@@ -622,6 +622,7 @@ impl WorkHost {
             }
             if matches!(&result, Err(CognitionError::Io(_))) {
                 drop(guard.take());
+                self.note_back_end(binding, None);
                 backend.inner.lock().unwrap().peer_active_through=None;
             }
             let reason = result.map_err(|e| e.to_string())?;
@@ -820,7 +821,7 @@ impl WorkHost {
         binding: &ThreadBinding,
     ) -> Result<(), String> {
         let mut lease = backend.lease.lock().unwrap();
-        if lease.as_ref().is_some_and(|lease|lease.is_closed()) {drop(lease.take());}
+        if lease.as_ref().is_some_and(|lease|lease.is_closed()) {drop(lease.take());self.note_back_end(binding,None);}
         if lease.is_some() {
             return Ok(());
         }
@@ -846,8 +847,20 @@ impl WorkHost {
             drop(opened);
             return Err("RichOS is closing down. Nothing was started.".into());
         }
+        let account = opened.account().map(str::to_string);
         *lease = Some(opened);
+        drop(lease);
+        self.note_back_end(binding, account.as_deref());
         Ok(())
+    }
+
+    /// **Where this conversation's back end runs now** (`None`: it has no live lease), for the
+    /// switch line: "I switched the team" is said only once Stu is on the new account too
+    /// (`claude_accounts::Accounts::back_end_on`).
+    fn note_back_end(&self, binding: &ThreadBinding, account: Option<&str>) {
+        if let Some(quota) = self.quota.lock().unwrap().clone() {
+            quota.accounts.back_end_on(binding.thread_id(), account);
+        }
     }
 
     fn renew_if_account_changed(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) {
@@ -869,6 +882,7 @@ impl WorkHost {
             drop(inner);
             drop(lease.take());
         }
+        self.note_back_end(binding, None);
         if let Err(why) = self.ensure_lease(backend, binding) {
             eprintln!("[richos] back end: not moved to the next Claude account ({why})");
         }
@@ -1609,6 +1623,47 @@ mod tests {
         assert!(dropped.load(Ordering::SeqCst));
         assert_eq!(h.spawns.load(Ordering::SeqCst),1,"clear commands and finished input should use the common opener");
         h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// **Stu's lease tells the accounts where it runs** (nightly 65, 2026-10-18: "I switched
+    /// the team to your Home account" was said while Stu's whole job ran on Work). The switch
+    /// from Account 1 to Home is decided while Stu's lease is on Account 1: Rich's turn on Home
+    /// says nothing yet and the panel shows no switch card; Stu's lease moving at its boundary
+    /// releases the line and the card.
+    #[test]
+    fn the_switch_is_announced_only_once_stus_lease_has_moved_too() {
+        struct OnAccount(String);
+        impl Cognition for OnAccount {
+            fn session_id(&self)->&str {"stu-on-an-account"}
+            fn account(&self)->Option<&str> {Some(&self.0)}
+            fn prompt(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {Ok("end_turn".into())}
+        }
+        struct Follows(Arc<crate::quota::Service>);
+        impl LeaseFactory for Follows {
+            fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
+            fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
+                Ok(Box::new(OnAccount(self.0.lease_account().id)))
+            }
+        }
+        use crate::claude_accounts::tests::{reading, NOW};
+        let h=harness(0);
+        let quota=Arc::new(crate::quota::Service::open(&h.root.join("quota")).unwrap());
+        let home=quota.accounts.add("Home").unwrap();
+        let host=WorkHost::new(&h.state,Box::new(Follows(quota.clone())),Arc::new(SilentNotifier));
+        host.set_quota(quota.clone());
+        let backend=host.backend_for(h.binding.thread_id()).unwrap();
+        host.ensure_lease(&backend,&h.binding).unwrap();
+        let readings=[("1".to_string(),reading(10.,3_600_000,99.,48*3_600_000)),
+            (home.id.clone(),reading(0.,3_600_000,0.,72*3_600_000))].into_iter().collect();
+        assert!(quota.accounts.evaluate(&readings,None,NOW).unwrap(),"Account 1 at 99% of its week is left for Home");
+        quota.accounts.ran_on(&home.id);
+        assert_eq!(quota.accounts.take_notice(),None,"Stu is still on Account 1");
+        assert!(quota.view().last_switch.is_none(),"no switch card while Stu is on Account 1");
+        host.renew_if_account_changed(&backend,&h.binding);
+        assert_eq!(backend.lease.lock().unwrap().as_ref().and_then(|lease|lease.account().map(str::to_string)),Some(home.id.clone()));
+        assert!(quota.accounts.take_notice().unwrap().starts_with("I switched the team to your **Home** account."));
+        assert_eq!(quota.view().last_switch.map(|s|s.to),Some(home.id.clone()));
+        host.shutdown();h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
     }
 
     #[test]

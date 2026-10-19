@@ -316,22 +316,30 @@ fn fully_added(state: &Stored, id: &str) -> bool {
         .is_some_and(|c| c.kind == "added")
 }
 
-/// A switch that is decided but has not happened yet: no turn or job has run under `to`.
+/// A switch that is decided but has not happened yet: no conversation turn has run under `to`,
+/// or a back end is still on another account.
 struct PendingSwitch {
     /// The account the leases were on before this switch (before any chain of switches that
     /// nothing ran under).
     from: String,
     to: String,
     text: String,
+    /// A conversation turn has run under `to` ([`Accounts::ran_on`]).
+    ran: bool,
 }
 
 pub struct Accounts {
     path: PathBuf,
     root: PathBuf,
     state: Mutex<Stored>,
-    /// The switch notice waits here until a turn or job really runs under the new account
-    /// ([`Accounts::ran_on`]). A switch that waits on a running command shows nothing.
+    /// The switch notice waits here until a turn really runs under the new account
+    /// ([`Accounts::ran_on`]) and no back end is still on another one
+    /// ([`Accounts::back_end_on`]). A switch that waits on a running command shows nothing.
     pending: Mutex<Option<PendingSwitch>>,
+    /// **The account each live back-end lease (Stu's) runs on**, by conversation, reported by
+    /// the work host when it opens or ends one (nightly 65, 2026-10-18: "I switched the team
+    /// to your Home account" was said while Stu's whole job ran on, and stayed on, Work).
+    back_ends: Mutex<BTreeMap<String, String>>,
     notice: Mutex<Option<String>>,
     /// The webview's offset from UTC (`quota::Service::set_utc_offset`), so the switch line
     /// can say as a clock time when the account it left is fresh again.
@@ -356,7 +364,7 @@ impl Accounts {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Stored::default(),
             Err(e) => return Err(e),
         };
-        Ok(Self { path, root: data_dir.join("claude-accounts"), state: Mutex::new(state), pending: Mutex::new(None), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
+        Ok(Self { path, root: data_dir.join("claude-accounts"), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
     }
 
     fn save(&self, state: &Stored) -> io::Result<()> {
@@ -573,8 +581,37 @@ impl Accounts {
             from: origin,
             to: to.into(),
             text,
+            ran: false,
         });
         Ok(())
+    }
+
+    /// **Has the decided switch not happened yet for every session?** While it has not, the
+    /// view leaves out the record of it, so nothing says the team moved before it did.
+    pub fn switch_pending(&self) -> bool { self.pending.lock().unwrap().is_some() }
+
+    /// **The back end of conversation `thread` runs on `account` now** (`None`: it has no live
+    /// lease). Reported by the work host whenever it opens or ends Stu's lease.
+    pub fn back_end_on(&self, thread: &str, account: Option<&str>) {
+        {
+            let mut back_ends = self.back_ends.lock().unwrap();
+            match account {
+                Some(account) => { back_ends.insert(thread.into(), account.into()); }
+                None => { back_ends.remove(thread); }
+            }
+        }
+        self.release();
+    }
+
+    /// The switch has happened once a conversation turn ran under `to` and every live back end
+    /// is on `to` too; then its notice is released for [`Accounts::take_notice`].
+    fn release(&self) {
+        let mut pending = self.pending.lock().unwrap();
+        let moved = pending.as_ref().is_some_and(|p| p.ran
+            && self.back_ends.lock().unwrap().values().all(|account| *account == p.to));
+        if moved {
+            *self.notice.lock().unwrap() = pending.take().map(|p| p.text);
+        }
     }
 
     /// **He chose the account that drains first** (feedback item 8, 2026-10-06). `id` is put in
@@ -613,15 +650,16 @@ impl Accounts {
         state.accounts.iter().find(|a| a.id == id).cloned()
     }
 
-    /// **A turn or job is about to run on a lease under `account`.** If that is the account a
-    /// switch went to, the switch has now actually happened and its notice is released for
-    /// [`Accounts::take_notice`]. Called by the conversation (`spine.rs`, `prepare_request`)
-    /// and the work host (`work_host.rs`, before each work turn).
+    /// **A conversation turn is about to run on a lease under `account`.** If that is the
+    /// account a switch went to, and no back end is still on another account
+    /// ([`Accounts::back_end_on`]), the switch has now actually happened and its notice is
+    /// released for [`Accounts::take_notice`]. Called by the conversation (`spine.rs`,
+    /// `prepare_request`).
     pub fn ran_on(&self, account: &str) {
-        let mut pending = self.pending.lock().unwrap();
-        if pending.as_ref().is_some_and(|p| p.to == account) {
-            *self.notice.lock().unwrap() = pending.take().map(|p| p.text);
+        if let Some(pending) = self.pending.lock().unwrap().as_mut().filter(|p| p.to == account) {
+            pending.ran = true;
         }
+        self.release();
     }
 
     /// **The switch decision, on the freshest readings.** `readings` holds every account that
@@ -779,6 +817,35 @@ pub(crate) mod tests {
         assert_eq!(accounts.in_use().id, "3");
         // The choice survives a restart.
         assert_eq!(Accounts::open(dir.path()).unwrap().in_use().id, "3");
+    }
+
+    /// **"I switched the team" only once the team has switched** (nightly 65, 2026-10-18: the
+    /// line was released at Rich's first turn on Home, 22:49:03Z, while Stu's lease, opened on
+    /// Work a second before the decision, ran the whole job on Work and stayed there). A
+    /// conversation turn on the new account is not enough while a back end is on the old one;
+    /// the line comes when that back end is on the new account too, or has no lease at all.
+    #[test]
+    fn the_switch_is_announced_only_once_every_back_end_is_on_the_new_account() {
+        let (_dir, accounts) = two_accounts();
+        accounts.back_end_on("thread-a", Some("1"));
+        accounts.back_end_on("thread-b", Some("1"));
+        assert!(accounts.evaluate(&readings(reading(10., HOUR, 99., 48 * HOUR), reading(0., HOUR, 0., 72 * HOUR)), None, NOW).unwrap());
+        assert!(accounts.switch_pending());
+        accounts.ran_on("2");
+        assert_eq!(accounts.take_notice(), None, "both back ends are still on Account 1");
+        accounts.back_end_on("thread-a", Some("2"));
+        assert_eq!(accounts.take_notice(), None, "one back end is still on Account 1");
+        accounts.back_end_on("thread-b", None);
+        assert!(accounts.take_notice().unwrap().starts_with("I switched the team to your **Work** account."));
+        assert!(!accounts.switch_pending());
+
+        // With every back end already moved, the conversation's first turn on it says it.
+        let (_dir, accounts) = two_accounts();
+        assert!(accounts.evaluate(&readings(reading(10., HOUR, 99., 48 * HOUR), reading(0., HOUR, 0., 72 * HOUR)), None, NOW).unwrap());
+        accounts.back_end_on("thread-a", Some("2"));
+        assert_eq!(accounts.take_notice(), None, "no conversation turn has run on Work yet");
+        accounts.ran_on("2");
+        assert!(accounts.take_notice().is_some());
     }
 
     /// **Feedback item 8 (the CEO 2026-10-06): he picks which account drains first**, his own

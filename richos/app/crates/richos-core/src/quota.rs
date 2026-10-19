@@ -1027,13 +1027,23 @@ impl Service {
                 }
             }).collect();
             view.held_until = self.accounts.held_until(&readings, policy.line(), now);
-            view.last_switch = self.accounts.last_switch();
+            // The card after a switch, only once the switch has happened for every session
+            // (`Accounts::switch_pending`): nightly 65 showed "Rich switched to Home ... the
+            // team carried on" while Stu's job still ran on Work.
+            let pending = self.accounts.switch_pending();
+            view.last_switch = self.accounts.last_switch().filter(|_| !pending);
             if let Some(until) = view.held_until {
                 view.admission = Admission::Held { resets_at: until };
             }
         }
         view.agents_working = self.agents_working.load(std::sync::atomic::Ordering::SeqCst);
         view.changes = self.accounts.changes();
+        // Recent changes' "Rich switched to ..." row waits for the same moment.
+        if self.accounts.switch_pending() {
+            if let Some(at) = view.changes.iter().rposition(|change| change.kind == "switched") {
+                view.changes.remove(at);
+            }
+        }
         view.nudge = self.accounts.nudge();
         view.notes = self.accounts.notes();
         if self.accounts.count() == 1 && in_use.label != "Account 1" {
@@ -2405,12 +2415,14 @@ for line in sys.stdin:
         assert_eq!(view.windows[0].used_percent, 10., "the published reading is the account in use");
         assert!(view.accounts[1].in_use && !view.accounts[0].in_use);
         assert_eq!(service.accounts.take_notice(), None, "nothing has run under Work yet");
+        assert_eq!(view.last_switch, None, "no card before the switch has happened");
         service.accounts.ran_on(&work.id);
         // Round 18's words. The five-hour reset is 2099, and before the webview has said its
         // offset the span is said, so only the parts that do not move with the clock are exact.
         let line = service.accounts.take_notice().unwrap();
         assert!(line.starts_with("I switched the team to your **Work** account. Account 1 had used 93% of its 5-hour limit, and it is fresh again in "), "{line}");
         assert!(line.ends_with(".\n\nNothing stopped. The team carried on right where it was."), "{line}");
+        let view = service.view();
         assert_eq!(view.last_switch.as_ref().map(|s| (s.from.as_str(), s.to.as_str(), s.why.as_str(), s.used)),
             Some(("1", work.id.as_str(), "fiveHour", Some(93.))), "the card after a switch reads it from the view");
         let published: View = gate::read_json(&root.path().join("engine-state/claude-quota.json")).unwrap();
