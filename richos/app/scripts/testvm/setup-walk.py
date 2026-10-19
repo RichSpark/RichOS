@@ -127,7 +127,7 @@ R19_NOT_NOW_AX = "Okay. It's in Settings, under Dictation, whenever you want it.
 # The sheet's On line (dictation.js) and the "Dictation feature" message with F2 (dictation_offer.rs).
 # The key in the On line is its own key cap, so the words after it are what is matched (walk of
 # 6c09d61b9, 19:18Z: the sheet said On and 'On. Tap F' was never one AX value).
-R19_ON_AX = 'in any app, talk, and tap it again.'
+R19_ON_AX = 'in any app, talk and tap it again.'
 R19_FEATURE_AX = 'Click into where you want your words to appear, tap F2, say what you want written'
 # r19-key-change: the key a person changes to afterwards, its key code for the "Press a different
 # key" way in, and the question put to Rich in the "Dictation feature" conversation.

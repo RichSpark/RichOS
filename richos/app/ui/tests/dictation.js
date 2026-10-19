@@ -162,7 +162,7 @@ async function main() {
     assert(order.indexOf("dictation_ask_accessibility") > order.indexOf("dictation_ask_microphone"), "Accessibility asked after the microphone: " + order);
     // Allowed in System Settings: read within a second, the tool told, RichOS to the front.
     await set(page, { ax: "allowed", keyTap: true });
-    await waitText(page, "#dict-state", "On. Tap F1 in any app, talk, and tap it again.");
+    await waitText(page, "#dict-state", "On. Tap F1 in any app, talk and tap it again.");
     assertEqual(await text(page, "#dict-feedback"), "RichScribe is on. Try it in the box on the right or in any app.");
     assert((await calls(page)).includes("dictation_permissions_changed:true"), "the tool told, RichOS brought forward");
     await page.waitForFunction(() => document.activeElement && document.activeElement.id === "dict-try");
@@ -182,7 +182,7 @@ async function main() {
   // in the same breath as the grant, which is not how the app sees it; here the tap comes last.
   await run.check("D18: round 19's 'Dictation is on' line shows once the tool holds the key, when the tap comes after Accessibility was allowed and when it comes after the switch with both grants already there", async () => {
     const LINE = "RichScribe is on. Try it in the box on the right or in any app.";
-    const ON = "On. Tap F1 in any app, talk, and tap it again.";
+    const ON = "On. Tap F1 in any app, talk and tap it again.";
     // A2's shape: the microphone, then Accessibility allowed in System Settings, then the tap.
     let page = await open("dark", {}, { tapNever: true });
     await sheet(page);
@@ -352,7 +352,7 @@ async function main() {
     await page.waitForFunction(() => document.querySelector('[data-act="key"][data-k="5"]').getAttribute("aria-checked") === "true");
     assertEqual(await text(page, ".dict-key-row .dict-key-say"), "F5 starts and stops RichScribe. Pick one you rarely use.");
     await page.waitForFunction(() => { const t = document.getElementById("bug-toast"); return t && !t.hidden && t.textContent === "RichScribe now starts and stops with F5."; });
-    await waitText(page, "#dict-state", "On. Tap F5 in any app, talk, and tap it again.");
+    await waitText(page, "#dict-state", "On. Tap F5 in any app, talk and tap it again.");
     await page.click("#dict-capture");
     await waitText(page, ".dict-key-wait .dict-key-say", "Press the key you want to use. Esc to cancel.");
     assertEqual(await text(page, ".dict-sec .dict-key-say.is-soft"), "Any function key works, F1 to F19.");
@@ -398,7 +398,7 @@ async function main() {
   await run.check("the second copy and line 4 on the sheet: On through another copy's tool (round 19's On line, never 'even when closed'); another app hiding keys, named and unnamed", async () => {
     let page = await open("dark", { ...ALLOWED, owner: "other" });
     await sheet(page);
-    await waitText(page, "#dict-state", "On. Tap F1 in any app, talk, and tap it again.");
+    await waitText(page, "#dict-state", "On. Tap F1 in any app, talk and tap it again.");
     assertEqual(await page.locator(".dict-card.is-on").count(), 1, "the gold on card: dictation does work");
     await page.close();
     // The other copy's tool types, so this copy's own permissions decide nothing (plan section 7,
@@ -410,7 +410,7 @@ async function main() {
     await waitText(page, "#set-dictation-state", "On. Tap F1 to talk");
     assertEqual(await page.locator("#set-dictation-state.is-attention").count(), 0, "row: no attention");
     await page.click("#set-dictation-open");
-    await waitText(page, "#dict-state", "On. Tap F1 in any app, talk, and tap it again.");
+    await waitText(page, "#dict-state", "On. Tap F1 in any app, talk and tap it again.");
     assertEqual(await page.locator("#dict-copy-note").count(), 1, "line 2 for the second copy too");
     assertEqual(await page.locator(".dict-card.is-warn").count(), 0, "no warning spine");
     const asked = (await calls(page)).filter(c => /ask_(microphone|accessibility)/.test(c));
@@ -438,7 +438,7 @@ async function main() {
     assertEqual(await page.getAttribute("#dict-try", "data-ph"), "You can try it here once your keys are back.");
     assert(await page.locator("#dictation-composer-note").count() === 0 || await page.locator("#dictation-composer-note").isHidden(), "the composer drops its line");
     await set(page, { secure: null });
-    await waitText(page, "#dict-state", "On. Tap F1 in any app, talk, and tap it again.");
+    await waitText(page, "#dict-state", "On. Tap F1 in any app, talk and tap it again.");
     await page.close();
     page = await open("dark", { ...ALLOWED, secure: { app: null } });
     await sheet(page);

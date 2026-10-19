@@ -864,7 +864,7 @@ async function main() {
     assert(await page.isVisible("#corrections-overlay"), "the window did not stay open");
     assertEqual(await page.locator("#conversation .bug-rich").count(), 0, "it also started in the conversation");
     const asked = await page.locator("#bugdock-msgs .bug-rich .tl-prose").first().innerText();
-    assert(asked.includes("I've noted that you were in Corrections, and it stays open beside us."), asked);
+    assert(asked.includes("I've noted that you were in Corrections and it stays open beside us."), asked);
     // Side by side: the window moved left of the panel.
     const panel = await page.locator("#bugdock").boundingBox();
     const win = await page.locator("#corrections-overlay .overlay-panel").boundingBox();

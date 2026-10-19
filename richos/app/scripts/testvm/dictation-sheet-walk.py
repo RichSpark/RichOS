@@ -109,7 +109,7 @@ IRIS_FRAGMENTS = ('talk instead of typing', 'only when you ask')
 AX_PROMPT = 'control this computer'
 # The sheet's drawn words (round 19 and its more lines), read from the accessibility tree. A line
 # with the key's cap in it is read by the text run after the cap.
-ON_RUN = 'in any app, talk, and tap it again.'
+ON_RUN = 'in any app, talk and tap it again.'
 # Round 19 state 10's line under the card, drawn by the turn-on once the tool holds the key (D18,
 # the candidate 46 walk: it never showed, because the window decided it before the tool's tap).
 FEEDBACK_LINE = 'Dictation is on. Try it in the box on the right or in any app.'
@@ -118,7 +118,7 @@ DENIED_LINE = 'Not working yet: macOS has not let me type into other apps.'
 # 2026-10-08: dictation runs only while RichOS runs, so "On even when RichOS is closed" is drawn
 # nowhere); the sheet's line is the row's line completed with ON_RUN.
 OTHER_ROW = 'On. Tap F1 to talk'
-OTHER_SHEET = 'On. Tap F1 in any app, talk, and tap it again.'
+OTHER_SHEET = 'On. Tap F1 in any app, talk and tap it again.'
 # The second copy's executable, renamed so its process is told apart from the first's.
 SECOND_EXE = 'richos-second'
 # The processes macOS has put its privacy prompts in, across releases; the first that answers wins.
@@ -834,7 +834,7 @@ class SheetWalk(dictation_walk.DictationWalk):
             time.sleep(1)
             self.shot('second-copy-sheet.png')
             sheet_ax = self.shows_text(OTHER_SHEET)
-            sheet_ocr = self.frame_says('second-copy-sheet.png', 'talk, and tap it again')
+            sheet_ocr = self.frame_says('second-copy-sheet.png', 'talk and tap it again')
             if not sheet_ax and not sheet_ocr:
                 raise StepFailed(f'the second copy\'s sheet does not say "{OTHER_SHEET}" (second-copy-sheet.png)')
             seen = {'row_text': row_text.strip(), 'row_ocr': row_ocr, 'sheet_ax': sheet_ax, 'sheet_ocr': sheet_ocr}
