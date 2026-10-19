@@ -3,7 +3,9 @@
 # and ui/no-native-menu.js together, through src-tauri/examples/context_menu_probe.rs): selected text
 # in the composer offers only Cut, Copy, Paste and Select All; the PDF preview and the company name
 # offer no menu (CEO, nightly 65: no Look Up, Translate, Search with Google, Share, Speech or
-# Services). Then prove the probe sees the defect: without the fix the same checks must fail.
+# Services), and a right-click on the PDF preview selects no word (nightly 66), because main gives
+# every window the page's guard for all its frames. Then prove the probe sees the defect: without
+# the fix the same checks must fail.
 # run-tests: no-host-screen: the probe's window is never ordered on screen, its process may not show a Dock icon, its right-clicks are handed to the view rather than posted to the system, and no menu is drawn
 # run-tests: inputs richos/app/scripts/context-menu-probe.test.sh richos/app/src-tauri/examples/context_menu_probe.rs richos/app/src-tauri/src/webview_menu.rs richos/app/ui/no-native-menu.js richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Cargo.lock
 # run-tests: covers richos/app/src-tauri/src/webview_menu.rs richos/app/src-tauri/examples/context_menu_probe.rs
@@ -21,8 +23,10 @@ if out="$(cargo run --quiet --example context_menu_probe -- --without-the-fix)";
   exit 1
 fi
 printf '%s\n' "$out"
-# A crash is not the defect: the two checks must fail by seeing WebKit's own items.
-for check in "a right-click on selected text in the composer" "a right-click in the PDF preview"; do
+# A crash is not the defect: the checks must fail by seeing WebKit's own items (on the PDF's word,
+# "Look Up “report”": the word the viewer selected).
+for check in "a right-click on selected text in the composer" "a right-click in the PDF preview" \
+             "a right-click on a word in the PDF preview"; do
   if ! grep -q "^FAIL $check.*Look Up" <<<"$out"; then
     echo "FAIL without src/webview_menu.rs, '$check' did not fail by seeing Look Up" >&2
     exit 1
