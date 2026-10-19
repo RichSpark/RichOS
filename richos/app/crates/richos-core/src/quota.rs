@@ -541,10 +541,11 @@ struct Snapshot {
 pub const FIRST_READING_RETRY_MS: u64 = 30_000;
 pub const FIRST_READING_RETRY_MAX_MS: u64 = 120_000;
 
-/// One window's reading as a speed base: used percent, its reset time, when it was read, and
-/// whether its rise into that value was seen (`rose`: a lower reading came just before it).
+/// One window's reading as a speed base: used percent, its reset time, when it was first read
+/// (`at`) and last read (`last`) at that value, and whether its rise into that value was seen
+/// (`rose`: a lower reading came just before it).
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct SpeedBase { used: f64, resets_at: Option<u64>, at: u64, rose: bool }
+struct SpeedBase { used: f64, resets_at: Option<u64>, at: u64, last: u64, rose: bool }
 
 /// A value Claude reports in whole points.
 fn whole(used: f64) -> bool { used.fract() == 0. }
@@ -560,9 +561,18 @@ impl Snapshot {
     /// speed (Work was left at 96% instead of his 99%). And when the rise into the base value
     /// was not seen (the first reading of a window), a whole-point value may already have been
     /// nearly a point higher, so that one point is not counted as speed.
+    ///
+    /// **A burst after a long unchanged stretch is still a burst** (review
+    /// rv-20261019T005929Z-e3d9ad03-3e7b, finding 1): timed from the first reading alone, two
+    /// hours at 90% and then 98% five minutes later averaged 8 points over 125 minutes, a normal
+    /// speed, and the week reached 100% before the switch. So the rise is also timed from the
+    /// LAST reading of the base value, counting only what it certainly gained since then: with
+    /// whole points, a value read as 90 was under 91, so 90 -> 98 is at least 7 points in those
+    /// 5 minutes. The larger of the two speeds is the speed. One whole point after a steady
+    /// reading certainly gained nothing, so it is still no speed.
     fn measure(&mut self, windows: &[Window], observed: u64) {
         for window in windows {
-            let fresh = SpeedBase { used: window.used_percent, resets_at: window.resets_at, at: observed, rose: false };
+            let fresh = SpeedBase { used: window.used_percent, resets_at: window.resets_at, at: observed, last: observed, rose: false };
             // The SAME window when the reset times agree within a minute: the probe reports
             // an ISO time and the stream whole seconds, so exact equality would treat one
             // window read two ways as two windows and never measure a speed across them.
@@ -574,12 +584,25 @@ impl Snapshot {
                 Some(base) if same(base.resets_at, window.resets_at) => {
                     if observed >= base.at + SPEED_MIN_GAP_MS {
                         let gained = (window.used_percent - base.used).max(0.);
-                        let unseen = if !base.rose && whole(base.used) && whole(window.used_percent) { 1. } else { 0. };
-                        self.speeds.insert(window.id.clone(), (gained - unseen).max(0.) / (observed - base.at) as f64);
-                        self.rises.insert(window.id.clone(), Rise { from: base.used, to: window.used_percent, ms: observed - base.at });
+                        let points = whole(base.used) && whole(window.used_percent);
+                        let unseen = if !base.rose && points { 1. } else { 0. };
+                        let mut speed = (gained - unseen).max(0.) / (observed - base.at) as f64;
+                        let mut rise = Rise { from: base.used, to: window.used_percent, ms: observed - base.at };
+                        // Since the last reading of the base value, at least `certain` points.
+                        let certain = (gained - if points { 1. } else { 0. }).max(0.);
+                        let since_last = observed.saturating_sub(base.last).max(SPEED_MIN_GAP_MS);
+                        if certain / since_last as f64 > speed {
+                            speed = certain / since_last as f64;
+                            rise.ms = since_last;
+                        }
+                        self.speeds.insert(window.id.clone(), speed);
+                        self.rises.insert(window.id.clone(), rise);
                         if window.used_percent != base.used {
                             self.bases.insert(window.id.clone(), SpeedBase { rose: gained > 0., ..fresh });
                         }
+                    }
+                    if window.used_percent == base.used {
+                        if let Some(base) = self.bases.get_mut(&window.id) { base.last = base.last.max(observed); }
                     }
                 }
                 _ => {
@@ -2231,6 +2254,36 @@ pub(crate) mod tests {
         let view = burn.view(policy(), NOW + 120_000);
         assert_eq!(view.refresh_interval_ms, FAST_REFRESH_INTERVAL_MS);
         assert!(view.act_at["seven_day"] <= 97., "{:?}", view.act_at);
+    }
+
+    /// **A burst after a long unchanged stretch still switches before 100%** (review
+    /// rv-20261019T005929Z-e3d9ad03-3e7b, finding 1; its fixture's numbers), through the
+    /// switch decision every turn makes (`Service::before_turn`, the lease's streamed reading).
+    /// Account 1 reads 90% of its week every five minutes for two hours, then 98% five minutes
+    /// later. Timed from the first 90% reading only, that was 8 points in 125 minutes, a normal
+    /// speed, so the point stayed 99 and the next reading was 100%. From the last 90% reading it
+    /// is at least 7 points in 5 minutes = 1.4 a minute: fast, checked every minute, and the
+    /// point is 99 - (ceil(1.4 x 1 + 1.4 x 5) - 1) = 99 - (ceil(8.4) - 1) = 91, so 98 switches.
+    #[test]
+    #[cfg(unix)]
+    fn a_burst_after_two_unchanged_hours_switches_before_the_week_runs_out() {
+        let root = Scratch::new();
+        let bin = fake_claude(root.path());
+        let service = Service::open(root.path()).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        usage(&root.path().join("usage-1.json"), 10., 90., "2099-01-05T00:00:00Z");
+        usage(&work.folder.clone().unwrap().join("usage.json"), 0., 10., "2099-01-06T00:00:00Z");
+        service.set_policy(policy()).unwrap();
+        service.refresh(&bin, true);
+        assert_eq!(service.accounts.in_use().id, "1");
+        let week = |used: f64| vec![Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: used,
+            resets_at: Some(4_102_444_800_000), duration_ms: 168 * 3_600_000 }];
+        let start = crate::util::now_millis() + 60_000;
+        for minute in (0..=120).step_by(5) {
+            assert_eq!(service.before_turn("1", Some((week(90.), start + minute * 60_000))), "1", "unchanged at minute {minute}");
+        }
+        assert_eq!(service.before_turn("1", Some((week(98.), start + 125 * 60_000))), work.id,
+            "98% after the burst: {:?}", service.view().act_at);
     }
 
     #[test]
