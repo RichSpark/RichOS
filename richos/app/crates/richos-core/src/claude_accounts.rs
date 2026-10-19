@@ -477,6 +477,12 @@ impl Accounts {
     pub fn folder(&self, id: &str) -> Option<PathBuf> {
         self.state.lock().unwrap().accounts.iter().find(|a| a.id == id).and_then(|a| a.folder.clone())
     }
+    /// The Claude Code folder whose sign-in IS account `id` (round 31's "Show email"):
+    /// `Some(None)` for Account 1, the app's own environment; `Some(Some(folder))` for an added
+    /// account; `None` when no account has that id.
+    pub fn sign_in_folder(&self, id: &str) -> Option<Option<PathBuf>> {
+        self.state.lock().unwrap().accounts.iter().find(|a| a.id == id).map(|a| a.folder.clone())
+    }
 
     pub fn set_at_threshold(&self, value: AtThreshold) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
