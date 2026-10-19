@@ -3933,6 +3933,8 @@ fn main() {
             // — appended ---
             home_team,
             // --- a job's result said on its own (2026-10-15) — appended ---
+            // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
+            set_oxford_comma,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -9066,12 +9068,30 @@ struct Appearance {
     theme: String,
     /// A percentage of the 16px root, always one of `FONT_SCALE_STEPS`.
     font_scale: u16,
+    /// Whether he keeps the Oxford comma in what Claude writes (CEO, 2026-10-19). `false`, his
+    /// default, deletes it where Rich's and Stu's words and the question cards are drawn.
+    oxford_comma: bool,
 }
 
 #[richos_command::command]
 fn get_appearance(state: State<AppState>) -> Appearance {
     let config = state.config.lock().unwrap();
-    Appearance { theme: config.theme().as_str().to_string(), font_scale: config.font_scale() }
+    Appearance {
+        theme: config.theme().as_str().to_string(),
+        font_scale: config.font_scale(),
+        oxford_comma: config.oxford_comma(),
+    }
+}
+
+/// Persist the Oxford comma choice (CEO, 2026-10-19: "make the Oxford comma linter switchable in
+/// settings"), and tell a watching phone at once so its screen changes with this one's.
+#[richos_command::command]
+fn set_oxford_comma(app: AppHandle, state: State<AppState>, keep: bool) -> Result<(), String> {
+    state.config.lock().unwrap().set_oxford_comma(keep).map_err(|e| e.to_string())?;
+    if let Some(phone) = app.try_state::<Arc<phone::PhoneRuntime>>() {
+        phone.announce_oxford_comma(keep);
+    }
+    Ok(())
 }
 
 /// Persist the CEO's lighting. An unparseable string is REFUSED rather than coerced to the

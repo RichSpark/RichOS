@@ -221,7 +221,8 @@
   const MOCK_CONFIG_KEY = "richos-mock-config";
   const mockConfig = (function () {
     // `rich_model`/`stu_model` stand in for config.rs's §119 pair: absent reads as Opus.
-    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus" };
+    // `oxford_comma` stands in for config.rs's Oxford comma setting: absent reads as off (CEO, 2026-10-19).
+    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus", oxford_comma: false };
     try {
       const raw = window.localStorage.getItem(MOCK_CONFIG_KEY);
       if (!raw) return fresh;
@@ -232,6 +233,7 @@
         user_name: typeof parsed.user_name === "string" && parsed.user_name.trim() ? parsed.user_name : null,
         rich_model: parsed.rich_model === "fable" ? "fable" : "opus",
         stu_model: parsed.stu_model === "fable" ? "fable" : "opus",
+        oxford_comma: parsed.oxford_comma === true,
       };
     } catch (e) {
       // A corrupt or unavailable store degrades to the shipped defaults rather than
@@ -3140,7 +3142,11 @@
         // is the state the acceptance suite has to be able to reach without arranging
         // anything.
         case "get_appearance":
-          return { theme: mockConfig.theme, font_scale: mockConfig.font_scale };
+          return { theme: mockConfig.theme, font_scale: mockConfig.font_scale, oxford_comma: mockConfig.oxford_comma };
+        case "set_oxford_comma":
+          mockConfig.oxford_comma = args.keep === true;
+          persistMockConfig();
+          return null;
         case "set_theme": {
           const t = String(args.theme);
           // Refused, not coerced, exactly as the real command refuses it: quietly writing

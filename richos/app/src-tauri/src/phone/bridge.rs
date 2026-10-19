@@ -103,6 +103,7 @@ impl Bridge for PhoneBridge {
         self.app.state::<std::sync::Arc<super::PhoneRuntime>>().register_native_notifications(device,registration)
     }
     fn voice_available(&self) -> bool { self.voice.available() }
+    fn oxford_comma(&self) -> bool { self.app.state::<AppState>().config.lock().unwrap().oxford_comma() }
     /// `intake_<n>` -> the turn drained from intake record `n`, read with `try_lock` so a phone
     /// request never waits on a running turn: busy means "not yet", and the next request asks again.
     fn turn_for_intake(&self, message_id: &str) -> Option<String> {

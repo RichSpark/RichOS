@@ -22,6 +22,9 @@ const { createThread } = require(path.join(ROOT, 'lib/thread.js'));
 const source = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
 const cardSource = source.slice(source.indexOf('const questionCards = new Map();'), source.indexOf('\nfunction timeOf(row)'));
 const switchSource = source.slice(source.indexOf('async function selectThread(id)'), source.indexOf("\n$('thread-picker').addEventListener"));
+// What Claude wrote on the card is drawn through the Oxford comma rule (`said`, the desktop's own file).
+const saidSource = source.match(/function said\(text\) \{[^\n]*\}/)[0];
+const RichOxford = require(path.join(ROOT, '..', '..', 'app', 'ui', 'oxford-comma.js'));
 
 class Node {
 	constructor(tag) { this.tagName = tag; this.children = []; this.dataset = {}; this.events = {}; }
@@ -55,9 +58,9 @@ async function answerThen(switchAway) {
 		threads: [{ id: 'A' }, { id: 'B' }], settings: { set: async () => {} }, composer: { value: '' },
 		voiceGesture: { interrupt: async () => {} }, restoreComposer: async () => {}, renderVoiceDrafts: async () => {},
 		renderThreadPicker: () => {}, render: () => {}, connectStream: () => {},
-		scheduleRender: () => {}, timeOf: () => '', hearIt: () => {}, handleApiError: () => {}, row,
+		scheduleRender: () => {}, timeOf: () => '', hearIt: () => {}, handleApiError: () => {}, row, RichOxford,
 	});
-	vm.runInContext(cardSource + '\n' + switchSource + '\nglobalThis.card = questionCard(row);', context);
+	vm.runInContext(saidSource + '\n' + cardSource + '\n' + switchSource + '\nglobalThis.card = questionCard(row);', context);
 	model.merge(row);
 	const controls = context.card.children.find((n) => n.className === 'ask-controls');
 	const sent = controls.children.find((n) => n.className === 'ask-option').events.click();

@@ -1874,6 +1874,15 @@
   /// output record's lookup (§6.5) or nothing; without it a code span is always a code span.
   /// `doc` is the document extension (below `renderMarkdownInto`): a FILE in the Output panel,
   /// never Rich's answer. It adds backslash escapes and `[label](target)` drawn as its label.
+  /// WHAT CLAUDE WROTE, AS IT IS DRAWN (CEO, 2026-10-19): with the comma before and/or/nor deleted
+  /// while the Oxford comma setting is off, his default, and untouched while it is on. The filter
+  /// is `oxford-comma.js` and it is applied HERE, where Rich's and his team's words are drawn,
+  /// never to the stored text: `Copy` still copies what Rich wrote. `renderMarkdownInto` itself
+  /// filters nothing, so the app's own lines and a file in the Output panel are drawn as written.
+  function said(text) {
+    return window.RichOxford ? window.RichOxford.display(text) : text;
+  }
+
   function markdownInline(text, into, links, doc) {
     let plain = "";
     const flush = () => {
@@ -2211,7 +2220,7 @@
     // what he pastes should be what Rich wrote, markers and all.
     const body = elem("div", "tl-prose");
     body.id = "prose:" + item.id;
-    renderMarkdownInto(body, item.text, opts.output);
+    renderMarkdownInto(body, said(item.text), opts.output);
     if (!item.closed && item.text) body.classList.add("is-streaming");
     art.appendChild(body);
 
@@ -2289,7 +2298,9 @@
     }
     const body = elem("p", "tl-notice-body");
     body.id = "prose:" + item.id;
-    renderMarkdownInto(body, item.text);
+    // A line from his team is what Claude wrote (Stu's words); an app status line is the app's
+    // own text and is drawn as written.
+    renderMarkdownInto(body, item.team ? said(item.text) : item.text);
     inlineTalkIcon(body);
     card.appendChild(body);
     return card;
@@ -3250,6 +3261,8 @@
       parts.push(tokenOf(item) + open);
     }
     parts.push(opts.machineryRaw ? "m1" : "m0");
+    // The Oxford comma setting changes how Claude's words are drawn without any item changing.
+    parts.push(window.RichOxford && window.RichOxford.keeping() ? "k1" : "k0");
     // The output record changes what a turn draws — its links, *Wrote N files*, the produced
     // strip — without any item changing, so its revision is part of every turn's signature.
     parts.push(opts.output && opts.output.rev ? "f" + opts.output.rev() : "f0");
@@ -3351,7 +3364,7 @@
   function updateProse(container, messageId, text, closed) {
     const node = container.querySelector('[id="prose:' + cssEscape(messageId) + '"]');
     if (!node) return false;
-    renderMarkdownInto(node, text, outputLinks);
+    renderMarkdownInto(node, said(text), outputLinks);
     node.classList.toggle("is-streaming", !closed && !!text);
     return true;
   }

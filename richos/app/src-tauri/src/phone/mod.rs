@@ -1033,6 +1033,17 @@ impl PhoneRuntime {
         stream::announce_his_words(&self.hub, thread_id, message_id, text, now_millis()).is_some()
     }
 
+    /// **Tell a watching phone that he switched the Oxford comma setting, so it redraws at once**
+    /// (CEO, 2026-10-19: "the user should be able to choose whether or not they want that
+    /// nuisance"). A `state` frame with no `message_id`, which the phone reads as the setting and
+    /// never as a row; under the current cursor, because it opens no row. Every `hello` carries
+    /// the same value, so a phone that was away when he switched it is told when it reconnects.
+    /// INERT with no phone listening, like [`PhoneRuntime::announce_his_words`].
+    pub fn announce_oxford_comma(&self, keep: bool) -> bool {
+        let data = serde_json::json!({ "oxford_comma": keep }).to_string();
+        self.hub.publish("state", self.hub.cursor_now(), data).is_some()
+    }
+
     /// Ask the daemon again on the next [`PhoneRuntime::status`], whatever the cache says.
     ///
     /// This is the Mac's half of Urban's `Check again` control: the user has just done the thing

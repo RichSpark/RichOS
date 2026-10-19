@@ -9323,9 +9323,14 @@ syncQuestionInert();
 /// and the direction is fixed: THE BACKEND WINS. A mirror that could overwrite the store
 /// would be a second place the decision is made, which is how a preference starts flipping
 /// between launches for no reason the CEO can see.
+window.RichOxford.onChange(() => scheduleRender());
+
 async function syncAppearanceFromBackend() {
   const durable = await invokeQuiet("get_appearance");
   if (durable) window.RichTheme.sync(durable);
+  // THE OXFORD COMMA (CEO, 2026-10-19): the stored choice decides how Claude's words are drawn.
+  // A switch redraws the conversation at once.
+  if (durable && typeof durable.oxford_comma === "boolean") window.RichOxford.setKeeping(durable.oxford_comma);
   // Register the durable half only NOW, after the sync — registering earlier would let a
   // keystroke during boot write the mirror's value back over the store's.
   window.RichSettings.registerDurable({

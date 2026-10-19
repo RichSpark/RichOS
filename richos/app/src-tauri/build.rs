@@ -246,6 +246,14 @@ fn sync_tree(source: &Path, dest: &Path, top: bool, not_shipped: &[&str]) -> std
 /// forgotten denylist entry ships a README nobody reads. A forgotten allowlist entry drops
 /// a file the app fetches, and the app breaks on his phone. The first failure is untidy;
 /// the second is the defect this whole change exists to end.
+/// Files the phone app gets from the desktop app's own tree instead of holding a copy:
+/// `(url path, source relative to this crate)`. ONE today, the Oxford comma rule (CEO,
+/// 2026-10-19): the desktop and the phone draw what Claude writes through the same filter, and a
+/// second copy would be a second rule that drifts. Staged under `$OUT_DIR/phone-shared/`, never
+/// inside `$OUT_DIR/phone/`, whose sync deletes whatever `web/web-app` does not hold.
+const SHARED_WITH_PHONE: &[(&str, &str)] = &[("lib/oxford-comma.js", "../ui/oxford-comma.js")];
+const PHONE_SHARED_DIR: &str = "phone-shared";
+
 const PHONE_NOT_SHIPPED: &[&str] =
     &["test", "bin", "node_modules", "package.json", "README.md", "CONTRACT-STUB.md"];
 
@@ -320,6 +328,27 @@ fn embed_phone(source: &Path) {
     if let Err(e) = collect_files(&staged, "", &mut files) {
         panic!("\n\nrichos-tauri: could not walk the staged phone app at {staged:?}: {e}\n\n");
     }
+    let shared = out_dir.join(PHONE_SHARED_DIR);
+    for (rel, from) in SHARED_WITH_PHONE {
+        if files.iter().any(|f| f == rel) {
+            panic!(
+                "\n\nrichos-tauri: web/web-app holds its own {rel}, which the phone app gets from \
+                 {from}. Two copies of one rule are two rules; delete the phone's copy.\n\n"
+            );
+        }
+        let bytes = fs::read(from).unwrap_or_else(|e| {
+            panic!("\n\nrichos-tauri: could not read {from}, which the phone app serves as {rel}: {e}\n\n")
+        });
+        let to = shared.join(rel);
+        // Written only when it differs, for the reason `phone_app.rs` is: an unchanged file must
+        // not force a recompile of everything that includes it.
+        if fs::read(&to).ok().as_deref() != Some(bytes.as_slice()) {
+            if let Err(e) = to.parent().map(fs::create_dir_all).unwrap_or(Ok(())).and_then(|_| fs::write(&to, &bytes)) {
+                panic!("\n\nrichos-tauri: could not stage {from} as {to:?}: {e}\n\n");
+            }
+        }
+        files.push((*rel).to_string());
+    }
     files.sort();
 
     if files.is_empty() {
@@ -353,8 +382,9 @@ fn embed_phone(source: &Path) {
                  requests and a string literal in generated code. Rename it.\n\n"
             );
         }
+        let dir = if SHARED_WITH_PHONE.iter().any(|(r, _)| r == rel) { PHONE_SHARED_DIR } else { "phone" };
         generated.push_str(&format!(
-            "    (\"{rel}\", include_bytes!(concat!(env!(\"OUT_DIR\"), \"/phone/{rel}\"))),\n"
+            "    (\"{rel}\", include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{dir}/{rel}\"))),\n"
         ));
     }
     generated.push_str("];\n");
