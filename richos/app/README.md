@@ -177,7 +177,7 @@ richos/app/
                               file replays into. Run it with two builds against the same
                               file and diff: identical output is what a claim that a reader
                               change left every existing history alone is made of
-    tests/ledger_forward_compat_tests.rs 27 tests holding one line — NOTHING ALREADY
+    tests/ledger_forward_compat_tests.rs holding one line — NOTHING ALREADY
                               READABLE MAY BECOME LESS READABLE. Two committed fixtures
                               carrying every record shape the shipped builds wrote, pinned
                               against goldens captured BEFORE the tolerant reader existed;
@@ -185,7 +185,7 @@ richos/app/
                               torn write, a bad byte, a tag no build could have written —
                               and the anti-vacuous test that an unmodified ledger skips
                               NOTHING
-    tests/intake_forward_compat_tests.rs 19 tests holding the SAME line over the intake
+    tests/intake_forward_compat_tests.rs holding the SAME line over the intake
                               log — the file that holds what the CEO TYPED before it becomes
                               a turn. A record from a newer build, a torn write, a bad byte
                               placed FIRST (the reader used to stop there and lose every
@@ -194,7 +194,7 @@ richos/app/
                               nothing could read; a planted secret reaches no report; and
                               the anti-vacuous test that an untouched log skips NOTHING and
                               says NOTHING
-    tests/correction_forward_compat_tests.rs 36 tests holding the SAME line over the
+    tests/correction_forward_compat_tests.rs holding the SAME line over the
                               CORRECTION DESK — the file that holds what he was ASKED and
                               what he ANSWERED. The desk is an event log, so losing the
                               LATER record loses the ANSWER: a correction he confirmed
@@ -212,7 +212,7 @@ richos/app/
                               CONTROL (proven failing with the guard removed), immutability,
                               the fail-closed unbound legacy thread + its one-way explicit
                               adoption, the activation fence, and restart
-    tests/entity_registry_tests.rs 10 tests that the registry is the PERSON'S OWN, read from
+    tests/entity_registry_tests.rs that the registry is the PERSON'S OWN, read from
                               their own entities.json — empty by default, fail-closed on every
                               unknown root, and no existing thread orphaned by the migration
                               rather than four directory names, including the multi-root
@@ -225,7 +225,7 @@ richos/app/
     tests/native_input_provenance_tests.rs 1 native input provenance witness.
     tests/terminal_session_tests.rs 15 native session continuity and overlapping-input regressions.
     tests/rotation_tests.rs 12 account-resume, native model-control and quota-notice tests.
-    tests/questions.rs       23 tests: durable question sets, revisions, delivery, engine witnesses and the app-run ask gate
+    tests/questions.rs       durable question sets, revisions, delivery, engine witnesses and the app-run ask gate
     tests/action_ledger_tests.rs 5 action-ledger WRITER tests (the ledger is non-empty
                               at runtime; CEO-facing actions cross a rotation; machinery
                               stays out of every priming prompt)
@@ -307,19 +307,19 @@ richos/app/
                               never a pass; run it with --ignored against the binary a
                               release ships against
                               (docs/verification/inner-doctrine-live-2026-09-06/)
-    tests/between_turn_tests.rs 4 tests for techy-mode §1.5 gap #1, also against a REAL
+    tests/between_turn_tests.rs for techy-mode §1.5 gap #1, also against a REAL
                               CHILD PROCESS: the frame the agent emits at session start and
                               after a turn's result — which used to hit no sink at all — is
                               parked, deduplicated by the last_session_meta slot (on
                               meta_identity, because the frames differ by uuid), and drained
                               with turn_id: None. The fourth pins spike caveat C3: the
                               derived context measurement cannot exist before turn two
-    tests/between_turn_thread_tests.rs 5 tests for the same gap end to end: a real
+    tests/between_turn_thread_tests.rs for the same gap end to end: a real
                               NativeCognition's session-start frame reaching the journal and
                               the technical view, re-prime machinery that is recorded and
                               structurally cannot render, no session id on the lane's wire,
                               the honest empty lane, and the retention window covering it
-    tests/bug_report_tests.rs 69 tests for Bust a bug (CEO §115, round 21): names (in
+    tests/bug_report_tests.rs for Bust a bug (CEO §115, round 21): names (in
                               any capitals, in every alphabet, with an accent
                               encoded either Unicode way), file
                               paths (any word with a slash or a backslash, relative
@@ -357,7 +357,7 @@ richos/app/
                               when it is due; canceling one is confirmed (off this Mac, or
                               the issue it had already become, or an error and still
                               waiting). Fake transport and credentials throughout
-    tests/feature_request_tests.rs 9 tests for Request a feature (CEO 2026-10-11, round 24):
+    tests/feature_request_tests.rs for Request a feature (CEO 2026-10-11, round 24):
                               an idea goes through Bust a bug's own machinery and is posted
                               as a discussion under Ideas (GraphQL lookup of the repository
                               and the `ideas` category, then `createDiscussion`), never to
@@ -368,7 +368,7 @@ richos/app/
                               online; private names are left out by the same scanner and
                               Rich last, and nothing in the post calls it an issue or a bug.
                               A stand-in GitHub throughout
-    tests/feedback_no_outbound_tests.rs 8 tests asserting an ABSENCE: no transport in the
+    tests/feedback_no_outbound_tests.rs asserting an ABSENCE: no transport in the
                               module's shipping code, no network-capable dependency in the
                               crate, no other module consuming the feature, and an approval
                               that lands in one file with no sibling left for anything to
@@ -380,7 +380,7 @@ richos/app/
                               half — `feedback_record` still compares the rendered report
                               against what the webview says it showed him. Each proven to
                               FAIL when broken
-    tests/launch_no_outbound_tests.rs 11 tests holding the LAUNCH RECORD to the identical
+    tests/launch_no_outbound_tests.rs holding the LAUNCH RECORD to the identical
                               standard, at the CEO's direction — it is a record of his own
                               working life, so "local only, never outbound" is asserted the
                               same four ways (no transport in `launch.rs`, no network-capable
@@ -394,7 +394,7 @@ richos/app/
                               the CALLER with no timezone read in Rust, and the shape handed
                               to the webview pinned field by field. Two positive controls,
                               because a scanner over an empty corpus reports clean
-    tests/feedback_surface_tests.rs 3 tests that WRITE the three fixtures the browser suite
+    tests/feedback_surface_tests.rs that WRITE the three fixtures the browser suite
                               checks `richos/app/ui/mock.js`'s copy of this feature against — the
                               wording and the whole vocabulary, six selections with the exact
                               block each renders, and three stored entries taken through a
@@ -407,7 +407,7 @@ richos/app/
                               FN 1 / TN 112 over 147 invented utterances, plus the
                               topic-condition counterfactual that earns it (precision 1.000
                               -> 0.739 with the condition off, recall unmoved)
-    tests/belief_trigger_tests.rs 6 tests for the loro completion criterion, driven through
+    tests/belief_trigger_tests.rs for the loro completion criterion, driven through
                               the REAL read seam: a slice -> CliContextCompiler::interpret ->
                               SliceProvenance -> submit_prompt -> a proposal with the RIGHT
                               ref on a real desk. Plus the fixture richos/app/ui/ renders, checked
@@ -419,7 +419,7 @@ richos/app/
                               condition off, recall unmoved), the `emitted`-vs-`text`
                               counterfactual, and a cross-match probe over 24,058 offers of
                               a send against a dictation it did not come from
-    tests/heard_trigger_tests.rs 7 tests for the third completion criterion — a dictation
+    tests/heard_trigger_tests.rs for the third completion criterion — a dictation
                               silently edited before sending puts a candidate on the desk
                               with nothing said, over a REAL journal on disk in the format
                               richos/tools/richos-hud/dictation-flywheel.patch writes. Plus the
@@ -430,7 +430,7 @@ richos/app/
                               covers the HUNK REDUCTION too since 2026-08-30 — heard.rs
                               ports capture.js's `tokenReplaceHunks`, and a divergence there
                               changes WHICH PAIR is learned rather than whether to ask
-    tests/spoken_trigger_tests.rs 9 tests for the completion criterion — speaking a
+    tests/spoken_trigger_tests.rs for the completion criterion — speaking a
                               correction records it with no command typed, ordinary
                               conversation stages nothing, internal traffic is never mined
     tests/timeline_tests.rs  16 typed-timeline tests: the cross-entity machinery NEGATIVE
@@ -450,7 +450,7 @@ richos/app/
                               `unknown`, the states that are never emitted, the
                               cross-entity fence on every payload, and a pressed button's
                               words never drawn as his
-    tests/company_layer_tests.rs 7 tests driving a REAL spine and asserting on what the
+    tests/company_layer_tests.rs driving a REAL spine and asserting on what the
                               lease was actually primed with, never on the renderer: what the
                               CEO said about a company reaches the priming turn, another
                               company's file never does, an over-budget file arrives as
@@ -459,7 +459,7 @@ richos/app/
                               learning where the central folder is re-primes a lease that was
                               already running. The two negative controls come first because
                               they are what make the positives mean anything
-    tests/resident_front_desk_tests.rs 6 tests for the CEO's "any number of conversation
+    tests/resident_front_desk_tests.rs for the CEO's "any number of conversation
                               threads, each holding one front desk": a thread's lease is
                               PARKED alive rather than killed when another thread speaks, so
                               coming back is the same provider session with no re-prime; a
@@ -473,7 +473,7 @@ richos/app/
                               reports false and never comes down this path — and its `Drop`
                               is the only honest witness that a parked desk was not quietly
                               killed
-    tests/two_conversations_at_once_tests.rs 5 tests against the REAL delivered engine for
+    tests/two_conversations_at_once_tests.rs against the REAL delivered engine for
                               his per-thread ECS cursor: two conversations hold turns open at
                               once and BOTH check point, with the identical sequence on the
                               legacy single cursor REQUIRED TO FAIL in the same test — two
@@ -486,7 +486,7 @@ richos/app/
     tests/request_preparation_tests.rs regressions for cancellable preparation, independent replies and startup, rotation, provider retries and restart outcomes.
     tests/restart_continuation_tests.rs 8 restart tests for atomic continuation, uncertain native attempts, preserved control provenance and durable Stop across replay.
     tests/routing_context_tests.rs verifies that classification receives the existing scoped visible conversation, including formatted replies, without hidden inputs.
-    tests/onboarding_declination_tests.rs 3 tests over the two spine methods the first-run
+    tests/onboarding_declination_tests.rs over the two spine methods the first-run
                               notice is built on. `record_declination` shipped with no caller
                               anywhere in the product, so `OnboardingState::Declined` and
                               `DECLINED_BLOCK` were unreachable outside their own unit tests
@@ -516,7 +516,7 @@ richos/app/
                               instruction, the spoken form carries the document's name and date
                               and no URL, and the memory lanes' characters are byte-identical
                               with and without a block
-    tests/loro_gui_launch_tests.rs 15 tests for the launch nobody tests on (13 plus the two
+    tests/loro_gui_launch_tests.rs for the launch nobody tests on (13 plus the two
                               subprocess children they drive): a double-click
                               carries HOME, USER and PATH and nothing else, and until
                               2026-09-01 the WRITE half of loro read three environment
@@ -527,16 +527,16 @@ richos/app/
                               the SAME corpus — a build where they disagreed would show him
                               a proposal about one record and write to another
     tests/deferred_send_tests.rs
-                             5 tests for durable input during preparation, exact ordering,
+                             for durable input during preparation, exact ordering,
                               one delivery and independent conversation priming claims.
     tests/spare_front_desk_tests.rs
-                             9 tests for a spare primed before its thread exists, safe company
+                             for a spare primed before its thread exists, safe company
                               boundaries and unlocked startup/priming with the same shared factory.
                               A stale completed prime is retained without claiming it is current.
     tests/front_desk_priming_tests.rs
-                             3 tests for preparing the selected conversation before the first
+                             for preparing the selected conversation before the first
                               message, readiness after repair and accurate startup reporting.
-    tests/setup.rs           56 tests for FIRST-RUN SETUP (Option D, `src/setup.rs`): the
+    tests/setup.rs           for FIRST-RUN SETUP (Option D, `src/setup.rs`): the
                               two executables a customer's Mac does not have, fetched and
                               verified, and since 2026-10-07 the video tools (yt-dlp and a
                               pinned speech model) as the third essential. Every failure path is a VALUE rather than a network
@@ -552,14 +552,14 @@ richos/app/
                               run since that job landed. Off macOS it is now
                               `ignored, NOT CHECKABLE ON THIS TARGET: …`, because the pin is
                               read by `/usr/bin/codesign`. The negative half needs nothing
-    tests/media_tools.rs     13 tests for YT-DLP KEPT AT THE NEWEST NIGHTLY (`src/media_tools.rs`,
+    tests/media_tools.rs     for YT-DLP KEPT AT THE NEWEST NIGHTLY (`src/media_tools.rs`,
                               media-tools plan slice 2): a newer nightly replaces the copy, a
                               download that does not match its checksum is deleted, offline
                               keeps the old copy, the old version file survives the swap and
                               goes one check later (review m1), the tools folder sits on PATH
                               after `/sbin` (m2), one tag per check and a 5-minute retry while
                               no copy exists (m3). Fakes only, no network.
-    tests/interruption_tests.rs 14 tests for WHY A TURN ENDED WITHOUT FINISHING
+    tests/interruption_tests.rs for WHY A TURN ENDED WITHOUT FINISHING
                               (`src/interruption.rs`, the 2026-09-17 nightly's D2). The
                               published nightly held
                               `cognition protocol: "Not logged in · Please run /login"` in
@@ -574,11 +574,11 @@ richos/app/
                               the vendor's one string that carries both families' wording.
                               The transient arm has its own positive control, without which
                               a classifier answering `Unknown` to everything would pass
-    tests/worker_attribution_tests.rs 7 tests that the workers in the prompt are the
+    tests/worker_attribution_tests.rs that the workers in the prompt are the
                               SERVING SESSION's, derived from the session identity and
                               never from a directory mtime (a decoy dir is present in
                               every case, so "reads nothing" cannot pass by finding nothing)
-    tests/upstream_classification_tests.rs 9 tests pinned to CAPTURED BYTES — the five
+    tests/upstream_classification_tests.rs pinned to CAPTURED BYTES — the five
                               `API Error: 529` lines from 2026-09-03, four of them carrying
                               the incident's own request ids, at
                               docs/verification/upstream-failure-2026-09-05/. It proves `429`
@@ -587,7 +587,7 @@ richos/app/
                               retries on the CEO's schedule (1, 2, 5, 10, 20, 40, 80 minutes,
                               2026-10-07) and any other fault at most once, saying what it
                               spent
-    tests/upstream_turn_tests.rs 14 tests driving the REAL spine against an injected
+    tests/upstream_turn_tests.rs driving the REAL spine against an injected
                               upstream: the `529` that arrives as an ASSISTANT MESSAGE (the
                               shape that would otherwise complete a turn whose answer is a
                               vendor diagnostic in Rich's voice), the loss statement built
@@ -645,7 +645,7 @@ richos/app/
                               at each codec block while the rest of the sentence is generated
     src/controller.rs        four threads, CaptureBrain, the half-duplex taint rule
     tests/barge_in_composition.rs  the WIRING: echo defense + real interruptions
-    tests/long_speech_on_the_ceos_rig.rs 7 tests: 23.466 s of speech recorded in his room on his
+    tests/long_speech_on_the_ceos_rig.rs 23.466 s of speech recorded in his room on his
                               microphone, at his -18.1 dBFS, reaches the recognizer to its last
                               frame, over silence and over his room's noise at -44.0 and -36.0
                               dBFS; the VAD floor that climbed inside speech kept 1.376-5.840 s
@@ -655,22 +655,22 @@ richos/app/
                               reply over the recorded room of the 2026-09-17 rig at -49.2 to
                               -37.0 dBFS. And no input holds a turn open past 60.000 s, through
                               the turn assembler
-    tests/on_it_spoken_at_once.rs 1 test: on his spoken go the early "On it!" reaches speech
+    tests/on_it_spoken_at_once.rs on his spoken go the early "On it!" reaches speech
                               the moment it is shown, through the real spine and the production
                               sentence chunker, not at turn end
-    tests/rich_voice.rs      3 tests: voice mode speaks through RichVoice, and with the pinned
+    tests/rich_voice.rs      voice mode speaks through RichVoice, and with the pinned
                               bundle installed a sentence comes out of Pocket TTS as Peter
                               Yearsley, and the last words of a reply ending "9:00 AM." are
                               heard as said (ignored, never ok, without the bundle)
-    tests/rich_voice_only.rs 1 test: no other voice speaks for Rich or is named for him; a
+    tests/rich_voice_only.rs no other voice speaks for Rich or is named for him; a
                               sentence waits while his voice is installed, and the voice the
                               install brings speaks it
-    tests/self_voice_replay.rs 18 tests replaying the candidate-.5 walk (and the near-end onset control): the shipped rule submitted
+    tests/self_voice_replay.rs replaying the candidate-.5 walk (and the near-end onset control): the shipped rule submitted
                              2.224 s of Rich's own answer as the CEO's message; the audible window
                              (queued OR owed OR within the measured device hold, taint re-evaluated
                              every frame) admits none of it; the CEO after the answer and tap-to-stop
                              mid-answer are still admitted (positive controls).
-    tests/turn_on_the_ceos_rig.rs 8 tests: a sentence with his measured 1.406 s pause in it, on
+    tests/turn_on_the_ceos_rig.rs a sentence with his measured 1.406 s pause in it, on
                               his room at his -18.1 dBFS (a synthetic voice, and his own private
                               near-end recording), is ONE turn handed over 2.010 s after his
                               last speech; the old rule made two, the first inside the pause.
@@ -701,15 +701,15 @@ richos/app/
     examples/voice_loop.rs   the reproducible end-to-end proof (audio -> Claude -> speakers)
     examples/device_probe.rs what the audio hardware on THIS machine actually reports
     examples/noaudio_live.rs live mute/unmute check on the real device (PASS 2026-08-24)
-    tests/watermark_cadence_tests.rs 8 tests that recompute the rotation cadence from the
+    tests/watermark_cadence_tests.rs that recompute the rotation cadence from the
                               RAW 2026-08-28 capture on every run, both directions
-    tests/phone_intake_tests.rs 16 tests of THE PHONE'S ROAD IN — the `IntakeRecord::Channel`
+    tests/phone_intake_tests.rs of THE PHONE'S ROAD IN — the `IntakeRecord::Channel`
                               record and `Spine::poll_intake`, the idle drain the phone-client
                               plan calls "not a half-day nicety any more; it is the feature".
                               Every negative test carries its positive control in the SAME
                               test: the one that matters runs the same fixture with and
                               without `poll_intake` one call apart
-    tests/ended_turn_tests.rs 8 tests of WHICH CONVERSATIONS' TURNS ENDED — `Spine::
+    tests/ended_turn_tests.rs of WHICH CONVERSATIONS' TURNS ENDED — `Spine::
                               take_ended_turns`, the one question every entrance asks at
                               its turn boundary so work he gives typed, aloud or from the
                               phone starts the same way (CEO ruling §88); each road has a
@@ -984,19 +984,18 @@ for doing it.
 
 **What keeps the documents true** (`richos/app/ui/tests/docs-claims.js`). Slice 10 rewrote the
 stale claims in this file, in `richos/app/STREAMING.md` and in `richos/app/ui/tests/README.md`; the suite
-is what stops them going stale again. It joins four kinds of claim to the tree and types
+is what stops them going stale again. It joins three kinds of claim to the tree and types
 nothing:
 
 | Claim | Joined to |
 |---|---|
-| per-file test counts in this file | `#[test]` counted in the file named |
-| the `cargo test -p <crate>` totals | the sum of those, plus doc-tests counted from the fences |
+| every test file named in this file | the test files that exist on disk |
 | the suite table in `ui/tests/README.md` | the inventory `run.js` discovers from disk |
 | every `rich://` name in `STREAMING.md` | the `pub const … = "rich://…"` the Rust source declares |
 
 Its first run is the demonstrated failure and nothing in it was staged:
 [`docs/verification/restart-scope-2026-08-30/docs-claims-before-slice-10.txt`](../../docs/verification/restart-scope-2026-08-30/docs-claims-before-slice-10.txt).
-Five of six checks red — two crate totals wrong by 207 and 42 tests, four per-file counts
+Five of six checks red — two crate totals wrong, four per-file counts
 stale, three whole test suites documented nowhere, three browser suites missing from their
 own table and four declared `rich://` events absent from the document that calls itself
 *"the whole contract the UI needs"*, `rich://proactive-message` — Rich speaking unprompted
@@ -1198,7 +1197,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 1840 tests + 8 doc-tests (1836 direct, 4 ignored)
+cargo test -p richos-core                       # 8 doc-tests; direct and ignored tests counted by the tree
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside
@@ -1226,7 +1225,7 @@ cargo test -p richos-core                       # 1840 tests + 8 doc-tests (1836
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 432 tests (431 direct, 1 ignored; 4 live-device tests also ignored without a device)
+cargo test -p richos-voice                      # live-device tests are ignored without a device
 #     The 327 library tests include four `ignored, LIVE AUDIO: …` tests, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test
@@ -1872,9 +1871,7 @@ Transcript and findings: `docs/verification/2026-09-17-evidence-lookup-wired-end
 
 **Proven (live, 2026-08-24):** the round-trip through the full spine — CEO prompt
 persisted crash-safe → re-prime identity injected → real Claude replies **as Rich** →
-clean render. The Tauri shell builds into a real arm64 binary. `tests/spine_tests.rs` was
-11 tests on the day this was written and is 12 now; the layout above carries the current
-number and `docs-claims.js` is what keeps it current.
+clean render. The Tauri shell builds into a real arm64 binary. `tests/spine_tests.rs` is documented in the layout above.
 
 **Streaming (2026-08-24):** Rich's reply deltas now stream **live** to the UI via Tauri
 events (`rich://turn-started` → `rich://chunk`… → `rich://turn-completed`/`rich://turn-error`),
@@ -1889,7 +1886,7 @@ explicit triggers), self-authored handoff summaries on clean rotation, mid-turn-
 recovery/replay (bounded to one attempt, clean-render dedup via superseded turns) and the
 identity/action-ledger re-prime that structurally excludes false attribution — all wired
 in `richos-core::spine` (`LeaseFactory`, `rotate_lease`, `recover_and_replay`) and proven
-both headless (`cargo test -p richos-core`, `tests/terminal_session_tests.rs`, 15 tests) and live
+both headless (`cargo test -p richos-core`, `tests/terminal_session_tests.rs`) and live
 against the real binary (`examples/rotation_roundtrip.rs` — a forced mid-conversation
 rotation swaps the backing Claude session and the successor correctly recalls the prior
 exchange purely via the re-prime payload). Company name, the assertiveness dial and the
@@ -1902,7 +1899,7 @@ the spine-seams + rotation brief, 2026-08-24.
 routed into a second event family (`rich://machinery`) and retained in a separate
 per-thread, day-sharded journal, on ONE per-turn `seq` shared with the assistant text so
 "he said X, then ran Y, then said Z" is reconstructible. Proven headless
-(`tests/machinery_tests.rs`, 16 tests, driven by wire frames measured against the real
+(`tests/machinery_tests.rs`, driven by wire frames measured against the real
 binary) and live (`examples/machinery_roundtrip.rs` — one real tool-using turn, 24 journal
 lines projecting to 9 rows, positions 0..=34 used exactly once across both families; the run
 is kept at `docs/verification/machinery-roundtrip-2026-08-28.txt`). The emission set the
@@ -1928,7 +1925,7 @@ The standing order is held by an ORDERING RULE rather than by an argument about 
 vendor kinds might give a rotation away: the lane is drained as honest traffic BEFORE an
 internal turn starts and as `internal: true` immediately after one finishes, so a re-prime,
 a handoff or a successor's residue can never render. Proven against a real child process
-(`tests/between_turn_tests.rs`, 3 tests; `tests/between_turn_thread_tests.rs`, 6 tests
+(`tests/between_turn_tests.rs`; `tests/between_turn_thread_tests.rs`
 end to end through `NativeCognition`) and on the rendered surface (`richos/app/ui/tests/techy.js`
 checks 18-21, shots `3-1-08` and `3-1-09`).
 
