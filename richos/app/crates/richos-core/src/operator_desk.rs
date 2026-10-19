@@ -1112,7 +1112,7 @@ mod tests {
     fn saved_answer(d: &Desk, a: &Assignment, set: &str, text: &str) -> crate::questions::Delivery {
         let delivery = crate::questions::Delivery { obligation_id:None,
             id: format!("question-set:{set}"), entity_id: a.entity_id.clone(), thread_id: a.thread_id.clone(),
-            asker: format!("operator:handle:{}", a.id), set_id: Some(set.into()), text: text.into(), receipt: None };
+            asker: format!("operator:handle:{}", a.id), set_id: Some(set.into()), text: text.into(), receipt: None, order: None };
         d.desk.queue_question_answer(&delivery).unwrap();
         delivery
     }

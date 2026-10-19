@@ -3929,6 +3929,80 @@ body.bp-narrow .tl-user-bubble {
   font-size: 0.94em;
 }
 
+/* Tables, quotations, rules and fenced code in an answer (nightly 64 s5: a stopped answer's
+   table read as raw `|` lines). The Output panel's approved treatment (`.of-md`, below), copied
+   into the prose with two differences: every TEXT inherits `--ink` (a header is told by weight,
+   a quotation by its bar), and sizes stay on the prose scale.
+
+   CONTRAST, computed: text is `--ink` on `--ground`, 14.55:1 dark and 14.90:1 light, and on the
+   fence's `--surface-sunk` 14.78:1 dark and 15.58:1 light. The quotation bar is a non-text
+   indicator on `--gold-text`: 7.68:1 dark (#c2a35c on #0c1322), 5.48:1 light (#715715 on
+   #eae6dd), both above 3:1. DECLARED DECORATIVE, not an indicator: the `--line-soft` row
+   hairlines and the fence border (1.11:1 dark, 1.20:1 light, the Output panel's own). A row is
+   read from its cells' words, which stay aligned in their columns without the hairline. */
+.tl-prose .tl-md-quote,
+.tl-prose .tl-md-rule,
+.tl-prose .tl-md-pre,
+.tl-prose .tl-md-table-wrap {
+  margin: 0.7em 0;
+}
+
+.tl-prose > :first-child {
+  margin-top: 0;
+}
+
+.tl-prose > :last-child {
+  margin-bottom: 0;
+}
+
+.tl-prose .tl-md-quote {
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--gold-text);
+}
+
+.tl-prose .tl-md-rule {
+  height: 1px;
+  border: 0;
+  background: var(--line);
+}
+
+.tl-prose .tl-md-pre {
+  padding: 10px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--surface-sunk);
+  font-family: var(--mono);
+  /* The code span's 0.94em: 16.9px at 100%, above the 16px readable floor. */
+  font-size: 0.94em;
+  line-height: 1.5;
+}
+
+.tl-prose .tl-md-table-wrap {
+  overflow-x: auto;
+}
+
+.tl-prose .tl-md-table {
+  border-collapse: collapse;
+}
+
+.tl-prose .tl-md-table th,
+.tl-prose .tl-md-table td {
+  padding: 6px 14px 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: normal;
+}
+
+.tl-prose .tl-md-table th {
+  font-weight: 600;
+}
+
+.tl-prose .tl-md-table td {
+  font-variant-numeric: tabular-nums;
+}
+
 /* Tier-1/2 proactive: the slim accent edge — the ONLY "this is more urgent" signal, and the
    ONE phase that is real. */
 .tl-rich--proactive {

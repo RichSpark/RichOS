@@ -23,6 +23,16 @@ pub trait SpineView {
         Ok(self.ledger().messages(thread)?)
     }
     fn active_thread(&self) -> Option<&str> { self.active_binding().map(|b| b.thread_id()) }
+    /// The conversation a Stop press is for: the one the screen named. While another
+    /// conversation opens, the screen still offers Stop for the previous one after the
+    /// active conversation has moved on. With no name, the active one; a name this ledger
+    /// does not know is no conversation.
+    fn stop_conversation<'a>(&'a self, named: Option<&'a str>) -> Option<&'a str> {
+        match named {
+            Some(thread) => self.ledger().threads().iter().any(|t| t.id == thread).then_some(thread),
+            None => self.active_thread(),
+        }
+    }
 }
 
 impl SpineView for Spine {

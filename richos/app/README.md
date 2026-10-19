@@ -149,16 +149,7 @@ richos/app/
     src/upstream.rs          UPSTREAM MODEL-API FAILURE, first-class (open-items row 3.30).
                               `529` overload and `429` quota classified apart, from the
                               vendor's own structural tokens rather than its English; the
-                              BOUNDED, VISIBLE retry budget; the what-survived statement; and
-                              a size-dependent fake upstream, because the 2026-09-03 outage
-                              failed the expensive requests and passed a one-command probe
-    src/reachability.rs      CAN CLAUDE BE REACHED **AT THE SIZE THE WORK IS**? On
-                              2026-09-03 a three-character probe finished while every large
-                              brief died on 529, so a `Reachable` verdict CANNOT be
-                              constructed by a probe below the measured floor — a cheap
-                              success is `Unproven`, which is a statement about the probe.
-                              The floor is the LARGEST recent request, never the median,
-                              and an unmeasured install sends nothing at all
+                              BOUNDED, VISIBLE retry budget; and the what-survived statement
     src/work_gate.rs         IS RICHOS DOING ANYTHING RIGHT NOW — the decision the updater
                               never asked (RICH-TODOs row u1). Three readings in, one verdict
                               plus the sentence that explains it out. Holds no handles and
@@ -232,7 +223,7 @@ richos/app/
                               classified identically, which is what makes the operator line
                               impossible to write for only one surface
     tests/native_input_provenance_tests.rs 1 native input provenance witness.
-    tests/terminal_session_tests.rs 13 native session continuity and overlapping-input regressions.
+    tests/terminal_session_tests.rs 15 native session continuity and overlapping-input regressions.
     tests/rotation_tests.rs 11 account-resume, native model-control and quota-notice tests.
     tests/questions.rs       23 tests: durable question sets, revisions, delivery, engine witnesses and the app-run ask gate
     tests/action_ledger_tests.rs 5 action-ledger WRITER tests (the ledger is non-empty
@@ -587,7 +578,7 @@ richos/app/
                               SERVING SESSION's, derived from the session identity and
                               never from a directory mtime (a decoy dir is present in
                               every case, so "reads nothing" cannot pass by finding nothing)
-    tests/upstream_classification_tests.rs 10 tests pinned to CAPTURED BYTES — the five
+    tests/upstream_classification_tests.rs 9 tests pinned to CAPTURED BYTES — the five
                               `API Error: 529` lines from 2026-09-03, four of them carrying
                               the incident's own request ids, at
                               docs/verification/upstream-failure-2026-09-05/. It proves `429`
@@ -595,9 +586,7 @@ richos/app/
                               the vendor's structure and not its English, that an overload
                               retries on the CEO's schedule (1, 2, 5, 10, 20, 40, 80 minutes,
                               2026-10-07) and any other fault at most once, saying what it
-                              spent, and — the finding itself —
-                              that the injected upstream passes a 3-character probe while
-                              failing a 120,000-character one
+                              spent
     tests/upstream_turn_tests.rs 14 tests driving the REAL spine against an injected
                               upstream: the `529` that arrives as an ASSISTANT MESSAGE (the
                               shape that would otherwise complete a turn whose answer is a
@@ -606,11 +595,6 @@ richos/app/
                               two positive controls without which the rest is theater — an
                               ordinary broken pipe is NOT dressed up as an outage, and a
                               healthy turn produces nothing at all
-    examples/reachability_probe.rs the operator's half: the same rules against the REAL
-                              `claude`, with the floor read off a real ledger. It prints
-                              what it would send and REFUSES to send it without `--spend`,
-                              because the request is billed to whoever is signed in. Exit 0
-                              proved / 1 classified failure / 3 NOT PROVEN
     examples/machinery_roundtrip.rs headless proof that machinery is routed AND retained
                               end to end against the real adapter (the run is kept at
                               docs/verification/machinery-roundtrip-2026-08-28.txt)
@@ -1198,7 +1182,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 1809 tests + 8 doc-tests (1805 direct, 4 ignored)
+cargo test -p richos-core                       # 1818 tests + 8 doc-tests (1814 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside
@@ -1889,7 +1873,7 @@ explicit triggers), self-authored handoff summaries on clean rotation, mid-turn-
 recovery/replay (bounded to one attempt, clean-render dedup via superseded turns), and the
 identity/action-ledger re-prime that structurally excludes false attribution — all wired
 in `richos-core::spine` (`LeaseFactory`, `rotate_lease`, `recover_and_replay`) and proven
-both headless (`cargo test -p richos-core`, `tests/terminal_session_tests.rs`, 13 tests) and live
+both headless (`cargo test -p richos-core`, `tests/terminal_session_tests.rs`, 15 tests) and live
 against the real binary (`examples/rotation_roundtrip.rs` — a forced mid-conversation
 rotation swaps the backing Claude session and the successor correctly recalls the prior
 exchange purely via the re-prime payload). Company name, the assertiveness dial, and the

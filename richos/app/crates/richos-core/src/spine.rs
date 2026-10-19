@@ -2827,10 +2827,19 @@ impl Spine {
     pub fn queue_question_answer(&mut self,delivery:&crate::questions::Delivery)->Result<String,SpineError> {
         let binding=self.fence_binding(&delivery.thread_id)?;
         if binding.entity_id().as_str()!=delivery.entity_id {return Err(SpineError::Steering("Question scope mismatch".into()));}
-        let turn_id=self.ledger.record_question_answer(&binding,delivery)?;
+        // The order taken when the app accepted his click (the question store carries it), or
+        // the same acceptance order a typed message takes, so a Stop he presses after it covers it.
+        let order=match delivery.order {Some(order)=>{self.control.advance_input_order(order);Some(order)},None=>self.control.take_input_order()};
+        let turn_id=self.ledger.record_question_answer(&binding,delivery,order)?;
         if self.ledger.turn(&turn_id).is_some_and(|t|t.state==crate::ledger::TurnState::Received)
             && !self.pending_delivery.iter().any(|pending|pending.turn_id==turn_id) {
             if delivery.set_id.is_none(){self.emit_live(self.ceo_message_event(&binding,&turn_id));}
+            // Accepted before a Stop that settled before this delivery: stopped with the rest.
+            if let Some(claim)=delivery.order.and_then(|order|self.control.for_thread(binding.thread_id()).settled_stop_covering(order)) {
+                self.ledger.stop_turn(&turn_id,claim.requested_at)?;
+                self.emit_live(self.turn_status_event(&binding,&turn_id,TurnStatus::Stopped,None));
+                return Ok(turn_id);
+            }
             self.deliver(&turn_id,&binding,&delivery.text,true)?;
         }
         Ok(turn_id)

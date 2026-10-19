@@ -335,6 +335,60 @@ select {
 	color: var(--attention);
 }
 
+/* A question card: his answers are buttons, one tap answers (the Mac's `app/ui/questions.js`).
+ * Only pairs already on this screen: --ink and --ink-soft on --surface-sunk and --rich-bg, and
+ * --gold-text for the recommendation, as the native card has it. */
+.msg-question { width: 88%; }
+.ask-aside { margin: 0 0 4px; font-size: 16px; color: var(--ink-soft); }
+.ask-controls { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ask-option {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	width: 100%;
+	min-height: 44px;
+	padding: 10px 13px;
+	text-align: left;
+	border-radius: 9px;
+	border: 1px solid var(--line-control);
+	background: var(--surface-sunk);
+	color: var(--ink);
+	font-family: inherit;
+	overflow-wrap: anywhere;
+}
+.ask-option[aria-pressed="true"] { border: 2px solid var(--gold); padding: 9px 12px; }
+.ask-option[aria-pressed="true"] .ask-label::before { content: "\2713\00a0"; }
+.ask-label { font-size: 17px; font-weight: 600; }
+.ask-desc { font-size: 16px; font-weight: 400; color: var(--ink-soft); }
+.ask-rec { font-size: 16px; color: var(--gold-text); }
+.ask-link {
+	align-self: flex-start;
+	min-height: 44px;
+	padding: 8px 0;
+	border: 0;
+	background: none;
+	color: var(--ink);
+	font-family: inherit;
+	font-size: 16px;
+	text-decoration: underline;
+}
+.ask-controls > .hear, .ask-other > .hear { align-self: flex-start; margin-top: 0; }
+.ask-other { display: flex; flex-direction: column; gap: 8px; }
+.ask-other textarea {
+	min-height: 88px;
+	padding: 10px 12px;
+	border-radius: 9px;
+	border: 1px solid var(--line-control);
+	background: var(--surface-sunk);
+	color: var(--ink);
+	font-family: inherit;
+	font-size: 17px;
+}
+.ask-answer { margin: 0; font-size: 17px; font-weight: 600; }
+.ask-line, .ask-status { margin: 0; font-size: 16px; color: var(--ink-soft); }
+.ask-status { margin-top: 8px; }
+
 /* ---------------------------------------------------------------------------------------
    The composer — type, or hold and speak
    --------------------------------------------------------------------------------------- */
