@@ -433,7 +433,7 @@ impl Finding {
     pub fn ceo_message(&self) -> String {
         match self.kind {
             Failure::NoSpace => format!(
-                "There isn't enough room on this disk for my speech model: it needs about {} free, \
+                "There isn't enough room on this disk for my speech model: it needs about {} free \
                  and there's {}. Free up some space and ask me again. Nothing was downloaded.",
                 human(self.want_u64()),
                 human(self.have_u64())

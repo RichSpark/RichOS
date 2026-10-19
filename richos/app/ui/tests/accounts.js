@@ -31,14 +31,17 @@ async function main() {
   const errors = [];
   async function open(theme, quota, opts = {}) {
     const page = await browser.newPage({ viewport: opts.viewport || { width: 1440, height: 900 }, locale: "en-US" });
+    // `opts.clock`: the page runs on Playwright's clock from its first script; it keeps pace with
+    // real time until a check pauses it (as tests/home.js does).
+    if (opts.clock) await page.clock.install();
     page.setDefaultTimeout(30000); // load-bound: a hang guard only; every wait below waits for a fact
     page.on("pageerror", e => errors.push(String(e)));
-    await page.addInitScript(({ theme, quota, signIn, policy }) => {
+    await page.addInitScript(({ theme, quota, signIn, policy, emails }) => {
       localStorage.setItem("richos-theme", theme);
       localStorage.setItem("richos-mock-config", JSON.stringify({ theme, font_scale: 100 }));
       localStorage.setItem("richos-mock-quota-policy", JSON.stringify(policy || { enabled: false, pausePercent: 93 }));
-      window.__RICHOS_MOCK_PRESET__ = { quota, signIn };
-    }, { theme, quota, signIn: opts.signIn || [], policy: opts.policy });
+      window.__RICHOS_MOCK_PRESET__ = { quota, signIn, emails };
+    }, { theme, quota, signIn: opts.signIn || [], policy: opts.policy, emails: opts.emails || {} });
     await page.goto("file://" + path.join(UI_DIR, "index.html"));
     await page.waitForSelector("#set-btn");
     await page.evaluate(() => window.RichSplash.yieldNow("accounts-test"));
@@ -119,8 +122,8 @@ async function main() {
     assertEqual(await texts(page, ".acc-pill"), ["In use now", "Next"]);
     assertEqual(await text(page, ".acc-handover"), "Then Work, when Home is nearly full");
     assertEqual(await text(page, '.acc-card[data-id="2"] .acc-meter[data-k="five"] .acc-meter-when'), "Not used in the last 5 hours");
-    assertEqual(await page.locator('.acc-card[data-id="1"] button').allInnerTexts(), [], "the one in use has nothing to press, and Account 1 is never removed here");
-    assertEqual((await page.locator('.acc-card[data-id="2"] button').allInnerTexts()).map(t => t.trim()), ["Use this one now", "Remove"]);
+    assertEqual(await page.locator('.acc-card[data-id="1"] .acc-acts button').allInnerTexts(), [], "the one in use has nothing to press, and Account 1 is never removed here");
+    assertEqual((await page.locator('.acc-card[data-id="2"] .acc-acts button').allInnerTexts()).map(t => t.trim()), ["Use this one now", "Remove"]);
     assertEqual(await text(page, ".acc-how-title"), "How Rich uses your accounts");
     await page.close();
     return "one: Your Claude account + the slot; two: Home In use now, Work Next, the handover line";
@@ -224,7 +227,7 @@ async function main() {
     const at = await page.evaluate(() => window.RichBridge.invoke("claude_quota", {}).then(v => v.lastSwitch.at));
     assertEqual(await text(page, ".acc-banner-head"), `Rich switched to Work at ${clock(at)}`);
     assert((await text(page, ".acc-banner-body")).startsWith("Why: Home had used 99% of its weekly limit. It is fresh again "), await text(page, ".acc-banner-body"));
-    assert((await text(page, ".acc-banner-body")).endsWith("Nothing stopped, and the team carried on."));
+    assert((await text(page, ".acc-banner-body")).endsWith("Nothing stopped and the team carried on."));
     assertEqual((await texts(page, ".acc-log li"))[0], `${clock(at)} Rich switched to Work. Home reached 99% of its week.`);
     assertEqual(await texts(page, ".acc-name"), ["Work", "Home"], "the one in use now is on top");
     assertEqual(await texts(page, ".acc-pill"), ["In use now", "Next"]);
@@ -322,7 +325,7 @@ async function main() {
     const page = await open("dark", two([58, 72], [0, 12]));
     await sheet(page);
     await page.click('[aria-label="Remove Work"]');
-    assert((await text(page, ".acc-confirm")).startsWith("Remove Work from RichOS? RichOS signs out of it here. Nothing changes on the account itself, and you can add it back any time."));
+    assert((await text(page, ".acc-confirm")).startsWith("Remove Work from RichOS? RichOS signs out of it here. Nothing changes on the account itself and you can add it back any time."));
     await page.click("#acc-remove-yes");
     await page.waitForSelector(".acc-feedback");
     assertEqual(await text(page, ".acc-feedback"), "Work is removed from RichOS. You can add it back any time.");
@@ -330,6 +333,153 @@ async function main() {
     await page.close();
     return "removed";
   });
+
+  // ---- 6. which account is which: Show email (round 31, item 18) -----------------------------
+  // The CEO, 2026-10-18: "The user needs to know which account is which but we don't want to
+  // display the emails associated with each account directly on the corresponding screen.
+  // Instead, I imagine the user would need to do an extra click there somehow to temporarily
+  // reveal which email is connected to which account name." Each email is what that account's
+  // own sign-in answers (main.rs `claude_account_email`; the mock answers from `emails`, by id).
+  const EMAILS = { "1": "jordan.lee@example.com", "2": "jordan@northwind.example" };
+  const onPage = (page, s) => page.evaluate(s => document.documentElement.outerHTML.includes(s), s);
+  const anyEmail = page => Promise.all(Object.values(EMAILS).map(e => onPage(page, e))).then(a => a.some(Boolean));
+  const showing = (page, id) => page.locator(`.acc-card[data-id="${id}"] .acc-who-addr`);
+
+  await run.check("Show email: hidden by default, one click shows Signed in as the account's own email with the ring and Hide, each card on its own", async () => {
+    const page = await open("dark", two([58, 72], [0, 12]), { emails: EMAILS });
+    await sheet(page);
+    assertEqual((await texts(page, ".acc-reveal")), ["Show email", "Show email"], "one Show email per card");
+    assert(!(await anyEmail(page)), "no email anywhere in the page before a click, not even hidden");
+    assertEqual(await page.evaluate(() => window.__accountCalls.filter(c => c.cmd === "claude_account_email").length), 0, "nothing is read before a click");
+    await page.click('[aria-label="Show the email Home is signed in with"]');
+    await showing(page, "1").waitFor();
+    assertEqual(await text(page, '.acc-card[data-id="1"] .acc-who'), "Signed in as jordan.lee@example.com Hide");
+    assert(await page.locator('.acc-card[data-id="1"] .acc-who-ring').isVisible(), "the ring that empties over 8 seconds");
+    assertEqual(await page.evaluate(() => document.activeElement.textContent.trim()), "Hide", "focus moves to Hide");
+    assertEqual(await page.evaluate(() => window.__accountCalls.filter(c => c.cmd === "claude_account_email")), [{ cmd: "claude_account_email", id: "1" }], "Home's own sign-in was asked, by its id");
+    assertEqual(await text(page, '.acc-card[data-id="2"] .acc-who'), "Show email", "Work stays hidden");
+    assert(!(await onPage(page, EMAILS["2"])), "Work's email is not in the page");
+    assertEqual(await text(page, "#acc-who-status"), "Home is signed in as jordan.lee@example.com. It hides again in 8 seconds.", "said to a screen reader");
+    await page.click('[aria-label="Show the email Work is signed in with"]');
+    await showing(page, "2").waitFor();
+    assertEqual(await text(page, '.acc-card[data-id="2"] .acc-who-addr'), EMAILS["2"], "Work's own email, not Home's");
+    assert(await showing(page, "1").isVisible(), "both at once, to compare");
+    await page.close();
+    return "Home then Work, each its own email";
+  });
+
+  await run.check("Show email: it hides again by itself after 8 seconds, and at once on Hide, with Show email back", async () => {
+    // On the page's own clock (Playwright's), paused once the sheet is open, so each boundary is
+    // the app's own timer and never this host's load: 8,000 ms showing, then the 320 ms wipe.
+    const page = await open("light", two([58, 72], [0, 12]), { emails: EMAILS, clock: true });
+    await sheet(page);
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+    const line = id => page.evaluate(id => {
+      const who = document.querySelector(`.acc-card[data-id="${id}"] .acc-who`);
+      return who ? [who.querySelector(".acc-who-addr") ? "showing" : "hidden", who.classList.contains("is-wiping")] : null;
+    }, id);
+    await page.click('[aria-label="Show the email Home is signed in with"]');
+    await showing(page, "1").waitFor();
+    assertEqual(await page.evaluate(() => getComputedStyle(document.querySelector('.acc-card[data-id="1"] .acc-who-ring .arc')).animationDuration), "8s", "the ring empties over 8 seconds");
+    await page.clock.runFor(100); // the wipe-in's two frames
+    await page.clock.runFor(7899);
+    assertEqual(await line("1"), ["showing", false], "still showing at 7,999 ms");
+    await page.clock.runFor(1);
+    assertEqual(await line("1"), ["showing", true], "at 8,000 ms it starts to go");
+    await page.clock.runFor(320);
+    assertEqual(await line("1"), ["hidden", false], "gone after the 320 ms wipe");
+    assertEqual(await text(page, '.acc-card[data-id="1"] .acc-who'), "Show email");
+    assert(!(await anyEmail(page)), "gone from the page, not just from view");
+    // Hide: at once (the same wipe), and focus back on Show email. Pressed from the keyboard,
+    // the way focus matters: Show email moves focus to Hide (a mouse click on a button gives it
+    // no focus in WebKit, so there is none to hand back then).
+    await page.click('[aria-label="Show the email Work is signed in with"]');
+    await showing(page, "2").waitFor();
+    await page.clock.runFor(100);
+    assertEqual(await page.evaluate(() => document.activeElement.id), "acc-email-hide-2", "focus is on Work's Hide");
+    await page.keyboard.press("Enter");
+    assertEqual(await line("2"), ["showing", true], "Hide starts the wipe at once");
+    await page.clock.runFor(320);
+    assertEqual(await line("2"), ["hidden", false], "gone 320 ms after Hide, not 8 seconds");
+    assertEqual(await page.evaluate(() => document.activeElement.id), "acc-email-2", "focus is back on Work's Show email");
+    assertEqual(await text(page, "#acc-who-status"), "Email hidden.");
+    await page.close();
+    return "showing to 7,999 ms, going at 8,000, gone at 8,320; Hide: gone 320 ms later";
+  });
+
+  await run.check("Show email: closing the sheet hides every email, by its close button and by Escape; it always opens with all hidden", async () => {
+    const page = await open("dark", two([58, 72], [0, 12]), { emails: EMAILS });
+    for (const how of ["close button", "Escape"]) {
+      await sheet(page);
+      assertEqual(await page.locator(".acc-who-addr").count(), 0, `opens with every email hidden (${how})`);
+      await page.click('[aria-label="Show the email Home is signed in with"]');
+      await page.click('[aria-label="Show the email Work is signed in with"]');
+      await showing(page, "1").waitFor(); await showing(page, "2").waitFor();
+      if (how === "Escape") await page.keyboard.press("Escape"); else await page.click("#acc-close");
+      await page.waitForFunction(() => document.getElementById("accounts-sheet").hidden);
+      assert(!(await anyEmail(page)), `no email left in the closed sheet (${how})`);
+    }
+    await sheet(page);
+    assertEqual(await texts(page, ".acc-who"), ["Show email", "Show email"], "reopened: all hidden");
+    await page.close();
+    return "closed by × and by Escape; reopened hidden";
+  });
+
+  await run.check("Show email: when an account's email cannot be read, the line says so plainly and guesses nothing", async () => {
+    // Home: an answer that names no address; Work: Claude Code says it is not signed in.
+    const page = await open("dark", two([58, 72], [0, 12]), { emails: { "2": null } });
+    await sheet(page);
+    await page.click('[aria-label="Show the email Home is signed in with"]');
+    await page.click('[aria-label="Show the email Work is signed in with"]');
+    await page.waitForFunction(() => document.querySelectorAll(".acc-who-label").length === 2);
+    assertEqual(await text(page, '.acc-card[data-id="1"] .acc-who'), "Claude Code did not say which email this account uses. Hide");
+    assertEqual(await text(page, '.acc-card[data-id="2"] .acc-who'), "This account is not signed in on this Mac. Hide");
+    assertEqual(await page.locator(".acc-who-addr").count(), 0, "no address shown");
+    await page.close();
+    return "not read / not signed in";
+  });
+
+  // Every Show email state, both themes: text at AA and the 16px floor, the ring's gold arc at
+  // 3:1 against the card it sits on, measured at once (the line hides itself at 8 seconds).
+  for (const theme of ["dark", "light"]) {
+    await run.check(theme + ": Show email, the email, the could-not-read lines, Hide and the ring meet AA contrast and the type floor", async () => {
+      const page = await open(theme, two([58, 72], [0, 12]), { emails: { "1": EMAILS["1"], "2": null } });
+      await sheet(page);
+      await page.addScriptTag({ content: contrast.pageScript() });
+      const measure = () => page.evaluate(() => {
+        const C = window.__contrastMath, out = [];
+        const ground = el => { let bg = { r: 0, g: 0, b: 0, a: 0 }; const chain = []; for (let p = el; p; p = p.parentElement) chain.unshift(p);
+          for (const p of chain) bg = C.compositeOver(C.parseCssColor(getComputedStyle(p).backgroundColor), bg); return bg; };
+        for (const e of document.querySelectorAll(".acc-who *")) {
+          if (!e.getClientRects().length) continue;
+          const own = [...e.childNodes].some(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
+          if (own) {
+            const s = getComputedStyle(e), bg = ground(e);
+            out.push({ text: e.textContent.trim(), ratio: C.round2(C.contrastRatio(C.compositeOver(C.parseCssColor(s.color), bg), bg)), size: parseFloat(s.fontSize), need: 4.5 });
+          }
+          if (e.matches(".acc-who-ring .arc")) {
+            const bg = ground(e.closest(".acc-who"));
+            out.push({ text: "ring", ratio: C.round2(C.contrastRatio(C.compositeOver(C.parseCssColor(getComputedStyle(e).stroke), bg), bg)), size: 16, need: 3 });
+          }
+        }
+        return out;
+      });
+      const rest = await measure();
+      await page.click('[aria-label="Show the email Home is signed in with"]');
+      await page.click('[aria-label="Show the email Work is signed in with"]');
+      await page.waitForFunction(() => document.querySelectorAll(".acc-who-mail").length === 2 && !document.querySelector(".acc-who.is-wiping"));
+      // The wipe-in, measured when it has finished, never after a guessed delay.
+      await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect && a.effect.target && a.effect.target.matches && a.effect.target.matches(".acc-who-addr")).map(a => a.finished.catch(() => null))));
+      const all = [...rest, ...await measure()];
+      const bad = all.filter(m => m.ratio < m.need || m.size < 16);
+      assertEqual(bad, [], theme + ": below AA or the 16px floor");
+      for (const want of ["Show email", "Signed in as", EMAILS["1"], "Hide", "This account is not signed in on this Mac.", "ring"]) {
+        assert(all.some(m => m.text === want), `${theme}: ${want} was measured`);
+      }
+      await page.close();
+      return all.map(m => `${m.text} ${m.ratio}:1`).filter((v, i, a) => a.indexOf(v) === i).join(", ");
+    });
+  }
 
   // ---- every state, both themes: contrast, type size, fit, no dash ---------------------------
   const STATES = [

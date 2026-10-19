@@ -1590,7 +1590,7 @@ async function main() {
     await page.evaluate(() => {
       window.__emit("rich://voice-error", {
         message:
-          "I can't take that on yet: the RichOS engine isn't on this Mac, and that's the " +
+          "I can't take that on yet: the RichOS engine isn't on this Mac and that's the " +
           "part of me that knows how I work. I've put the setting up back on your screen: " +
           "press Set it up and I'll fetch it. There's nothing to quit and nothing to reopen.",
         at: Date.now(),
@@ -1884,7 +1884,7 @@ async function main() {
     const said = await page.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.replace(/\s+/g, " ").trim()));
     assertEqual(said[0], "Voice is ready. Press the round button beside the message box and just talk to me.", "the drawn first paragraph");
     // The CEO's copy, 2026-10-13 (turn-on-dictation-paragraph.png), word for word; [F1] is the key.
-    assertEqual(said[1], "If you turn on dictation, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)", "his first new paragraph");
+    assertEqual(said[1], "If you turn on RichScribe, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)", "his first new paragraph");
     assertEqual(said[2], "So, instead of typing you'll be able to do this: Just click into any other app (Mail, Slack, Chrome/Safari, anything), press F1 (or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊", "his second new paragraph, the key filled in");
     assertEqual(said.length, 3, "his two paragraphs replace the old one");
     // NO BLANK LINE UNDER "Rich" (seen on the guest, 2026-10-08): the first sentence sits where
@@ -1894,12 +1894,12 @@ async function main() {
       "0px",
       "the offer's first sentence starts a line below Rich's name"
     );
-    assertEqual((await page.textContent("#dictation-offer-yes")).trim(), "Turn on dictation", "the first button");
+    assertEqual((await page.textContent("#dictation-offer-yes")).trim(), "Turn on RichScribe", "the first button");
     assertEqual((await page.textContent("#dictation-offer-no")).trim(), "Not now", "the second button");
     assertEqual((await page.evaluate(() => window.__RICHOS_MOCK__.dictationOfferCalls())).join(","), "dictation_offer,dictation_offer_shown", "asked once and recorded as shown");
     await page.click("#dictation-offer-no");
     await page.waitForSelector("#dictation-offer-after");
-    assertEqual((await page.textContent("#dictation-offer-after")).trim(), "Okay. It's in Settings, under Dictation, whenever you want it.", "Not now's line");
+    assertEqual((await page.textContent("#dictation-offer-after")).trim(), "Okay. It's in Settings, under RichScribe, whenever you want it.", "Not now's line");
     assert(await page.isHidden("#dictation-offer-yes"), "answered, the buttons go");
     await page.close();
 
@@ -1921,16 +1921,16 @@ async function main() {
     await on.click('.dict-key[data-k="2"]');
     await on.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 2));
     await on.click("#dict-close");
-    const feature = on.locator(".nav-thread", { hasText: "Dictation feature" });
+    const feature = on.locator(".nav-thread", { hasText: "RichScribe feature" });
     await feature.waitFor();
-    assertEqual(await on.locator(".nav-thread", { hasText: "Dictation feature" }).count(), 1, "one conversation, under his company");
+    assertEqual(await on.locator(".nav-thread", { hasText: "RichScribe feature" }).count(), 1, "one conversation, under his company");
     await feature.click();
     await on.waitForFunction(() => /Good news!/.test(document.getElementById("messages").innerText));
     assertEqual(
       // Rich's prose is one Markdown body; his four paragraphs are its four paragraphs.
       await on.evaluate(() => [...document.querySelectorAll("#messages .tl-prose .tl-md-p")].map((p) => p.innerText.replace(/\s+/g, " ").trim())),
       [
-        "Good news! Dictation is set up and enabled.",
+        "Good news! RichScribe is set up and enabled.",
         "So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:",
         "Click into where you want your words to appear, tap F2, say what you want written, then tap it again. See how your words appear where your cursor is.",
         "If you have any questions about this, we can discuss it here.",
@@ -1948,7 +1948,7 @@ async function main() {
     assertEqual(
       await on.evaluate(() => [...document.querySelectorAll("#messages .tl-prose .tl-md-p")].map((p) => p.innerText.replace(/\s+/g, " ").trim())),
       [
-        "Good news! Dictation is set up and enabled.",
+        "Good news! RichScribe is set up and enabled.",
         "So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:",
         "Click into where you want your words to appear, tap F3, say what you want written, then tap it again. See how your words appear where your cursor is.",
         "If you have any questions about this, we can discuss it here.",
@@ -1961,7 +1961,7 @@ async function main() {
     assert((await later.textContent("#dictation-offer")).includes("press F5 (or another key"), "the chosen key is named");
     await later.click("#dictation-offer-yes");
     await later.waitForSelector("#dictation-offer-after");
-    assertEqual((await later.textContent("#dictation-offer-after")).trim(), "It's in Settings, under Dictation.", "not on");
+    assertEqual((await later.textContent("#dictation-offer-after")).trim(), "It's in Settings, under RichScribe.", "not on");
     await later.close();
 
     // SET UP LATER, FROM SETTINGS (second review rv-20261013T173014Z, finding 2): "Not now" first,
@@ -1978,7 +1978,7 @@ async function main() {
     await later2.click('.dict-key[data-k="2"]');
     await later2.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 2));
     await later2.click("#dict-close");
-    await later2.locator(".nav-thread", { hasText: "Dictation feature" }).waitFor();
+    await later2.locator(".nav-thread", { hasText: "RichScribe feature" }).waitFor();
     await later2.waitForFunction(() => document.querySelectorAll("#dictation-offer .tl-prose").length === 1);
     assertEqual(
       await later2.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.trim())),

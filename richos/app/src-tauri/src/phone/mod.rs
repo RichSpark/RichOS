@@ -1033,6 +1033,17 @@ impl PhoneRuntime {
         stream::announce_his_words(&self.hub, thread_id, message_id, text, now_millis()).is_some()
     }
 
+    /// **Tell a watching phone that he switched the Oxford comma setting, so it redraws at once**
+    /// (CEO, 2026-10-19: "the user should be able to choose whether or not they want that
+    /// nuisance"). A `state` frame with no `message_id`, which the phone reads as the setting and
+    /// never as a row; under the current cursor, because it opens no row. Every `hello` carries
+    /// the same value, so a phone that was away when he switched it is told when it reconnects.
+    /// INERT with no phone listening, like [`PhoneRuntime::announce_his_words`].
+    pub fn announce_oxford_comma(&self, keep: bool) -> bool {
+        let data = serde_json::json!({ "oxford_comma": keep }).to_string();
+        self.hub.publish("state", self.hub.cursor_now(), data).is_some()
+    }
+
     /// Ask the daemon again on the next [`PhoneRuntime::status`], whatever the cache says.
     ///
     /// This is the Mac's half of Urban's `Check again` control: the user has just done the thing
@@ -1690,7 +1701,7 @@ impl PhoneRuntime {
     /// `threads` frame, which a client that does not know the name ignores.
     pub fn threads_changed(&self) {
         let Some(bridge) = self.running.lock().unwrap().as_ref().map(|r| Arc::clone(&r.bridge)) else { return };
-        drop(self.hub.publish("threads", self.hub.cursor_now(), threads_frame(&bridge.threads_changed())));
+        send_threads(&self.hub, &bridge.threads_changed());
     }
 
     /// **Push the reply that just finished**, if there is a phone to push to.
@@ -1840,6 +1851,12 @@ struct Gathered {
 /// `build.rs` compiled in, and a build that embedded nothing does not compile.
 fn phone_assets() -> assets::PhoneApp {
     assets::PhoneApp::embedded()
+}
+
+/// The conversation list on the live stream as its own `threads` frame, under the newest cursor:
+/// a list is not a row and takes none (`stream.rs`, `subscribe_from`).
+pub(crate) fn send_threads(hub: &stream::PhoneHub, threads: &[(String, String)]) {
+    drop(hub.publish("threads", hub.cursor_now(), threads_frame(threads)));
 }
 
 /// The data of a `threads` frame: the conversation list in the `hello`'s own shape.

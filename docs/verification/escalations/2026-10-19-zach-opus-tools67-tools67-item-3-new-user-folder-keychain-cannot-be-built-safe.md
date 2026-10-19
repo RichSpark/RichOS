@@ -10,11 +10,11 @@
 
 ## The question
 
-Item 3 (rv-20261018T221416Z-e862157b-95ed#1, give the --new-user folder its own usable login keychain) needs either keychain creation plus a keychain search-list/default-keychain write in the CEO's own GUI session on his Mac, or a test-VM measurement first that such a write lands only in the folder's preferences. The recorded disposition of esc-20261018T215954Z-e37f7702 (2026-10-18 22:00) says: no keychain creation on his Mac and no VM measurement now; a separate macOS user account is the recommendation. This brief also forbids the test VM. Does that disposition still stand (then item 3 stays skipped, as I am doing), or is one test-VM measurement now allowed?
+Item 3 (rv-20261018T221416Z-e862157b-95ed#1, give the --new-user folder its own usable login keychain) needs either keychain creation plus a keychain search-list/default-keychain write in the CEO's own GUI session on his Mac or a test-VM measurement first that such a write lands only in the folder's preferences. The recorded disposition of esc-20261018T215954Z-e37f7702 (2026-10-18 22:00) says: no keychain creation on his Mac and no VM measurement now; a separate macOS user account is the recommendation. This brief also forbids the test VM. Does that disposition still stand (then item 3 stays skipped, as I am doing) or is one test-VM measurement now allowed?
 
 ## What was already tried
 
-Read the review fixture (it only probes for a login.keychain file), nightly-launch.sh on main (no keychain step by design), docs/testvm.md 'The fixture's login keychain' (unlock must happen in the GUI session via launchctl asuser, measured in a guest), and the escalation ledger entry and its ack.
+Read the review fixture (it only probes for a login.keychain file), nightly-launch.sh on main (no keychain step by design), docs/testvm.md 'The fixture's login keychain' (unlock must happen in the GUI session via launchctl asuser, measured in a guest) and the escalation ledger entry and its ack.
 
 ## Proceeding meanwhile
 

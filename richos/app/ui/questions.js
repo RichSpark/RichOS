@@ -5,6 +5,9 @@
   // use time; capturing it here works only with the earlier mock bridge.
   const shown = new Set();
   const drafts = new Map();
+  // What Claude wrote on the card (the question and its options) is drawn through the Oxford comma
+  // setting (CEO, 2026-10-19), the same filter as Rich's replies (`oxford-comma.js`).
+  const said=(text)=>window.RichOxford?window.RichOxford.display(text):text;
   function node(tag, text, cls) { const el=document.createElement(tag); if(text) el.textContent=text; if(cls) el.className=cls; return el; }
   function render(item, opts) {
     const q=item.question;
@@ -12,7 +15,7 @@
     card.setAttribute("role","group");card.setAttribute("aria-labelledby",`question-${q.id}`);
 
     if(q.set_count>1)card.append(node("div",`Question ${q.set_index} of ${q.set_count}`,"ask-set"));
-    const title=node("p",q.text,"question-title ask-q");title.id=`question-${q.id}`;card.append(title);
+    const title=node("p",said(q.text),"question-title ask-q");title.id=`question-${q.id}`;card.append(title);
     const draft=drafts.get(q.id) || {editing:false,selected:new Set(),text:"",other:false,revision:q.revision};
     if(draft.revision!==q.revision){draft.editing=false;draft.selected.clear();draft.revision=q.revision;}
     drafts.set(q.id,draft);
@@ -52,7 +55,7 @@
         const button=node("button",null,"question-option ask-opt");button.type="button";
         button.append(node("span",String(index+1),"ask-key"));
         if(q.multiple){button.classList.add("is-multi");const box=node("span","✓","ask-box");box.setAttribute("aria-hidden","true");button.append(box);}
-        const body=node("span",null,"ask-body");body.append(node("span",option.label,"question-label ask-label"),node("span",option.description,"question-description ask-desc"));button.append(body);
+        const body=node("span",null,"ask-body");body.append(node("span",said(option.label),"question-label ask-label"),node("span",said(option.description),"question-description ask-desc"));button.append(body);
         if(q.recommended===option.id) button.append(node("span",q.asker==="Your team"?"Your team recommends":"Rich recommends","question-recommended ask-rec"));
         if(q.multiple) {button.setAttribute("role","checkbox");button.setAttribute("aria-checked",String(selected.has(option.id)));}
         button.addEventListener("click",event=> {

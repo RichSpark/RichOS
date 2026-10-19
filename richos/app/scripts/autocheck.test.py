@@ -1051,6 +1051,64 @@ class Commit(Fixture):
         self.assertEqual(self.tools(), "")
 
 
+class OxfordComma(Fixture):
+    """CEO, 2026-10-19: no Oxford comma in our docs, and "when one of the existing docs gets
+    changed/updated etc, THEN the Oxford comma linter should clean that doc." The fixture carries
+    the REAL fixer and the real rule (`oxford-comma.js` in scripts/ and ui/); git runs it at the
+    commit, on what is being committed."""
+    APP = HERE.parent
+
+    def make_with_fixer(self):
+        self.make(install=False)
+        for rel in ("scripts/oxford-comma.js", "ui/oxford-comma.js"):
+            dest = self.repo / "richos/app" / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(self.APP / rel, dest)
+        self.write("docs/old.md", "Untouched, and kept as it is.\n")
+        self.write("richos/app/tests/fixtures/sample.md", "Planted, and kept.\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "the fixer", "--no-verify")
+        self.install()
+        self.git("checkout", "-q", "-b", "feature")
+
+    def blob(self, rel, ref="HEAD"):
+        return self.git("show", f"{ref}:{rel}").stdout
+
+    def test_a_doc_a_commit_adds_is_committed_without_the_oxford_comma_and_code_keeps_its_commas(self):
+        self.make_with_fixer()
+        self.write("docs/guide.md", "Red, green, and blue. Tea, or coffee, nor milk. `a, and b` and \"said, and quoted\" too.\n"
+                                    "```\ncode, and more\n```\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-m", "a doc")
+        want = "Red, green and blue. Tea or coffee nor milk. `a, and b` and \"said and quoted\" too.\n```\ncode, and more\n```\n"
+        self.assertEqual(self.blob("docs/guide.md"), want)
+        self.assertEqual((self.repo / "docs/guide.md").read_text(), want, "the working copy gets the same fix")
+        self.assertIn("Oxford comma deleted in 1 file(s) being committed: docs/guide.md", out.stderr)
+        self.assertEqual(self.git("status", "--porcelain").stdout, "")
+
+    def test_a_changed_doc_is_cleaned_whole_and_its_unstaged_edits_survive_with_the_same_fix(self):
+        self.make_with_fixer()
+        self.write("docs/old.md", "Untouched, and kept as it is.\nA new line, or two.\n")
+        self.git("add", "docs/old.md")
+        self.write("docs/old.md", "Untouched, and kept as it is.\nA new line, or two.\nUnstaged, nor this.\n")
+        self.git("commit", "-m", "change a doc")
+        self.assertEqual(self.blob("docs/old.md"), "Untouched and kept as it is.\nA new line or two.\n",
+                         "the whole doc, not only its changed line")
+        self.assertEqual((self.repo / "docs/old.md").read_text(),
+                         "Untouched and kept as it is.\nA new line or two.\nUnstaged nor this.\n")
+        self.assertEqual(self.git("diff", "--cached").stdout, "", "nothing is left staged")
+
+    def test_a_doc_the_commit_does_not_touch_and_a_test_fixture_keep_their_commas(self):
+        self.make_with_fixer()
+        self.write("richos/app/tests/fixtures/sample.md", "Planted, and kept, or changed.\n")
+        self.write("docs/new.md", "New, and cleaned.\n")
+        self.git("add", "-A")
+        self.git("commit", "-m", "a fixture and a doc")
+        self.assertEqual(self.blob("richos/app/tests/fixtures/sample.md"), "Planted, and kept, or changed.\n")
+        self.assertEqual(self.blob("docs/old.md"), "Untouched, and kept as it is.\n")
+        self.assertEqual(self.blob("docs/new.md"), "New and cleaned.\n")
+
+
 class BatteryTrailer(Fixture):
     """CEO ruling §81 at the commit (commit-msg). 2026-10-01: a trailer wrapped over three
     unindented lines is no trailer to git; only the land noticed."""

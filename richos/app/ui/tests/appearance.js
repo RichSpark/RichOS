@@ -1232,9 +1232,10 @@ async function main() {
       // sits in the foot band, away from the first things the panel shows (the CEO's
       // 2026-10-06 feedback item 7). Rich's model is first in the middle column, never in the
       // first (§119: "in general settings, not in quick settings"). Request a feature is the
-      // floor's second row, directly under Bust a bug (round 24).
+      // floor's second row, directly under Bust a bug (round 24). The Oxford comma switch sits
+      // directly under Text size, its heading saying OFF or ON (round 33, CEO 2026-10-19).
       [
-        "Theme", "Text size", "Technical view", "Claude Code quota", "Keep the stored output",
+        "Theme", "Text size", "Oxford comma: OFF", "Technical view", "Claude Code quota", "Keep the stored output",
         "Rich's model", "How much should Rich interrupt you?", "Use Rich from your phone",
         "Company", "Home screen", "Token spend", "Let Codex review your team’s work", "Claude accounts",
         "Connected folders (repositories)", "Memory folder", "Updates",
