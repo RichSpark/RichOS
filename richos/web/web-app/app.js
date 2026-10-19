@@ -606,6 +606,15 @@ function streamIsOpen() { return Boolean(link && link.isOpen()); }
 /// booted. That is the whole point of the slice.
 function makeLink() {
     let firstOpen=true;
+    // **THE CONVERSATION WHOSE `hello` THIS STREAM HAS HAD** (Ray's nightly 67 walk: a reopened
+    // conversation drew its question cards above the request that asked them). The page's cursors
+    // mix two numberings: a projection position (a `hello`, a backfill, a question row) and the
+    // hub's one live sequence for every conversation (`phone/stream.rs`). Presented on a reopen,
+    // the page's highest is read by the Mac as a hub number and the live frames after it put some
+    // rows back on hub numbers and leave others on positions. So a conversation that is opened,
+    // at boot or from the picker, asks for a `hello`, whose rows are all the Mac's own positions;
+    // only a reconnect of the conversation already heard presents a cursor.
+    let heard=null;
 	return globalThis.RichOSLink.createLink({
 		open: async (handlers) => {
             if(firstOpen){firstOpen=false;await api.refreshChallenge();}
@@ -614,7 +623,8 @@ function makeLink() {
             // A conversation the page knows only from its rows has no title yet: no cursor, so the
             // Mac answers with a `hello` and its list (`noteThread`).
             const named=threads.some(t=>t.id===currentThreadId && t.title);
-            return api.openEvents(currentThreadId,named && cursor>0?Math.min(cursor-1,...incomplete):null,handlers);
+            const resume=heard===currentThreadId && named && cursor>0;
+            return api.openEvents(currentThreadId,resume?Math.min(cursor-1,...incomplete):null,handlers);
         },
 		refresh: () => api.refreshChallenge(),
 		onFailure: handleApiError,
@@ -637,6 +647,7 @@ function makeLink() {
 		handlers: {
 			open() { flushQueue(); },
 			hello(data) {
+				heard=currentThreadId;
 				// What this Mac can actually be asked for, before anything else in this handler:
 				// the screen should never be one frame ahead of what the Mac has said it can do.
 				applyCapabilities();
