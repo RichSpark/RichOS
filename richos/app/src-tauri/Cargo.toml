@@ -253,6 +253,14 @@ name = "key_probe"
 path = "examples/key_probe.rs"
 test = true
 
+# THE RIGHT-CLICK MENU (src/webview_menu.rs): this Mac's own WebKit, in a window never put on
+# screen, sent right-clicks straight to the view, with a recorder in place of the call that would
+# draw the menu. Run by scripts/context-menu-probe.test.sh; it has its own `main` and needs the
+# main thread, so it is not a libtest target.
+[[example]]
+name = "context_menu_probe"
+path = "examples/context_menu_probe.rs"
+
 [dev-dependencies]
 # `tauri::test`'s mock runtime, for `src/command_rule_tests.rs`: commands dispatched through
 # Tauri's real IPC path in a unit test. The `test` feature is `test = []` in tauri 2.11.5's

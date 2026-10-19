@@ -114,6 +114,7 @@ const ROLES = {
   "splash.js": { role: "ui", why: "the opening curtain's renderer" },
   "splash-library.js": { role: "ui", why: "the two approved splash compositions — data, with prose in it" },
   "theme-boot.js": { role: "ui", why: "the pre-paint theme mirror" },
+  "no-native-menu.js": { role: "ui", why: "the one place that keeps the web view's own right-click menu (Look Up, Translate, Share) from appearing; it has no user-visible strings" },
   "speckle.js": {
     role: "ui",
     why:
