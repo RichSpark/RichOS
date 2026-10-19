@@ -222,7 +222,12 @@ async function main() {
     assert(!c.sendDisabled, "the send control is still off after the question was answered");
     assertEqual(c.placeholder, LIVE_PLACEHOLDER, "the inviting placeholder did not come back");
     assertEqual(c.reasonHidden, true, "the block's sentence is still on screen");
-    // And it types, which is the thing the audit asked for by name.
+    // And it types, which is the thing the audit asked for by name. The settings panel is
+    // closed first, as a person closes it: open, it covers the composer wherever its foot
+    // reaches the box (on main at 1280 x 900 already; at this 1400 x 900 too once the Updates
+    // row's action line wraps, which "See what's new" makes it do in a 320px column).
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#set-menu", { state: "hidden" });
     await page.click("#input");
     await page.keyboard.type("hello");
     const v = await page.evaluate(() => document.getElementById("input").value);
