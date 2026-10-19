@@ -1314,6 +1314,205 @@ while True: time.sleep(.02)
         with self.assertRaisesRegex(ValueError, "no pass recorded"):
             r.accept_passed_gates(self.RESUMED, "build")
 
+    NIGHTLY = "v1.2.0-nightly.20260928.28"
+
+    def stable_runner(self, source_commit=None):
+        """A Runner whose `stable_plan` resolves NIGHTLY to `source_commit` (SOURCE by default)."""
+        r = self.runner()
+        r.summary = Mock()
+        r.stable_plan = Mock(return_value=(self.root / "stable-plan.json", {
+            "tag": "v1.2.0", "version": "1.2.0", "source_commit": source_commit or self.SOURCE}))
+        r.bump_next_version = Mock()
+        r.env["RICHOS_NIGHTLY_RUN_ID"] = "20261019T120000Z-0000000f"
+        r.vm_boot_proof = Mock(return_value=None)
+        return r
+
+    def test_a_published_stable_ends_by_bumping_main_and_says_so_when_it_cannot(self):
+        # CEO, 2026-10-19: "Can I assume that because v1.2.0 stable has now been published,
+        # the next nightly version is automatically guaranteed to NOT start with
+        # "1.2.0-nightly"?" Yes: the stable run's last step bumps main.
+        self.recorded_run(grade="build")
+        r = self.stable_runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        r.bump_next_version.assert_called_once_with("1.2.0")
+        # A bump that fails after the upload never hides that the release is out.
+        r = self.stable_runner()
+        r.bump_next_version = Mock(side_effect=ValueError("main has uncommitted changes"))
+        with self.assertRaisesRegex(RuntimeError, "v1.2.0 IS PUBLISHED, but main's next release "
+                                    "version was not bumped: main has uncommitted changes"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        # A dry run publishes nothing, so it bumps nothing.
+        r = self.stable_runner()
+        r.describe_stable = Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED,
+                      dry_run=True)
+        r.bump_next_version.assert_not_called()
+
+    def test_stable_reuses_the_gates_of_the_run_that_built_the_promoted_nightly(self):
+        # CEO, 2026-10-19: "what fucking checks are there needed if ALL OF THE FUCKING CHECKS
+        # HAD BEEN ALREADY PREVIOUSLY DONE FOR THAT NIGHTLY VERSION?" Nightly 65's run passed
+        # every gate on the very commit `stable` rebuilds; the rebuild runs none of them again.
+        for grade in ("build", "release"):
+            with self.subTest(grade):
+                self.recorded_run(grade=grade)
+                r = self.stable_runner()
+                with contextlib.redirect_stdout(io.StringIO()):
+                    r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+                r.gates.assert_not_called()
+                self.assertEqual(r.checkout.call_args_list[-1].args, (self.SOURCE,))
+                r.preflight.assert_called_once()
+                r.runtime.assert_called_once()
+                build, publish = r.command.call_args_list[-2:]
+                self.assertEqual((build.args[2], publish.args[2]), ("build", "finish"))
+                self.assertIs(build.kwargs["release_build"], True)
+                self.assertEqual(sorted(r.skipped), sorted(m.GATE_NAMES))
+        # A later run replacing the suite record is no reason to refuse: stable never reads it.
+        self.recorded_run(grade="build", suites_run="20261019T000000Z-00000000")
+        r = self.stable_runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        r.gates.assert_not_called()
+
+    def test_the_rebuilt_stable_bundle_boots_in_the_test_vm_before_it_is_published(self):
+        # Review rv-20261018T233835Z-9bcfb492-597f#1: stable ran `nightly.py run`, build and
+        # publish in one motion, so the bundle every stable user installs was published
+        # without the VM boot proof the nightly's own bundle had. It is a new artifact
+        # (another version, signed again): built, booted in the test VM, then published.
+        self.recorded_run(grade="build")
+        r = self.stable_runner()
+        order = []
+        r.command.side_effect = lambda *a, **k: order.append(str(a[2]))
+        r.vm_boot_proof.side_effect = lambda run: order.append(f"boot {run}")
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        self.assertEqual(order, ["build", "boot 20261019T120000Z-0000000f", "finish"])
+        pointer = json.loads(r.run_pointer("20261019T120000Z-0000000f").read_text())
+        self.assertEqual(pointer["out"], str(r.state / "releases" / "v1.2.0"))
+        # A boot that was not proven publishes nothing and bumps nothing.
+        r = self.stable_runner()
+        r.vm_boot_proof.return_value = "THE CANDIDATE IS BUILT, AND ITS BOOT WAS NOT PROVEN"
+        with self.assertRaisesRegex(RuntimeError, "v1.2.0 IS NOT PUBLISHED. THE CANDIDATE IS BUILT"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        self.assertNotIn("finish", [str(c.args[2]) for c in r.command.call_args_list])
+        r.bump_next_version.assert_not_called()
+
+    def test_stable_refuses_the_gates_of_another_source_a_failed_run_or_changed_dependencies(self):
+        # Another commit's pass proves nothing about this one: refused after the plan names
+        # the nightly's commit, before any checkout of it, gate or build.
+        self.recorded_run(grade="build")
+        r = self.stable_runner(source_commit="1" * 40)
+        with self.assertRaisesRegex(ValueError, "prove nothing"), contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        self.assertEqual(r.checkout.call_args_list, [unittest.mock.call()])   # main only
+        r.gates.assert_not_called()
+        r.command.assert_not_called()
+        # A run whose gates did not all pass, or that never said what it built, is refused
+        # before anything runs at all.
+        cases = {
+            "a gate failed": dict(grade="build", verdicts={"gates/lint-tauri": "FAILED"},
+                                  reached_recheck=False),
+            "a gate never recorded a pass": dict(grade="build", verdicts={"gates/privacy-sweep": None}),
+            "a gate was skipped": dict(grade="build", verdicts={m.LAND_PROVEN_GATE: "SKIPPED"}),
+            "it never said which build it was": dict(grade=None),
+        }
+        for name, shape in cases.items():
+            with self.subTest(name):
+                self.recorded_run(**shape)
+                r = self.stable_runner()
+                with self.assertRaises(ValueError), contextlib.redirect_stdout(io.StringIO()):
+                    r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+                r.checkout.assert_not_called()
+                r.gates.assert_not_called()
+                r.command.assert_not_called()
+        # Changed dependencies: refused, never a silent rerun of every gate.
+        self.recorded_run(grade="build")
+        r = self.stable_runner()
+        r.installed_dependencies_digest = Mock(return_value="e" * 64)
+        with self.assertRaisesRegex(ValueError, "differ"), contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        r.checkout.assert_not_called()
+        r.gates.assert_not_called()
+        r.command.assert_not_called()
+
+    def write_log(self, run_id, lines):
+        logs = self.root / "state" / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / f"{run_id}.log").write_text(
+            "".join(f"[2026-10-18T17:09:33.021Z] {line}\n" for line in lines))
+
+    def test_stable_finds_the_run_that_built_the_nightly_by_itself(self):
+        # Nightly 65's promotion: run 20261018T154953Z-c752908c had to be dug out of the
+        # logs by hand to pass as --gates-passed-in. The run that says it built the nightly
+        # is found by its own lines, for a build and for a release alike.
+        for grade in ("build", "release"):
+            with self.subTest(grade):
+                self.recorded_run(grade=grade)
+                self.assertEqual(self.runner().run_that_built(self.NIGHTLY), self.RESUMED)
+        # Lines inside a gate's section are a suite's output, not the run's: a fixture that
+        # prints the same words names no run. Neither does a run that built another nightly.
+        self.write_log("20261018T000000Z-0000000a", [
+            "=== phase gates/script-suites begins ===", f"Building {self.NIGHTLY}...",
+            "=== phase gates/script-suites ends: 1.0s ==="])
+        self.write_log("20261018T000000Z-0000000b", ["Building v1.2.0-nightly.20260928.27..."])
+        self.assertEqual(self.runner().run_that_built(self.NIGHTLY), self.RESUMED)
+        # And the run found is refused or reused exactly as a named one: its gates are what
+        # `stable` skips, with every check of --gates-passed-in.
+        r = self.stable_runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY,
+                      gates_passed_in=r.run_that_built(self.NIGHTLY))
+        r.gates.assert_not_called()
+        self.assertEqual(sorted(r.skipped), sorted(m.GATE_NAMES))
+
+    def test_stable_stops_when_no_single_run_on_this_mac_built_the_nightly(self):
+        # Never a silent rerun of the gates: no run found says so and stops.
+        self.write_log("20261018T000000Z-0000000b", ["Building v1.2.0-nightly.20260928.27..."])
+        with self.assertRaisesRegex(ValueError, "no run log .* says it built v1\\.2\\.0-nightly\\.20260928\\.28,"):
+            self.runner().run_that_built(self.NIGHTLY)
+        self.recorded_run(grade="build")
+        self.write_log("20261018T000000Z-0000000c", [f"Building and publishing {self.NIGHTLY}..."])
+        with self.assertRaisesRegex(ValueError, "2 runs say they built"):
+            self.runner().run_that_built(self.NIGHTLY)
+
+    def test_stable_finds_the_retry_that_built_the_nightly_beside_the_attempt_that_failed(self):
+        # The announcement precedes the publisher's reservation of the version, so an attempt
+        # that failed before it leaves the tag free and its retry announces the same tag
+        # (review rv-20261019T004500Z-9d645b07-4e4f). Only the retry finished building.
+        self.write_log("20261018T000000Z-0000000c", [
+            f"Building and publishing {self.NIGHTLY}...", "=== phase build begins ===",
+            "=== phase build ends: 3.0s ==="])
+        self.recorded_run(grade="release")
+        with (self.root / "state" / "logs" / f"{self.RESUMED}.log").open("a") as log:
+            log.write(f"[2026-09-28T19:01:11.429Z] phase timings for run {self.RESUMED}:\n")
+        self.assertEqual(self.runner().run_that_built(self.NIGHTLY), self.RESUMED)
+        # Two that both finished are still two builders: named by hand, never guessed.
+        self.write_log("20261018T000000Z-0000000d", [
+            f"Building {self.NIGHTLY}...", "phase timings for run 20261018T000000Z-0000000d:"])
+        with self.assertRaisesRegex(ValueError, "3 runs say they built"):
+            self.runner().run_that_built(self.NIGHTLY)
+
+    def test_his_words_reach_the_stable_plan(self):
+        r = self.runner()
+        plan = self.root / "state" / "stable-plan.json"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(json.dumps({"tag": "v1.2.0"}))
+        r.stable_plan(self.NIGHTLY, "his sentence, verbatim")
+        argv = [str(a) for a in r.command.call_args.args]
+        self.assertEqual(argv[2:8], ["stable-plan", "--from-nightly", self.NIGHTLY,
+                                     "--ceo-words", "his sentence, verbatim", "--output"])
+        r.stable_plan(self.NIGHTLY)
+        self.assertNotIn("--ceo-words", [str(a) for a in r.command.call_args.args])
+        self.recorded_run(grade="build")
+        r = self.stable_runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED,
+                      ceo_words="his sentence, verbatim")
+        r.stable_plan.assert_called_once_with(self.NIGHTLY, "his sentence, verbatim")
+
     DENIED = ("git@github.com: Permission denied (publickey).\n"
               "fatal: Could not read from remote repository.\n")
 
@@ -1368,7 +1567,7 @@ while True: time.sleep(.02)
             with self.subTest(**kwargs), self.assertRaisesRegex(ValueError, "alone"):
                 r.perform("build", gates_passed_in=self.RESUMED, **kwargs)
         with self.assertRaisesRegex(ValueError, "alone"):
-            r.perform("stable", gates_passed_in=self.RESUMED, from_nightly="v1")
+            r.perform("stable", gates_passed_in=self.RESUMED, from_nightly="v1", no_host_screen=True)
         script = Path(m.__file__)
         for argv in (["publish", "--run", "x", "--gates-passed-in", self.RESUMED],
                      ["release", "--gates-passed-in", self.RESUMED, "--gates-at-once", "2"]):
@@ -2734,8 +2933,9 @@ class GatesAtOnceTests(unittest.TestCase):
         return stop.exception.code, err.getvalue()
 
     def test_a_build_that_does_not_name_the_gates_at_once_does_not_start(self):
-        stable = ["--from-nightly", "v1.2.0-nightly.20260916.1"]
-        for command, extra in (("build", []), ("release", []), ("stable", stable)):
+        # `stable` is not in this list: without --gates-at-once it reuses the gates of the run
+        # that built the nightly (test_stable_is_one_command_with_his_words).
+        for command, extra in (("build", []), ("release", [])):
             for given in ([], ["--simulated-phones", "2"]):
                 with self.subTest(command=command, given=given):
                     code, err = self.main_refusal(command, *extra, *given)
@@ -2798,10 +2998,10 @@ class GatesAtOnceTests(unittest.TestCase):
     # 2 (20260929T101720Z-bee22332) was given RICHOS_GUI_HOST=richos-test-1, which the gates'
     # allowlisted environment dropped without a word.
 
-    def main_with(self, *argv, environ=None):
+    def main_with(self, *argv, environ=None, runner=None):
         """Run main() under exactly BASE_ENVIRON + `environ`, up to the Runner and no further:
         (the Runner's keyword arguments, perform()'s positional arguments)."""
-        runner = Mock()
+        runner = runner or Mock()
         state = self.root / "state"
         state.mkdir(exist_ok=True)
         with patch.dict(os.environ, {**self.BASE_ENVIRON, **(environ or {})}, clear=True), \
@@ -2818,6 +3018,30 @@ class GatesAtOnceTests(unittest.TestCase):
 
     NUMBERS = ("--gates-at-once", "2", "--simulated-phones", "1")
     NO_HOST_SCREEN_ARG = 5  # perform(command, force, runtime, run, checks_done_at_land, no_host_screen, ...)
+    GATES_PASSED_IN_ARG = 9  # ... gui_proof, from_nightly, dry_run, gates_passed_in, ceo_words)
+    CEO_WORDS_ARG = 10
+
+    def test_stable_is_one_command_with_his_words(self):
+        # CEO, 2026-10-19: "Will this whole retarded shitshow be repeated all over again?"
+        # Next time: one command with his words. No --gates-passed-in dug out of the logs, no
+        # --gates-at-once (no gate runs), no promotion record committed first.
+        one = ["stable", "--from-nightly", "v1.2.0-nightly.20261018.65",
+               "--ceo-words", "go ahead and promote this nightly to stable"]
+        runner = Mock()
+        runner.return_value.run_that_built.return_value = "20261018T154953Z-c752908c"
+        _, args = self.main_with(*one, runner=runner)
+        runner.return_value.run_that_built.assert_called_once_with("v1.2.0-nightly.20261018.65")
+        self.assertEqual(args[self.GATES_PASSED_IN_ARG], "20261018T154953Z-c752908c")
+        self.assertEqual(args[self.CEO_WORDS_ARG], "go ahead and promote this nightly to stable")
+        # Asked to run every gate again, it looks for no run.
+        runner = Mock()
+        _, args = self.main_with(*one, *self.NUMBERS, runner=runner)
+        runner.return_value.run_that_built.assert_not_called()
+        self.assertIsNone(args[self.GATES_PASSED_IN_ARG])
+        # His words promote a nightly and nothing else.
+        code, err = self.main_refusal("build", *self.NUMBERS, "--ceo-words", "ship it")
+        self.assertEqual(code, 2)
+        self.assertIn("--ceo-words is the CEO's decision to promote a nightly", err)
 
     def build_with_gate_parent(self, parent_mode, foreign_owner=False):
         """main() `build` with its gate folder under a fresh parent created with `parent_mode`:
@@ -2933,6 +3157,19 @@ class GatesAtOnceTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("--host-screen is for `build` alone", err)
 
+    def test_stable_takes_gates_passed_in_and_then_names_no_gate_count(self):
+        stable = ["stable", "--from-nightly", "v1.2.0-nightly.20261018.65",
+                  "--gates-passed-in", "20261018T154953Z-c752908c"]
+        runner = Mock()
+        _, args = self.main_with(*stable, runner=runner)
+        self.assertEqual(args[0], "stable")
+        self.assertEqual(args[self.GATES_PASSED_IN_ARG], "20261018T154953Z-c752908c")
+        runner.return_value.run_that_built.assert_not_called()
+        self.assertIs(args[self.NO_HOST_SCREEN_ARG], False)
+        code, err = self.main_refusal(*stable, *self.NUMBERS)
+        self.assertEqual(code, 2)
+        self.assertIn("which runs no gate", err)
+
     def test_the_guest_and_vm_settings_the_shell_gives_reach_the_vm_boot_proof(self):
         kwargs, _ = self.main_with("build", *self.NUMBERS, environ={
             "RICHOS_GUI_HOST": "richos-test-1", "TESTVM_ROOT": "/Volumes/E1TB/testvm", # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
@@ -2941,6 +3178,12 @@ class GatesAtOnceTests(unittest.TestCase):
             "RICHOS_AGENT_OWNER": "zach", "RICHOS_NOTARY_PROFILE": "fixture-profile"})
         self.assertEqual(kwargs["gui_host"], "richos-test-1")
         self.assertEqual(kwargs["vm_settings"], {"TESTVM_ROOT": "/Volumes/E1TB/testvm"}) # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+        # `stable` boots its rebuilt bundle in the test VM too, so the same settings reach it.
+        runner = Mock()
+        runner.return_value.run_that_built.return_value = "20261018T154953Z-c752908c"
+        kwargs, _ = self.main_with("stable", "--from-nightly", "v1.2.0-nightly.20261018.65",
+                                   runner=runner, environ={"RICHOS_GUI_HOST": "richos-test-1"})
+        self.assertEqual(kwargs["gui_host"], "richos-test-1")
 
     def stand_in_gui_proof(self, result, exit_code, write_proof=True):
         """A gui-proof-in-vm.sh that writes the proof file it was given `--out` and exits."""
@@ -3005,6 +3248,101 @@ class GatesAtOnceTests(unittest.TestCase):
                 self.assertIn(f"your shell sets {name}, and no step of `{command}` would receive it", err)
                 self.assertIn("Nothing has started", err)
                 self.assertFalse((self.root / "state").exists())
+
+
+class NextVersionTests(unittest.TestCase):
+    """After stable vX.Y.Z is published, main says X.Y.(Z+1): a real main and a real remote.
+
+    The CEO, 2026-10-19: "Can I assume that because v1.2.0 stable has now been published, the
+    next nightly version is automatically guaranteed to NOT start with "1.2.0-nightly"?"
+    """
+
+    MANIFEST = '[package]\nname = "richos-tauri"\nversion = "1.2.0"\n\n[dependencies]\nserde = { version = "1.2.0" }\n'
+    LOCK = ('version = 4\n\n[[package]]\nname = "richos-tauri"\nversion = "1.2.0"\n\n'
+            '[[package]]\nname = "serde"\nversion = "1.2.0"\n')
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(["git", *args], cwd=cwd or self.main, check=True, text=True,
+                              capture_output=True).stdout.strip()
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        environment = patch.dict(os.environ, {})
+        environment.start()
+        self.addCleanup(environment.stop)
+        for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
+                     "GIT_COMMITTER_EMAIL", "EMAIL", "GIT_DIR", "GIT_INDEX_FILE"):
+            os.environ.pop(name, None)
+        root = Path(temp.name)
+        self.remote, self.main = root / "remote.git", root / "main"
+        self.git("init", "--bare", "-q", str(self.remote), cwd=root)
+        self.git("init", "-q", "-b", "main", str(self.main), cwd=root)
+        for key, value in (("user.name", "Fixture"), ("user.email", "fixture@example.invalid"),
+                           ("core.hooksPath", "/dev/null")):
+            self.git("config", key, value)
+        self.git("remote", "add", "origin", str(self.remote))
+        for path, text in ((m.APP_MANIFEST, self.MANIFEST), (m.APP_LOCK, self.LOCK)):
+            (self.main / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.main / path).write_text(text)
+        self.git("add", ".")
+        self.git("commit", "-qm", "1.2.0")
+        self.git("push", "-q", "origin", "main")
+        self.released = self.git("rev-parse", "HEAD")
+        self.runner = m.Runner(self.main, root / "state", {}, io.StringIO())
+
+    def on_remote(self, path):
+        return self.git("show", f"refs/heads/main:{path}", cwd=self.remote)
+
+    def test_a_published_stable_leaves_main_on_the_next_patch_version(self):
+        commit = self.runner.bump_next_version("1.2.0")
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), commit)
+        self.assertEqual(self.git("rev-parse", f"{commit}^"), self.released)
+        self.assertEqual(self.on_remote(m.APP_MANIFEST) + "\n",
+                         self.MANIFEST.replace('version = "1.2.0"\n', 'version = "1.2.1"\n', 1))
+        # The app's own lock entry moves; a dependency that happens to share the number does not.
+        self.assertEqual(self.on_remote(m.APP_LOCK) + "\n",
+                         self.LOCK.replace('"richos-tauri"\nversion = "1.2.0"', '"richos-tauri"\nversion = "1.2.1"'))
+        self.assertEqual(self.git("diff", "--name-only", self.released, commit).splitlines(),
+                         [str(m.APP_LOCK), str(m.APP_MANIFEST)])
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        # Run again, or after a hand bump: main is already past 1.2.0, so nothing moves.
+        self.assertIsNone(self.runner.bump_next_version("1.2.0"))
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), commit)
+
+    def test_a_main_with_changes_or_not_at_origin_is_left_alone(self):
+        (self.main / "notes.txt").write_text("someone's work\n")
+        self.git("add", "notes.txt")
+        with self.assertRaisesRegex(ValueError, "uncommitted changes"):
+            self.runner.bump_next_version("1.2.0")
+        self.git("commit", "-qm", "unpushed land")
+        with self.assertRaisesRegex(ValueError, "is not origin/main"):
+            self.runner.bump_next_version("1.2.0")
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.released)
+        self.assertEqual(self.git("show", f"HEAD:{m.APP_MANIFEST}") + "\n", self.MANIFEST)
+
+    def test_a_refused_commit_puts_the_two_files_back(self):
+        hooks = self.main.parent / "hooks"
+        hooks.mkdir()
+        (hooks / "pre-commit").write_text("#!/bin/sh\necho 'land checks failed' >&2\nexit 1\n")
+        (hooks / "pre-commit").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        with self.assertRaisesRegex(ValueError, "land checks failed"):
+            self.runner.bump_next_version("1.2.0")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.released)
+
+    def test_the_real_tree_moves_to_the_next_patch_in_exactly_two_lines(self):
+        manifest = (m.ROOT / m.APP_MANIFEST).read_text()
+        lock = (m.ROOT / m.APP_LOCK).read_text()
+        version = m.tomllib.loads(manifest)["package"]["version"]
+        following, files = m.next_patch_version_files(manifest, lock, version)
+        major, minor, patch = version.split(".")
+        self.assertEqual(following, f"{major}.{minor}.{int(patch) + 1}")
+        for path, before in ((m.APP_MANIFEST, manifest), (m.APP_LOCK, lock)):
+            changed = [(a, b) for a, b in zip(before.splitlines(), files[path].splitlines()) if a != b]
+            self.assertEqual(changed, [(f'version = "{version}"', f'version = "{following}"')], path)
+        self.assertIsNone(m.next_patch_version_files(files[m.APP_MANIFEST], files[m.APP_LOCK], version))
 
 
 class WalkRecipeTests(unittest.TestCase):
