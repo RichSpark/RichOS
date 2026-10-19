@@ -11517,7 +11517,7 @@
     },
     "ass-kicker/brief-provenance.py#annotate": {
       "source": "ass-kicker/brief-provenance.py",
-      "sha256": "78b82b175a6d2e59032bcffd9ca49928023f4742bd8866275c581e7afb6d4a10",
+      "sha256": "dc8b2c55174fd815580afef91583582ffc66d4ce153aa3d3356f361e3257f005",
       "evidence": "All import and I/O sites reviewed. annotate/review parse prompt text and read cited files as text for quotation checks. No configuration is sourced and no command or imported engine helper is executed.",
       "keys": [],
       "edges": []
@@ -12507,7 +12507,7 @@
     },
     "ass-kicker/tests/brief-provenance.test.sh": {
       "source": "ass-kicker/tests/brief-provenance.test.sh",
-      "sha256": "ec9f43c420de9cb3c1f56b3d6ba5313f54dace244d9f0876f6206f39ff40097d",
+      "sha256": "43bde0b21a817f8241e7742b46e398223e87743d258bcc97a3a046f78bc2b76f",
       "evidence": "Invokes review/annotate CLI on generated private Markdown/cited text. Quoted commands and config names are parsed data, never sourced or executed.",
       "keys": [],
       "edges": [
@@ -12529,7 +12529,7 @@
     },
     "ass-kicker/brief-provenance.py#capability": {
       "source": "ass-kicker/brief-provenance.py",
-      "sha256": "78b82b175a6d2e59032bcffd9ca49928023f4742bd8866275c581e7afb6d4a10",
+      "sha256": "dc8b2c55174fd815580afef91583582ffc66d4ce153aa3d3356f361e3257f005",
       "evidence": "Module initialization, norm, segment, check_capability and dedupe are stdlib text operations. No engine module import, command execution or config lookup.",
       "keys": [],
       "edges": []
@@ -17765,7 +17765,7 @@
       "sources": {
         "scripts/spawn.test.sh": "bdcbadba325947b1c85f81d4c76c88c4c3b2c768107fa2c9086aba9a690249b4",
         "scripts/lib/spawn.py": "3f5b489bc1684909bd8b3d63a8c083921ef845cfb3ea43b9e6bc53cd7c353c56",
-        "ass-kicker/brief-provenance.py": "78b82b175a6d2e59032bcffd9ca49928023f4742bd8866275c581e7afb6d4a10",
+        "ass-kicker/brief-provenance.py": "dc8b2c55174fd815580afef91583582ffc66d4ce153aa3d3356f361e3257f005",
         "ass-kicker/brief-scope.py": "d6910b6891d7461b98d51b234343a004834e6fd4a3c52e5dc530b6539cf376a9",
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/workspaces.py": "8bd607902bab2802a9c7e068c682058ef950acc279325d5b270721fe1471d4f2",
