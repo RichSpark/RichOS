@@ -210,6 +210,29 @@ async function main(){
   }
   return "stopped line only when flagged; "+measurements.join("; ");
  });
+ await run.check("a withdrawn card never shows the asker's note, card ids included (nightly 66)",async()=>{
+  // Nightly 66 p13: "Rich no longer needs this: Duplicate: ... (card ee45a329-...)".
+  const NOTE="Duplicate: Rich already asked the user this exact formal-vs-casual question (card ee45a329-0f1e-4c55-9f0e-6b1f8f1d2a77)";
+  const measurements=[];
+  for(const theme of ["dark","light"]){
+   const line=await page.evaluate(([theme,note])=>{
+    document.documentElement.dataset.theme=theme;
+    document.querySelectorAll(".question-row").forEach(n=>n.remove());
+    const q={id:crypto.randomUUID(),thread_id:"general",set_id:"set",text:"Formal or casual?",options:[{id:"formal",label:"Formal",description:"Polished"},{id:"casual",label:"Casual",description:"Relaxed"}],multiple:false,free_answer:true,state:"withdrawn",revision:1,delivered:false,withdrawal_reason:note};
+    document.getElementById("messages").appendChild(window.RichQuestions.render({threadId:"general",question:q}));
+    const el=document.querySelector(".question-card.ask .ask-withdrawn"),M=window.__contrastMath;
+    let bg={r:255,g:255,b:255,a:1};const chain=[];for(let e=el;e;e=e.parentElement)chain.unshift(e);
+    for(const e of chain){const c=M.parseCssColor(getComputedStyle(e).backgroundColor);if(c)bg=M.compositeOver(c,bg);}
+    const cs=getComputedStyle(el);
+    return {card:document.querySelector(".question-card.ask").textContent,text:el.textContent,ratio:M.contrastRatio(M.compositeOver(M.parseCssColor(cs.color),bg),bg),size:parseFloat(cs.fontSize)};
+   },[theme,NOTE]);
+   assertEqual(line.text,"Rich no longer needs this.",theme+" withdrawn line");
+   assert(!line.card.includes("ee45a329") && !line.card.includes("Duplicate"),theme+" the asker's note is on the card: "+line.card);
+   assert(line.ratio>=4.5,theme+" withdrawn line contrast: "+JSON.stringify(line));assert(line.size>=16,theme+" withdrawn line below 16px: "+JSON.stringify(line));
+   measurements.push(theme+" "+line.ratio.toFixed(2)+":1 at "+line.size+"px");
+  }
+  return "the line reads only that Rich no longer needs it; "+measurements.join("; ");
+ });
  assertEqual(errors,[],"renderer errors");await browser.close();process.exit(run.report()?1:0);
 }
 main().catch(e=>{console.error(e);process.exit(1);});

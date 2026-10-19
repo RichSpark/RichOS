@@ -144,7 +144,9 @@ test('Ray\'s sequence: a conversation created after the page loaded is listed, a
 	context.connectStream();
 	await settle();
 	await settle();
-	assert.notStrictEqual(opened[2].since, null, 'a named conversation reopened without its cursor');
+	// A reopened conversation asks for a `hello`, whose rows are the Mac's own positions, rather
+	// than presenting a cursor the Mac reads as a hub number (`reopen-order.test.js`).
+	assert.strictEqual(opened[2].since, null, 'a reopened conversation presented a cursor instead of asking for its hello');
 	opened[2].handlers.message(row('b2:reply', THREAD_B, 5, 'rich'));
 	assert.deepStrictEqual(context.thread.view([]).map((r) => r.id), ['onboarding:reply']);
 });

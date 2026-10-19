@@ -301,7 +301,15 @@ pub struct IntakeLog {
     /// derived, so "3 of 4" is a measurement and not an inference.
     records_read: usize,
     records_applied: usize,
+    /// Every Stop on disk, drained or not, oldest first. A drained Stop still marks where
+    /// his cut fell: a card answer accepted before it and delivered after a restart is
+    /// covered by it (review rv-20261018T204635Z-c68a30ec-f61e#2). Compaction keeps the
+    /// latest [`KEPT_STOPS`] of them.
+    stops: Vec<IntakeRecord>,
 }
+
+/// How many Stop records a compaction keeps, so each recent cut survives it.
+const KEPT_STOPS: usize = 16;
 
 /// Compact the file once it is fully drained and has grown past this many lines. Chosen so
 /// compaction is rare (a drained log is two lines per CEO action) and never happens while
@@ -352,6 +360,7 @@ impl IntakeLog {
         // The highest id seen on a record this build could NOT fold. It is not in
         // `records`, so without it the counter can hand the same id out twice.
         let mut salvaged_id: u64 = 0;
+        let mut stops: Vec<IntakeRecord> = Vec::new();
         if path.exists() {
             let file = std::fs::File::open(&path)?;
             let mut reader = BufReader::new(file);
@@ -390,6 +399,10 @@ impl IntakeLog {
                         match rec {
                             IntakeRecord::Drained { through } => {
                                 drained_through = drained_through.max(through)
+                            }
+                            stop @ IntakeRecord::Stop { .. } => {
+                                stops.push(stop.clone());
+                                records.push(stop)
                             }
                             other => records.push(other),
                         }
@@ -439,7 +452,7 @@ impl IntakeLog {
         let next_id = highest.saturating_add(1);
         records.retain(|r| r.id() > drained_through);
         let log =
-            IntakeLog { path, pending: records, next_id, lines, skipped, records_read, records_applied };
+            IntakeLog { path, pending: records, next_id, lines, skipped, records_read, records_applied, stops };
         log.report_skipped();
         Ok(log)
     }
@@ -581,6 +594,11 @@ impl IntakeLog {
         &self.pending
     }
 
+    /// Every Stop on disk, drained or not, oldest first.
+    pub fn stops(&self) -> &[IntakeRecord] {
+        &self.stops
+    }
+
     fn write(&mut self, rec: &IntakeRecord) -> Result<(), SteeringError> {
         // Stamped with this build's `written_by` — spec point 18. This log holds the CEO's
         // own typed words, so it is the last file that should ever leave a reader guessing
@@ -701,6 +719,7 @@ impl IntakeLog {
         self.write(&rec)?;
         self.next_id += 1;
         self.pending.push(rec.clone());
+        self.stops.push(rec.clone());
         Ok(rec)
     }
 
@@ -731,16 +750,22 @@ impl IntakeLog {
         debug_assert!(self.pending.is_empty());
         debug_assert!(self.skipped.is_empty(), "compaction would delete a record nothing could read");
         let tmp = self.path.with_extension("compacting");
-        let mut line = crate::skip::stamped_line(&IntakeRecord::Drained { through })
-            .map_err(|e| SteeringError::Io(e.to_string()))?;
-        line.push('\n');
+        // The latest Stops first, so their cuts outlive the compaction; the marker after
+        // them drains them on replay as before.
+        let kept = self.stops.split_off(self.stops.len().saturating_sub(KEPT_STOPS));
+        let mut line = String::new();
+        for rec in kept.iter().chain(std::iter::once(&IntakeRecord::Drained { through })) {
+            line.push_str(&crate::skip::stamped_line(rec).map_err(|e| SteeringError::Io(e.to_string()))?);
+            line.push('\n');
+        }
         {
             let mut f = std::fs::File::create(&tmp)?;
             f.write_all(line.as_bytes())?;
             f.sync_all()?;
         }
         std::fs::rename(&tmp, &self.path)?;
-        self.lines = 1;
+        self.lines = kept.len() + 1;
+        self.stops = kept;
         Ok(())
     }
 }
@@ -944,6 +969,11 @@ impl TurnControl {
 
     pub fn intake_path(&self) -> Option<PathBuf> {
         self.inner.intake.lock().unwrap().as_ref().map(|l| l.path().to_path_buf())
+    }
+
+    /// Every Stop on disk, drained or not, oldest first (see [`IntakeLog::stops`]).
+    pub fn stop_records(&self) -> Vec<IntakeRecord> {
+        self.inner.intake.lock().unwrap().as_ref().map(|l| l.stops().to_vec()).unwrap_or_default()
     }
 
     // --- written by the spine, at the points that already exist -------------------------
@@ -1370,6 +1400,14 @@ impl ConversationControl {
         }
     }
 
+    /// A Stop read back from disk at startup: its cut covers what was accepted before it,
+    /// exactly as when it settled in this process. The latest cut wins.
+    pub(crate) fn restore_settled(&self, claim: StopClaim) {
+        let mut states=self.shared.inner.conversations.lock().unwrap();
+        let state=states.entry(self.key().to_string()).or_default();
+        if state.settled.as_ref().is_none_or(|settled|settled.intake_id<claim.intake_id) {state.settled=Some(claim);}
+    }
+
     /// The cleared Stop whose cut covers an input accepted at `order`, if any.
     pub fn settled_stop_covering(&self, order: u64) -> Option<StopClaim> {
         self.shared.inner.conversations.lock().unwrap().get(self.key())
@@ -1690,6 +1728,11 @@ mod tests {
         let path = tmp("compact");
         let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
         ctl.begin_turn(active());
+        // A drained Stop is kept by the compaction: its cut still covers a card answer saved
+        // before it (review rv-20261018T204635Z-c68a30ec-f61e#2).
+        ctl.request_stop().unwrap();
+        let stop = ctl.stop_claim().unwrap().intake_id;
+        ctl.mark_drained(stop).unwrap();
         // Two lines per action (the steer, then its drain marker), so this crosses
         // COMPACT_AFTER_LINES = 256 with room to spare.
         for i in 0..200 {
@@ -1702,7 +1745,9 @@ mod tests {
         assert!(!lines.is_empty(), "compaction must never leave the file empty");
 
         // And it still replays to the same place.
-        let reopened = TurnControl::open(&path).unwrap().for_thread("thr_1");
+        let reopened = TurnControl::open(&path).unwrap();
+        assert!(reopened.stop_records().iter().any(|r| r.id() == stop), "the compaction lost the Stop's cut");
+        let reopened = reopened.for_thread("thr_1");
         assert!(reopened.pending_intake().is_empty());
         let _ = std::fs::remove_file(&path);
     }

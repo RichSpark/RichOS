@@ -142,6 +142,12 @@ pub struct AnswerResult {
     pub outcome: String,
     pub question: Option<Question>,
 }
+/// **The receipt of an answer his Stop covered** (review rv-20261018T204635Z-c68a30ec-f61e#1):
+/// the recipient accepted it and stopped it before Rich got it, so the card must not say "Rich
+/// has your answer". A sink prefixes the turn id with this; the card then reads as a job that
+/// stopped before Rich got the answer.
+pub const STOPPED_RECEIPT_PREFIX: &str = "stopped-before-rich:";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Delivery {
     pub id: String,
@@ -795,6 +801,7 @@ impl Store {
                         return Ok(0);
                     }
                     let receipt = sink(&delivery)?;
+                    let stopped = receipt.starts_with(STOPPED_RECEIPT_PREFIX);
                     if let Some(saved) = d.deliveries.iter_mut().find(|v| v.id == delivery.id) {
                         saved.receipt = Some(receipt);
                     }
@@ -806,7 +813,9 @@ impl Store {
                     if let Some(set) = &delivery.set_id {
                         for q in d.questions.iter_mut().filter(|q| &q.set_id == set) {
                             q.delivered = true;
-                            q.awaiting_taker = awaiting;
+                            // Covered by his Stop: no one will take it, and the card says so.
+                            q.awaiting_taker = awaiting || stopped;
+                            q.ended_before_taken |= stopped;
                             q.updated_at = now();
                         }
                     }

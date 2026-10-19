@@ -480,6 +480,18 @@ async function main() {
     return "stopped and finished: one 3x3 table, one quotation, no raw `|`; identical markup (" + stopped.html.length + " bytes)";
   });
 
+  // Review rv-20261018T195734Z-d14f5d12-fa08#1: a quotation holding a `|` right under a table,
+  // with no blank line between, was read as one more table row.
+  await run.check("16 a quotation right under a table ends the table, in an answer and a document", async () => {
+    const text = ["| Plan | Price |", "|---|---|", "| Basic | $10 |", "> Prices exclude tax | annual billing only."].join("\n");
+    for (const opts of [undefined, { document: true }]) {
+      const r = await doc(page, text, opts);
+      assertEqual(r.tables, [[["Plan", "Price"], ["Basic", "$10"]]], "the table is header and one row, nothing more");
+      assertEqual(r.quotes, ["Prices exclude tax | annual billing only."], "the quotation is a quotation, its words whole");
+    }
+    return "table of one row, then one quotation with its `|` kept, in both modes";
+  });
+
   await run.check("10 no page errors anywhere in this suite", async () => {
     assertEqual(page.__errors, [], "the renderer logged errors");
     return "0 uncaught errors, 0 console errors";

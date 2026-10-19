@@ -33,7 +33,9 @@
         if(!saved.deleted){const retry=node("button","Retry saved answer");retry.onclick=()=>sendSaved(saved);controls.append(retry);}
         return;
       }
-      if(q.state==="withdrawn") {status.append(node("p",`Rich no longer needs this: ${q.withdrawal_reason}`,"ask-withdrawn"));return;}
+      // The withdrawal reason is the asker's note for the record (nightly 66: "Duplicate: ...
+      // (card ee45a329-...)"), not words for him, so the card says only what changed.
+      if(q.state==="withdrawn") {status.append(node("p","Rich no longer needs this.","ask-withdrawn"));return;}
       if(q.state==="answered" && !draft.editing) {
         const method={click:"click",keyboard:"keyboard",typed:"typing",spoken:"voice",phone_tap:"tap",phone_typed:"typing",phone_voice:"voice note"}[q.answer.method]||"your words";
         const answerLine=node("p",null,"ask-answer");answerLine.append(node("span","✓","ask-check"),node("span",`You answered: ${labels(q.answer)}`));status.append(answerLine);

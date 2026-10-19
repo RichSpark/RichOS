@@ -289,6 +289,12 @@ select {
 	white-space: pre-wrap;
 }
 
+/* Rich's Markdown (`lib/markdown.js`): blocks spaced as paragraphs, colors inherited. */
+.msg-text > * + * { margin-top: 8px; }
+.msg-text ul, .msg-text ol { margin: 0; padding-left: 1.4em; white-space: normal; }
+.msg-text .md-h { font-weight: 700; }
+.msg-text code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.94em; }
+
 .msg-meta {
 	display: flex;
 	flex-wrap: wrap;

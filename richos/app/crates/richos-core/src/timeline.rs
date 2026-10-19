@@ -832,6 +832,11 @@ pub enum TimelineItem {
         loss_message: Option<String>,
         /// Whether asking again is a plan. Drives whether a retry control is drawn at all.
         offers_retry: bool,
+        /// **Whether the turn carried words of his** (the same test that draws his bubble).
+        /// `false` for Rich's reply to Stu's report, an app message or a pressed button:
+        /// every sentence on the card is about HIS message (nightly 67 p3: "Press Restore my
+        /// message ... Your message is saved" for a message he never sent), so none is drawn.
+        his_words: bool,
     },
 }
 
@@ -1403,7 +1408,8 @@ fn turn_items(turn: &Turn, entity: &EntityId, revision: u64) -> Vec<TimelineItem
     // so it contributes no user item rather than an empty bubble. Nor does a turn the app
     // started for a button he pressed: those words are not his (product hunt 2026-10-15,
     // finding 14, `Turn::pressed`).
-    if !matches!(turn.source, Source::Proactive | Source::Agent) && !turn.pressed && !turn.user_text.is_empty() {
+    let his_words = !matches!(turn.source, Source::Proactive | Source::Agent) && !turn.pressed && !turn.user_text.is_empty();
+    if his_words {
         out.push(TimelineItem::UserMessage {
             base: base(format!("{}:user", turn.id), None, TimelineSlot::Opening, turn.created_at, vis(Visibility::Ceo)),
             text: turn.user_text.clone(),
@@ -1620,6 +1626,7 @@ fn turn_items(turn: &Turn, entity: &EntityId, revision: u64) -> Vec<TimelineItem
             // Read off the STORED value rather than re-derived from the tag, so a record
             // written by an older or newer build renders the control it was written with.
             offers_retry: cause.offers_retry,
+            his_words,
         });
     }
 
@@ -2447,6 +2454,31 @@ mod tests {
             assert_eq!(b.turn_id, "turn_1");
             assert_eq!(b.binding_revision, 3);
         }
+    }
+
+    #[test]
+    fn an_interruption_says_whether_the_turn_carried_words_of_his() {
+        // Nightly 67 p3: Rich's turn for Stu's status message was cut off, and the Mac drew
+        // "Press Restore my message ... Your message is saved" for a message he never sent.
+        let his_words = |source: Source, pressed: bool| {
+            let mut t = turn();
+            t.source = source;
+            t.pressed = pressed;
+            t.state = TurnState::Interrupted;
+            t.interruption = Some(crate::interruption::InterruptionRecord {
+                cause: "unknown".into(),
+                ceo_message: "unused".into(),
+                loss_message: None,
+                offers_retry: true,
+            });
+            turn_items(&t, &entity(), 3).into_iter().find_map(|i| match i {
+                TimelineItem::TurnInterruption { his_words, .. } => Some(his_words),
+                _ => None,
+            })
+        };
+        assert_eq!(his_words(Source::Text, false), Some(true), "his typed message");
+        assert_eq!(his_words(Source::Agent, false), Some(false), "Stu's report to Rich");
+        assert_eq!(his_words(Source::Text, true), Some(false), "a button he pressed");
     }
 
     #[test]
