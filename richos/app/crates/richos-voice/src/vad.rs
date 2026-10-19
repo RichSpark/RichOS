@@ -28,6 +28,27 @@ pub const VAD_FRAME_SAMPLES: usize = 256;
 /// not listening to a person. 625 x 256 / 16000 = 10.000 s. See [`VadConfig::stuck_speech_frames`].
 pub const STUCK_SPEECH_FRAMES: u32 = 625;
 
+/// **After the last speech frame, the floor may not RISE for this long.** 50 x 256 / 16000 =
+/// 0.800 s, the endpointer's own silence hangover: anything shorter is still inside one stretch
+/// of his speech, and a quiet frame there is a soft consonant or the tail of a word, not the room.
+///
+/// The defect it closes (nightly 65, the CEO's recording of 2026-10-18 at 8:27): a frame inside
+/// his speech that the VAD did not call speech still raised the floor, at
+/// [`VadConfig::floor_attack`] (0.05 per frame: 1 / 0.05 = 20 frames = 0.320 s time constant),
+/// toward its own level. A higher floor calls more of his quieter frames non-speech, and they
+/// raise it further. His second spoken message, replayed from that recording through the shipped
+/// capture path ([`crate::controller::CaptureBrain`], no device): the threshold was 0.00529 RMS (-45.5 dBFS) when
+/// the utterance started and 0.1387 (-17.2 dBFS) 8.848 s later; the utterance ended in the middle
+/// of his sentence, and the 119 frames at -30 dBFS or louder that he said in the next 4.368 s were
+/// none of them called speech, so they never reached the recognizer. Its transcript was, word for
+/// word, the message the app sent for him; with this hold the same replay keeps his whole sentence.
+///
+/// **Only while it is switched on ([`Vad::set_hold_inside_speech`]), and voice mode switches it on
+/// only while Rich is silent.** While Rich is audible the same rise is what keeps his own echo
+/// from reading as speech: with the hold on then, the committed echo-path fixture at +6.3 dB had
+/// Rich cut himself off (`barge_in_on_the_ceos_rig.rs`, `richs_own_echo_never_interrupts_him_at_any_volume`).
+pub const FLOOR_RISE_HOLD_FRAMES: u32 = 50;
+
 /// Frame duration in milliseconds, derived — never hard-coded as "16".
 pub const fn frame_ms() -> f32 {
     (VAD_FRAME_SAMPLES as f32 * 1000.0) / SAMPLE_RATE as f32
@@ -108,6 +129,10 @@ pub struct Vad {
     noise_floor: f32,
     last_rms: f32,
     speech_run: u32,
+    /// Frames since the last speech frame, saturating; compared with [`FLOOR_RISE_HOLD_FRAMES`].
+    since_speech: u32,
+    /// [`FLOOR_RISE_HOLD_FRAMES`] applies: off until [`Vad::set_hold_inside_speech`] turns it on.
+    hold_inside_speech: bool,
 }
 
 impl Default for Vad {
@@ -118,7 +143,20 @@ impl Default for Vad {
 
 impl Vad {
     pub fn new(cfg: VadConfig) -> Self {
-        Vad { cfg, noise_floor: cfg.absolute_floor, last_rms: 0.0, speech_run: 0 }
+        Vad {
+            cfg,
+            noise_floor: cfg.absolute_floor,
+            last_rms: 0.0,
+            speech_run: 0,
+            since_speech: u32::MAX,
+            hold_inside_speech: false,
+        }
+    }
+
+    /// Whether a quiet frame within [`FLOOR_RISE_HOLD_FRAMES`] of speech is kept from raising the
+    /// floor. Voice mode turns it on for every frame on which Rich is not audible.
+    pub fn set_hold_inside_speech(&mut self, on: bool) {
+        self.hold_inside_speech = on;
     }
 
     /// The current adaptive noise floor (RMS units) — exposed for diagnostics/tests.
@@ -157,15 +195,21 @@ impl Vad {
         let is_speech = r > self.speech_threshold();
         if is_speech {
             self.speech_run += 1;
+            self.since_speech = 0;
         } else {
             self.speech_run = 0;
+            self.since_speech = self.since_speech.saturating_add(1);
         }
         // Track the room on non-speech frames, so a long sentence can never drag the floor
         // up to the level of the voice and mute the speaker mid-word. The `stuck` escape
         // (see VadConfig) is the only thing that lets a speech-classified frame adapt it.
         let stuck = self.speech_run > self.cfg.stuck_speech_frames;
-        if !is_speech || stuck {
-            let rate = if r > self.noise_floor { self.cfg.floor_attack } else { self.cfg.floor_release };
+        // And, with the hold on, a non-speech frame within 0.800 s of speech is still his speech:
+        // it may lower the floor but never raise it (`FLOOR_RISE_HOLD_FRAMES`).
+        let rising = r > self.noise_floor;
+        let held = rising && self.hold_inside_speech && self.since_speech <= FLOOR_RISE_HOLD_FRAMES;
+        if stuck || (!is_speech && !held) {
+            let rate = if rising { self.cfg.floor_attack } else { self.cfg.floor_release };
             self.noise_floor += (r - self.noise_floor) * rate;
             self.noise_floor = self.noise_floor.max(1e-5);
         }
@@ -258,6 +302,45 @@ mod tests {
             before,
             vad.noise_floor()
         );
+    }
+
+    /// INVARIANT: a quiet frame INSIDE speech never raises the floor. Within 0.800 s of his last
+    /// speech frame, a frame the VAD did not call speech is a soft consonant or a word's tail, and
+    /// letting it raise the floor is the ratchet that stopped hearing him mid-sentence (nightly
+    /// 65, [`FLOOR_RISE_HOLD_FRAMES`]). After 0.800 s without speech the room is learned again.
+    #[test]
+    fn a_quiet_frame_inside_speech_never_raises_the_floor() {
+        assert_eq!(FLOOR_RISE_HOLD_FRAMES, crate::endpoint::SILENCE_HANGOVER_FRAMES);
+        assert!((frames_to_secs(FLOOR_RISE_HOLD_FRAMES) - 0.800).abs() < 1e-6);
+        let mut vad = Vad::default();
+        vad.set_hold_inside_speech(true);
+        let soft = tone(0.014); // RMS 0.0099: above the 0.005 floor, under its 0.015 threshold
+        assert!(vad.push_frame(&tone(0.2)), "premise: he is speaking");
+        let floor = vad.noise_floor();
+        for i in 1..=FLOOR_RISE_HOLD_FRAMES {
+            assert!(!vad.push_frame(&soft), "premise: the soft frame is not speech");
+            assert_eq!(vad.noise_floor(), floor, "frame {i} after speech raised the floor");
+        }
+        assert!(!vad.push_frame(&soft));
+        assert!(vad.noise_floor() > floor, "0.800 s after speech the room must be learned again");
+
+        // Switched off (Rich is audible), the same frame raises the floor at once, as it always did.
+        let mut off = Vad::default();
+        assert!(off.push_frame(&tone(0.2)));
+        let floor = off.noise_floor();
+        assert!(!off.push_frame(&soft));
+        assert!(off.noise_floor() > floor, "with the hold off nothing may change");
+    }
+
+    /// INVARIANT: the hold is one way. A silent frame inside speech still LOWERS the floor.
+    #[test]
+    fn a_silent_frame_inside_speech_still_lowers_the_floor() {
+        let mut vad = Vad::default();
+        vad.set_hold_inside_speech(true);
+        assert!(vad.push_frame(&tone(0.2)), "premise: he is speaking");
+        let floor = vad.noise_floor();
+        assert!(!vad.push_frame(&[0.0; VAD_FRAME_SAMPLES]));
+        assert!(vad.noise_floor() < floor, "silence inside speech must still lower the floor");
     }
 
     /// INVARIANT: the stuck-floor escape is exactly 10.000 s of continuous "speech" — long
