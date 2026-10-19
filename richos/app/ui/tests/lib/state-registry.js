@@ -2698,6 +2698,22 @@ module.exports = [
       "act — WCAG 2.5.3 'Label in Name' is why the visible words come first and verbatim.",
   },
   {
+    s: "See what’s new",
+    c: "CONTROL",
+    why:
+      "`#update-notes`'s visible label (updates.js `changelogLink`, round 34): the link after " +
+      "Check for updates on the Updates line. It is itself the control: a click or Enter opens " +
+      "the RichOS changelog in the default browser through the `open_external` allowlist key, " +
+      "as the setup sheet's pricing link does.",
+  },
+  {
+    s: "See what’s new (opens in your web browser)",
+    c: "CONTROL",
+    why:
+      "`#update-notes`'s `aria-label`: the visible words first (WCAG 2.5.3 'Label in Name'), " +
+      "then where the link goes. The accessible name of the same link, not a state.",
+  },
+  {
     s: "You are running",
     c: "FRAGMENT",
     why: "`'You are running ' + currentVersion + '.'` — the `available` sub-line's tail, never alone.",

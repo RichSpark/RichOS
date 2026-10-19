@@ -109,7 +109,7 @@ function view(over) {
   );
 }
 
-async function openApp(browser) {
+async function openApp(browser, theme) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -124,7 +124,7 @@ async function openApp(browser) {
   // suite asserts is about lighting. A reference shot is a picture a person LOOKS at, so the
   // palette is named here rather than inherited from a default that is free to move again.
   // `SEED_THEME` writes both the mirror and the store and says why; the store decides.
-  await page.addInitScript(SEED_THEME, "dark");
+  await page.addInitScript(SEED_THEME, theme || "dark");
   if (LAG_MS > 0) await page.addInitScript(SLOW_BRIDGE, LAG_MS);
   await page.goto(APP);
   // The home screen is the landing surface now; this suite is about the app UI behind it.
@@ -1476,6 +1476,104 @@ async function main() {
     return "the audited URL breaks after its own separators (" +
       (auditedUrl.match(/[/.\-_]/g) || []).length + " <wbr>s), and a 90-character run with none " +
       "still wraps instead of overflowing the menu";
+  });
+
+  // ---- 23. "See what's new" (CEO, 2026-10-19; round 34) ----------------------------------
+  //
+  // His words: the user can "click something somewhere in the appropriate place in the app that
+  // will open their default web browser and get them to this page:
+  // https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md". Asserted on what the
+  // opener was HANDED (`mock.js` records `open_external`), never on a real browser: the key, and
+  // the page that key is (`opener.rs` proves the key opens exactly that page). Both themes, both
+  // ways in (Tab then Enter, and a click), and the page never leaves the app.
+  await run.check("23. See what's new: on Check for updates' line, reached by Tab, opens the changelog outside the app", async () => {
+    const CHANGELOG = "https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md";
+    const out = [];
+    for (const theme of ["dark", "light"]) {
+      const page = await openApp(browser, theme);
+      await settled(page);
+      await openMenu(page);
+      await setState(page, view({ state: "upToDate", currentVersion: "1.2.0", checkedAt: Date.now() - 12 * 60000 }));
+      const link = await page.evaluate(() => {
+        const a = document.getElementById("update-notes");
+        if (!a) return null;
+        const c = document.getElementById("update-check").getBoundingClientRect();
+        const r = a.getBoundingClientRect();
+        return {
+          tag: a.tagName.toLowerCase(),
+          text: a.querySelector(".update-notes-text").textContent,
+          name: a.getAttribute("aria-label"),
+          words: a.textContent,
+          href: a.getAttribute("href"),
+          tabindex: a.getAttribute("tabindex"),
+          visible: r.width > 0 && r.height > 0,
+          sameLine: Math.abs((r.top + r.bottom) / 2 - (c.top + c.bottom) / 2) <= 2 && r.left > c.right,
+        };
+      });
+      assert(link, theme + ": there is no #update-notes link in the Updates row");
+      assertEqual(link.tag, "a", theme + ": the control is a link");
+      assertEqual(link.text, "See what’s new", theme + ": the link's words");
+      assertEqual(link.name, "See what’s new (opens in your web browser)", theme + ": what a screen reader hears");
+      assertEqual(link.words, "See what’s new", theme + ": no hidden words laid out inside the link (they ran past the column)");
+      assertEqual(link.href, CHANGELOG, theme + ": the link names the changelog page");
+      assertEqual(link.tabindex, "0", theme + ": WebKit skips a plain link on Tab without tabindex=0");
+      assert(link.visible && link.sameLine, theme + ": on the same line as Check for updates, after it: " + JSON.stringify(link));
+
+      // WCAG AA, computed: the label (16px, 4.5:1) and the focus ring (3:1) against the panel
+      // they sit on, at rest and on the hover tint composited over that panel.
+      const ratios = async () => page.evaluate(() => {
+        const rgba = (s) => { const m = s.match(/[\d.]+/g).map(Number); return { r: m[0], g: m[1], b: m[2], a: m.length > 3 ? m[3] : 1 }; };
+        const over = (top, under) => ({ r: top.r * top.a + under.r * (1 - top.a), g: top.g * top.a + under.g * (1 - top.a), b: top.b * top.a + under.b * (1 - top.a), a: 1 });
+        const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
+        const ratio = (x, y) => { const a = lum(x), b = lum(y); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
+        const a = document.getElementById("update-notes");
+        let n = a.parentElement, panel = null;
+        while (n && !panel) { const bg = rgba(getComputedStyle(n).backgroundColor); if (bg.a === 1) panel = bg; n = n.parentElement; }
+        const s = getComputedStyle(a);
+        const ground = over(rgba(s.backgroundColor), panel);
+        const ink = rgba(getComputedStyle(a.querySelector(".update-notes-text")).color);
+        return { text: Math.round(ratio(ink, ground) * 100) / 100, ring: Math.round(ratio(rgba(s.outlineColor), panel) * 100) / 100 };
+      });
+      const rest = await ratios();
+      await page.hover("#update-notes");
+      await awaitSettled(page);
+      const hover = await ratios();
+      assert(rest.text >= 4.5 && hover.text >= 4.5, theme + ": the label is below 4.5:1 — rest " + rest.text + ", hover " + hover.text);
+
+      // Tab from Check for updates lands on the link; Enter hands the opener the changelog.
+      await page.mouse.move(0, 0);
+      await page.focus("#update-check");
+      await page.keyboard.press("Tab");
+      const focus = await page.evaluate(() => {
+        const a = document.activeElement;
+        const s = getComputedStyle(a);
+        return { id: a.id, ring: s.outlineStyle + " " + s.outlineWidth };
+      });
+      assertEqual(focus.id, "update-notes", theme + ": Tab from Check for updates");
+      assertEqual(focus.ring, "solid 2px", theme + ": the keyboard focus ring");
+      const ring = await ratios();
+      assert(ring.ring >= 3, theme + ": the focus ring is below 3:1 — " + ring.ring);
+      const before = { url: page.url(), pages: page.context().pages().length };
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => (window.__RICHOS_OPENED__ || []).length === 1);
+      await page.click("#update-notes");
+      await page.waitForFunction(() => (window.__RICHOS_OPENED__ || []).length === 2);
+      const opened = await page.evaluate(() => window.__RICHOS_OPENED__);
+      for (const key of opened) assertEqual("https://" + key, CHANGELOG, theme + ": the opener was handed the changelog");
+      assertEqual(page.url(), before.url, theme + ": the app window did not navigate");
+      assertEqual(page.context().pages().length, before.pages, theme + ": no window was opened inside the app");
+
+      if (theme === "dark") await evidence(page, SHOTS + "/updates-whats-new-focus");
+      else {
+        await page.mouse.move(0, 0);
+        await page.evaluate(() => document.activeElement.blur());
+        await flushFrames(page);
+        await evidence(page, SHOTS + "/updates-whats-new-light");
+      }
+      await page.close();
+      out.push(theme + " label " + rest.text + " rest / " + hover.text + " hover, ring " + ring.ring);
+    }
+    return "Enter and a click each handed the opener " + CHANGELOG + "; " + out.join("; ");
   });
 
   await browser.close();

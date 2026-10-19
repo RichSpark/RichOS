@@ -1,4 +1,4 @@
-//! **OPENING ONE OF SEVEN KNOWN THINGS, AND NOTHING ELSE.**
+//! **OPENING ONE OF EIGHT KNOWN THINGS, AND NOTHING ELSE.**
 //!
 //! CEO §61.1, from his own evening: Tailscale's own screens never say that the account IS the
 //! network, and he could not find the macOS download from `tailscale.com`'s home page or from the
@@ -10,7 +10,7 @@
 //! A general "open this URL" command is a hole with a button on it: anything that can reach the
 //! webview can then ask the Mac to open `file:///`, a `mailto:` that sends, a custom scheme
 //! registered by some other application, or a link that looks like ours with a different host.
-//! The screens need **seven** destinations, all of them fixed at build time, so the command takes
+//! The screens need **eight** destinations, all of them fixed at build time, so the command takes
 //! the address as a **key into a table** rather than as data to act on. Anything not in the table
 //! is refused by name.
 //!
@@ -37,7 +37,7 @@ pub enum Target {
     App,
 }
 
-/// **Every destination the how-to, quota and setup screens name.** Seven, and the key is the address exactly as the
+/// **Every destination the how-to, quota, setup and update screens name.** Eight, and the key is the address exactly as the
 /// screen prints it — so a reader of `phone.js` and a reader of this file see the same string.
 ///
 /// The two Apple identifiers are different and must not be swapped: `1470499037` is the iPhone and
@@ -58,6 +58,11 @@ const ALLOWED: &[(&str, Target)] = &[
         Target::Page("https://play.google.com/store/apps/details?id=com.tailscale.ipn"),
     ),
     ("console.tailscale.com/admin/dns", Target::Page("https://console.tailscale.com/admin/dns")),
+    // The Updates row's "See what's new" link (CEO, 2026-10-19; round 34): the RichOS changelog.
+    (
+        "github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md",
+        Target::Page("https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md"),
+    ),
     // NOT a URL. Screen 3 says "Open Tailscale", and what that has to do is bring the app the user
     // already installed to the front — sending them to a web page there would be telling somebody
     // who has the app to go and download it again.
@@ -168,13 +173,24 @@ mod tests {
         let main_js = include_str!("../../ui/main.js");
         assert!(main_js.contains("\"claude.com/pricing\""), "the setup sheet must ask for the pricing address");
         assert_eq!(resolve("claude.com/pricing"), Some(Target::Page("https://claude.com/pricing")));
-        assert_eq!(ALLOWED.len(), 7, "the allowlist grew or shrank without this test being told");
+        // The eighth belongs to the Updates row's "See what's new" link (CEO, 2026-10-19).
+        let updates_js = include_str!("../../ui/updates.js");
+        let changelog = "github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md";
+        assert!(
+            updates_js.contains(&format!("\"{changelog}\"")),
+            "the Updates row must ask for the changelog by this key"
+        );
+        assert_eq!(
+            resolve(changelog),
+            Some(Target::Page("https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md"))
+        );
+        assert_eq!(ALLOWED.len(), 8, "the allowlist grew or shrank without this test being told");
     }
 
     /// **AN ADDRESS OUTSIDE THE LIST IS REFUSED** — the check the brief asks for, over the near
     /// misses that a prefix test, a suffix test or a `contains` would each have let through.
     #[test]
-    fn anything_that_is_not_exactly_one_of_the_seven_is_refused() {
+    fn anything_that_is_not_exactly_one_of_the_eight_is_refused() {
         for asked in [
             // The classic host-suffix trick: it ENDS with nothing of ours and BEGINS with all of it.
             "tailscale.com.evil.example/download/mac",
@@ -192,6 +208,11 @@ mod tests {
             "claude.com/pricing?x=1",
             "claude.com/pricing/",
             "claude.com",
+            // The changelog's near misses: a scheme, another branch, a suffix, the repository.
+            "https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md",
+            "github.com/WebDevBooster/richos/blob/evil/docs/CHANGELOG.md",
+            "github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md?x=1",
+            "github.com/WebDevBooster/richos",
             "file:///etc/passwd",
             "mailto:someone@example.com",
             // Whitespace and case: no normalizing, on purpose.
