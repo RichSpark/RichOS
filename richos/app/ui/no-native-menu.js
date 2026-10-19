@@ -3,7 +3,10 @@
 // shit of this kind be gone from the right-click events?").
 //
 // ONE PLACE FOR THE WHOLE WINDOW, loaded first by every document the app opens (index.html and
-// the two dictation windows), so no element and no panel has to remember to suppress it.
+// the two dictation windows), so no element and no panel has to remember to suppress it. The
+// shell also runs it in every frame of the main window (src-tauri/src/webview_menu.rs
+// EVERY_FRAME), because the Output panel's PDF preview is a frame of its own that the page's
+// script never reaches, and its viewer highlighted the word under a right-click (nightly 66).
 //
 //  * A context click shows nothing, except in a field the user types in (input, textarea,
 //    contenteditable), where the plain editing menu stays so Cut, Copy and Paste still work.
@@ -15,6 +18,9 @@
 //  * A right-click does not select the text under it (WebKit selects the word on mouse-down).
 (function () {
   "use strict";
+  // Once per document: in the main window the shell's copy runs first and index.html's second.
+  if (window.__richosNoNativeMenu) return;
+  window.__richosNoNativeMenu = true;
   var TYPED_INTO = 'textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"], ' +
     'input:not([type]), input[type="text"], input[type="search"], input[type="url"], input[type="tel"], ' +
     'input[type="email"], input[type="password"], input[type="number"]';
