@@ -145,8 +145,9 @@ if have_commit e7facc99; then
   # (R47 below): a Rust message nobody classified is what the nightly refused on 2026-10-03.
   # dialect.js, interruption.js and outage.js scan every Rust file under crates/ too, and
   # realbytes.js compiles it (R48 below), so the land's work_host.rs selects them as well.
+  # richscribe.js reads all UI text, like dialect.js, so any UI change selects it too.
   UI_B="$(sed -n 's/^  cd richos\/app\/ui\/tests && node \(.*\.js\)$/\1/p' "$WORK/b.out" | LC_ALL=C sort | tr '\n' ' ')"
-  [ "$UI_B" = "affordances.js dialect.js docs-claims.js interruption.js no-home-network.js outage.js realbytes.js " ] \
+  [ "$UI_B" = "affordances.js dialect.js docs-claims.js interruption.js no-home-network.js outage.js realbytes.js richscribe.js " ] \
     && ok "B4 a one-check UI change costs ONE suite plus the suites that read its Rust file (and the sub-second document check), not the 19-minute run" \
     || bad "B4 a one-check UI change costs ONE suite" "got ${UI_B:-none}"
 else
