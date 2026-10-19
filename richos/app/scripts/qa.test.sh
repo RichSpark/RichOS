@@ -94,7 +94,7 @@
 #
 # run-tests: no-host-screen: its only capture/keystroke references are the strings it asserts those two tools REFUSE to act on, and its frames are committed PNG fixtures
 # run-tests: inputs richos/app/scripts/qa.test.sh richos/app/scripts/qa richos/mobile/conformance/vectors/fingerprint.json richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
-# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
+# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -143,7 +143,7 @@ python3 -c 'import PIL' >/dev/null 2>&1 && HAVE_PIL=1
 echo ""
 echo "=== H. every tool answers for itself ==="
 for t in contrast.py frame.py redact.py timeline.py ocr-gate.sh ocr-find.sh \
-         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh fixtures/make-fixtures.py; do
+         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh fixtures/make-fixtures.py; do
   if [ ! -x "$QA/$t" ]; then
     bad "H $t is executable" "not present or not executable at $QA/$t"
     continue
@@ -601,6 +601,9 @@ expect "wait-turn picks the later open turn, never the completed request, and ex
 
 run python3 "$QA/rich-reply-probe.test.py"
 expect "rich-reply-probe judges a note to himself and an answered cut-off question as FAIL, a plain reply as PASS" 0 "OK"
+
+run python3 "$QA/routing-probe.test.py"
+expect "routing-probe starts the classifier as the app does and judges a handoff of a do-it-yourself request as FAIL" 0 "OK"
 
 run python3 "$QA/tunnel-requests.test.py"
 expect "tunnel-requests: a reading without the request counter is a gap, never zero requests (R39)" 0 "OK"
