@@ -103,7 +103,7 @@ test('a hello frame renders BOTH sides — his message from the phone AND the on
 // --- 2. the wiring -----------------------------------------------------------------------------
 
 test('the shipped app merges the rows the Mac puts in every hello, rather than dropping them', () => {
-	const handler = appJs.match(/\n\t+hello\(data\) \{[\s\S]*?\n\t+\},\n/);
+	const handler = appJs.match(/\n\t+hello\(data(?:, id)?\) \{[\s\S]*?\n\t+\},\n/);
 	assert.ok(handler, 'the hello handler is gone from app.js, and with it the one frame that carries his own words');
 
 	assert.match(
@@ -137,7 +137,7 @@ test('the shipped app merges the rows the Mac puts in every hello, rather than d
 // `his_own_message_and_richs_reply_reach_the_phone_within_one_bound`, over real TLS.
 
 test('a live message frame reaches the screen the same way whichever of them said it', () => {
-	const handler = appJs.match(/\n\t+message\(row\) \{[\s\S]*?\n\t+\},\n/);
+	const handler = appJs.match(/\n\t+message\(row(?:, id)?\) \{[\s\S]*?\n\t+\},\n/);
 	assert.ok(handler, 'the live `message` handler is gone from app.js');
 
 	const mergeAt = handler[0].indexOf('thread.merge(row)');
