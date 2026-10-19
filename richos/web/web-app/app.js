@@ -918,17 +918,22 @@ function questionCard(row) {
 	async function submit(optionIds, text) {
 		if (draft.busy) return;
 		draft.busy = true; draft.note = 'Saving your answer…'; draw();
+		// The conversation this answer belongs to, fixed now: he can switch to another one while
+		// it is on its way to the Mac.
+		const threadId = row.thread_id || currentThreadId;
 		try {
 			const result = await api.answerQuestion({
-				clientId: newClientId(), threadId: row.thread_id || currentThreadId, questionId: q.id,
+				clientId: newClientId(), threadId, questionId: q.id,
 				optionIds, text, expectedRevision: draft.editing ? q.revision : undefined
 			});
 			draft.busy = false;
 			if (result.outcome === 'conversation_deleted') { draft.note = 'This conversation was deleted. Your answer was not sent.'; draw(); return; }
 			draft.note = ''; draft.editing = false;
 			if (result.question) {
-				const updated = Object.assign({}, row, { question: result.question });
-				thread.merge(updated);
+				// Kept for its own conversation either way; shown only if that is still the one on
+				// screen, because `thread` holds whichever conversation he is looking at now.
+				const updated = Object.assign({}, row, { thread_id: threadId, question: result.question });
+				if (currentThreadId === threadId) thread.merge(updated);
 				messageCache.put(updated).catch(() => {});
 			}
 			// The same answer again is `already_answered` with the question unchanged, so no new
