@@ -39,19 +39,28 @@ const row = (id, thread_id, cursor, role, extra) => Object.assign({ id, thread_i
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 const question = (cursor) => row('q', 'A', cursor, 'rich', { kind: 'question', question: { id: 'q', text: 'Formal or casual?', state: 'open', options: [] } });
 
-/// The Mac, as `phone/stream.rs` and `phone/routes.rs` answer the phone.
+/// The Mac, as `phone/stream.rs` and `phone/routes.rs` answer the phone. Every frame carries the
+/// hub's own number as its SSE `id:` (`Frame::to_wire`); a `hello` carries the hub's number when
+/// it is built (`hello_frame`).
 function mac() {
 	const projection = { A: [row('r1', 'A', 1, 'ceo'), row('r2', 'A', 2, 'rich')], B: [row('b1', 'B', 1, 'ceo')] };
 	const hub = [];
 	const threads = [{ id: 'A', title: 'Onboarding' }, { id: 'B', title: 'Thread B' }];
 	const streams = [];
+	// Thread B's traffic has already moved the hub's one sequence to 10.
+	let hubCursor = 10;
 	return {
 		projection, hub, streams,
 		openEvents: async (id, since, handlers) => {
 			streams.push({ id, since, handlers });
 			setImmediate(() => {
-				if (since === null) handlers.hello({ thread_id: id, threads, messages: projection[id] });
-				else hub.filter((f) => f.cursor > since).forEach((f) => handlers.message(f.row));
+				// `replay_after_marked`: no cursor, or one this run never issued, is a `hello`.
+				if (since === null || since > hubCursor) {
+					hubCursor = Math.max(hubCursor, projection[id].length);
+					handlers.hello({ thread_id: id, threads, messages: projection[id] }, String(hubCursor));
+				} else {
+					hub.filter((f) => f.cursor > since).forEach((f) => handlers.message(f.row, String(f.cursor)));
+				}
 			});
 			return { close() {} };
 		},
@@ -61,15 +70,16 @@ function mac() {
 		},
 		/// One live frame: the hub's own number on the frame, and the row's cursor as the Mac sets it.
 		live(frameCursor, liveRow, projected) {
+			hubCursor = Math.max(hubCursor, frameCursor);
 			hub.push({ cursor: frameCursor, row: liveRow });
 			projection.A.push(projected);
-			streams[streams.length - 1].handlers.message(liveRow);
+			streams[streams.length - 1].handlers.message(liveRow, String(frameCursor));
 		}
 	};
 }
 
-test('Ray\'s nightly 67 sequence: a reopened conversation keeps its question cards under the request that asked them', async () => {
-	const m = mac();
+/// The page around the shipped functions, against the Mac `m`.
+function page(m) {
 	const stored = new Map();
 	const context = vm.createContext({
 		RichOSLink: { createLink },
@@ -89,25 +99,72 @@ test('Ray\'s nightly 67 sequence: a reopened conversation keeps its question car
 	});
 	vm.runInContext(linkSource + '\n' + ['renderThreadPicker', 'selectThread', 'askForTheQuestion'].map(fn).join('\n')
 		+ '\nconst reconciled = new Set();', context);
-	const order = () => context.thread.view([]).map((r) => r.id);
+	context.order = () => context.thread.view([]).map((r) => r.id);
+	return context;
+}
 
+/// Onboarding open live: the request, Rich's reply and the question card arrive on the stream.
+async function openLive(m, context) {
 	context.connectStream();
 	await settle(); await settle();
-	assert.deepStrictEqual(order(), ['r1', 'r2']);
+	assert.deepStrictEqual(context.order(), ['r1', 'r2']);
 
-	// Thread B's traffic has already moved the hub's one sequence to 10. The welcome-email request
-	// and Rich's reply take hub numbers 11 and 12; the question card takes its projection
-	// position, 5, on a frame numbered 13 (`question_changed`).
+	// The welcome-email request and Rich's reply take hub numbers 11 and 12; the question card
+	// takes its projection position, 5, on a frame numbered 13 (`question_changed`).
 	m.live(11, row('req', 'A', 11, 'ceo'), row('req', 'A', 3, 'ceo'));
 	m.live(12, row('reply', 'A', 12, 'rich'), row('reply', 'A', 4, 'rich'));
 	m.live(13, question(5), question(5));
 	await settle(); await settle();
-	assert.deepStrictEqual(order(), ['r1', 'r2', 'req', 'reply', 'q'], 'while open live the card is at the bottom, as Ray saw');
+	assert.deepStrictEqual(context.order(), ['r1', 'r2', 'req', 'reply', 'q'], 'while open live the card is at the bottom, as Ray saw');
+}
 
-	// He opens Thread B, then Onboarding again.
+/// He opens Thread B, then Onboarding again.
+async function reopen(context) {
 	await context.selectThread('B');
 	await settle(); await settle();
 	await context.selectThread('A');
 	await settle(); await settle();
-	assert.deepStrictEqual(order(), ['r1', 'r2', 'req', 'reply', 'q'], 'the question card moved above the request that asked it');
+}
+
+/// An ordinary connection loss, and the page coming back to the front wakes the retry. Returns
+/// the cursor the reconnect presented.
+async function loseAndWake(m, context) {
+	m.streams[m.streams.length - 1].handlers.error({});
+	context.link.wake();
+	await settle(); await settle();
+	return m.streams[m.streams.length - 1].since;
+}
+
+test('Ray\'s nightly 67 sequence: a reopened conversation keeps its question cards under the request that asked them', async () => {
+	const m = mac();
+	const context = page(m);
+	await openLive(m, context);
+	await reopen(context);
+	context.link.close();
+	assert.deepStrictEqual(context.order(), ['r1', 'r2', 'req', 'reply', 'q'], 'the question card moved above the request that asked it');
+});
+
+// Review `rv-20261019T112205Z-d98f7bde-d3fb`: after the reopen's `hello` the page's highest row
+// cursor is the question's projection position, 5. A lost connection presented 4 as a hub number,
+// and the Mac replayed frames 11 to 13, which put the request and the reply back on 11 and 12.
+test('a lost connection after a reopen resumes from the stream\'s own number and keeps the card under its request', async () => {
+	const m = mac();
+	const context = page(m);
+	await openLive(m, context);
+	await reopen(context);
+	assert.deepStrictEqual(context.order(), ['r1', 'r2', 'req', 'reply', 'q']);
+	const since = await loseAndWake(m, context);
+	context.link.close();
+	assert.strictEqual(since, 13, 'the reconnect did not present the last frame the stream delivered');
+	assert.deepStrictEqual(context.order(), ['r1', 'r2', 'req', 'reply', 'q'], 'the question card moved above the request that asked it');
+});
+
+test('a lost connection while open live resumes from the stream\'s own number', async () => {
+	const m = mac();
+	const context = page(m);
+	await openLive(m, context);
+	const since = await loseAndWake(m, context);
+	context.link.close();
+	assert.strictEqual(since, 13, 'the reconnect did not present the last frame the stream delivered');
+	assert.deepStrictEqual(context.order(), ['r1', 'r2', 'req', 'reply', 'q']);
 });

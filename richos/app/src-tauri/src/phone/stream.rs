@@ -36,8 +36,9 @@ const BROADCAST_DEPTH: usize = 256;
 /// One thing to send down an open event stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
-    /// The SSE `id:`. The phone does not read it — it tracks `cursor` inside the data — but it is
-    /// what makes a reconnection answerable, and `EventSource` resends it for free.
+    /// The SSE `id:`. The phone orders rows by the `cursor` inside the data, and presents the last
+    /// `id:` it heard as `since=` when it reconnects (`web-app/app.js` `makeLink`): a row's cursor
+    /// can be a projection position (`mod.rs` `question_changed`), never a place in this stream.
     pub cursor: u64,
     /// The SSE `event:` name: one of the five the phone subscribes to.
     pub kind: &'static str,

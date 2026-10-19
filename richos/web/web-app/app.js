@@ -615,16 +615,23 @@ function makeLink() {
     // at boot or from the picker, asks for a `hello`, whose rows are all the Mac's own positions;
     // only a reconnect of the conversation already heard presents a cursor.
     let heard=null;
+    // **THAT CURSOR IS THE STREAM'S OWN NUMBER, NEVER A ROW'S** (review
+    // `rv-20261019T112205Z-d98f7bde-d3fb`: after a `hello`, a lost connection presented a projection
+    // position and the replay put the question card above its request again). It is the SSE `id:`
+    // of the last frame this stream delivered, which is always the hub's number (`phone/stream.rs`
+    // `Frame::to_wire`, a `hello` included: `routes.rs` `hello_frame`). A Mac that sends no `id:`
+    // leaves it unset, and the reconnect asks for a `hello`.
+    let streamAt=null;
+    const heardFrame=(id)=>{const n=id===''||id==null?NaN:Number(id);if(Number.isSafeInteger(n)&&(streamAt===null||n>streamAt))streamAt=n;};
 	return globalThis.RichOSLink.createLink({
 		open: async (handlers) => {
             if(firstOpen){firstOpen=false;await api.refreshChallenge();}
             const incomplete=thread.view([]).filter(row=>row.complete===false && Number.isSafeInteger(row.cursor)).map(row=>Math.max(0,row.cursor-1));
-            const cursor=thread.latestCursor();
             // A conversation the page knows only from its rows has no title yet: no cursor, so the
             // Mac answers with a `hello` and its list (`noteThread`).
             const named=threads.some(t=>t.id===currentThreadId && t.title);
-            const resume=heard===currentThreadId && named && cursor>0;
-            return api.openEvents(currentThreadId,resume?Math.min(cursor-1,...incomplete):null,handlers);
+            const resume=heard===currentThreadId && named && streamAt!==null;
+            return api.openEvents(currentThreadId,resume?Math.min(streamAt,...incomplete):null,handlers);
         },
 		refresh: () => api.refreshChallenge(),
 		onFailure: handleApiError,
@@ -646,8 +653,10 @@ function makeLink() {
 
 		handlers: {
 			open() { flushQueue(); },
-			hello(data) {
+			hello(data, id) {
 				heard=currentThreadId;
+				// A `hello` starts the count again: a Mac that restarted numbers from its projection.
+				streamAt=null;heardFrame(id);
 				// What this Mac can actually be asked for, before anything else in this handler:
 				// the screen should never be one frame ahead of what the Mac has said it can do.
 				applyCapabilities();
@@ -687,7 +696,8 @@ function makeLink() {
 				if(notificationTarget)void resolveNotificationTarget().catch(handleApiError);
 				flushQueue();
 			},
-			message(row) {
+			message(row, id) {
+				heardFrame(id);
 				messageCache.put(row).catch(() => {});
 				if (row && elsewhere(row.thread_id)) { noteThread(row.thread_id); return; }
 				thread.merge(row);
@@ -695,9 +705,9 @@ function makeLink() {
 				if (row && row.role === 'rich' && row.complete) askForTheQuestion(row);
 			},
 			// A conversation created or renamed on the Mac (`phone/mod.rs` `threads_changed`).
-			threads(data) { takeThreadList(data && data.threads); },
-			delta(data) { if (data && elsewhere(data.thread_id)) return; thread.applyDelta(data); scheduleRender(); },
-			state(data) { thread.applyState(data); scheduleRender(); }
+			threads(data, id) { heardFrame(id); takeThreadList(data && data.threads); },
+			delta(data, id) { heardFrame(id); if (data && elsewhere(data.thread_id)) return; thread.applyDelta(data); scheduleRender(); },
+			state(data, id) { heardFrame(id); thread.applyState(data); scheduleRender(); }
 		}
 	});
 }

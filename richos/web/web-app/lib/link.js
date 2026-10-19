@@ -116,13 +116,14 @@
 		/// The handlers the source is actually wired to. Gated on the generation, so a source this
 		/// file has already given up on cannot move the app's state from underneath the live one.
 		function wire(mine) {
-			const forward = (name) => (data) => {
+			// `id` is the frame's SSE `id:`, the hub's number a reconnect presents (`app.js` `makeLink`).
+			const forward = (name) => (data, id) => {
 				if (mine !== generation || stopped) return;
 				// ANY frame is proof the Mac accepted this credential — `app.js` already treated a
 				// heartbeat that way, and it was right to. It matters most for the quiet reconnect
 				// described below, where the first thing that ever arrives is a heartbeat.
 				accepted();
-				if (handlers[name]) handlers[name](data);
+				if (handlers[name]) handlers[name](data, id);
 			};
 			// WHAT COUNTS AS THE MAC HAVING ACCEPTED THIS RE-SIGNED URL — and it is NOT `hello`
 			// alone, which is where the plan and the tree disagree.
@@ -152,12 +153,12 @@
 					accepted();
 					if (handlers.open) handlers.open();
 				},
-				hello: (data) => {
+				hello: (data, id) => {
 					if (mine !== generation || stopped) return;
 					// Also here, because a stub in a test can deliver `hello` without an `open`, and
 					// because a `hello` is no weaker a proof than the `open` that carried it.
 					accepted();
-					if (handlers.hello) handlers.hello(data);
+					if (handlers.hello) handlers.hello(data, id);
 				},
 				message: forward('message'),
 				delta: forward('delta'),
