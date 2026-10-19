@@ -22,7 +22,8 @@
 //!
 //!  * over a web view, a menu WebKit built for a text field (it holds WebKit's own Paste) becomes
 //!    exactly Cut, Copy, Paste and Select All: AppKit's standard edit actions, sent to that web
-//!    view, which enables each one the way it enables the Edit menu's;
+//!    view, which enables each one the way it enables the Edit menu's, with AppKit's own Services
+//!    and Writing Tools additions switched off on it;
 //!  * over a web view, any other menu is not shown at all;
 //!  * a menu over anything else is shown as it was asked for.
 
@@ -195,13 +196,23 @@ mod mac {
         }
     }
 
-    /// Empty `menu` and give it [`EDITING`], each item sent to `web_view`.
+    /// Empty `menu` and give it [`EDITING`], each item sent to `web_view`, with AppKit's own
+    /// additions switched off: system-wide Services (`allowsContextMenuPlugIns`) and Writing Tools
+    /// (`automaticallyInsertsWritingToolsItems`, macOS 15.2 and later), both on by default
+    /// (NSMenu.h), which AppKit would otherwise add to selected text after this call hands it on.
     fn editing_menu(menu: *mut AnyObject, web_view: *mut AnyObject) {
         let Some(string) = AnyClass::get(c"NSString") else { return };
         // SAFETY: documented NSMenu, NSMenuItem and NSString methods on the menu AppKit was handed;
         // main thread. `addItemWithTitle:action:keyEquivalent:` returns the item the menu owns.
+        // The Writing Tools setter is sent only where the menu has it.
         unsafe {
             let () = msg_send![menu, removeAllItems];
+            let () = msg_send![menu, setAllowsContextMenuPlugIns: Bool::NO];
+            let has_writing_tools: Bool =
+                msg_send![menu, respondsToSelector: sel!(setAutomaticallyInsertsWritingToolsItems:)];
+            if has_writing_tools.as_bool() {
+                let () = msg_send![menu, setAutomaticallyInsertsWritingToolsItems: Bool::NO];
+            }
             let none: *mut AnyObject = msg_send![string, string];
             for (title, action) in EDITING {
                 let (Ok(title), Ok(action)) = (CString::new(title), CString::new(action)) else { continue };
