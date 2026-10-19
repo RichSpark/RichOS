@@ -432,10 +432,18 @@ async function main() {
     }, head);
     assert(real.shown && real.text === "+ New chat", "the real hover: " + JSON.stringify(real));
     assert(real.right > 0 && real.right <= 16 && Math.abs(real.midDelta) <= 2, "the tooltip is not beside the plus: " + JSON.stringify(real));
-    // Keyboard focus shows it too.
+    // Keyboard focus shows it too, reached the keyboard's way: Tab from the company's name to
+    // its collapse control, Tab to the plus.
     await page.mouse.move(700, 450);
-    await page.focus(head + " .nav-group-add");
-    assertEqual(await page.isVisible("#rail-tip"), true, "keyboard focus does not show the tooltip");
+    await page.focus(head + " .nav-group-label");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    const kb = await page.evaluate(() => {
+      const a = document.activeElement;
+      const tip = document.getElementById("rail-tip");
+      return { plus: !!a && a.classList.contains("nav-group-add"), tip: !tip.hidden, text: tip.textContent.trim() };
+    });
+    assertEqual(kb, { plus: true, tip: true, text: "+ New chat" }, "the plus by keyboard");
     await page.close();
     return "shown in the same task as the pointer event; transition " + sync.transition + "; beside the plus at +" + real.right + "px";
   });

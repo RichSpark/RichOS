@@ -2414,17 +2414,30 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
 }
 
 /* The two hover controls, collapse and the plus: hidden until the heading is hovered or has
-   focus (§3.1's "a quiet plus control on hover or focus"), never hidden from the keyboard. */
+   focus (§3.1's "a quiet plus control on hover or focus"), NEVER hidden from the keyboard. So
+   they are transparent and out of the row's flow rather than `display: none`, which would take
+   them out of the Tab order: Tab and Shift+Tab reach them, and the focus that lands on one
+   shows them (`:focus-within`). Shown, they take their place in the row and the name ellipsizes
+   before them; no transition, so they are there in the frame the pointer arrives in. */
 .co-tools {
-  display: none;
+  display: flex;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
   align-items: center;
   gap: 2px;
   padding-right: 4px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 #rail-nav .nav-group-head:hover .co-tools,
 #rail-nav .nav-group-head:focus-within .co-tools {
-  display: flex;
+  position: static;
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .co-tool {
