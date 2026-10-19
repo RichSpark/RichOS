@@ -67,8 +67,10 @@
   window.RichFolderPicker.attach(field("repository-folder"), "Choose a project folder", () => field("repository-connect").focus());
   field("repository-company").addEventListener("change", renderList);
   field("repository-close").addEventListener("click", close);
+  // Escape is main.js's alone, through `data-dismiss` above: it closes whatever is on top. A
+  // handler of its own here closed this sheet even with the report panel open over it (review
+  // rv-20261019T002816Z-ba3129ad-c627).
   sheet.addEventListener("keydown", event => {
-    if (event.key === "Escape") { event.stopPropagation(); close(); }
     if (event.key === "Tab") {
       const targets = [...sheet.querySelectorAll("button, input, select")].filter(node => !node.disabled);
       if (event.shiftKey && document.activeElement === targets[0]) { event.preventDefault(); targets.at(-1).focus(); }

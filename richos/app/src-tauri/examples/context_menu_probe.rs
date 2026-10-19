@@ -8,12 +8,14 @@
 //! menu is ever drawn. In place of AppKit's `+[NSMenu popUpContextMenu:withEvent:forView:]` a
 //! recorder takes each menu that would be shown, and tells the menu's delegate it opened and
 //! closed the way AppKit would. `src/webview_menu.rs` is compiled by path and installed over that
-//! recorder exactly as `main` installs it over AppKit.
+//! recorder exactly as `main` installs it over AppKit, and the web view is given
+//! `webview_menu::EVERY_FRAME` for all its frames, as `main` gives it to each window.
 //!
 //! ```text
 //! context_menu_probe                     the shipped behavior; exits 0 when every check passes
 //! context_menu_probe --without-the-fix   the same checks with src/webview_menu.rs not installed
-//!                                        (the behavior before it); they must fail
+//!                                        and no script in every frame (the behavior before
+//!                                        them); they must fail
 //! ```
 //!
 //! Run by `scripts/context-menu-probe.test.sh`, which requires both outcomes.
@@ -243,10 +245,13 @@ mod mac {
     struct Probe {
         window: *mut AnyObject,
         web_view: *mut AnyObject,
+        content: *mut AnyObject,
     }
 
     impl Probe {
-        fn new() -> Probe {
+        /// `every_frame`: the window gets `webview_menu::EVERY_FRAME` for all frames, as `main`
+        /// gives it to each window.
+        fn new(every_frame: bool) -> Probe {
             // SAFETY: documented AppKit and WebKit constructors and setters; main thread. Nothing
             // here orders the window on screen.
             unsafe {
@@ -268,13 +273,31 @@ mod mac {
                 let config_class = AnyClass::get(c"WKWebViewConfiguration").expect("WebKit is loaded");
                 let config: *mut AnyObject = msg_send![config_class, alloc];
                 let config: *mut AnyObject = msg_send![config, init];
+                let content: *mut AnyObject = msg_send![config, userContentController];
+                if every_frame {
+                    // What wry does for `initialization_script_for_all_frames`: at document
+                    // start, in every frame.
+                    let script_class = AnyClass::get(c"WKUserScript").expect("WebKit is loaded");
+                    let script: *mut AnyObject = msg_send![script_class, alloc];
+                    let script: *mut AnyObject = msg_send![script, initWithSource: ns(webview_menu::EVERY_FRAME),
+                        injectionTime: 0isize, forMainFrameOnly: Bool::NO];
+                    let () = msg_send![content, addUserScript: script];
+                }
                 let web_class = AnyClass::get(c"WKWebView").expect("WebKit is loaded");
                 let web_view: *mut AnyObject = msg_send![web_class, alloc];
                 let web_view: *mut AnyObject = msg_send![web_view, initWithFrame: frame, configuration: config];
                 let () = msg_send![parent, addSubview: web_view];
                 let () = msg_send![window, setContentView: parent];
                 *WEB_VIEW.lock().unwrap_or_else(|p| p.into_inner()) = web_view as usize;
-                Probe { window, web_view }
+                Probe { window, web_view, content }
+            }
+        }
+
+        /// Take the frames script away again, for the checks of `webview_menu.rs` alone.
+        fn without_frame_scripts(&self) {
+            // SAFETY: documented WKUserContentController method; main thread.
+            unsafe {
+                let () = msg_send![self.content, removeAllUserScripts];
             }
         }
 
@@ -397,15 +420,24 @@ mod mac {
         Ok(describe(menus))
     }
 
+    /// No menu shown, and WebKit did offer one that `webview_menu.rs` dropped.
+    fn dropped_by_the_fix(menus: &[Vec<Item>], dropped: usize) -> Result<String, String> {
+        match (menus.is_empty(), dropped) {
+            (true, 1) => Ok("its menu was not shown".into()),
+            (true, _) => Err("WebKit offered no menu to drop, so this check proved nothing".into()),
+            (false, _) => Err(format!("saw {}; forbidden among them: {:?}", describe(menus), forbidden(menus))),
+        }
+    }
+
     pub fn run(without_the_fix: bool) -> i32 {
         objc2::rc::autoreleasepool(|_| {
             put_recorder_in_appkits_place();
             if without_the_fix {
-                println!("context_menu_probe: src/webview_menu.rs NOT installed (the behavior before it)");
+                println!("context_menu_probe: src/webview_menu.rs NOT installed, and no script in every frame (the behavior before them)");
             } else {
                 webview_menu::install();
             }
-            let probe = Probe::new();
+            let probe = Probe::new(!without_the_fix);
             let mut checks = Checks { failed: 0 };
 
             probe.load(true);
@@ -423,12 +455,30 @@ mod mac {
                 editing_only(&menus),
             );
 
+            // Nightly 66: a right-click on the PDF preview highlighted the word under the pointer.
+            // WebKit's PDF viewer selects that word while handling the right-click's mouse-down
+            // (UnifiedPDFPlugin::beginTrackingSelection, "Context menu events can only generate a
+            // word selection under the event"), and builds its menu from it: here "Look Up
+            // “report”". So the word stays unselected only if the viewer is never handed the
+            // right-click at all, which is what this asks of WebKit: no menu offered, none shown.
+            // (555, 105) is the middle of "Quarterly report preview" as WebKit draws it here: its
+            // text box is (435, 94)-(674, 116), read from WebKit's own snapshot of this page.
+            let (menus, dropped) = probe.right_click(555.0, 105.0);
+            checks.check(
+                "a right-click on a word in the PDF preview never reaches the PDF viewer, so nothing is selected",
+                match (menus.is_empty(), dropped) {
+                    (true, 0) => Ok("the viewer was not handed it: no menu offered, none shown".into()),
+                    (true, _) => Err("the viewer handled it, selecting the word under the pointer: it offered its menu, which webview_menu.rs dropped".into()),
+                    (false, _) => Err(format!("the viewer handled it, selecting the word under the pointer: saw {}", describe(&menus))),
+                },
+            );
+
             let (menus, dropped) = probe.right_click(600.0, 300.0);
             checks.check(
-                "a right-click in the PDF preview shows no menu, and WebKit did offer one",
+                "a right-click in the PDF preview shows no menu",
                 match (menus.is_empty(), dropped) {
-                    (true, 1) => Ok("its menu was not shown".into()),
-                    (true, _) => Err("WebKit offered no menu to drop, so this check proved nothing".into()),
+                    (true, 0) => Ok("the PDF viewer never had it: the frame's own script canceled it".into()),
+                    (true, _) => Ok("its menu was not shown".into()),
                     (false, _) => Err(format!("saw {}; forbidden among them: {:?}", describe(&menus), forbidden(&menus))),
                 },
             );
@@ -437,16 +487,16 @@ mod mac {
             let (menus, _) = probe.right_click(60.0, 75.0);
             checks.check("after the PDF preview, the composer still gets only the editing menu", editing_only(&menus));
 
+            // `webview_menu.rs` on its own, with no script in any frame: the backstop still holds.
+            probe.without_frame_scripts();
             probe.load(false);
             probe.script("getSelection().selectAllChildren(document.getElementById('name'));");
             let (menus, dropped) = probe.right_click(30.0, 18.0);
+            checks.check("with no page script at all, selected page text still shows no menu", dropped_by_the_fix(&menus, dropped));
+            let (menus, dropped) = probe.right_click(600.0, 300.0);
             checks.check(
-                "with no page script at all, selected page text still shows no menu",
-                match (menus.is_empty(), dropped) {
-                    (true, 1) => Ok("its menu was not shown".into()),
-                    (true, _) => Err("WebKit offered no menu to drop, so this check proved nothing".into()),
-                    (false, _) => Err(format!("saw {}; forbidden among them: {:?}", describe(&menus), forbidden(&menus))),
-                },
+                "with no script in any frame, the PDF preview still shows no menu, and WebKit did offer one",
+                dropped_by_the_fix(&menus, dropped),
             );
 
             // SAFETY: documented NSWindow method; the window was never on screen.

@@ -128,6 +128,28 @@ async function main(){
   assertEqual(await page.inputValue("#entity-add-folder"),"/fictional/typed","typing a path still works");
   await page.close();return "same chooser, its own title, placeholder Click and select folder, typing still works";
  });
+ await run.check("Escape with focus back in the folder field closes the report on top first, then the sheet (review rv-20261019T002816Z-ba3129ad-c627)",async()=>{
+  // The report panel opened over this sheet from Settings, then focus Tabbed back into the
+  // folder field: Escape closed the sheet underneath and left the report open.
+  const seen=[];
+  for(const opener of ["#bug-btn","#idea-btn"]){
+   const page=await browser.newPage({viewport:{width:1280,height:900}});
+   await page.goto("file://"+path.join(UI_DIR,"index.html"));await leaveHome(page);
+   await page.click("#set-btn");await page.click("#set-repositories-open");
+   await page.waitForFunction(()=>document.activeElement&&document.activeElement.id==="repository-folder");
+   await page.click("#set-btn");await page.click(opener);
+   await page.waitForSelector("#bugdock:not([hidden])");
+   await page.focus("#repository-folder");
+   await page.keyboard.press("Escape");
+   assert(await page.isHidden("#bugdock"),`${opener}: Escape left the report open`);
+   assert(await page.isVisible("#repositories-sheet"),`${opener}: Escape closed the sheet under the report`);
+   await page.focus("#repository-folder");
+   await page.keyboard.press("Escape");
+   assert(await page.isHidden("#repositories-sheet"),`${opener}: the second Escape left the sheet open`);
+   seen.push(opener.slice(1,-4));await page.close();
+  }
+  return seen.join(" and ")+": the report closed first, the sheet on the next Escape";
+ });
  await browser.close();process.exit(run.report()?1:0);
 }
 main().catch(e=>{console.error(e);process.exit(1);});
