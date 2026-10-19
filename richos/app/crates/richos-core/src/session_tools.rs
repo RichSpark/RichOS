@@ -156,6 +156,13 @@ pub(crate) fn observe_overload_retry(scope:&StatusToolScope,facts:&Value)->Resul
     append(scope,"stu",&Message {handoff:false,from:"overload-retry".into(),text:facts.to_string(),instruction:None,work:None})
 }
 
+/// Stu's Claude account is being switched (`account_switch`: something of his still runs on the
+/// account being left) or he has been moved to it (`account_moved`) (`work_host.rs`
+/// move_to_account_in_use). A host observation, like the overload retry's.
+pub(crate) fn observe_account_switch(scope:&StatusToolScope,facts:&Value)->Result<(),String> {
+    append(scope,"stu",&Message {handoff:false,from:"account-switch".into(),text:facts.to_string(),instruction:None,work:None})
+}
+
 pub(crate) fn observe_user_stop(scope:&StatusToolScope,assignment:&str,obligation:&str,at:u64)->Result<(),String> {
     append(scope,"stu",&Message {handoff:false,from:"user-control".into(),text:json!({"event":"user_stop",
         "assignment_id":assignment,"obligation_id":obligation,"requested_at_ms":at}).to_string(),instruction:None,work:None})
