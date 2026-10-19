@@ -267,7 +267,7 @@ async function main() {
     const menu = (extra) => Object.assign({ seq: 3, on: true, key: "F1", choice: "accurate", paused: false, secureApp: null, theme: "dark", fontScale: 100 }, extra || {});
     await say(page, "dictation-menu", menu());
     assertEqual(await text(page, ".sb-head"), "RichScribe On", "the heading");
-    assertEqual(await text(page, ".sb-say"), "Tap F1 to start, and again to stop.", "the line under it");
+    assertEqual(await text(page, ".sb-say"), "Tap F1 to start and again to stop.", "the line under it");
     const rows = await page.locator(".sb-item").allInnerTexts();
     assertEqual(JSON.stringify(rows.map((r) => r.trim())), JSON.stringify(["More accurate", "Faster", "RichScribe settings…", "Turn RichScribe off", "Open RichOS"]), "the rows");
     assertEqual(await page.locator('.sb-item[aria-checked="true"]').innerText(), "More accurate", "the tick");
