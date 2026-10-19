@@ -5321,6 +5321,27 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         self.assertIn("Filed as a follow-up: %s#1 question-card answers are not in the cut. "
                       "Why: Rich, per the CEO: not a normal-use hole in this work" % rid, body)
 
+    def test_second_review_a_stale_installed_fence_never_refuses_a_land_that_passes(self):
+        # 2026-10-19 ~05:30Z: the Escape fix passed its land check and was then refused by the
+        # hook's copy of the fence, installed before the copy learned to read follow-up rulings.
+        program = os.path.join(self.other, ".git", "hooks", "operator-fences", "operator_fences.py")
+        engine_copy = os.path.join(ENGINE, "scripts", "lib", "operator_fences.py")
+        with open(engine_copy) as f:
+            text = f.read()
+        older = text.replace("def read_deferrals(ledger):",
+                             "def read_deferrals(ledger):\n    return {}\n\n\ndef _newer_read_deferrals(ledger):", 1)
+        self.assertNotEqual(older, text)
+        with open(program, "w") as f:
+            f.write(older)
+        _cc, (tip,) = self.finished("zach-opus-rvstale")
+        rid = self.verdict(tip, "changes-requested", findings=[(2, "a finding the lead ruled")])
+        self.follow_up(rid + "#1")
+        _merged, res = ws.merge_and_land("zach-opus-rvstale", self.sid, "Merge cc/zach-opus-rvstale: the work")
+        self.assertTrue(res["landed"])
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip)
+        with open(program) as f:
+            self.assertEqual(f.read(), text)
+
     def test_second_review_a_follow_up_ruling_reaches_a_plain_git_merge_too(self):
         _cc, (tip,) = self.finished("zach-opus-rvfug")
         rid = self.verdict(tip, "changes-requested", findings=[(2, "a finding the lead ruled")])
