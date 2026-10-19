@@ -5321,9 +5321,9 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         self.assertIn("Filed as a follow-up: %s#1 question-card answers are not in the cut. "
                       "Why: Rich, per the CEO: not a normal-use hole in this work" % rid, body)
 
-    def test_second_review_a_stale_installed_fence_never_refuses_a_land_that_passes(self):
-        # 2026-10-19 ~05:30Z: the Escape fix passed its land check and was then refused by the
-        # hook's copy of the fence, installed before the copy learned to read follow-up rulings.
+    def stale_fence(self):
+        """The hook's copy of the fence made older than the engine's: its read_deferrals reads nothing.
+        Returns (the installed copy's path, the engine's text)."""
         program = os.path.join(self.other, ".git", "hooks", "operator-fences", "operator_fences.py")
         engine_copy = os.path.join(ENGINE, "scripts", "lib", "operator_fences.py")
         with open(engine_copy) as f:
@@ -5333,6 +5333,12 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         self.assertNotEqual(older, text)
         with open(program, "w") as f:
             f.write(older)
+        return program, text
+
+    def test_second_review_a_stale_installed_fence_never_refuses_a_land_that_passes(self):
+        # 2026-10-19 ~05:30Z: the Escape fix passed its land check and was then refused by the
+        # hook's copy of the fence, installed before the copy learned to read follow-up rulings.
+        program, text = self.stale_fence()
         _cc, (tip,) = self.finished("zach-opus-rvstale")
         rid = self.verdict(tip, "changes-requested", findings=[(2, "a finding the lead ruled")])
         self.follow_up(rid + "#1")
@@ -5341,6 +5347,36 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip)
         with open(program) as f:
             self.assertEqual(f.read(), text)
+
+    def test_second_review_a_stale_installed_fence_never_refuses_a_plain_git_merge(self):
+        # A release branch lands by a plain `git merge` into main, which never runs workspaces.sh merge.
+        program, text = self.stale_fence()
+        _cc, (tip,) = self.finished("zach-opus-rvstalegit")
+        rid = self.verdict(tip, "changes-requested", findings=[(2, "a finding the lead ruled")])
+        self.follow_up(rid + "#1")
+        r = run("git", "-C", self.other, "merge", "--no-ff", "--no-edit", "cc/zach-opus-rvstalegit", check=False)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip)
+        with open(program) as f:
+            self.assertEqual(f.read(), text)
+
+    def test_a_fence_inside_the_repository_is_brought_current_from_main_never_the_checkout(self):
+        # A plain `git merge` has already written the incoming work's files into the main checkout
+        # when the fence decides; the incoming fence must not judge its own land.
+        F = ws._fence_program()
+        repo = os.path.join(self.env.root, "engine-inside")
+        lib = os.path.join(repo, "engine", "scripts", "lib")
+        os.makedirs(lib)
+        run("git", "init", "-q", "-b", "main", repo)
+        for name in F.PROGRAM_FILES:
+            with open(os.path.join(lib, name), "w") as f:
+                f.write("main's %s\n" % name)
+        run("git", "-C", repo, "add", "-A")
+        run("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "base")
+        with open(os.path.join(lib, "operator_fences.py"), "w") as f:
+            f.write("the incoming work's fence\n")
+        found = F.current_program({"ENGINE": os.path.join(repo, "engine"), "REPO": repo})
+        self.assertEqual(found, {n: ("main's %s\n" % n).encode() for n in F.PROGRAM_FILES})
 
     def test_second_review_a_follow_up_ruling_reaches_a_plain_git_merge_too(self):
         _cc, (tip,) = self.finished("zach-opus-rvfug")

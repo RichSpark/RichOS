@@ -42,7 +42,7 @@ import operator_fences as F   # noqa: E402
 ENGINE = os.path.realpath(os.path.join(HERE, "..", ".."))
 TEMPLATE = os.path.join(HERE, "operator-fence-launcher.sh")
 PROGRAM_SOURCE = os.path.join(HERE, "operator_fences.py")
-PROGRAM_FILES = ("operator_fences.py", "recovery.py", "machine_settings.py")   # what install copies beside the hook
+PROGRAM_FILES = F.PROGRAM_FILES   # what install copies beside the hook
 RECORDER_MARKER = "ref-transaction-forensics.sh"
 REGISTRY_NAME = "operator-fences.json"
 _ASSIGN = re.compile(r'^\s*([A-Z_][A-Z0-9_]*)=(?:"([^"]*)"|\'([^\']*)\'|(\S*))\s*(?:#.*)?$')
