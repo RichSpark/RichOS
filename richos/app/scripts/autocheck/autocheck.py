@@ -2112,8 +2112,7 @@ def commit_msg(repo, message_file):
 # written back to the index; the working copy gets the same fix (its unstaged edits included), so
 # nothing shows as changed afterward. A file the commit does not touch is never read. This is the
 # only check here that changes what it checks: the rule is a deletion with nothing to decide, and
-# his word for it is "automatically". Code, inline code, quoted words, front matter and test
-# fixtures are never touched (the script's header lists them).
+# his word for it is "automatically". Code and test fixtures are never touched.
 
 OXFORD_FIXER = "richos/app/scripts/oxford-comma.js"
 

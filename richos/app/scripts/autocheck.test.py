@@ -1076,11 +1076,11 @@ class OxfordComma(Fixture):
 
     def test_a_doc_a_commit_adds_is_committed_without_the_oxford_comma_and_code_keeps_its_commas(self):
         self.make_with_fixer()
-        self.write("docs/guide.md", "Red, green, and blue. Tea, or coffee, nor milk. `a, and b` and \"said, and quoted\".\n"
+        self.write("docs/guide.md", "Red, green, and blue. Tea, or coffee, nor milk. `a, and b` and \"said, and quoted\" too.\n"
                                     "```\ncode, and more\n```\n")
         self.git("add", "-A")
         out = self.git("commit", "-m", "a doc")
-        want = "Red, green and blue. Tea or coffee nor milk. `a, and b` and \"said, and quoted\".\n```\ncode, and more\n```\n"
+        want = "Red, green and blue. Tea or coffee nor milk. `a, and b` and \"said and quoted\" too.\n```\ncode, and more\n```\n"
         self.assertEqual(self.blob("docs/guide.md"), want)
         self.assertEqual((self.repo / "docs/guide.md").read_text(), want, "the working copy gets the same fix")
         self.assertIn("Oxford comma deleted in 1 file(s) being committed: docs/guide.md", out.stderr)

@@ -81,7 +81,7 @@ const UI_DIR = SOURCES.UI_DIR;
 /// three entries, none of which is the sentence the CEO reads. Folding is what makes the
 /// registry key equal to the rendered text.
 ///
-/// `withOffsets` (the Oxford comma fixer, `oxford-ui-text.js`) adds `offsets`: for every
+/// `withOffsets` (the Oxford comma fixer, `app/scripts/oxford-comma.js`) adds `offsets`: for every
 /// character of `text`, the index in `src` it was read from, so a character found in the text
 /// can be deleted from the source.
 function jsStringLiterals(src, withOffsets) {
@@ -737,7 +737,30 @@ function rustSourceFiles() {
   return files;
 }
 
+const RUST_MACHINE_LINE = /\b(eprintln|println|print|panic|assert|assert_eq|assert_ne|debug_assert|unreachable|todo|unimplemented|debug|info|warn|trace)!|\.expect\(/;
+const PROMPT_HEADER = /^[A-Z]{4,}\b|\b[A-Z][A-Z']{2,}\b[ :]+[A-Z][A-Z']{1,}\b/;
+
+/// Sentence-shaped Rust literals outside test modules, minus log/assert lines and prompts: a
+/// capital first letter, sentence punctuation last, four words or more. The m-dash check's net,
+/// read by the Oxford comma fixer too.
+function rustSentenceLiterals(src, withOffsets) {
+  const lines = src.split("\n");
+  const tests = testModuleRanges(lines);
+  const out = [];
+  for (const lit of rustStringLiterals(src, withOffsets)) {
+    const idx = lit.line - 1;
+    if (tests.some(([a, b]) => idx >= a && idx <= b)) continue;
+    const t = lit.text.trim();
+    if (RUST_MACHINE_LINE.test([lines[idx - 2] || "", lines[idx - 1] || "", lines[idx]].join("\n"))) continue;
+    if (!(/^[A-Z]/.test(t) && /[.?!]["”)]?$/.test(t) && t.split(/\s+/).length >= 4)) continue;
+    if (PROMPT_HEADER.test(t)) continue;
+    out.push(lit);
+  }
+  return out;
+}
+
 module.exports = {
+  rustSentenceLiterals,
   inventory,
   testModuleRanges,
   rustStringLiterals,
