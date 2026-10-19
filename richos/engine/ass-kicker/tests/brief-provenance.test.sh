@@ -101,6 +101,9 @@
 #  S12   A STATE OF THE WORLD IS NOT AN ABSENT STRING ("wherever DST is not in force").
 #  S13   A KNOWN FALSE POSITIVE, asserted out loud: a brief DISCUSSING this failure is flagged
 #        for quoting it. One of the four rows on the 30-brief corpus is exactly this.
+#  L1    A 65,536-BYTE BRIEF OF ONE WORD CHARACTER is annotated in linear time (measured
+#        before the fix: 61.9 CPU seconds through this case's command, and an app hire pushed
+#        past its 120 s bound on a loaded Mac).
 #
 # Exit 0 = all cases pass; exit 1 = at least one failure.
 
@@ -718,6 +721,31 @@ else
   printf '  FAIL  %s\n' "S10  selector rows carry their OWN instruction — broaden, not re-run"
   printf '%s' "$OUT" | sed 's/^/          /'
   FAIL=$((FAIL + 1))
+fi
+
+# L1 — A LONG RUN OF WORD CHARACTERS IS READ IN LINEAR TIME. The app accepts a brief of up to
+# 65,536 bytes, and the file-path pattern used to retry from every position of a run with no
+# "/" in it: 65,525 "x" characters took about 10 s per search, three searches per brief, on a
+# quiet Mac. That pushed one hire in mega-lander's app.test.py past the app's 120 s bound during
+# a loaded land check. What is measured is the CPU time the annotator itself used, which a busy
+# Mac does not add to: linear, this brief costs 0.1 s of it; quadratic, it cost 61.9 s.
+# load-bound: CPU seconds of the annotator's own process (getrusage), not wall-clock time; host load does not add to them
+CPU="$(python3 - "$CHECK" "$SANDBOX" <<'PY'
+import resource, subprocess, sys
+check, sandbox = sys.argv[1], sys.argv[2]
+with open(sandbox + "/brief.md", "w") as out:
+    out.write("Hire Beth. " + "x" * 65525)
+subprocess.run([sys.executable, check, sandbox + "/brief.md", "--annotate", "--repo", sandbox],
+               capture_output=True)
+used = resource.getrusage(resource.RUSAGE_CHILDREN)
+print("%.1f" % (used.ru_utime + used.ru_stime))
+PY
+)"
+# load-bound: compares CPU seconds (above), not wall-clock time
+if [ "${CPU%%.*}" -lt 5 ]; then
+  ok "L1   a 65,536-byte brief of one word character is annotated in ${CPU} CPU s (under 5)"
+else
+  bad "L1   a 65,536-byte brief of one word character is annotated in under 5 CPU s" "it used ${CPU}"
 fi
 
 echo
