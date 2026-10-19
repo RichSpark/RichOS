@@ -85,9 +85,46 @@ pub fn same_account(bin: &Path, a: Option<&Path>, b: Option<&Path>) -> Option<bo
     Some(who(a)? == who(b)?)
 }
 
+/// **Which email an account is signed in with**, for round 31's "Show email" on its card (the
+/// CEO 2026-10-18: "an extra click there somehow to temporarily reveal which email is connected
+/// to which account name"). Read when he clicks, from Claude Code's own `claude auth status
+/// --json` under that account's folder, and handed to the window for those 8 seconds. Never
+/// typed in, never kept: nothing here or in the caller stores it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "state")]
+pub enum SignedInAs {
+    /// The address Claude Code names for this sign-in.
+    Email { email: String },
+    /// Claude Code says this folder is not signed in.
+    SignedOut,
+    /// No answer that names an address (no binary, a timeout, an error, no `email`): the card
+    /// says it could not be read, never a guess.
+    Unknown,
+}
+
+/// [`SignedInAs`] for the folder `folder` (`None`: Account 1, the app's own environment).
+pub fn signed_in_as(bin: &Path, folder: Option<&Path>) -> SignedInAs {
+    let Some((finished_ok, value)) = status_answer(bin, folder) else { return SignedInAs::Unknown };
+    match value.get("loggedIn").and_then(serde_json::Value::as_bool) {
+        Some(false) => SignedInAs::SignedOut,
+        Some(true) if finished_ok => match value.get("email").and_then(serde_json::Value::as_str).map(str::trim) {
+            Some(email) if !email.is_empty() => SignedInAs::Email { email: email.to_string() },
+            _ => SignedInAs::Unknown,
+        },
+        _ => SignedInAs::Unknown,
+    }
+}
+
 /// `claude auth status --json` under `folder`, bounded like [`status_in`], read and parsed in
 /// memory only. `None` for anything but a finished, successful, parseable answer.
 fn status_json(bin: &Path, folder: Option<&Path>) -> Option<serde_json::Value> {
+    status_answer(bin, folder).and_then(|(ok, value)| ok.then_some(value))
+}
+
+/// The parsed answer and whether the binary exited successfully. A signed-out folder may answer
+/// `{"loggedIn":false}` with a failing exit, which [`signed_in_as`] still reads as signed out.
+/// `None` when the binary did not run, did not finish in time, or said nothing parseable.
+fn status_answer(bin: &Path, folder: Option<&Path>) -> Option<(bool, serde_json::Value)> {
     let mut command = Command::new(bin);
     command.args(["auth", "status", "--json"]).env_remove("CLAUDECODE")
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
@@ -110,8 +147,9 @@ fn status_json(bin: &Path, folder: Option<&Path>) -> Option<serde_json::Value> {
         }
     };
     let Ok((Ok(_), output)) = reader.join() else { return None };
-    if !exit.is_some_and(|s| s.success()) || output.len() > 64 * 1024 { return None; }
-    serde_json::from_slice(&output).ok()
+    let exit = exit?;
+    if output.len() > 64 * 1024 { return None; }
+    serde_json::from_slice(&output).ok().map(|value| (exit.success(), value))
 }
 
 /// **Sign an added account's folder out** (fill-first's Remove): the stock
@@ -217,5 +255,46 @@ mod tests {
         assert_eq!(same_account(&bin, None, Some(&work)), Some(false));
         status(&work, r#"{"loggedIn":true}"#);
         assert_eq!(same_account(&bin, None, Some(&work)), None, "a folder that does not say who it is is never called the same");
+    }
+
+    /// **Round 31's "Show email": each card's email is the one that account's OWN sign-in
+    /// names.** Fixture folders only: the fixture binary answers `auth status --json` from the
+    /// `status.json` in the folder it is run under, and Account 1 (no folder of its own, the
+    /// app's environment, whatever that is where this test runs) is answered from the fixture's
+    /// `one` folder, so no real Claude Code folder is ever read.
+    #[test]
+    fn each_account_shows_the_email_its_own_sign_in_names_and_says_so_when_it_cannot() {
+        use crate::claude_accounts::Accounts;
+        use std::os::unix::fs::PermissionsExt;
+        let root = Scratch::new();
+        let data = root.path().join("data");
+        let one = root.path().join("one");
+        std::fs::create_dir_all(&one).unwrap();
+        let accounts = Accounts::open(&data).unwrap();
+        let work = accounts.add("Work").unwrap().folder.unwrap();
+        let bin = root.path().join("claude-fixture");
+        std::fs::write(&bin, format!(
+            "#!/bin/sh\ncase \"${{CLAUDE_CONFIG_DIR:-}}\" in\n  {data}/*) f=\"$CLAUDE_CONFIG_DIR/status.json\" ;;\n  *) f=\"{one}/status.json\" ;;\nesac\n[ -f \"$f\" ] || exit 1\ncat \"$f\"\ngrep -q '\"loggedIn\":false' \"$f\" && exit 1\nexit 0\n",
+            data = data.display(), one = one.display())).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let status = |dir: &Path, json: &str| std::fs::write(dir.join("status.json"), json).unwrap();
+        status(&one, r#"{"loggedIn":true,"email":"jordan.lee@example.com","orgId":"org-home"}"#);
+        status(&work, r#"{"loggedIn":true,"email":"jordan@northwind.example","orgId":"org-work"}"#);
+        let who = |id: &str| signed_in_as(&bin, accounts.sign_in_folder(id).expect("an account on this Mac").as_deref());
+        assert_eq!(who("1"), SignedInAs::Email { email: "jordan.lee@example.com".into() }, "Account 1: the app's own sign-in");
+        assert_eq!(who("2"), SignedInAs::Email { email: "jordan@northwind.example".into() }, "Work: its own folder's sign-in, not Account 1's");
+        assert_eq!(accounts.sign_in_folder("9"), None, "an account that is not on this Mac is never answered for");
+        // What it cannot read, it says, and never guesses.
+        status(&work, r#"{"loggedIn":false}"#);
+        assert_eq!(who("2"), SignedInAs::SignedOut, "signed out, even though the binary exits 1");
+        status(&work, r#"{"loggedIn":true}"#);
+        assert_eq!(who("2"), SignedInAs::Unknown, "signed in but no email named");
+        std::fs::remove_file(work.join("status.json")).unwrap();
+        assert_eq!(who("2"), SignedInAs::Unknown, "no answer at all");
+        assert_eq!(signed_in_as(&root.path().join("no-such-claude"), Some(&work)), SignedInAs::Unknown, "no Claude Code");
+        // The window reads it as tagged JSON.
+        assert_eq!(serde_json::to_value(SignedInAs::Email { email: "a@b.example".into() }).unwrap(), serde_json::json!({ "state": "email", "email": "a@b.example" }));
+        assert_eq!(serde_json::to_value(SignedInAs::SignedOut).unwrap(), serde_json::json!({ "state": "signedOut" }));
+        assert_eq!(serde_json::to_value(SignedInAs::Unknown).unwrap(), serde_json::json!({ "state": "unknown" }));
     }
 }

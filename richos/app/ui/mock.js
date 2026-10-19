@@ -2917,6 +2917,15 @@
           if (mockAccounts.length === 1) { mockAccounts[0].inUse = true; }
           return quotaView();
         }
+        case "claude_account_email": {
+          // Round 31's Show email, as main.rs answers it from that account's own `claude auth
+          // status`: `preset.emails[id]` is the address, `null` a signed-out folder; no entry is
+          // an answer that names no address. No sample address is made up here.
+          window.__accountCalls.push({ cmd, ...args });
+          const said = (preset.emails || {})[args.id];
+          if (said === null) return { state: "signedOut" };
+          return typeof said === "string" ? { state: "email", email: said } : { state: "unknown" };
+        }
         case "claude_account_nudge_answer": {
           window.__accountCalls.push({ cmd, ...args });
           mockNudge = { ...(mockNudge || { at: Date.now() }), answer: args.answer };
