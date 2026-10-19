@@ -45,6 +45,13 @@
 // does not; lowercase Rust error text relayed through `String(e)` (blind spot B5, an
 // unbounded set). And it cannot see what Rich himself writes in a reply: that is generated at
 // run time, not shipped text.
+//
+// NO OXFORD COMMA IN ANY UI TEXT (CEO, 2026-10-19: "in the UI as well as any of our docs etc, the
+// Oxford comma must be always off"). The check after the dash check reads the same UI text,
+// through `lib/oxford-ui-text.js`, and fails on any comma left before " and", " or" or " nor".
+// Git deletes them at every commit (`app/scripts/oxford-comma.js`, run by autocheck), so this
+// check is the backstop for a commit made without the hook. Inline code and quoted words inside
+// the text keep their commas; what Claude writes is the setting's business, not this check's.
 
 "use strict";
 
@@ -52,6 +59,7 @@ const fs = require("fs");
 const path = require("path");
 const { createRun, assert, assertEqual, rustSentenceAfter, UI_DIR } = require("./lib/harness");
 const STRINGS = require("./lib/state-strings");
+const OXFORD_UI = require("./lib/oxford-ui-text");
 
 const APP_DIR = path.resolve(UI_DIR, "..");
 const PROVIDER_AUTH_RS = path.join(APP_DIR, "crates", "richos-core", "src", "provider_auth.rs");
@@ -137,6 +145,37 @@ async function main() {
     return "UI files, the CEO-facing Rust scrape and sentence-shaped Rust literals hold no dash";
   });
 
+  await run.check("no UI text holds a comma before and/or/nor (CEO 2026-10-19), and the scan is not vacuous", async () => {
+    const hits = [];
+    for (const f of OXFORD_UI.files()) hits.push(...OXFORD_UI.report(f.kind, f.abs, fs.readFileSync(f.abs, "utf8")));
+    assertEqual(hits, [], "UI text with a comma before and/or/nor; git deletes it at commit (app/scripts/oxford-comma.js --write <file> does it by hand)");
+
+    // Positive controls, never written to disk: each extractor, over a planted comma in the
+    // shape it reads, must see it, and the fixer must delete exactly that. Negative controls: a
+    // code comment, an HTML comment inside a template literal, inline code, quoted words, a log
+    // line and "Android" keep theirs.
+    const js = 'const a = "Red, green, and blue."; // a comment, and fine\n' +
+      "const b = `<p>Tea, or coffee</p><!-- a comment, or fine -->`;\n" +
+      'const c = "Run `a, and b` as \\"he said, nor this\\" for Android, order.";';
+    const jsAbs = path.join(UI_DIR, "main.js");
+    assertEqual(OXFORD_UI.commaSites("js", jsAbs, js).length, 2, "positive control: the JS extractor saw " +
+      JSON.stringify(OXFORD_UI.report("js", jsAbs, js)));
+    const jsFixed = OXFORD_UI.fix("js", jsAbs, js);
+    assert(jsFixed.includes('"Red, green and blue."') && jsFixed.includes("<p>Tea or coffee</p>") &&
+      jsFixed.includes("a comment, and fine") && jsFixed.includes("a comment, or fine") &&
+      jsFixed.includes("`a, and b`") && jsFixed.includes("he said, nor this"), "the fixer changed: " + jsFixed);
+    const html = '<p title="Copy, or share">Text, and more</p><!-- a note, and fine -->';
+    assertEqual(OXFORD_UI.fix("html", path.join(UI_DIR, "index.html"), html),
+      '<p title="Copy or share">Text and more</p><!-- a note, and fine -->', "the HTML fixer");
+    const rs = 'const S: &str = "I could not do that, and nothing was \\\n    lost, or moved.";\n\n\n' +
+      'fn f() {\n    eprintln!("Log line, and it is for a terminal.");\n}\n';
+    const rsAbs = path.join(UI_DIR, "..", "src-tauri", "src", "main.rs");
+    assertEqual(OXFORD_UI.fix("rs", rsAbs, rs),
+      'const S: &str = "I could not do that and nothing was \\\n    lost or moved.";\n\n\n' +
+      'fn f() {\n    eprintln!("Log line, and it is for a terminal.");\n}\n', "the Rust fixer");
+    return "UI files, the CEO-facing Rust scrape and sentence-shaped Rust literals hold no comma before and/or/nor";
+  });
+
   const failed = run.report();
   return failed;
 }
@@ -164,25 +203,12 @@ function htmlDashes(src, name) {
     .map((s) => name + ":" + s.line + "  " + snippet(s.text));
 }
 
-const RUST_MACHINE_LINE = /\b(eprintln|println|print|panic|assert|assert_eq|assert_ne|debug_assert|unreachable|todo|unimplemented|debug|info|warn|trace)!|\.expect\(/;
-const PROMPT_HEADER = /^[A-Z]{4,}\b|\b[A-Z][A-Z']{2,}\b[ :]+[A-Z][A-Z']{1,}\b/;
-
-/// Sentence-shaped Rust literals outside test modules, minus log/assert lines and prompts.
+/// Sentence-shaped Rust literals outside test modules, minus log/assert lines and prompts. The
+/// net is `lib/oxford-ui-text.js`'s, so the Oxford comma check reads the same Rust sentences.
 function rustSentenceDashes(src, name) {
-  const lines = src.split("\n");
-  const tests = STRINGS.testModuleRanges(lines);
-  const out = [];
-  for (const lit of STRINGS.rustStringLiterals(src)) {
-    const idx = lit.line - 1;
-    if (tests.some(([a, b]) => idx >= a && idx <= b)) continue;
-    const t = lit.text.trim();
-    if (!DASH.test(t)) continue;
-    if (RUST_MACHINE_LINE.test([lines[idx - 2] || "", lines[idx - 1] || "", lines[idx]].join("\n"))) continue;
-    if (!(/^[A-Z]/.test(t) && /[.?!]["”)]?$/.test(t) && t.split(/\s+/).length >= 4)) continue;
-    if (PROMPT_HEADER.test(t)) continue;
-    out.push(name + ":" + lit.line + "  " + snippet(t));
-  }
-  return out;
+  return OXFORD_UI.rustSentenceLiterals(src)
+    .filter((lit) => DASH.test(lit.text.trim()))
+    .map((lit) => name + ":" + lit.line + "  " + snippet(lit.text.trim()));
 }
 
 function dashedUiText() {
