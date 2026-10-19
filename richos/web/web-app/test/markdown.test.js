@@ -84,3 +84,15 @@ test('a tilde fence keeps its literal heading and asterisks', () => {
 	assert.deepStrictEqual(body.all('strong'), []);
 	assert.deepStrictEqual(body.all('div').filter((n) => n.attrs.role === 'heading'), []);
 });
+
+// Review `rv-20261019T115102Z-1f88727c-a59d` (finding `rv-20261019T112205Z-d98f7bde-d3fb#2`, still
+// open): a fence indented under a numbered step is the step's example, and it went through the
+// inline parser, so `` `npm test` `` lost its backticks. It is shown exactly as written too.
+test('a fence indented under a numbered step is shown exactly as written', () => {
+	const fenced = ['    ```js', '    const command = `npm test`;', '    run(*args*);', '    ```'].join('\n');
+	const body = text(draw({ id: 'r', cursor: 2, role: 'rich', kind: 'text', complete: true,
+		text: '1. Run this example:\n\n' + fenced }));
+	assert.strictEqual(body.textContent, 'Run this example:' + fenced);
+	assert.deepStrictEqual(body.all('code'), [], 'code inside the fence was parsed as inline code');
+	assert.deepStrictEqual(body.all('em'), [], 'asterisks inside the fence were parsed as italics');
+});

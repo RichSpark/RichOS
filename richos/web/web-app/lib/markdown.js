@@ -15,6 +15,7 @@
 // `rv-20261019T112205Z-d98f7bde-d3fb`: `` `npm test` `` in a fence lost its backticks, and a
 // `~~~` fence's `# heading` and `**not bold**` lost their markers). It is one text node, its
 // fences included, exactly as the model wrote it; an unclosed fence runs to the end of the answer.
+// A fence indented under a list item counts too (review `rv-20261019T115102Z-1f88727c-a59d`).
 //
 // NO STRING EVER BECOMES HTML. Every leaf is a text node and every container is `createElement`;
 // there is no `innerHTML`, so model output cannot become markup.
@@ -32,9 +33,11 @@
 	// Whitespace after the marker keeps `**bold on its own line**` out of the list branch.
 	const BULLET = /^[ \t]*[-*+][ \t]+(.*)$/;
 	const ORDERED = /^[ \t]*(\d{1,9})[.)][ \t]+(.*)$/;
-	// CommonMark's fence: three or more backticks or tildes, indented at most three spaces; a
-	// backtick fence's info string has no backtick in it.
-	const FENCE = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
+	// A fence: three or more backticks or tildes; a backtick fence's info string has no backtick in
+	// it. AT ANY INDENTATION, because a fence indented under a numbered step is that step's example
+	// (review `rv-20261019T115102Z-1f88727c-a59d`: four spaces in kept it out of this rule and
+	// `` `npm test` `` lost its backticks); either way its lines are shown exactly as written.
+	const FENCE = /^[ \t]*(`{3,}(?=[^`]*$)|~{3,})/;
 
 	/// Where a `*` or `**` run closes, or -1. A `**` never closes a `*`.
 	function close(text, from, marker) {
@@ -104,7 +107,7 @@
 			const fence = FENCE.exec(line);
 			if (fence) {
 				const marker = fence[1];
-				const closer = new RegExp('^ {0,3}' + (marker[0] === '`' ? '`' : '~') + '{' + marker.length + ',}[ \\t]*$');
+				const closer = new RegExp('^[ \\t]*' + (marker[0] === '`' ? '`' : '~') + '{' + marker.length + ',}[ \\t]*$');
 				const start = i;
 				i += 1;
 				while (i < lines.length && !closer.test(lines[i])) i += 1;
