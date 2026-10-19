@@ -339,11 +339,9 @@ async function main() {
 
   await run.check("6. a new thread's first message carries its files", async () => {
     const page = await openApp(browser);
+    // "+ New chat or company", then the first company (round 32).
     await page.click("#rail-new-thread");
-    await page.waitForFunction(() => !document.getElementById("entity-picker").hidden || !document.getElementById("entity-view").hidden);
-    if (await page.evaluate(() => !document.getElementById("entity-picker").hidden)) {
-      await page.click("#entity-picker .picker-item");
-    }
+    await page.click("#new-chat-menu .m-item[data-company]");
     await page.waitForSelector("#entity-view:not([hidden])");
     await drop(page, [{ name: "kickoff.pdf", bytes: PDF }]);
     await readyChips(page, 1);

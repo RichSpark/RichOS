@@ -2338,6 +2338,469 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   color: var(--attention);
 }
 
+/* ---- round 32 (CEO 2026-10-19): a company is the heading of its own section ------------
+   The approved mockup is `richos-hq/design/mockups/rounds/round-32/new-chat-or-company.html`;
+   these rules are its own, on the app's tokens. Ratios, computed with `tests/lib/contrast.js`
+   (the README of the round lists every one, lowest value across its states):
+     folder symbol (--gold-text on the rail)          indicator  7.37:1 dark   5.03:1 light
+     company name (--ink, 16px)                       text       full ink in both themes
+     collapse and plus on a hovered heading (--ink-soft)  indicator  6.35:1 dark   5.63:1 light
+     hovered plus outline (--chrome-edge)              indicator  4.38:1 dark   6.45:1 light
+     dot on the "New chat" row (--gold-text, selected) indicator  6.71:1 dark   4.87:1 light
+   DECLARED DECORATIVE: the guide line under a company's chats (`--line`). The indent is what
+   places a chat under its company; the line only echoes it. */
+
+#rail-nav .nav-group--entity {
+  margin: 0 0 14px;
+}
+
+#rail-nav .nav-group--entity + .nav-group--entity {
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+#rail-nav .nav-group--entity .nav-group-head {
+  position: relative;
+  gap: 0;
+  padding: 0;
+  min-height: 36px;
+  border-radius: 7px;
+}
+
+#rail-nav .nav-group--entity .nav-group-head:hover {
+  background: var(--bg-hover);
+}
+
+#rail-nav .nav-group--entity .nav-group-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 6px 7px 8px;
+  background: none;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--ink);
+  line-height: 1.35;
+}
+
+#rail-nav .nav-group--entity .nav-group-label:hover {
+  background: none;
+  color: var(--ink);
+}
+
+#rail-nav .nav-group--entity .co-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.co-folder {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+  color: var(--gold-text);
+}
+
+#rail-nav .nav-group--entity .nav-group-count {
+  font-size: 1rem;
+  color: var(--ink-faint);
+  padding: 0 8px 0 2px;
+}
+
+#rail-nav .nav-group--entity .nav-group-head:hover .nav-group-count,
+#rail-nav .nav-group--entity .nav-group-head:focus-within .nav-group-count {
+  display: none;
+}
+
+/* The two hover controls, collapse and the plus: hidden until the heading is hovered or has
+   focus (§3.1's "a quiet plus control on hover or focus"), NEVER hidden from the keyboard. So
+   they are transparent and out of the row's flow rather than `display: none`, which would take
+   them out of the Tab order: Tab and Shift+Tab reach them, and the focus that lands on one
+   shows them (`:focus-within`). Shown, they take their place in the row and the name ellipsizes
+   before them; no transition, so they are there in the frame the pointer arrives in. */
+.co-tools {
+  display: flex;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  /* Transparent, not inert: a pointer can only reach them by being over the heading, which
+     shows them, so a press where the plus will be is a press on the plus. */
+  opacity: 0;
+}
+
+#rail-nav .nav-group-head:hover .co-tools,
+#rail-nav .nav-group-head:focus-within .co-tools {
+  position: static;
+  transform: none;
+  opacity: 1;
+}
+
+.co-tool {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+#rail-nav .co-tool.nav-group-add {
+  opacity: 1;
+  width: 28px;
+  height: 28px;
+  font-size: 1rem;
+}
+
+.co-tool svg {
+  width: 16px;
+  height: 16px;
+}
+
+.co-tool:hover {
+  background: var(--tint-soft);
+  border-color: var(--chrome-edge);
+  color: var(--ink);
+}
+
+.co-tool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.nav-collapse svg {
+  transition: transform 0.16s ease; /* §17.4: chevron rotation is explicitly allowed */
+}
+
+.nav-group.is-collapsed .nav-collapse svg {
+  transform: rotate(-90deg);
+}
+
+/* Its chats hang underneath: indented to the name, under a guide line dropped from the folder. */
+#rail-nav .nav-group--entity .nav-threads {
+  margin: 2px 0 0 17px;
+  padding: 0;
+  border-left: 1px solid var(--line);
+  gap: 1px;
+}
+
+#rail-nav .nav-group--entity .nav-thread-row {
+  margin-left: -1px;
+  border-left-width: 2px;
+  border-radius: 0 6px 6px 0;
+}
+
+#rail-nav .nav-group--entity .nav-thread {
+  padding-left: 15px;
+  color: var(--ink-soft);
+}
+
+#rail-nav .nav-group--entity .nav-thread-row:hover .nav-thread,
+#rail-nav .nav-group--entity .nav-thread-row.is-active .nav-thread {
+  color: var(--ink);
+}
+
+/* A company with no chats says so under its heading, so the section is never a bare line. */
+.co-empty {
+  padding: 6px 4px 6px 15px;
+  font-size: 1rem;
+  color: var(--ink-faint);
+}
+
+.nav-thread-row.is-draft .nav-thread-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-thread-row.is-draft .draft-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--gold-text);
+  flex-shrink: 0;
+}
+
+/* A company that has just arrived catches the eye once, then settles; a new chat's row slides
+   in. `--arrival-delay` carries the elapsed time across a rail rebuild (`carryArrival`). */
+.nav-group.is-new .nav-group-head {
+  animation: co-arrive 1.9s ease-out var(--arrival-delay, 0ms) both;
+}
+
+@keyframes co-arrive {
+  0% {
+    background: var(--gold-soft);
+    box-shadow: inset 0 0 0 1px var(--gold);
+    transform: translateY(-4px);
+    opacity: 0.2;
+  }
+  18% {
+    transform: none;
+    opacity: 1;
+  }
+  45% {
+    background: var(--gold-soft);
+    box-shadow: inset 0 0 0 1px var(--gold);
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
+.nav-thread-row.is-new {
+  animation: chat-arrive 0.5s var(--out-quint, ease-out) var(--arrival-delay, 0ms) both;
+}
+
+@keyframes chat-arrive {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-group.is-new .nav-group-head,
+  .nav-thread-row.is-new {
+    animation: none;
+  }
+  .nav-collapse svg {
+    transition: none;
+  }
+}
+
+/* ---- the rail's instant tooltip: "+ New chat" on a company's plus (round 32) -----------
+   No delay and no transition: it is on screen in the frame the pointer arrives in. Inverted in
+   each theme so it stands off whatever it sits over: #0c1322 on #eef1f6 is 16.39:1 (dark),
+   #f3f4f6 on #0c1322 is 16.86:1 (light); the chip against the screen 16.39:1 and 14.9:1. */
+#rail-tip {
+  position: fixed;
+  /* Above the rail and the conversation, below Settings (300) and every overlay, which sit
+     over the whole window by design (appearance.js check 7c). */
+  z-index: 80;
+  pointer-events: none;
+  white-space: nowrap;
+  font: 600 1rem/1.25 var(--font);
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: #eef1f6;
+  color: #0c1322;
+  box-shadow: 0 8px 22px -8px rgba(0, 0, 0, 0.6);
+  transition: none;
+  animation: none;
+}
+
+:root[data-theme="light"] #rail-tip {
+  background: #0c1322;
+  color: #f3f4f6;
+  box-shadow: 0 8px 22px -8px rgba(46, 40, 22, 0.45);
+}
+
+#rail-tip::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin-top: -5px;
+  background: inherit;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+#rail-tip.is-above::before {
+  left: 50%;
+  top: auto;
+  bottom: -5px;
+  margin: 0 0 0 -5px;
+}
+
+/* ---- "+ New chat or company" and its menu (round 32) ------------------------------------
+   The menu is the app's own `.menu`, a size up. DECLARED DECORATIVE: its panel edge (1.21:1
+   against the screen, border 1.24:1 dark and 1.47:1 light); nothing in it is identified by the
+   edge, and every row is text at 4.5:1 or better plus its symbol. The ⌘N hint is `.rail-kbd`,
+   the 14px tier for a skippable shortcut hint, like ⌘K and ⌘J beside it. */
+#rail-new-thread[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--ink);
+}
+
+/* The `.menu` stacking (70), below Settings (300) like every other popup. */
+.new-chat-menu {
+  /* `placeNewChatMenu` caps the height at the room under the anchor; the rest scrolls. */
+  overflow-y: auto;
+  width: 304px;
+  padding: 6px;
+  border-radius: 12px;
+  box-shadow: 0 18px 44px -12px var(--shadow-strong), 0 2px 6px var(--shadow-weak);
+  transform-origin: 24px 0;
+  animation: new-chat-menu-in 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* A flex column would squeeze its children to fit the capped height; they keep their size and
+   the menu scrolls instead. */
+.new-chat-menu > * {
+  flex-shrink: 0;
+}
+
+.new-chat-menu.is-form {
+  width: 360px;
+  padding: 14px 16px 16px;
+}
+
+@keyframes new-chat-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-chat-menu {
+    animation: none;
+  }
+}
+
+.new-chat-menu .m-label {
+  margin: 6px 10px 4px;
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.new-chat-menu .m-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  font-size: 1rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.new-chat-menu .m-item svg {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+  color: var(--gold-text);
+}
+
+.new-chat-menu .m-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
+}
+
+.new-chat-menu .m-item kbd {
+  font-family: inherit;
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  border: 1px solid var(--line-control);
+  border-radius: 4px;
+  padding: 0 5px;
+  line-height: 18px;
+}
+
+.new-chat-menu .m-item:hover,
+.new-chat-menu .m-item:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.new-chat-menu .m-item:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.new-chat-menu .m-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 6px 4px;
+}
+
+/* The company form, in the same menu: the app's own `#entity-add`, without the rule above it
+   that separates it from the company list in the dialog it otherwise lives in. */
+.new-chat-menu .m-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 12px -6px;
+}
+
+.new-chat-menu .m-back {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 0;
+}
+
+.new-chat-menu .m-back svg {
+  width: 18px;
+  height: 18px;
+}
+
+.new-chat-menu .m-back:hover {
+  background: var(--bg-hover);
+  color: var(--ink);
+}
+
+.new-chat-menu .m-back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.new-chat-menu .m-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.new-chat-menu .entity-add {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.new-chat-menu #entity-add-folder {
+  cursor: pointer;
+}
+
+.new-chat-menu .setup-error {
+  margin: 0 0 12px;
+}
+
 /* ---- resizable divider (§2.1) --------------------------------------------------------- */
 
 #rail-resizer {

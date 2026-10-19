@@ -152,8 +152,12 @@
             <span class="rail-action-label">Search</span>
             <kbd class="rail-kbd" id="nav-search-kbd">⌘K</kbd>
           </button>
-          <button id="rail-new-thread" class="rail-action" type="button">
-            <span class="rail-action-label">+ New thread</span>
+          <!-- "+ NEW CHAT OR COMPANY" (design round 32, CEO 2026-10-19). It opens
+               `#new-chat-menu` under it: a new chat in one of his companies, or a new company.
+               ⌘N is the same door (with one company it starts the chat at once). -->
+          <button id="rail-new-thread" class="rail-action" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="new-chat-menu" aria-keyshortcuts="Meta+N Control+N">
+            <span class="rail-action-label">+ New chat or company</span>
+            <kbd class="rail-kbd" id="rail-new-kbd">⌘N</kbd>
           </button>
           <!-- THE CORRECTION DESK's door. `loro-structure.md` calls the property this
                protects the one that must not be lost: "a human can read what the system
@@ -495,7 +499,7 @@
               <ul id="entity-view-attention-list" class="entity-list"></ul>
             </div>
             <div id="entity-view-threads" class="entity-block" hidden>
-              <h2 class="entity-block-title">Threads</h2>
+              <h2 class="entity-block-title">Chats</h2>
               <ul id="entity-view-thread-list" class="entity-list"></ul>
             </div>
             <p id="entity-view-note" class="pane-note"></p>
@@ -964,6 +968,10 @@
             <p id="entity-add-error" class="setup-error" role="alert" hidden></p>
             <div class="memory-setup-actions">
               <button id="entity-add-go" class="desk-btn desk-btn--confirm" type="button">Add this company</button>
+              <!-- Only while this form is inside "+ New chat or company" (round 32), where the
+                   way out of it is a button beside Add; in this dialog the dialog's own
+                   "Not now" and Escape are the way out. -->
+              <button id="entity-add-cancel" class="desk-btn" type="button" hidden>Cancel</button>
             </div>
           </div>
 
@@ -1326,6 +1334,15 @@
 
       <!-- Thread row overflow: rename, pin, archive (§3.1). -->
       <div id="thread-menu" class="menu" data-dismiss="escape" hidden role="menu" aria-label="Thread actions"></div>
+
+      <!-- "+ New chat or company" (round 32): a new chat in one of his companies, or a new
+           company. Built by main.js on open; "New company" turns it into the company form
+           (`#entity-add`, moved in from the company dialog above and back out on close). -->
+      <div id="new-chat-menu" class="menu new-chat-menu" data-dismiss="escape" hidden role="menu" aria-label="New chat or company"></div>
+
+      <!-- The rail's instant tooltip: "+ New chat" on a company's plus (round 32). No delay and
+           no fade, so it is on screen in the frame the pointer arrives in. -->
+      <div id="rail-tip" role="tooltip" hidden></div>
 
       <!-- What a stand-in on the report replaced. Only the user sees it; it is never in the issue. -->
       <div id="bug-subtip" role="tooltip" hidden></div>

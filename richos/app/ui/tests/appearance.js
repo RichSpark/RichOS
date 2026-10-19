@@ -1720,7 +1720,14 @@ async function main() {
     const page = track(await openApp(browser, { stored: { theme: "dark", font_scale: 100, user_name: "Alex Booster" } }));
     await openThread(page, "acme");
     await techyOnEverywhere(page);
-    const glyphSelectors = Object.keys(BELOW_FLOOR).filter((s) => BELOW_FLOOR[s].kind !== "caps");
+    // `.nav-disclosure` is drawn only by the Archived group since round 32 gave every company
+    // heading its own chevron control, so one chat is archived here, by its own ⋯ menu, to put
+    // that group (and its triangle) on the page.
+    await page.hover('.nav-thread[data-thread-id="hiring"]');
+    await page.click('.nav-thread[data-thread-id="hiring"] + .nav-thread-more');
+    await page.click('#thread-menu .menu-item:has-text("Archive")');
+    await page.waitForSelector(".nav-group--archived .nav-disclosure");
+    const glyphSelectors =Object.keys(BELOW_FLOOR).filter((s) => BELOW_FLOOR[s].kind !== "caps");
     const painted = await page.evaluate((sels) => {
       const out = {};
       for (const sel of sels) {

@@ -1929,10 +1929,11 @@ async function main() {
   // the mock's own comment gives for holding six.
   await run.check("the company picker says \"company\", and does not ask when there is one answer", async () => {
     // (a) THE WORD, on the install the rest of this suite runs on — six companies, so the
-    //     dialog opens and its title can be read off the screen.
-    const many = await openApp(browser);
-    await dismissEntityPicker(many);
-    await many.click("#rail-new-thread");
+    //     dialog opens and its title can be read off the screen. Since round 32 the rail's
+    //     "+ New chat or company" opens its own menu, so the dialog is reached by the door that
+    //     still asks it: the unbound screen's way out.
+    const many = await FIXTURES.unbound(browser);
+    await many.click("#unbound-new-thread");
     await many.waitForSelector("#entity-picker:not([hidden])");
     const title = (await many.textContent("#entity-picker-title")).trim();
     assertEqual(title, "Which company is this work in?", "the picker speaks the schema's language");
@@ -1970,7 +1971,8 @@ async function main() {
     // for unbound threads too, and the number this check is about is `navTree.groups.length`.
     const only = await page.evaluate(async () => (await window.RichBridge.invoke("navigation_tree")).groups.length);
 
-    await page.click("#rail-new-thread");
+    // ⌘N, the door that asks which company (round 32: with one company it asks nothing).
+    await page.keyboard.press("Meta+n");
     // He is on the new-thread screen for the only company he has, with NO dialog in between.
     // BOUNDED, AND THE FAILURE IS NAMED RATHER THAN A TIMEOUT: with the skip removed this wait
     // can never be satisfied, and "Timeout 10000ms exceeded waiting for #entity-view" is true
@@ -1980,7 +1982,7 @@ async function main() {
       .then(() => true)
       .catch(() => false);
     const after = await page.evaluate(() => ({
-      picker: !document.getElementById("entity-picker").hidden,
+      picker: !document.getElementById("entity-picker").hidden || !document.getElementById("new-chat-menu").hidden,
       rows: document.querySelectorAll("#entity-picker .picker-item").length,
       canType: !document.getElementById("input").disabled,
     }));

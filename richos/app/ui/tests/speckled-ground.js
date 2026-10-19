@@ -120,7 +120,17 @@ async function groundClips(page) {
     const GROUND = new Set(["stage", "conversation", "messages", "app", "rail", "rail-nav", "stage-header", "composer-zone"]);
     const isGround = (x, y) => {
       const top = document.elementFromPoint(x, y);
-      return !!top && GROUND.has(top.id);
+      if (!top) return false;
+      if (GROUND.has(top.id)) return true;
+      // Round 32 fills the rail with company headings and chats. Those rows and buttons paint no
+      // fill of their own, so the field shows through them wherever no glyph or icon is drawn:
+      // a bare-ground point is a rail point whose topmost element is a plain, unfilled, borderless
+      // box with no text of its own. Spans, icons, <kbd> and anything with a fill do not count.
+      if (!top.closest("#rail") || !/^(BUTTON|DIV|SECTION|NAV)$/.test(top.tagName)) return false;
+      if (Array.prototype.some.call(top.childNodes, (n) => n.nodeType === 3 && n.textContent.trim() !== "")) return false;
+      const cs = getComputedStyle(top);
+      return cs.backgroundColor === "rgba(0, 0, 0, 0)" && cs.backgroundImage === "none" &&
+        cs.boxShadow === "none" && ["Top", "Right", "Bottom", "Left"].every((d) => parseFloat(cs["border" + d + "Width"]) === 0);
     };
     function find(x0, x1, y0, y1, w, h) {
       for (let y = y0; y + h <= y1; y += 8) {

@@ -92,6 +92,10 @@ const entityAddNameEl = el("entity-add-name");
 const entityAddFolderEl = el("entity-add-folder");
 const entityAddErrorEl = el("entity-add-error");
 const entityAddGoEl = el("entity-add-go");
+const entityAddCancelEl = el("entity-add-cancel");
+const railNewThreadBtn = el("rail-new-thread");
+const newChatMenuEl = el("new-chat-menu");
+const railTipEl = el("rail-tip");
 const chooseCompanyRowEl = el("composer-choose-company");
 const chooseCompanyBtnEl = el("choose-company-btn");
 const memorySetupEl = el("memory-setup");
@@ -275,6 +279,16 @@ function switchThreadInOrder(threadId) {
 let mainView = "conversation"; // "conversation" | "entity" | "unbound"
 let viewEntityId = null; // the entity whose overview / new-thread screen is showing
 let draftEntityId = null; // §3.3: a draft thread bound to this entity, with NO record yet
+/// Which of the entity screen's two faces is showing: "new" (a new chat, drawn in the rail as
+/// a "New chat" row at the top of its company, round 32) or "overview".
+let viewEntityMode = null;
+/// Round 32's two arrivals, each a one-time light: a company just added, and a "New chat" row
+/// just started. `{ id, at }`; the rail is rebuilt often, so a rebuild mid-animation carries
+/// the elapsed time forward as a negative delay instead of replaying it from the start.
+let arrivedCompany = null;
+let arrivedDraft = null;
+/// The rail control `#rail-tip` is showing its words for (round 32), or null.
+let railTipFor = null;
 let sendBlockedReason = null; // §21: non-null means send is refused, with this reason
 /// What the composer says when NOTHING is running (§9.1). Held as state because §9.2
 /// replaces it with "Add context or steer Rich…" while Rich works, and the idle text is
@@ -575,8 +589,11 @@ function buildThreadRow(row, opts) {
   const li = document.createElement("li");
   li.className = "nav-thread-item";
 
+  // The chat on screen is marked; on a company's own screen (its overview, or a new chat in it)
+  // no existing chat is on screen, so none is (round 32: the "New chat" row takes the mark).
+  const onScreen = row.id === activeThreadId && mainView !== "entity";
   const wrap = document.createElement("div");
-  wrap.className = "nav-thread-row" + (row.id === activeThreadId ? " is-active" : "");
+  wrap.className = "nav-thread-row" + (onScreen ? " is-active" : "");
 
   const btn = document.createElement("button");
   btn.type = "button";
@@ -607,7 +624,7 @@ function buildThreadRow(row, opts) {
   if (row.archived) parts.push("archived");
   btn.setAttribute("aria-label", parts.join(", "));
   btn.title = row.display_title; // §3.1: full title in a tooltip when truncated
-  if (row.id === activeThreadId) btn.setAttribute("aria-current", "true");
+  if (onScreen) btn.setAttribute("aria-current", "true");
 
   if (opts.showEntity) {
     const tag = document.createElement("span");
@@ -676,18 +693,11 @@ function buildGroupShell(id, label, opts) {
     head.appendChild(disc);
   }
 
-  const labelEl = document.createElement(opts.onSelect ? "button" : "span");
-  labelEl.className = "nav-group-label" + (opts.onSelect ? " is-selectable" : "");
+  // A list's heading, never a control: a company's heading is `buildCompanyShell`'s.
+  const labelEl = document.createElement("span");
+  labelEl.className = "nav-group-label";
   labelEl.id = "nav-label-" + id;
   labelEl.textContent = label;
-  if (opts.onSelect) {
-    labelEl.type = "button";
-    // §3.1: selecting an entity LABEL opens its overview. It must not change the current
-    // thread's scope, so this only changes what the main pane shows — `active_context`
-    // is untouched until a thread is opened or a new one is started.
-    labelEl.addEventListener("click", opts.onSelect);
-    labelEl.setAttribute("aria-label", opts.selectLabel || label);
-  }
   head.appendChild(labelEl);
   section.setAttribute("aria-labelledby", labelEl.id);
 
@@ -697,16 +707,6 @@ function buildGroupShell(id, label, opts) {
     count.textContent = String(opts.count);
     count.setAttribute("aria-hidden", "true");
     head.appendChild(count);
-  }
-
-  if (opts.onAdd) {
-    const add = document.createElement("button");
-    add.type = "button";
-    add.className = "nav-group-add";
-    add.textContent = "+";
-    add.setAttribute("aria-label", "New thread in " + label);
-    add.addEventListener("click", opts.onAdd);
-    head.appendChild(add);
   }
 
   section.appendChild(head);
@@ -720,21 +720,180 @@ function buildGroupShell(id, label, opts) {
   return { section, list };
 }
 
+/// Round 32's symbols (Lucide's folder-open, folder, folder-plus, plus, chevron-down and
+/// chevron-left, ISC), as markup the rail and the "+ New chat or company" menu share.
+const ICONS = {
+  folderOpen:
+    '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
+  folder:
+    '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  folderPlus:
+    '<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  back: '<path d="m15 18-6-6 6-6"/>',
+};
+const ICON_STROKE = { plus: "2.4", chevron: "2.2", back: "2.2" };
+
+function icon(name, className) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", ICON_STROKE[name] || "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  if (className) svg.setAttribute("class", className);
+  svg.innerHTML = ICONS[name];
+  return svg;
+}
+
+/// A one-time light, kept running across rail rebuilds: the element is new each time, so the
+/// animation is started where it would be by now rather than from its first frame.
+function carryArrival(node, arrival, id, ms) {
+  if (!arrival || arrival.id !== id) return;
+  const elapsed = Date.now() - arrival.at;
+  if (elapsed >= ms) return;
+  node.classList.add("is-new");
+  node.style.setProperty("--arrival-delay", -elapsed + "ms");
+}
+const COMPANY_ARRIVAL_MS = 1900;
+const DRAFT_ARRIVAL_MS = 500;
+
+/// A COMPANY IS THE HEADING OF ITS OWN SECTION (round 32, CEO 2026-10-19): a gold open folder in
+/// front of the name (closed when collapsed), the name in full ink at reading size, its chat
+/// count, and on hover or focus two controls at its right: collapse, and the plus that starts a
+/// new chat there (its "+ New chat" tooltip is `#rail-tip`). Its chats hang underneath, indented
+/// to the name under a guide line. "Pinned", "Needs an entity" and "Archived" keep
+/// `buildGroupShell`: they are lists, not companies.
+function buildCompanyShell(entity, count) {
+  const id = entity.id;
+  const name = entity.display_name;
+  const collapsed = isCollapsed(id);
+  const section = document.createElement("section");
+  section.className = "nav-group nav-group--entity" + (collapsed ? " is-collapsed" : "");
+  section.setAttribute("role", "group");
+  section.dataset.entity = id;
+  carryArrival(section, arrivedCompany, id, COMPANY_ARRIVAL_MS);
+
+  const head = document.createElement("div");
+  head.className = "nav-group-head";
+
+  const labelEl = document.createElement("button");
+  labelEl.type = "button";
+  labelEl.className = "nav-group-label is-selectable";
+  labelEl.id = "nav-label-" + id;
+  const folder = icon(collapsed ? "folder" : "folderOpen", "co-folder");
+  folder.dataset.folder = collapsed ? "closed" : "open";
+  labelEl.appendChild(folder);
+  const nameEl = document.createElement("span");
+  nameEl.className = "co-name";
+  nameEl.textContent = name;
+  labelEl.appendChild(nameEl);
+  // §3.1: selecting an entity LABEL opens its overview. It must not change the current
+  // thread's scope, so this only changes what the main pane shows — `active_context`
+  // is untouched until a thread is opened or a new one is started.
+  labelEl.addEventListener("click", () => showEntityView(id, "overview"));
+  labelEl.setAttribute("aria-label", name + " overview");
+  head.appendChild(labelEl);
+  section.setAttribute("aria-labelledby", labelEl.id);
+
+  const countEl = document.createElement("span");
+  countEl.className = "nav-group-count";
+  countEl.textContent = String(count);
+  countEl.setAttribute("aria-hidden", "true");
+  head.appendChild(countEl);
+
+  const listId = "nav-list-" + id;
+  const tools = document.createElement("span");
+  tools.className = "co-tools";
+  const fold = document.createElement("button");
+  fold.type = "button";
+  fold.className = "co-tool nav-collapse";
+  fold.appendChild(icon("chevron"));
+  fold.setAttribute("aria-expanded", String(!collapsed));
+  fold.setAttribute("aria-controls", listId);
+  fold.setAttribute("aria-label", (collapsed ? "Expand " : "Collapse ") + name);
+  fold.dataset.tip = collapsed ? "Expand" : "Collapse";
+  fold.dataset.tipPos = "above";
+  fold.addEventListener("click", async () => {
+    hideRailTip();
+    await toggleEntityCollapsed(id);
+    const again = railNavEl.querySelector('.nav-group--entity[data-entity="' + CSS.escape(id) + '"] .nav-collapse');
+    if (again) again.focus({ preventScroll: true });
+  });
+  tools.appendChild(fold);
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "co-tool nav-group-add";
+  add.dataset.tip = "+ New chat";
+  add.appendChild(icon("plus"));
+  add.setAttribute("aria-label", "New chat in " + name);
+  add.addEventListener("click", () => {
+    hideRailTip();
+    startNewChatIn(id);
+  });
+  tools.appendChild(add);
+  head.appendChild(tools);
+  section.appendChild(head);
+
+  const list = document.createElement("ul");
+  list.className = "nav-threads";
+  list.id = listId;
+  if (collapsed) list.hidden = true;
+  section.appendChild(list);
+  return { section, list };
+}
+
+/// The row a new chat has in the rail before its first message: "New chat", a gold dot, at the
+/// top of its company's section, marked as what is on screen. It is the draft `showEntityView`
+/// opened (§3.3: no record exists until the first send), so it carries no actions menu; a click
+/// puts him back in its composer. The first send replaces it with the chat itself.
+function buildDraftRow(entityId) {
+  const li = document.createElement("li");
+  li.className = "nav-thread-item";
+  const wrap = document.createElement("div");
+  wrap.className = "nav-thread-row is-draft is-active";
+  carryArrival(wrap, arrivedDraft, entityId, DRAFT_ARRIVAL_MS);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "nav-thread";
+  btn.setAttribute("aria-current", "true");
+  const title = document.createElement("span");
+  title.className = "nav-thread-title";
+  const dot = document.createElement("span");
+  dot.className = "draft-dot";
+  dot.setAttribute("aria-hidden", "true");
+  title.appendChild(dot);
+  title.appendChild(document.createTextNode("New chat"));
+  btn.appendChild(title);
+  btn.addEventListener("click", () => inputEl.focus());
+  wrap.appendChild(btn);
+  li.appendChild(wrap);
+  return li;
+}
+
 function buildEntityGroup(group) {
   const entity = group.entity;
   const visible = group.threads.filter((t) => !t.archived && !t.pinned);
-  const { section, list } = buildGroupShell(entity.id, entity.display_name, {
-    collapsible: true,
-    count: visible.length,
-    onSelect: () => showEntityView(entity.id, "overview"),
-    selectLabel: entity.display_name + " overview",
-    onAdd: () => showEntityView(entity.id, "new"),
-  });
-  section.classList.add("nav-group--entity");
+  const { section, list } = buildCompanyShell(entity, visible.length);
+
+  if (mainView === "entity" && viewEntityMode === "new" && viewEntityId === entity.id) {
+    list.appendChild(buildDraftRow(entity.id));
+  }
 
   const expanded = expandedEntities.has(entity.id);
   const shown = expanded ? visible : visible.slice(0, THREADS_SHOWN_INITIALLY);
   for (const row of shown) list.appendChild(buildThreadRow(row));
+  // Only when it truly has none: a company whose chats are all pinned or archived has chats.
+  if (!list.children.length && !group.threads.length) {
+    const empty = document.createElement("li");
+    empty.className = "co-empty";
+    empty.textContent = "No chats yet";
+    list.appendChild(empty);
+  }
 
   if (visible.length > shown.length) {
     const li = document.createElement("li");
@@ -798,6 +957,7 @@ function renderRail() {
 
   const archived = allRows().filter((t) => t.archived);
   if (archived.length) railNavEl.appendChild(buildArchivedGroup(archived));
+  keepRailTip();
 }
 
 // ---- view switching --------------------------------------------------------------------
@@ -884,6 +1044,7 @@ function showEntityView(entityId, mode) {
   if (!entity) return;
   stashThreadViewState();
   viewEntityId = entityId;
+  viewEntityMode = mode;
   // A draft thread bound to this entity, with NO record persisted (§3.3). The record is
   // created on first send, inside `send()`.
   draftEntityId = entityId;
@@ -915,7 +1076,7 @@ function showEntityView(entityId, mode) {
     facts.appendChild(dt);
     facts.appendChild(dd);
   };
-  addFact("Threads", String(threads.length));
+  addFact("Chats", String(threads.length));
   if (entity.roots && entity.roots.length) addFact("Source root", entity.roots.join(", "));
 
   // "Threads needing attention" — ONLY rows that carry a real mark. If nothing has a
@@ -958,7 +1119,7 @@ function showEntityView(entityId, mode) {
     "needs you.";
 
   composerScopeEl.textContent =
-    (mode === "new" ? "New thread in " : "Talk to Rich about ") + entity.display_name;
+    (mode === "new" ? "New chat in " : "Talk to Rich about ") + entity.display_name;
   composerScopeEl.hidden = false;
   idlePlaceholder = "Talk to Rich about " + entity.display_name + "…";
   inputEl.placeholder = idlePlaceholder;
@@ -985,7 +1146,7 @@ function renderScopeHeader() {
   if (mainView === "entity" && viewEntityId) {
     scopeEntityEl.textContent = entityLabel(viewEntityId);
     scopeSepEl.hidden = false;
-    scopeThreadEl.textContent = "New thread";
+    scopeThreadEl.textContent = "New chat";
     return;
   }
   if (mainView === "unbound") {
@@ -1303,6 +1464,277 @@ async function openThread(threadId, opts) {
 function startNewThreadFlow() {
   openEntityPicker((entityId) => showEntityView(entityId, "new"));
 }
+
+// ---------------------------------------------------------------------------------------
+// "+ NEW CHAT OR COMPANY" — design round 32, built to the mockup the CEO approved on
+// 2026-10-19 (`richos-hq/design/mockups/rounds/round-32/`). His words: the button "must become
+// "+ New chat or company" and work in a way that's intuitive and doesn't suck."
+//
+// A click opens a small menu right under the button: "New chat in" and each of his companies
+// (one click starts a new chat there), then "New company", which turns the same menu into the
+// app's own company form (`#entity-add`, moved in from the company dialog and back out when the
+// menu closes, so there is one form, one set of refusals and one folder chooser). ⌘N is the
+// same door: with one company it starts the chat at once, as it always has (`theOnlyCompany`);
+// with more it opens this menu on the first company. Arrow keys move, Enter picks, Escape closes
+// (`POPUP_CLOSERS`).
+//
+// The boot-time question and the §21 unbound screen's button keep `startNewThreadFlow`: they
+// ask on the app's behalf, and the round changed only the doors he opens himself.
+// ---------------------------------------------------------------------------------------
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || "");
+const NEW_CHAT_KEY = IS_MAC ? "⌘N" : "Ctrl+N";
+
+/// A new chat in one company: its "New chat" row at the top of its section (opened if it was
+/// collapsed) and its new-chat screen, composer focused.
+function startNewChatIn(entityId) {
+  closeNewChatMenu();
+  if (isCollapsed(entityId)) toggleEntityCollapsed(entityId);
+  arrivedDraft = { id: entityId, at: Date.now() };
+  showEntityView(entityId, "new");
+}
+
+/// Where the company form lives when it is not in the menu, so it goes back exactly there.
+const entityAddHome = { parent: entityAddEl.parentNode, next: entityAddEl.nextSibling };
+
+function formInMenu() {
+  return newChatMenuEl.contains(entityAddEl);
+}
+
+/// Put the company form back in the company dialog, as that dialog expects to find it.
+function returnCompanyForm() {
+  if (!formInMenu()) return;
+  entityAddHome.parent.insertBefore(entityAddEl, entityAddHome.next);
+  entityAddEl.hidden = true;
+  entityAddLeadEl.hidden = false;
+  entityAddCancelEl.hidden = true;
+  entityAddErrorEl.hidden = true;
+  entityAddErrorEl.textContent = "";
+}
+
+/// The control the menu hangs from: the rail's button, or, while the sidebar is hidden (its
+/// toggle or ⌘⇧S, then ⌘N), the sidebar toggle at the top of the conversation, which is on
+/// screen and is the way back to the rail. Anchored to the hidden button the menu would open
+/// off the left edge of the window (mid-job review rv-20261019T132219Z-c8964a8e-f9d9).
+function newChatMenuAnchor() {
+  return railOpen ? railNewThreadBtn : railToggleBtn;
+}
+
+function placeNewChatMenu() {
+  const r = newChatMenuAnchor().getBoundingClientRect();
+  const width = newChatMenuEl.offsetWidth || 304;
+  newChatMenuEl.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - width - 8))) + "px";
+  const top = Math.round(r.bottom + 6);
+  newChatMenuEl.style.top = top + "px";
+  // Never past the foot of the window: at 150% text in a small window the company form with
+  // its refusal is taller than the room under the button, and it scrolls inside itself so Add
+  // and Cancel stay reachable (mid-job review rv-20261019T142223Z-c855f9a6-d96d).
+  newChatMenuEl.style.maxHeight = Math.max(120, window.innerHeight - top - 8) + "px";
+}
+
+function menuItem(iconName, name, attrs, kbd) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "m-item";
+  b.setAttribute("role", "menuitem");
+  for (const [k, v] of Object.entries(attrs)) b.setAttribute(k, v);
+  b.appendChild(icon(iconName));
+  const n = document.createElement("span");
+  n.className = "m-name";
+  n.textContent = name;
+  b.appendChild(n);
+  if (kbd) {
+    const k = document.createElement("kbd");
+    k.textContent = kbd;
+    b.appendChild(k);
+  }
+  return b;
+}
+
+/// The menu's list: "New chat in", each company, a rule, "New company". With exactly one
+/// company that company's row carries the key, because ⌘N is exactly that row.
+function openNewChatMenu(focusFirst) {
+  // The menu lives in `#app`, which the home screen holds inert under its own z-index; Home
+  // gives way before the menu opens, as the old company picker's overlay made it do
+  // (handover review rv-20261019T154229Z-07a5b039-1c33).
+  if (homeIsUp()) window.RichHome.hide("new-chat-menu");
+  returnCompanyForm();
+  closeThreadMenu();
+  hideRailTip();
+  const groups = (navTree && navTree.groups) || [];
+  newChatMenuEl.className = "menu new-chat-menu";
+  newChatMenuEl.setAttribute("role", "menu");
+  newChatMenuEl.setAttribute("aria-label", "New chat or company");
+  newChatMenuEl.replaceChildren();
+  if (groups.length) {
+    const label = document.createElement("p");
+    label.className = "m-label";
+    label.textContent = "New chat in";
+    label.setAttribute("aria-hidden", "true");
+    newChatMenuEl.appendChild(label);
+    for (const g of groups) {
+      const item = menuItem("folderOpen", g.entity.display_name, { "data-company": g.entity.id, "aria-label": "New chat in " + g.entity.display_name }, groups.length === 1 ? NEW_CHAT_KEY : null);
+      item.addEventListener("click", () => startNewChatIn(g.entity.id));
+      newChatMenuEl.appendChild(item);
+    }
+    const sep = document.createElement("div");
+    sep.className = "m-sep";
+    sep.setAttribute("role", "separator");
+    newChatMenuEl.appendChild(sep);
+  }
+  const add = menuItem("folderPlus", "New company", { "data-new-company": "" });
+  add.addEventListener("click", openNewCompanyForm);
+  newChatMenuEl.appendChild(add);
+  newChatMenuEl.hidden = false;
+  placeNewChatMenu();
+  railNewThreadBtn.setAttribute("aria-expanded", "true");
+  if (focusFirst) newChatMenuEl.querySelector(".m-item").focus();
+}
+
+/// "New company": the same menu becomes the company form, with a back arrow to the list.
+function openNewCompanyForm() {
+  if (newChatMenuEl.hidden) openNewChatMenu(false);
+  newChatMenuEl.className = "menu new-chat-menu is-form";
+  newChatMenuEl.setAttribute("role", "dialog");
+  newChatMenuEl.setAttribute("aria-label", "New company");
+  newChatMenuEl.replaceChildren();
+  const head = document.createElement("div");
+  head.className = "m-head";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "m-back";
+  back.setAttribute("aria-label", "Back");
+  back.appendChild(icon("back"));
+  back.addEventListener("click", () => openNewChatMenu(true));
+  head.appendChild(back);
+  const title = document.createElement("p");
+  title.className = "m-title";
+  title.textContent = "New company";
+  head.appendChild(title);
+  newChatMenuEl.appendChild(head);
+  newChatMenuEl.appendChild(entityAddEl);
+  entityAddEl.hidden = false;
+  entityAddLeadEl.hidden = true;
+  entityAddCancelEl.hidden = false;
+  entityAddErrorEl.hidden = true;
+  entityAddErrorEl.textContent = "";
+  placeNewChatMenu();
+  entityAddNameEl.focus();
+}
+
+function closeNewChatMenu(refocus) {
+  if (newChatMenuEl.hidden) return;
+  const hadFocus = newChatMenuEl.contains(document.activeElement);
+  newChatMenuEl.hidden = true;
+  returnCompanyForm();
+  newChatMenuEl.replaceChildren();
+  railNewThreadBtn.setAttribute("aria-expanded", "false");
+  if (refocus || hadFocus) newChatMenuAnchor().focus({ preventScroll: true });
+}
+
+railNewThreadBtn.addEventListener("click", (e) => {
+  if (!newChatMenuEl.hidden) return closeNewChatMenu();
+  // A click from the keyboard (Enter or Space: `detail` 0) puts focus in the menu.
+  openNewChatMenu(e.detail === 0);
+});
+entityAddCancelEl.addEventListener("click", () => closeNewChatMenu(true));
+newChatMenuEl.addEventListener("keydown", (e) => {
+  if (newChatMenuEl.classList.contains("is-form")) return;
+  const items = Array.from(newChatMenuEl.querySelectorAll(".m-item"));
+  const at = items.indexOf(document.activeElement);
+  let next = -1;
+  if (e.key === "ArrowDown") next = (at + 1) % items.length;
+  else if (e.key === "ArrowUp") next = (at - 1 + items.length) % items.length;
+  else if (e.key === "Home") next = 0;
+  else if (e.key === "End") next = items.length - 1;
+  if (next < 0) return;
+  e.preventDefault();
+  items[next].focus();
+});
+// Opened with the pointer, the menu leaves focus where it was; the first arrow key then moves
+// it into the menu, so a hand that switches to the keyboard is not stranded outside it
+// (mid-job review rv-20261019T142223Z-c855f9a6-d96d).
+document.addEventListener("keydown", (e) => {
+  if (newChatMenuEl.hidden || newChatMenuEl.classList.contains("is-form")) return;
+  if (newChatMenuEl.contains(document.activeElement)) return;
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  const items = newChatMenuEl.querySelectorAll(".m-item");
+  if (!items.length) return;
+  e.preventDefault();
+  items[e.key === "ArrowDown" ? 0 : items.length - 1].focus();
+});
+document.addEventListener("pointerdown", (e) => {
+  if (newChatMenuEl.hidden) return;
+  if (newChatMenuEl.contains(e.target) || railNewThreadBtn.contains(e.target)) return;
+  closeNewChatMenu();
+});
+window.addEventListener("resize", () => {
+  if (!newChatMenuEl.hidden) placeNewChatMenu();
+});
+
+/// ⌘N. One company: a new chat there, at once. Two or more: the menu, on the first company.
+/// None: the menu, whose one row is "New company".
+function newChatShortcut() {
+  const only = theOnlyCompany();
+  if (only) return startNewChatIn(only);
+  openNewChatMenu(true);
+}
+
+// ---- the rail's instant tooltip (round 32) ---------------------------------------------
+//
+// His words: hovering the plus on a company "must instantly show a tooltip that says "+ New
+// chat"". So it is shown from the pointer's own event, in the same task, with no delay and no
+// transition: on screen in the frame the pointer arrives in. Keyboard focus shows it too.
+// `title` was not usable: WebKit holds a native tooltip back for about a second.
+function showRailTip(target) {
+  railTipFor = target;
+  railTipEl.textContent = target.dataset.tip;
+  railTipEl.hidden = false;
+  const r = target.getBoundingClientRect();
+  const above = target.dataset.tipPos === "above";
+  railTipEl.classList.toggle("is-above", above);
+  railTipEl.style.left = Math.round(above ? r.left + r.width / 2 - railTipEl.offsetWidth / 2 : r.right + 10) + "px";
+  railTipEl.style.top = Math.round(above ? r.top - railTipEl.offsetHeight - 10 : r.top + r.height / 2 - railTipEl.offsetHeight / 2) + "px";
+  target.setAttribute("aria-describedby", "rail-tip");
+}
+
+/// The rail is rebuilt whenever anything in it changes, which replaces the control a tooltip is
+/// showing for. The same control in the new rail takes it over, so a rebuild under a resting
+/// pointer neither drops the tooltip nor leaves it pointing at nothing.
+function keepRailTip() {
+  if (!railTipFor || railTipFor.isConnected) return;
+  const section = railTipFor.closest(".nav-group--entity");
+  const id = section ? section.dataset.entity : null;
+  const kind = railTipFor.classList.contains("nav-collapse") ? ".nav-collapse" : ".nav-group-add";
+  railTipFor = null;
+  const again = id ? railNavEl.querySelector('.nav-group--entity[data-entity="' + CSS.escape(id) + '"] ' + kind) : null;
+  if (again && again.matches(":hover, :focus")) showRailTip(again);
+  else hideRailTip();
+}
+
+function hideRailTip() {
+  if (railTipFor) railTipFor.removeAttribute("aria-describedby");
+  railTipFor = null;
+  railTipEl.hidden = true;
+}
+
+railNavEl.addEventListener("pointerover", (e) => {
+  const t = e.target instanceof Element ? e.target.closest("[data-tip]") : null;
+  if (t && t !== railTipFor) showRailTip(t);
+  else if (!t && railTipFor && railTipFor !== document.activeElement) hideRailTip();
+});
+railNavEl.addEventListener("pointerleave", () => {
+  if (railTipFor && railTipFor !== document.activeElement) hideRailTip();
+});
+railNavEl.addEventListener("focusin", (e) => {
+  const t = e.target instanceof Element ? e.target.closest("[data-tip]") : null;
+  if (t) showRailTip(t);
+  else hideRailTip();
+});
+railNavEl.addEventListener("focusout", (e) => {
+  if (e.target === railTipFor) hideRailTip();
+});
+railNavEl.addEventListener("scroll", hideRailTip, { passive: true });
 
 /// **A QUESTION WITH ONE ANSWER IS NOT A QUESTION** — Ray's candidate-.11 defect 3.5:
 /// *"the dialog is shown when there is exactly one choice."*
@@ -3450,9 +3882,8 @@ stopBtn.addEventListener("click", (e) => {
   stopTurn();
 });
 
-el("rail-new-thread").addEventListener("click", startNewThreadFlow);
-// §21's way out of the unbound screen — the SAME §3.3 flow the rail's button runs, not a
-// second one. The picker always opens, so this never guesses an entity either.
+// §21's way out of the unbound screen: the §3.3 company question, which never guesses an entity.
+// (The rail's button is "+ New chat or company" since round 32, wired beside its menu.)
 el("unbound-new-thread").addEventListener("click", startNewThreadFlow);
 el("nav-search").addEventListener("click", openSearch);
 jumpLatestBtn.addEventListener("click", jumpToLatest);
@@ -5444,6 +5875,8 @@ function registryUnreadableLine(path) {
 const FIRST_RUN_ORDER = ["engine", "corpus", "company"];
 
 function openEntityPicker(onPick, opts) {
+  // The company form is borrowed by "+ New chat or company"; closing that menu puts it back here.
+  closeNewChatMenu();
   const forCompany = !!(opts && opts.forCompany);
   // ASKED ONLY WHEN THERE IS SOMETHING TO ASK. See `theOnlyCompany` for why this is the thread
   // question and not the first-run one, and why it does not contradict §21.
@@ -5694,6 +6127,10 @@ async function chooseCompany(entityId) {
 async function addCompany() {
   const displayName = entityAddNameEl.value.trim();
   const folder = entityAddFolderEl.value.trim();
+  // Added from "+ New chat or company" (round 32): it arrives in the rail as its own section,
+  // and a new chat in it is already open, because that is what he is about to do next.
+  const fromMenu = formInMenu();
+  const known = new Set(((navTree && navTree.groups) || []).map((g) => g.entity.id));
   entityAddErrorEl.hidden = true;
   entityAddGoEl.disabled = true;
   let next;
@@ -5714,11 +6151,16 @@ async function addCompany() {
   entityAddFolderEl.value = "";
   entityChoice = next;
   closeEntityPicker();
+  closeNewChatMenu();
   if (next && next.chosen) clearCompanyBlock();
   refreshCompanySetting();
   await refreshNavigation();
+  const added = fromMenu ? navTree.groups.find((g) => !known.has(g.entity.id)) : null;
   const activeId = next && next.active ? next.active.thread_id : null;
-  if (activeId && threadRow(activeId)) await openThread(activeId);
+  if (added) {
+    arrivedCompany = { id: added.entity.id, at: Date.now() };
+    startNewChatIn(added.entity.id);
+  } else if (activeId && threadRow(activeId)) await openThread(activeId);
   // The first company a first-run user adds is the one this notice exists for, and it is
   // added AFTER boot — so the boot-time read found no binding and said nothing.
   await renderFirstRunNotice();
@@ -5728,6 +6170,10 @@ async function addCompany() {
 }
 
 entityAddGoEl.addEventListener("click", addCompany);
+// A refusal answers the name he tried; the moment he types another, it no longer applies.
+entityAddNameEl.addEventListener("input", () => {
+  entityAddErrorEl.hidden = true;
+});
 // Enter in either field submits, because a two-field form whose only commit is a button is
 // a form people press Enter in and nothing happens.
 for (const field of [entityAddNameEl, entityAddFolderEl]) {
@@ -7313,6 +7759,9 @@ let sidebarHiddenPref = false;
 let lastBreakpointNarrow = null;
 
 function setRailOpen(open) {
+  // "+ New chat or company" hangs from the rail or, with the rail away, from this toggle; the
+  // menu does not outlive the move of the thing it hangs from.
+  if (open !== railOpen) closeNewChatMenu();
   railOpen = open;
   const narrow = isNarrow();
   document.body.classList.toggle("rail-closed", !open);
@@ -8918,7 +9367,7 @@ document.addEventListener("keydown", (e) => {
   // shortcut-preferences surface in the app, and inventing one is not this slice's work.
   if (mod && !e.shiftKey && (e.key === "n" || e.key === "N")) {
     e.preventDefault();
-    startNewThreadFlow();
+    newChatShortcut();
     return;
   }
   // §3.3: "v1 access = a keyboard shortcut, plus one line in Settings." This is the
@@ -9122,6 +9571,7 @@ const POPUP_CLOSERS = {
   "thread-menu": closeThreadMenu,
   "search-overlay": closeSearch,
   "entity-picker": closeEntityPicker,
+  "new-chat-menu": () => closeNewChatMenu(true),
   "corrections-overlay": closeCorrections,
   "feedback-overlay": closeFeedback,
   slideover: closeSlideOver,
@@ -9439,6 +9889,7 @@ async function init() {
   await refreshTechy("");
 
   if (!/Mac|iPhone|iPad/.test(navigator.platform || "")) el("nav-search-kbd").textContent = "Ctrl+K";
+  el("rail-new-kbd").textContent = NEW_CHAT_KEY;
 
   // Durable rail preferences (nav.rs): width, collapsed entity set, pins, renames.
   navPrefs = await invokeQuiet("nav_state");

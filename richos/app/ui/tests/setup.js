@@ -288,8 +288,12 @@ async function main() {
     // control there would be a second way to do nothing. If this ever shows the button, the
     // check above has stopped proving anything about the first-run question specifically.
     const page = await openApp(browser, { setup: "ready", memory: "ready" });
-    await page.waitForSelector("#rail-new-thread");
-    await page.click("#rail-new-thread");
+    // Since round 32 "+ New chat or company" opens its own menu; the per-thread company
+    // picker is still reached by the unbound screen's button (`startNewThreadFlow`).
+    await page.waitForSelector('.nav-thread[data-thread-id="legacy"]');
+    await page.click('.nav-thread[data-thread-id="legacy"]');
+    await page.waitForSelector("#unbound-view:not([hidden])");
+    await page.click("#unbound-new-thread");
     await page.waitForSelector("#entity-picker:not([hidden])");
     assert(await page.isHidden("#entity-picker-later"), "the per-thread picker grew a deferral");
     assert(await page.isHidden("#entity-picker-defer-note"), "and a cost line for a cost it does not have");
