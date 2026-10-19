@@ -908,12 +908,18 @@ impl WorkHost {
 
     /// **An automatic turn of Stu's began (`running`) or ended**, on the lease of `session`. Its
     /// end is a boundary of his work: the run loop checks there that he is on the account in use.
+    /// Its start is checked too, so a switch already decided reaches him while the turn runs
+    /// rather than after it (the idle check covers one decided during the turn).
     fn note_automatic_turn(&self, backend: &Backend, session: &str, running: bool) {
         let mut inner = backend.inner.lock().unwrap();
         if inner.lease_session.as_deref() != Some(session) { return; }
+        let began = running && !inner.automatic_turn;
         inner.automatic_turn = running;
         if !running {
             inner.move_check = Some(true);
+            backend.wake.notify_all();
+        } else if began {
+            inner.move_check.get_or_insert(false);
             backend.wake.notify_all();
         }
     }
@@ -927,8 +933,8 @@ impl WorkHost {
     ///
     /// When nothing of his is running, his session ends and the normal opener resumes it on the
     /// account in use. When something is (a turn, a command, a helper), ending it would end that
-    /// work, so he is told once (`account_switch`) and moves at a later boundary; once he has
-    /// moved after being told, he is told so (`account_moved`) on the new session. What each
+    /// work, so he is told once (`account_switch`) and moves at a later boundary; every time he
+    /// has moved, he is told so (`account_moved`) on the new session. What each
     /// message asks of him is in his instructions (`stu.md`), never here.
     fn move_to_account_in_use(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, at_turn_end: bool) {
         let due = if at_turn_end { self.account_switch_due(backend) } else { self.account_left_behind(backend) };
@@ -946,8 +952,10 @@ impl WorkHost {
                 }
                 serde_json::json!({"event":"account_switch","from":label(&from),"to":to.label})
             }
+            // Told or not, his new session has nothing else telling it to carry on (review
+            // rv-20261019T030516Z-0a1a8728-e798, finding 1).
             Renewal::Moved { from, to } => {
-                if backend.inner.lock().unwrap().switch_told.take().is_none() { return; }
+                backend.inner.lock().unwrap().switch_told = None;
                 serde_json::json!({"event":"account_moved","from":label(&from),"to":label(&to)})
             }
             Renewal::NotDue | Renewal::Failed => return,
@@ -1109,12 +1117,13 @@ impl WorkHost {
                     if inner.closing {
                         return;
                     }
-                    if !inner.automatic_turn {
-                        if let (Some(binding), Some(at_turn_end)) = (inner.binding.clone(), inner.move_check) {
-                            inner.move_check = None;
-                            inner.processing = true;
-                            break Next::Move(binding, at_turn_end);
-                        }
+                    // During an automatic turn of Stu's too (review
+                    // rv-20261019T030516Z-0a1a8728-e798, finding 1): he is told there that the
+                    // switch is coming, and the renewal never ends a running turn.
+                    if let (Some(binding), Some(at_turn_end)) = (inner.binding.clone(), inner.move_check) {
+                        inner.move_check = None;
+                        inner.processing = true;
+                        break Next::Move(binding, at_turn_end);
                     }
                     if let Some(binding) = inner.binding.clone() {
                         if let Some(answer) = crate::question_work::pending(&self.state)
@@ -1856,9 +1865,22 @@ mod tests {
         prompts: Arc<Mutex<Vec<(String, String)>>>,
     }
     /// Stu started on Account 1 by a message in his inbox (the run loop opens his lease), then
-    /// the switch from Account 1 (99% of its week) to Home is decided.
+    /// the switch from Account 1 (99% of its week) to Home is decided while a command of his runs.
     fn stu_on_account_one_then_a_switch() -> Moving {
+        let m=stu_on_account_one();
+        *m.commands.lock().unwrap()=crate::lease_commands::CommandReading::Running(1);
+        switch_to_home(&m);
+        m
+    }
+    /// The switch from Account 1 (99% of its week) to Home is decided.
+    fn switch_to_home(m: &Moving) {
         use crate::claude_accounts::tests::{reading, NOW};
+        let readings=[("1".to_string(),reading(10.,3_600_000,99.,48*3_600_000)),
+            (m.home.id.clone(),reading(0.,3_600_000,0.,72*3_600_000))].into_iter().collect();
+        assert!(m.quota.accounts.evaluate(&readings,None,NOW).unwrap(),"Account 1 at 99% of its week is left for Home");
+    }
+    /// Stu started on Account 1 by a message in his inbox (the run loop opens his lease).
+    fn stu_on_account_one() -> Moving {
         let h=harness(0);
         let quota=Arc::new(crate::quota::Service::open(&h.root.join("quota")).unwrap());
         let home=quota.accounts.add("Home").unwrap();
@@ -1872,12 +1894,22 @@ mod tests {
         host.wake_messages(&h.binding);
         until("Stu's first turn on Account 1",||prompts.lock().unwrap().len()==1);
         assert_eq!(prompts.lock().unwrap()[0].0,"1");
-        // His job has a command running when the switch comes.
-        *commands.lock().unwrap()=crate::lease_commands::CommandReading::Running(1);
-        let readings=[("1".to_string(),reading(10.,3_600_000,99.,48*3_600_000)),
-            (home.id.clone(),reading(0.,3_600_000,0.,72*3_600_000))].into_iter().collect();
-        assert!(quota.accounts.evaluate(&readings,None,NOW).unwrap(),"Account 1 at 99% of its week is left for Home");
         Moving {h,quota,home,host,spawns,commands,sink,prompts}
+    }
+    /// Claude Code starts an automatic turn of Stu's on its own (a task notification) and he
+    /// takes his first step in it; the turn's result comes later ([`automatic_turn_ends`]).
+    fn automatic_turn_starts(m: &Moving) {
+        let sink=m.sink.lock().unwrap().clone().expect("the host installs a between-turn sink");
+        sink(vec![serde_json::json!({"type":"system","subtype":"task_notification","task_id":"build","status":"completed"}),
+            serde_json::json!({"type":"assistant","message":{"content":[{"type":"text","text":"The build finished. Deploying next."}]}})]);
+    }
+    fn automatic_turn_ends(m: &Moving) {
+        let sink=m.sink.lock().unwrap().clone().expect("the host installs a between-turn sink");
+        sink(vec![serde_json::json!({"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn"})]);
+    }
+    /// Every message the app sent Stu with `event` in it, with the account it reached him on.
+    fn told(m: &Moving, event: &str) -> Vec<(String, String)> {
+        m.prompts.lock().unwrap().iter().filter(|(_,text)|text.contains(event)).cloned().collect()
     }
     /// One automatic turn of Stu's, as Claude Code reports it between turns of ours.
     fn automatic_turn(m: &Moving) {
@@ -1922,6 +1954,58 @@ mod tests {
         let working=|id:&str|view["accounts"].as_array().unwrap().iter().find(|a|a["id"]==id).map(|a|a["working"].clone());
         assert_eq!(working(&m.home.id),Some(serde_json::json!(["team"])));
         assert_eq!(working("1"),Some(serde_json::Value::Null),"nobody is left on Account 1");
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
+    }
+
+    /// The run loop has nothing left to do for now: no input of ours and no account check.
+    fn settled(m: &Moving) {
+        let backend=m.host.backend(m.h.binding.thread_id()).unwrap();
+        until("the run loop settles",||{let inner=backend.inner.lock().unwrap();!inner.processing&&inner.move_check.is_none()});
+    }
+
+    /// **Stu is told the switch is coming while an automatic turn of his runs** (review
+    /// rv-20261019T030516Z-0a1a8728-e798, finding 1: the run loop skipped every account check
+    /// while one ran, so through a job of many steps he kept spending the old account and was
+    /// never asked to save and stop). The switch is decided while a command of his runs; then
+    /// Claude Code starts an automatic turn and he takes a step. His turn's result has not come
+    /// yet: he is told now, on Account 1, and his session is not ended under him. When the
+    /// turn's result comes with nothing of his running, he is on Home and told to carry on.
+    #[test]
+    fn stu_is_told_to_save_and_stop_while_an_automatic_turn_runs() {
+        use crate::lease_commands::CommandReading;
+        let m=stu_on_account_one_then_a_switch();
+        automatic_turn_starts(&m);
+        until("Stu is told the switch is coming while his automatic turn runs",||!told(&m,"account_switch").is_empty());
+        let switch=told(&m,"account_switch");
+        assert_eq!(switch.len(),1,"told once: {switch:?}");
+        assert_eq!(switch[0].0,"1","told on the session he is still on");
+        assert_eq!(m.spawns.load(Ordering::SeqCst),1,"his running turn and command were ended by a move");
+
+        *m.commands.lock().unwrap()=CommandReading::Clear;
+        automatic_turn_ends(&m);
+        until("Stu is on Home",||m.spawns.load(Ordering::SeqCst)==2);
+        until("Stu is told to carry on, on Home",||told(&m,"account_moved").iter().any(|(account,_)|account==&m.home.id));
+        assert_eq!(told(&m,"account_switch").len(),1,"told again after it was said: {:?}",told(&m,"account_switch"));
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
+    }
+
+    /// **Stu is always told to carry on after a move** (review rv-20261019T030516Z-0a1a8728-e798,
+    /// finding 1: a move he had not been warned of sent nothing, so his resumed session had
+    /// nothing telling it to continue). An automatic turn of his starts before any switch; the
+    /// switch is decided while it runs; its result comes with nothing of his running, so he is
+    /// moved at once, and told so on Home.
+    #[test]
+    fn stu_is_told_to_carry_on_after_a_move_he_was_not_warned_of() {
+        let m=stu_on_account_one();
+        automatic_turn_starts(&m);
+        settled(&m);
+        switch_to_home(&m);
+        automatic_turn_ends(&m);
+        until("Stu is on Home",||m.spawns.load(Ordering::SeqCst)==2);
+        assert_eq!(told(&m,"account_switch"),Vec::<(String,String)>::new(),"he was warned after all");
+        until("Stu is told to carry on, on Home",||told(&m,"account_moved").iter().any(|(account,_)|account==&m.home.id));
+        let moved=told(&m,"account_moved");
+        assert!(moved[0].1.contains(r#"\"from\":\"Account 1\""#) && moved[0].1.contains(r#"\"to\":\"Home\""#),"{}",moved[0].1);
         m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
     }
 
