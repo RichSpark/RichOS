@@ -57,22 +57,54 @@ fn his_rig_track() -> Vec<f32> {
     mic.iter().map(|s| s * gain).collect()
 }
 
-/// THE SHIPPED CAPTURE PATH: the sample spans of every utterance admitted for the recognizer.
-fn admitted_spans(mic: &[f32]) -> Vec<(usize, usize)> {
+/// THE SHIPPED CAPTURE PATH: the sample spans of every utterance admitted for the recognizer,
+/// and the frames on which his end-of-turn quiet was sent.
+fn replay(mic: &[f32]) -> (Vec<(usize, usize)>, Vec<usize>) {
     let (aec, ring) = EchoCanceller::new();
     let mut brain = CaptureBrain::with_aec(aec);
     let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
     let mut spans = Vec::new();
+    let mut quiet = Vec::new();
     for (n, frame) in mic.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
         ring.push(&silence);
         for m in brain.push_frame(frame, false, false) {
-            if let CapMsg::Utterance(u) = m {
-                let end = (n + 1) * VAD_FRAME_SAMPLES;
-                spans.push((end - u.samples.len(), end));
+            match m {
+                CapMsg::Utterance(u) => {
+                    let end = (n + 1) * VAD_FRAME_SAMPLES;
+                    spans.push((end - u.samples.len(), end));
+                }
+                CapMsg::TurnQuiet => quiet.push(n),
+                _ => {}
             }
         }
     }
-    spans
+    (spans, quiet)
+}
+
+fn admitted_spans(mic: &[f32]) -> Vec<(usize, usize)> {
+    replay(mic).0
+}
+
+/// **And his turn still ends in a noisy room** (second review rv-20261019T123341Z, finding 1). A
+/// hold renewed by every frame the VAD calls speech never let the floor learn room noise that
+/// sits at the initial threshold: its peaks renewed the hold, its troughs broke the 10.000 s
+/// stuck escape, and the utterance never closed. The reviewer's case: 1.600 s of a steady spoken
+/// level, then the room of this same fixture (its first 1.488 s, before playback) raised to
+/// -36.0 dBFS and repeated for 20.000 s.
+#[test]
+fn his_turn_still_ends_when_the_room_is_noisy() {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push(MIC);
+    let pcm = wav::read_pcm16(&std::fs::read(&p).unwrap()).unwrap();
+    let mic = wav::to_mono(&pcm.samples, pcm.channels);
+    let room = &mic[..93 * VAD_FRAME_SAMPLES];
+    let gain = 10f32.powf(-36.0 / 20.0) / rms(room);
+    let mut track = vec![0.12f32; 100 * VAD_FRAME_SAMPLES];
+    track.extend(room.iter().cycle().take(1250 * VAD_FRAME_SAMPLES).map(|s| s * gain));
+    let (spans, quiet) = replay(&track);
+    println!("[replay] noisy room: admitted {spans:?}, end-of-turn quiet at frames {quiet:?}");
+    assert_eq!(spans.len(), 1, "his speech never closed as an utterance in the noisy room");
+    assert!(!quiet.is_empty(), "his turn never ended in the noisy room, so it was never sent");
 }
 
 #[test]

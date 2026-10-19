@@ -28,9 +28,14 @@ pub const VAD_FRAME_SAMPLES: usize = 256;
 /// not listening to a person. 625 x 256 / 16000 = 10.000 s. See [`VadConfig::stuck_speech_frames`].
 pub const STUCK_SPEECH_FRAMES: u32 = 625;
 
-/// **After the last speech frame, the floor may not RISE for this long.** 50 x 256 / 16000 =
-/// 0.800 s, the endpointer's own silence hangover: anything shorter is still inside one stretch
-/// of his speech, and a quiet frame there is a soft consonant or the tail of a word, not the room.
+/// **After the last frame of clear speech, the floor may not RISE for this long.** 50 x 256 /
+/// 16000 = 0.800 s, the endpointer's own silence hangover: anything shorter is still inside one
+/// stretch of his speech, and a quiet frame there is a soft consonant or the tail of a word, not
+/// the room. "Clear" is a frame above the threshold by [`VadConfig::speech_ratio`] again (3 x 3 =
+/// 9 x the floor, 19.1 dB): every syllable of a voice is, and room noise that only grazes the
+/// threshold is not, so such noise is still learned 0.800 s after his last word (second review
+/// rv-20261019T123341Z: renewed by every speech frame, a room at -36.0 dBFS kept the hold alive
+/// forever and his turn was never sent).
 ///
 /// The defect it closes (nightly 65, the CEO's recording of 2026-10-18 at 8:27): a frame inside
 /// his speech that the VAD did not call speech still raised the floor, at
@@ -129,7 +134,8 @@ pub struct Vad {
     noise_floor: f32,
     last_rms: f32,
     speech_run: u32,
-    /// Frames since the last speech frame, saturating; compared with [`FLOOR_RISE_HOLD_FRAMES`].
+    /// Frames since the last frame clearly above the threshold (by [`VadConfig::speech_ratio`]
+    /// again), saturating; compared with [`FLOOR_RISE_HOLD_FRAMES`].
     since_speech: u32,
     /// [`FLOOR_RISE_HOLD_FRAMES`] applies: off until [`Vad::set_hold_inside_speech`] turns it on.
     hold_inside_speech: bool,
@@ -192,12 +198,18 @@ impl Vad {
     pub fn push_frame(&mut self, frame: &[f32]) -> bool {
         let r = rms(frame);
         self.last_rms = r;
-        let is_speech = r > self.speech_threshold();
+        let threshold = self.speech_threshold();
+        let is_speech = r > threshold;
         if is_speech {
             self.speech_run += 1;
-            self.since_speech = 0;
         } else {
             self.speech_run = 0;
+        }
+        // Only a frame CLEARLY above the threshold, by the same ratio again, renews the hold: a
+        // voice is, and room noise that only grazes the threshold is not (`FLOOR_RISE_HOLD_FRAMES`).
+        if r > threshold * self.cfg.speech_ratio {
+            self.since_speech = 0;
+        } else {
             self.since_speech = self.since_speech.saturating_add(1);
         }
         // Track the room on non-speech frames, so a long sentence can never drag the floor
