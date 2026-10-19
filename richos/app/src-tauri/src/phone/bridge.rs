@@ -69,7 +69,7 @@ impl PhoneBridge {
     pub fn refresh(&self) {
         let state = self.app.state::<AppState>();
         let Ok(spine) = state.spine.try_lock() else { return };
-        let threads = titled(spine.threads(), &state.nav.lock().unwrap().state().renamed_threads);
+        let threads = titled(spine.threads(), state.nav.lock().unwrap().state());
         let active = spine.active_thread().map(|s| s.to_string()).or_else(|| threads.first().map(|t| t.0.clone()));
         let mut payloads = HashMap::new();
         if let Some(id) = active.as_deref() {
@@ -92,22 +92,23 @@ impl PhoneBridge {
     /// leave it stale; returned for [`super::PhoneRuntime::threads_changed`] to send.
     pub fn threads_changed(&self) -> Vec<(String, String)> {
         let state = self.app.state::<AppState>();
-        let threads = titled(state.reader.snapshot().threads(), &state.nav.lock().unwrap().state().renamed_threads);
+        let threads = titled(state.reader.snapshot().threads(), state.nav.lock().unwrap().state());
         self.cache.lock().unwrap().threads = threads.clone();
         threads
     }
 }
 
-/// `(id, title)` per conversation, with the title the Mac's rail shows: the CEO's rename where
-/// he made one (`nav.rs`, a display override), the ledger's title otherwise.
-fn titled(
+/// `(id, title)` per conversation, with the title the Mac's rail shows
+/// (`nav::NavState::display_title`): the CEO's rename where he made one, then the title Haiku
+/// wrote from the first message, the ledger's title otherwise.
+pub(crate) fn titled(
     threads: Vec<richos_core::thread::ThreadSummary>,
-    renamed: &std::collections::BTreeMap<String, String>,
+    nav: &crate::nav::NavState,
 ) -> Vec<(String, String)> {
     threads
         .into_iter()
         .map(|t| {
-            let title = renamed.get(&t.id).cloned().unwrap_or(t.title);
+            let title = nav.display_title(&t.id, &t.title);
             (t.id, title)
         })
         .collect()
@@ -265,9 +266,10 @@ mod tests {
         let summary = |id: &str, title: &str| richos_core::thread::ThreadSummary {
             id: id.into(), title: title.into(), created_at: 0, message_count: 0, last_activity: 0, entity_id: None, binding_revision: 0,
         };
-        let renamed = std::collections::BTreeMap::from([("thr_b".to_string(), "Welcome email".to_string())]);
+        let mut nav = crate::nav::NavState::default();
+        nav.renamed_threads.insert("thr_b".to_string(), "Welcome email".to_string());
         assert_eq!(
-            titled(vec![summary("thr_a", "Onboarding"), summary("thr_b", "New thread")], &renamed),
+            titled(vec![summary("thr_a", "Onboarding"), summary("thr_b", "New thread")], &nav),
             vec![("thr_a".to_string(), "Onboarding".to_string()), ("thr_b".to_string(), "Welcome email".to_string())]
         );
     }

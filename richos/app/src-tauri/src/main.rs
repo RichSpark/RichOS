@@ -1115,9 +1115,9 @@ fn create_thread(app: AppHandle, state: State<AppState>, title: String) -> Resul
     Ok(id)
 }
 
-/// A conversation was created or renamed: a paired phone hears its name now rather than at the
-/// next turn's end or its next `hello` (`phone::PhoneRuntime::threads_changed`). Off the
-/// command's thread, like the push after a turn, so the command never waits on the channel.
+/// A conversation was created, renamed or titled by Haiku: a paired phone hears its name now
+/// rather than at the next turn's end or its next `hello` (`phone::PhoneRuntime::threads_changed`).
+/// Off the caller's thread, like the push after a turn, so it never waits on the channel.
 fn tell_the_phone_the_threads(app: &AppHandle) {
     if let Some(runtime) = app.try_state::<Arc<phone::PhoneRuntime>>() {
         let runtime = Arc::clone(&runtime);
@@ -2726,7 +2726,8 @@ fn main() {
             // the webview via Tauri events (see app/STREAMING.md for the contract).
             spine.set_observer(Box::new(TauriEmitter { app: app.handle().clone() }));
             // Haiku's title for a new conversation (`thread_title.rs`) arrives here, off the
-            // spine, after the first message. The sidebar is told to read its rows again.
+            // spine, after the first message. The sidebar is told to read its rows again, and a
+            // connected phone gets the list with the new name on its live stream.
             let titles = app.handle().clone();
             spine.set_title_observer(Arc::new(move |thread_id: &str, title: &str| {
                 let Some(state) = titles.try_state::<AppState>() else { return };
@@ -2735,6 +2736,7 @@ fn main() {
                     if let Err(e) = titles.emit(richos_core::live::EVENT_THREAD_SUMMARY_UPDATED, summary) {
                         eprintln!("[richos] the sidebar was not told about the new title ({e})");
                     }
+                    tell_the_phone_the_threads(&titles);
                 }
             }));
 
@@ -7960,6 +7962,44 @@ mod navigation_tests {
         let reopened = nav::NavStore::open(&nav_path);
         assert_eq!(reopened.state().display_title(BOUND_ID, "Running"), "My plan");
         assert_eq!(reopened.state().auto_titles.get(BOUND_ID).map(String::as_str), Some("Weekly running plan"));
+        std::fs::remove_file(&nav_path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// **Haiku's title reaches a phone that is already connected, as a `threads` frame** (review
+    /// `rv-20261019T135509Z-1d83fd75-da31`: it showed only on the phone's next list load). The
+    /// list is read the way `PhoneBridge::threads_changed` reads it (the reader's snapshot, named
+    /// as the sidebar names it) and sent the way `PhoneRuntime::threads_changed` sends it.
+    #[test]
+    fn a_saved_haiku_title_reaches_a_connected_phone_as_a_threads_frame() {
+        let (mut spine, path) = spine_from_real_ledger("haiku-title-phone");
+        let nav_path = path.with_extension("nav.json");
+        if nav_path.exists() {
+            std::fs::remove_file(&nav_path).unwrap();
+        }
+        let nav = Mutex::new(nav::NavStore::open(&nav_path));
+        let reader = spine.reader();
+        let hub = phone::stream::PhoneHub::new();
+        hub.set_live(true);
+        let mut connected = hub.subscribe();
+        let phone_hears = |rx: &mut tokio::sync::broadcast::Receiver<phone::stream::Frame>| {
+            let frame = rx.try_recv().expect("a threads frame on the live stream");
+            assert_eq!(frame.kind, "threads");
+            let data: serde_json::Value = serde_json::from_str(&frame.data).unwrap();
+            data["threads"].as_array().unwrap().iter()
+                .find(|t| t["id"] == BOUND_ID).expect("listed")["title"].as_str().unwrap().to_string()
+        };
+        let tell_the_phone =
+            || phone::send_threads(&hub, &phone::bridge::titled(reader.snapshot().threads(), nav.lock().unwrap().state()));
+
+        assert!(show_haiku_title(&nav, BOUND_ID, "Weekly running plan"));
+        tell_the_phone();
+        assert_eq!(phone_hears(&mut connected), "Weekly running plan", "Haiku's title, not the provisional one");
+
+        // He renames it: the phone hears his name, the same way.
+        nav.lock().unwrap().rename_thread(BOUND_ID, "My plan").unwrap();
+        tell_the_phone();
+        assert_eq!(phone_hears(&mut connected), "My plan");
         std::fs::remove_file(&nav_path).unwrap();
         std::fs::remove_file(&path).unwrap();
     }

@@ -1690,7 +1690,7 @@ impl PhoneRuntime {
     /// `threads` frame, which a client that does not know the name ignores.
     pub fn threads_changed(&self) {
         let Some(bridge) = self.running.lock().unwrap().as_ref().map(|r| Arc::clone(&r.bridge)) else { return };
-        drop(self.hub.publish("threads", self.hub.cursor_now(), threads_frame(&bridge.threads_changed())));
+        send_threads(&self.hub, &bridge.threads_changed());
     }
 
     /// **Push the reply that just finished**, if there is a phone to push to.
@@ -1840,6 +1840,12 @@ struct Gathered {
 /// `build.rs` compiled in, and a build that embedded nothing does not compile.
 fn phone_assets() -> assets::PhoneApp {
     assets::PhoneApp::embedded()
+}
+
+/// The conversation list on the live stream as its own `threads` frame, under the newest cursor:
+/// a list is not a row and takes none (`stream.rs`, `subscribe_from`).
+pub(crate) fn send_threads(hub: &stream::PhoneHub, threads: &[(String, String)]) {
+    drop(hub.publish("threads", hub.cursor_now(), threads_frame(threads)));
 }
 
 /// The data of a `threads` frame: the conversation list in the `hello`'s own shape.
