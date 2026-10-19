@@ -611,7 +611,10 @@ function makeLink() {
             if(firstOpen){firstOpen=false;await api.refreshChallenge();}
             const incomplete=thread.view([]).filter(row=>row.complete===false && Number.isSafeInteger(row.cursor)).map(row=>Math.max(0,row.cursor-1));
             const cursor=thread.latestCursor();
-            return api.openEvents(currentThreadId,cursor>0?Math.min(cursor-1,...incomplete):null,handlers);
+            // A conversation the page knows only from its rows has no title yet: no cursor, so the
+            // Mac answers with a `hello` and its list (`noteThread`).
+            const named=threads.some(t=>t.id===currentThreadId && t.title);
+            return api.openEvents(currentThreadId,named && cursor>0?Math.min(cursor-1,...incomplete):null,handlers);
         },
 		refresh: () => api.refreshChallenge(),
 		onFailure: handleApiError,
@@ -670,7 +673,7 @@ function makeLink() {
 					settings.set('vapidPublicKey', vapidPublicKey).catch(() => {});
 				}
 				if (Array.isArray(data.threads) && data.threads.length) {
-					threads = data.threads;
+					threads = listFromHello(data.threads);
 					settings.set('threads', threads).catch(() => {});
 					renderThreadPicker();
 				}
@@ -678,12 +681,13 @@ function makeLink() {
 				flushQueue();
 			},
 			message(row) {
-				thread.merge(row);
 				messageCache.put(row).catch(() => {});
+				if (row && elsewhere(row.thread_id)) { noteThread(row.thread_id); return; }
+				thread.merge(row);
 				scheduleRender();
 				if (row && row.role === 'rich' && row.complete) askForTheQuestion(row);
 			},
-			delta(data) { thread.applyDelta(data); scheduleRender(); },
+			delta(data) { if (data && elsewhere(data.thread_id)) return; thread.applyDelta(data); scheduleRender(); },
 			state(data) { thread.applyState(data); scheduleRender(); }
 		}
 	});
@@ -693,6 +697,33 @@ function connectStream() {
 	if (!currentThreadId) return;
 	if (!link) link = makeLink();
 	link.connect();
+}
+
+/// **ANOTHER CONVERSATION'S ROW IS KEPT FOR IT, NEVER DRAWN UNDER THIS ONE** (Ray's nightly 66
+/// walk, `esc-20261019T075013Z-233dbe9d`). The Mac's hub is one broadcast for every conversation,
+/// each frame naming its `thread_id` (`phone/rows.rs` `event_from_live`), so the stream opened for
+/// the conversation on screen also carries every other one's. A row that names no conversation is
+/// from an older Mac and is drawn where it always was.
+function elsewhere(threadId) { return Boolean(threadId) && threadId !== currentThreadId; }
+
+/// **A CONVERSATION CREATED AFTER THE PAGE LOADED.** The list rides only in a `hello`, which the Mac
+/// sends only to a stream that presents no cursor (`phone/stream.rs` `replay_after_marked`), so a
+/// new conversation is first seen here as a row naming a `thread_id` the page does not know. It is
+/// listed at once, untitled, which brings up the picker. Its title comes from the `hello` the
+/// stream asks for when that conversation is opened (`makeLink`), and it is not reopened here: the
+/// Mac's list only catches up when a turn completes (`phone/bridge.rs` `refresh`), so a `hello`
+/// asked for now would not name it yet, and reopening would drop the frames still in flight.
+function noteThread(id) {
+	if (!id || threads.some((t) => t.id === id)) return;
+	threads = threads.concat([{ id, title: '' }]);
+	settings.set('threads', threads).catch(() => {});
+	renderThreadPicker();
+}
+
+/// The Mac's list from a `hello`, keeping a conversation this page learned from its rows that the
+/// list does not name yet (the same lag as above).
+function listFromHello(named) {
+	return named.concat(threads.filter((t) => !t.title && !named.some((n) => n.id === t.id)));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1826,7 +1857,7 @@ if ('serviceWorker' in navigator) {
 		if (data.type === 'push-message' && data.message) {
 			if (data.api_base && api) api.setApiBase(data.api_base);
 			if (!thread) return;
-			if (data.message.thread_id && data.message.thread_id !== currentThreadId) return;
+			if (elsewhere(data.message.thread_id)) { noteThread(data.message.thread_id); return; }
 			thread.merge(data.message);
 			scheduleRender();
 		}
