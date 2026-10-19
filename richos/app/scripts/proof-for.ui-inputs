@@ -158,6 +158,7 @@ home.js               @shell @home richos/app/ui/mock.js richos/app/ui/home/fiel
 ticker-wrap.js          @shell @home
 settings-fit.js         @shell @phone richos/app/ui/settings-button.js
 rail-initials-fit.js    @shell
+new-chat-or-company.js  @shell richos/app/ui/mock.js
 speckled-ground.js      @shell @home @splash richos/app/ui/speckle.js richos/app/ui/speckle-app.js richos/app/ui/speckle.css richos/app/ui/timeline.js richos/app/ui/mock.js
 
 # ---- one screen each -----------------------------------------------------------------------
