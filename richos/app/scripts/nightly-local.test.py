@@ -1387,6 +1387,64 @@ while True: time.sleep(.02)
         r.gates.assert_not_called()
         r.command.assert_not_called()
 
+    def write_log(self, run_id, lines):
+        logs = self.root / "state" / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / f"{run_id}.log").write_text(
+            "".join(f"[2026-10-18T17:09:33.021Z] {line}\n" for line in lines))
+
+    def test_stable_finds_the_run_that_built_the_nightly_by_itself(self):
+        # Nightly 65's promotion: run 20261018T154953Z-c752908c had to be dug out of the
+        # logs by hand to pass as --gates-passed-in. The run that says it built the nightly
+        # is found by its own lines, for a build and for a release alike.
+        for grade in ("build", "release"):
+            with self.subTest(grade):
+                self.recorded_run(grade=grade)
+                self.assertEqual(self.runner().run_that_built(self.NIGHTLY), self.RESUMED)
+        # Lines inside a gate's section are a suite's output, not the run's: a fixture that
+        # prints the same words names no run. Neither does a run that built another nightly.
+        self.write_log("20261018T000000Z-0000000a", [
+            "=== phase gates/script-suites begins ===", f"Building {self.NIGHTLY}...",
+            "=== phase gates/script-suites ends: 1.0s ==="])
+        self.write_log("20261018T000000Z-0000000b", ["Building v1.2.0-nightly.20260928.27..."])
+        self.assertEqual(self.runner().run_that_built(self.NIGHTLY), self.RESUMED)
+        # And the run found is refused or reused exactly as a named one: its gates are what
+        # `stable` skips, with every check of --gates-passed-in.
+        r = self.stable_runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY,
+                      gates_passed_in=r.run_that_built(self.NIGHTLY))
+        r.gates.assert_not_called()
+        self.assertEqual(sorted(r.skipped), sorted(m.GATE_NAMES))
+
+    def test_stable_stops_when_no_single_run_on_this_mac_built_the_nightly(self):
+        # Never a silent rerun of the gates: no run found says so and stops.
+        self.write_log("20261018T000000Z-0000000b", ["Building v1.2.0-nightly.20260928.27..."])
+        with self.assertRaisesRegex(ValueError, "no run log .* says it built v1\\.2\\.0-nightly\\.20260928\\.28,"):
+            self.runner().run_that_built(self.NIGHTLY)
+        self.recorded_run(grade="build")
+        self.write_log("20261018T000000Z-0000000c", [f"Building and publishing {self.NIGHTLY}..."])
+        with self.assertRaisesRegex(ValueError, "2 runs say they built"):
+            self.runner().run_that_built(self.NIGHTLY)
+
+    def test_his_words_reach_the_stable_plan(self):
+        r = self.runner()
+        plan = self.root / "state" / "stable-plan.json"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(json.dumps({"tag": "v1.2.0"}))
+        r.stable_plan(self.NIGHTLY, "his sentence, verbatim")
+        argv = [str(a) for a in r.command.call_args.args]
+        self.assertEqual(argv[2:8], ["stable-plan", "--from-nightly", self.NIGHTLY,
+                                     "--ceo-words", "his sentence, verbatim", "--output"])
+        r.stable_plan(self.NIGHTLY)
+        self.assertNotIn("--ceo-words", [str(a) for a in r.command.call_args.args])
+        self.recorded_run(grade="build")
+        r = self.stable_runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED,
+                      ceo_words="his sentence, verbatim")
+        r.stable_plan.assert_called_once_with(self.NIGHTLY, "his sentence, verbatim")
+
     DENIED = ("git@github.com: Permission denied (publickey).\n"
               "fatal: Could not read from remote repository.\n")
 
@@ -2807,8 +2865,9 @@ class GatesAtOnceTests(unittest.TestCase):
         return stop.exception.code, err.getvalue()
 
     def test_a_build_that_does_not_name_the_gates_at_once_does_not_start(self):
-        stable = ["--from-nightly", "v1.2.0-nightly.20260916.1"]
-        for command, extra in (("build", []), ("release", []), ("stable", stable)):
+        # `stable` is not in this list: without --gates-at-once it reuses the gates of the run
+        # that built the nightly (test_stable_is_one_command_with_his_words).
+        for command, extra in (("build", []), ("release", [])):
             for given in ([], ["--simulated-phones", "2"]):
                 with self.subTest(command=command, given=given):
                     code, err = self.main_refusal(command, *extra, *given)
@@ -2871,10 +2930,10 @@ class GatesAtOnceTests(unittest.TestCase):
     # 2 (20260929T101720Z-bee22332) was given RICHOS_GUI_HOST=richos-test-1, which the gates'
     # allowlisted environment dropped without a word.
 
-    def main_with(self, *argv, environ=None):
+    def main_with(self, *argv, environ=None, runner=None):
         """Run main() under exactly BASE_ENVIRON + `environ`, up to the Runner and no further:
         (the Runner's keyword arguments, perform()'s positional arguments)."""
-        runner = Mock()
+        runner = runner or Mock()
         state = self.root / "state"
         state.mkdir(exist_ok=True)
         with patch.dict(os.environ, {**self.BASE_ENVIRON, **(environ or {})}, clear=True), \
@@ -2891,6 +2950,30 @@ class GatesAtOnceTests(unittest.TestCase):
 
     NUMBERS = ("--gates-at-once", "2", "--simulated-phones", "1")
     NO_HOST_SCREEN_ARG = 5  # perform(command, force, runtime, run, checks_done_at_land, no_host_screen, ...)
+    GATES_PASSED_IN_ARG = 9  # ... gui_proof, from_nightly, dry_run, gates_passed_in, ceo_words)
+    CEO_WORDS_ARG = 10
+
+    def test_stable_is_one_command_with_his_words(self):
+        # CEO, 2026-10-19: "Will this whole retarded shitshow be repeated all over again?"
+        # Next time: one command with his words. No --gates-passed-in dug out of the logs, no
+        # --gates-at-once (no gate runs), no promotion record committed first.
+        one = ["stable", "--from-nightly", "v1.2.0-nightly.20261018.65",
+               "--ceo-words", "go ahead and promote this nightly to stable"]
+        runner = Mock()
+        runner.return_value.run_that_built.return_value = "20261018T154953Z-c752908c"
+        _, args = self.main_with(*one, runner=runner)
+        runner.return_value.run_that_built.assert_called_once_with("v1.2.0-nightly.20261018.65")
+        self.assertEqual(args[self.GATES_PASSED_IN_ARG], "20261018T154953Z-c752908c")
+        self.assertEqual(args[self.CEO_WORDS_ARG], "go ahead and promote this nightly to stable")
+        # Asked to run every gate again, it looks for no run.
+        runner = Mock()
+        _, args = self.main_with(*one, *self.NUMBERS, runner=runner)
+        runner.return_value.run_that_built.assert_not_called()
+        self.assertIsNone(args[self.GATES_PASSED_IN_ARG])
+        # His words promote a nightly and nothing else.
+        code, err = self.main_refusal("build", *self.NUMBERS, "--ceo-words", "ship it")
+        self.assertEqual(code, 2)
+        self.assertIn("--ceo-words is the CEO's decision to promote a nightly", err)
 
     def build_with_gate_parent(self, parent_mode, foreign_owner=False):
         """main() `build` with its gate folder under a fresh parent created with `parent_mode`:
@@ -3009,9 +3092,11 @@ class GatesAtOnceTests(unittest.TestCase):
     def test_stable_takes_gates_passed_in_and_then_names_no_gate_count(self):
         stable = ["stable", "--from-nightly", "v1.2.0-nightly.20261018.65",
                   "--gates-passed-in", "20261018T154953Z-c752908c"]
-        _, args = self.main_with(*stable)
+        runner = Mock()
+        _, args = self.main_with(*stable, runner=runner)
         self.assertEqual(args[0], "stable")
-        self.assertEqual(args[-1], "20261018T154953Z-c752908c")
+        self.assertEqual(args[self.GATES_PASSED_IN_ARG], "20261018T154953Z-c752908c")
+        runner.return_value.run_that_built.assert_not_called()
         self.assertIs(args[self.NO_HOST_SCREEN_ARG], False)
         code, err = self.main_refusal(*stable, *self.NUMBERS)
         self.assertEqual(code, 2)

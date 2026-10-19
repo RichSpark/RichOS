@@ -1547,16 +1547,20 @@ class Runner:
                      *(["--force"] if force else []), "--output", path)
         return path, json.loads(path.read_text())
 
-    def stable_plan(self, nightly_tag):
+    def stable_plan(self, nightly_tag, ceo_words=None):
         """Resolve a STABLE release as a rebuild of the commit `nightly_tag` was built from.
 
         Read at MAIN, deliberately, and before the worktree is moved to the older commit:
         the CEO's promotion record is a fact about today, written after the nightly he
         tested was published, so it does not exist in that nightly's own commit.
+        `ceo_words` is his decision given on this command line instead, checked by the
+        same rules and carried into the release commit.
         """
         path = self.state / "stable-plan.json"
         self.command(sys.executable, self.source / SCRIPTS / "nightly.py", "stable-plan",
-                     "--from-nightly", nightly_tag, "--output", path, timeout=300)
+                     "--from-nightly", nightly_tag,
+                     *(["--ceo-words", ceo_words] if ceo_words is not None else []),
+                     "--output", path, timeout=300)
         return path, json.loads(path.read_text())
 
     def describe_stable(self, info):
@@ -2747,6 +2751,59 @@ class Runner:
         except (OSError, ValueError, subprocess.SubprocessError):
             return None
 
+    @classmethod
+    def coordinator_lines(cls, path):
+        """A run log's own lines, and the gate sections that ended in it.
+
+        A gate's own output sits between its `=== phase gates/X begins/ends ===` lines
+        (merged whole when it ends); the coordinator's verdict follows the section. Only
+        lines outside every section are the coordinator's, and only those are read: a
+        suite's fixture output can say anything, including "Building and publishing v...".
+        """
+        outer, ended, inside = [], set(), []
+        for match in map(cls.LOG_LINE.match, path.read_text(errors="replace").splitlines()):
+            line = match[1] if match else None
+            section = line and re.fullmatch(r"=== phase (gates/[a-z-]+(?:/[a-z-]+)*) (begins ===|ends: [\d.]+s ===)", line)
+            if section:
+                if section[2] == "begins ===":
+                    inside.append(section[1])
+                elif inside and inside[-1] == section[1]:
+                    inside.pop()
+                    ended.add(section[1])
+            elif line is not None and not inside:
+                outer.append(line)
+        return outer, ended
+
+    def run_that_built(self, tag):
+        """The run on this Mac whose own log says it built nightly `tag`, or a refusal.
+
+        `stable --from-nightly TAG` reuses that run's gates, so nobody digs the run id out
+        of the logs by hand (nightly 65: run 20261018T154953Z-c752908c). Found by the line
+        the build or release announces after its gates, `Building TAG...` or `Building and
+        publishing TAG...`; `accept_passed_gates` then decides whether its gates count.
+        """
+        said = {f"Building {tag}...", f"Building and publishing {tag}..."}
+        logs = self.state / "logs"
+        found = []
+        for path in sorted(logs.glob("*.log")):
+            if not re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", path.stem):
+                continue
+            try:
+                outer, _ = self.coordinator_lines(path)
+            except OSError:
+                continue
+            if said & set(outer):
+                found.append(path.stem)
+        if not found:
+            raise ValueError(f"no run log in {logs} says it built {tag}, so there are no passed "
+                             "gates to reuse, and `stable` never reruns them without being told. "
+                             f"Name the run with {PASSED_GATES_FLAG} RUN, or run every gate again "
+                             f"with {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
+        if len(found) > 1:
+            raise ValueError(f"{len(found)} runs say they built {tag} ({', '.join(found)}); name "
+                             f"the one to reuse with {PASSED_GATES_FLAG} RUN. Nothing was built.")
+        return found[0]
+
     def accept_passed_gates(self, run_id, command):
         """What `--gates-passed-in RUN` may reuse: RUN's source and its suite record, or refuse.
 
@@ -2759,24 +2816,9 @@ class Runner:
             raise ValueError(f"{PASSED_GATES_FLAG} needs a run id like 20260928T190111Z-40a16163")
         path = self.state / "logs" / f"{run_id}.log"
         try:
-            raw = path.read_text(errors="replace").splitlines()
+            outer, ended = self.coordinator_lines(path)
         except OSError as error:
             raise ValueError(f"{PASSED_GATES_FLAG} {run_id}: its log cannot be read ({error})") from None
-        # A gate's own output sits between its `=== phase gates/X begins/ends ===` lines
-        # (merged whole when it ends); the coordinator's verdict follows the section. Only
-        # lines outside every section are the coordinator's, and only those are read.
-        outer, ended, inside = [], set(), []
-        for match in map(self.LOG_LINE.match, raw):
-            line = match[1] if match else None
-            section = line and re.fullmatch(r"=== phase (gates/[a-z-]+(?:/[a-z-]+)*) (begins ===|ends: [\d.]+s ===)", line)
-            if section:
-                if section[2] == "begins ===":
-                    inside.append(section[1])
-                elif inside and inside[-1] == section[1]:
-                    inside.pop()
-                    ended.add(section[1])
-            elif line is not None and not inside:
-                outer.append(line)
         source = next((m[1] for m in (re.fullmatch(r"Source: ([0-9a-f]{40})", l) for l in outer) if m), None)
         if not source:
             raise ValueError(f"run {run_id} never recorded the source it fetched, so there is nothing to resume")
@@ -2843,7 +2885,7 @@ class Runner:
 
     def perform(self, command, force=False, runtime=None, run_id=None,
                 checks_done_at_land=None, no_host_screen=False, gui_proof=None,
-                from_nightly=None, dry_run=False, gates_passed_in=None):
+                from_nightly=None, dry_run=False, gates_passed_in=None, ceo_words=None):
         passed = None
         if gates_passed_in:
             if command not in ("build", "release", "stable") or checks_done_at_land or no_host_screen:
@@ -2890,7 +2932,7 @@ class Runner:
             with self.phase("fetch"):
                 self.checkout()
             with self.phase("stable-plan"):
-                plan_path, info = self.stable_plan(from_nightly)
+                plan_path, info = self.stable_plan(from_nightly, ceo_words)
             if passed and passed["source_commit"] != info["source_commit"]:
                 raise ValueError(f"run {passed['run_id']} ran its gates on {passed['source_commit'][:12]}, "
                                  f"but {from_nightly} was built from {info['source_commit'][:12]}; "
@@ -2907,10 +2949,11 @@ class Runner:
                 self.preflight()
             with self.phase("runtime-verify"):
                 self.runtime(runtime)
-            # EVERY GATE ON THIS COMMIT. Without --gates-passed-in every gate runs here. With
-            # it, the run that built the promoted nightly already passed every gate on this
-            # same source commit against the dependencies installed now (both checked above),
-            # so nothing already proven is redone (CEO, 2026-10-19).
+            # EVERY GATE ON THIS COMMIT. Asked with --gates-at-once, every gate runs here.
+            # Otherwise the run that built the promoted nightly (found by `run_that_built`, or
+            # named with --gates-passed-in) already passed every gate on this same source
+            # commit against the dependencies installed now (both checked above), so nothing
+            # already proven is redone (CEO, 2026-10-19).
             if passed:
                 for name in GATE_NAMES:
                     self.skip(name, f"passed in run {passed['run_id']} on {passed['source_commit']}")
@@ -3141,14 +3184,26 @@ def main():
     parser.add_argument("--from-nightly", metavar="TAG",
                         help="the published nightly whose SOURCE COMMIT `stable` rebuilds; "
                              "refused unless the CEO's own promotion decision for that exact "
-                             "tag is recorded (ceo-decisions §69)")
+                             "tag is given with --ceo-words or recorded in "
+                             "stable-promotions.json (ceo-decisions §69). The gates are not "
+                             "run again: the run on this Mac that built TAG is found in the "
+                             "run logs and its gates reused, with the refusals of "
+                             f"{PASSED_GATES_FLAG}. The one command: stable --from-nightly TAG "
+                             "--ceo-words '<his sentence>'")
+    parser.add_argument("--ceo-words", metavar="TEXT",
+                        help="stable only: the CEO's own sentence promoting TAG, verbatim. "
+                             "Recorded with today's date as his decision for TAG, checked by "
+                             "the same rules as a stable-promotions.json entry, and committed "
+                             "in the stable release's own stable-promotions.json and "
+                             "nightly-build.json; no separate commit is needed first")
     parser.add_argument("--dry-run", action="store_true",
                         help="print exactly what `stable` would build and publish, and stop")
     parser.add_argument(GATES_AT_ONCE_FLAG, type=gates_at_once_value, metavar="N|all",
-                        help="REQUIRED for build, release and stable: how many gates run at the "
+                        help="REQUIRED for build and release: how many gates run at the "
                              "same time. 1 runs them one after another; all starts every gate "
                              "whose inputs are ready. Choose it from what else is running on "
-                             "this Mac.")
+                             "this Mac. Given to stable, it runs every gate again instead of "
+                             "reusing the gates of the run that built the nightly.")
     parser.add_argument(SIMULATED_PHONES_FLAG, type=simulated_phones_value, metavar="N",
                         help="optional for build, release and stable: how many simulated "
                              "iPhones the suites may use at once (one per device type; the "
@@ -3156,9 +3211,10 @@ def main():
                              "in the desktop build leases one; not named, a suite that did "
                              "would get one at a time.")
     parser.add_argument(PASSED_GATES_FLAG, metavar="RUN_ID",
-                        help="build or release: run no gate, and build the source commit of RUN_ID, "
-                             "a recorded run whose log shows every gate PASSED on that commit; "
-                             "refused otherwise (see the note above GATE_NAMES)")
+                        help="build, release or stable: run no gate, and build the source commit "
+                             "of RUN_ID, a recorded run whose log shows every gate PASSED on "
+                             "that commit; refused otherwise (see the note above GATE_NAMES). "
+                             "stable finds that run by itself; this names it explicitly")
     parser.add_argument("--gui-proof", metavar="PATH",
                         help="a gui-boot proof taken against this candidate's commit, required "
                              "to publish a candidate built with --no-host-screen")
@@ -3199,6 +3255,9 @@ def main():
     if args.from_nightly and args.command != "stable":
         parser.error("--from-nightly names the nightly `stable` rebuilds; it means nothing "
                      "to any other command")
+    if args.ceo_words is not None and args.command != "stable":
+        parser.error("--ceo-words is the CEO's decision to promote a nightly to stable; it "
+                     "means nothing to any other command")
     if args.dry_run and args.command != "stable":
         parser.error("--dry-run is implemented for `stable`. For a nightly, `build` already "
                      "produces the whole train without publishing anything: nobody's "
@@ -3213,8 +3272,11 @@ def main():
     # time?"). A command that runs the gates names how many run at once, or it does not start.
     # It is not made to name a simulated-phone count no gate of the desktop build uses (hunt
     # part 2 v3, R48). A command that reuses a recorded run's gates runs none, so it names neither.
-    runs_gates = (args.command in GATE_COMMANDS and not (args.command == "stable" and args.dry_run)
-                  and not args.gates_passed_in)
+    # `stable` runs the gates only when asked to with --gates-at-once; otherwise it reuses
+    # the gates of the run that built the nightly, and never reruns them silently.
+    runs_gates = (args.command in GATE_COMMANDS and not args.gates_passed_in
+                  and not (args.command == "stable"
+                           and (args.dry_run or args.gates_at_once is None)))
     named = [flag for flag, value in ((GATES_AT_ONCE_FLAG, args.gates_at_once),
                                       (SIMULATED_PHONES_FLAG, args.simulated_phones))
              if value is not None]
@@ -3256,10 +3318,17 @@ def main():
             runner = Runner(args.repo.resolve(), state, env, log, credentials,
                             gates_at_once=args.gates_at_once, simulated_phones=args.simulated_phones,
                             chosen_by=chosen_by(), gui_host=gui_host, vm_settings=vm_settings)
+            gates_passed_in = args.gates_passed_in
+            if args.command == "stable" and not gates_passed_in and args.gates_at_once is None:
+                # Nobody digs the run id out of the logs by hand: the run that built the
+                # nightly is found here, and refused or reused exactly as if it were named.
+                gates_passed_in = runner.run_that_built(args.from_nightly)
+                runner.announce(f"{args.from_nightly} was built by run {gates_passed_in} on "
+                                f"this Mac; its gates are the ones reused.")
             runner.perform(
                 args.command, args.force, args.runtime_dir.resolve() if args.runtime_dir else None,
                 args.run, args.checks_done_at_land, no_host_screen, args.gui_proof,
-                args.from_nightly, args.dry_run, args.gates_passed_in)
+                args.from_nightly, args.dry_run, gates_passed_in, args.ceo_words)
 
 
 if __name__ == "__main__":

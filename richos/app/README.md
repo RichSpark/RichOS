@@ -870,7 +870,9 @@ richos/app/
                               naming the function — the drift T3 Code's own smoke has
     stable-promotions.json   the record of the CEO's own decision to promote a nightly to
                               stable (§69). `stable --from-nightly` refuses without an entry
-                              naming that exact tag. A READY verdict, a gui-proof and a green
+                              naming that exact tag or his words on its own command line
+                              (`--ceo-words`), which it commits into this file in the stable
+                              release commit itself. A READY verdict, a gui-proof and a green
                               gate are preconditions for publishing a NIGHTLY and none of
                               them promotes anything. Committed empty; Rich writes his words
     *.test.sh                fourteen at this commit, counted with `ls scripts/*.test.sh |

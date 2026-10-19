@@ -194,9 +194,23 @@ nightly was built from** — copied from T3 Code, whose release workflow says it
 sentence: *"Manual stable releases build the commit of the latest published nightly,
 so stable only ever ships a build that nightly users have already run."*
 
+When he says "promote nightly N", it is ONE command, with his sentence verbatim:
+
 ```sh
-python3 richos/app/scripts/nightly-local.py stable --from-nightly v1.2.0-nightly.20260920.1 --dry-run
-python3 richos/app/scripts/nightly-local.py stable --from-nightly v1.2.0-nightly.20260920.1 --gates-at-once all --simulated-phones 2
+python3 richos/app/scripts/nightly-local.py stable --from-nightly v1.2.0-nightly.20261018.65 --ceo-words '<his sentence, verbatim>'
+```
+
+Nothing is prepared first. His words are his decision for that tag, dated today and
+checked by the same rules as a written record entry (below). The gates are not run
+again: the run on this Mac that built that nightly is found in `~/.richos-nightly/logs`
+by its own `Building <tag>...` line, and its gates are reused with every refusal of
+`--gates-passed-in` (every gate passed, same source commit, same installed
+dependencies). If no single run says it built the tag, the command says so and stops;
+it never reruns the gates on its own. `--gates-passed-in RUN` names the run explicitly;
+`--gates-at-once N|all` runs every gate again instead.
+
+```sh
+python3 richos/app/scripts/nightly-local.py stable --from-nightly v1.2.0-nightly.20261018.65 --ceo-words '<his sentence>' --dry-run
 ```
 
 `--dry-run` prints exactly what would be built and published — the source commit, the
@@ -216,7 +230,11 @@ accepted here. "Extensively tested" is his own use of that nightly, for as long 
 chooses; nobody else's test counts toward it. There is no override flag and no
 environment variable — a decision a stray export could make would not be his.
 
-The record is `richos/app/stable-promotions.json`, written by Rich from his words:
+His decision is given with `--ceo-words` on the command line, or as an entry Rich
+wrote earlier in `richos/app/stable-promotions.json` on main. Either way the stable
+release commit carries it: its own `stable-promotions.json` gains the entry, and its
+`nightly-build.json` and release notes name the nightly, the date and his words. The
+record's shape:
 
 ```json
 [
@@ -228,8 +246,9 @@ The record is `richos/app/stable-promotions.json`, written by Rich from his word
 ]
 ```
 
-It is committed empty. An entry naming a different tag, missing his words, or dated
-malformed is refused, and so are two entries for one nightly.
+An entry naming a different tag, missing his words, or dated malformed is refused, and
+so are two entries for one nightly, including `--ceo-words` for a nightly main's record
+already decides on.
 
 ### Why a rebuild and not the bytes
 
@@ -251,8 +270,9 @@ of the **commit**, never of the bytes.
 2. Resolves the nightly's **source commit** from that nightly's own tagged provenance.
 3. Takes the version from **that commit's** `Cargo.toml` — a stable release of commit
    X ships X's own version, whatever `main` has since bumped to.
-4. Moves the dedicated worktree to that commit and runs **every gate** there. Nothing
-   is skipped: skipping is for candidates nobody can install.
+4. Moves the dedicated worktree to that commit. Its gates already passed there in the
+   run that built the nightly, against the dependencies installed now, so none runs
+   again (CEO, 2026-10-19); `--gates-at-once` runs every one of them anyway.
 5. Builds, signs and notarizes with the **stable** endpoint compiled in.
 6. Uploads every asset while the release is still a **prerelease** — so nothing
    installed can see a partial release, however long the upload takes or however badly
