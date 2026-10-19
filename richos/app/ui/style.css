@@ -2428,8 +2428,9 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   align-items: center;
   gap: 2px;
   padding-right: 4px;
+  /* Transparent, not inert: a pointer can only reach them by being over the heading, which
+     shows them, so a press where the plus will be is a press on the plus. */
   opacity: 0;
-  pointer-events: none;
 }
 
 #rail-nav .nav-group-head:hover .co-tools,
@@ -2437,7 +2438,6 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   position: static;
   transform: none;
   opacity: 1;
-  pointer-events: auto;
 }
 
 .co-tool {
