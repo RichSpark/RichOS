@@ -488,6 +488,73 @@ if [ ! -e "$F/engine.noindex" ] && grep -qx 'version=1.2.0-nightly.20260924.1' "
 else bad "L15d refusal changed nothing" "$(ls -la "$F") / $(cat "$F/nightly-launch.txt")"; fi
 tmp_clean "L15d the launcher's scratch is gone"
 
+# ---------------------------------------------------------------------------------------
+# L16 — --new-user: a folder that starts as a person who never had Claude Code or Codex
+# ---------------------------------------------------------------------------------------
+# new_user_home_clean <case> <folder-home>: none of his sign-in, and no Codex login.
+new_user_home_clean() {
+  local found=""
+  for piece in .claude .claude.json Library/Keychains .local/bin/claude .codex; do
+    if [ -e "$2/$piece" ] || [ -L "$2/$piece" ]; then found="$found $piece"; fi
+  done
+  if [ -z "$found" ]; then ok "$1"; else bad "$1" "the folder's home holds:$found ($(find "$2" -mindepth 1 -maxdepth 1 2>&1 | tr '\n' ' '))"; fi
+}
+H="$(new_home h16)"; F="$H/myrichos-nightly-a"; A="$H.state/open.args"
+mkdir -p "$H/.codex"; printf '{"tokens":"fixture"}\n' > "$H/.codex/auth.json"
+run "$H" a "$ZIPS/v1.zip" --new-user
+if [ "$RC" -eq 0 ]; then ok "L16 folder a starts from a ZIP with --new-user"; else bad "L16 folder a starts with --new-user" "exit $RC: $OUT"; fi
+new_user_home_clean "L16 the folder's home has no ~/.claude, ~/.claude.json, ~/Library/Keychains, ~/.local/bin/claude and no ~/.codex, though all of them exist in his home" "$F/home.noindex"
+ENV_OK=1
+for want in "HOME=$F/home.noindex" "CFFIXED_USER_HOME=$F/home.noindex" "TMPDIR=$F/home.noindex/tmp/" "RICHOS_ACTIVATION=regular" \
+            "DISABLE_AUTOUPDATER=1" "LORO_CORPUS=" "LORO_ROOT=" "RICHOS_ENGINE_DIR=" "RICHOS_ENGINE_ROOT=" "RICHOS_CLAUDE_BIN=" "RICHOS_UPDATE_ENDPOINT="; do
+  grep -qxF -- "$want" "$A" || { ENV_OK=0; bad "L16 the app is still started with $want" "$(tr '\n' ' ' < "$A")"; }
+done
+[ "$ENV_OK" = 1 ] && ok "L16 everything else stays: the folder's HOME and CFFIXED_USER_HOME, its TMPDIR, the same empty overrides"
+if grep -q 'NIGHTLY_TEST_CANARY' "$H.state/open.env" || ! grep -qx 'PATH=/usr/bin:/bin:/usr/sbin:/sbin' "$H.state/open.env"; then
+  bad "L16 open still runs under env -i with launchd's PATH" "$(cat "$H.state/open.env")"
+else ok "L16 open still runs under env -i with launchd's PATH, so no claude is on the app's PATH"; fi
+if grep -qx 'new_user=1' "$F/nightly-launch.txt" && [ "$(stat -f %Lp "$F/home.noindex")" = "700" ]; then
+  ok "L16 the folder records that it is a new user's, and its home is private"
+else bad "L16 the folder records new_user=1" "$(cat "$F/nightly-launch.txt" 2>&1)"; fi
+quit_app "$H"
+run "$H" status
+if grep -q 'new user: yes' <<<"$OUT"; then ok "L16 status says folder a is a new user's"; else bad "L16 status says new user" "$OUT"; fi
+run "$H" a --again
+if [ "$RC" -eq 0 ] && grep -q 'new user' <<<"$OUT"; then
+  ok "L16 --again on a new user's folder stays a new user without the flag, and says so"
+else bad "L16 --again stays a new user" "exit $RC: $OUT"; fi
+new_user_home_clean "L16 ...and still links nothing of his" "$F/home.noindex"
+quit_app "$H"
+run "$H" a "$ZIPS/v2.zip" --replace
+if [ "$RC" -eq 0 ] && grep -qx 'new_user=1' "$F/nightly-launch.txt" && grep -qx 'version=1.2.0-nightly.20260924.1' "$F/nightly-launch.txt"; then
+  ok "L16 --replace on a new user's folder keeps it a new user's"
+else bad "L16 --replace keeps new_user=1" "exit $RC: $OUT / $(cat "$F/nightly-launch.txt")"; fi
+new_user_home_clean "L16 ...and links nothing of his" "$F/home.noindex"
+quit_app "$H"
+
+# L16b — a Mac that has never had Claude Code: --new-user needs none of his sign-in
+H="$(new_home h16b)"; F="$H/myrichos-nightly-a"
+rm -rf "${H:?}/.claude" "${H:?}/.claude.json" "${H:?}/Library/Keychains" "${H:?}/.local"
+run "$H" a "$ZIPS/v1.zip" --new-user
+if [ "$RC" -eq 0 ]; then ok "L16b --new-user starts on a home with no ~/.claude, ~/.claude.json, ~/Library/Keychains or claude"
+else bad "L16b --new-user needs none of his sign-in" "exit $RC: $OUT"; fi
+new_user_home_clean "L16b ...and the folder's home holds none of them" "$F/home.noindex"
+quit_app "$H"
+
+# L16c — a folder already started with his sign-in is never turned into a "new user"
+H="$(new_home h16c)"; F="$H/myrichos-nightly-a"
+run "$H" a "$ZIPS/v1.zip"
+quit_app "$H"
+BEFORE_MARKER="$(cat "$F/nightly-launch.txt")"
+run "$H" a "$ZIPS/v1.zip" --new-user
+expect_refusal "L16c --new-user on a folder that was started with his sign-in is refused, naming the way out" "move it to the Trash"
+if [ "$(cat "$F/nightly-launch.txt")" = "$BEFORE_MARKER" ] && [ -L "$F/home.noindex/.claude" ]; then
+  ok "L16c ...and the refusal changed nothing"
+else bad "L16c refusal changed nothing" "$(cat "$F/nightly-launch.txt")"; fi
+run "$H" a --again --new-user
+expect_refusal "L16c --again --new-user on that folder is refused too" "move it to the Trash"
+tmp_clean "L16 the launcher's scratch is gone"
+
 echo ""
 echo "nightly-launch.test.sh: $PASSES passed, $FAILS failed"
 [ "$FAILS" -eq 0 ]
