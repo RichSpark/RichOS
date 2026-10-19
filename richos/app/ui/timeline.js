@@ -2156,7 +2156,9 @@
       table.appendChild(thead);
       const tbody = elem("tbody");
       let k = i + 2;
-      while (k < lines.length && lines[k].trim() && lines[k].indexOf("|") >= 0 && !MD_FENCE_OPEN.test(lines[k])) {
+      // A quotation ends the table even with no blank line before it, as a fence does: a `>`
+      // line holding a `|` is still a quotation (review rv-20261018T195734Z-d14f5d12-fa08#1).
+      while (k < lines.length && lines[k].trim() && lines[k].indexOf("|") >= 0 && !MD_FENCE_OPEN.test(lines[k]) && !MD_QUOTE.test(lines[k])) {
         const cells = mdCells(lines[k]);
         const row = elem("tr");
         for (let n = 0; n < head.length; n += 1) {
@@ -2969,6 +2971,10 @@
       }
       return card;
     }
+    // The same rule for the cards below: Restore my message only when there is a message of
+    // his to restore. A capacity or usage-limit failure on a turn a button or an agent started
+    // keeps its explanation and gets no control (review rv-20261019T115204Z-2b619840-5405#1).
+    const hisText = !!(turn.user && turn.user.text);
     const outage = turn.outage;
     if (outage && outage.ceoMessage) {
       // What happened. Authored by `UpstreamFault::ceo_message`.
@@ -2982,10 +2988,12 @@
     } else {
       card.appendChild(elem("p", "tl-intervention-body",
         "Rich's answer was cut off before he finished."));
-      card.appendChild(elem("p", "tl-intervention-note",
-        "Press Restore my message to put your words back in the box."));
+      if (hisText) {
+        card.appendChild(elem("p", "tl-intervention-note",
+          "Press Restore my message to put your words back in the box."));
+      }
     }
-    card.appendChild(retryControl(turn, opts));
+    if (hisText) card.appendChild(retryControl(turn, opts));
     return card;
   }
 
@@ -3150,7 +3158,23 @@
       if (row.tone === "ceo-stopped" && turn.user && turn.user.text) {
         section.appendChild(retryControl(turn, opts));
       }
-      if (row.tone === "stopped") section.appendChild(renderFailureCard(turn, opts));
+      // A turn that carried no words of his (Rich answering Stu's report, an app message, a
+      // button) has no message to restore (nightly 67 p3: "Press Restore my message ... Your
+      // message is saved" for a message he never sent). Its card keeps only a cause he can
+      // act on — `offersRetry` false: sign in, replace the key, reinstall Claude Code (review
+      // rv-20261019T113734Z-68e37b15-cc60#1, a "Start the questions" press whose sign-in had
+      // expired) — and is not drawn for a cause whose only advice is restoring his message.
+      // The duration row above still says it stopped. `hisWords` absent (an older build's
+      // payload) keeps the whole card.
+      const notHis = !!(turn.interruption && turn.interruption.hisWords === false);
+      if (row.tone === "stopped" && !notHis) section.appendChild(renderFailureCard(turn, opts));
+      if (row.tone === "stopped" && notHis && !turn.interruption.offersRetry
+          && turn.interruption.cause !== "stopped-by-ceo" && turn.interruption.ceoMessage) {
+        const card = elem("aside", "tl-intervention");
+        card.setAttribute("role", "note");
+        card.appendChild(elem("p", "tl-intervention-body", turn.interruption.ceoMessage));
+        section.appendChild(card);
+      }
       if (row.tone === "unknown") section.appendChild(renderUnknownCard(turn, opts));
     }
 

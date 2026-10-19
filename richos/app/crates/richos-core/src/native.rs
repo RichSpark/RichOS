@@ -2952,11 +2952,33 @@ impl NativeResponse {
             if !decided.is_empty() {on_item(TurnItem::Text {seq:*seq,text:&decided});*seq+=1;}
         }
 
-        fn release(seq: &mut u64, on_item: &mut dyn FnMut(TurnItem), spelling: &mut crate::american_spelling::Speller) {
+        // **A FRAME ABOUT ANOTHER INPUT DOES NOT CUT THIS ANSWER IN HALF** (nightly 66: "Early
+        // in [gap] a relationship"). A message sent while Rich is writing makes the child say
+        // `command_lifecycle: queued` for it (and, when folded, its input hook) in the middle
+        // of the text. Taking a position there split one sentence into two text runs, which
+        // the Mac draws as two answers with a blank gap between them. Such a frame is held
+        // while text is streaming and delivered, in arrival order, before the next item that
+        // is not text (or on the way out), so it is still recorded and the sentence is whole.
+        let mut aside: Vec<Value> = Vec::new();
+        let mut text_open = false;
+        let about_another_input = |frame: &Value| match frame.get("type").and_then(Value::as_str) {
+            Some("command_lifecycle") => frame.get("command_uuid").and_then(Value::as_str) != Some(command_uuid.as_str()),
+            Some("control_request") => frame.pointer("/request/callback_id").and_then(Value::as_str) == Some("richos-input-context"),
+            _ => false,
+        };
+
+        fn release(seq: &mut u64, on_item: &mut dyn FnMut(TurnItem), spelling: &mut crate::american_spelling::Speller,
+            aside: &mut Vec<Value>, session_id: &str) {
             let held = spelling.finish();
             if !held.is_empty() {
                 on_item(TurnItem::Text { seq: *seq, text: &held });
                 *seq += 1;
+            }
+            for frame in aside.drain(..) {
+                for record in MachineryRecord::from_native_event(&frame, session_id, *seq) {
+                    *seq += 1;
+                    on_item(TurnItem::Machinery(record));
+                }
             }
         }
         // A usage-limit refusal seen on this turn (`usage_limit_signal`), with its reset time.
@@ -2975,9 +2997,11 @@ impl NativeResponse {
             match received {
                 Ok(ChunkMsg::Text(t)) => {
                     say(&t,&mut seq,on_item,&mut spelling,&mut first_text_logged);
+                    text_open = true;
                 }
                 Ok(ChunkMsg::Frame(frame)) => {
-                    if !is_ping(&frame) {release(&mut seq,on_item,&mut spelling);}
+                    if text_open && about_another_input(&frame) {aside.push(frame); continue;}
+                    if !is_ping(&frame) {release(&mut seq,on_item,&mut spelling,&mut aside,&session_id); text_open = false;}
                     if frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
                         if let Some(resets_at) = usage_limit_signal(&frame) { limit = Some(resets_at); }
                     }
@@ -2987,7 +3011,8 @@ impl NativeResponse {
                     }
                 }
                 Ok(ChunkMsg::Permission { request, chosen }) => {
-                    release(&mut seq, on_item, &mut spelling);
+                    release(&mut seq, on_item, &mut spelling, &mut aside, &session_id);
+                    text_open = false;
                     on_item(TurnItem::Machinery(MachineryRecord::from_permission_request(
                         &request,
                         &chosen,
@@ -2997,7 +3022,8 @@ impl NativeResponse {
                     seq += 1;
                 }
                 Ok(ChunkMsg::Usage { used, size, usage }) => {
-                    release(&mut seq, on_item, &mut spelling);
+                    release(&mut seq, on_item, &mut spelling, &mut aside, &session_id);
+                    text_open = false;
                     on_item(TurnItem::Machinery(MachineryRecord::from_context_usage(
                         used,
                         size,
@@ -3014,7 +3040,7 @@ impl NativeResponse {
                     cancel_deadline.get_or_insert_with(|| std::time::Instant::now() + cancel_grace());
                 }
                 Ok(ChunkMsg::Done(result)) => {
-                    release(&mut seq, on_item, &mut spelling);
+                    release(&mut seq, on_item, &mut spelling, &mut aside, &session_id);
                     let reason = stop_reason_of(&result);
                     // **Refused for a usage limit** (fill-first's backstop): said as that, so the
                     // spine and the work host continue on the next account instead of reading an
@@ -3033,12 +3059,12 @@ impl NativeResponse {
                     // window. Stop rendering this turn — and DETACH the sink first, so
                     // anything the agent says afterwards cannot be routed into whatever turn
                     // runs next. What was already said is released first: it is this turn's.
-                    release(&mut seq, on_item, &mut spelling);
+                    release(&mut seq, on_item, &mut spelling, &mut aside, &session_id);
                     current_prompt.lock().unwrap().retain(|pending| pending.command_uuid != command_uuid);
                     return Ok(STOP_REASON_CANCEL_UNACKNOWLEDGED.to_string());
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    release(&mut seq, on_item, &mut spelling);
+                    release(&mut seq, on_item, &mut spelling, &mut aside, &session_id);
                     if let Some(resets_at) = limit {
                         return Err(limit_error(resets_at, "the session ended after the limit".into()));
                     }
@@ -6651,6 +6677,49 @@ send({"type":"result","stop_reason":"end_turn"})
         second.wait(&mut |item|if let TurnItem::Text{text,..}=item{two.push_str(text)}).unwrap();
         assert!(one.is_empty(),"folded text duplicated into the earlier input: {one}");
         assert_eq!(two,"Single folded reply.");
+    }
+
+    #[test]
+    fn a_message_queued_while_rich_writes_does_not_split_his_sentence() {
+        // Nightly 66 (run b, ledger seq 232..235): "Early " | a gap | "in a relationship".
+        // The gap was the child's `queued` frame for the message sent while Rich wrote.
+        let script=write_script("queued-mid-text",r#"
+exec python3 -u -c '
+import json,sys
+def read():return json.loads(sys.stdin.readline())
+def send(frame):print(json.dumps(frame),flush=True)
+def text(t):send({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":t}}})
+read()
+send({"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}})
+first=read()
+send({"type":"command_lifecycle","command_uuid":first["uuid"],"state":"started"})
+send({"type":"stream_event","event":{"type":"message_start","message":{}}})
+text("Early ")
+second=read()
+send({"type":"command_lifecycle","command_uuid":second["uuid"],"state":"queued"})
+text("in a relationship.")
+send({"type":"stream_event","event":{"type":"content_block_stop","index":0}})
+send({"type":"result","stop_reason":"end_turn"})
+sys.stdin.read()
+'
+"#);
+        let client=NativeClient::spawn(&script,fixture_root(),&doctrine_fixture(),&skills_fixture()).unwrap();
+        let first=client.enqueue_prompt("Write me a guide",None).unwrap();
+        let mut second=None;
+        let mut log:Vec<(u64,String)>=Vec::new();
+        first.wait(&mut |item| match item {
+            TurnItem::Text{seq,text} => {
+                log.push((seq,format!("text:{text}")));
+                if second.is_none() {second=Some(client.enqueue_prompt("And what is 7 plus 7?",None).unwrap());}
+            }
+            TurnItem::Machinery(record) => log.push((record.seq,format!("machinery:{}",record.title))),
+            _ => {}
+        }).unwrap();
+        let texts:Vec<u64>=log.iter().filter(|(_,what)|what.starts_with("text:")).map(|(seq,_)|*seq).collect();
+        assert!(texts.windows(2).all(|pair|pair[1]==pair[0]+1), "the sentence was split by another input's frame: {log:?}");
+        assert_eq!(log.iter().filter(|(_,what)|what=="machinery:command_lifecycle").count(),2, "the queued frame must still be recorded: {log:?}");
+        let said:String=log.iter().filter_map(|(_,what)|what.strip_prefix("text:")).collect();
+        assert_eq!(said,"Early in a relationship.");
     }
 
     #[test]
