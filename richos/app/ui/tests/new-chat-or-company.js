@@ -250,6 +250,23 @@ async function main() {
     return walk.join(", ") + "; Enter -> " + s.scope;
   });
 
+  // Handover review rv-20261019T154229Z-07a5b039-1c33: with Home showing, the menu opened inside
+  // the inert #app, under Home (z 70 against 150), and could not take focus.
+  await run.check("⌘N with the home screen showing and two companies: Home gives way and the menu takes focus", async () => {
+    const page = await openApp(browser);
+    await page.evaluate(() => window.RichHome.show());
+    assert(await page.evaluate(() => window.RichHome.isOpen()), "the home screen did not come back up");
+    await page.keyboard.press("Meta+n");
+    const m = await menuState(page);
+    const inert = await page.evaluate(() => document.getElementById("app").hasAttribute("inert"));
+    assert(!(await page.evaluate(() => window.RichHome.isOpen())), "Home stayed up over the menu");
+    assert(m.open, "⌘N did not open the menu over Home");
+    assertEqual(inert, false, "#app stayed inert under the menu");
+    assertEqual(m.focused, "Northwind Traders", "focus in the menu");
+    await page.close();
+    return "Home hidden, #app live, focus " + m.focused;
+  });
+
   // Mid-job review rv-20261019T132219Z-c8964a8e-f9d9: with the sidebar hidden the menu hung
   // from the hidden button and opened off the left edge (menu_left=-284, 20px of it visible).
   await run.check("⌘N with the sidebar hidden opens the whole menu on screen, under the sidebar toggle", async () => {

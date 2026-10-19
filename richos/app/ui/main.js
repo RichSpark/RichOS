@@ -1554,6 +1554,10 @@ function menuItem(iconName, name, attrs, kbd) {
 /// The menu's list: "New chat in", each company, a rule, "New company". With exactly one
 /// company that company's row carries the key, because ⌘N is exactly that row.
 function openNewChatMenu(focusFirst) {
+  // The menu lives in `#app`, which the home screen holds inert under its own z-index; Home
+  // gives way before the menu opens, as the old company picker's overlay made it do
+  // (handover review rv-20261019T154229Z-07a5b039-1c33).
+  if (homeIsUp()) window.RichHome.hide("new-chat-menu");
   returnCompanyForm();
   closeThreadMenu();
   hideRailTip();
