@@ -31,7 +31,8 @@ def last_step(targets=None):
                 "Never rebase. If git reports a conflict, resolve it and commit the merge. If the conflict is in a screenshot "
                 "baseline picture (a `.png` under `ui/tests/shots-*`), regenerate that picture from the merged tree and look at it: "
                 "if it shows anything besides your change and main's change together, do not commit it; say what it shows in your "
-                "report. Merge only once; if main moves again after your merge, do not merge again. Then hand over.")
+                "report. Merge only once; if main moves again after your merge, do not merge again. "
+                "If the merge brought in any change, run the tests you ran for your proof once more on the merged tree, and fix on your branch anything that fails. Then hand over.")
     if len(branches) == 1:
         b = branches[0]
         which = ("run `git merge %s` inside your own worktree. `%s` here is the local branch named `%s`, not "
@@ -48,7 +49,7 @@ def last_step(targets=None):
             "conflict is in a screenshot baseline picture (a `.png` under `ui/tests/shots-*`), regenerate that "
             "picture from the merged tree and look at it: if it shows anything besides your change and %s "
             "together, do not commit it; say what it shows in your report. Merge only once; if %s again after "
-            "your merge, do not merge again. Then hand over." % (which, theirs, moves))
+            "your merge, do not merge again. If the merge brought in any change, run the tests you ran for your proof once more on the merged tree, and fix on your branch anything that fails. Then hand over." % (which, theirs, moves))
 
 
 def prepare(value, targets=None, *, native_isolation=True):
