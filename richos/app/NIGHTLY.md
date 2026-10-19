@@ -211,6 +211,11 @@ says it built the tag, the command says so and stops;
 it never reruns the gates on its own. `--gates-passed-in RUN` names the run explicitly;
 `--gates-at-once N|all` runs every gate again instead.
 
+The rebuilt bundle is a new artifact (another version, signed again), so it is booted in
+the test VM exactly as a nightly candidate is (`gui-proof-in-vm.sh`, never on this Mac's
+screen) before anything is uploaded. A boot that is not proven stops the command with the
+version unpublished.
+
 ```sh
 python3 richos/app/scripts/nightly-local.py stable --from-nightly v1.2.0-nightly.20261018.65 --ceo-words '<his sentence>' --dry-run
 ```

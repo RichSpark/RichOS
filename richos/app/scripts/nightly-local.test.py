@@ -1323,6 +1323,8 @@ while True: time.sleep(.02)
         r.stable_plan = Mock(return_value=(self.root / "stable-plan.json", {
             "tag": "v1.2.0", "version": "1.2.0", "source_commit": source_commit or self.SOURCE}))
         r.bump_next_version = Mock()
+        r.env["RICHOS_NIGHTLY_RUN_ID"] = "20261019T120000Z-0000000f"
+        r.vm_boot_proof = Mock(return_value=None)
         return r
 
     def test_a_published_stable_ends_by_bumping_main_and_says_so_when_it_cannot(self):
@@ -1363,8 +1365,8 @@ while True: time.sleep(.02)
                 self.assertEqual(r.checkout.call_args_list[-1].args, (self.SOURCE,))
                 r.preflight.assert_called_once()
                 r.runtime.assert_called_once()
-                build = r.command.call_args_list[-1]
-                self.assertEqual(build.args[2], "run")
+                build, publish = r.command.call_args_list[-2:]
+                self.assertEqual((build.args[2], publish.args[2]), ("build", "finish"))
                 self.assertIs(build.kwargs["release_build"], True)
                 self.assertEqual(sorted(r.skipped), sorted(m.GATE_NAMES))
         # A later run replacing the suite record is no reason to refuse: stable never reads it.
@@ -1373,6 +1375,30 @@ while True: time.sleep(.02)
         with contextlib.redirect_stdout(io.StringIO()):
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
         r.gates.assert_not_called()
+
+    def test_the_rebuilt_stable_bundle_boots_in_the_test_vm_before_it_is_published(self):
+        # Review rv-20261018T233835Z-9bcfb492-597f#1: stable ran `nightly.py run`, build and
+        # publish in one motion, so the bundle every stable user installs was published
+        # without the VM boot proof the nightly's own bundle had. It is a new artifact
+        # (another version, signed again): built, booted in the test VM, then published.
+        self.recorded_run(grade="build")
+        r = self.stable_runner()
+        order = []
+        r.command.side_effect = lambda *a, **k: order.append(str(a[2]))
+        r.vm_boot_proof.side_effect = lambda run: order.append(f"boot {run}")
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        self.assertEqual(order, ["build", "boot 20261019T120000Z-0000000f", "finish"])
+        pointer = json.loads(r.run_pointer("20261019T120000Z-0000000f").read_text())
+        self.assertEqual(pointer["out"], str(r.state / "releases" / "v1.2.0"))
+        # A boot that was not proven publishes nothing and bumps nothing.
+        r = self.stable_runner()
+        r.vm_boot_proof.return_value = "THE CANDIDATE IS BUILT, AND ITS BOOT WAS NOT PROVEN"
+        with self.assertRaisesRegex(RuntimeError, "v1.2.0 IS NOT PUBLISHED. THE CANDIDATE IS BUILT"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        self.assertNotIn("finish", [str(c.args[2]) for c in r.command.call_args_list])
+        r.bump_next_version.assert_not_called()
 
     def test_stable_refuses_the_gates_of_another_source_a_failed_run_or_changed_dependencies(self):
         # Another commit's pass proves nothing about this one: refused after the plan names
@@ -3152,6 +3178,12 @@ class GatesAtOnceTests(unittest.TestCase):
             "RICHOS_AGENT_OWNER": "zach", "RICHOS_NOTARY_PROFILE": "fixture-profile"})
         self.assertEqual(kwargs["gui_host"], "richos-test-1")
         self.assertEqual(kwargs["vm_settings"], {"TESTVM_ROOT": "/Volumes/E1TB/testvm"}) # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+        # `stable` boots its rebuilt bundle in the test VM too, so the same settings reach it.
+        runner = Mock()
+        runner.return_value.run_that_built.return_value = "20261018T154953Z-c752908c"
+        kwargs, _ = self.main_with("stable", "--from-nightly", "v1.2.0-nightly.20261018.65",
+                                   runner=runner, environ={"RICHOS_GUI_HOST": "richos-test-1"})
+        self.assertEqual(kwargs["gui_host"], "richos-test-1")
 
     def stand_in_gui_proof(self, result, exit_code, write_proof=True):
         """A gui-proof-in-vm.sh that writes the proof file it was given `--out` and exits."""

@@ -308,6 +308,11 @@ AMBIENT_NAMES = {
 }
 
 
+# The commands that boot what they built in the test VM (Runner.vm_boot_proof), so the guest
+# and test-VM settings the shell gives reach them.
+VM_BOOT_COMMANDS = ("build", "stable")
+
+
 def settings_this_build_drops(environ, command):
     """The setting-shaped names in `environ` that no step of `command` would receive."""
     dropped = []
@@ -318,9 +323,9 @@ def settings_this_build_drops(environ, command):
             # A credential (RICHOS_NOTARY_*, RICHOS_SIGNING_IDENTITY, ...) is read from the
             # shell ON PURPOSE and handed to the signing steps only: delivered, not dropped.
             continue
-        if command == "build" and (name == GUI_HOST_ENV or name.startswith(VM_STEP_PREFIXES)):
+        if command in VM_BOOT_COMMANDS and (name == GUI_HOST_ENV or name.startswith(VM_STEP_PREFIXES)):
             continue
-        if command != "build" and name.startswith(VM_STEP_PREFIXES):
+        if command not in VM_BOOT_COMMANDS and name.startswith(VM_STEP_PREFIXES):
             # No step of any other command touches a guest; the name has no consumer to be
             # dropped on the way to. (A TESTVM_ROOT kept in a shell profile is ordinary.)
             continue
@@ -3032,9 +3037,20 @@ class Runner:
             self.announce(f"Building and publishing {info['tag']} from "
                           f"{info['source_commit'][:12]}...")
             with self.phase("build"):
-                self.command(sys.executable, self.source / SCRIPTS / "nightly.py", "run",
+                self.command(sys.executable, self.source / SCRIPTS / "nightly.py", "build",
                              "--plan", plan_path, "--out", out, credentials=True,
                              release_build=True)
+            # THE REBUILT BUNDLE IS A NEW ARTIFACT: another version, signed again. The
+            # nightly's boot proof saw the nightly's bundle, so the bundle every stable user
+            # installs is booted in the test VM before it is published, never after.
+            run = self.env["RICHOS_NIGHTLY_RUN_ID"]
+            self.record_run(run, out)
+            proof_error = self.vm_boot_proof(run)
+            if proof_error:
+                raise RuntimeError(f"{info['tag']} IS NOT PUBLISHED. {proof_error}")
+            with self.phase("publish"):
+                self.command(sys.executable, self.source / SCRIPTS / "nightly.py", "finish",
+                             "--out", out)
             print(f"Published https://github.com/{REPO}/releases/tag/{info['tag']}",
                   flush=True)
             # The next nightly must not start with this version: bump it on main now.
@@ -3408,15 +3424,16 @@ def main():
             "without a word and the run would not be the one you asked for. Nothing has "
             f"started. Unset it to run without it (unset {' '.join(dropped)}). A setting a gate "
             "really needs becomes a command-line flag or a GATE_PASSTHROUGH entry with its "
-            "reason. (The test VM needs none: `build` boots its candidate there by itself.)")
+            "reason. (The test VM needs none: `build` and `stable` boot what they built there by themselves.)")
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         parser.error("local nightly releases currently require an Apple Silicon Mac")
     os.umask(0o077)
     state = args.state_dir.expanduser().absolute()
     env, credentials = local_environment(args.run if args.command == "build" else None)
+    boots = args.command in VM_BOOT_COMMANDS
     vm_settings = {name: value for name, value in os.environ.items()
-                   if args.command == "build" and name.startswith(VM_STEP_PREFIXES)}
-    gui_host = os.environ.get(GUI_HOST_ENV) if args.command == "build" else None
+                   if boots and name.startswith(VM_STEP_PREFIXES)}
+    gui_host = os.environ.get(GUI_HOST_ENV) if boots else None
     with exclusive(state):
         logs = state / "logs"
         logs.mkdir(exist_ok=True)
