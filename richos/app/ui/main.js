@@ -1824,6 +1824,11 @@ const DICTATION_FEATURE_TITLE = "Dictation feature";
 let dictationOffer = null;
 /// Set by Start; the offer waits for voice to be ready.
 let dictationOfferWanted = false;
+/// Set the first time he presses the round button (`#talk-toggle`): he has learned it, so the
+/// note's "Voice is ready. Press the round button..." sentence is gone from then on (the CEO,
+/// 2026-10-19). The note itself is drawn once per install (`offered` is stored by the backend),
+/// so after a relaunch it is not drawn at all and there is nothing further to remember.
+let voiceButtonUsed = false;
 
 /// Show the offer if Start asked for it, voice is ready and it was never made.
 async function maybeOfferDictation() {
@@ -1894,13 +1899,15 @@ function renderDictationOffer() {
   key.textContent = dictationOffer.key;
   third.append(DICTATION_OFFER_HOW_BEFORE, key, DICTATION_OFFER_HOW_AFTER);
   // On: the dictation text has moved to its own conversation ("Dictation feature"), so this one
-  // keeps only the sentence about voice.
+  // keeps only the sentence about voice, and once he has used the round button not even that.
   if (dictationOffer.phase === "on") {
+    if (voiceButtonUsed) return;
     art.append(first);
     messagesEl.appendChild(art);
     return;
   }
-  art.append(first, second, third);
+  if (!voiceButtonUsed) art.append(first);
+  art.append(second, third);
   if (dictationOffer.phase === "open") {
     const acts = document.createElement("div");
     acts.className = "dictation-offer-actions";
@@ -4599,6 +4606,10 @@ async function exitVoiceMode() {
 }
 
 talkToggleBtn.addEventListener("click", () => {
+  if (!voiceButtonUsed) {
+    voiceButtonUsed = true;
+    if (dictationOffer) scheduleRender();
+  }
   if (voiceMode) exitVoiceMode();
   else enterVoiceMode();
 });
