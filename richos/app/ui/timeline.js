@@ -2156,7 +2156,9 @@
       table.appendChild(thead);
       const tbody = elem("tbody");
       let k = i + 2;
-      while (k < lines.length && lines[k].trim() && lines[k].indexOf("|") >= 0 && !MD_FENCE_OPEN.test(lines[k])) {
+      // A quotation ends the table even with no blank line before it, as a fence does: a `>`
+      // line holding a `|` is still a quotation (review rv-20261018T195734Z-d14f5d12-fa08#1).
+      while (k < lines.length && lines[k].trim() && lines[k].indexOf("|") >= 0 && !MD_FENCE_OPEN.test(lines[k]) && !MD_QUOTE.test(lines[k])) {
         const cells = mdCells(lines[k]);
         const row = elem("tr");
         for (let n = 0; n < head.length; n += 1) {
