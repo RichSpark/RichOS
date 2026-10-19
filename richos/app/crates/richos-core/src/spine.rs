@@ -2845,7 +2845,8 @@ impl Spine {
             if let Some(claim)=delivery.order.and_then(|order|self.control.for_thread(binding.thread_id()).settled_stop_covering(order)) {
                 self.ledger.stop_turn(&turn_id,claim.requested_at)?;
                 self.emit_live(self.turn_status_event(&binding,&turn_id,TurnStatus::Stopped,None));
-                return Ok(turn_id);
+                // The receipt says it was stopped, so the card does not say Rich has it.
+                return Ok(format!("{}{turn_id}",crate::questions::STOPPED_RECEIPT_PREFIX));
             }
             self.deliver(&turn_id,&binding,&delivery.text,true)?;
         }

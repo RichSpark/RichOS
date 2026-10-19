@@ -855,14 +855,19 @@ fn stop_covers_a_question_card_answer_sent_before_it() {
     assert!(controls.for_thread(&thread).stop_claim().is_none(), "the Stop settled before delivery");
     let mut answer = None;
     store.deliver(company.as_str(), &thread, "front_desk", |delivery| {
-        let id = shared.lock().unwrap().queue_question_answer(delivery).map_err(|e| e.to_string())?;
-        answer = Some(id.clone());
-        Ok(id)
+        let receipt = shared.lock().unwrap().queue_question_answer(delivery).map_err(|e| e.to_string())?;
+        answer = Some(receipt.trim_start_matches(richos_core::questions::STOPPED_RECEIPT_PREFIX).to_string());
+        Ok(receipt)
     }).unwrap();
     drive_shared_turns(&shared).unwrap();
     let spine = shared.into_inner().unwrap();
     let answer = answer.expect("the saved answer was delivered");
     assert_eq!(spine.ledger().turn(&answer).unwrap().state, TurnState::Stopped, "an answer clicked before Stop ran after it settled");
+    // ... and the card says so (review rv-20261018T204635Z-c68a30ec-f61e#1): it read "Rich has
+    // your answer" with no button, for an answer his Stop had covered.
+    let card = store.list(company.as_str(), &thread).unwrap().remove(0).public_value();
+    assert_eq!((&card["delivered"], &card["ended_before_taken"]), (&serde_json::json!(false), &serde_json::json!(true)),
+        "the card of a stopped answer: {card}");
     let sent: Vec<_> = prompts.lock().unwrap().iter().flat_map(|p| p.lock().unwrap().clone()).collect();
     assert!(!sent.iter().any(|p| p.contains("Tomorrow")), "sent after Stop: {sent:?}");
     drop(spine); std::fs::remove_dir_all(root).unwrap();
