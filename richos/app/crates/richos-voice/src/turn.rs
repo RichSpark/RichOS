@@ -104,11 +104,12 @@ pub const TURN_QUIET_FRAMES: u32 = END_OF_TURN_FRAMES - SILENCE_HANGOVER_FRAMES;
 /// calling speech (a click every 0.496 s in a quiet room, a television, words that never pause)
 /// would otherwise hold it open for ever. At the bound the capture path closes the recording,
 /// admits what it holds by the ordinary rules and sends `CapMsg::TurnLimit`, and the turn is
-/// handed over as soon as the recognizer returns it ([`TurnAssembler::time_limit`]). Twice
-/// whisper's 30.000 s window ([`crate::endpoint::MAX_UTTERANCE_FRAMES`]), so an utterance
-/// continued once after that cut still ends with its own silence; and if he is in fact still
-/// talking, his next words join the turn while Rich has not answered it aloud, as after any
-/// quiet (`TurnDesk::continue_thought`).
+/// handed over as soon as the recognizer returns it ([`TurnAssembler::time_limit`]) and goes
+/// to the model without waiting for the floor or for his next words ([`Turn::at_limit`]):
+/// a turn that waited on either would wait for ever on the same input. Twice whisper's 30.000 s
+/// window ([`crate::endpoint::MAX_UTTERANCE_FRAMES`]), so an utterance continued once after that
+/// cut still ends with its own silence. If he is in fact still talking, what he says next is a
+/// turn of its own, and Rich's spoken answer still waits while he has the floor.
 pub const MAX_TURN_FRAMES: u32 = 3750;
 
 /// [`END_OF_TURN_FRAMES`] in seconds, from the one frame-math helper. Never typed.
@@ -128,6 +129,9 @@ pub struct Turn {
     pub fragments: u32,
     /// The recorded audio behind those fragments, in milliseconds.
     pub audio_ms: u64,
+    /// Ended by [`MAX_TURN_FRAMES`], not by his quiet: it goes ahead as it is, without waiting
+    /// for the floor and without being joined to what he says next (`controller::TurnDesk::send`).
+    pub at_limit: bool,
 }
 
 /// Holds his fragments until his turn is over. See the module documentation.
@@ -257,7 +261,7 @@ impl TurnAssembler {
     /// Or, after [`Self::time_limit`], once every fragment admitted before it is back.
     pub fn take_turn(&mut self) -> Option<Turn> {
         if self.limit == Some(0) {
-            return self.take();
+            return self.take().map(|t| Turn { at_limit: true, ..t });
         }
         if !self.quiet || self.open || !self.awaiting.is_empty() {
             return None;
@@ -285,6 +289,7 @@ impl TurnAssembler {
             rich_audible: self.rich_audible,
             fragments: words.len() as u32,
             audio_ms: self.audio_ms,
+            at_limit: false,
         };
         self.rich_audible = false;
         self.audio_ms = 0;
@@ -798,7 +803,7 @@ mod tests {
         t.his_utterance_started();
         t.utterance_admitted(1000);
         t.recognized(words("after I approve it."));
-        t.carry(Turn { text: "Send the draft".into(), rich_audible: false, fragments: 1, audio_ms: 1500 });
+        t.carry(Turn { text: "Send the draft".into(), rich_audible: false, fragments: 1, audio_ms: 1500, at_limit: false });
         t.quiet();
         let turn = t.take_turn().unwrap();
         assert_eq!(turn.text, "Send the draft after I approve it.");

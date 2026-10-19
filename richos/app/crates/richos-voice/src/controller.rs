@@ -2843,11 +2843,19 @@ impl TurnDesk {
             at: now_millis(),
         });
         self.sent += 1;
-        self.unanswered = Some(Unanswered {
-            seq: self.sent,
-            turn: turn.clone(),
-            turns_started_at_send: self.turns_started.load(Ordering::SeqCst),
-        });
+        if turn.at_limit {
+            // Ended by the time limit (`turn::MAX_TURN_FRAMES`): it goes ahead as it is. Waiting
+            // for the floor, or for his next words to carry it, would wait on the very input that
+            // never stops (review rv-20261019T160520Z, finding 2).
+            self.floor.let_through(self.sent);
+            self.unanswered = None;
+        } else {
+            self.unanswered = Some(Unanswered {
+                seq: self.sent,
+                turn: turn.clone(),
+                turns_started_at_send: self.turns_started.load(Ordering::SeqCst),
+            });
+        }
         if self.submit_tx.send((turn.text, turn.rich_audible)).is_err() {
             // Only when the submit thread is already gone, which is voice shutting down.
             eprintln!("[richos-voice] the turn could not be handed over: the submit thread has ended");
@@ -2928,6 +2936,9 @@ struct HisFloor {
     /// He has the floor, and how many spoken turns are waiting for it.
     held: Mutex<(bool, usize)>,
     changed: std::sync::Condvar,
+    /// The last turn number ended by the time limit (`turn::MAX_TURN_FRAMES`): it and those
+    /// before it go ahead without waiting for the floor ([`Self::let_through`]).
+    limit_seq: AtomicU64,
 }
 
 type FloorHold = Arc<HisFloor>;
@@ -2941,13 +2952,23 @@ impl HisFloor {
         }
     }
 
-    /// Returns once he does not have the floor. `true` when it had to wait.
-    fn wait_until_free(&self) -> bool {
+    /// Turn `seq` was ended by the time limit: it does not wait for the floor. An input that
+    /// holds the floor for ever is exactly the input that limit exists for.
+    fn let_through(&self, seq: u64) {
+        let _held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        self.limit_seq.fetch_max(seq, Ordering::SeqCst);
+        self.changed.notify_all();
+    }
+
+    /// Returns once he does not have the floor, or at once for a turn ended by the time limit.
+    /// `true` when it had to wait.
+    fn wait_until_free(&self, seq: u64) -> bool {
+        let through = || seq <= self.limit_seq.load(Ordering::SeqCst);
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
-        let waited = held.0;
+        let waited = held.0 && !through();
         held.1 += 1;
         self.changed.notify_all();
-        while held.0 {
+        while held.0 && !through() {
             held = self.changed.wait(held).unwrap_or_else(|p| p.into_inner());
         }
         held.1 -= 1;
@@ -3032,7 +3053,7 @@ pub fn spoken_turn_withdrawn() -> bool {
     SUBMITTING.with(|s| {
         let s = s.borrow();
         let Some((seq, w, floor)) = s.as_ref() else { return false };
-        if floor.wait_until_free() {
+        if floor.wait_until_free(*seq) {
             eprintln!(
                 "[richos-voice] {} turn {seq} waited before it started: he was speaking again",
                 wall_clock_utc()
@@ -3959,6 +3980,63 @@ mod tests {
         words_tx.send(Some(("Send the draft".to_string(), false))).unwrap();
         assert!(desk.collect());
         assert_eq!(desk.continue_thought(false, false), None, "words the shell already handled were carried");
+    }
+
+    /// INVARIANT — review rv-20261019T160520Z, finding 2. A turn ended by the time limit
+    /// (`turn::MAX_TURN_FRAMES`) reaches the model through the real submit thread and
+    /// [`spoken_turn_withdrawn`] even though the input that never stops has already opened his
+    /// next utterance and holds the floor, and his next words do not withdraw it to carry it.
+    /// Before this the submit waited on that floor, so the bound ended nothing.
+    #[test]
+    fn a_turn_ended_by_the_time_limit_runs_while_the_floor_is_still_held() {
+        let (words_tx, words_rx) = channel();
+        let (submit_tx, submit_rx) = channel();
+        let mut desk = TurnDesk {
+            assembler: TurnAssembler::new(),
+            words_rx,
+            submit_tx,
+            observer: Arc::new(Recorder::default()),
+            last_end: None,
+            sent: 0,
+            unanswered: None,
+            withdrawn: Default::default(),
+            turns_started: Default::default(),
+            submits_done: Default::default(),
+            stop: Default::default(),
+            floor: Default::default(),
+        };
+        let (ran_tx, ran_rx) = channel();
+        let callback_floor = desk.floor.clone();
+        let submit: SubmitFn = Arc::new(move |text: String, _| {
+            if !spoken_turn_withdrawn() {
+                ran_tx.send(text).unwrap();
+            }
+            callback_floor.nudge();
+        });
+        let (withdrawn, hold, done) = (desk.withdrawn.clone(), desk.floor.clone(), desk.submits_done.clone());
+        let worker = std::thread::spawn(move || submit_turns(submit_rx, withdrawn, hold, done, submit));
+
+        // 60.000 s of input: the limit closes it, and the next utterance opens before the
+        // recognizer has returned the last fragment.
+        desk.assembler.his_utterance_started();
+        desk.assembler.utterance_admitted(30_000);
+        desk.assembler.time_limit();
+        desk.assembler.his_utterance_started();
+        assert!(desk.publish_floor(), "premise: the next utterance holds the floor");
+        words_tx.send(Some(("everything up to the limit".to_string(), false))).unwrap();
+        assert!(desk.collect());
+        desk.release();
+        assert!(desk.publish_floor(), "premise: the floor is still held while the turn goes out");
+        match desk.floor.turn_waits_or_ran(&ran_rx) {
+            Err(ran) => assert_eq!(ran, "everything up to the limit"),
+            Ok(()) => panic!("the turn ended by the time limit is waiting for a floor the input never gives back"),
+        }
+        // His next words are a turn of their own: nothing to carry, nothing withdrawn.
+        assert_eq!(desk.continue_thought(true, true), None, "the limited turn was carried into the next one");
+
+        desk.floor.set(false);
+        drop(desk);
+        worker.join().unwrap();
     }
 
     /// INVARIANT — review rv-20261013T214648Z. "Send the draft" waits for the spine behind
