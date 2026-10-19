@@ -115,8 +115,8 @@ mod mac {
         unsafe { msg_send![class, stringWithUTF8String: c.as_ptr()] }
     }
 
-    /// Stands in for AppKit's implementation: records the menu and plays its delegate's open and
-    /// close, drawing nothing.
+    /// Stands in for AppKit's implementation: records the menu, with the items AppKit would add to
+    /// it on its own, and plays its delegate's open and close, drawing nothing.
     unsafe extern "C-unwind" fn record(
         _class: *const AnyClass,
         _cmd: Sel,
@@ -151,6 +151,22 @@ mod mac {
                     action: action.map(|s| s.name().to_string_lossy().into_owned()).unwrap_or_default(),
                     to_web_view: target as usize == web_view && web_view != 0,
                 });
+            }
+            // What AppKit's own call adds to a context menu after it is handed over, which no
+            // recorder in its place ever sees as items: system-wide Services while
+            // `allowsContextMenuPlugIns` is on, Writing Tools while
+            // `automaticallyInsertsWritingToolsItems` is on (macOS 15.2 and later). Both default
+            // to on (NSMenu.h), so each switch left on is listed as the items it lets in.
+            let plug_ins: Bool = msg_send![menu, allowsContextMenuPlugIns];
+            if plug_ins.as_bool() {
+                items.push(Item { title: "Services (AppKit appends them: allowsContextMenuPlugIns is on)".into(), action: String::new(), to_web_view: false });
+            }
+            let has_writing_tools: Bool = msg_send![menu, respondsToSelector: sel!(automaticallyInsertsWritingToolsItems)];
+            if has_writing_tools.as_bool() {
+                let writing_tools: Bool = msg_send![menu, automaticallyInsertsWritingToolsItems];
+                if writing_tools.as_bool() {
+                    items.push(Item { title: "Writing Tools (AppKit inserts them: automaticallyInsertsWritingToolsItems is on)".into(), action: String::new(), to_web_view: false });
+                }
             }
             let closes = !delegate.is_null() && {
                 let r: Bool = msg_send![delegate, respondsToSelector: sel!(menuDidClose:)];
@@ -330,8 +346,8 @@ mod mac {
         }
     }
 
-    /// The words the CEO named, and the rest of what WebKit's menus carry beside them.
-    const FORBIDDEN: [&str; 6] = ["Look Up", "Translate", "Search with", "Share", "Speech", "Services"];
+    /// The words the CEO named, and the rest of what WebKit's and AppKit's menus carry beside them.
+    const FORBIDDEN: [&str; 7] = ["Look Up", "Translate", "Search with", "Share", "Speech", "Services", "Writing Tools"];
 
     fn forbidden(menus: &[Vec<Item>]) -> Vec<String> {
         menus
