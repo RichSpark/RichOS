@@ -63,7 +63,7 @@ const GENERIC_NOTE = "Everything I'd already written above is saved.";
 // FIXTURES
 // ---------------------------------------------------------------------------------------
 
-function snapshot(outage) {
+function snapshot(outage, opts) {
   const b = (id, extra) =>
     Object.assign(
       {
@@ -98,6 +98,8 @@ function snapshot(outage) {
       activeMs: 461000,
     }),
   ];
+  // A turn a button or an agent started carries no words of his: core projects no user item.
+  if (opts && opts.withoutHisWords) items.shift();
   if (outage) {
     items.push(Object.assign(b(TURN + ":upstream", { slot: "terminal", createdAt: 1787948561000 }), outage));
   }
@@ -322,6 +324,22 @@ async function main() {
     assert(c.body[0].includes("schedule"), "it names the schedule, which IS the difference");
     assert(OVERLOAD !== QUOTA, "the two sentences differ at the source");
     return "529 and 429 render two different sentences";
+  });
+
+  await run.check("a 529 or a 429 on a turn he did not type keeps its explanation and offers no Restore", async () => {
+    // Review rv-20261019T115204Z-2b619840-5405#1: a capacity or usage-limit failure on a
+    // button-started or agent-sourced turn drew Restore my message, which had nothing to restore.
+    const seen = [];
+    for (const item of [overloadItem(), quotaItem()]) {
+      await page.evaluate((s) => window.__render(s), snapshot(item, { withoutHisWords: true }));
+      await page.waitForSelector(".tl-intervention");
+      const c = await cardText(page);
+      assertEqual(c.body, [item.ceoMessage], "the failure's own sentence stays");
+      assertEqual(c.notes, [item.lossMessage], "what is on disk stays");
+      assertEqual(c.action, null, "no Restore my message without a message of his");
+      seen.push(item.fault);
+    }
+    return seen.join(" and ") + ": explanation kept, no control";
   });
 
   // =====================================================================================
