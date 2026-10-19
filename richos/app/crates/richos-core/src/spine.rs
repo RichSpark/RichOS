@@ -286,7 +286,9 @@ fn retain_preparation_item(
 }
 
 
-fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot:&std::sync::Arc<std::sync::Mutex<Option<Box<dyn Cognition>>>>)->Result<bool,SpineError> {
+/// `turn` is the reply this connection is prepared for: it runs on the lease's account until
+/// [`crate::claude_accounts::Accounts::turn_ended`].
+fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot:&std::sync::Arc<std::sync::Mutex<Option<Box<dyn Cognition>>>>,turn:&str)->Result<bool,SpineError> {
     let mut slot=slot.lock().unwrap();
     if slot.as_ref().is_some_and(|lease|lease.is_closed()) {drop(slot.take());}
     if let Some(lease)=slot.as_ref() {
@@ -309,7 +311,7 @@ fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot
         }
         state.state(|s| {
             if let Some(active)=plan.control.active_turn() {s.ledger.mark_turn_started(&active.turn_id,lease.session_id())?;}
-            if let (Some(quota),Some(account))=(s.quota_service(),lease.account()) {quota.accounts.ran_on(account);}
+            if let (Some(quota),Some(account))=(s.quota_service(),lease.account()) {quota.accounts.ran_on(turn,account);}
             s.raise_quota_notices(Some(plan.binding.thread_id()));
             Ok::<_,SpineError>(())
         })?;
@@ -328,7 +330,7 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
             plan.control.stop_claim_for(&delivery.turn_id).is_some()
         });
     }
-    let prepared=prepare_connection(state,plan,&delivery.lease).and_then(|_| {
+    let prepared=prepare_connection(state,plan,&delivery.lease,&delivery.turn_id).and_then(|_| {
         if stopped() {return Ok(())}
         let (original,source,conversation,channel,app_messages)=state.state(|s| {
             let mut successor=delivery.turn_id.as_str();let mut seen=std::collections::HashSet::new();
@@ -394,8 +396,11 @@ fn prime_front_desk_with(state:&mut impl PreparationState,thread:&str)->FrontDes
     });
     let (plan,desk)=match begun {Ok(value)=>value,Err(verdict)=>return verdict};
     let started=std::time::Instant::now();
-    let result=prepare_connection(state,&plan,&desk);
+    // The priming is a reply of its own on the lease's account, over when it returns.
+    let priming=format!("prime:{thread}");
+    let result=prepare_connection(state,&plan,&desk,&priming);
     state.state(|s| {
+        if let Some(quota)=s.quota_service() {quota.accounts.turn_ended(&priming);}
         if let Some(resident)=s.resident.get_mut(thread) {resident.parked_at_ms=now_millis();}
         plan.control.end_front_desk_prime();
         if let Err(error)=s.poll_intake() {eprintln!("[richos] queued input after preparation: {error}");}
@@ -2275,6 +2280,8 @@ impl Spine {
         // The mirror is cleared whatever happens below, including on the error paths: a
         // stale "still running" would make the next stop request name a dead turn.
         control.end_turn(turn_id);
+        // Nor does it run on its account any more: the switch may be complete now.
+        if let Some(quota)=self.quota_service() {quota.accounts.turn_ended(turn_id);}
         // Every entrance reports completion here, including direct intake and failures.
         if !self.thread_is_running(thread_id) && !self.ended_turns.iter().any(|known|known.thread_id()==thread_id) {
             self.ended_turns.push(binding.clone());

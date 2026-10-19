@@ -224,7 +224,7 @@ richos/app/
                               impossible to write for only one surface
     tests/native_input_provenance_tests.rs 1 native input provenance witness.
     tests/terminal_session_tests.rs 15 native session continuity and overlapping-input regressions.
-    tests/rotation_tests.rs 11 account-resume, native model-control and quota-notice tests.
+    tests/rotation_tests.rs 12 account-resume, native model-control and quota-notice tests.
     tests/questions.rs       23 tests: durable question sets, revisions, delivery, engine witnesses and the app-run ask gate
     tests/action_ledger_tests.rs 5 action-ledger WRITER tests (the ledger is non-empty
                               at runtime; CEO-facing actions cross a rotation; machinery
@@ -1180,7 +1180,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 1824 tests + 8 doc-tests (1820 direct, 4 ignored)
+cargo test -p richos-core                       # 1825 tests + 8 doc-tests (1821 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

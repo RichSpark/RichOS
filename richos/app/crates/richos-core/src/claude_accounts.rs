@@ -212,8 +212,8 @@ pub struct AccountView {
     pub label: String,
     pub in_use: bool,
     /// **Who is working on this account right now** ([`Accounts::working_on`]): `"rich"` when
-    /// the conversation's last turn ran on it, `"team"` when a back end's lease (Stu's) runs on
-    /// it. `in_use` is where the next session starts; during a switch the account being left
+    /// a reply of Rich's, in any conversation, is running on it, `"team"` when a back end's
+    /// lease (Stu's) runs on it. `in_use` is where the next session starts; during a switch the account being left
     /// still lists whoever has not moved yet (review rv-20261019T005929Z-e3d9ad03-3e7b, finding
     /// 3: the panel said the new account was "In use now" while Stu still ran on the old one).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -347,8 +347,12 @@ pub struct Accounts {
     /// the work host when it opens or ends one (nightly 65, 2026-10-18: "I switched the team
     /// to your Home account" was said while Stu's whole job ran on, and stayed on, Work).
     back_ends: Mutex<BTreeMap<String, String>>,
-    /// The account the conversation's last turn ran on ([`Accounts::ran_on`]).
-    conversation: Mutex<Option<String>>,
+    /// **Every reply of Rich's running now, by turn, with the account it runs on**
+    /// ([`Accounts::ran_on`] until [`Accounts::turn_ended`]). Each conversation has its own
+    /// lease and their replies run side by side, so one conversation's reply on the new account
+    /// says nothing about another's still running on the old one (review
+    /// rv-20261019T030516Z-0a1a8728-e798, finding 2).
+    replies: Mutex<BTreeMap<String, String>>,
     notice: Mutex<Option<String>>,
     /// The webview's offset from UTC (`quota::Service::set_utc_offset`), so the switch line
     /// can say as a clock time when the account it left is fresh again.
@@ -373,7 +377,7 @@ impl Accounts {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Stored::default(),
             Err(e) => return Err(e),
         };
-        Ok(Self { path, root: data_dir.join("claude-accounts"), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), conversation: Mutex::new(None), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
+        Ok(Self { path, root: data_dir.join("claude-accounts"), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), replies: Mutex::new(BTreeMap::new()), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
     }
 
     fn save(&self, state: &Stored) -> io::Result<()> {
@@ -613,20 +617,22 @@ impl Accounts {
     }
 
     /// **Who is working on `account` right now**, for the panel ([`AccountView::working`]):
-    /// `"rich"` when the conversation's last turn ran on it, `"team"` when a back end's live
-    /// lease runs on it.
+    /// `"rich"` when a reply of his, in any conversation, is running on it, `"team"` when a back
+    /// end's live lease runs on it.
     pub fn working_on(&self, account: &str) -> Vec<String> {
         let mut who = Vec::new();
-        if self.conversation.lock().unwrap().as_deref() == Some(account) { who.push("rich".to_string()); }
+        if self.replies.lock().unwrap().values().any(|on| on == account) { who.push("rich".to_string()); }
         if self.back_ends.lock().unwrap().values().any(|on| on == account) { who.push("team".to_string()); }
         who
     }
 
-    /// The switch has happened once a conversation turn ran under `to` and every live back end
-    /// is on `to` too; then its notice is released for [`Accounts::take_notice`].
+    /// The switch has happened once a conversation turn ran under `to`, every reply of Rich's
+    /// still running is on `to` and every live back end is on `to` too; then its notice is
+    /// released for [`Accounts::take_notice`].
     fn release(&self) {
         let mut pending = self.pending.lock().unwrap();
         let moved = pending.as_ref().is_some_and(|p| p.ran
+            && self.replies.lock().unwrap().values().all(|account| *account == p.to)
             && self.back_ends.lock().unwrap().values().all(|account| *account == p.to));
         if moved {
             *self.notice.lock().unwrap() = pending.take().map(|p| p.text);
@@ -669,16 +675,23 @@ impl Accounts {
         state.accounts.iter().find(|a| a.id == id).cloned()
     }
 
-    /// **A conversation turn is about to run on a lease under `account`.** If that is the
-    /// account a switch went to, and no back end is still on another account
-    /// ([`Accounts::back_end_on`]), the switch has now actually happened and its notice is
-    /// released for [`Accounts::take_notice`]. Called by the conversation (`spine.rs`,
-    /// `prepare_request`).
-    pub fn ran_on(&self, account: &str) {
-        *self.conversation.lock().unwrap() = Some(account.to_string());
+    /// **Rich's reply `turn` is about to run on a lease under `account`**, and runs there until
+    /// [`Accounts::turn_ended`]. If that is the account a switch went to, and no other reply of
+    /// his and no back end is still on another account ([`Accounts::back_end_on`]), the switch
+    /// has now actually happened and its notice is released for [`Accounts::take_notice`].
+    /// Called by the conversation (`spine.rs`, `prepare_connection`).
+    pub fn ran_on(&self, turn: &str, account: &str) {
+        self.replies.lock().unwrap().insert(turn.into(), account.into());
         if let Some(pending) = self.pending.lock().unwrap().as_mut().filter(|p| p.to == account) {
             pending.ran = true;
         }
+        self.release();
+    }
+
+    /// **Rich's reply `turn` has ended**, however it ended (`spine.rs`, `finish_delivery`): it
+    /// runs on no account any more, and the switch may now be complete.
+    pub fn turn_ended(&self, turn: &str) {
+        self.replies.lock().unwrap().remove(turn);
         self.release();
     }
 
@@ -805,6 +818,12 @@ pub(crate) mod tests {
     fn readings(one: Reading, two: Reading) -> BTreeMap<String, Reading> {
         [("1".to_string(), one), ("2".to_string(), two)].into_iter().collect()
     }
+    /// One whole reply of Rich's on `account`: it starts there and ends.
+    fn replied(accounts: &Accounts, account: &str) {
+        let turn = format!("reply-{}", uuid::Uuid::new_v4());
+        accounts.ran_on(&turn, account);
+        accounts.turn_ended(&turn);
+    }
 
     /// **His answer 1.** Account 1's weekly window is at 99%. Of the two with room, "Personal"
     /// (id 3) has its week end in one day and "Work" (id 2) in six, so Personal is next even
@@ -825,9 +844,9 @@ pub(crate) mod tests {
         assert_eq!(accounts.in_use().id, "3");
         // Decided is not switched: the notice waits until something runs under Personal.
         assert_eq!(accounts.take_notice(), None);
-        accounts.ran_on("1");
+        replied(&accounts, "1");
         assert_eq!(accounts.take_notice(), None, "a turn on the account being left says nothing");
-        accounts.ran_on("3");
+        replied(&accounts, "3");
         assert_eq!(accounts.take_notice().as_deref(), Some("I switched the team to your **Personal** account. Account 1 had used 99% of its weekly limit, and it is fresh again in 2 d.\n\nNothing stopped. The team carried on right where it was."));
         let last = accounts.last_switch().unwrap();
         assert_eq!((last.from.as_str(), last.to.as_str(), last.at, last.why.as_str(), last.used), ("1", "3", NOW, "weekly", Some(99.)));
@@ -851,7 +870,7 @@ pub(crate) mod tests {
         accounts.back_end_on("thread-b", Some("1"));
         assert!(accounts.evaluate(&readings(reading(10., HOUR, 99., 48 * HOUR), reading(0., HOUR, 0., 72 * HOUR)), None, NOW).unwrap());
         assert!(accounts.switch_pending());
-        accounts.ran_on("2");
+        replied(&accounts, "2");
         assert_eq!(accounts.take_notice(), None, "both back ends are still on Account 1");
         accounts.back_end_on("thread-a", Some("2"));
         assert_eq!(accounts.take_notice(), None, "one back end is still on Account 1");
@@ -864,7 +883,7 @@ pub(crate) mod tests {
         assert!(accounts.evaluate(&readings(reading(10., HOUR, 99., 48 * HOUR), reading(0., HOUR, 0., 72 * HOUR)), None, NOW).unwrap());
         accounts.back_end_on("thread-a", Some("2"));
         assert_eq!(accounts.take_notice(), None, "no conversation turn has run on Work yet");
-        accounts.ran_on("2");
+        replied(&accounts, "2");
         assert!(accounts.take_notice().is_some());
     }
 
@@ -883,7 +902,7 @@ pub(crate) mod tests {
         accounts.use_first("1").unwrap();
         assert_eq!(accounts.in_use().id, "1");
         assert_eq!(accounts.last_switch(), None, "the automatic switch's card no longer describes the account in use");
-        accounts.ran_on("2");
+        replied(&accounts, "2");
         assert_eq!(accounts.take_notice(), None, "his own choice is not announced as a switch");
 
         accounts.use_first("2").unwrap();
@@ -896,7 +915,7 @@ pub(crate) mod tests {
 
         assert!(accounts.evaluate(&readings(one, reading(0., HOUR, 99., 48 * HOUR)), Some(93), NOW).unwrap());
         assert_eq!(accounts.in_use().id, "1", "at 99% of its week the switch moves on");
-        accounts.ran_on("1");
+        replied(&accounts, "1");
         assert_eq!(accounts.take_notice().as_deref(), Some("I switched the team to **Account 1**. Work had used 99% of its weekly limit, and it is fresh again in 2 d.\n\nNothing stopped. The team carried on right where it was."));
         assert!(accounts.use_first("9").is_err(), "an account that is not on this Mac cannot be picked");
         assert_eq!(accounts.in_use().id, "1");
@@ -975,18 +994,18 @@ pub(crate) mod tests {
         accounts.set_at_threshold(AtThreshold::Switch).unwrap();
         // NOW is Sunday 2001-09-09 1:46:40 AM UTC; Home's five-hour window resets an hour on.
         assert!(accounts.evaluate(&readings(reading(95., HOUR, 30., 72 * HOUR), reading(5., HOUR, 5., 96 * HOUR)), Some(93), NOW).unwrap());
-        accounts.ran_on("2");
+        replied(&accounts, "2");
         let line = accounts.take_notice().unwrap();
         assert_eq!(line, "I switched the team to your **Work** account. Home had used 95% of its 5-hour limit, and it is fresh again today at 2:47 AM.\n\nNothing stopped. The team carried on right where it was.");
         assert!(!line.contains('\u{2014}') && !line.contains('\u{2013}'));
         // Work's week at 99.4%, fresh again Wednesday: back to Home.
         assert!(accounts.evaluate(&readings(reading(5., 5 * HOUR, 30., 72 * HOUR), reading(5., HOUR, 99.4, 72 * HOUR)), Some(93), NOW).unwrap());
-        accounts.ran_on("1");
+        replied(&accounts, "1");
         assert_eq!(accounts.take_notice().as_deref(), Some("I switched the team to your **Home** account. Work had used 99% of its weekly limit, and it is fresh again on Wednesday at 1:47 AM.\n\nNothing stopped. The team carried on right where it was."));
         // A usage-limit refusal inside a turn on Home: the step runs again on Work.
         let room = readings(reading(5., 5 * HOUR, 30., 72 * HOUR), reading(5., HOUR, 10., 72 * HOUR));
         assert_eq!(accounts.limit_reached("1", Some(NOW + HOUR), &room, Some(93), NOW).unwrap(), AfterLimit::Continue);
-        accounts.ran_on("2");
+        replied(&accounts, "2");
         assert_eq!(accounts.take_notice().as_deref(), Some("I switched the team to your **Work** account. Home reached a Claude usage limit, so the step it turned away runs again on Work."));
     }
 

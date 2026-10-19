@@ -2470,7 +2470,7 @@ for line in sys.stdin:
         assert!(view.accounts[1].in_use && !view.accounts[0].in_use);
         assert_eq!(service.accounts.take_notice(), None, "nothing has run under Work yet");
         assert_eq!(view.last_switch, None, "no card before the switch has happened");
-        service.accounts.ran_on(&work.id);
+        service.accounts.ran_on("reply-on-work", &work.id);
         // Round 18's words. The five-hour reset is 2099, and before the webview has said its
         // offset the span is said, so only the parts that do not move with the clock are exact.
         let line = service.accounts.take_notice().unwrap();

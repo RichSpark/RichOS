@@ -1799,7 +1799,7 @@ mod tests {
         let readings=[("1".to_string(),reading(10.,3_600_000,99.,48*3_600_000)),
             (home.id.clone(),reading(0.,3_600_000,0.,72*3_600_000))].into_iter().collect();
         assert!(quota.accounts.evaluate(&readings,None,NOW).unwrap(),"Account 1 at 99% of its week is left for Home");
-        quota.accounts.ran_on(&home.id);
+        quota.accounts.ran_on("rich-reply",&home.id);
         assert_eq!(quota.accounts.take_notice(),None,"Stu is still on Account 1");
         assert!(quota.view().last_switch.is_none(),"no switch card while Stu is on Account 1");
         host.renew_if_account_changed(&backend,&h.binding);
@@ -1932,7 +1932,7 @@ mod tests {
     #[test]
     fn the_accounts_view_shows_where_rich_and_the_team_really_are_during_a_switch() {
         let m=stu_on_account_one_then_a_switch();
-        m.quota.accounts.ran_on(&m.home.id);
+        m.quota.accounts.ran_on("rich-reply",&m.home.id);
         let view=serde_json::to_value(m.quota.view()).unwrap();
         let account=|id:&str|view["accounts"].as_array().unwrap().iter().find(|a|a["id"]==id).cloned().unwrap();
         assert_eq!((account(&m.home.id)["inUse"].clone(),account(&m.home.id)["working"].clone()),

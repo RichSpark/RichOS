@@ -97,8 +97,8 @@
     return s && cur && multi() && s.to === cur.id && Date.now() - s.at < RECENT ? s : null;
   };
   const labelOf = id => (list().find(a => a.id === id) || {}).label || "";
-  // WHO IS REALLY ON EACH ACCOUNT (claude_accounts.rs `working`): "rich" when the conversation's
-  // last turn ran on it, "team" when Stu's session runs on it. The account in use is where the next
+  // WHO IS REALLY ON EACH ACCOUNT (claude_accounts.rs `working`): "rich" when a reply of his, in
+  // any conversation, is running on it, "team" when Stu's session runs on it. The account in use is where the next
   // session starts; while someone is still on another account the move is under way, and the cards
   // say so instead of calling the new one "In use now" (review rv-20261019T005929Z-e3d9ad03-3e7b,
   // finding 3: the panel said Home was in use while the team still ran on Work).
