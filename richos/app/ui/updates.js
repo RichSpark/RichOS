@@ -338,6 +338,11 @@ window.RichUpdates = (function () {
   /// plain link out of the Tab order. Enter on a focused link fires this same `click`.
   var CHANGELOG_KEY = "github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md";
 
+  /// What a screen reader hears is the `aria-label`: the visible words first (WCAG 2.5.3 "Label
+  /// in Name", as the update cue does), then where it goes. Not a clipped `.sr-only` span: that
+  /// span's text is still laid out at full width from the arrow onward, invisible but ~200px
+  /// long, and where the link ends near its column's edge it ran past the column
+  /// (`tests/rich-model.js` check 6, "nothing in Settings leaves its place").
   function changelogLink() {
     var a = el("a", "update-notes", {
       id: "update-notes",
@@ -345,6 +350,7 @@ window.RichUpdates = (function () {
       target: "_blank",
       rel: "noopener noreferrer",
       tabindex: "0",
+      "aria-label": "See what’s new (opens in your web browser)",
     });
     var text = el("span", "update-notes-text");
     text.textContent = "See what’s new";
@@ -366,11 +372,8 @@ window.RichUpdates = (function () {
       p.setAttribute("d", d);
       svg.appendChild(p);
     });
-    var sr = el("span", "sr-only");
-    sr.textContent = " (opens in your web browser)";
     a.appendChild(text);
     a.appendChild(svg);
-    a.appendChild(sr);
     a.addEventListener("click", function (e) {
       e.preventDefault();
       var b = window.RichBridge;

@@ -1502,7 +1502,8 @@ async function main() {
         return {
           tag: a.tagName.toLowerCase(),
           text: a.querySelector(".update-notes-text").textContent,
-          name: a.textContent,
+          name: a.getAttribute("aria-label"),
+          words: a.textContent,
           href: a.getAttribute("href"),
           tabindex: a.getAttribute("tabindex"),
           visible: r.width > 0 && r.height > 0,
@@ -1513,6 +1514,7 @@ async function main() {
       assertEqual(link.tag, "a", theme + ": the control is a link");
       assertEqual(link.text, "See what’s new", theme + ": the link's words");
       assertEqual(link.name, "See what’s new (opens in your web browser)", theme + ": what a screen reader hears");
+      assertEqual(link.words, "See what’s new", theme + ": no hidden words laid out inside the link (they ran past the column)");
       assertEqual(link.href, CHANGELOG, theme + ": the link names the changelog page");
       assertEqual(link.tabindex, "0", theme + ": WebKit skips a plain link on Tab without tabindex=0");
       assert(link.visible && link.sameLine, theme + ": on the same line as Check for updates, after it: " + JSON.stringify(link));
