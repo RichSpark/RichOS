@@ -3150,7 +3150,12 @@
       if (row.tone === "ceo-stopped" && turn.user && turn.user.text) {
         section.appendChild(retryControl(turn, opts));
       }
-      if (row.tone === "stopped") section.appendChild(renderFailureCard(turn, opts));
+      // A turn that carried no words of his (Rich answering Stu's report, an app message, a
+      // button) gets no failure card: every sentence on it is about HIS message (nightly 67
+      // p3). The duration row above still says it stopped. `hisWords` absent (an older
+      // build's payload) keeps the card.
+      const notHis = !!(turn.interruption && turn.interruption.hisWords === false);
+      if (row.tone === "stopped" && !notHis) section.appendChild(renderFailureCard(turn, opts));
       if (row.tone === "unknown") section.appendChild(renderUnknownCard(turn, opts));
     }
 
