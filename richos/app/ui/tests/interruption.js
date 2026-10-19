@@ -402,7 +402,7 @@ async function main() {
 
   // Nightly 67 p3: Rich's turn for Stu's status message was cut off, and the Mac said "Press
   // Restore my message ... Your message is saved" about a message he never sent.
-  await run.check("a turn that carried no words of his draws no failure card (nightly 67)", async () => {
+  await run.check("a turn that carried no words of his never offers to restore them, and keeps a cause he can act on (nightly 67)", async () => {
     const UNKNOWN = rustSentence("can't tell you why");
     const record = (hisWords) => ({ kind: "turn_interruption", cause: "unknown", ceoMessage: UNKNOWN,
       lossMessage: ONLY_HIS_WORDS, offersRetry: true, hisWords });
@@ -416,6 +416,15 @@ async function main() {
     assertEqual(seen.card, false, "a failure card about his message on a turn he did not send");
     assert(!/Restore my message|Your message is saved/.test(seen.text), "his message is mentioned: " + seen.text);
     assertEqual(seen.label, ["Stopped after 1s"], "the duration row still says the turn stopped");
+    // A cause he can act on stays (review rv-20261019T113734Z-68e37b15-cc60#1: a "Start the
+    // questions" press whose sign-in had expired lost the Settings / Claude accounts route):
+    // the sentence only, without the loss note about his message and without Restore.
+    await page.evaluate((s) => window.__render(s),
+      snapshot(Object.assign(notSignedInItem(), { hisWords: false }), { withoutHisWords: true }));
+    await page.waitForSelector(".tl-intervention");
+    const signIn = await cardText(page);
+    assertEqual([signIn.body, signIn.notes, signIn.actionCount], [[NOT_SIGNED_IN], [], 0],
+      "a button's failed turn keeps the sign-in route and nothing about his message");
     // The positive control: the same record on a turn of his still draws the whole card.
     await page.evaluate((s) => window.__render(s), snapshot(record(true)));
     await page.waitForSelector(".tl-intervention");

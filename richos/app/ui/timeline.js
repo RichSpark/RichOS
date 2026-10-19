@@ -3153,11 +3153,22 @@
         section.appendChild(retryControl(turn, opts));
       }
       // A turn that carried no words of his (Rich answering Stu's report, an app message, a
-      // button) gets no failure card: every sentence on it is about HIS message (nightly 67
-      // p3). The duration row above still says it stopped. `hisWords` absent (an older
-      // build's payload) keeps the card.
+      // button) has no message to restore (nightly 67 p3: "Press Restore my message ... Your
+      // message is saved" for a message he never sent). Its card keeps only a cause he can
+      // act on — `offersRetry` false: sign in, replace the key, reinstall Claude Code (review
+      // rv-20261019T113734Z-68e37b15-cc60#1, a "Start the questions" press whose sign-in had
+      // expired) — and is not drawn for a cause whose only advice is restoring his message.
+      // The duration row above still says it stopped. `hisWords` absent (an older build's
+      // payload) keeps the whole card.
       const notHis = !!(turn.interruption && turn.interruption.hisWords === false);
       if (row.tone === "stopped" && !notHis) section.appendChild(renderFailureCard(turn, opts));
+      if (row.tone === "stopped" && notHis && !turn.interruption.offersRetry
+          && turn.interruption.cause !== "stopped-by-ceo" && turn.interruption.ceoMessage) {
+        const card = elem("aside", "tl-intervention");
+        card.setAttribute("role", "note");
+        card.appendChild(elem("p", "tl-intervention-body", turn.interruption.ceoMessage));
+        section.appendChild(card);
+      }
       if (row.tone === "unknown") section.appendChild(renderUnknownCard(turn, opts));
     }
 
