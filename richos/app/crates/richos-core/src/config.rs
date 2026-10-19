@@ -514,6 +514,14 @@ struct StoredConfig {
     /// §119: the model Stu's session (the back end) starts on. Absent reads as Opus.
     #[serde(default)]
     stu_model: ModelChoice,
+    /// THE OXFORD COMMA IN WHAT CLAUDE WRITES FOR HIM (CEO, 2026-10-19): "make the Oxford comma
+    /// linter switchable in settings. Default setting: Oxford comma off." `true` keeps the comma
+    /// before and/or/nor in Rich's and Stu's replies and in the questions Claude writes; `false`
+    /// (the default, and what an absent key reads as, so an install from before this setting
+    /// existed starts off) has the app delete it where the text is drawn. The app's own text
+    /// never has it, whatever this says.
+    #[serde(default)]
+    oxford_comma: bool,
 }
 
 impl Default for StoredConfig {
@@ -537,6 +545,7 @@ impl Default for StoredConfig {
             home_entity_hidden: BTreeMap::new(),
             rich_model: ModelChoice::default(),
             stu_model: ModelChoice::default(),
+            oxford_comma: false,
         }
     }
 }
@@ -1039,6 +1048,21 @@ impl ConfigStore {
             return Ok(());
         }
         self.config.font_scale = snapped;
+        self.persist()
+    }
+
+    // ---- the Oxford comma in what Claude writes (CEO, 2026-10-19) -------------------
+
+    /// Whether he keeps the Oxford comma in what Claude writes. `false` on a fresh install.
+    pub fn oxford_comma(&self) -> bool {
+        self.config.oxford_comma
+    }
+
+    pub fn set_oxford_comma(&mut self, keep: bool) -> io::Result<()> {
+        if self.config.oxford_comma == keep {
+            return Ok(());
+        }
+        self.config.oxford_comma = keep;
         self.persist()
     }
 
@@ -2260,6 +2284,39 @@ mod tests {
         assert_eq!(store.font_scale(), 135);
         assert_eq!(store.theme(), Theme::System, "and the untouched preference is untouched");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_oxford_comma_is_off_by_default_and_his_choice_survives_a_reopen() {
+        // His words, 2026-10-19: "Default setting: Oxford comma off." A config file is what an
+        // update leaves in place, so a reopen is what an update and a restart both are.
+        let path = tmp_path("oxford-comma-durable");
+        if path.exists() {
+            std::fs::remove_file(&path).unwrap();
+        }
+        {
+            let mut store = ConfigStore::open(&path).unwrap();
+            assert!(!store.oxford_comma(), "a fresh install starts with the Oxford comma off");
+            store.set_oxford_comma(true).unwrap();
+        }
+        {
+            let mut store = ConfigStore::open(&path).unwrap();
+            assert!(store.oxford_comma(), "switched on, it stays on across a reopen");
+            assert_eq!(store.theme(), Theme::System, "and the untouched preference is untouched");
+            store.set_oxford_comma(false).unwrap();
+        }
+        assert!(!ConfigStore::open(&path).unwrap().oxford_comma(), "switched back off, it stays off");
+
+        // A config file written before this setting existed (no key at all) reads as off.
+        {
+            let mut store = ConfigStore::open(&path).unwrap();
+            store.set_oxford_comma(true).unwrap();
+        }
+        let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(json.as_object_mut().unwrap().remove("oxford_comma").is_some(), "the key is on disk");
+        std::fs::write(&path, json.to_string()).unwrap();
+        assert!(!ConfigStore::open(&path).unwrap().oxford_comma(), "an older file reads as off");
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
