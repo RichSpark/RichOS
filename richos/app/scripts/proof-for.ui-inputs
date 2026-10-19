@@ -115,6 +115,7 @@ waiting-state.js        @shell richos/app/ui/mock.js
 waiting-lifecycle.js    @shell richos/app/ui/mock.js
 second-mouth.js         @shell richos/app/ui/mock.js
 dialect.js              @shell richos/app/ui/mock.js richos/app/src-tauri/src/main.rs @allui richos/app/src-tauri/src/ richos/app/crates/
+richscribe.js           @shell @allui richos/app/src-tauri/src/ richos/app/crates/
 dictation-overlay.js    richos/app/ui/dictation-bar.html richos/app/ui/dictation-bar.js richos/app/ui/dictation-menu.html richos/app/ui/dictation-menu.js richos/app/ui/dictation-overlay.css richos/app/ui/style.css richos/app/ui/theme-boot.js richos/app/ui/index.html
 retention.js            @shell richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js richos/app/crates/richos-core/src/config.rs richos/app/crates/richos-core/src/journal.rs
 rich-model.js           @shell richos/app/ui/mock.js richos/app/ui/settings-button.js

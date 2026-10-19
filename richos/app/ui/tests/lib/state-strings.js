@@ -80,7 +80,15 @@ const UI_DIR = SOURCES.UI_DIR;
 /// one sentence written across three source lines by prettier; scraped naively it becomes
 /// three entries, none of which is the sentence the CEO reads. Folding is what makes the
 /// registry key equal to the rendered text.
-function jsStringLiterals(src) {
+///
+/// `opts.holes` (default off) ALSO returns the literals written INSIDE a template's `${...}`
+/// holes, appended after the rest with their own lines. A label chosen by a ternary inside a
+/// template (`${k === "F1" ? "…" : `<b>${k}</b> starts and stops it.`}`) is text a person reads,
+/// and without this it is invisible (blind spot B1's other half). Off by default, so the
+/// inventory every other gate keys on is unchanged.
+function jsStringLiterals(src, opts) {
+  const holes = !!(opts && opts.holes);
+  const nested = [];
   const out = [];
   let i = 0;
   let line = 1;
@@ -155,11 +163,17 @@ function jsStringLiterals(src) {
         if (quote === "`" && d === "$" && src[i + 1] === "{") {
           let depth = 1;
           i += 2;
+          const holeFrom = i, holeLine = line;
           while (i < n && depth > 0) {
             if (src[i] === "{") depth++;
             else if (src[i] === "}") depth--;
             else if (src[i] === "\n") line++;
             i++;
+          }
+          if (holes) {
+            for (const h of jsStringLiterals(src.slice(holeFrom, i - 1), opts)) {
+              nested.push({ text: h.text, line: holeLine + h.line - 1 });
+            }
           }
           continue;
         }
@@ -180,7 +194,7 @@ function jsStringLiterals(src) {
     if (sigSince !== null) sigSince += c;
     i++;
   }
-  return out;
+  return holes ? out.concat(nested) : out;
 }
 
 // ---------------------------------------------------------------------------------------
