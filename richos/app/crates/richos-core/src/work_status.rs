@@ -279,8 +279,11 @@ fn describe(row: &Value, later: &Later, workspaces: &Path, bytes_read: &mut u64)
         ("continued", "This step ended. A later step carries on from where it stopped.")
     } else if retired_execution(workspaces, row, bytes_read)? {
         match later.other_attempts(row) {
-            (true, _) => ("retired-other-added", "This attempt ended without a result. Another attempt did this work, and it was added to your project."),
-            (false, true) => ("retired-other-shown", "This attempt ended without a result. Another attempt at this is shown separately."),
+            // "Other work on the same job", never "another attempt": the other workers of one job
+            // may be independent parts of it, and no receipt says one replaced this one (review
+            // rv-20261018T200142Z-c700e59d-1f6e).
+            (true, _) => ("retired-other-added", "This attempt ended without a result. Other work on the same job was added to your project."),
+            (false, true) => ("retired-other-shown", "This attempt ended without a result. Other work on the same job is shown separately."),
             (false, false) => ("retired", "This attempt ended without a result."),
         }
     } else if row["status"] == "run-ended" && row["review_observation"]["valid"] == true
@@ -640,6 +643,36 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         let (state, detail) = old_row(&root);
         assert_eq!(state, "retired-other-added");
         assert!(!detail.contains("later attempts are shown"), "{detail}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **Review `rv-20261018T200142Z-c700e59d-1f6e`, P3**: one assignment may have several
+    /// independent workers (`engine/mega-lander/app.py`, `prepare`: "An assignment may have
+    /// several independent workers"), and nothing in the receipts says one replaced another. So
+    /// when "Write guide" is retired and the independent "Update invoice" lands, the guide's row
+    /// must not say another attempt did its work: it says what is known, at the job's level.
+    #[test] fn an_independent_workers_land_is_not_called_this_attempts_replacement() {
+        let root = temp();
+        let mut guide = receipt("guide", "job", "worker");
+        guide["request"]["title"] = "Write guide".into();
+        guide["status"] = "interrupted".into();
+        guide["workspace_ref"] = "session--guide".into();
+        let mut invoice = receipt("invoice", "job", "worker");
+        invoice["request"]["title"] = "Update invoice".into();
+        let receipts = write(&root, &[guide, invoice.clone()]);
+        let workspace = root.join("workspaces").join(receipts.file_name().unwrap());
+        std::fs::create_dir_all(workspace.join("done")).unwrap();
+        std::fs::write(workspace.join("done/session--guide.json"), serde_json::to_vec(&serde_json::json!(
+            {"key":"session--guide","end":null,"disposition":{"kind":"landed"}})).unwrap()).unwrap();
+        let guide_row = |root: &std::path::Path| read(root, "depot", "thread").unwrap().items.into_iter()
+            .find(|i| i.title == "Write guide").map(|i| (i.state, i.detail)).expect("the guide is not shown");
+        assert_eq!(guide_row(&root), ("retired-other-shown".into(),
+            "This attempt ended without a result. Other work on the same job is shown separately.".into()));
+        invoice["status"] = "integrated".into();
+        invoice["integration"] = serde_json::json!({"verified":true,"cleanup_pending":[]});
+        write(&root, &[invoice]);
+        assert_eq!(guide_row(&root), ("retired-other-added".into(),
+            "This attempt ended without a result. Other work on the same job was added to your project.".into()));
         std::fs::remove_dir_all(root).unwrap();
     }
 
