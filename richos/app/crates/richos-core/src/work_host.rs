@@ -26,6 +26,26 @@ pub trait AnsweredClose: Send + Sync {
 }
 pub type LeadSink<'a> = &'a dyn Fn(&crate::questions::Delivery) -> Result<String, String>;
 pub const ROTATION_WAITS_FOR_COMMANDS: std::time::Duration = std::time::Duration::from_secs(600);
+/// **How often an idle back end checks that Stu is on the account in use** (review
+/// rv-20261019T005929Z-e3d9ad03-3e7b, finding 2). A switch decided while Stu is idle, by Rich's
+/// turn or the quota service's own check, otherwise left his session on the old account until
+/// the next message the app sent him. The check reads two ids; the move itself waits for a
+/// boundary (`WorkHost::move_to_account_in_use`).
+pub const ACCOUNT_CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What renewing Stu's lease for the account in use came to.
+#[derive(Debug, PartialEq)]
+enum Renewal {
+    /// No switch is due, or there is no lease to move.
+    NotDue,
+    /// Something of Stu's still runs on the old account: a turn (his own or an automatic one),
+    /// input of ours, a command or a helper. Ending his session now would end it.
+    Waits { from: Option<String> },
+    /// He is on a new session on the account in use.
+    Moved { from: Option<String>, to: Option<String> },
+    /// The old session ended and no new one could be opened; the next boundary opens one.
+    Failed,
+}
 
 #[derive(Clone)]
 enum InputReceipt { Peer(u64), Answer(String) }
@@ -71,6 +91,16 @@ struct Inner {
     rotations: u64,
     last_rotation_reason: Option<String>,
     lease_team: Option<String>,
+    /// **An automatic turn of Stu's is running on the live lease** (Claude Code started it
+    /// itself: a helper's hand-back, a task notification): begun on the between-turn lane and
+    /// not yet ended by its `result`. Nightly 65's whole website job ran as such turns.
+    automatic_turn: bool,
+    /// The run loop is to check that Stu is on the account in use: `Some(true)` when one of his
+    /// automatic turns has ended (the full decision, as before every turn), `Some(false)` at the
+    /// idle check ([`ACCOUNT_CHECK_EVERY`]).
+    move_check: Option<bool>,
+    /// The account Stu was told he is being moved to (`account_switch`), until he has moved.
+    switch_told: Option<String>,
 }
 struct Backend {
     live_delivery: Mutex<()>,
@@ -555,7 +585,7 @@ impl WorkHost {
         let result=(|| {
         // This is queue cancellation, not per-tool authority on Stu's session.
         let stopped = || self.handoff_stopped(binding, message);
-        self.renew_if_account_changed(backend, binding);
+        self.move_to_account_in_use(backend, binding, true);
         let input = serde_json::to_string(message).map_err(|e| e.to_string())?;
         {
             self.ensure_lease(backend, binding)?;
@@ -619,6 +649,9 @@ impl WorkHost {
                 let mut inner=backend.inner.lock().unwrap();
                 inner.peer_input=None;
                 inner.cancel=None;
+                // Input of ours sent during an automatic turn is folded into it, and that turn's
+                // result is then ours: it has ended with this one.
+                inner.automatic_turn=false;
             }
             if matches!(&result, Err(CognitionError::Io(_))) {
                 drop(guard.take());
@@ -794,6 +827,12 @@ impl WorkHost {
                     if let Some(backend) = receiving.upgrade() { host.observe_worker(&backend, &binding, &session, &frame); }
                     continue;
                 }
+                // Stu's own frames between turns of ours are an automatic turn under way; a task
+                // notification starts one.
+                if matches!(frame["type"].as_str(), Some("assistant" | "user" | "stream_event"))
+                    || (frame["type"] == "system" && frame["subtype"] == "task_notification") {
+                    if let Some(backend) = receiving.upgrade() { host.note_automatic_turn(&backend, &session, true); }
+                }
                 if frame["type"] == "assistant" {
                     *said.lock().unwrap() = crate::native::overloaded_api_error_message(&frame).map(|failure| failure.raw);
                     continue;
@@ -806,7 +845,10 @@ impl WorkHost {
                         _ => Ok(reason),
                     });
                 match receiving.upgrade() {
-                    Some(backend) => host.observe_automatic_turn(&backend, &binding, &session, &result),
+                    Some(backend) => {
+                        host.observe_automatic_turn(&backend, &binding, &session, &result);
+                        host.note_automatic_turn(&backend, &session, false);
+                    }
                     None => if let Err(error) = host.observe_turn_result(&binding,None,None,&session,&result) {
                         eprintln!("[richos] native turn status: {error}");
                     },
@@ -836,6 +878,7 @@ impl WorkHost {
         let closing = {
             let mut inner = backend.inner.lock().unwrap();
             if !inner.closing {
+                inner.automatic_turn = false;
                 inner.lease_session = Some(opened.session_id().to_string());
                 inner.peer_stopper=opened.cancel_handle().map(|handle|(opened.session_id().to_string(),handle));
                 inner.lease_team = team;
@@ -863,16 +906,82 @@ impl WorkHost {
         }
     }
 
-    fn renew_if_account_changed(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) {
-        if !self.account_switch_due(backend) {
-            return;
+    /// **An automatic turn of Stu's began (`running`) or ended**, on the lease of `session`. Its
+    /// end is a boundary of his work: the run loop checks there that he is on the account in use.
+    fn note_automatic_turn(&self, backend: &Backend, session: &str, running: bool) {
+        let mut inner = backend.inner.lock().unwrap();
+        if inner.lease_session.as_deref() != Some(session) { return; }
+        inner.automatic_turn = running;
+        if !running {
+            inner.move_check = Some(true);
+            backend.wake.notify_all();
         }
+    }
+
+    /// **Stu moves to the account in use at the next boundary of his work** (review
+    /// rv-20261019T005929Z-e3d9ad03-3e7b, finding 2; nightly 65: his whole website job ran as
+    /// automatic turns on Work after the switch to Home, because he was moved only before a
+    /// message the app sent him). Called before every message the app sends him, when one of his
+    /// automatic turns ends (`at_turn_end`: the full decision, as before every turn) and at the
+    /// idle check.
+    ///
+    /// When nothing of his is running, his session ends and the normal opener resumes it on the
+    /// account in use. When something is (a turn, a command, a helper), ending it would end that
+    /// work, so he is told once (`account_switch`) and moves at a later boundary; once he has
+    /// moved after being told, he is told so (`account_moved`) on the new session. What each
+    /// message asks of him is in his instructions (`stu.md`), never here.
+    fn move_to_account_in_use(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, at_turn_end: bool) {
+        let due = if at_turn_end { self.account_switch_due(backend) } else { self.account_left_behind(backend) };
+        if !due { return; }
+        let outcome = self.renew_lease(backend, binding);
+        let Some(quota) = self.quota.lock().unwrap().clone() else { return };
+        let label = |id: &Option<String>| id.as_deref().and_then(|id| quota.accounts.list().into_iter().find(|a| a.id == id)).map(|a| a.label);
+        let fact = match outcome {
+            Renewal::Waits { from } => {
+                let to = quota.accounts.in_use();
+                {
+                    let mut inner = backend.inner.lock().unwrap();
+                    if inner.switch_told.as_deref() == Some(to.id.as_str()) { return; }
+                    inner.switch_told = Some(to.id.clone());
+                }
+                serde_json::json!({"event":"account_switch","from":label(&from),"to":to.label})
+            }
+            Renewal::Moved { from, to } => {
+                if backend.inner.lock().unwrap().switch_told.take().is_none() { return; }
+                serde_json::json!({"event":"account_moved","from":label(&from),"to":label(&to)})
+            }
+            Renewal::NotDue | Renewal::Failed => return,
+        };
+        if let Err(error) = crate::session_tools::observe_account_switch(&self.message_scope(binding), &fact) {
+            eprintln!("[richos] the account switch could not be passed to Stu: {error}");
+        }
+    }
+
+    /// The renewal for a switch, decided on the lease's own freshest reading. Kept for the
+    /// tests that drive the boundary rule itself.
+    #[cfg(test)]
+    fn renew_if_account_changed(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) -> Renewal {
+        if !self.account_switch_due(backend) {
+            return Renewal::NotDue;
+        }
+        self.renew_lease(backend, binding)
+    }
+
+    /// End Stu's session and resume it on the account in use, unless something of his still
+    /// runs on it ([`Renewal::Waits`]).
+    fn renew_lease(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) -> Renewal {
         // Finish the previous process before the normal opener resumes its transcript.
         // Both processes have the same native session ID and must never overlap.
-        {
+        let from = {
             let mut lease = backend.lease.lock().unwrap();
-            if lease.as_ref().is_some_and(|lease|crate::cognition::account_resume_blocked(lease.as_ref())) {
-                return;
+            let Some(current) = lease.as_ref() else { return Renewal::NotDue };
+            let from = current.account().map(str::to_string);
+            // A running command or helper would end with the process, and so would a turn.
+            let busy = crate::cognition::account_resume_blocked(current.as_ref())
+                || current.worker_status().is_some_and(|workers| workers.active > 0)
+                || backend.inner.lock().unwrap().automatic_turn;
+            if busy {
+                return Renewal::Waits { from };
             }
             let mut inner = backend.inner.lock().unwrap();
             inner.cancel = None;
@@ -881,11 +990,15 @@ impl WorkHost {
             inner.peer_active_through = None;
             drop(inner);
             drop(lease.take());
-        }
+            from
+        };
         self.note_back_end(binding, None);
         if let Err(why) = self.ensure_lease(backend, binding) {
             eprintln!("[richos] back end: not moved to the next Claude account ({why})");
+            return Renewal::Failed;
         }
+        let to = backend.lease.lock().unwrap().as_ref().and_then(|lease| lease.account().map(str::to_string));
+        Renewal::Moved { from, to }
     }
 
     pub fn set_model(&self,model:crate::config::ModelChoice)->Result<(),String> {
@@ -898,6 +1011,14 @@ impl WorkHost {
             .filter(|(session,_)|inner.lease_session.as_ref()==Some(session)).map(|(_,handle)|handle.clone()))};
         if let Some(handle)=handle {handle.set_model(model)?;}
         Ok(())
+    }
+    /// Is Stu's lease on another account than the one in use? Two ids, no decision: the idle
+    /// check's question ([`ACCOUNT_CHECK_EVERY`]).
+    fn account_left_behind(&self, backend: &Arc<Backend>) -> bool {
+        let Some(quota)=self.quota.lock().unwrap().clone() else {return false};
+        let lease=backend.lease.lock().unwrap();
+        lease.as_ref().and_then(|lease|lease.account().map(str::to_string))
+            .is_some_and(|account|quota.accounts.in_use().id!=account)
     }
     fn account_switch_due(&self, backend: &Arc<Backend>) -> bool {
         let Some(quota)=self.quota.lock().unwrap().clone() else {return false};
@@ -977,6 +1098,8 @@ impl WorkHost {
         enum Next {
             Message(ThreadBinding, crate::session_tools::Message, u64),
             Answer(ThreadBinding, crate::questions::Delivery),
+            /// A boundary of Stu's work, or the idle check: is he on the account in use?
+            Move(ThreadBinding, bool),
         }
         loop {
             let live_session = backend.lease.lock().unwrap().as_ref().map(|lease| lease.session_id().to_string());
@@ -985,6 +1108,13 @@ impl WorkHost {
                 loop {
                     if inner.closing {
                         return;
+                    }
+                    if !inner.automatic_turn {
+                        if let (Some(binding), Some(at_turn_end)) = (inner.binding.clone(), inner.move_check) {
+                            inner.move_check = None;
+                            inner.processing = true;
+                            break Next::Move(binding, at_turn_end);
+                        }
                     }
                     if let Some(binding) = inner.binding.clone() {
                         if let Some(answer) = crate::question_work::pending(&self.state)
@@ -1014,10 +1144,21 @@ impl WorkHost {
                             Err(error) => eprintln!("[richos] operator inbox: {error}"),
                         }
                     }
-                    inner = backend.wake.wait(inner).unwrap();
+                    let (woken, waited) = backend.wake.wait_timeout(inner, ACCOUNT_CHECK_EVERY).unwrap();
+                    inner = woken;
+                    if waited.timed_out() && inner.move_check.is_none() {
+                        inner.move_check = Some(false);
+                    }
                 }
             };
             let result = match next {
+                Next::Move(binding, at_turn_end) => {
+                    self.move_to_account_in_use(&backend, &binding, at_turn_end);
+                    let mut inner = backend.inner.lock().unwrap();
+                    inner.processing = false;
+                    backend.wake.notify_all();
+                    continue;
+                }
                 Next::Message(binding, message, through) => self
                     .run_message(&backend, &binding, &message, &format!("peer:{through}"))
                     .and_then(|_| {
@@ -1061,6 +1202,8 @@ impl WorkHost {
             inner.peer_input = None;
             inner.processing = false;
             inner.completed += 1;
+            // The end of this turn is a boundary of Stu's work too.
+            inner.move_check.get_or_insert(false);
             backend.wake.notify_all();
             if let Err(error) = result {
                 eprintln!("[richos] operator input remains saved: {error}");
@@ -1664,6 +1807,118 @@ mod tests {
         assert!(quota.accounts.take_notice().unwrap().starts_with("I switched the team to your **Home** account."));
         assert_eq!(quota.view().last_switch.map(|s|s.to),Some(home.id.clone()));
         host.shutdown();h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// A Stu whose turns can be driven as Claude Code drives an automatic one: the test hands
+    /// frames to the between-turn sink the host installed, as the native reader does.
+    struct Driven {
+        session: String,
+        account: String,
+        commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
+        sink: Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>,
+        prompts: Arc<Mutex<Vec<(String, String)>>>,
+    }
+    impl Cognition for Driven {
+        fn session_id(&self)->&str {&self.session}
+        fn account(&self)->Option<&str> {Some(&self.account)}
+        fn running_commands(&self)->Option<crate::lease_commands::CommandReading> {Some(*self.commands.lock().unwrap())}
+        fn set_between_turn_sink(&mut self,sink:crate::cognition::BetweenTurnSink) {*self.sink.lock().unwrap()=Some(sink);}
+        fn prompt(&mut self,text:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
+            self.prompts.lock().unwrap().push((self.account.clone(),text.to_string()));
+            Ok("end_turn".into())
+        }
+    }
+    /// Opens every lease on the account in use, as the production factory does
+    /// (`lease_account`), and keeps the last one's sink.
+    struct OnAccountInUse {
+        quota: Arc<crate::quota::Service>,
+        spawns: Arc<AtomicUsize>,
+        commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
+        sink: Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>,
+        prompts: Arc<Mutex<Vec<(String, String)>>>,
+    }
+    impl LeaseFactory for OnAccountInUse {
+        fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
+        fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
+            let n=self.spawns.fetch_add(1,Ordering::SeqCst);
+            Ok(Box::new(Driven {session:format!("stu-session-{n}"),account:self.quota.lease_account().id,
+                commands:self.commands.clone(),sink:self.sink.clone(),prompts:self.prompts.clone()}))
+        }
+    }
+    struct Moving {
+        h: Harness,
+        quota: Arc<crate::quota::Service>,
+        home: crate::claude_accounts::Account,
+        host: Arc<WorkHost>,
+        spawns: Arc<AtomicUsize>,
+        commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
+        sink: Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>,
+        prompts: Arc<Mutex<Vec<(String, String)>>>,
+    }
+    /// Stu started on Account 1 by a message in his inbox (the run loop opens his lease), then
+    /// the switch from Account 1 (99% of its week) to Home is decided.
+    fn stu_on_account_one_then_a_switch() -> Moving {
+        use crate::claude_accounts::tests::{reading, NOW};
+        let h=harness(0);
+        let quota=Arc::new(crate::quota::Service::open(&h.root.join("quota")).unwrap());
+        let home=quota.accounts.add("Home").unwrap();
+        let (spawns,prompts)=(Arc::new(AtomicUsize::new(0)),Arc::new(Mutex::new(Vec::new())));
+        let commands=Arc::new(Mutex::new(crate::lease_commands::CommandReading::Clear));
+        let sink=Arc::new(Mutex::new(None));
+        let host=WorkHost::new(&h.state,Box::new(OnAccountInUse {quota:quota.clone(),spawns:spawns.clone(),
+            commands:commands.clone(),sink:sink.clone(),prompts:prompts.clone()}),Arc::new(SilentNotifier));
+        host.set_quota(quota.clone());
+        crate::session_tools::observe_stall(&host.message_scope(&h.binding),"the website job").unwrap();
+        host.wake_messages(&h.binding);
+        until("Stu's first turn on Account 1",||prompts.lock().unwrap().len()==1);
+        assert_eq!(prompts.lock().unwrap()[0].0,"1");
+        // His job has a command running when the switch comes.
+        *commands.lock().unwrap()=crate::lease_commands::CommandReading::Running(1);
+        let readings=[("1".to_string(),reading(10.,3_600_000,99.,48*3_600_000)),
+            (home.id.clone(),reading(0.,3_600_000,0.,72*3_600_000))].into_iter().collect();
+        assert!(quota.accounts.evaluate(&readings,None,NOW).unwrap(),"Account 1 at 99% of its week is left for Home");
+        Moving {h,quota,home,host,spawns,commands,sink,prompts}
+    }
+    /// One automatic turn of Stu's, as Claude Code reports it between turns of ours.
+    fn automatic_turn(m: &Moving) {
+        let sink=m.sink.lock().unwrap().clone().expect("the host installs a between-turn sink");
+        sink(vec![serde_json::json!({"type":"system","subtype":"task_notification","task_id":"build","status":"completed"}),
+            serde_json::json!({"type":"assistant","message":{"content":[{"type":"text","text":"The build finished."}]}}),
+            serde_json::json!({"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn"})]);
+    }
+
+    /// **Stu really moves at the next boundary of his work, automatic turns included** (review
+    /// rv-20261019T005929Z-e3d9ad03-3e7b, finding 2; nightly 65: after the switch to Home his whole
+    /// website job ran as automatic turns, helper hand-backs and task notifications, on Work,
+    /// because he was moved only before a message the app sent him). Nothing here calls the
+    /// renewal: his turns end as Claude Code reports them.
+    ///
+    /// The switch comes while a command of his runs: ending his session would end it, so he is
+    /// told once (`account_switch`, delivered on Account 1) and keeps his session. When an
+    /// automatic turn ends with nothing of his running, he is on a new session on Home within
+    /// seconds (well inside the idle check's 30 s, so it is the turn's end that moved him) and
+    /// told so there (`account_moved`), and the panel shows the team on Home.
+    #[test]
+    fn stu_moves_to_the_new_account_when_an_automatic_turn_ends_and_is_told_while_a_command_runs() {
+        use crate::lease_commands::CommandReading;
+        let m=stu_on_account_one_then_a_switch();
+        assert_eq!(m.quota.accounts.in_use().id,m.home.id,"the switch to Home is decided");
+        automatic_turn(&m);
+        until("Stu is told the switch is coming",||m.prompts.lock().unwrap().iter().any(|(_,text)|text.contains("account_switch")));
+        assert_eq!(m.spawns.load(Ordering::SeqCst),1,"a running command was ended by a move");
+        let told:Vec<_>=m.prompts.lock().unwrap().iter().filter(|(_,text)|text.contains("account_switch")).cloned().collect();
+        assert_eq!(told.len(),1,"told once: {told:?}");
+        assert_eq!(told[0].0,"1","told on the session that is being left");
+        assert!(told[0].1.contains(r#"\"from\":\"Account 1\""#) && told[0].1.contains(r#"\"to\":\"Home\""#),"{}",told[0].1);
+
+        *m.commands.lock().unwrap()=CommandReading::Clear;
+        let ended=std::time::Instant::now();
+        automatic_turn(&m);
+        until("Stu is on Home",||m.spawns.load(Ordering::SeqCst)==2);
+        // A third of the idle check's 30 s (`ACCOUNT_CHECK_EVERY`).
+        assert!(ended.elapsed()<std::time::Duration::from_secs(10),"moved by the turn's end, not the idle check: {:?}",ended.elapsed());
+        until("Stu is told he moved, on Home",||m.prompts.lock().unwrap().iter().any(|(account,text)|account==&m.home.id&&text.contains("account_moved")));
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
     }
 
     #[test]
