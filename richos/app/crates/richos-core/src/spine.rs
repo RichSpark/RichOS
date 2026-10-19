@@ -2898,6 +2898,15 @@ impl Spine {
         let interrupted: Vec<String> = self.ledger.pending_turns().iter()
             .filter(|turn| turn.source != Source::Internal)
             .map(|turn| turn.id.clone()).collect();
+        // A Stop that settled before the restart still covers a card answer saved before it
+        // and not yet delivered (review rv-20261018T204635Z-c68a30ec-f61e#2).
+        for record in self.control.stop_records() {
+            if let IntakeRecord::Stop { id, turn_id, at } = record {
+                if let Some(thread) = self.ledger.turn(&turn_id).map(|turn| turn.thread_id.clone()) {
+                    self.control.for_thread(&thread).restore_settled(StopClaim { turn_id, intake_id: id, requested_at: at });
+                }
+            }
+        }
         for record in self.control.pending_intake() {
             if let IntakeRecord::Stop { id, turn_id, at } = record {
                 let claim = StopClaim { turn_id: turn_id.clone(), intake_id: id, requested_at: at };
