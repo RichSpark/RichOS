@@ -67,6 +67,34 @@ fn his_first_message_is_titled_and_the_title_reaches_the_shell() {
     std::fs::remove_dir_all(f.root).unwrap();
 }
 
+/// Item 1, the second review's case (rv-20261019T125755Z-2ce0daa8-2bf1): his first message and
+/// a quick follow-up both queue while the conversation is starting, and are delivered together
+/// on the shell's own road (durable intake, `poll_intake`, then `drive_shared_turns`). Both are
+/// in the ledger when the first is delivered; the first is still titled, once, from its own words.
+#[test]
+fn a_follow_up_queued_with_the_first_message_does_not_hide_it() {
+    let f = fixture("batched", |_| Ok("Board update".into()));
+    let Fixture { mut spine, thread, titles, asked, requests, root } = f;
+    spine.detach_conversation_io();
+    let control = richos_core::steering::TurnControl::open(root.join("intake.jsonl")).unwrap();
+    spine.set_turn_control(control.clone());
+    let entity = EntityId::parse("femcboost").unwrap();
+    for words in ["Draft the board update", "Keep it to one page"] {
+        control.submit_from_channel(&thread, Some(entity.clone()), words, "phone").unwrap();
+    }
+    spine.poll_intake().unwrap();
+    let shared = Mutex::new(spine);
+    richos_core::spine::drive_shared_turns(&shared).unwrap();
+    let replies = shared.lock().unwrap().messages(&thread).unwrap().iter().filter(|m| m.role == "assistant").count();
+    assert_eq!(replies, 2, "both messages were answered");
+    assert_eq!(requests.load(Ordering::SeqCst), 1, "exactly one title, for the first message");
+    let (titled, title) = titles.recv_timeout(GUARD).expect("the first message was titled");
+    assert_eq!((titled.as_str(), title.as_str()), (thread.as_str(), "Board update"));
+    assert_eq!(*asked.lock().unwrap(), vec!["Draft the board update".to_string()]);
+    drop(shared);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Item 3: his first reply is never delayed by the title. The titler is held until his reply
 /// has come back; if the spine waited for it, it would give up holding and no title would come.
 #[test]

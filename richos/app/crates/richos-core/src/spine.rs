@@ -375,13 +375,16 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
             let channel=s.input_channels.get(&delivery.turn_id).cloned().or_else(||turn.channel.clone());
             let mut conversation=String::new();
             for message in s.ledger.messages_scoped(&plan.binding)?.into_iter().filter(|m|m.turn_id!=delivery.turn_id){conversation.push_str(&format!("{}: {}\n",message.role,message.text));}
-            // His first message in this conversation: nothing visible came before it, and the
-            // words are his (typed or spoken, at the desk or on the phone), never a pressed
-            // button's or another agent's.
-            let first_words=(conversation.is_empty() && matches!(turn.source,Source::Text|Source::Jam) && !turn.pressed)
-                .then(||turn.user_text.clone());
             let mut from=conversation.len().saturating_sub(8192);while !conversation.is_char_boundary(from){from+=1;}
             let scoped=s.ledger.thread_turns(plan.binding.thread_id())?;
+            // His first message in this conversation: the words are his (typed or spoken, at
+            // the desk or on the phone), never a pressed button's or another agent's, and no
+            // message of his came EARLIER in the ledger. Earlier, not "nothing else": a
+            // follow-up he sent while the conversation was still starting is already
+            // recorded when this one is delivered, and it must not hide the first.
+            let his=|t:&crate::ledger::Turn|t.superseded_by.is_none() && matches!(t.source,Source::Text|Source::Jam) && !t.pressed;
+            let earlier=scoped.iter().take_while(|t|t.id!=delivery.turn_id).any(|t|his(t));
+            let first_words=(his(turn) && !earlier).then(||turn.user_text.clone());
             let current=|id:&str|scoped.iter().any(|turn|turn.id==id&&turn.superseded_by.is_none());
             let mut app_messages:Vec<_>=scoped.iter().filter(|turn|turn.source==Source::Proactive&&turn.superseded_by.is_none())
                 .map(|turn|(turn.id.clone(),turn.assistant_text.clone())).collect();
