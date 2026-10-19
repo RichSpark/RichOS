@@ -70,6 +70,12 @@ PHYSICAL_CHECK = "richos/mobile/physical.py"
 MOBILE = "richos/mobile/"
 ENGINE_ESCALATE = "richos/engine/scripts/escalate.sh"
 ACTIVE = "RICHOS_AUTOCHECK_ACTIVE"
+# The branch a land moves, named by the lander (workspaces.sh merge). It merges onto a branch
+# the main checkout is not on (a release branch) in a temporary checkout of that branch, where
+# no checked-out main says a land is happening (review rv-20261013T095956Z-f4ae06df-2813,
+# finding 1; 2026-10-18: two app suites broken on v1.2.1 were found only at its merge into
+# main). It can only add the land check, never take one away (land_target).
+LAND_TARGET = "RICHOS_AUTOCHECK_LAND_TARGET"
 ZERO = "0" * 40
 
 
@@ -233,6 +239,8 @@ def clean_env(common):
     # A land runs every suite it selected: a caller's opt-in to skip unchanged suites would
     # turn them into NOT RUN, which the land refuses (accepted_not_run).
     env.pop("RUN_TESTS_SKIP_UNCHANGED", None)
+    # The land's own target is not a suite's: a suite's fixture merge is no land.
+    env.pop(LAND_TARGET, None)
     cargo = str(Path.home() / ".cargo/bin")
     if cargo not in env.get("PATH", "").split(":"):
         env["PATH"] = env.get("PATH", "") + ":" + cargo
@@ -297,6 +305,17 @@ class Repo:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(dict(detail, tree=tree, at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
                                    sort_keys=True) + "\n")
+
+
+def land_target(repo):
+    """The branch this commit or merge lands onto, or "" when it is no land: a checked-out main,
+    or the branch the lander names in LAND_TARGET when this checkout is detached (its merge tree)
+    or on that same branch. A land onto a release branch runs the check a land onto main runs.
+    A name that disagrees with the checked-out branch is ignored, so it never removes a check."""
+    named = os.environ.get(LAND_TARGET, "").strip()
+    if named and repo.branch in ("", named):
+        return named
+    return LAND_BRANCH if repo.branch == LAND_BRANCH else ""
 
 
 # ---------------------------------------------------------------------------------------
@@ -2030,6 +2049,14 @@ def post_merge(repo, squash):
             record_skip(repo, f"main moved to {head[:12]} without the land checks ({how})",
                         f"Was landing {head[:12]} on main without its suites deliberate? The next push of main runs them.")
         return 0
+    target = land_target(repo)
+    if target:
+        # The lander's merge tree: the land check ran at pre-merge-commit and left its receipt.
+        # The phone watch and the hook sidecars belong to the main checkout, not to this tree.
+        if merged and not repo.land_receipt(tree).exists():
+            record_skip(repo, f"{target} moved to {head[:12]} without the land checks (git merge --no-verify)",
+                        f"Was landing {head[:12]} on {target} without its suites deliberate?")
+        return 0
     marker = repo.marker()
     verified = marker.read_text().strip() if marker.exists() else ""
     if marker.exists():
@@ -2102,13 +2129,14 @@ def main(argv):
     try:
         if hook == "commit-msg":
             return commit_msg(repo, argv[1]) if len(argv) > 1 else 0
+        target = land_target(repo)
         if hook == "pre-commit":
-            if repo.branch == LAND_BRANCH:
-                return land_from_index(repo, "commit to main")
+            if target:
+                return land_from_index(repo, f"commit to {target}")
             rc = commit_check(repo, "commit")
         elif hook == "pre-merge-commit":
-            if repo.branch == LAND_BRANCH:
-                return land_from_index(repo, "merge into main")
+            if target:
+                return land_from_index(repo, f"merge into {target}")
             rc = commit_check(repo, "merge")
         elif hook == "post-commit":
             return post_commit(repo)

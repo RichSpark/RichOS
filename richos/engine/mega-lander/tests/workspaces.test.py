@@ -6806,6 +6806,65 @@ class HuntV3_06_AStatusQueryWritesNoCleanupHistory(Base):
         self.assertIn('"regenerable-not-preserved"', open(events).read())
 
 
+class ReleaseBranches_TheMergeGateIsToldWhichBranchItLandsOn(unittest.TestCase):
+    """Review rv-20261013T095956Z-f4ae06df-2813, finding 1, and 2026-10-18: a land onto
+    a branch the main checkout is not on merges in a temporary checkout of that branch,
+    where the merge gate saw no main and ran the commit check instead of the land check;
+    two app suites broken on v1.2.1 were found only when v1.2.1 was merged into main.
+    The lander names the branch it lands onto in RICHOS_AUTOCHECK_LAND_TARGET, which
+    richos's merge gate (autocheck.py) reads; its own test proves the gate then runs the
+    land check. This hook refuses a merge that does not say which branch it lands on, as
+    that gate would have no way to tell."""
+
+    def setUp(self):
+        self.root = os.path.realpath(tempfile.mkdtemp(prefix="ws-land-target-"))
+        self.saved = {k: os.environ.get(k) for k in ("RICHOS_WORKSPACES_DIR", "GIT_CONFIG_GLOBAL",
+                                                     "RICHOS_AUTOCHECK_LAND_TARGET")}
+        os.environ["RICHOS_WORKSPACES_DIR"] = os.path.join(self.root, "state")
+        os.environ.pop("RICHOS_AUTOCHECK_LAND_TARGET", None)
+        gc = os.path.join(self.root, "gitconfig")
+        with open(gc, "w") as f:
+            f.write("[user]\n\tname = t\n\temail = t@example.invalid\n[init]\n\tdefaultBranch = main\n")
+        os.environ["GIT_CONFIG_GLOBAL"] = gc
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_every_land_off_the_main_checkout_names_its_branch_to_the_merge_gate(self):
+        repo = os.path.join(self.root, "repo")
+        run("git", "init", "-q", "-b", "main", repo)
+        run("git", "-C", repo, "commit", "-q", "--allow-empty", "-m", "base")
+        for b in ("v1.2.1", "v1.3.0"):
+            run("git", "-C", repo, "branch", b)
+        run("git", "-C", repo, "switch", "-q", "-c", "cc/worker")
+        with open(os.path.join(repo, "fix.txt"), "w") as f:
+            f.write("fix\n")
+        run("git", "-C", repo, "add", "fix.txt")
+        run("git", "-C", repo, "commit", "-q", "-m", "fix")
+        worker = run("git", "-C", repo, "rev-parse", "HEAD").stdout.strip()
+        # The main checkout stays on main while work lands on the release branches.
+        run("git", "-C", repo, "switch", "-q", "main")
+        seen = os.path.join(self.root, "gate-saw")
+        hook = os.path.join(repo, ".git", "hooks", "pre-merge-commit")
+        with open(hook, "w") as f:
+            f.write('#!/bin/sh\nprintf "%%s\\n" "${RICHOS_AUTOCHECK_LAND_TARGET:-}" >> %s\n'
+                    '[ -n "${RICHOS_AUTOCHECK_LAND_TARGET:-}" ]\n' % shlex.quote(seen))
+        os.chmod(hook, 0o755)
+        for target in ("v1.2.1", "v1.3.0"):
+            self.assertFalse(ws._merges_in_main_checkout(repo, target, "cc/worker"), target)
+            args = ["merge", "--no-ff", "--no-edit", "-m", "land worker", worker]
+            ws._merge_in_temporary_checkout(repo, target, args, "cc/worker")
+            self.assertEqual(run("git", "-C", repo, "rev-parse", target + "^2").stdout.strip(), worker)
+        with open(seen) as f:
+            self.assertEqual(f.read().split(), ["v1.2.1", "v1.3.0"])
+        self.assertEqual(run("git", "-C", repo, "symbolic-ref", "--short", "HEAD").stdout.strip(), "main")
+
+
 class HuntV3_07_NoTestIsCollectedTwice(unittest.TestCase):
     """Hunt part 4 v3, V3-07: SeverityThreeGroupJ subclassed the concrete
     Point09_NeverWritesAgain for one helper and so ran its six tests twice.

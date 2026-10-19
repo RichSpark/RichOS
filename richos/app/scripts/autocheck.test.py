@@ -1158,6 +1158,47 @@ class Land(Fixture):
         self.assertIn("lint --changed", self.tools())
         self.git("merge", "--abort")
 
+    def test_a_land_onto_a_release_branch_runs_the_land_check_a_land_onto_main_runs(self):
+        # Review rv-20261013T095956Z-f4ae06df-2813, finding 1: the lander merges onto a branch
+        # the main checkout is not on inside a DETACHED tree at that branch's tip, and the hook
+        # chose the land check only for a checked-out main. The work main refuses went onto
+        # v1.2.1, v1.3.0 and main itself under the commit check. The lander names the branch
+        # it lands onto (LAND_TARGET), and every land runs the land check.
+        self.make()
+        self.git("branch", "v1.2.1")
+        self.branch_with("broken", "richos/app/src/thing.txt", "BROKEN\n")
+        for target in ("v1.2.1", "main"):
+            tree = self.base / ("merge-tree-" + target)
+            self.git("worktree", "add", "-q", "--detach", str(tree), target)
+            (tree / "richos/engine").symlink_to(ENGINE)      # tracked in richos, linked here
+            before = self.head(target)
+            out = self.git("merge", "--no-ff", "-m", "land broken", "broken", cwd=tree, expect=1,
+                           env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET=target))
+            text = out.stdout + out.stderr
+            self.assertIn("MERGE INTO %s REFUSED" % target.upper(), text)
+            self.assertIn("suite: FAIL src/thing.txt is broken", text)
+            self.assertEqual(self.head(target), before)
+            self.git("merge", "--abort", cwd=tree)
+            self.git("worktree", "remove", "--force", str(tree))
+        # The release branch checked out where the land runs is checked the same way.
+        self.git("checkout", "-q", "v1.2.1")
+        out = self.git("merge", "--no-ff", "-m", "land broken", "broken", expect=1,
+                       env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.2.1"))
+        self.assertIn("suite: FAIL src/thing.txt is broken", out.stdout + out.stderr)
+        self.git("merge", "--abort")
+        self.git("checkout", "-q", "main")
+        # Good work lands on the release branch with the land's receipt and no false skip record.
+        self.branch_with("fix", "richos/app/src/thing.txt", "fine, fixed\n")
+        tree = self.base / "merge-tree-good"
+        self.git("worktree", "add", "-q", "--detach", str(tree), "v1.2.1")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        out = self.git("merge", "--no-ff", "-m", "land fix", "fix", cwd=tree,
+                       env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.2.1"))
+        self.assertIn("run cd richos/app && bash scripts/suite.sh", self.tools())
+        self.assertNotIn("AUTOCHECK SKIPPED", out.stderr)
+        self.assertEqual(self.recorded(), "")
+        self.git("worktree", "remove", "--force", str(tree))
+
     def test_a_merge_whose_tree_holds_a_listed_device_identifier_is_refused_without_printing_it(self):
         # 2026-10-02: a CoreDevice id reached a branch in a commit made before the commit-time
         # scan existed, and a merge carries what a branch already holds. The gate reads the whole
