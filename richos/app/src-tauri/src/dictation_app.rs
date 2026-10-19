@@ -574,7 +574,7 @@ impl Host {
     /// change goes to that tool's file, through it, so it takes effect (finding 4).
     pub fn set_key(&self, key: u8) -> Result<View, String> {
         if !(1..=19).contains(&key) {
-            return Err(format!("F{key} is not a key dictation can use"));
+            return Err(format!("F{key} is not a key RichScribe can use"));
         }
         if self.owned_elsewhere() {
             self.link.tell(&AppMessage::Change { on: None, key: Some(key), model: None });
@@ -588,7 +588,7 @@ impl Host {
     /// **Accuracy**: More accurate or Faster. The model id is stored; the label is derived from
     /// it, never stored beside it. Through the owner's tool when another copy holds the key.
     pub fn set_accuracy(&self, accuracy: &str) -> Result<View, String> {
-        let model = model_for(accuracy).ok_or_else(|| format!("{accuracy} is not an accuracy dictation offers"))?;
+        let model = model_for(accuracy).ok_or_else(|| format!("{accuracy} is not an accuracy RichScribe offers"))?;
         if self.owned_elsewhere() {
             self.link.tell(&AppMessage::Change { on: None, key: None, model: Some(model.to_string()) });
             return self.view();
@@ -873,7 +873,7 @@ pub fn event_payload(message: Option<&ToolMessage>) -> serde_json::Value {
 
 fn host(app: &tauri::AppHandle) -> Result<Arc<Host>, String> {
     use tauri::Manager;
-    app.try_state::<Arc<Host>>().map(|h| h.inner().clone()).ok_or_else(|| "dictation has not started in this window yet".to_string())
+    app.try_state::<Arc<Host>>().map(|h| h.inner().clone()).ok_or_else(|| "RichScribe has not started in this window yet".to_string())
 }
 
 /// What the sheet and the row show, read now.
@@ -935,7 +935,7 @@ pub fn dictation_permissions_changed(app: tauri::AppHandle, forward: Option<bool
 /// **Open System Settings** on the pane a refusal names: `microphone` or `accessibility`.
 #[richos_command::command]
 pub fn dictation_open_settings(pane: String) -> Result<(), String> {
-    let url = privacy_pane(&pane).ok_or_else(|| format!("{pane} is not a pane dictation opens"))?;
+    let url = privacy_pane(&pane).ok_or_else(|| format!("{pane} is not a pane RichScribe opens"))?;
     let status = std::process::Command::new("/usr/bin/open").arg(url).status().map_err(|e| e.to_string())?;
     if status.success() {
         Ok(())

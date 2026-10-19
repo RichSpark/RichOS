@@ -77,20 +77,21 @@ pub fn mark_shown(data_dir: &Path) -> Result<(), String> {
     set_field(data_dir, "offered", serde_json::Value::Bool(true))
 }
 
-// ---- THE "DICTATION FEATURE" CONVERSATION ------------------------------------------------
+// ---- THE "RICHSCRIBE FEATURE" CONVERSATION ("Dictation feature" until 2026-10-19) ------
 //
 // The CEO, 2026-10-13 (richos-hq docs/ceo-input/2026-10-13_1, onboarding5.png): "Once
 // dictation is setup, ... a new conversation should be automatically created titled
 // "Dictation feature"", holding his text below with the key he actually picked. Created once:
 // `featureThread` in the same file records the conversation's id.
 
-/// The conversation's title, his words.
-pub const FEATURE_TITLE: &str = "Dictation feature";
+/// The conversation's title, his words, with the feature's name since the CEO's rename of
+/// 2026-10-19 ("The dictation feature ... gets renamed to RichScribe").
+pub const FEATURE_TITLE: &str = "RichScribe feature";
 
 /// Rich's message in it, his words verbatim, "[selected key]" filled in with the chosen key.
 pub fn feature_text(key: u8) -> String {
     format!(
-        "Good news! Dictation is set up and enabled.\n\n\
+        "Good news! RichScribe is set up and enabled.\n\n\
          So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:\n\n\
          Click into where you want your words to appear, tap F{key}, say what you want written, then \
          tap it again. See how your words appear where your cursor is.\n\n\
@@ -103,8 +104,8 @@ pub fn feature_text(key: u8) -> String {
 /// them. `old` is the key the replaced message named, when the record kept it.
 pub fn key_change_fact(key: u8, old: Option<u8>) -> String {
     match old {
-        Some(old) if old != key => format!("The dictation key is now F{key}. The old key F{old} no longer works."),
-        _ => format!("The dictation key is now F{key}. Any other key named before no longer works."),
+        Some(old) if old != key => format!("The RichScribe key is now F{key}. The old key F{old} no longer works."),
+        _ => format!("The RichScribe key is now F{key}. Any other key named before no longer works."),
     }
 }
 
@@ -264,13 +265,13 @@ mod tests {
     fn the_feature_message_is_his_text_with_the_picked_key() {
         assert_eq!(
             feature_text(2),
-            "Good news! Dictation is set up and enabled.\n\n\
+            "Good news! RichScribe is set up and enabled.\n\n\
              So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:\n\n\
              Click into where you want your words to appear, tap F2, say what you want written, then tap it again. \
              See how your words appear where your cursor is.\n\n\
              If you have any questions about this, we can discuss it here."
         );
-        assert_eq!(FEATURE_TITLE, "Dictation feature");
+        assert_eq!(FEATURE_TITLE, "RichScribe feature");
     }
 
     /// INVARIANT: the conversation is created once, the record keeps every other setting, and a

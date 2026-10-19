@@ -4625,7 +4625,7 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
     #[cfg(target_os = "macos")]
     if let Some(link) = app.try_state::<Arc<dictation_app::Link>>() {
         if !link.finish() {
-            return Err("a dictation is still listening; tap its key to finish it, then try again".into());
+            return Err("RichScribe is still listening; tap its key to finish, then try again".into());
         }
     }
     let handle = app.state::<VoiceHandle>();
