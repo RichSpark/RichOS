@@ -840,10 +840,17 @@ function renderRow(row, isLastDelivered) {
 			? `Voice note, ${Math.round(row.seconds)} seconds.`
 			: 'Voice note.';
 		li.appendChild(voice);
-	} else {
+	} else if (mine) {
 		const text = document.createElement('p');
 		text.className = 'msg-text';
 		text.textContent = row.text || '';
+		li.appendChild(text);
+	} else {
+		// Rich writes Markdown and the Mac draws it (Ray's nightly 67 walk: `**323**` on this
+		// page); his own words above stay exactly as he typed them.
+		const text = document.createElement('div');
+		text.className = 'msg-text';
+		RichOSMarkdown.renderInto(text, row.text || '', document);
 		li.appendChild(text);
 	}
 
