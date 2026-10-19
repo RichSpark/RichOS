@@ -363,10 +363,11 @@ fn claude_for(state: &crate::AppState) -> (PathBuf, Option<PathBuf>) {
 fn private_terms(state: &crate::AppState) -> Vec<bug::PrivateTerm> {
     use bug::{Kind, PrivateTerm};
     let mut terms = Vec::new();
-    let renamed = state.nav.lock().map(|n| n.state().renamed_threads.clone()).unwrap_or_default();
+    let nav = state.nav.lock().map(|n| n.state().clone()).unwrap_or_default();
     for thread in state.reader.snapshot().threads() {
         terms.push(PrivateTerm::new(&thread.title, Kind::ConversationName));
-        if let Some(name) = renamed.get(&thread.id) {
+        // His rename and Haiku's title are both made of his words.
+        for name in [nav.renamed_threads.get(&thread.id), nav.auto_titles.get(&thread.id)].into_iter().flatten() {
             terms.push(PrivateTerm::new(name, Kind::ConversationName));
         }
     }

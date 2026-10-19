@@ -136,19 +136,37 @@ impl Bridge for PhoneBridge {
     }
 
     fn current_thread(&self) -> Option<(String, String)> {
-        let cache = self.cache.lock().unwrap();
-        let id = cache.active.clone()?;
-        let title = cache
-            .threads
-            .iter()
+        let (id, threads) = {
+            let cache = self.cache.lock().unwrap();
+            (cache.active.clone()?, cache.threads.clone())
+        };
+        let title = self
+            .shown(threads)
+            .into_iter()
             .find(|(known, _)| *known == id)
-            .map(|(_, t)| t.clone())
+            .map(|(_, t)| t)
             .unwrap_or_else(|| "Rich".to_string());
         Some((id, title))
     }
 
     fn threads(&self) -> Vec<(String, String)> {
-        self.cache.lock().unwrap().threads.clone()
+        let threads = self.cache.lock().unwrap().threads.clone();
+        self.shown(threads)
+    }
+}
+
+impl PhoneBridge {
+    /// **The titles the Mac's sidebar shows**, read when the phone asks rather than when the
+    /// cache was filled: his own rename, then the title Haiku wrote from the first message
+    /// (`nav::NavState::display_title`). So a conversation is called the same thing on both,
+    /// and a title Haiku wrote after the last turn is on the phone's next list.
+    fn shown(&self, threads: Vec<(String, String)>) -> Vec<(String, String)> {
+        let state = self.app.state::<AppState>();
+        let Ok(nav) = state.nav.lock() else { return threads };
+        threads.into_iter().map(|(id, title)| {
+            let shown = nav.state().display_title(&id, &title);
+            (id, shown)
+        }).collect()
     }
 }
 

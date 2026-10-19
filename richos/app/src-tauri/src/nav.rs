@@ -96,6 +96,22 @@ pub struct NavState {
     /// thread_id -> display title override. See the module doc: the ledger title is
     /// evidence and is never rewritten.
     pub renamed_threads: BTreeMap<String, String>,
+    /// thread_id -> the title Haiku wrote from the conversation's first message (CEO,
+    /// 2026-10-19). Shown in place of the provisional title, and never over a title the user
+    /// set himself: [`NavState::display_title`] puts his rename first.
+    pub auto_titles: BTreeMap<String, String>,
+}
+
+impl NavState {
+    /// The title a conversation is shown under, everywhere it is listed: his own rename, then
+    /// Haiku's title, then the title it was created with.
+    pub fn display_title(&self, thread_id: &str, created_title: &str) -> String {
+        self.renamed_threads
+            .get(thread_id)
+            .or_else(|| self.auto_titles.get(thread_id))
+            .cloned()
+            .unwrap_or_else(|| created_title.to_string())
+    }
 }
 
 impl Default for NavState {
@@ -109,6 +125,7 @@ impl Default for NavState {
             pinned_threads: Vec::new(),
             archived_threads: Vec::new(),
             renamed_threads: BTreeMap::new(),
+            auto_titles: BTreeMap::new(),
         }
     }
 }
@@ -261,6 +278,24 @@ impl NavStore {
             self.state.renamed_threads.insert(thread_id.to_string(), trimmed);
         }
         self.persist().inspect_err(|_| self.state.renamed_threads = before)
+    }
+
+    /// Haiku's title for a new conversation. Returns whether it was kept: never for a
+    /// conversation the user has named himself, and only once per conversation, so a later
+    /// answer for the same first message changes nothing.
+    pub fn set_auto_title(&mut self, thread_id: &str, title: &str) -> std::io::Result<bool> {
+        let trimmed: String = title.trim().chars().take(TITLE_MAX_LEN).collect();
+        if trimmed.is_empty()
+            || self.state.renamed_threads.contains_key(thread_id)
+            || self.state.auto_titles.contains_key(thread_id)
+        {
+            return Ok(false);
+        }
+        self.state.auto_titles.insert(thread_id.to_string(), trimmed);
+        self.persist().inspect_err(|_| {
+            self.state.auto_titles.remove(thread_id);
+        })?;
+        Ok(true)
     }
 }
 
@@ -435,6 +470,23 @@ mod tests {
         store.rename_thread("thr_a", "   ").unwrap();
         assert!(store.state().renamed_threads.get("thr_a").is_none());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn haikus_title_is_kept_once_and_never_over_a_name_he_gave() {
+        let path = tmp_path("auto-title");
+        let mut store = NavStore::open(&path);
+        assert_eq!(store.state().display_title("thr_a", "Can you price the Acme…"), "Can you price the Acme…");
+        assert!(store.set_auto_title("thr_a", "  Acme renewal pricing ").unwrap());
+        assert_eq!(store.state().display_title("thr_a", "Can you price the Acme…"), "Acme renewal pricing");
+        assert!(!store.set_auto_title("thr_a", "Another answer").unwrap(), "one title per conversation");
+        assert!(!store.set_auto_title("thr_b", "   ").unwrap(), "an empty answer is not a title");
+        store.rename_thread("thr_c", "Board pack").unwrap();
+        assert!(!store.set_auto_title("thr_c", "Quarterly board materials").unwrap());
+        assert_eq!(store.state().display_title("thr_c", "New thread"), "Board pack");
+        store.rename_thread("thr_a", "Acme").unwrap();
+        assert_eq!(store.state().display_title("thr_a", "Can you price the Acme…"), "Acme", "his rename wins");
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
