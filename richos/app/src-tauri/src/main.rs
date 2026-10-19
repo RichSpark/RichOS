@@ -1104,13 +1104,25 @@ fn active_thread(state: State<AppState>) -> Option<String> {
 }
 
 #[richos_command::command]
-fn create_thread(state: State<AppState>, title: String) -> Result<String, String> {
+fn create_thread(app: AppHandle, state: State<AppState>, title: String) -> Result<String, String> {
     let title = if title.trim().is_empty() { "New thread".to_string() } else { title };
     // A thread cannot exist without an immutable entity home (ECS §3.2). Until the entity
     // picker lands (slice 4) the entity comes from deterministic root resolution, and an
     // unresolved root refuses rather than guessing.
     let entity = state.entity.lock().unwrap().clone().ok_or_else(|| ENTITY_UNRESOLVED_MESSAGE.to_string())?;
-    take_the_spine(&state.spine).create_thread(&title, &entity).map_err(|e| e.to_string())
+    let id = take_the_spine(&state.spine).create_thread(&title, &entity).map_err(|e| e.to_string())?;
+    tell_the_phone_the_threads(&app);
+    Ok(id)
+}
+
+/// A conversation was created or renamed: a paired phone hears its name now rather than at the
+/// next turn's end or its next `hello` (`phone::PhoneRuntime::threads_changed`). Off the
+/// command's thread, like the push after a turn, so the command never waits on the channel.
+fn tell_the_phone_the_threads(app: &AppHandle) {
+    if let Some(runtime) = app.try_state::<Arc<phone::PhoneRuntime>>() {
+        let runtime = Arc::clone(&runtime);
+        tauri::async_runtime::spawn_blocking(move || runtime.threads_changed());
+    }
 }
 
 #[richos_command::command]
@@ -5380,6 +5392,7 @@ fn create_thread_in(app: AppHandle, state: State<AppState>, entity_id: String, t
         // command still held the mutex would put it in front of the `send_message` that is
         // microseconds behind this return. The ordering is the point, not the thread.
         drop(spine);
+        tell_the_phone_the_threads(&app);
         ready_a_spare_front_desk(&app, entity);
         Ok(id)
     }
@@ -6623,8 +6636,10 @@ fn set_thread_archived(state: State<AppState>, thread_id: String, archived: bool
 /// A DISPLAY override. The ledger's title is evidence and is left exactly as written — see
 /// nav.rs's module doc for why a rename is not a ledger edit.
 #[richos_command::command]
-fn rename_thread(state: State<AppState>, thread_id: String, title: String) -> Result<(), String> {
-    state.nav.lock().unwrap().rename_thread(&thread_id, &title).map_err(|e| e.to_string())
+fn rename_thread(app: AppHandle, state: State<AppState>, thread_id: String, title: String) -> Result<(), String> {
+    state.nav.lock().unwrap().rename_thread(&thread_id, &title).map_err(|e| e.to_string())?;
+    tell_the_phone_the_threads(&app);
+    Ok(())
 }
 
 #[cfg(test)]

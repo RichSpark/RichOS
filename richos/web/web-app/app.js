@@ -683,11 +683,7 @@ function makeLink() {
 					vapidPublicKey = data.vapid_public_key;
 					settings.set('vapidPublicKey', vapidPublicKey).catch(() => {});
 				}
-				if (Array.isArray(data.threads) && data.threads.length) {
-					threads = listFromHello(data.threads);
-					settings.set('threads', threads).catch(() => {});
-					renderThreadPicker();
-				}
+				takeThreadList(data.threads);
 				if(notificationTarget)void resolveNotificationTarget().catch(handleApiError);
 				flushQueue();
 			},
@@ -698,6 +694,8 @@ function makeLink() {
 				scheduleRender();
 				if (row && row.role === 'rich' && row.complete) askForTheQuestion(row);
 			},
+			// A conversation created or renamed on the Mac (`phone/mod.rs` `threads_changed`).
+			threads(data) { takeThreadList(data && data.threads); },
 			delta(data) { if (data && elsewhere(data.thread_id)) return; thread.applyDelta(data); scheduleRender(); },
 			state(data) { thread.applyState(data); scheduleRender(); }
 		}
@@ -720,10 +718,10 @@ function elsewhere(threadId) { return Boolean(threadId) && threadId !== currentT
 /// **A CONVERSATION CREATED AFTER THE PAGE LOADED.** The list rides only in a `hello`, which the Mac
 /// sends only to a stream that presents no cursor (`phone/stream.rs` `replay_after_marked`), so a
 /// new conversation is first seen here as a row naming a `thread_id` the page does not know. It is
-/// listed at once, untitled, which brings up the picker. Its title comes from the `hello` the
-/// stream asks for when that conversation is opened (`makeLink`), and it is not reopened here: the
-/// Mac's list only catches up when a turn completes (`phone/bridge.rs` `refresh`), so a `hello`
-/// asked for now would not name it yet, and reopening would drop the frames still in flight.
+/// listed at once, untitled, which brings up the picker. Its title comes in the `threads` frame
+/// the Mac sends when a conversation is created or renamed (`phone/mod.rs` `threads_changed`), or
+/// in the `hello` the stream asks for when it is opened (`makeLink`); the stream is not reopened
+/// here, because reopening would drop the frames still in flight.
 function noteThread(id) {
 	if (!id || threads.some((t) => t.id === id)) return;
 	threads = threads.concat([{ id, title: '' }]);
@@ -735,6 +733,15 @@ function noteThread(id) {
 /// list does not name yet (the same lag as above).
 function listFromHello(named) {
 	return named.concat(threads.filter((t) => !t.title && !named.some((n) => n.id === t.id)));
+}
+
+/// The Mac's list, from a `hello` or from the `threads` frame it sends when a conversation is
+/// created or renamed, kept for the next launch and shown in the picker.
+function takeThreadList(named) {
+	if (!Array.isArray(named) || !named.length) return;
+	threads = listFromHello(named);
+	settings.set('threads', threads).catch(() => {});
+	renderThreadPicker();
 }
 
 // ---------------------------------------------------------------------------------------------

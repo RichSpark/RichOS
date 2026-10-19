@@ -163,6 +163,7 @@
 				delta: forward('delta'),
 				state: forward('state'),
 				heartbeat: forward('heartbeat'),
+				threads: forward('threads'),
 				error: (err) => {
 					if (mine !== generation || stopped) return;
 					dropSource();
