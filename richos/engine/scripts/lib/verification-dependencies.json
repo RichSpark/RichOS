@@ -11517,7 +11517,7 @@
     },
     "ass-kicker/brief-provenance.py#annotate": {
       "source": "ass-kicker/brief-provenance.py",
-      "sha256": "78b82b175a6d2e59032bcffd9ca49928023f4742bd8866275c581e7afb6d4a10",
+      "sha256": "dc8b2c55174fd815580afef91583582ffc66d4ce153aa3d3356f361e3257f005",
       "evidence": "All import and I/O sites reviewed. annotate/review parse prompt text and read cited files as text for quotation checks. No configuration is sourced and no command or imported engine helper is executed.",
       "keys": [],
       "edges": []
@@ -12507,7 +12507,7 @@
     },
     "ass-kicker/tests/brief-provenance.test.sh": {
       "source": "ass-kicker/tests/brief-provenance.test.sh",
-      "sha256": "ec9f43c420de9cb3c1f56b3d6ba5313f54dace244d9f0876f6206f39ff40097d",
+      "sha256": "43bde0b21a817f8241e7742b46e398223e87743d258bcc97a3a046f78bc2b76f",
       "evidence": "Invokes review/annotate CLI on generated private Markdown/cited text. Quoted commands and config names are parsed data, never sourced or executed.",
       "keys": [],
       "edges": [
@@ -12529,7 +12529,7 @@
     },
     "ass-kicker/brief-provenance.py#capability": {
       "source": "ass-kicker/brief-provenance.py",
-      "sha256": "78b82b175a6d2e59032bcffd9ca49928023f4742bd8866275c581e7afb6d4a10",
+      "sha256": "dc8b2c55174fd815580afef91583582ffc66d4ce153aa3d3356f361e3257f005",
       "evidence": "Module initialization, norm, segment, check_capability and dedupe are stdlib text operations. No engine module import, command execution or config lookup.",
       "keys": [],
       "edges": []
@@ -13973,7 +13973,7 @@
     },
     "mega-lander/tests/app.test.py": {
       "source": "mega-lander/tests/app.test.py",
-      "sha256": "1e8f7d08fb09a618b4ae815bbe157146aa913beb0114e38c112f2302424387ab",
+      "sha256": "456df7003d545c62e2c9831f86cac635ad055d8d97ad8e5412d404a0904aa580",
       "evidence": "Full fixed unittest fixture, literal holder/probe subprocess programs and one literal spawn failure override. Private Git, ECS stores, registry, scope, land locks and explicit single-hook manifest bind the app/adapter entrypoint guarantees. No agent, model, arbitrary setup or MCP server is invoked. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): setUp copies the always-active five (engine/agents/{dean,clark,reed,frank,pierce}.md) as data and writes one literal fictional teammate, mark.md, into the private roster; cases name a teammate in prepare and read the duty texts mega-lander/duties/*.md as data. Renewed 2026-10-06 (proto-teammate shelf slice 3): one case prepares Clark with role consult and no repository, starts and ends it through the existing fixture helpers with literal fictional messages, and reads the fixture's private ECS store for work units. Renewed 2026-10-06 (proto-teammate shelf slice 4): one case lists and shows the shipped shelf (team/shelf/*.md read as data), saves literal fictional definitions into the fixture's private <app data>/team/ and calls prepare once more against the private roster. Renewed 2026-10-09 (echo-opus-review4, second review slice 4): cases write the scope's user words (literal fictional text and its hash) and read the brief and <id>.words prepare writes; one case loads scripts/app-engine-hook.py and calls only its mid_job_notice, which loads scripts/lib/app_review.py over a literal private ledger; one case loads scripts/lib/review_watch.py and runs app_mode --tick (AppWorld over the fixture's private registry partition, with REVIEW_WATCH_SECOND_REVIEW a literal fake script that records its arguments and sleeps) and Watcher.stop_own on that fake's recorded pid. No model, Claude CLI or real review runs. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case passes a list's append as mid_job_notice's emit and reads the text from it; nothing else changes. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 1): the app-watcher case also gives app_mode a fixture path as accounts (never created) and checks the fake second-review's recorded --accounts argument; nothing new is read. Renewed 2026-10-11 (echo-opus-skills2, second review of 79ba6eb7e, finding 2): one more case reads mega-lander/duties/consult.md as data, as the consult case already does, and the module imports re; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-11 (echo-opus-skills2, mid-job review of 7f6ea1dd8): that case asserts more words of the same consult.md text; nothing new is read. Renewed 2026-10-14 (echo-opus-hiresnag55b): one test also runs ecs/adapters/mcp.py serve in process (no server process) to prove a brief the limit accepts fits the transport's request line. Renewed 2026-10-15 (echo-opus-hire57): one case reads engine/agents/dean.md as data (setUp already copies it) and saves literal fictional definitions into the fixture's private <app data>/team/ through the team tool; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-18 (retired execution after app update): retirement reads the canonical workspaces agents/done records through existing workspaces.py helpers under the fixture private RICHOS_WORKSPACES_DIR; active cleanup intent cannot retire a worker. The new fixture calls the same canonical land and session lifecycle APIs used by existing integration/restart cases, then verifies actual ECS completion. No configuration key, environment variable, subprocess type or outside fixture file is added.",
       "keys": [],
       "edges": [
@@ -15817,7 +15817,7 @@
     },
     "mega-lander/tests/app.test.py#pause-message-case": {
       "source": "mega-lander/tests/app.test.py",
-      "sha256": "1e8f7d08fb09a618b4ae815bbe157146aa913beb0114e38c112f2302424387ab",
+      "sha256": "456df7003d545c62e2c9831f86cac635ad055d8d97ad8e5412d404a0904aa580",
       "evidence": "Added 2026-09-30 for workspaces.test.py's finding-20 case, which runs this suite with the one name test_pause_message_is_fixed. That selects only DesktopWork.test_pause_message_is_fixed_and_does_not_claim_delivery: setUp builds private Git repositories, a private orchestration.config, agent definitions copied from the engine as data, a private registry, scope, ECS store and land-locks directory, and loads app.py; the case renders pause messages and calls inspect over no receipts. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): the agent definitions setUp copies are now the always-active five plus a literal fictional teammate; the case still never reaches prepare. Renewed 2026-10-06 (proto-teammate shelf slice 3): a consult case was added beside it; this case is unchanged. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case elsewhere in the file changed; this case is unchanged. Renewed 2026-10-11 (review rv-20261011T055437Z-206908c9-000f): the case also calls resume_message and asserts both tools say NOT HELD / NOT RELEASED for the unregistered fixture name, against the same private registry; nothing else in setUp changed. Renewed 2026-10-15 (echo-opus-hire57): a Dean name-rule case was added elsewhere in the file; this case is unchanged. Renewed 2026-10-18: retired-execution reconciliation and two desktop dispatch cases changed elsewhere in these files; this selected fixture closure and setUp are unchanged.",
       "keys": [],
       "edges": [
@@ -17765,7 +17765,7 @@
       "sources": {
         "scripts/spawn.test.sh": "bdcbadba325947b1c85f81d4c76c88c4c3b2c768107fa2c9086aba9a690249b4",
         "scripts/lib/spawn.py": "3f5b489bc1684909bd8b3d63a8c083921ef845cfb3ea43b9e6bc53cd7c353c56",
-        "ass-kicker/brief-provenance.py": "78b82b175a6d2e59032bcffd9ca49928023f4742bd8866275c581e7afb6d4a10",
+        "ass-kicker/brief-provenance.py": "dc8b2c55174fd815580afef91583582ffc66d4ce153aa3d3356f361e3257f005",
         "ass-kicker/brief-scope.py": "d6910b6891d7461b98d51b234343a004834e6fd4a3c52e5dc530b6539cf376a9",
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/workspaces.py": "8bd607902bab2802a9c7e068c682058ef950acc279325d5b270721fe1471d4f2",
