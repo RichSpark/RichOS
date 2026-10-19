@@ -613,10 +613,11 @@
 							// place that knows the wire, and handed to the screen as state.
 							setCapabilities(data.capabilities, data.build);
 						}
-						if (handlers[name]) handlers[name](data);
+						// The frame's `id:` is the hub's own number, the cursor a reconnect presents (`makeLink`).
+						if (handlers[name]) handlers[name](data, event.lastEventId);
 					});
 				};
-				['hello', 'message', 'delta', 'state', 'heartbeat'].forEach(wire);
+				['hello', 'message', 'delta', 'state', 'heartbeat', 'threads'].forEach(wire);
 				source.onopen = () => { if (handlers.open) handlers.open(); };
 				// EventSource hides HTTP refusal bodies. Stop its built-in retry immediately,
 				// then ask the same authenticated route for an empty JSON page to distinguish

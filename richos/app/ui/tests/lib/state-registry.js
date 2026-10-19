@@ -4877,7 +4877,7 @@ module.exports = [
   {"s":"Question tool server: {error}","c":"NOT-RENDERED","why":"Internal command/server validation or fallback implementation diagnostic. Question UI renders its own saved-answer recovery wording; this literal is not a desktop instruction."},
   {"s":"Retry saved answer","c":"CONTROL","why":"Label of the inline question control, not a separate state."},
   {"s":"Rich has your answer","c":"INFORMATIONAL","why":"The durable receiving input has been handed off."},
-  {"s":"Rich no longer needs this:","c":"FRAGMENT","why":"Part of the inline question renderer, completed by live content. Dedicated card tests exercise the visible controls."},
+  {"s":"Rich no longer needs this.","c":"INFORMATIONAL","why":"The asker withdrew the question; there is nothing left to answer. The asker's own note stays in the record, never on the card (nightly 66: it carried a card id)."},
   {"s":"Saving your answer…","c":"INFORMATIONAL","why":"The current submission is in progress; duplicate submission is prevented."},
   {"s":"This job stopped before Rich got your answer.","c":"INFORMATIONAL","why":"The job ended (his Stop, or its second failed delivery try) before any back end took the answer; nothing on this card can send it to that ended job."},
   {"s":"This conversation was deleted. This answer was not sent:","c":"ACTIONABLE","control":".question-recovery button","fixture":"question-deleted","why":"The rendered state retains the adjacent retry, answer or recovery control; the fixture exercises the production renderer."},

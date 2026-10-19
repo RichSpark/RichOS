@@ -69,8 +69,7 @@ impl PhoneBridge {
     pub fn refresh(&self) {
         let state = self.app.state::<AppState>();
         let Ok(spine) = state.spine.try_lock() else { return };
-        let threads: Vec<(String, String)> =
-            spine.threads().into_iter().map(|t| (t.id.clone(), t.title.clone())).collect();
+        let threads = titled(spine.threads(), &state.nav.lock().unwrap().state().renamed_threads);
         let active = spine.active_thread().map(|s| s.to_string()).or_else(|| threads.first().map(|t| t.0.clone()));
         let mut payloads = HashMap::new();
         if let Some(id) = active.as_deref() {
@@ -85,6 +84,33 @@ impl PhoneBridge {
             cache.payloads.insert(k, v);
         }
     }
+
+    /// **The conversation list, read now, for a conversation just created or renamed** (Ray's
+    /// nightly 66 and 67 walks: a conversation made on the Mac was `Conversation` in the phone's
+    /// picker until opened, because this list was read only at construction and after a turn).
+    /// Read from the reader's snapshot, which needs no spine lock, so a running turn cannot
+    /// leave it stale; returned for [`super::PhoneRuntime::threads_changed`] to send.
+    pub fn threads_changed(&self) -> Vec<(String, String)> {
+        let state = self.app.state::<AppState>();
+        let threads = titled(state.reader.snapshot().threads(), &state.nav.lock().unwrap().state().renamed_threads);
+        self.cache.lock().unwrap().threads = threads.clone();
+        threads
+    }
+}
+
+/// `(id, title)` per conversation, with the title the Mac's rail shows: the CEO's rename where
+/// he made one (`nav.rs`, a display override), the ledger's title otherwise.
+fn titled(
+    threads: Vec<richos_core::thread::ThreadSummary>,
+    renamed: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+    threads
+        .into_iter()
+        .map(|t| {
+            let title = renamed.get(&t.id).cloned().unwrap_or(t.title);
+            (t.id, title)
+        })
+        .collect()
 }
 
 impl Bridge for PhoneBridge {
@@ -212,7 +238,21 @@ fn write_phone_words(
 
 #[cfg(test)]
 mod tests {
-    use super::write_phone_words;
+    use super::{titled, write_phone_words};
+
+    /// The phone's list names a conversation as the Mac's rail does: the CEO's rename when he
+    /// made one, the ledger's title otherwise. Until this, a rename never reached the phone at all.
+    #[test]
+    fn the_phones_list_names_a_renamed_conversation_by_its_new_name() {
+        let summary = |id: &str, title: &str| richos_core::thread::ThreadSummary {
+            id: id.into(), title: title.into(), created_at: 0, message_count: 0, last_activity: 0, entity_id: None, binding_revision: 0,
+        };
+        let renamed = std::collections::BTreeMap::from([("thr_b".to_string(), "Welcome email".to_string())]);
+        assert_eq!(
+            titled(vec![summary("thr_a", "Onboarding"), summary("thr_b", "New thread")], &renamed),
+            vec![("thr_a".to_string(), "Onboarding".to_string()), ("thr_b".to_string(), "Welcome email".to_string())]
+        );
+    }
     use richos_core::steering::{IntakeRecord, TurnControl};
 
     /// The record a phone message becomes carries the phone's own id, and a second reader of

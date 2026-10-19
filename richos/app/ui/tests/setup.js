@@ -2003,6 +2003,24 @@ async function main() {
     await fresh.waitForSelector("#dictation-offer-yes");
     await fresh.close();
 
+    // THE ROUND BUTTON LEARNED (the CEO, 2026-10-19): once he has pressed it, "Voice is ready.
+    // Press the round button..." is gone from the conversation; the dictation paragraphs stay
+    // while the offer is open, and when dictation is on the whole note goes.
+    const used = await finish({});
+    await used.waitForSelector("#dictation-offer");
+    await used.click("#talk-toggle");
+    await used.waitForFunction(() => ![...document.querySelectorAll("#dictation-offer .tl-prose")].some((p) => /round button/.test(p.innerText)));
+    assertEqual(await used.evaluate(() => document.body.innerText.includes("Press the round button")), false, "the voice line is gone after the first press");
+    assertEqual(await used.locator("#dictation-offer .tl-prose").count(), 2, "the dictation paragraphs stay");
+    await used.close();
+    const usedOn = await finish({ dictationView: { mic: "allowed", ax: "allowed" } });
+    await usedOn.waitForSelector("#dictation-offer-yes");
+    await usedOn.click("#talk-toggle");
+    await usedOn.click("#dictation-offer-yes");
+    await usedOn.waitForSelector("#dictation-sheet:not([hidden])");
+    await usedOn.waitForFunction(() => !document.getElementById("dictation-offer"));
+    await usedOn.close();
+
     // NEVER AGAIN: the offer was made in an earlier run (a relaunch reads `offered`).
     const again = await finish({ dictationOffered: true });
     await again.waitForFunction(() => window.__RICHOS_MOCK__.dictationOfferCalls().length > 0);

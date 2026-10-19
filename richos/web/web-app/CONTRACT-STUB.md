@@ -115,6 +115,7 @@ Event types the phone understands (anything else is ignored rather than treated 
 | `delta` | `{message_id, cursor, text}` | appends streamed text to that reply |
 | `state` | `{message_id, state}` | updates one row |
 | `heartbeat` | `{}` | proves the stream is alive |
+| `threads` | `{threads:[{id,title}]}` | sent when a conversation is created or renamed on the Mac; lists threads as a `hello` does |
 
 A message row:
 

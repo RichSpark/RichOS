@@ -606,15 +606,32 @@ function streamIsOpen() { return Boolean(link && link.isOpen()); }
 /// booted. That is the whole point of the slice.
 function makeLink() {
     let firstOpen=true;
+    // **THE CONVERSATION WHOSE `hello` THIS STREAM HAS HAD** (Ray's nightly 67 walk: a reopened
+    // conversation drew its question cards above the request that asked them). The page's cursors
+    // mix two numberings: a projection position (a `hello`, a backfill, a question row) and the
+    // hub's one live sequence for every conversation (`phone/stream.rs`). Presented on a reopen,
+    // the page's highest is read by the Mac as a hub number and the live frames after it put some
+    // rows back on hub numbers and leave others on positions. So a conversation that is opened,
+    // at boot or from the picker, asks for a `hello`, whose rows are all the Mac's own positions;
+    // only a reconnect of the conversation already heard presents a cursor.
+    let heard=null;
+    // **THAT CURSOR IS THE STREAM'S OWN NUMBER, NEVER A ROW'S** (review
+    // `rv-20261019T112205Z-d98f7bde-d3fb`: after a `hello`, a lost connection presented a projection
+    // position and the replay put the question card above its request again). It is the SSE `id:`
+    // of the last frame this stream delivered, which is always the hub's number (`phone/stream.rs`
+    // `Frame::to_wire`, a `hello` included: `routes.rs` `hello_frame`). A Mac that sends no `id:`
+    // leaves it unset, and the reconnect asks for a `hello`.
+    let streamAt=null;
+    const heardFrame=(id)=>{const n=id===''||id==null?NaN:Number(id);if(Number.isSafeInteger(n)&&(streamAt===null||n>streamAt))streamAt=n;};
 	return globalThis.RichOSLink.createLink({
 		open: async (handlers) => {
             if(firstOpen){firstOpen=false;await api.refreshChallenge();}
             const incomplete=thread.view([]).filter(row=>row.complete===false && Number.isSafeInteger(row.cursor)).map(row=>Math.max(0,row.cursor-1));
-            const cursor=thread.latestCursor();
             // A conversation the page knows only from its rows has no title yet: no cursor, so the
             // Mac answers with a `hello` and its list (`noteThread`).
             const named=threads.some(t=>t.id===currentThreadId && t.title);
-            return api.openEvents(currentThreadId,named && cursor>0?Math.min(cursor-1,...incomplete):null,handlers);
+            const resume=heard===currentThreadId && named && streamAt!==null;
+            return api.openEvents(currentThreadId,resume?Math.min(streamAt,...incomplete):null,handlers);
         },
 		refresh: () => api.refreshChallenge(),
 		onFailure: handleApiError,
@@ -636,7 +653,10 @@ function makeLink() {
 
 		handlers: {
 			open() { flushQueue(); },
-			hello(data) {
+			hello(data, id) {
+				heard=currentThreadId;
+				// A `hello` starts the count again: a Mac that restarted numbers from its projection.
+				streamAt=null;heardFrame(id);
 				// What this Mac can actually be asked for, before anything else in this handler:
 				// the screen should never be one frame ahead of what the Mac has said it can do.
 				applyCapabilities();
@@ -672,23 +692,22 @@ function makeLink() {
 					vapidPublicKey = data.vapid_public_key;
 					settings.set('vapidPublicKey', vapidPublicKey).catch(() => {});
 				}
-				if (Array.isArray(data.threads) && data.threads.length) {
-					threads = listFromHello(data.threads);
-					settings.set('threads', threads).catch(() => {});
-					renderThreadPicker();
-				}
+				takeThreadList(data.threads);
 				if(notificationTarget)void resolveNotificationTarget().catch(handleApiError);
 				flushQueue();
 			},
-			message(row) {
+			message(row, id) {
+				heardFrame(id);
 				messageCache.put(row).catch(() => {});
 				if (row && elsewhere(row.thread_id)) { noteThread(row.thread_id); return; }
 				thread.merge(row);
 				scheduleRender();
 				if (row && row.role === 'rich' && row.complete) askForTheQuestion(row);
 			},
-			delta(data) { if (data && elsewhere(data.thread_id)) return; thread.applyDelta(data); scheduleRender(); },
-			state(data) { thread.applyState(data); scheduleRender(); }
+			// A conversation created or renamed on the Mac (`phone/mod.rs` `threads_changed`).
+			threads(data, id) { heardFrame(id); takeThreadList(data && data.threads); },
+			delta(data, id) { heardFrame(id); if (data && elsewhere(data.thread_id)) return; thread.applyDelta(data); scheduleRender(); },
+			state(data, id) { heardFrame(id); thread.applyState(data); scheduleRender(); }
 		}
 	});
 }
@@ -709,10 +728,10 @@ function elsewhere(threadId) { return Boolean(threadId) && threadId !== currentT
 /// **A CONVERSATION CREATED AFTER THE PAGE LOADED.** The list rides only in a `hello`, which the Mac
 /// sends only to a stream that presents no cursor (`phone/stream.rs` `replay_after_marked`), so a
 /// new conversation is first seen here as a row naming a `thread_id` the page does not know. It is
-/// listed at once, untitled, which brings up the picker. Its title comes from the `hello` the
-/// stream asks for when that conversation is opened (`makeLink`), and it is not reopened here: the
-/// Mac's list only catches up when a turn completes (`phone/bridge.rs` `refresh`), so a `hello`
-/// asked for now would not name it yet, and reopening would drop the frames still in flight.
+/// listed at once, untitled, which brings up the picker. Its title comes in the `threads` frame
+/// the Mac sends when a conversation is created or renamed (`phone/mod.rs` `threads_changed`), or
+/// in the `hello` the stream asks for when it is opened (`makeLink`); the stream is not reopened
+/// here, because reopening would drop the frames still in flight.
 function noteThread(id) {
 	if (!id || threads.some((t) => t.id === id)) return;
 	threads = threads.concat([{ id, title: '' }]);
@@ -724,6 +743,15 @@ function noteThread(id) {
 /// list does not name yet (the same lag as above).
 function listFromHello(named) {
 	return named.concat(threads.filter((t) => !t.title && !named.some((n) => n.id === t.id)));
+}
+
+/// The Mac's list, from a `hello` or from the `threads` frame it sends when a conversation is
+/// created or renamed, kept for the next launch and shown in the picker.
+function takeThreadList(named) {
+	if (!Array.isArray(named) || !named.length) return;
+	threads = listFromHello(named);
+	settings.set('threads', threads).catch(() => {});
+	renderThreadPicker();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -829,10 +857,17 @@ function renderRow(row, isLastDelivered) {
 			? `Voice note, ${Math.round(row.seconds)} seconds.`
 			: 'Voice note.';
 		li.appendChild(voice);
-	} else {
+	} else if (mine) {
 		const text = document.createElement('p');
 		text.className = 'msg-text';
 		text.textContent = row.text || '';
+		li.appendChild(text);
+	} else {
+		// Rich writes Markdown and the Mac draws it (Ray's nightly 67 walk: `**323**` on this
+		// page); his own words above stay exactly as he typed them.
+		const text = document.createElement('div');
+		text.className = 'msg-text';
+		RichOSMarkdown.renderInto(text, row.text || '', document);
 		li.appendChild(text);
 	}
 
@@ -1164,10 +1199,14 @@ async function askForTheQuestion(row) {
 	// highest cursor either side knows is what makes the answer include his row rather than stop
 	// just short of it.
 	const from = Math.max(row.cursor || 0, thread.latestCursor() || 0) + 1;
+	const threadId = currentThreadId;
 	try {
-		const page = await api.backfill(currentThreadId, from, 5);
-		thread.prependOlder(page);
+		const page = await api.backfill(threadId, from, 5);
 		messageCache.put(page.messages || []).catch(() => {});
+		// He may have opened another conversation while this was on its way (review
+		// `rv-20261019T081330Z-785564c3-187f`): the rows are kept for their own, never drawn here.
+		if (currentThreadId !== threadId) return;
+		thread.prependOlder(page);
 		scheduleRender();
 	} catch (err) {
 		// Never a screen of its own: the reply he is reading is real and already on screen, and the
@@ -1180,12 +1219,14 @@ async function askForTheQuestion(row) {
 async function loadOlder(beforeCursor) {
 	loadingOlder = true;
 	render(false);
-	const el = $('thread');
+	const threadId = currentThreadId;
 	const before = following.capture();
 	try {
-		const page = await api.backfill(currentThreadId, beforeCursor, 40);
-		thread.prependOlder(page);
+		const page = await api.backfill(threadId, beforeCursor, 40);
 		messageCache.put(page.messages || []).catch(() => {});
+		// The same rule as `askForTheQuestion`: an answer for a conversation he has left is kept
+		// for it and never merged into the one on screen.
+		if (currentThreadId === threadId) thread.prependOlder(page);
 	} catch (err) {
 		handleApiError(err);
 	} finally {
@@ -1193,7 +1234,7 @@ async function loadOlder(beforeCursor) {
 		render(false);
 		// Keep his place: the new content went in above him, so the scroll position moves by
 		// exactly as much as the document grew.
-		following.restore(before,{prepend:true});
+		if (currentThreadId === threadId) following.restore(before,{prepend:true});
 	}
 }
 
