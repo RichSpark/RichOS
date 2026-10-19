@@ -47,6 +47,7 @@ const SHELL = [
 	'/lib/fingerprint.js',
 	'/lib/queue.js',
 	'/lib/thread.js',
+	'/lib/markdown.js',
 	'/lib/api.js',
 	'/lib/link.js',
 	'/lib/storage.js',
