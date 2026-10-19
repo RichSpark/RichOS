@@ -11,7 +11,8 @@ from pathlib import Path
 TOOL = Path(__file__).with_name('routing-probe.py')
 
 # A stand-in for the classifier's `claude -p --input-format stream-json ...`: it records its argv
-# and every message it is sent, and answers each with FAKE_LABEL as the result.
+# and every message it is sent, and answers each as Haiku with FAKE_LABEL as the result (an error
+# result when FAKE_ERROR is set).
 FAKE = r'''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ['FAKE_LOG'], 'a') as log:
@@ -19,8 +20,12 @@ with open(os.environ['FAKE_LOG'], 'a') as log:
 for line in sys.stdin:
     with open(os.environ['FAKE_LOG'], 'a') as log:
         log.write(json.dumps({'sent': json.loads(line)['message']['content']}) + '\n')
+    label = os.environ['FAKE_LABEL']
     print(json.dumps({'type': 'system', 'subtype': 'init', 'tools': []}), flush=True)
-    print(json.dumps({'type': 'result', 'is_error': False, 'result': os.environ['FAKE_LABEL']}), flush=True)
+    print(json.dumps({'type': 'assistant', 'message': {'model': 'claude-haiku-5-5',
+                      'content': [{'type': 'text', 'text': label}]}}), flush=True)
+    print(json.dumps({'type': 'result', 'is_error': bool(os.environ.get('FAKE_ERROR')), 'result': label}),
+          flush=True)
 '''
 
 
@@ -41,8 +46,8 @@ class Probe(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def probe(self, case, label, engine=None, claude=None):
-        env = dict(os.environ, FAKE_LOG=str(self.log), FAKE_LABEL=label)
+    def probe(self, case, label, engine=None, claude=None, error=''):
+        env = dict(os.environ, FAKE_LOG=str(self.log), FAKE_LABEL=label, FAKE_ERROR=error)
         return subprocess.run([sys.executable, str(TOOL), '--engine', str(engine or self.engine), '--case', case,
                                '--runs', '2', '--claude', str(claude or self.claude)],
                               capture_output=True, text=True, env=env, timeout=60)
@@ -66,6 +71,13 @@ class Probe(unittest.TestCase):
         r = self.probe('write-it-yourself-first', 'new_stu_handoff\n\nBecause it is long.')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('not a label, so Rich keeps it', r.stdout)
+
+    def test_an_error_result_routes_nothing_as_the_app_does(self):
+        # Review rv-20261019T113837Z-a6ddf48f-5d69: Live::exchange refuses an error result, so the
+        # request stays with Rich; a delegated job that the classifier failed on is a FAIL.
+        r = self.probe('delegated-work', 'new_stu_handoff', error='1')
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn('the classifier failed, so Rich keeps it', r.stdout)
 
     def test_the_classifier_starts_and_is_fed_as_the_app_does(self):
         self.probe('write-it-yourself', 'rich_handles_message')

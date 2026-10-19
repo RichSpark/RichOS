@@ -28,8 +28,8 @@ Cases (each is a request Ray saw routed in a walk, and the label it must never g
                      business's first year. Write it yourself, right here." as the conversation's
                      first message, routed to Stu the same way.
   delegated-work     The other direction, from the same run P: "please have Echo write a short
-                     welcome email ... commit it to main and push it" is work for Stu, and must
-                     never be labeled rich_handles_message.
+                     welcome email ... commit it to main and push it" is work for Stu, and
+                     must reach Stu: anything but new_stu_handoff leaves it with Rich.
 
 Prints one line per run (PASS/FAIL and the label), then a count. Exit 0 when every run passes,
 1 when any run fails, 2 when the probe cannot run. The live model is not deterministic: a count is
@@ -122,13 +122,22 @@ def one_run(args, engine, case, cwd):
         for body in sends:
             child.stdin.write(body)
             child.stdin.flush()
+            # `Live::exchange`'s own checks: a result counts only after an answer from Haiku with
+            # no tool call, and only when it is not an error; otherwise the app routes nothing.
+            model_seen, invalid = False, False
             for line in child.stdout:
                 try:
                     frame = json.loads(line)
                 except ValueError:
                     continue
+                if frame.get('type') == 'assistant':
+                    reply = frame.get('message') or {}
+                    invalid = invalid or reply.get('model') != 'claude-haiku-5-5' or any(
+                        block.get('type') == 'tool_use' for block in reply.get('content') or [])
+                    model_seen = True
                 if frame.get('type') == 'result':
-                    label = (frame.get('result') or '').strip()
+                    failed = invalid or not model_seen or frame.get('is_error') is not False
+                    label = '' if failed else (frame.get('result') or '').strip()
                     break
             else:
                 raise RuntimeError('the classifier ended without a result')
@@ -165,11 +174,14 @@ def main():
             except (RuntimeError, OSError) as error:
                 print(f'routing-probe: run {n} could not be judged: {error}', file=sys.stderr)
                 return 2
-            # Anything but an exact label is the app's "Invalid classifier decision": no handoff,
-            # Rich keeps the request (`request_classifier.rs`, `choice`).
-            shown = label if label in LABELS else 'not a label, so Rich keeps it: ' + json.dumps(label[:120])
-            failed += label == case['bad']
-            print(f"{'FAIL' if label == case['bad'] else 'PASS'} run {n}: {shown}", flush=True)
+            # Only new_stu_handoff hands the request to Stu (`routing.rs`). Anything else, a failed
+            # classifier and an answer that is not exactly a label included ("Invalid classifier
+            # decision", `request_classifier.rs` `choice`), leaves it with Rich.
+            shown = (label if label in LABELS else 'the classifier failed, so Rich keeps it' if not label
+                     else 'not a label, so Rich keeps it: ' + json.dumps(label[:120]))
+            routed = label if label == 'new_stu_handoff' else 'rich_handles_message'
+            failed += routed == case['bad']
+            print(f"{'FAIL' if routed == case['bad'] else 'PASS'} run {n}: {shown}", flush=True)
     print(f'{args.case}: {args.runs - failed} of {args.runs} passed')
     return 1 if failed else 0
 
