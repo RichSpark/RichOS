@@ -1717,6 +1717,60 @@ def fence_refusal_text(conf, files, refused, lease, repo, rewrote=None):
     ])
 
 
+PROGRAM_FILES = ("operator_fences.py", "recovery.py", "machine_settings.py")   # what install copies beside the hook
+
+
+def current_program(conf):
+    """{name: bytes} of the fence a land into this repository is judged by, or
+    None when any file of it cannot be read: the engine's, and when the engine
+    lies inside this repository, the one committed on main (which a move of main
+    has not moved yet in `prepared`), never the main checkout's files, which a
+    plain `git merge` has already replaced with the incoming work's."""
+    engine = conf.get("ENGINE") or ""
+    top = os.path.realpath(conf.get("REPO") or "/nonexistent")
+    found = {}
+    for name in PROGRAM_FILES:
+        path = os.path.realpath(os.path.join(engine, "scripts", "lib", name))
+        if engine and path.startswith(top + os.sep):
+            rc, data, _err = git(top, "cat-file", "blob", "%s:%s" % (MAIN, os.path.relpath(path, top)), raw=True)
+            if rc != 0:
+                return None
+        else:
+            try:
+                with open(path, "rb") as fh:
+                    data = fh.read()
+            except OSError:
+                return None
+        found[name] = data
+    return found
+
+
+def bring_self_current(conf):
+    """A STALE INSTALLED FENCE NEVER JUDGES A LAND (2026-10-19), whichever way
+    the land comes: `workspaces.sh merge` or a plain `git merge`. Run as the
+    launcher's installed copy, this replaces every installed file that differs
+    from current_program() (each by rename) and returns their names, [] when
+    the copy is current, cannot be compared, or this is not the installed copy."""
+    program = conf.get("PROGRAM") or ""
+    if not program or os.path.realpath(program) != os.path.realpath(__file__):
+        return []
+    want = current_program(conf)
+    if not want:
+        return []
+    folder = os.path.dirname(program)
+    stale = [n for n in PROGRAM_FILES
+             if hashlib.sha256(want[n]).hexdigest() != file_digest(os.path.join(folder, n))]
+    for name in stale:
+        dest = os.path.join(folder, name)
+        tmp = "%s.%d.tmp" % (dest, os.getpid())
+        with open(tmp, "wb") as fh:
+            fh.write(want[name])
+        if name == "operator_fences.py":
+            os.chmod(tmp, 0o755)
+        os.replace(tmp, dest)
+    return stale
+
+
 def cmd_fence(argv):
     """Called by the launcher: `fence <launcher> <phase>` with the transaction
     on stdin. Exit 0 pass, 1 refuse. In `committed` it only records."""
@@ -1726,6 +1780,18 @@ def cmd_fence(argv):
     phase = argv[1]
     if not conf or (not fenced(conf) and not conf.get("REVIEWS")):
         return 0
+    if phase == "prepared":
+        try:
+            stale = bring_self_current(conf)
+        except OSError as error:
+            stale = []
+            sys.stderr.write("operator fence: the installed fence differs from the engine's and could not be "
+                             "brought current (%s); it decides as installed. Run operator-fences.sh install "
+                             "--repo %s.\n" % (error, conf.get("REPO") or ""))
+        if stale:
+            # The same process (so the same ancestry) and the same unread stdin, now running the current
+            # fence, which finds itself current and decides.
+            os.execv(sys.executable, [sys.executable, conf["PROGRAM"], "fence"] + list(argv))
     files = Files(conf)
     lines = []
     for raw in sys.stdin.read().splitlines():

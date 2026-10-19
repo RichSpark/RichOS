@@ -42,6 +42,7 @@ import operator_fences as F   # noqa: E402
 ENGINE = os.path.realpath(os.path.join(HERE, "..", ".."))
 TEMPLATE = os.path.join(HERE, "operator-fence-launcher.sh")
 PROGRAM_SOURCE = os.path.join(HERE, "operator_fences.py")
+PROGRAM_FILES = F.PROGRAM_FILES   # what install copies beside the hook
 RECORDER_MARKER = "ref-transaction-forensics.sh"
 REGISTRY_NAME = "operator-fences.json"
 _ASSIGN = re.compile(r'^\s*([A-Z_][A-Z0-9_]*)=(?:"([^"]*)"|\'([^\']*)\'|(\S*))\s*(?:#.*)?$')
@@ -196,6 +197,51 @@ def chain_members(common):
         return []
 
 
+def copy_program(program_dir):
+    """Copies the engine's fence program into `program_dir` and returns its path.
+    The reference-transaction fence and managed land use the same recovery
+    acceptance predicate, so its state reader and settings dependency ship beside
+    the standalone fence rather than duplicating the predicate. Each file arrives
+    by rename, so a hook starting meanwhile reads the old file or the new one."""
+    os.makedirs(program_dir, exist_ok=True)
+    for name in PROGRAM_FILES:
+        dest = os.path.join(program_dir, name)
+        tmp = "%s.%d.tmp" % (dest, os.getpid())
+        shutil.copyfile(os.path.join(HERE, name), tmp)
+        if name == "operator_fences.py":
+            os.chmod(tmp, 0o755)  # copyfile carries no mode; check_one refuses a fence program git cannot run
+        os.replace(tmp, dest)
+    return os.path.join(program_dir, "operator_fences.py")
+
+
+def bring_current(repo):
+    """A STALE INSTALLED FENCE NEVER JUDGES A LAND (2026-10-19). The launcher
+    runs a COPY of the engine's fence, made at `install`; nothing re-made it when
+    the engine changed, so a land that passed its whole land check (1215 s) was
+    refused by a copy that predated the follow-up rulings it needed. The land
+    command calls this before it merges anything: when the installed copy differs
+    from the engine's, the engine's is copied in (and the launcher's digest line
+    follows). Only the program changes; the launcher's state, holders and review
+    ledger stay what `install` baked. Returns the names replaced, [] when the
+    copy is current or no launcher of ours is installed. Raises OSError when it
+    cannot write them; the land then refuses, naming `install`."""
+    conf, _paths = F.launcher_for(repo)
+    if not conf or not conf.get("PROGRAM"):
+        return []
+    program_dir = os.path.dirname(conf["PROGRAM"])
+    stale = [n for n in PROGRAM_FILES
+             if F.file_digest(os.path.join(program_dir, n)) != F.file_digest(os.path.join(HERE, n))]
+    if not stale:
+        return []
+    program = copy_program(program_dir)
+    with open(conf["LAUNCHER"], encoding="utf-8") as fh:
+        text = fh.read()
+    write_executable(conf["LAUNCHER"], re.sub(r'(?m)^OPERATOR_FENCES_PROGRAM_DIGEST="[^"]*"$',
+                                              'OPERATOR_FENCES_PROGRAM_DIGEST="%s"' % F.file_digest(program),
+                                              text, count=1))
+    return stale
+
+
 def install_one(repo, entity, decl):
     paths = F.repo_paths(repo)
     if not paths or not paths["main"]:
@@ -234,16 +280,7 @@ def install_one(repo, entity, decl):
             shutil.move(target, dest)
             os.chmod(dest, 0o755)
         moved = slot
-    program_dir = os.path.join(hooks, "operator-fences")
-    os.makedirs(program_dir, exist_ok=True)
-    program = os.path.join(program_dir, "operator_fences.py")
-    shutil.copyfile(PROGRAM_SOURCE, program)
-    # The reference-transaction fence and managed land use the same recovery
-    # acceptance predicate. Ship its state reader and settings dependency beside
-    # the standalone fence rather than duplicating the predicate.
-    shutil.copyfile(os.path.join(HERE, "recovery.py"), os.path.join(program_dir, "recovery.py"))
-    shutil.copyfile(os.path.join(HERE, "machine_settings.py"), os.path.join(program_dir, "machine_settings.py"))
-    os.chmod(program, 0o755)  # copyfile carries no mode; check_one refuses a fence program git cannot run
+    program = copy_program(os.path.join(hooks, "operator-fences"))
     digest = F.file_digest(program)
     holders = " ".join(decl.get("LAND_LEASE_HOLDERS", "").split())
     write_executable(target, launcher_text({
