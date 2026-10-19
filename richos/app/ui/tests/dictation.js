@@ -91,6 +91,7 @@ async function main() {
       const page = await open("dark", view);
       await menu(page);
       await waitText(page, "#set-dictation-state", want);
+      assert((await page.textContent("#set-dictation-open")).trim().startsWith("RichScribe"), "the row is named RichScribe (the CEO, 2026-10-19)");
       assertEqual(await page.locator("#set-dictation-state.is-attention").count(), attention ? 1 : 0, want + ": attention");
       // Round 27: under "Working with Rich", after the interruption choice and directly above
       // Use Rich from your phone, as drawn.
@@ -107,12 +108,12 @@ async function main() {
   await run.check("state 6: the sheet, off: the switch, Your key with F1 right of esc, What macOS asks you for, Accuracy, Try it here, and line 2", async () => {
     const page = await open("dark", {});
     await sheet(page);
-    assertEqual(await text(page, "#dict-title"), "Dictation");
+    assertEqual(await text(page, "#dict-title"), "RichScribe");
     assertEqual(await text(page, ".dict-lede"), "Type with your voice in any app on your Mac. Your words appear where your cursor is.");
     assertEqual(await text(page, ".dict-card-title"), "Dictate in any app");
     assertEqual(await text(page, "#dict-state"), "Off. Turn it on to type with your voice in Mail, Slack, your browser, anywhere.");
     assertEqual(await page.getAttribute("#dict-switch", "aria-checked"), "false");
-    assertEqual(await text(page, "#dict-copy-note"), "Works only while RichOS is open. When you quit RichOS, dictation stops until you open it again.");
+    assertEqual(await text(page, "#dict-copy-note"), "Works only while RichOS is open. When you quit RichOS, RichScribe stops until you open it again.");
     const keys = await page.locator(".dict-keys > *").allInnerTexts();
     assertEqual(keys, ["esc", "F1", "F2", "F3", "F4", "F5", "F6", "F7"], "esc, then F1 to F7");
     assertEqual(await page.getAttribute('[data-act="key"][data-k="1"]', "aria-checked"), "true");
@@ -121,7 +122,7 @@ async function main() {
     assertEqual(await text(page, '[data-perm="microphone"] .dict-perm-s'), "So I can hear you, only while you dictate.");
     assertEqual(await text(page, '[data-perm="accessibility"] .dict-perm-s'), "So I can type your words where your cursor is, in any app.");
     assertEqual(await page.getAttribute('[data-act="accuracy"][data-v="accurate"]', "aria-checked"), "true");
-    assertEqual(await page.getAttribute("#dict-try", "data-ph"), "Turn dictation on to try it here.");
+    assertEqual(await page.getAttribute("#dict-try", "data-ph"), "Turn RichScribe on to try it here.");
     assert(await page.locator("#dict-try-note").isHidden(), "the try note waits for dictation to work");
     assertEqual(await text(page, ".dict-priv"), "Your voice stays on this Mac. Nothing you say is sent anywhere.");
     await page.close();
@@ -129,11 +130,11 @@ async function main() {
     // off, and for a copy whose key another copy holds.
     const on = await open("dark", ALLOWED);
     await sheet(on);
-    assertEqual(await text(on, "#dict-copy-note"), "Works only while RichOS is open. When you quit RichOS, dictation stops until you open it again.");
+    assertEqual(await text(on, "#dict-copy-note"), "Works only while RichOS is open. When you quit RichOS, RichScribe stops until you open it again.");
     await on.close();
     const other = await open("dark", { ...ALLOWED, owner: "other" });
     await sheet(other);
-    assertEqual(await text(other, "#dict-copy-note"), "Works only while RichOS is open. When you quit RichOS, dictation stops until you open it again.");
+    assertEqual(await text(other, "#dict-copy-note"), "Works only while RichOS is open. When you quit RichOS, RichScribe stops until you open it again.");
     await other.close();
     return "off, and line 2 for every copy";
   });
@@ -162,7 +163,7 @@ async function main() {
     // Allowed in System Settings: read within a second, the tool told, RichOS to the front.
     await set(page, { ax: "allowed", keyTap: true });
     await waitText(page, "#dict-state", "On. Tap F1 in any app, talk, and tap it again.");
-    assertEqual(await text(page, "#dict-feedback"), "Dictation is on. Try it in the box on the right, or in any app.");
+    assertEqual(await text(page, "#dict-feedback"), "RichScribe is on. Try it in the box on the right, or in any app.");
     assert((await calls(page)).includes("dictation_permissions_changed:true"), "the tool told, RichOS brought forward");
     await page.waitForFunction(() => document.activeElement && document.activeElement.id === "dict-try");
     assertEqual(await page.getAttribute("#dict-try", "data-ph"), "Click here, tap F1 and say something.");
@@ -180,7 +181,7 @@ async function main() {
   // started by the switch (run T3: "Starting" first, On 8 s later). Check 4 above gives the tap
   // in the same breath as the grant, which is not how the app sees it; here the tap comes last.
   await run.check("D18: round 19's 'Dictation is on' line shows once the tool holds the key, when the tap comes after Accessibility was allowed and when it comes after the switch with both grants already there", async () => {
-    const LINE = "Dictation is on. Try it in the box on the right, or in any app.";
+    const LINE = "RichScribe is on. Try it in the box on the right, or in any app.";
     const ON = "On. Tap F1 in any app, talk, and tap it again.";
     // A2's shape: the microphone, then Accessibility allowed in System Settings, then the tap.
     let page = await open("dark", {}, { tapNever: true });
@@ -200,11 +201,11 @@ async function main() {
     assertEqual(await text(page, "#dict-feedback"), LINE);
     await page.close();
     // T3's shape: both grants already there, the switch pressed; the tool starts (owner none,
-    // "Starting dictation…"), then connects with its tap.
+    // "Starting RichScribe…"), then connects with its tap.
     page = await open("dark", { mic: "allowed", ax: "allowed" }, { owner: "none" });
     await sheet(page);
     await page.click("#dict-switch");
-    await waitText(page, "#dict-state", "Starting dictation…");
+    await waitText(page, "#dict-state", "Starting RichScribe…");
     assertEqual(await page.locator("#dict-feedback").count(), 0, "no line while the tool starts");
     await set(page, { owner: "self", keyTap: true });
     await waitText(page, "#dict-state", ON);
@@ -264,7 +265,7 @@ async function main() {
     await set(page, { ax: "allowed", keyTap: true });
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some(c => c.cmd === "dictation_feature_thread" && c.create));
-    await page.locator(".nav-thread", { hasText: "Dictation feature" }).waitFor();
+    await page.locator(".nav-thread", { hasText: "RichScribe feature" }).waitFor();
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await menu(page);
     await page.click("#set-dictation-open");
@@ -272,7 +273,7 @@ async function main() {
     await page.click("#dict-close");
     await page.waitForFunction(() => document.getElementById("dictation-sheet").hidden);
     assertEqual(await creates(), 1, "asked for once");
-    assertEqual(await page.locator(".nav-thread", { hasText: "Dictation feature" }).count(), 1, "one conversation");
+    assertEqual(await page.locator(".nav-thread", { hasText: "RichScribe feature" }).count(), 1, "one conversation");
     await page.close();
     return "relaunched on and refused, allowed, back in RichOS: one Dictation feature conversation in the rail";
   });
@@ -282,14 +283,14 @@ async function main() {
   await run.check("set up before the first company: the Dictation feature conversation comes once he adds one", async () => {
     const page = await open("dark", ALLOWED, { preset: { chosenEntity: null } });
     await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some(c => c.cmd === "dictation_feature_thread" && c.create));
-    assertEqual(await page.locator(".nav-thread", { hasText: "Dictation feature" }).count(), 0, "no company, so no conversation yet");
+    assertEqual(await page.locator(".nav-thread", { hasText: "RichScribe feature" }).count(), 0, "no company, so no conversation yet");
     if (await page.locator("#memory-setup:not([hidden])").count()) await page.click("#memory-setup-later");
     await page.waitForSelector("#entity-picker:not([hidden])");
     await page.evaluate(() => [...document.querySelectorAll("#entity-picker button")].find(b => /add/i.test(b.textContent)).click());
     await page.fill("#entity-add-name", "Brightwave LABS");
     await page.click("#entity-add-go");
-    await page.locator(".nav-thread", { hasText: "Dictation feature" }).waitFor();
-    assertEqual(await page.locator(".nav-thread", { hasText: "Dictation feature" }).count(), 1, "one conversation");
+    await page.locator(".nav-thread", { hasText: "RichScribe feature" }).waitFor();
+    assertEqual(await page.locator(".nav-thread", { hasText: "RichScribe feature" }).count(), 1, "one conversation");
     await page.close();
     return "refused under no company, then made when Brightwave LABS was added";
   });
@@ -302,7 +303,7 @@ async function main() {
     await leaveHome(page);
     await page.waitForSelector("#first-run:not([hidden])");
     const home = await page.locator(".nav-thread-row.is-active .nav-thread").getAttribute("data-thread-id");
-    const feature = page.locator(".nav-thread", { hasText: "Dictation feature" });
+    const feature = page.locator(".nav-thread", { hasText: "RichScribe feature" });
     await feature.waitFor();
     await feature.click();
     await page.waitForFunction(() => document.getElementById("first-run").hidden);
@@ -349,8 +350,8 @@ async function main() {
     await sheet(page);
     await page.click('[data-act="key"][data-k="5"]');
     await page.waitForFunction(() => document.querySelector('[data-act="key"][data-k="5"]').getAttribute("aria-checked") === "true");
-    assertEqual(await text(page, ".dict-key-row .dict-key-say"), "F5 starts and stops dictation. Pick one you rarely use.");
-    await page.waitForFunction(() => { const t = document.getElementById("bug-toast"); return t && !t.hidden && t.textContent === "Dictation now starts and stops with F5."; });
+    assertEqual(await text(page, ".dict-key-row .dict-key-say"), "F5 starts and stops RichScribe. Pick one you rarely use.");
+    await page.waitForFunction(() => { const t = document.getElementById("bug-toast"); return t && !t.hidden && t.textContent === "RichScribe now starts and stops with F5."; });
     await waitText(page, "#dict-state", "On. Tap F5 in any app, talk, and tap it again.");
     await page.click("#dict-capture");
     await waitText(page, ".dict-key-wait .dict-key-say", "Press the key you want to use. Esc to cancel.");
@@ -418,9 +419,9 @@ async function main() {
     // Never On without a working tool (recheck finding 6): no tool yet, and a tool with no tap.
     page = await open("dark", { ...ALLOWED, owner: "none", keyTap: false });
     await sheet(page);
-    await waitText(page, "#dict-state", "Starting dictation…");
+    await waitText(page, "#dict-state", "Starting RichScribe…");
     assertEqual(await page.locator(".dict-card.is-on").count(), 0, "not the gold on card");
-    assertEqual(await page.getAttribute("#dict-try", "data-ph"), "You can try it here once dictation has started.");
+    assertEqual(await page.getAttribute("#dict-try", "data-ph"), "You can try it here once RichScribe has started.");
     await page.close();
     // The sheet pokes the tool once for a tap (dictation_permissions_changed); here the tool's
     // tap never comes, which is the case this line is for.
@@ -465,7 +466,7 @@ async function main() {
     const page = await open("dark", {});
     await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().length > 0);
     await page.keyboard.press("F1");
-    await page.waitForFunction(() => { const t = document.getElementById("bug-toast"); return t && !t.hidden && t.textContent === "Dictation is off. Turn it on in Settings, under Dictation."; });
+    await page.waitForFunction(() => { const t = document.getElementById("bug-toast"); return t && !t.hidden && t.textContent === "RichScribe is off. Turn it on in Settings, under RichScribe."; });
     await page.close();
     const on = await open("dark", ALLOWED);
     await on.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().length > 0);

@@ -505,7 +505,7 @@ window.RichSettings = (function () {
     // line ("Off", "On. Tap F1 to talk", "Needs a permission"). `dictation.js` registers it only
     // once the app says dictation is there (DICTATION_READY).
     if (dictation) {
-      doors.push(buildDisclosureRow("set-dictation-open", "Dictation", function () {
+      doors.push(buildDisclosureRow("set-dictation-open", "RichScribe", function () {
         dictation.open();
       }, "set-dictation-state"));
     }

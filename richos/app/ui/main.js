@@ -1798,26 +1798,29 @@ function renderFirstRun() {
 // (`dictation_offer_shown`), so a relaunch never shows it again. Off entirely until dictation is
 // there (`dictation_offer`'s `ready`, `richos_core::dictation_ready`).
 //
-// **Turn on dictation** hands over to the Dictation sheet's own turn-on (slice 2 registers
+// **Turn on RichScribe** hands over to the RichScribe sheet's own turn-on (slice 2 registers
 // `window.RichDictation.turnOn`, which opens the sheet and runs the permission flow and answers
 // `{on}`). When it is on, the dictation text LEAVES this conversation and only "Voice is ready."
 // stays: once dictation is set up (the sheet closed on it, after he picked his key there), the
-// app opens a conversation titled "Dictation feature" under the company, with Rich's message
+// app opens a conversation titled "RichScribe feature" under the company, with Rich's message
 // naming the key he picked (the CEO, 2026-10-13, onboarding5.png; `dictation_feature_thread`).
-// When it did not end up on, the note says the drawn "It's in Settings, under Dictation." **Not
-// now** says the drawn "Okay. It's in Settings, under Dictation, whenever you want it."
+// When it did not end up on, the note says the drawn "It's in Settings, under RichScribe." **Not
+// now** says the drawn "Okay. It's in Settings, under RichScribe, whenever you want it."
 // ---------------------------------------------------------------------------------------
 
 const DICTATION_OFFER_VOICE = "Voice is ready. Press the round button beside the message box and just talk to me.";
 // The CEO's copy, 2026-10-13 (richos-hq docs/ceo-input/2026-10-13_1, turn-on-dictation-paragraph.png),
 // word for word after the sentence above. "[F1]" in it is the key cap, drawn with the key he has now.
-const DICTATION_OFFER_WHAT = "If you turn on dictation, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)";
+const DICTATION_OFFER_WHAT = "If you turn on RichScribe, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)";
 const DICTATION_OFFER_HOW_BEFORE = "So, instead of typing you'll be able to do this: Just click into any other app (Mail, Slack, Chrome/Safari, anything), press ";
 const DICTATION_OFFER_HOW_AFTER = " (or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊";
-const DICTATION_OFFER_NOT_NOW = "Okay. It's in Settings, under Dictation, whenever you want it.";
-const DICTATION_OFFER_LATER = "It's in Settings, under Dictation.";
+const DICTATION_OFFER_NOT_NOW = "Okay. It's in Settings, under RichScribe, whenever you want it.";
+const DICTATION_OFFER_LATER = "It's in Settings, under RichScribe.";
 /// The conversation dictation opens once set up (`dictation_offer.rs` FEATURE_TITLE).
-const DICTATION_FEATURE_TITLE = "Dictation feature";
+const DICTATION_FEATURE_TITLE = "RichScribe feature";
+/// The same conversation as an install made it before the feature was named RichScribe (the CEO,
+/// 2026-10-19): its stored title is matched, never drawn by this code.
+const DICTATION_FEATURE_TITLE_BEFORE = "Dictation feature"; // richscribe-exempt: a stored conversation title, matched only
 
 /// The note's state: null (not shown), or `{phase, key}` with phase "open", "no", "on" or
 /// "later", and the key's name ("F1").
@@ -1893,7 +1896,7 @@ function renderDictationOffer() {
   key.className = "dictation-offer-key";
   key.textContent = dictationOffer.key;
   third.append(DICTATION_OFFER_HOW_BEFORE, key, DICTATION_OFFER_HOW_AFTER);
-  // On: the dictation text has moved to its own conversation ("Dictation feature"), so this one
+  // On: the dictation text has moved to its own conversation ("RichScribe feature"), so this one
   // keeps only the sentence about voice.
   if (dictationOffer.phase === "on") {
     art.append(first);
@@ -1908,7 +1911,7 @@ function renderDictationOffer() {
     yes.type = "button";
     yes.id = "dictation-offer-yes";
     yes.className = "desk-btn desk-btn--confirm";
-    yes.textContent = "Turn on dictation";
+    yes.textContent = "Turn on RichScribe";
     yes.addEventListener("click", () => answerDictationOffer(true));
     const no = document.createElement("button");
     no.type = "button";
@@ -1929,7 +1932,7 @@ function renderDictationOffer() {
 }
 
 /// **DICTATION WAS JUST SET UP** (`dictation.js` says so when the sheet closes on a turn-on that
-/// worked, after he picked his key there): the app opens the "Dictation feature" conversation
+/// worked, after he picked his key there): the app opens the "RichScribe feature" conversation
 /// under his company, once, with Rich's message naming the key he picked, and the rail shows it.
 window.addEventListener("richos:dictation-set-up", async () => {
   // Set up later (after "Not now", or from Settings after a refused permission): the dictation
@@ -1957,7 +1960,7 @@ async function createDictationFeature() {
   await showDictationFeature(threadId);
 }
 
-/// **HE PICKED ANOTHER KEY**: the "Dictation feature" message, if there is one, is replaced so it
+/// **HE PICKED ANOTHER KEY**: the "RichScribe feature" message, if there is one, is replaced so it
 /// names the new key (the CEO: "make sure the correct key is actually within that message").
 /// A key change alone never opens the conversation.
 window.addEventListener("richos:dictation-key-changed", async () => {
@@ -6697,11 +6700,11 @@ async function renderFirstRunNotice() {
   const ticket = ++firstRunRead;
   const view = await invokeQuiet("onboarding_view");
   if (ticket !== firstRunRead || context !== firstRunContext()) return;
-  // Never in the "Dictation feature" conversation: it holds Rich's dictation message, and the
+  // Never in the "RichScribe feature" conversation: it holds Rich's dictation message, and the
   // business questions belong to onboarding (Ray on the combined build,
   // esc-20261013T210016Z-20625b89).
   const row = threadRow(activeThreadId);
-  if (row && row.title === DICTATION_FEATURE_TITLE) {
+  if (row && (row.title === DICTATION_FEATURE_TITLE || row.title === DICTATION_FEATURE_TITLE_BEFORE)) {
     box.hidden = true;
     return;
   }
