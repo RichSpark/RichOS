@@ -63,3 +63,24 @@ test('his own words are shown exactly as he wrote them', () => {
 	assert.strictEqual(text(li).textContent, 'what is **17 x 19**?');
 	assert.deepStrictEqual(text(li).all('strong'), []);
 });
+
+// Review `rv-20261019T112205Z-d98f7bde-d3fb`: a fenced block went through the inline parser, so
+// code lost its backticks and a `~~~` fence lost its literal markers. Before Markdown was drawn,
+// `textContent` showed both exactly; a fence still does, while the prose around it is formatted.
+test('a fenced example is shown exactly as written, backticks and all', () => {
+	const fenced = ['```js', 'const command = `npm test`;', '', 'run(*args*);', '```'].join('\n');
+	const body = text(draw({ id: 'r', cursor: 2, role: 'rich', kind: 'text', complete: true,
+		text: 'Run **this**:\n' + fenced + '\nThen *wait*.' }));
+	assert.strictEqual(body.textContent, 'Run this:' + fenced + 'Then wait.');
+	assert.deepStrictEqual(body.all('code'), [], 'code inside the fence was parsed as inline code');
+	assert.deepStrictEqual(body.all('strong').map((n) => n.textContent), ['this']);
+	assert.deepStrictEqual(body.all('em').map((n) => n.textContent), ['wait']);
+});
+
+test('a tilde fence keeps its literal heading and asterisks', () => {
+	const fenced = ['~~~text', '# Literal heading', '**not bold**', '~~~'].join('\n');
+	const body = text(draw({ id: 'r', cursor: 2, role: 'rich', kind: 'text', complete: true, text: fenced }));
+	assert.strictEqual(body.textContent, fenced);
+	assert.deepStrictEqual(body.all('strong'), []);
+	assert.deepStrictEqual(body.all('div').filter((n) => n.attrs.role === 'heading'), []);
+});

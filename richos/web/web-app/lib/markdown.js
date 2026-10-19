@@ -11,6 +11,11 @@
 // unmatched marker is literal, so nothing can swallow the rest of an answer. Tables, quotations,
 // rules and fenced code are not drawn here and read as written.
 //
+// A FENCED BLOCK IS FOUND BEFORE ANY OTHER RULE AND NOTHING INSIDE IT IS PARSED (review
+// `rv-20261019T112205Z-d98f7bde-d3fb`: `` `npm test` `` in a fence lost its backticks, and a
+// `~~~` fence's `# heading` and `**not bold**` lost their markers). It is one text node, its
+// fences included, exactly as the model wrote it; an unclosed fence runs to the end of the answer.
+//
 // NO STRING EVER BECOMES HTML. Every leaf is a text node and every container is `createElement`;
 // there is no `innerHTML`, so model output cannot become markup.
 //
@@ -27,6 +32,9 @@
 	// Whitespace after the marker keeps `**bold on its own line**` out of the list branch.
 	const BULLET = /^[ \t]*[-*+][ \t]+(.*)$/;
 	const ORDERED = /^[ \t]*(\d{1,9})[.)][ \t]+(.*)$/;
+	// CommonMark's fence: three or more backticks or tildes, indented at most three spaces; a
+	// backtick fence's info string has no backtick in it.
+	const FENCE = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
 
 	/// Where a `*` or `**` run closes, or -1. A `**` never closes a `*`.
 	function close(text, from, marker) {
@@ -93,6 +101,19 @@
 		while (i < lines.length) {
 			const line = lines[i];
 			if (!line.trim()) { i += 1; continue; }
+			const fence = FENCE.exec(line);
+			if (fence) {
+				const marker = fence[1];
+				const closer = new RegExp('^ {0,3}' + (marker[0] === '`' ? '`' : '~') + '{' + marker.length + ',}[ \\t]*$');
+				const start = i;
+				i += 1;
+				while (i < lines.length && !closer.test(lines[i])) i += 1;
+				i = Math.min(i + 1, lines.length);
+				const node = doc.createElement('div');
+				node.appendChild(doc.createTextNode(lines.slice(start, i).join('\n')));
+				root.appendChild(node);
+				continue;
+			}
 			const heading = HEADING.exec(line);
 			if (heading) {
 				const node = doc.createElement('div');
@@ -120,7 +141,7 @@
 			}
 			const para = doc.createElement('div');
 			const buf = [];
-			while (i < lines.length && lines[i].trim() && !HEADING.test(lines[i]) && !ORDERED.test(lines[i]) && !BULLET.test(lines[i])) {
+			while (i < lines.length && lines[i].trim() && !FENCE.test(lines[i]) && !HEADING.test(lines[i]) && !ORDERED.test(lines[i]) && !BULLET.test(lines[i])) {
 				buf.push(lines[i]);
 				i += 1;
 			}
