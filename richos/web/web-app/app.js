@@ -1164,10 +1164,14 @@ async function askForTheQuestion(row) {
 	// highest cursor either side knows is what makes the answer include his row rather than stop
 	// just short of it.
 	const from = Math.max(row.cursor || 0, thread.latestCursor() || 0) + 1;
+	const threadId = currentThreadId;
 	try {
-		const page = await api.backfill(currentThreadId, from, 5);
-		thread.prependOlder(page);
+		const page = await api.backfill(threadId, from, 5);
 		messageCache.put(page.messages || []).catch(() => {});
+		// He may have opened another conversation while this was on its way (review
+		// `rv-20261019T081330Z-785564c3-187f`): the rows are kept for their own, never drawn here.
+		if (currentThreadId !== threadId) return;
+		thread.prependOlder(page);
 		scheduleRender();
 	} catch (err) {
 		// Never a screen of its own: the reply he is reading is real and already on screen, and the
@@ -1180,12 +1184,14 @@ async function askForTheQuestion(row) {
 async function loadOlder(beforeCursor) {
 	loadingOlder = true;
 	render(false);
-	const el = $('thread');
+	const threadId = currentThreadId;
 	const before = following.capture();
 	try {
-		const page = await api.backfill(currentThreadId, beforeCursor, 40);
-		thread.prependOlder(page);
+		const page = await api.backfill(threadId, beforeCursor, 40);
 		messageCache.put(page.messages || []).catch(() => {});
+		// The same rule as `askForTheQuestion`: an answer for a conversation he has left is kept
+		// for it and never merged into the one on screen.
+		if (currentThreadId === threadId) thread.prependOlder(page);
 	} catch (err) {
 		handleApiError(err);
 	} finally {
@@ -1193,7 +1199,7 @@ async function loadOlder(beforeCursor) {
 		render(false);
 		// Keep his place: the new content went in above him, so the scroll position moves by
 		// exactly as much as the document grew.
-		following.restore(before,{prepend:true});
+		if (currentThreadId === threadId) following.restore(before,{prepend:true});
 	}
 }
 
