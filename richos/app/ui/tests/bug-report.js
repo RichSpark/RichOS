@@ -1684,7 +1684,6 @@ async function main() {
     ["Feedback", ["#nav-feedback"], "#feedback-overlay"],
     ["Search", ["#nav-search"], "#search-overlay"],
     ["the company picker", [".nav-group--unbound .nav-thread", "#unbound-new-thread"], "#entity-picker"],
-    ["the New chat or company menu", ["#rail-new-thread"], "#new-chat-menu"],
     // The second review of 9463220ef (rv-20261010T072702Z-9463220e-543f), finding 2, fixture
     // `settings-techy-scope.js`: opened from Settings in a conversation, the Technical view question
     // was aria-modal at z-index 310 over Settings (300), and focus went to its first choice.

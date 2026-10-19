@@ -876,7 +876,27 @@ module.exports = [
   // -------------------------------------------------------------------------------------
   // CONTROL — the string is an affordance, not a state that needs one
   // -------------------------------------------------------------------------------------
-  { s: "+ New thread", c: "CONTROL", why: "#rail-new-thread." },
+  { s: "+ New chat or company", c: "CONTROL", why: "#rail-new-thread since round 32: opens #new-chat-menu." },
+  {
+    s: "New chat or company",
+    c: "CONTROL",
+    why: "The accessible name of #new-chat-menu, the button's own menu (index.html and openNewChatMenu); it names the control he opened.",
+  },
+  {
+    s: "No chats yet",
+    c: "INFORMATIONAL",
+    why: "Under a company with no chats in the rail (round 32). Nothing is asked of him; the heading's plus starts one.",
+  },
+  {
+    s: "menu new-chat-menu is-form",
+    c: "NOT-RENDERED",
+    why: "A class list main.js sets on #new-chat-menu when it shows the company form; never text on screen.",
+  },
+  {
+    s: "nav-thread-row is-draft is-active",
+    c: "NOT-RENDERED",
+    why: "A class list main.js sets on a new chat's \"New chat\" row in the rail; never text on screen.",
+  },
   { s: "Start a new thread instead", c: "CONTROL", why: "#unbound-new-thread — §21's way out." },
   {
     s: "Restore my message",
@@ -941,7 +961,6 @@ module.exports = [
     why: "Empty-entity line, completed with the entity name and 'in this area.'",
   },
   { s: "in this area.", c: "FRAGMENT", why: "The tail of the empty-entity line." },
-  { s: "New thread in", c: "FRAGMENT", why: "Composer scope prefix and a group's 'new thread' accessible name." },
   { s: "Talk to Rich about", c: "FRAGMENT", why: "Composer scope prefix, completed with the entity name." },
   {
     s: "I couldn't get that to my desk just now, and nothing is running.",
