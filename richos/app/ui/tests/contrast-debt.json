@@ -379,8 +379,9 @@
       "considered": 742
     },
     "new-chat-company-form": {
+      "// 2026-10-19 merge": "RE-DERIVED 2026-10-19 after merging main (See what's new, round 34), and the reason is not this surface: the link adds text to the always-present Settings panel, so the bare shell measures 96 of 728 and cleared the old 730 within the three-node tolerance, and 9z reported it. Measured by contrast.js on the merged tree (5d68da29f): this surface 80 of 732 with its menu opened. `considered` is that measurement (732 - 3 = 729 > 728); `checked` is unchanged. Nothing this surface renders changed.",
       "checked": 80,
-      "considered": 730
+      "considered": 732
     },
     "new-chat": {
       "checked": 104,
