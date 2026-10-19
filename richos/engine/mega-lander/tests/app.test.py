@@ -410,7 +410,9 @@ class DesktopWork(unittest.TestCase):
                 "fields":{"id":f"hire-{index}","title":"Hire a fictional teammate"}}]}})
             reply=send(brief,f"hire-at-limit-{index}",f"hire-{index}")
             self.assertNotIn("error",reply,repr(unit))
-            self.assertFalse(reply["result"]["isError"],(repr(unit),reply["result"]["content"][0]["text"][:500]))
+            # The END of the error, where its reason is: a failed command's text starts with the
+            # command line, which alone filled the first 500 characters this used to keep.
+            self.assertFalse(reply["result"]["isError"],(repr(unit),reply["result"]["content"][0]["text"][-4000:]))
             self.assertEqual(json.loads(reply["result"]["content"][0]["text"])["status"],"prepared",repr(unit))
             # One byte more is the limit's refusal, never the transport's.
             reply=send(brief+"x",f"hire-over-limit-{index}",f"hire-{index}")

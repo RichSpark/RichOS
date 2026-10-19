@@ -74,8 +74,7 @@ pub struct ObligationDesk {
 /// Opening the obligation, as a seam — **so the refusal paths are unit-tested without a
 /// Python interpreter and `cargo test -p richos-core` stays native-dep-free.**
 ///
-/// The production implementation is [`EcsObligations`]; the real wire is exercised by
-/// `examples/first_reply_timing_e2e.rs`, which drives `prepare` against what this wrote.
+/// The production implementation is [`EcsObligations`].
 pub trait ObligationOpener {
     /// Open the obligation, or say why not in a sentence that can be read aloud.
     fn open(&self, desk: &ObligationDesk, obligation: &str, title: &str, kind: AssignmentKind)

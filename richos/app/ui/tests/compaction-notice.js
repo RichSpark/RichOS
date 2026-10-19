@@ -291,7 +291,9 @@ const FABRICATION = [
   /\bestimated?\b/i,
   /\bremaining\b/i,
   /\babout (a|an|\d)/i,
-  /\bthinking\b/i,
+  // "Rich is thinking" is the band's words for the moment before anything has come back from Rich
+  // (CEO order 2026-10-17); any other use of "thinking" would still be a made-up claim.
+  /(?<!\bRich is )\bthinking\b/i,
   /\bprogress\b/i,
 ];
 

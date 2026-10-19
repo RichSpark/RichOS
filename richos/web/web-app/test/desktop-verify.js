@@ -427,6 +427,71 @@ async function runEngine(playwright, engine) {
 		mac.state.threads = [{ id: mac.threadId, title: 'Rich' }];
 		await page.evaluate(() => window.__richosPhone.connectStream());
 
+		// --- a question card: one tap on an answer answers it, as a click does on the Mac ---
+		// Ray, nightlies 63 and 64: the phone page showed the question as plain text with no option
+		// to press, so clicking "Casual" did nothing (follow-ups-after-nightly65.md item 5).
+		mac.ask({ id: 'q-tone', text: 'Should the welcome email sound formal or casual?', options: [
+			{ id: 'opt-formal', label: 'Formal', description: 'Polished, professional tone.' },
+			{ id: 'opt-casual', label: 'Casual', description: 'Warm, friendly, conversational tone.' }] });
+		const casual = page.locator('[data-message-id="q-tone"] button', { hasText: 'Casual' });
+		let cardShown = true;
+		try { await casual.waitFor({ state: 'visible', timeout: 10000 }); } catch { cardShown = false; }
+		check('a question from Rich arrives as a card with its answers as buttons', cardShown,
+			await page.evaluate(() => document.querySelector('[data-message-id="q-tone"]')?.innerText || 'no row'));
+		if (cardShown) {
+			await shoot(page, `${engine}-question-open`);
+			await casual.click();
+			try { await page.waitForFunction(() => /You answered: Casual/.test(document.querySelector('[data-message-id="q-tone"]')?.innerText || ''), null, { timeout: 10000 }); } catch { /* the check says it */ }
+			const sent = mac.state.answers;
+			check('tapping "Casual" sends that answer to the Mac, once',
+				sent.length === 1 && sent[0].kind === 'answer' && sent[0].question_id === 'q-tone'
+					&& sent[0].thread_id === mac.threadId && JSON.stringify(sent[0].option_ids) === '["opt-casual"]',
+				JSON.stringify(sent));
+			const after = await page.evaluate(() => document.querySelector('[data-message-id="q-tone"]')?.innerText || '');
+			check('and the card then says what he answered, with no answer left to press',
+				/You answered: Casual/.test(after) && !(await casual.count()), after);
+			await shoot(page, `${engine}-question-answered`);
+
+			// Change answer, then the same answer again: the Mac says `already_answered` and the
+			// question does not change, so nothing new arrives to redraw the card. Keeping his
+			// answer finishes editing all the same (review rv-20261018T195835Z-e9e0cebc-554e #1).
+			const card = page.locator('[data-message-id="q-tone"]');
+			await card.locator('button', { hasText: 'Change answer' }).click();
+			await casual.click();
+			let settled = true;
+			try { await page.waitForFunction(() => /You answered: Casual/.test(document.querySelector('[data-message-id="q-tone"]')?.innerText || ''), null, { timeout: 10000 }); } catch { settled = false; }
+			const kept = await card.innerText();
+			check('Change answer, then the same answer again, shows the answered card, not "Saving your answer…"',
+				settled && !/Saving your answer/.test(kept) && await card.locator('button', { hasText: 'Change answer' }).count() === 1
+					&& await card.locator('button.ask-option').count() === 0
+					&& sent.length === 2 && sent[1].expected_revision === 1, `${kept} | ${JSON.stringify(sent.slice(1))}`);
+		}
+
+		// A multiple-choice card with Other answer open: ONE Send answer, which sends the chosen
+		// options and what he typed together (review rv-20261018T195835Z-e9e0cebc-554e #2).
+		mac.ask({ id: 'q-recipients', multiple: true, text: 'Who should get the summary?', options: [
+			{ id: 'opt-sales', label: 'Sales' }, { id: 'opt-finance', label: 'Finance' }] });
+		const multi = page.locator('[data-message-id="q-recipients"]');
+		let multiShown = true;
+		try { await multi.locator('button', { hasText: 'Sales' }).waitFor({ state: 'visible', timeout: 10000 }); } catch { multiShown = false; }
+		check('a multiple-choice question arrives as a card', multiShown, await multi.innerText().catch(() => 'no row'));
+		if (multiShown) {
+			const before = mac.state.answers.length;
+			await multi.locator('button', { hasText: 'Sales' }).click();
+			await multi.locator('button', { hasText: 'Other answer' }).click();
+			await multi.locator('textarea').fill('Also send it to the support team');
+			const sends = multi.locator('button:visible', { hasText: 'Send answer' });
+			const sendCount = await sends.count();
+			check('with options chosen and Other answer open, the card has one Send answer', sendCount === 1, `${sendCount} Send answer buttons`);
+			await sends.first().click();
+			try { await page.waitForFunction(() => /You answered:/.test(document.querySelector('[data-message-id="q-recipients"]')?.innerText || ''), null, { timeout: 10000 }); } catch { /* the check says it */ }
+			const body = mac.state.answers.slice(before);
+			const shown = await multi.innerText();
+			check('and it sends the chosen options and the typed text together',
+				body.length === 1 && JSON.stringify(body[0].option_ids) === '["opt-sales"]' && body[0].text === 'Also send it to the support team'
+					&& /You answered: Sales; Also send it to the support team/.test(shown), `${JSON.stringify(body)} | ${shown}`);
+		}
+
 		// --- the shell is kept, so the app OPENS where his Mac does not resolve ---
 		const worker = await page.evaluate(async () => {
 			if (!('serviceWorker' in navigator)) return { supported: false };

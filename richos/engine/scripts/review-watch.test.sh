@@ -471,6 +471,8 @@ FAKE_SR_MODE=changes-requested tickrw
 [ "$(ncalls)" = "1" ] && has "$OUT" "[CHANGES-REQUESTED] echo-sonnet-w1, handover review" && has "$OUT" "continues: echo-sonnet-w1" \
   && has "$OUT" "Shutdown leaves audio on disk"
 check "W03 the verdict is told once with its findings and what the lead can do; no second review of the tip" $? "calls=$(ncalls) out=$OUT"
+has "$OUT" "second-review.sh --follow-up <finding id> --why"
+check "W03 the notice also names the one command that files a blocking finding as a follow-up (follow-up 12, D1)" $? "out=$OUT"
 tickrw
 [ -z "$OUT" ]; check "W03 the next look tells nothing again" $? "out=$OUT"
 REVIEW_WATCH_NOW="$(python3 -c 'import time; print(time.time() + 31 * 60)')" tickrw

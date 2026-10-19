@@ -286,7 +286,9 @@ fn retain_preparation_item(
 }
 
 
-fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot:&std::sync::Arc<std::sync::Mutex<Option<Box<dyn Cognition>>>>)->Result<bool,SpineError> {
+/// `turn` is the reply this connection is prepared for: it runs on the lease's account until
+/// [`crate::claude_accounts::Accounts::turn_ended`].
+fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot:&std::sync::Arc<std::sync::Mutex<Option<Box<dyn Cognition>>>>,turn:&str)->Result<bool,SpineError> {
     let mut slot=slot.lock().unwrap();
     if slot.as_ref().is_some_and(|lease|lease.is_closed()) {drop(slot.take());}
     if let Some(lease)=slot.as_ref() {
@@ -309,7 +311,7 @@ fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot
         }
         state.state(|s| {
             if let Some(active)=plan.control.active_turn() {s.ledger.mark_turn_started(&active.turn_id,lease.session_id())?;}
-            if let (Some(quota),Some(account))=(s.quota_service(),lease.account()) {quota.accounts.ran_on(account);}
+            if let (Some(quota),Some(account))=(s.quota_service(),lease.account()) {quota.accounts.ran_on(turn,account);}
             s.raise_quota_notices(Some(plan.binding.thread_id()));
             Ok::<_,SpineError>(())
         })?;
@@ -328,7 +330,7 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
             plan.control.stop_claim_for(&delivery.turn_id).is_some()
         });
     }
-    let prepared=prepare_connection(state,plan,&delivery.lease).and_then(|_| {
+    let prepared=prepare_connection(state,plan,&delivery.lease,&delivery.turn_id).and_then(|_| {
         if stopped() {return Ok(())}
         let (original,source,conversation,channel,app_messages)=state.state(|s| {
             let mut successor=delivery.turn_id.as_str();let mut seen=std::collections::HashSet::new();
@@ -394,8 +396,11 @@ fn prime_front_desk_with(state:&mut impl PreparationState,thread:&str)->FrontDes
     });
     let (plan,desk)=match begun {Ok(value)=>value,Err(verdict)=>return verdict};
     let started=std::time::Instant::now();
-    let result=prepare_connection(state,&plan,&desk);
+    // The priming is a reply of its own on the lease's account, over when it returns.
+    let priming=format!("prime:{thread}");
+    let result=prepare_connection(state,&plan,&desk,&priming);
     state.state(|s| {
+        if let Some(quota)=s.quota_service() {quota.accounts.turn_ended(&priming);}
         if let Some(resident)=s.resident.get_mut(thread) {resident.parked_at_ms=now_millis();}
         plan.control.end_front_desk_prime();
         if let Err(error)=s.poll_intake() {eprintln!("[richos] queued input after preparation: {error}");}
@@ -2275,6 +2280,8 @@ impl Spine {
         // The mirror is cleared whatever happens below, including on the error paths: a
         // stale "still running" would make the next stop request name a dead turn.
         control.end_turn(turn_id);
+        // Nor does it run on its account any more: the switch may be complete now.
+        if let Some(quota)=self.quota_service() {quota.accounts.turn_ended(turn_id);}
         // Every entrance reports completion here, including direct intake and failures.
         if !self.thread_is_running(thread_id) && !self.ended_turns.iter().any(|known|known.thread_id()==thread_id) {
             self.ended_turns.push(binding.clone());
@@ -2827,10 +2834,19 @@ impl Spine {
     pub fn queue_question_answer(&mut self,delivery:&crate::questions::Delivery)->Result<String,SpineError> {
         let binding=self.fence_binding(&delivery.thread_id)?;
         if binding.entity_id().as_str()!=delivery.entity_id {return Err(SpineError::Steering("Question scope mismatch".into()));}
-        let turn_id=self.ledger.record_question_answer(&binding,delivery)?;
+        // The order taken when the app accepted his click (the question store carries it), or
+        // the same acceptance order a typed message takes, so a Stop he presses after it covers it.
+        let order=match delivery.order {Some(order)=>{self.control.advance_input_order(order);Some(order)},None=>self.control.take_input_order()};
+        let turn_id=self.ledger.record_question_answer(&binding,delivery,order)?;
         if self.ledger.turn(&turn_id).is_some_and(|t|t.state==crate::ledger::TurnState::Received)
             && !self.pending_delivery.iter().any(|pending|pending.turn_id==turn_id) {
             if delivery.set_id.is_none(){self.emit_live(self.ceo_message_event(&binding,&turn_id));}
+            // Accepted before a Stop that settled before this delivery: stopped with the rest.
+            if let Some(claim)=delivery.order.and_then(|order|self.control.for_thread(binding.thread_id()).settled_stop_covering(order)) {
+                self.ledger.stop_turn(&turn_id,claim.requested_at)?;
+                self.emit_live(self.turn_status_event(&binding,&turn_id,TurnStatus::Stopped,None));
+                return Ok(turn_id);
+            }
             self.deliver(&turn_id,&binding,&delivery.text,true)?;
         }
         Ok(turn_id)

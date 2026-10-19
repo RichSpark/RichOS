@@ -8,6 +8,7 @@ whose arguments name an AVD; the machine's own simulators are never listed
 paired with the case that must NOT remove, because a collector is judged as
 much on what it leaves as on what it takes.
 """
+import contextlib
 import importlib.util
 import io
 import json
@@ -188,12 +189,29 @@ class Collector(Base):
         device = self.device('rios-ui-locked')
         self.hold_registry_lock()
         with patch.object(T, 'REGISTRY_LOCK_SECONDS', 0), \
-                patch.object(T, 'CLI_REGISTRY_LOCK_SECONDS', 0), \
+                patch.object(T, 'COLLECTOR_BUSY_ALERT_SECONDS', 0), \
                 patch.object(T, 'ios_devices', side_effect=AssertionError('lock not held')):
             errors = T.cleanup_run_simulators('mine')
         self.assertTrue(errors)
         self.assertIn('collector:incomplete', self.rows())
         self.assertEqual({d['udid'] for d in self.devices()}, {device})
+
+    def test_run_finalizer_outwaits_the_longest_legitimate_lock_hold(self):
+        import inspect
+        seen = []
+
+        @contextlib.contextmanager
+        def lock(wait_seconds=None):
+            seen.append(wait_seconds)
+            raise T.RegistryBusy('busy')
+            yield
+
+        longest_hold = inspect.signature(T.simctl).parameters['timeout'].default   # one simctl call, under the lock
+        os.makedirs(T.registry_dir(), exist_ok=True)   # an absent registry returns before the lock
+        with patch.object(T, 'registry_lock', lock):
+            self.assertTrue(T.cleanup_run_simulators('mine'))
+        self.assertEqual(len(seen), 1)
+        self.assertGreater(seen[0], longest_hold)
 
     def test_run_finalizer_preserves_a_shared_foreign_live_owner_without_failure(self):
         device = self.device('rios-ui-shared')

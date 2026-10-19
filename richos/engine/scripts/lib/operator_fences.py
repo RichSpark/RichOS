@@ -1220,10 +1220,45 @@ def _own_history(repo, other, tip):
     return code != 1
 
 
-def review_of(rows, tip, repo):
+def review_deferrals_path(ledger):
+    """review-deferrals.jsonl, beside the review ledger (second_review.py writes it)."""
+    return os.path.join(os.path.dirname(ledger), "review-deferrals.jsonl")
+
+
+def read_deferrals(ledger):
+    """{finding id: the row that filed it as a follow-up}. The lander's ruling on
+    a blocking finding (ruling §116: "Rich applies the same test"), written by
+    `second-review.sh --follow-up`; a later `--reopen` row of the same finding
+    undoes it, so the later row wins."""
+    out = {}
+    try:
+        with open(review_deferrals_path(ledger), encoding="utf-8") as fh:
+            for raw in fh:
+                try:
+                    r = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(r, dict) or not r.get("finding"):
+                    continue
+                if r.get("action") == "follow-up":
+                    out[r["finding"]] = r
+                elif r.get("action") == "reopen":
+                    out.pop(r["finding"], None)
+    except OSError:
+        pass
+    return out
+
+
+def review_of(rows, tip, repo, deferred=None):
     """(the verdict row that decides `tip` in `repo`, the newest mid-job row on
     it). A row of another repository, or with no repository, never counts: the
-    ledger is shared, and independent clones or forks can hold the same commit."""
+    ledger is shared, and independent clones or forks can hold the same commit.
+
+    `deferred` (read_deferrals) is applied last: a finding the lander filed as a
+    follow-up does not block, whatever a later review says of it. When every
+    blocking finding in the history was filed so, the changes-requested row
+    stands as passed (never an unresolved legacy row); the row then carries the
+    rulings it rests on in `deferred`."""
     ident = review_repo_identity(repo) if repo else ""
     mine = [review_row_standing(r) for r in rows if review_row_belongs(r, ident)]
     land = [r for r in mine if r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS]
@@ -1237,11 +1272,31 @@ def review_of(rows, tip, repo):
         history = [r for r in mine[:end+1] if (r.get("work") in works and _own_history(repo, r.get("tip"), tip)) or
                    (r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)]
         opened = open_review_findings(history)
+        applied = {}
+        for fid, ruling in (deferred or {}).items():
+            if fid in opened and review_row_belongs(ruling, ident):
+                if opened[fid].get("blocks") is not False:
+                    applied[fid] = ruling
+                opened[fid] = dict(opened[fid], blocks=False, filed=True)
         blocked = {k: f for k, f in opened.items() if f.get("blocks") is not False}
         if blocked:
             effective.update(verdict="changes-requested", blocking=len(blocked),
                              effective_findings=blocked)
+        elif applied and effective.get("verdict") == "changes-requested" \
+                and not effective.get("unresolved_legacy_pass"):
+            effective.update(verdict="passed", blocking=0)
+        if applied:
+            effective["deferred"] = applied
     return effective, (mid[-1] if mid else None)
+
+
+def review_blocking_ids(row):
+    """The ids of the findings that hold `row`, as `--follow-up` takes them."""
+    if row.get("effective_findings"):
+        return list(row["effective_findings"])
+    answer = review_record(row).get("answer") or {}
+    return ["%s#%d" % (row.get("id"), n) for n, f in enumerate(answer.get("findings") or [], 1)
+            if isinstance(f, dict) and f.get("blocks", row.get("verdict") == "changes-requested")]
 
 
 def review_findings(row, limit=6):
@@ -1265,9 +1320,10 @@ def review_findings(row, limit=6):
 def review_gaps(ledger, tips, repo):
     """{tip: why} for every tip with no passing verdict; {} when all pass."""
     rows = read_reviews(ledger)
+    deferred = read_deferrals(ledger)
     gaps = {}
     for tip in tips:
-        row, mid = review_of(rows, tip, repo)
+        row, mid = review_of(rows, tip, repo, deferred)
         if row and row.get("verdict") == "passed":
             recovery_home = os.path.join(os.path.dirname(ledger), "recovery")
             if os.path.isdir(recovery_home):
@@ -1294,6 +1350,9 @@ def review_gaps(ledger, tips, repo):
             why = ["the second review %s of %s says %s: %s finding(s), %s P1, by %s (%s). Record: %s" % (
                 row.get("id"), tip[:12], row.get("verdict"), row.get("findings"), row.get("p1"),
                 row.get("reviewer"), row.get("reviewer_model"), os.path.join(row.get("record") or "?", "verdict.json"))]
+            ids = review_blocking_ids(row)
+            if ids:
+                why += ["  Blocking finding id(s): %s" % ", ".join(ids)]
             why += ["  P%s %s (%s)" % f for f in review_findings(row)]
         gaps[tip] = why
     return gaps
@@ -1313,6 +1372,10 @@ def review_refusal_text(repo, gaps, engine, in_git=False):
         "  The way through: review-watch starts the review by itself when a teammate hands over",
         "  (and at Codex's READY entry); its verdict reaches the lead. For changes requested, start a",
         "  fresh continuation with the findings as its input; its own handover is reviewed again.",
+        "  Or, when no user hits a blocking finding in normal use of this work (ruling §116), the lead files",
+        "  it as a follow-up and the work lands: %s/scripts/second-review.sh --follow-up <finding id>"
+        % (engine or "<engine>"),
+        "  --why '<who rules, and why>' (undone with --reopen <finding id>).",
         "  To review a tip now: %s/scripts/second-review.sh --repo %s --tip <commit> --words-file <request>"
         % (engine or "<engine>", repo),
         "  Only the repositories in SECOND_REVIEW_REPOS (orchestration.config) are refused."]
@@ -1615,8 +1678,7 @@ def fence_refusal_text(conf, files, refused, lease, repo, rewrote=None):
         others = [r for r in refused if r[1] != REVIEW_WHY]
         tail = ["  Also: " + fence_refusal_text(conf, files, others, lease, repo, rewrote)] if others else []
         return "\n".join(reviews[:1] + tail + [
-            "  Review and recovery acceptance stays active while lease fencing is off.",
-            "  Route the exact blocking finding with scripts/recovery.sh dispute for an independent applicability check."])
+            "  Review and recovery acceptance stays active while lease fencing is off."])
     held_over = [detail for _l, _w, detail in refused if detail]
     if held_over:
         return "\n".join(["=== OPERATOR FENCE: refused in %s, even for the lease holder ===" % repo]

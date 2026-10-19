@@ -5137,7 +5137,7 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
     def setUp(self):
         super().setUp()
         self.saved_env = {k: os.environ.pop(k, None) for k in
-                          ("CLAUDE_PID", "CLAUDE_CODE_ENTRYPOINT", "SECOND_REVIEW_STATE_DIR")}
+                          ("CLAUDE_PID", "CLAUDE_CODE_ENTRYPOINT", "SECOND_REVIEW_STATE_DIR", "RICHOS_AGENT_OWNER")}
         os.environ["SECOND_REVIEW_STATE_DIR"] = os.path.join(self.env.root, "review-state")
         self.ledger = os.path.join(os.environ["SECOND_REVIEW_STATE_DIR"], "reviews.jsonl")
         self.decl = os.path.join(self.env.root, "fence-entity")
@@ -5287,6 +5287,102 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         with self.assertRaises(ws.SpecError) as e:
             ws.merge_and_land("zach-opus-rvown2", self.sid)
         self.assertIn("this branch's earlier defect", str(e.exception))
+        self.assertEqual(self.head(), before)
+
+    # -- the lead files a blocking finding as a follow-up (follow-up 12, D1) ------------
+    # 2026-10-18 05:01Z, nightly 63 held on a finding the CEO had ruled a follow-up: "Override. ...
+    # Follow-up for that review stuff." The only way through was switching the gate off.
+
+    def follow_up(self, finding, *extra, check=True):
+        return run("bash", os.path.join(ENGINE, "scripts", "second-review.sh"), "--follow-up", finding,
+                   "--why", "Rich, per the CEO: not a normal-use hole in this work", *extra, check=check)
+
+    def deferral_row(self, finding, repo, tip, action="follow-up"):
+        with open(os.path.join(os.path.dirname(self.ledger), "review-deferrals.jsonl"), "a") as f:
+            f.write(json.dumps({"action": action, "finding": finding, "repo": repo,
+                                "repo_id": self.repo_identity(repo), "tip": tip, "why": "by hand"}) + "\n")
+
+    def test_second_review_a_finding_filed_as_a_follow_up_lets_the_work_land(self):
+        cc, (tip,) = self.finished("zach-opus-rvfu")
+        rid = self.verdict(tip, "changes-requested", findings=[(2, "question-card answers are not in the cut")])
+        before = self.head()
+        with self.assertRaises(ws.SpecError) as e:
+            ws.merge_and_land("zach-opus-rvfu", self.sid)
+        self.assertIn("Blocking finding id(s): %s#1" % rid, str(e.exception))
+        self.assertIn("--follow-up <finding id>", str(e.exception))
+        self.assertEqual(self.head(), before)
+        r = self.follow_up(rid + "#1")
+        self.assertIn("filed as a follow-up", r.stdout)
+        merged, res = ws.merge_and_land("zach-opus-rvfu", self.sid, "Merge cc/zach-opus-rvfu: the work")
+        self.assertTrue(res["landed"])
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip)
+        body = run("git", "-C", self.other, "log", "-1", "--format=%B").stdout
+        self.assertIn("Second review: passed, %s" % rid, body)
+        self.assertIn("Filed as a follow-up: %s#1 question-card answers are not in the cut. "
+                      "Why: Rich, per the CEO: not a normal-use hole in this work" % rid, body)
+
+    def test_second_review_a_follow_up_ruling_reaches_a_plain_git_merge_too(self):
+        _cc, (tip,) = self.finished("zach-opus-rvfug")
+        rid = self.verdict(tip, "changes-requested", findings=[(2, "a finding the lead ruled")])
+        self.follow_up(rid + "#1")
+        r = run("git", "-C", self.other, "merge", "--no-ff", "--no-edit", "cc/zach-opus-rvfug", check=False)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip)
+
+    def test_second_review_reopen_makes_the_finding_hold_again(self):
+        _cc, (tip,) = self.finished("zach-opus-rvfur")
+        rid = self.verdict(tip, "changes-requested", findings=[(1, "the microphone is never handed back")])
+        self.follow_up(rid + "#1")
+        r = run("bash", os.path.join(ENGINE, "scripts", "second-review.sh"), "--reopen", rid + "#1")
+        self.assertIn("reopened", r.stdout)
+        before = self.head()
+        with self.assertRaises(ws.SpecError) as e:
+            ws.merge_and_land("zach-opus-rvfur", self.sid)
+        self.assertIn("the microphone is never handed back", str(e.exception))
+        self.assertEqual(self.head(), before)
+
+    def test_second_review_a_follow_up_of_another_repository_or_work_does_not_apply(self):
+        base = self.head()
+        work = "range:%s:%s" % (self.other, base)
+        _sib, (sibling,) = self.finished("zach-opus-sibfu", "sibling\n")
+        _cc, (tip,) = self.finished("zach-opus-ownfu", "own\n")
+        sib = self.verdict(sibling, "changes-requested", trigger="manual", work=work,
+                           findings=[(2, "the sibling branch's own defect")])
+        own = self.verdict(tip, "changes-requested", trigger="manual", work=work, findings=[(2, "this work's defect")])
+        self.follow_up(sib + "#1")                                     # another work's finding
+        self.deferral_row(own + "#1", self.FOREIGN, tip)                # another repository's ruling
+        before = self.head()
+        with self.assertRaises(ws.SpecError) as e:
+            ws.merge_and_land("zach-opus-ownfu", self.sid)
+        self.assertIn("this work's defect", str(e.exception))
+        self.assertEqual(self.head(), before)
+
+    def test_second_review_a_follow_up_survives_a_later_review_that_says_still_open_and_blocking(self):
+        _cc, (older, tip) = self.finished("zach-opus-rvfud", "one\n", "two\n")
+        work = "teammate:zach-opus-rvfud"
+        first = self.verdict(older, "changes-requested", work=work, findings=[(2, "a Stop path left open")])
+        self.follow_up(first + "#1")
+        later = self.verdict(tip, "changes-requested", work=work)
+        with open(os.path.join(os.path.dirname(self.ledger), "reviews", later, "verdict.json"), "w") as f:
+            json.dump({"answer": {"reviewed_commit": tip, "verdict": "changes-requested", "findings": [],
+                                  "earlier_findings": [{"id": first + "#1", "status": "still-open",
+                                                        "blocks": True, "note": "still open"}]},
+                       "earlier_findings_in": [{"id": first + "#1"}]}, f)
+        _merged, res = ws.merge_and_land("zach-opus-rvfud", self.sid, "Merge cc/zach-opus-rvfud: the work")
+        self.assertTrue(res["landed"])
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip)
+
+    def test_second_review_a_follow_up_never_upgrades_an_unresolved_legacy_pass(self):
+        cc, (older, tip) = self.finished("zach-opus-rvful", "one\n", "two\n")
+        work = "teammate:zach-opus-rvful"
+        first = self.verdict(older, "changes-requested", work=work, findings=[(2, "a defect the lead ruled")])
+        self.follow_up(first + "#1")
+        self.verdict(tip, "passed", repo=cc, legacy=True, work=work)
+        run("git", "-C", self.other, "worktree", "remove", "--force", cc)
+        before = self.head()
+        with self.assertRaises(ws.SpecError) as e:
+            ws.merge_and_land("zach-opus-rvful", self.sid)
+        self.assertIn("changes-requested", str(e.exception))
         self.assertEqual(self.head(), before)
 
     FOREIGN = "/independent-clones/foreign"
@@ -6708,6 +6804,65 @@ class HuntV3_06_AStatusQueryWritesNoCleanupHistory(Base):
         # The real land still records what it did not preserve.
         ws.land(name, self.sid)
         self.assertIn('"regenerable-not-preserved"', open(events).read())
+
+
+class ReleaseBranches_TheMergeGateIsToldWhichBranchItLandsOn(unittest.TestCase):
+    """Review rv-20261013T095956Z-f4ae06df-2813, finding 1, and 2026-10-18: a land onto
+    a branch the main checkout is not on merges in a temporary checkout of that branch,
+    where the merge gate saw no main and ran the commit check instead of the land check;
+    two app suites broken on v1.2.1 were found only when v1.2.1 was merged into main.
+    The lander names the branch it lands onto in RICHOS_AUTOCHECK_LAND_TARGET, which
+    richos's merge gate (autocheck.py) reads; its own test proves the gate then runs the
+    land check. This hook refuses a merge that does not say which branch it lands on, as
+    that gate would have no way to tell."""
+
+    def setUp(self):
+        self.root = os.path.realpath(tempfile.mkdtemp(prefix="ws-land-target-"))
+        self.saved = {k: os.environ.get(k) for k in ("RICHOS_WORKSPACES_DIR", "GIT_CONFIG_GLOBAL",
+                                                     "RICHOS_AUTOCHECK_LAND_TARGET")}
+        os.environ["RICHOS_WORKSPACES_DIR"] = os.path.join(self.root, "state")
+        os.environ.pop("RICHOS_AUTOCHECK_LAND_TARGET", None)
+        gc = os.path.join(self.root, "gitconfig")
+        with open(gc, "w") as f:
+            f.write("[user]\n\tname = t\n\temail = t@example.invalid\n[init]\n\tdefaultBranch = main\n")
+        os.environ["GIT_CONFIG_GLOBAL"] = gc
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_every_land_off_the_main_checkout_names_its_branch_to_the_merge_gate(self):
+        repo = os.path.join(self.root, "repo")
+        run("git", "init", "-q", "-b", "main", repo)
+        run("git", "-C", repo, "commit", "-q", "--allow-empty", "-m", "base")
+        for b in ("v1.2.1", "v1.3.0"):
+            run("git", "-C", repo, "branch", b)
+        run("git", "-C", repo, "switch", "-q", "-c", "cc/worker")
+        with open(os.path.join(repo, "fix.txt"), "w") as f:
+            f.write("fix\n")
+        run("git", "-C", repo, "add", "fix.txt")
+        run("git", "-C", repo, "commit", "-q", "-m", "fix")
+        worker = run("git", "-C", repo, "rev-parse", "HEAD").stdout.strip()
+        # The main checkout stays on main while work lands on the release branches.
+        run("git", "-C", repo, "switch", "-q", "main")
+        seen = os.path.join(self.root, "gate-saw")
+        hook = os.path.join(repo, ".git", "hooks", "pre-merge-commit")
+        with open(hook, "w") as f:
+            f.write('#!/bin/sh\nprintf "%%s\\n" "${RICHOS_AUTOCHECK_LAND_TARGET:-}" >> %s\n'
+                    '[ -n "${RICHOS_AUTOCHECK_LAND_TARGET:-}" ]\n' % shlex.quote(seen))
+        os.chmod(hook, 0o755)
+        for target in ("v1.2.1", "v1.3.0"):
+            self.assertFalse(ws._merges_in_main_checkout(repo, target, "cc/worker"), target)
+            args = ["merge", "--no-ff", "--no-edit", "-m", "land worker", worker]
+            ws._merge_in_temporary_checkout(repo, target, args, "cc/worker")
+            self.assertEqual(run("git", "-C", repo, "rev-parse", target + "^2").stdout.strip(), worker)
+        with open(seen) as f:
+            self.assertEqual(f.read().split(), ["v1.2.1", "v1.3.0"])
+        self.assertEqual(run("git", "-C", repo, "symbolic-ref", "--short", "HEAD").stdout.strip(), "main")
 
 
 class HuntV3_07_NoTestIsCollectedTwice(unittest.TestCase):

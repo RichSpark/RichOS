@@ -11,6 +11,10 @@ use std::sync::{Arc, Condvar, Mutex};
 pub trait WorkNotifier: Send + Sync {
     fn raised(&self, thread_id: &str, notice: &PendingNotice);
     fn nothing_left_to_do(&self) {}
+    /// Stu's work met an overload and waits out the CEO's schedule: `sentence` is
+    /// `RetryBudget::ceo_message`, the same "RichOS will try again in N minutes" line his
+    /// conversation shows for Rich, for the conversation `thread_id`.
+    fn overload_retry(&self, _thread_id: &str, _sentence: &str) {}
 }
 pub trait OperatorIntake: Send + Sync {
     fn take(&self, record: Assignment);
@@ -22,6 +26,26 @@ pub trait AnsweredClose: Send + Sync {
 }
 pub type LeadSink<'a> = &'a dyn Fn(&crate::questions::Delivery) -> Result<String, String>;
 pub const ROTATION_WAITS_FOR_COMMANDS: std::time::Duration = std::time::Duration::from_secs(600);
+/// **How often an idle back end checks that Stu is on the account in use** (review
+/// rv-20261019T005929Z-e3d9ad03-3e7b, finding 2). A switch decided while Stu is idle, by Rich's
+/// turn or the quota service's own check, otherwise left his session on the old account until
+/// the next message the app sent him. The check reads two ids; the move itself waits for a
+/// boundary (`WorkHost::move_to_account_in_use`).
+pub const ACCOUNT_CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What renewing Stu's lease for the account in use came to.
+#[derive(Debug, PartialEq)]
+enum Renewal {
+    /// No switch is due, or there is no lease to move.
+    NotDue,
+    /// Something of Stu's still runs on the old account: a turn (his own or an automatic one),
+    /// input of ours, a command or a helper. Ending his session now would end it.
+    Waits { from: Option<String> },
+    /// He is on a new session on the account in use.
+    Moved { from: Option<String>, to: Option<String> },
+    /// The old session ended and no new one could be opened; the next boundary opens one.
+    Failed,
+}
 
 #[derive(Clone)]
 enum InputReceipt { Peer(u64), Answer(String) }
@@ -29,10 +53,31 @@ impl InputReceipt {
     fn input_id(&self)->String {match self {Self::Peer(through)=>format!("peer:{through}"),Self::Answer(id)=>format!("answer:{id}")}}
 }
 
+/// A wait of the workers' overload clock on one Stu session: the retry it is and how long it
+/// is, and the `worker_overload` fact for each worker it will restart.
+struct WorkerWait {
+    session: String,
+    retry: u32,
+    wait: std::time::Duration,
+    facts: Vec<serde_json::Value>,
+}
+
 #[derive(Default)]
 struct Inner {
     peer_input: Option<Arc<dyn TurnCancel>>,
     overload: crate::upstream::RetryBudget,
+    /// ONE overload clock for all of Stu's WORKERS (follow-up 11), counted apart from his own
+    /// so a turn of his that succeeds does not restart theirs. An overload is Anthropic's
+    /// servers being overloaded and hits every running worker at once, so it is one schedule,
+    /// as Rich's and Stu's own are: the overloads that arrive during a wait join it
+    /// ([`Inner::worker_wait`]), the next one after it moves one step, a success resets it.
+    workers: crate::upstream::RetryBudget,
+    /// The wait the workers' clock is running, and every worker the overload stopped, each told
+    /// to Stu when it ends.
+    worker_wait: Option<WorkerWait>,
+    /// The description each worker run was started under, by the tool call that started it
+    /// (Claude Code's `task_started`), told to Stu as the worker's task.
+    worker_names: std::collections::HashMap<String, String>,
     /// Inputs accepted by this live backend. Unfinished handoffs remain durable for restart.
     // Input already delivered to this session stays delivered even when a turn fails.
     peer_active_through: Option<u64>,
@@ -46,6 +91,16 @@ struct Inner {
     rotations: u64,
     last_rotation_reason: Option<String>,
     lease_team: Option<String>,
+    /// **An automatic turn of Stu's is running on the live lease** (Claude Code started it
+    /// itself: a helper's hand-back, a task notification): begun on the between-turn lane and
+    /// not yet ended by its `result`. Nightly 65's whole website job ran as such turns.
+    automatic_turn: bool,
+    /// The run loop is to check that Stu is on the account in use: `Some(true)` when one of his
+    /// automatic turns has ended (the full decision, as before every turn), `Some(false)` at the
+    /// idle check ([`ACCOUNT_CHECK_EVERY`]).
+    move_check: Option<bool>,
+    /// The account Stu was told he is being moved to (`account_switch`), until he has moved.
+    switch_told: Option<String>,
 }
 struct Backend {
     live_delivery: Mutex<()>,
@@ -100,7 +155,7 @@ impl WorkHost {
         *self.retry_clock.lock().unwrap() = clock;
     }
 
-    fn overload_wait(&self, backend: &Backend, result: &Result<String, String>) -> Option<std::time::Duration> {
+    fn overload_wait(&self, backend: &Backend, binding: &ThreadBinding, result: &Result<String, String>) -> Option<std::time::Duration> {
         let overloaded = result.as_ref().err()
             .and_then(|error| crate::upstream::UpstreamFailure::classify_lines(error))
             .is_some_and(|failure| failure.fault == crate::upstream::UpstreamFault::Overloaded);
@@ -109,9 +164,13 @@ impl WorkHost {
             if result.is_ok() { inner.overload.succeeded(); }
             return None;
         }
-        if inner.overload.charge(crate::upstream::UpstreamFault::Overloaded) {
-            inner.overload.wait_before_retry()
-        } else { None }
+        if !inner.overload.charge(crate::upstream::UpstreamFault::Overloaded) { return None; }
+        let wait = inner.overload.wait_before_retry();
+        let said = inner.overload.ceo_message();
+        drop(inner);
+        // The wait is shown as Rich's is: RichOS's own retry sentence, never Stu's words.
+        if let Some(said) = said { self.notifier.overload_retry(binding.thread_id(), &said); }
+        wait
     }
 
     fn retry_stopped(&self, backend: &Backend, binding: &ThreadBinding,
@@ -144,7 +203,7 @@ impl WorkHost {
             };
             if let Err(error) = receipt { eprintln!("[richos] native input receipt remains pending: {error}"); }
             if outcome.report_failure {
-                if let Some(wait) = host.overload_wait(&backend, &outcome.result) {
+                if let Some(wait) = host.overload_wait(&backend, &binding, &outcome.result) {
                     // The native reader must keep reading while the existing retry clock waits.
                     let retry_host = Arc::downgrade(&host);
                     let retry_backend = Arc::downgrade(&backend);
@@ -182,6 +241,116 @@ impl WorkHost {
             }
             backend.wake.notify_all();
         })
+    }
+
+    /// **A worker stopped by an overload gets the CEO's waits too** (follow-up 11; his order of
+    /// 2026-10-07: 1, 2, 5, 10, 20, 40 and 80 minutes). A worker belongs to Claude Code, which
+    /// cannot be set to those waits, so this host waits, on the same budget, clock and Stop
+    /// checks as Stu's own retry above, and then tells Stu, who restarts the worker (stu.md).
+    /// All workers share ONE clock ([`Inner::workers`]): an overload during a running wait joins
+    /// it, and when it ends Stu gets one `worker_overload` message per worker it stopped. Any
+    /// other answer a worker gets from the API starts the schedule again.
+    fn observe_worker(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, session: &str,
+        frame: &serde_json::Value) {
+        if frame["type"] == "system" && frame["subtype"] == "task_started" && frame["task_type"] == "local_agent" {
+            if let (Some(call), Some(name)) = (frame["tool_use_id"].as_str(), frame["description"].as_str().filter(|name| !name.is_empty())) {
+                backend.inner.lock().unwrap().worker_names.insert(call.to_string(), name.to_string());
+            }
+            return;
+        }
+        if frame["type"] != "assistant" { return; }
+        let call = &frame["parent_tool_use_id"];
+        let mut inner = backend.inner.lock().unwrap();
+        let Some(failure) = crate::native::overloaded_api_error_message(frame) else {
+            if frame.get("error").is_none_or(serde_json::Value::is_null) { inner.workers.succeeded(); }
+            return;
+        };
+        let task = call.as_str().and_then(|call| inner.worker_names.get(call).cloned()).map(serde_json::Value::from)
+            .or_else(|| frame.get("task_description").cloned());
+        let fact = |wait: Option<(u32, std::time::Duration)>| serde_json::json!({"event":"worker_overload",
+            "worker":{"tool_use_id":call,"agent_id":frame.get("agent_id"),"task":task},
+            "error":failure.raw,"retry":wait.map(|(retry, _)| retry),
+            "retries_left":wait.map_or(0, |(retry, _)| crate::upstream::MAX_OVERLOAD_RETRIES - retry),
+            "waited_minutes":wait.map(|(_, wait)| wait.as_secs() / 60),
+            // The end is the overload granted no retry, never the seventh, whose retry still runs.
+            "retries_used_up":wait.is_none()});
+        if let Some(running) = inner.worker_wait.as_mut().filter(|running| running.session == session) {
+            // The same overload, stopping another worker: it joins the wait, the step stays.
+            if !running.facts.iter().any(|told| &told["worker"]["tool_use_id"] == call) {
+                let joined = fact(Some((running.retry, running.wait)));
+                running.facts.push(joined);
+            }
+            return;
+        }
+        let granted = inner.workers.charge(crate::upstream::UpstreamFault::Overloaded);
+        let wait = granted.then(|| inner.workers.wait_before_retry()).flatten();
+        let retry = inner.workers.retries_spent();
+        let told = fact(wait.map(|wait| (retry, wait)));
+        let started = match wait {
+            Some(wait) => {
+                inner.worker_wait = Some(WorkerWait {session: session.to_string(), retry, wait, facts: vec![told]});
+                drop(inner);
+                let ours = session.to_string();
+                // Every worker it stopped, taken when the wait ends; nobody when it was cut short.
+                self.tell_stu_after(backend, binding, session, Some(wait), move |backend, elapsed| {
+                    let taken = backend.inner.lock().unwrap().worker_wait.take_if(|running| running.session == ours);
+                    taken.filter(|_| elapsed).map_or_else(Vec::new, |running| running.facts)
+                })
+            }
+            None => {
+                drop(inner);
+                self.tell_stu_after(backend, binding, session, None, move |_, _| vec![told])
+            }
+        };
+        if let Err(error) = started {
+            backend.inner.lock().unwrap().worker_wait.take_if(|running| running.session == session);
+            eprintln!("[richos] a worker's overload wait could not start: {error}");
+        }
+    }
+
+    /// Off the native reader: wait `wait` on the retry clock unless the session ends first, then
+    /// put the facts `told` hands back in Stu's own inbox, one message each, and wake him on the
+    /// same session. `told` is asked once either way, with whether the wait elapsed.
+    fn tell_stu_after(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, session: &str,
+        wait: Option<std::time::Duration>,
+        told: impl FnOnce(&Backend, bool) -> Vec<serde_json::Value> + Send + 'static) -> std::io::Result<()> {
+        let (host, receiving, binding, session) = (Arc::downgrade(self), Arc::downgrade(backend), binding.clone(), session.to_string());
+        std::thread::Builder::new().name("richos-overload-retry".into()).spawn(move || {
+            let (Some(host), Some(backend)) = (host.upgrade(), receiving.upgrade()) else { return };
+            let elapsed = wait.is_none_or(|wait| {
+                let ended = || { let inner = backend.inner.lock().unwrap(); inner.closing || inner.lease_session.as_deref() != Some(session.as_str()) };
+                let clock = host.retry_clock.lock().unwrap().clone();
+                clock.wait(wait, &ended)
+            });
+            let facts = told(&backend, elapsed);
+            if facts.is_empty() { return; }
+            for fact in &facts {
+                if let Err(error) = crate::session_tools::observe_overload_retry(&host.message_scope(&binding), fact) {
+                    eprintln!("[richos] an overload could not be passed to Stu: {error}");
+                    return;
+                }
+            }
+            host.wake_messages(&binding);
+        }).map(|_| ())
+    }
+
+    /// **An automatic turn of Stu's that Claude Code gave up on with an overload waits the same
+    /// schedule as his other turns** (review rv-20261018T200657Z-585c24df-f9d6, finding 3).
+    /// Claude Code starts these turns itself, after a helper hands back or a task notification,
+    /// so no input of ours can be sent again: after the wait RichOS wakes Stu through his own
+    /// inbox to carry on. When the schedule grants no retry, the failure reaches Rich as before.
+    fn observe_automatic_turn(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, session: &str,
+        result: &Result<String, String>) {
+        if let Some(wait) = self.overload_wait(backend, binding, result) {
+            let fact = serde_json::json!({"event":"turn_overload","error":result.as_ref().err(),"waited_minutes":wait.as_secs()/60});
+            match self.tell_stu_after(backend, binding, session, Some(wait), move |_, elapsed| if elapsed { vec![fact] } else { vec![] }) {
+                Ok(()) => return,
+                Err(error) => eprintln!("[richos] an automatic turn's overload wait could not start: {error}"),
+            }
+        }
+        if let Err(error) = self.observe_turn_result(binding, None, None, session, result) {
+            eprintln!("[richos] native turn status: {error}");
+        }
     }
 
     fn project_output(&self, binding: &ThreadBinding, session: &str) {
@@ -416,7 +585,7 @@ impl WorkHost {
         let result=(|| {
         // This is queue cancellation, not per-tool authority on Stu's session.
         let stopped = || self.handoff_stopped(binding, message);
-        self.renew_if_account_changed(backend, binding);
+        self.move_to_account_in_use(backend, binding, true);
         let input = serde_json::to_string(message).map_err(|e| e.to_string())?;
         {
             self.ensure_lease(backend, binding)?;
@@ -471,7 +640,7 @@ impl WorkHost {
                     sent = Err(CognitionError::Protocol(failure.raw));
                 }
                 let observed = sent.as_ref().map(Clone::clone).map_err(ToString::to_string);
-                let Some(wait) = self.overload_wait(backend, &observed) else { break sent };
+                let Some(wait) = self.overload_wait(backend, binding, &observed) else { break sent };
                 let clock = self.retry_clock.lock().unwrap().clone();
                 if !clock.wait(wait, &||self.retry_stopped(backend, binding, message, &session)) { break sent; }
             };
@@ -480,9 +649,13 @@ impl WorkHost {
                 let mut inner=backend.inner.lock().unwrap();
                 inner.peer_input=None;
                 inner.cancel=None;
+                // Input of ours sent during an automatic turn is folded into it, and that turn's
+                // result is then ours: it has ended with this one.
+                inner.automatic_turn=false;
             }
             if matches!(&result, Err(CognitionError::Io(_))) {
                 drop(guard.take());
+                self.note_back_end(binding, None);
                 backend.inner.lock().unwrap().peer_active_through=None;
             }
             let reason = result.map_err(|e| e.to_string())?;
@@ -633,17 +806,52 @@ impl WorkHost {
         }))
     }
 
-    fn observe_lease(self: &Arc<Self>, lease: &mut dyn Cognition, binding: &ThreadBinding) {
+    fn observe_lease(self: &Arc<Self>, backend: &Arc<Backend>, lease: &mut dyn Cognition, binding: &ThreadBinding) {
         let host = Arc::downgrade(self);
+        let receiving = Arc::downgrade(backend);
         let binding = binding.clone();
         let session = lease.session_id().to_string();
+        // An automatic turn (a helper's hand-back, a task notification) reaches this sink whole,
+        // no input of ours being parked: its last message says whether Claude Code gave up on an
+        // overload before the turn's ordinary end_turn, as a live input's sink reads it.
+        let said: Mutex<Option<String>> = Mutex::new(None);
         lease.set_between_turn_sink(Arc::new(move |records| {
             let Some(host) = host.upgrade() else { return };
             for frame in records {
-                if frame["type"] != "result" || frame.get("parent_tool_use_id").is_some_and(|parent| !parent.is_null()) { continue }
-                let result = crate::native::native_result(&frame).map_err(|error| error.to_string());
-                if let Err(error) = host.observe_turn_result(&binding,None,None,&session,&result) {
-                    eprintln!("[richos] native turn status: {error}");
+                if frame.get("parent_tool_use_id").is_some_and(|parent| !parent.is_null()) {
+                    if let Some(backend) = receiving.upgrade() { host.observe_worker(&backend, &binding, &session, &frame); }
+                    continue;
+                }
+                // A worker's start names its task, told to Stu with its overload.
+                if frame["type"] == "system" && frame["subtype"] == "task_started" {
+                    if let Some(backend) = receiving.upgrade() { host.observe_worker(&backend, &binding, &session, &frame); }
+                    continue;
+                }
+                // Stu's own frames between turns of ours are an automatic turn under way; a task
+                // notification starts one.
+                if matches!(frame["type"].as_str(), Some("assistant" | "user" | "stream_event"))
+                    || (frame["type"] == "system" && frame["subtype"] == "task_notification") {
+                    if let Some(backend) = receiving.upgrade() { host.note_automatic_turn(&backend, &session, true); }
+                }
+                if frame["type"] == "assistant" {
+                    *said.lock().unwrap() = crate::native::overloaded_api_error_message(&frame).map(|failure| failure.raw);
+                    continue;
+                }
+                if frame["type"] != "result" { continue }
+                let overload = said.lock().unwrap().take();
+                let result = crate::native::native_result(&frame).map_err(|error| error.to_string())
+                    .and_then(|reason| match overload {
+                        Some(raw) if reason == "end_turn" => Err(raw),
+                        _ => Ok(reason),
+                    });
+                match receiving.upgrade() {
+                    Some(backend) => {
+                        host.observe_automatic_turn(&backend, &binding, &session, &result);
+                        host.note_automatic_turn(&backend, &session, false);
+                    }
+                    None => if let Err(error) = host.observe_turn_result(&binding,None,None,&session,&result) {
+                        eprintln!("[richos] native turn status: {error}");
+                    },
                 }
             }
         }));
@@ -655,7 +863,7 @@ impl WorkHost {
         binding: &ThreadBinding,
     ) -> Result<(), String> {
         let mut lease = backend.lease.lock().unwrap();
-        if lease.as_ref().is_some_and(|lease|lease.is_closed()) {drop(lease.take());}
+        if lease.as_ref().is_some_and(|lease|lease.is_closed()) {drop(lease.take());self.note_back_end(binding,None);}
         if lease.is_some() {
             return Ok(());
         }
@@ -665,11 +873,12 @@ impl WorkHost {
             (factory.team_digest(), factory.spawn_work(binding))
         };
         let mut opened = opened.map_err(|e| e.to_string())?;
-        self.observe_lease(opened.as_mut(), binding);
+        self.observe_lease(backend, opened.as_mut(), binding);
         // A provider opened after shutdown started is never installed.
         let closing = {
             let mut inner = backend.inner.lock().unwrap();
             if !inner.closing {
+                inner.automatic_turn = false;
                 inner.lease_session = Some(opened.session_id().to_string());
                 inner.peer_stopper=opened.cancel_handle().map(|handle|(opened.session_id().to_string(),handle));
                 inner.lease_team = team;
@@ -681,20 +890,106 @@ impl WorkHost {
             drop(opened);
             return Err("RichOS is closing down. Nothing was started.".into());
         }
+        let account = opened.account().map(str::to_string);
         *lease = Some(opened);
+        drop(lease);
+        self.note_back_end(binding, account.as_deref());
         Ok(())
     }
 
-    fn renew_if_account_changed(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) {
-        if !self.account_switch_due(backend) {
-            return;
+    /// **Where this conversation's back end runs now** (`None`: it has no live lease), for the
+    /// switch line: "I switched the team" is said only once Stu is on the new account too
+    /// (`claude_accounts::Accounts::back_end_on`).
+    fn note_back_end(&self, binding: &ThreadBinding, account: Option<&str>) {
+        if let Some(quota) = self.quota.lock().unwrap().clone() {
+            quota.accounts.back_end_on(binding.thread_id(), account);
         }
+    }
+
+    /// **An automatic turn of Stu's began (`running`) or ended**, on the lease of `session`. Its
+    /// end is a boundary of his work: the run loop checks there that he is on the account in use.
+    /// Its start is checked too, so a switch already decided reaches him while the turn runs
+    /// rather than after it (the idle check covers one decided during the turn).
+    fn note_automatic_turn(&self, backend: &Backend, session: &str, running: bool) {
+        let mut inner = backend.inner.lock().unwrap();
+        if inner.lease_session.as_deref() != Some(session) { return; }
+        let began = running && !inner.automatic_turn;
+        inner.automatic_turn = running;
+        if !running {
+            inner.move_check = Some(true);
+            backend.wake.notify_all();
+        } else if began {
+            inner.move_check.get_or_insert(false);
+            backend.wake.notify_all();
+        }
+    }
+
+    /// **Stu moves to the account in use at the next boundary of his work** (review
+    /// rv-20261019T005929Z-e3d9ad03-3e7b, finding 2; nightly 65: his whole website job ran as
+    /// automatic turns on Work after the switch to Home, because he was moved only before a
+    /// message the app sent him). Called before every message the app sends him, when one of his
+    /// automatic turns ends (`at_turn_end`: the full decision, as before every turn) and at the
+    /// idle check.
+    ///
+    /// When nothing of his is running, his session ends and the normal opener resumes it on the
+    /// account in use. When something is (a turn, a command, a helper), ending it would end that
+    /// work, so he is told once (`account_switch`) and moves at a later boundary; every time he
+    /// has moved, he is told so (`account_moved`) on the new session. What each
+    /// message asks of him is in his instructions (`stu.md`), never here.
+    fn move_to_account_in_use(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, at_turn_end: bool) {
+        let due = if at_turn_end { self.account_switch_due(backend) } else { self.account_left_behind(backend) };
+        if !due { return; }
+        let outcome = self.renew_lease(backend, binding);
+        let Some(quota) = self.quota.lock().unwrap().clone() else { return };
+        let label = |id: &Option<String>| id.as_deref().and_then(|id| quota.accounts.list().into_iter().find(|a| a.id == id)).map(|a| a.label);
+        let fact = match outcome {
+            Renewal::Waits { from } => {
+                let to = quota.accounts.in_use();
+                {
+                    let mut inner = backend.inner.lock().unwrap();
+                    if inner.switch_told.as_deref() == Some(to.id.as_str()) { return; }
+                    inner.switch_told = Some(to.id.clone());
+                }
+                serde_json::json!({"event":"account_switch","from":label(&from),"to":to.label})
+            }
+            // Told or not, his new session has nothing else telling it to carry on (review
+            // rv-20261019T030516Z-0a1a8728-e798, finding 1).
+            Renewal::Moved { from, to } => {
+                backend.inner.lock().unwrap().switch_told = None;
+                serde_json::json!({"event":"account_moved","from":label(&from),"to":label(&to)})
+            }
+            Renewal::NotDue | Renewal::Failed => return,
+        };
+        if let Err(error) = crate::session_tools::observe_account_switch(&self.message_scope(binding), &fact) {
+            eprintln!("[richos] the account switch could not be passed to Stu: {error}");
+        }
+    }
+
+    /// The renewal for a switch, decided on the lease's own freshest reading. Kept for the
+    /// tests that drive the boundary rule itself.
+    #[cfg(test)]
+    fn renew_if_account_changed(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) -> Renewal {
+        if !self.account_switch_due(backend) {
+            return Renewal::NotDue;
+        }
+        self.renew_lease(backend, binding)
+    }
+
+    /// End Stu's session and resume it on the account in use, unless something of his still
+    /// runs on it ([`Renewal::Waits`]).
+    fn renew_lease(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) -> Renewal {
         // Finish the previous process before the normal opener resumes its transcript.
         // Both processes have the same native session ID and must never overlap.
-        {
+        let from = {
             let mut lease = backend.lease.lock().unwrap();
-            if lease.as_ref().is_some_and(|lease|crate::cognition::account_resume_blocked(lease.as_ref())) {
-                return;
+            let Some(current) = lease.as_ref() else { return Renewal::NotDue };
+            let from = current.account().map(str::to_string);
+            // A running command or helper would end with the process, and so would a turn.
+            let busy = crate::cognition::account_resume_blocked(current.as_ref())
+                || current.worker_status().is_some_and(|workers| workers.active > 0)
+                || backend.inner.lock().unwrap().automatic_turn;
+            if busy {
+                return Renewal::Waits { from };
             }
             let mut inner = backend.inner.lock().unwrap();
             inner.cancel = None;
@@ -703,10 +998,15 @@ impl WorkHost {
             inner.peer_active_through = None;
             drop(inner);
             drop(lease.take());
-        }
+            from
+        };
+        self.note_back_end(binding, None);
         if let Err(why) = self.ensure_lease(backend, binding) {
             eprintln!("[richos] back end: not moved to the next Claude account ({why})");
+            return Renewal::Failed;
         }
+        let to = backend.lease.lock().unwrap().as_ref().and_then(|lease| lease.account().map(str::to_string));
+        Renewal::Moved { from, to }
     }
 
     pub fn set_model(&self,model:crate::config::ModelChoice)->Result<(),String> {
@@ -719,6 +1019,14 @@ impl WorkHost {
             .filter(|(session,_)|inner.lease_session.as_ref()==Some(session)).map(|(_,handle)|handle.clone()))};
         if let Some(handle)=handle {handle.set_model(model)?;}
         Ok(())
+    }
+    /// Is Stu's lease on another account than the one in use? Two ids, no decision: the idle
+    /// check's question ([`ACCOUNT_CHECK_EVERY`]).
+    fn account_left_behind(&self, backend: &Arc<Backend>) -> bool {
+        let Some(quota)=self.quota.lock().unwrap().clone() else {return false};
+        let lease=backend.lease.lock().unwrap();
+        lease.as_ref().and_then(|lease|lease.account().map(str::to_string))
+            .is_some_and(|account|quota.accounts.in_use().id!=account)
     }
     fn account_switch_due(&self, backend: &Arc<Backend>) -> bool {
         let Some(quota)=self.quota.lock().unwrap().clone() else {return false};
@@ -798,6 +1106,8 @@ impl WorkHost {
         enum Next {
             Message(ThreadBinding, crate::session_tools::Message, u64),
             Answer(ThreadBinding, crate::questions::Delivery),
+            /// A boundary of Stu's work, or the idle check: is he on the account in use?
+            Move(ThreadBinding, bool),
         }
         loop {
             let live_session = backend.lease.lock().unwrap().as_ref().map(|lease| lease.session_id().to_string());
@@ -806,6 +1116,14 @@ impl WorkHost {
                 loop {
                     if inner.closing {
                         return;
+                    }
+                    // During an automatic turn of Stu's too (review
+                    // rv-20261019T030516Z-0a1a8728-e798, finding 1): he is told there that the
+                    // switch is coming, and the renewal never ends a running turn.
+                    if let (Some(binding), Some(at_turn_end)) = (inner.binding.clone(), inner.move_check) {
+                        inner.move_check = None;
+                        inner.processing = true;
+                        break Next::Move(binding, at_turn_end);
                     }
                     if let Some(binding) = inner.binding.clone() {
                         if let Some(answer) = crate::question_work::pending(&self.state)
@@ -835,10 +1153,21 @@ impl WorkHost {
                             Err(error) => eprintln!("[richos] operator inbox: {error}"),
                         }
                     }
-                    inner = backend.wake.wait(inner).unwrap();
+                    let (woken, waited) = backend.wake.wait_timeout(inner, ACCOUNT_CHECK_EVERY).unwrap();
+                    inner = woken;
+                    if waited.timed_out() && inner.move_check.is_none() {
+                        inner.move_check = Some(false);
+                    }
                 }
             };
             let result = match next {
+                Next::Move(binding, at_turn_end) => {
+                    self.move_to_account_in_use(&backend, &binding, at_turn_end);
+                    let mut inner = backend.inner.lock().unwrap();
+                    inner.processing = false;
+                    backend.wake.notify_all();
+                    continue;
+                }
                 Next::Message(binding, message, through) => self
                     .run_message(&backend, &binding, &message, &format!("peer:{through}"))
                     .and_then(|_| {
@@ -882,6 +1211,8 @@ impl WorkHost {
             inner.peer_input = None;
             inner.processing = false;
             inner.completed += 1;
+            // The end of this turn is a boundary of Stu's work too.
+            inner.move_check.get_or_insert(false);
             backend.wake.notify_all();
             if let Err(error) = result {
                 eprintln!("[richos] operator input remains saved: {error}");
@@ -1295,6 +1626,16 @@ mod tests {
         commands: Arc<Mutex<Option<crate::lease_commands::CommandReading>>>,
         team: Arc<Mutex<TeamScript>>,
         start_gate: Arc<StartGate>,
+        notices: Arc<RecordingNotifier>,
+    }
+    /// The overload lines the host shows, in order, with the conversation each was for.
+    #[derive(Default)]
+    struct RecordingNotifier(Mutex<Vec<(String, String)>>);
+    impl WorkNotifier for RecordingNotifier {
+        fn raised(&self, _: &str, _: &PendingNotice) {}
+        fn overload_retry(&self, thread_id: &str, sentence: &str) {
+            self.0.lock().unwrap().push((thread_id.to_string(), sentence.to_string()));
+        }
     }
     fn harness(_: u64) -> Harness {
         let root = std::env::temp_dir().join(format!("richos-peer-host-{}", uuid::Uuid::new_v4()));
@@ -1320,10 +1661,11 @@ mod tests {
             team: team.clone(),
             gate: start_gate.clone(),
         };
+        let notices = Arc::new(RecordingNotifier::default());
         let host = WorkHost::new(
             &state,
             Box::new(factory),
-            Arc::new(SilentNotifier),
+            notices.clone(),
 
         );
         host.set_retry_clock(Arc::new(RecordedRetryClock::default()));
@@ -1339,6 +1681,7 @@ mod tests {
             commands,
             team,
             start_gate,
+            notices,
         }
     }
     fn every_worker_observed_ending(h: &Harness) {
@@ -1434,6 +1777,255 @@ mod tests {
         h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
     }
 
+    /// **Stu's lease tells the accounts where it runs** (nightly 65, 2026-10-18: "I switched
+    /// the team to your Home account" was said while Stu's whole job ran on Work). The switch
+    /// from Account 1 to Home is decided while Stu's lease is on Account 1: Rich's turn on Home
+    /// says nothing yet and the panel shows no switch card; Stu's lease moving at its boundary
+    /// releases the line and the card.
+    #[test]
+    fn the_switch_is_announced_only_once_stus_lease_has_moved_too() {
+        struct OnAccount(String);
+        impl Cognition for OnAccount {
+            fn session_id(&self)->&str {"stu-on-an-account"}
+            fn account(&self)->Option<&str> {Some(&self.0)}
+            fn prompt(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {Ok("end_turn".into())}
+        }
+        struct Follows(Arc<crate::quota::Service>);
+        impl LeaseFactory for Follows {
+            fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
+            fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
+                Ok(Box::new(OnAccount(self.0.lease_account().id)))
+            }
+        }
+        use crate::claude_accounts::tests::{reading, NOW};
+        let h=harness(0);
+        let quota=Arc::new(crate::quota::Service::open(&h.root.join("quota")).unwrap());
+        let home=quota.accounts.add("Home").unwrap();
+        let host=WorkHost::new(&h.state,Box::new(Follows(quota.clone())),Arc::new(SilentNotifier));
+        host.set_quota(quota.clone());
+        let backend=host.backend_for(h.binding.thread_id()).unwrap();
+        host.ensure_lease(&backend,&h.binding).unwrap();
+        let readings=[("1".to_string(),reading(10.,3_600_000,99.,48*3_600_000)),
+            (home.id.clone(),reading(0.,3_600_000,0.,72*3_600_000))].into_iter().collect();
+        assert!(quota.accounts.evaluate(&readings,None,NOW).unwrap(),"Account 1 at 99% of its week is left for Home");
+        quota.accounts.ran_on("rich-reply",&home.id);
+        assert_eq!(quota.accounts.take_notice(),None,"Stu is still on Account 1");
+        assert!(quota.view().last_switch.is_none(),"no switch card while Stu is on Account 1");
+        host.renew_if_account_changed(&backend,&h.binding);
+        assert_eq!(backend.lease.lock().unwrap().as_ref().and_then(|lease|lease.account().map(str::to_string)),Some(home.id.clone()));
+        assert!(quota.accounts.take_notice().unwrap().starts_with("I switched the team to your **Home** account."));
+        assert_eq!(quota.view().last_switch.map(|s|s.to),Some(home.id.clone()));
+        host.shutdown();h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// A Stu whose turns can be driven as Claude Code drives an automatic one: the test hands
+    /// frames to the between-turn sink the host installed, as the native reader does.
+    struct Driven {
+        session: String,
+        account: String,
+        commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
+        sink: Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>,
+        prompts: Arc<Mutex<Vec<(String, String)>>>,
+    }
+    impl Cognition for Driven {
+        fn session_id(&self)->&str {&self.session}
+        fn account(&self)->Option<&str> {Some(&self.account)}
+        fn running_commands(&self)->Option<crate::lease_commands::CommandReading> {Some(*self.commands.lock().unwrap())}
+        fn set_between_turn_sink(&mut self,sink:crate::cognition::BetweenTurnSink) {*self.sink.lock().unwrap()=Some(sink);}
+        fn prompt(&mut self,text:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
+            self.prompts.lock().unwrap().push((self.account.clone(),text.to_string()));
+            Ok("end_turn".into())
+        }
+    }
+    /// Opens every lease on the account in use, as the production factory does
+    /// (`lease_account`), and keeps the last one's sink.
+    struct OnAccountInUse {
+        quota: Arc<crate::quota::Service>,
+        spawns: Arc<AtomicUsize>,
+        commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
+        sink: Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>,
+        prompts: Arc<Mutex<Vec<(String, String)>>>,
+    }
+    impl LeaseFactory for OnAccountInUse {
+        fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
+        fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
+            let n=self.spawns.fetch_add(1,Ordering::SeqCst);
+            Ok(Box::new(Driven {session:format!("stu-session-{n}"),account:self.quota.lease_account().id,
+                commands:self.commands.clone(),sink:self.sink.clone(),prompts:self.prompts.clone()}))
+        }
+    }
+    struct Moving {
+        h: Harness,
+        quota: Arc<crate::quota::Service>,
+        home: crate::claude_accounts::Account,
+        host: Arc<WorkHost>,
+        spawns: Arc<AtomicUsize>,
+        commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
+        sink: Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>,
+        prompts: Arc<Mutex<Vec<(String, String)>>>,
+    }
+    /// Stu started on Account 1 by a message in his inbox (the run loop opens his lease), then
+    /// the switch from Account 1 (99% of its week) to Home is decided while a command of his runs.
+    fn stu_on_account_one_then_a_switch() -> Moving {
+        let m=stu_on_account_one();
+        *m.commands.lock().unwrap()=crate::lease_commands::CommandReading::Running(1);
+        switch_to_home(&m);
+        m
+    }
+    /// The switch from Account 1 (99% of its week) to Home is decided.
+    fn switch_to_home(m: &Moving) {
+        use crate::claude_accounts::tests::{reading, NOW};
+        let readings=[("1".to_string(),reading(10.,3_600_000,99.,48*3_600_000)),
+            (m.home.id.clone(),reading(0.,3_600_000,0.,72*3_600_000))].into_iter().collect();
+        assert!(m.quota.accounts.evaluate(&readings,None,NOW).unwrap(),"Account 1 at 99% of its week is left for Home");
+    }
+    /// Stu started on Account 1 by a message in his inbox (the run loop opens his lease).
+    fn stu_on_account_one() -> Moving {
+        let h=harness(0);
+        let quota=Arc::new(crate::quota::Service::open(&h.root.join("quota")).unwrap());
+        let home=quota.accounts.add("Home").unwrap();
+        let (spawns,prompts)=(Arc::new(AtomicUsize::new(0)),Arc::new(Mutex::new(Vec::new())));
+        let commands=Arc::new(Mutex::new(crate::lease_commands::CommandReading::Clear));
+        let sink=Arc::new(Mutex::new(None));
+        let host=WorkHost::new(&h.state,Box::new(OnAccountInUse {quota:quota.clone(),spawns:spawns.clone(),
+            commands:commands.clone(),sink:sink.clone(),prompts:prompts.clone()}),Arc::new(SilentNotifier));
+        host.set_quota(quota.clone());
+        crate::session_tools::observe_stall(&host.message_scope(&h.binding),"the website job").unwrap();
+        host.wake_messages(&h.binding);
+        until("Stu's first turn on Account 1",||prompts.lock().unwrap().len()==1);
+        assert_eq!(prompts.lock().unwrap()[0].0,"1");
+        Moving {h,quota,home,host,spawns,commands,sink,prompts}
+    }
+    /// Claude Code starts an automatic turn of Stu's on its own (a task notification) and he
+    /// takes his first step in it; the turn's result comes later ([`automatic_turn_ends`]).
+    fn automatic_turn_starts(m: &Moving) {
+        let sink=m.sink.lock().unwrap().clone().expect("the host installs a between-turn sink");
+        sink(vec![serde_json::json!({"type":"system","subtype":"task_notification","task_id":"build","status":"completed"}),
+            serde_json::json!({"type":"assistant","message":{"content":[{"type":"text","text":"The build finished. Deploying next."}]}})]);
+    }
+    fn automatic_turn_ends(m: &Moving) {
+        let sink=m.sink.lock().unwrap().clone().expect("the host installs a between-turn sink");
+        sink(vec![serde_json::json!({"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn"})]);
+    }
+    /// Every message the app sent Stu with `event` in it, with the account it reached him on.
+    fn told(m: &Moving, event: &str) -> Vec<(String, String)> {
+        m.prompts.lock().unwrap().iter().filter(|(_,text)|text.contains(event)).cloned().collect()
+    }
+    /// One automatic turn of Stu's, as Claude Code reports it between turns of ours.
+    fn automatic_turn(m: &Moving) {
+        let sink=m.sink.lock().unwrap().clone().expect("the host installs a between-turn sink");
+        sink(vec![serde_json::json!({"type":"system","subtype":"task_notification","task_id":"build","status":"completed"}),
+            serde_json::json!({"type":"assistant","message":{"content":[{"type":"text","text":"The build finished."}]}}),
+            serde_json::json!({"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn"})]);
+    }
+
+    /// **Stu really moves at the next boundary of his work, automatic turns included** (review
+    /// rv-20261019T005929Z-e3d9ad03-3e7b, finding 2; nightly 65: after the switch to Home his whole
+    /// website job ran as automatic turns, helper hand-backs and task notifications, on Work,
+    /// because he was moved only before a message the app sent him). Nothing here calls the
+    /// renewal: his turns end as Claude Code reports them.
+    ///
+    /// The switch comes while a command of his runs: ending his session would end it, so he is
+    /// told once (`account_switch`, delivered on Account 1) and keeps his session. When an
+    /// automatic turn ends with nothing of his running, he is on a new session on Home within
+    /// seconds (well inside the idle check's 30 s, so it is the turn's end that moved him) and
+    /// told so there (`account_moved`), and the panel shows the team on Home.
+    #[test]
+    fn stu_moves_to_the_new_account_when_an_automatic_turn_ends_and_is_told_while_a_command_runs() {
+        use crate::lease_commands::CommandReading;
+        let m=stu_on_account_one_then_a_switch();
+        assert_eq!(m.quota.accounts.in_use().id,m.home.id,"the switch to Home is decided");
+        automatic_turn(&m);
+        until("Stu is told the switch is coming",||m.prompts.lock().unwrap().iter().any(|(_,text)|text.contains("account_switch")));
+        assert_eq!(m.spawns.load(Ordering::SeqCst),1,"a running command was ended by a move");
+        let told:Vec<_>=m.prompts.lock().unwrap().iter().filter(|(_,text)|text.contains("account_switch")).cloned().collect();
+        assert_eq!(told.len(),1,"told once: {told:?}");
+        assert_eq!(told[0].0,"1","told on the session that is being left");
+        assert!(told[0].1.contains(r#"\"from\":\"Account 1\""#) && told[0].1.contains(r#"\"to\":\"Home\""#),"{}",told[0].1);
+
+        *m.commands.lock().unwrap()=CommandReading::Clear;
+        let ended=std::time::Instant::now();
+        automatic_turn(&m);
+        until("Stu is on Home",||m.spawns.load(Ordering::SeqCst)==2);
+        // A third of the idle check's 30 s (`ACCOUNT_CHECK_EVERY`).
+        assert!(ended.elapsed()<std::time::Duration::from_secs(10),"moved by the turn's end, not the idle check: {:?}",ended.elapsed());
+        until("Stu is told he moved, on Home",||m.prompts.lock().unwrap().iter().any(|(account,text)|account==&m.home.id&&text.contains("account_moved")));
+        let view=serde_json::to_value(m.quota.view()).unwrap();
+        let working=|id:&str|view["accounts"].as_array().unwrap().iter().find(|a|a["id"]==id).map(|a|a["working"].clone());
+        assert_eq!(working(&m.home.id),Some(serde_json::json!(["team"])));
+        assert_eq!(working("1"),Some(serde_json::Value::Null),"nobody is left on Account 1");
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
+    }
+
+    /// The run loop has nothing left to do for now: no input of ours and no account check.
+    fn settled(m: &Moving) {
+        let backend=m.host.backend(m.h.binding.thread_id()).unwrap();
+        until("the run loop settles",||{let inner=backend.inner.lock().unwrap();!inner.processing&&inner.move_check.is_none()});
+    }
+
+    /// **Stu is told the switch is coming while an automatic turn of his runs** (review
+    /// rv-20261019T030516Z-0a1a8728-e798, finding 1: the run loop skipped every account check
+    /// while one ran, so through a job of many steps he kept spending the old account and was
+    /// never asked to save and stop). The switch is decided while a command of his runs; then
+    /// Claude Code starts an automatic turn and he takes a step. His turn's result has not come
+    /// yet: he is told now, on Account 1, and his session is not ended under him. When the
+    /// turn's result comes with nothing of his running, he is on Home and told to carry on.
+    #[test]
+    fn stu_is_told_to_save_and_stop_while_an_automatic_turn_runs() {
+        use crate::lease_commands::CommandReading;
+        let m=stu_on_account_one_then_a_switch();
+        automatic_turn_starts(&m);
+        until("Stu is told the switch is coming while his automatic turn runs",||!told(&m,"account_switch").is_empty());
+        let switch=told(&m,"account_switch");
+        assert_eq!(switch.len(),1,"told once: {switch:?}");
+        assert_eq!(switch[0].0,"1","told on the session he is still on");
+        assert_eq!(m.spawns.load(Ordering::SeqCst),1,"his running turn and command were ended by a move");
+
+        *m.commands.lock().unwrap()=CommandReading::Clear;
+        automatic_turn_ends(&m);
+        until("Stu is on Home",||m.spawns.load(Ordering::SeqCst)==2);
+        until("Stu is told to carry on, on Home",||told(&m,"account_moved").iter().any(|(account,_)|account==&m.home.id));
+        assert_eq!(told(&m,"account_switch").len(),1,"told again after it was said: {:?}",told(&m,"account_switch"));
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
+    }
+
+    /// **Stu is always told to carry on after a move** (review rv-20261019T030516Z-0a1a8728-e798,
+    /// finding 1: a move he had not been warned of sent nothing, so his resumed session had
+    /// nothing telling it to continue). An automatic turn of his starts before any switch; the
+    /// switch is decided while it runs; its result comes with nothing of his running, so he is
+    /// moved at once, and told so on Home.
+    #[test]
+    fn stu_is_told_to_carry_on_after_a_move_he_was_not_warned_of() {
+        let m=stu_on_account_one();
+        automatic_turn_starts(&m);
+        settled(&m);
+        switch_to_home(&m);
+        automatic_turn_ends(&m);
+        until("Stu is on Home",||m.spawns.load(Ordering::SeqCst)==2);
+        assert_eq!(told(&m,"account_switch"),Vec::<(String,String)>::new(),"he was warned after all");
+        until("Stu is told to carry on, on Home",||told(&m,"account_moved").iter().any(|(account,_)|account==&m.home.id));
+        let moved=told(&m,"account_moved");
+        assert!(moved[0].1.contains(r#"\"from\":\"Account 1\""#) && moved[0].1.contains(r#"\"to\":\"Home\""#),"{}",moved[0].1);
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
+    }
+
+    /// **The panel shows the account each session is really on** (review
+    /// rv-20261019T005929Z-e3d9ad03-3e7b, finding 3: Home was "In use now" while Stu still ran on
+    /// Work). The switch to Home is decided and Rich's next turn runs on Home; Stu's session is
+    /// still on Account 1 with a command running. The published view says so per account.
+    #[test]
+    fn the_accounts_view_shows_where_rich_and_the_team_really_are_during_a_switch() {
+        let m=stu_on_account_one_then_a_switch();
+        m.quota.accounts.ran_on("rich-reply",&m.home.id);
+        let view=serde_json::to_value(m.quota.view()).unwrap();
+        let account=|id:&str|view["accounts"].as_array().unwrap().iter().find(|a|a["id"]==id).cloned().unwrap();
+        assert_eq!((account(&m.home.id)["inUse"].clone(),account(&m.home.id)["working"].clone()),
+            (serde_json::json!(true),serde_json::json!(["rich"])),"Home: in use, and Rich is on it");
+        assert_eq!((account("1")["inUse"].clone(),account("1")["working"].clone()),
+            (serde_json::json!(false),serde_json::json!(["team"])),"Account 1: the team is still on it");
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
+    }
+
     #[test]
     fn a_finished_native_turn_keeps_its_unfinished_job_resumable_after_quit() {
         for terminal in [Some(AssignmentState::Settled),Some(AssignmentState::Failed),None] {
@@ -1512,7 +2104,7 @@ mod tests {
                         let answer = crate::questions::Delivery {
                             obligation_id: (kind == "job-answer").then(|| registration(&h).obligation_id),
                             id: "answer-under-test".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
-                            asker: "stu".into(), set_id: None, text: "Input under test".into(), receipt: None,
+                            asker: "stu".into(), set_id: None, text: "Input under test".into(), receipt: None, order: None,
                         };
                         h.host.queue_question_answer(&h.binding, &answer).unwrap();
                     }
@@ -1574,12 +2166,176 @@ mod tests {
         assert_eq!(h.spawns.load(Ordering::SeqCst), 1);
         assert_eq!(*clock.0.lock().unwrap(), crate::upstream::OVERLOAD_RETRY_WAITS);
         assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none(), "recovered failure was announced as terminal");
+        // Each wait is shown in his conversation as RichOS's own retry line, as Rich's is.
+        let shown = h.notices.0.lock().unwrap().clone();
+        let expected: Vec<(String, String)> = [1, 2, 5, 10, 20, 40, 80].iter().enumerate().map(|(k, minutes)| {
+            let when = if *minutes == 1 { "1 minute".to_string() } else { format!("{minutes} minutes") };
+            ("thread-one".to_string(), format!("{} RichOS will try again in {when}, in the same conversation, so nothing is \
+                lost. This is retry {} of 7.", crate::upstream::UpstreamFault::Overloaded.ceo_message(), k + 1))
+        }).collect();
+        assert_eq!(shown, expected, "Stu's overload waits were not shown as RichOS's retry line");
         h.team.lock().unwrap().turn_results.extend(["pre_model_529", "end_turn"]);
         crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Independent later request"})).unwrap();
         h.host.wake_messages(&h.binding);
         assert!(h.host.wait_for_completed(2, std::time::Duration::from_secs(30)));
         assert_eq!(clock.0.lock().unwrap().as_slice(), [crate::upstream::OVERLOAD_RETRY_WAITS.as_slice(), &[std::time::Duration::from_secs(60)]].concat());
         assert_eq!(h.spawns.load(Ordering::SeqCst), 1);
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// The `worker_overload` (and `turn_overload`) facts Stu has been sent, in order.
+    fn overload_notices(h: &Harness) -> Vec<serde_json::Value> {
+        h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
+            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
+            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
+        }).collect()
+    }
+
+    fn worker_overloaded(call: &str) -> serde_json::Value {
+        serde_json::json!({"type":"assistant","parent_tool_use_id":call,"error":"overloaded",
+            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}})
+    }
+
+    /// A retry clock that holds each wait open until the test ends it, so an overload can arrive
+    /// DURING a wait. It writes down each wait it was asked for.
+    #[derive(Default)]
+    struct HeldRetryClock { waits: Mutex<Vec<std::time::Duration>>, ended: Mutex<usize>, turn: Condvar }
+    impl HeldRetryClock {
+        fn waits(&self) -> Vec<std::time::Duration> { self.waits.lock().unwrap().clone() }
+        fn end_one(&self) { *self.ended.lock().unwrap() += 1; self.turn.notify_all(); }
+    }
+    impl crate::upstream::RetryClock for HeldRetryClock {
+        fn wait(&self, wait: std::time::Duration, stop: &dyn Fn() -> bool) -> bool {
+            let mine = { let mut waits = self.waits.lock().unwrap(); waits.push(wait); waits.len() };
+            let mut ended = self.ended.lock().unwrap();
+            while *ended < mine {
+                if stop() { return false; }
+                ended = self.turn.wait_timeout(ended, std::time::Duration::from_millis(10)).unwrap().0;
+            }
+            !stop()
+        }
+    }
+
+    /// Follow-up 11, ONE clock: an overload hits every running worker at once. Eight workers
+    /// overloaded together wait one 1-minute wait and each gets the restart message when it
+    /// ends; a ninth overload during that wait joins it, and a worker reported twice is told
+    /// once. The next overload after the wait moves one step, to 2 minutes.
+    #[test]
+    fn eight_workers_overloaded_together_wait_one_minute_and_all_are_told_to_restart() {
+        let h = harness(0);
+        let clock = Arc::new(HeldRetryClock::default());
+        h.host.set_retry_clock(clock.clone());
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
+        let observe = |frame: serde_json::Value| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
+        let minute = std::time::Duration::from_secs(60);
+        for n in 1..=8 { observe(worker_overloaded(&format!("W{n}"))); }
+        until("the workers' overload did not start a wait", || clock.waits().len() == 1);
+        observe(worker_overloaded("W9"));
+        observe(worker_overloaded("W1"));
+        assert_eq!(clock.waits(), [minute], "an overload during the wait started a wait of its own");
+        assert!(overload_notices(&h).is_empty(), "Stu was told before the wait ended");
+        clock.end_one();
+        until("Stu was not told to restart every stopped worker", || overload_notices(&h).len() == 9);
+        let mut told: Vec<_> = overload_notices(&h).iter().map(|fact| (fact["worker"]["tool_use_id"].as_str().unwrap_or("").to_string(),
+            fact["event"].as_str().map(str::to_string), fact["retry"].as_u64(), fact["waited_minutes"].as_u64(), fact["retries_used_up"].as_bool())).collect();
+        told.sort();
+        let expected: Vec<_> = (1..=9).map(|n| (format!("W{n}"), Some("worker_overload".to_string()), Some(1), Some(1), Some(false))).collect();
+        assert_eq!(told, expected, "the stopped workers did not all wait the one 1-minute wait");
+        observe(worker_overloaded("W1"));
+        until("the next overload did not start a wait", || clock.waits().len() == 2);
+        assert_eq!(clock.waits(), [minute, 2 * minute], "the next overload after the wait did not move one step");
+        clock.end_one();
+        until("Stu was not told after the second wait", || overload_notices(&h).len() == 10);
+        let last = overload_notices(&h).pop().unwrap();
+        assert_eq!((&last["worker"]["tool_use_id"], &last["retry"], &last["waited_minutes"]),
+            (&serde_json::json!("W1"), &serde_json::json!(2), &serde_json::json!(2)), "{last}");
+        backend.inner.lock().unwrap().closing = true;
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// Follow-up 11, ONE clock: any worker's ordinary answer from the API resets it, so the next
+    /// overload, whichever worker it stops, waits the first minute again.
+    #[test]
+    fn a_workers_success_resets_the_workers_overload_clock_to_one_minute() {
+        let h = harness(0);
+        let clock = Arc::new(RecordedRetryClock::default());
+        h.host.set_retry_clock(clock.clone());
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
+        let observe = |frame: serde_json::Value| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
+        observe(worker_overloaded("A"));
+        until("Stu was not told after the first wait", || overload_notices(&h).len() == 1);
+        observe(worker_overloaded("B"));
+        until("Stu was not told after the second wait", || overload_notices(&h).len() == 2);
+        observe(serde_json::json!({"type":"assistant","parent_tool_use_id":"C",
+            "message":{"content":[{"type":"text","text":"Reading the files again."}]}}));
+        observe(worker_overloaded("A"));
+        until("Stu was not told after the third wait", || overload_notices(&h).len() == 3);
+        let minute = std::time::Duration::from_secs(60);
+        assert_eq!(*clock.0.lock().unwrap(), [minute, 2 * minute, minute], "a worker's success did not reset the clock");
+        let told: Vec<_> = overload_notices(&h).iter().map(|fact| (fact["worker"]["tool_use_id"].clone(), fact["retry"].clone())).collect();
+        assert_eq!(told, [(serde_json::json!("A"), serde_json::json!(1)), (serde_json::json!("B"), serde_json::json!(2)),
+            (serde_json::json!("A"), serde_json::json!(1))]);
+        backend.inner.lock().unwrap().closing = true;
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// Follow-up 11: overloads one after another, whichever worker each stops (Stu restarts a
+    /// worker as a new run), wait 1, 2, 5, 10, 20, 40 and 80 minutes and Stu is told after each
+    /// wait; the eighth is told at once, with no retries left. A frame Claude Code did not mark
+    /// as an API error is the worker's own words.
+    #[test]
+    fn a_workers_eighth_overload_in_a_row_tells_stu_its_retries_are_used_up() {
+        let h = harness(0);
+        let clock = Arc::new(RecordedRetryClock::default());
+        h.host.set_retry_clock(clock.clone());
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
+        let quoted = serde_json::json!({"type":"assistant","parent_tool_use_id":"run-1",
+            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
+        h.host.observe_worker(&backend, &h.binding, "stu-session", &quoted);
+        for n in 1..=8 {
+            h.host.observe_worker(&backend, &h.binding, "stu-session", &worker_overloaded(&format!("run-{n}")));
+            until("Stu was not told about his worker's overload", || overload_notices(&h).len() == n);
+        }
+        let told: Vec<_> = overload_notices(&h).iter().map(|fact| (fact["retry"].as_u64(), fact["retries_left"].clone(), fact["waited_minutes"].as_u64())).collect();
+        let mut expected: Vec<_> = [1, 2, 5, 10, 20, 40, 80].iter().enumerate()
+            .map(|(k, minutes)| (Some(k as u64 + 1), serde_json::json!(6 - k), Some(*minutes as u64))).collect();
+        expected.push((None, serde_json::json!(0), None));
+        assert_eq!(told, expected);
+        assert_eq!(*clock.0.lock().unwrap(), crate::upstream::OVERLOAD_RETRY_WAITS, "the quoted line was taken for an overload, or a wait was skipped");
+        backend.inner.lock().unwrap().closing = true;
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// Review rv-20261018T200657Z-585c24df-f9d6, finding 2: the seventh overload is granted the
+    /// 80-minute wait and its retry still runs. Only the eighth, which is granted none, says the
+    /// retries are used up, and that is what Stu's instruction reports to Rich.
+    #[test]
+    fn the_seventh_worker_retry_runs_and_only_the_eighth_overload_ends_the_schedule() {
+        let h = harness(0);
+        h.host.set_retry_clock(Arc::new(RecordedRetryClock::default()));
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
+        for n in 1..=8 {
+            h.host.observe_worker(&backend, &h.binding, "stu-session", &worker_overloaded("worker-call"));
+            until("Stu was not told about his worker's overload", || overload_notices(&h).len() == n);
+        }
+        let told = overload_notices(&h);
+        let seventh = told.iter().find(|fact| fact["retry"] == 7).expect("no seventh retry");
+        assert_eq!((&seventh["waited_minutes"], &seventh["retries_used_up"]), (&serde_json::json!(80), &serde_json::json!(false)),
+            "the granted seventh retry was marked as the end: {seventh}");
+        let eighth = told.iter().find(|fact| fact["retry"].is_null()).expect("no eighth overload");
+        assert_eq!(eighth["retries_used_up"], true, "the eighth overload, granted no retry, did not end the schedule: {eighth}");
+        let stu = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app/agents/stu.md")).unwrap();
+        assert!(stu.contains("`retries_used_up`") && !stu.contains("with no retries left means"),
+            "stu.md does not report the failure on the fact the host sets only when no retry is granted");
+        backend.inner.lock().unwrap().closing = true;
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
     }
@@ -2205,7 +2961,7 @@ mod tests {
         let (peer,complete_peer)=received.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
         assert!(peer.contains("Correction before any output"));
         let answer=crate::questions::Delivery {obligation_id:None,id:"early-answer".into(),entity_id:"depot".into(),
-            thread_id:"thread-one".into(),asker:"stu".into(),set_id:None,text:"Use Friday".into(),receipt:None};
+            thread_id:"thread-one".into(),asker:"stu".into(),set_id:None,text:"Use Friday".into(),receipt:None,order:None};
         host.queue_question_answer(&h.binding,&answer).unwrap();
         // load-bound: a submitted answer is the verdict; the first result remains impossible until release.
         let (text,complete_answer)=received.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
@@ -2235,6 +2991,7 @@ mod tests {
             set_id: Some("standing-choice".into()),
             text: "Use the existing launch date".into(),
             receipt: None,
+            order: None,
         };
         h.host.queue_question_answer(&h.binding, &answer).unwrap();
         assert!(

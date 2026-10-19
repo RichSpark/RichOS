@@ -1467,9 +1467,10 @@ def render_verdict(row, items_by_key, again=None):
         head += "  (told again, notice %d; first told %s)" % again
     out = [head]
     answer = _verdict_file(row).get("answer") or {}
-    for f in (answer.get("findings") or [])[:4]:
-        out.append("      P%s %s (%s)" % (f.get("priority"), " ".join(str(f.get("title") or "").split())[:110],
-                                         ", ".join(f.get("files") or [])[:80]))
+    for n, f in enumerate((answer.get("findings") or [])[:4], 1):
+        out.append("      P%s %s (%s)%s" % (f.get("priority"), " ".join(str(f.get("title") or "").split())[:110],
+                                           ", ".join(f.get("files") or [])[:80],
+                                           " [%s#%d]" % (row.get("id"), n) if f.get("blocks") else ""))
     if len(answer.get("findings") or []) > 4:
         out.append("      ... and %d more" % (len(answer["findings"]) - 4))
     out.append("      record: %s" % os.path.join(row.get("record") or "?", "verdict.json"))
@@ -1482,6 +1483,9 @@ def render_verdict(row, items_by_key, again=None):
         out.append("      You can: start a fresh continuation with these findings as its input (`continues: %s`); a "
                    "finished agent is never resumed. Told again every %d min until a continuation exists or the "
                    "work is landed or discarded." % (it.ref.split("--")[-1] if it and it.ref else who, REPEAT_MINUTES))
+        out.append("      Or, when no user hits a blocking finding in normal use of this work (ruling §116), file it "
+                   "as a follow-up and land: %s --follow-up <finding id> --why '<who rules, and why>'."
+                   % os.path.join(os.path.dirname(HERE), "second-review.sh"))
     return out
 
 

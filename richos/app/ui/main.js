@@ -2963,14 +2963,17 @@ function removeWaitBand() {
 /// WHAT THE BAND SAYS, as a pure function of what has been observed — separate from the DOM
 /// so a suite can assert on the sentence rather than on a picture of it.
 ///
-/// Headlines follow the observed turn status. The queued headline is general waiting
-/// copy, not a model-phase claim: this wire still reports `phase: unknown`.
+/// Headlines follow the observed turn status. "Rich is thinking" is the CEO's own words for
+/// the moment before anything comes back from Rich (2026-10-17 08:13Z, replacing "Rich has
+/// your message · Waiting to start"): a queued turn, and a working one with no reply, step
+/// or worker row yet, which is where the request classifier's second falls. It is general
+/// waiting copy, not a model-phase claim: this wire still reports `phase: unknown`.
 function waitBandCopy(t, nowMs) {
   const quietMs = nowMs - t.lastAt;
   const quiet = quietMs >= QUIET_AFTER_MS;
 
   let head;
-  if (t.status === "queued") head = "Rich is thinking";
+  if (t.status === "queued" || (t.status === "working" && t.signals === 0)) head = "Rich is thinking";
   else if (t.status === "recovering") head = "Rich is picking this back up";
   else if (t.status === "stopping") head = "Rich is letting go of this turn";
   else head = "Rich is working";
