@@ -257,12 +257,18 @@ impl PhoneHub {
 /// The frames that bring a phone whose last cursor is `frames`' row up to date, or `None` when
 /// the row cannot be reconstructed from what is held.
 ///
-/// Nothing at all for a row that is finished and was sent whole (his own message, a stand-in);
-/// otherwise the row's current state as [`coalesce_rows`] builds it.
+/// For a row that is finished and was sent whole (his own message, a stand-in, a question card),
+/// only the conversation lists at that cursor; otherwise the row's current state as
+/// [`coalesce_rows`] builds it, which passes those lists through as well.
+///
+/// **A LIST TAKES NO CURSOR, SO IT SHARES THE NEWEST ROW'S** (`mod.rs` `threads_changed`; review
+/// `rv-20261019T115102Z-1f88727c-a59d`): a conversation made on the Mac while the phone was away
+/// goes out under the number the phone comes back with. A list replaces the phone's list whole,
+/// so sending one the phone already had is harmless; leaving it out loses the conversation.
 fn catch_up_row(frames: Vec<Frame>, history: &VecDeque<Frame>) -> Option<Vec<Frame>> {
     let still_arriving = frames.iter().any(|f| f.kind == "delta" || is_incomplete_row(f));
     if !still_arriving {
-        return Some(Vec::new());
+        return Some(frames.into_iter().filter(|f| f.kind == "threads").collect());
     }
     coalesce_rows(frames, history)
 }
@@ -514,6 +520,28 @@ mod tests {
         hub.seed_cursor(4);
         hub.publish("message", 5, "{}".into()).unwrap();
         assert_eq!(hub.replay_after(Some(5)), Replay::Tail(Vec::new()));
+    }
+
+    #[test]
+    fn a_conversation_list_sharing_the_resume_cursor_still_reaches_a_reconnecting_phone() {
+        // Review `rv-20261019T115102Z-1f88727c-a59d` finding 1: a question card takes a fresh
+        // cursor and is sent whole; the phone drops; a conversation is created on the Mac and
+        // its list goes out under `cursor_now()`, the question's own number (`mod.rs`
+        // `threads_changed`). The phone comes back presenting that number. The list must be in
+        // the tail, or the new conversation is missing from its picker.
+        let hub = live_hub();
+        hub.seed_cursor(9);
+        let cursor = hub.next_cursor();
+        let question = serde_json::json!({ "id": "q", "cursor": cursor, "role": "rich", "kind": "question", "text": "Formal or casual?", "complete": true });
+        hub.publish("message", cursor, question.to_string()).unwrap();
+        let list = "{\"threads\":[{\"id\":\"A\"},{\"id\":\"C\"}]}".to_string();
+        hub.publish("threads", hub.cursor_now(), list.clone()).unwrap();
+        assert_eq!(hub.cursor_now(), cursor, "the list took no cursor of its own");
+        match hub.replay_after(Some(cursor)) {
+            // The question itself is not sent again: the phone already has it whole.
+            Replay::Tail(frames) => assert_eq!(frames, vec![Frame { cursor, kind: "threads", data: list }]),
+            other => panic!("expected a tail, got {other:?}"),
+        }
     }
 
     /// Publishes one reply the way [`PhoneLiveEmitter`] does: the opening, two deltas and the
