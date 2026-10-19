@@ -1524,7 +1524,12 @@ function placeNewChatMenu() {
   const r = newChatMenuAnchor().getBoundingClientRect();
   const width = newChatMenuEl.offsetWidth || 304;
   newChatMenuEl.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - width - 8))) + "px";
-  newChatMenuEl.style.top = Math.round(r.bottom + 6) + "px";
+  const top = Math.round(r.bottom + 6);
+  newChatMenuEl.style.top = top + "px";
+  // Never past the foot of the window: at 150% text in a small window the company form with
+  // its refusal is taller than the room under the button, and it scrolls inside itself so Add
+  // and Cancel stay reachable (mid-job review rv-20261019T142223Z-c855f9a6-d96d).
+  newChatMenuEl.style.maxHeight = Math.max(120, window.innerHeight - top - 8) + "px";
 }
 
 function menuItem(iconName, name, attrs, kbd) {
@@ -1641,6 +1646,18 @@ newChatMenuEl.addEventListener("keydown", (e) => {
   if (next < 0) return;
   e.preventDefault();
   items[next].focus();
+});
+// Opened with the pointer, the menu leaves focus where it was; the first arrow key then moves
+// it into the menu, so a hand that switches to the keyboard is not stranded outside it
+// (mid-job review rv-20261019T142223Z-c855f9a6-d96d).
+document.addEventListener("keydown", (e) => {
+  if (newChatMenuEl.hidden || newChatMenuEl.classList.contains("is-form")) return;
+  if (newChatMenuEl.contains(document.activeElement)) return;
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  const items = newChatMenuEl.querySelectorAll(".m-item");
+  if (!items.length) return;
+  e.preventDefault();
+  items[e.key === "ArrowDown" ? 0 : items.length - 1].focus();
 });
 document.addEventListener("pointerdown", (e) => {
   if (newChatMenuEl.hidden) return;

@@ -34,21 +34,21 @@ const TWO = ["northwind", "lumen"];
 async function openApp(browser, opts) {
   opts = opts || {};
   const theme = opts.theme || "dark";
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: theme });
+  const page = await browser.newPage({ viewport: opts.viewport || { width: 1440, height: 900 }, colorScheme: theme });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
     if (m.type() === "error") errors.push("console: " + m.text());
   });
-  await page.addInitScript((t) => {
+  await page.addInitScript(([t, scale]) => {
     try {
       window.localStorage.setItem("richos-theme", t);
-      window.localStorage.setItem("richos-font-scale", "100");
-      window.localStorage.setItem("richos-mock-config", JSON.stringify({ theme: t, font_scale: 100, user_name: null }));
+      window.localStorage.setItem("richos-font-scale", String(scale));
+      window.localStorage.setItem("richos-mock-config", JSON.stringify({ theme: t, font_scale: scale, user_name: null }));
     } catch (e) {
       /* storage unavailable: the shipped default theme */
     }
-  }, theme);
+  }, [theme, opts.fontScale || 100]);
   await page.addInitScript((keep) => {
     let real = null;
     Object.defineProperty(window, "RichBridge", {
@@ -284,6 +284,43 @@ async function main() {
     assertEqual(page.__errors, [], "page errors");
     await page.close();
     return "menu at x " + m.left + "-" + m.right + " of " + m.vw + ", " + m.underToggle + "px under the toggle";
+  });
+
+  // Mid-job review rv-20261019T142223Z-c855f9a6-d96d, finding 1: opened with the pointer, the
+  // arrow keys did nothing, because focus stayed on the button and the arrows were the menu's.
+  await run.check("opened with the pointer, the first arrow key moves into the menu and Enter picks", async () => {
+    const page = await openApp(browser);
+    await page.click("#rail-new-thread");
+    await page.keyboard.press("ArrowDown");
+    const first = await menuState(page);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    const s = await newChatScreen(page);
+    assertEqual(first.focused, "Northwind Traders", "the first arrow after a click");
+    assert(s.onScreen && s.name === "Lumen Labs", "ArrowDown, ArrowDown, Enter did not start a chat in Lumen Labs: " + JSON.stringify(s));
+    await page.close();
+    return "click, ArrowDown -> " + first.focused + ", ArrowDown, Enter -> " + s.scope;
+  });
+
+  // The same review, finding 2: at 150% text in the app's smallest window (1024 x 700) the
+  // company form with its refusal ran below the foot of the window, Add and Cancel with it.
+  await run.check("at 150% text in a 1024 x 700 window the company form with its refusal stays in the window, Add and Cancel reachable", async () => {
+    const page = await openApp(browser, { keep: ONE, fontScale: 150, viewport: { width: 1024, height: 700 } });
+    await page.click("#rail-new-thread");
+    await page.click("#new-chat-menu .m-item[data-new-company]");
+    await page.click("#entity-add-go");
+    await page.waitForSelector("#new-chat-menu #entity-add-error:not([hidden])");
+    const box = await page.evaluate(() => {
+      const r = document.getElementById("new-chat-menu").getBoundingClientRect();
+      return { bottom: Math.round(r.bottom), vh: window.innerHeight, scale: getComputedStyle(document.documentElement).fontSize };
+    });
+    assert(box.bottom <= box.vh, "the menu runs below the window: " + JSON.stringify(box));
+    // Reachable the way a hand reaches them: Playwright scrolls the menu to the control, and
+    // the click has to land on it and do its job.
+    await page.click("#entity-add-cancel");
+    assertEqual((await menuState(page)).open, false, "Cancel, scrolled to, did not close the menu");
+    await page.close();
+    return "menu bottom " + box.bottom + " of " + box.vh + " at root font " + box.scale;
   });
 
   await run.check('"New company" turns the same menu into the app\'s company form, with a back arrow to the menu', async () => {

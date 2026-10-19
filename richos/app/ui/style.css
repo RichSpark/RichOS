@@ -2640,12 +2640,20 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
 
 /* The `.menu` stacking (70), below Settings (300) like every other popup. */
 .new-chat-menu {
+  /* `placeNewChatMenu` caps the height at the room under the anchor; the rest scrolls. */
+  overflow-y: auto;
   width: 304px;
   padding: 6px;
   border-radius: 12px;
   box-shadow: 0 18px 44px -12px var(--shadow-strong), 0 2px 6px var(--shadow-weak);
   transform-origin: 24px 0;
   animation: new-chat-menu-in 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* A flex column would squeeze its children to fit the capped height; they keep their size and
+   the menu scrolls instead. */
+.new-chat-menu > * {
+  flex-shrink: 0;
 }
 
 .new-chat-menu.is-form {
