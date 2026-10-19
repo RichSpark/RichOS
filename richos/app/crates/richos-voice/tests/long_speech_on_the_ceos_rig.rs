@@ -107,6 +107,35 @@ fn his_turn_still_ends_when_the_room_is_noisy() {
     assert!(!quiet.is_empty(), "his turn never ended in the noisy room, so it was never sent");
 }
 
+/// **And with a click in the room as well** (handover review rv-20261019T131907Z, keeping
+/// rv-20261019T123341Z finding 1 open). The same noisy room with a 16 ms background transient
+/// every 496 ms (every 31st frame raised to RMS 0.046 or 0.050, 26.7 and 26.0 dB below full
+/// scale). Such a click is loud enough to pass for clear speech against a floor that has not yet
+/// learned the room, and arrives more often than the 0.800 s hold lasts, so a hold renewed by any
+/// single loud frame never let the floor learn the room, and his turn was never sent. Before the
+/// hold existed (main) both cases ended the turn at frame 287.
+#[test]
+fn his_turn_still_ends_when_the_noisy_room_also_has_clicks() {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push(MIC);
+    let pcm = wav::read_pcm16(&std::fs::read(&p).unwrap()).unwrap();
+    let mic = wav::to_mono(&pcm.samples, pcm.channels);
+    let room = &mic[..93 * VAD_FRAME_SAMPLES];
+    let gain = 10f32.powf(-36.0 / 20.0) / rms(room);
+    for click_rms in [0.046f32, 0.050] {
+        let mut track = vec![0.12f32; 100 * VAD_FRAME_SAMPLES];
+        let noise: Vec<f32> = room.iter().cycle().take(1250 * VAD_FRAME_SAMPLES).map(|s| s * gain).collect();
+        for (n, frame) in noise.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
+            let g = if n % 31 == 0 { click_rms / rms(frame) } else { 1.0 };
+            track.extend(frame.iter().map(|s| s * g));
+        }
+        let (spans, quiet) = replay(&track);
+        println!("[replay] noisy room, click RMS {click_rms}: admitted {spans:?}, end-of-turn quiet at frames {quiet:?}");
+        assert_eq!(spans.len(), 1, "click RMS {click_rms}: his speech never closed as an utterance");
+        assert!(!quiet.is_empty(), "click RMS {click_rms}: his turn never ended, so it was never sent");
+    }
+}
+
 #[test]
 fn every_word_of_a_long_stretch_of_speech_reaches_the_recognizer() {
     let mic = his_rig_track();
