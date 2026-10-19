@@ -7,6 +7,9 @@
 //
 //  * A context click shows nothing, except in a field the user types in (input, textarea,
 //    contenteditable), where the plain editing menu stays so Cut, Copy and Paste still work.
+//    WebKit's menu there carries Look Up, Translate and the rest too; src-tauri/src/webview_menu.rs
+//    cuts it to Cut, Copy, Paste and Select All, and drops the PDF preview's menu, which no page
+//    script reaches.
 //  * Wherever the app has its own right-click menu (thread rows, files), its handler still runs:
 //    this listener only cancels the default and never stops propagation.
 //  * A right-click does not select the text under it (WebKit selects the word on mouse-down).

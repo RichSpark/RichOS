@@ -134,6 +134,9 @@ mod bug_report;
 /// Bust a bug's picture of RichOS's own window, for the user's own Claude to look at
 /// (WKWebView's snapshot: no screen-recording permission).
 mod window_picture;
+/// The web view's own right-click menu: only Cut, Copy, Paste and Select All in a text field,
+/// nothing anywhere else, the PDF preview included (CEO, nightly 65).
+mod webview_menu;
 
 // Headless integration harness; absent from the shipped executable.
 #[cfg(test)]
@@ -2170,6 +2173,8 @@ fn main() {
     // `generate_context!()` on the line above is compile-generated construction with nothing
     // to fail at run time, which is why one line of `main` is deliberately outside the net.
     startup_alert::install(&context.config().identifier, &compiled_version);
+    // Before any window, and before the dictation tool branches off, so both processes have it.
+    webview_menu::install();
     // THE DICTATION TOOL (dictation plan section 6): after the alert's panic hook, so a panic is
     // still recorded, and BEFORE `update_startup::prepare`, so the tool never takes the update
     // lease, never opens a launch record and never builds the main window.
