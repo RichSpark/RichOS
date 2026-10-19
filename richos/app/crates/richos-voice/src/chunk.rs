@@ -298,7 +298,41 @@ pub fn speakable(raw: &str) -> String {
 
     // Collapse runs of whitespace; a synthesizer pauses on every one of them.
     let collapsed: String = out.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed.trim().to_string()
+    on_the_hour(collapsed.trim())
+}
+
+/// **A time on the hour is said the way a person says it: "9:00 AM" is "9 AM", "at 10:00" is
+/// "at 10".** Rich's voice cannot say ":00". Rendered by Pocket TTS on 2026-10-19 (to memory, not
+/// played) and transcribed by whisper large-v3-turbo, "It resets Wednesday at
+/// 9:00 AM." came out as "... at 9.70am" (twice), "at 97", "at 9 so", "at 9.30" and "at 9.00": six
+/// renders, six wrong, four without the "AM". "Lunch is at 12:00 PM." came out as "12 zero" and
+/// "12.00", "We meet at 10:00." as "10-7" and "ten, sir". The same sentences without the ":00"
+/// were said right every time (6 of 6, 2 of 2, 2 of 2). That is the end of Rich's spoken reply on
+/// nightly 65: written "It resets Wednesday at 9:00 AM.", heard "... at 9" and nothing after it.
+///
+/// Only ":00" after an hour of one or two digits goes, and never inside a longer time such as
+/// "10:00:30"; "2:30 PM" is said correctly already and stays as it is.
+fn on_the_hour(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == ':'
+            && chars.get(i + 1) == Some(&'0')
+            && chars.get(i + 2) == Some(&'0')
+            && !chars.get(i + 3).is_some_and(|c| c.is_ascii_digit() || *c == ':')
+        {
+            let digits = chars[..i].iter().rev().take_while(|c| c.is_ascii_digit()).count();
+            let before = i.checked_sub(digits + 1).map(|j| chars[j]);
+            if (1..=2).contains(&digits) && !before.is_some_and(|c| c == ':' || c == '.' || c.is_alphanumeric()) {
+                i += 3;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 fn replace_md_links(s: &str) -> String {
@@ -492,6 +526,22 @@ mod tests {
         );
         assert_eq!(out, vec!["Run this.", "Then tell me."]);
         assert!(!out.join(" ").contains("rm -rf"), "shell reached the CEO's ear");
+    }
+
+    /// INVARIANT: a time on the hour reaches the synthesizer without ":00", which Rich's voice
+    /// cannot say and which took the end of his reply with it (nightly 65, [`on_the_hour`]).
+    #[test]
+    fn a_time_on_the_hour_is_spoken_without_its_zeros() {
+        let mut c = SentenceChunker::new();
+        let mut said = c.push("Also, a heads-up: your Claude account has used 95% of this week's limit. It resets Wednesday at 9:00 AM.");
+        said.extend(c.flush());
+        assert_eq!(said.last().map(String::as_str), Some("It resets Wednesday at 9 AM."));
+        assert_eq!(speakable("Lunch is at 12:00 PM."), "Lunch is at 12 PM.");
+        assert_eq!(speakable("We meet at 10:00."), "We meet at 10.");
+        assert_eq!(speakable("(9:00-10:00)"), "(9-10)");
+        // Not on the hour, or not a clock time: unchanged.
+        assert_eq!(speakable("The call is at 2:30 PM."), "The call is at 2:30 PM.");
+        assert_eq!(speakable("It ran 10:00:30 and 1:10:00 and v1:00 and 123:00."), "It ran 10:00:30 and 1:10:00 and v1:00 and 123:00.");
     }
 
     /// INVARIANT: a URL is spoken as "a link", not letter by letter.
