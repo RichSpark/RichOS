@@ -167,7 +167,7 @@ pub fn decide(request: &ExitRequest) -> ExitDecision {
 pub fn quit_question(registered: &Registered) -> String {
     if !registered.readable {
         return "I can't tell whether anything is still running in the background. \
-                If you quit now, anything that is running stops. Nothing is lost, and \
+                If you quit now, anything that is running stops. Nothing is lost and \
                 nothing is landed."
             .into();
     }
@@ -211,10 +211,10 @@ pub fn quit_question(registered: &Registered) -> String {
         ),
         (Some(team), false) => format!(
             "You have {what}. {team} Quitting stops the work and your team. Everything done so \
-             far is kept, and nothing more is landed."
+             far is kept and nothing more is landed."
         ),
         (None, _) => format!(
-            "You have {what}. Quitting stops the work. Everything it has done so far is kept, \
+            "You have {what}. Quitting stops the work. Everything it has done so far is kept \
              and nothing is landed in your repository."
         ),
     }

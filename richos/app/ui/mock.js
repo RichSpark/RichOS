@@ -106,7 +106,7 @@
     name: null,
     origin: null,
     sentence:
-      "Tailscale is not on this Mac. Installing it here and on your phone, and signing in to the " +
+      "Tailscale is not on this Mac. Installing it here and on your phone and signing in to the " +
       "same free account on both, is what lets you reach me when you are away from your desk.",
     account: null,
     phone: null,
@@ -221,7 +221,8 @@
   const MOCK_CONFIG_KEY = "richos-mock-config";
   const mockConfig = (function () {
     // `rich_model`/`stu_model` stand in for config.rs's §119 pair: absent reads as Opus.
-    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus" };
+    // `oxford_comma` stands in for config.rs's Oxford comma setting: absent reads as off (CEO, 2026-10-19).
+    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus", oxford_comma: false };
     try {
       const raw = window.localStorage.getItem(MOCK_CONFIG_KEY);
       if (!raw) return fresh;
@@ -232,6 +233,7 @@
         user_name: typeof parsed.user_name === "string" && parsed.user_name.trim() ? parsed.user_name : null,
         rich_model: parsed.rich_model === "fable" ? "fable" : "opus",
         stu_model: parsed.stu_model === "fable" ? "fable" : "opus",
+        oxford_comma: parsed.oxford_comma === true,
       };
     } catch (e) {
       // A corrupt or unavailable store degrades to the shipped defaults rather than
@@ -1267,7 +1269,7 @@
         state === "unusable" ? "I couldn't read your notes about this company." : null,
       message:
         state === "unusable"
-          ? "I'm working without them, and I won't guess at what they said. Whoever set " +
+          ? "I'm working without them and I won't guess at what they said. Whoever set " +
             "RichOS up will need to look at that."
           : null,
     };
@@ -1561,15 +1563,15 @@
   // `_notConnected` follows for `LEASE_UNAVAILABLE_MESSAGE`.
   const SETUP_INCOMPLETE = {
     engine:
-      "I can't take that on yet: the RichOS engine isn't on this Mac, and that's the part " +
+      "I can't take that on yet: the RichOS engine isn't on this Mac and that's the part " +
       "of me that knows how I work. I've put the setting up back on your screen: press Set " +
       "it up and I'll fetch it. There's nothing to quit and nothing to reopen.",
     claude:
-      "I can't take that on yet: Claude Code isn't on this Mac, and that's the program I " +
+      "I can't take that on yet: Claude Code isn't on this Mac and that's the program I " +
       "think with. I've put the setting up back on your screen: press Set it up and I'll " +
       "fetch it. There's nothing to quit and nothing to reopen.",
     both:
-      "I can't take that on yet: this Mac doesn't have Claude Code or the RichOS engine, " +
+      "I can't take that on yet: this Mac doesn't have Claude Code or the RichOS engine " +
       "and those are what I think with. I've put the setting up back on your screen: press " +
       "Set it up and I'll fetch them. There's nothing to quit and nothing to reopen.",
   };
@@ -2062,7 +2064,7 @@
 
   /// Verbatim from `FEEDBACK_STORE_UNAVAILABLE`, app/src-tauri/src/main.rs.
   const FEEDBACK_STORE_ABSENT =
-    "I can't keep an answer right now: the file I record them in wouldn't open, and I'm not going to ask you what you think and then lose it. That one is for whoever set RichOS up to look at; it isn't yours to fix.";
+    "I can't keep an answer right now: the file I record them in wouldn't open and I'm not going to ask you what you think and then lose it. That one is for whoever set RichOS up to look at; it isn't yours to fix.";
   /// Verbatim from `FEEDBACK_PREVIEW_MISMATCH`, app/src-tauri/src/main.rs.
   const FEEDBACK_PREVIEW_MISMATCH =
     "I won't record that. What you were shown isn't what I would say now, so approving it would be approving something you haven't read. Ask me to show it again.";
@@ -2218,7 +2220,7 @@
   // compares them to the Rust source, so a reworded sentence reaches this file through a
   // failing check rather than through a stale copy nobody looked at.
   const TECHY_NOTHING_RECORDED =
-    "No machinery was recorded for this conversation. Retention started on 2026-08-28, and " +
+    "No machinery was recorded for this conversation. Retention started on 2026-08-28 and " +
     "anything Rich did before that was never written down, so this is a gap in the record, " +
     "not a quiet conversation.";
   const TECHY_NOT_RETAINED =
@@ -2226,7 +2228,7 @@
     "hasn't been written to. It fills up as Rich works.";
   const TECHY_UNREADABLE =
     "I can't read the technical record for this conversation. It's on this machine and I " +
-    "haven't lost it. Something is refusing to open it, and whoever set RichOS up needs to " +
+    "haven't lost it. Something is refusing to open it and whoever set RichOS up needs to " +
     "look.";
   // §1.5's between-turn lane, when it is empty. Verbatim from `machinery_view.rs`'s
   // `BETWEEN_TURNS_QUIET`; `techy.js` check 2 compares them.
@@ -3025,7 +3027,7 @@
             unbound: threads.filter((t) => !t.entity_id).map(threadRowOf),
             active: activeContextOf(),
             unbound_explanation:
-              "This thread has no entity home: it predates entity scoping, and Rich will not guess " +
+              "This thread has no entity home: it predates entity scoping and Rich will not guess " +
               "which entity this work belongs to. An operator must bind it explicitly.",
           };
         }
@@ -3140,7 +3142,11 @@
         // is the state the acceptance suite has to be able to reach without arranging
         // anything.
         case "get_appearance":
-          return { theme: mockConfig.theme, font_scale: mockConfig.font_scale };
+          return { theme: mockConfig.theme, font_scale: mockConfig.font_scale, oxford_comma: mockConfig.oxford_comma };
+        case "set_oxford_comma":
+          mockConfig.oxford_comma = args.keep === true;
+          persistMockConfig();
+          return null;
         case "set_theme": {
           const t = String(args.theme);
           // Refused, not coerced, exactly as the real command refuses it: quietly writing
@@ -3499,7 +3505,7 @@
           if (!entities.some((e) => e.id === id))
             return Promise.reject(
               'I don\'t have a company called "' + id + '" on file, so I won\'t file ' +
-                "anything under it. Pick one of the companies I do have, or whoever set " +
+                "anything under it. Pick one of the companies I do have or whoever set " +
                 "RichOS up can add it."
             );
           const label = args.label == null ? "" : String(args.label).trim();
@@ -3515,7 +3521,7 @@
           if (!entities.some((e) => e.id === id))
             return Promise.reject(
               'I don\'t have a company called "' + id + '" on file, so I won\'t file ' +
-                "anything under it. Pick one of the companies I do have, or whoever set " +
+                "anything under it. Pick one of the companies I do have or whoever set " +
                 "RichOS up can add it."
             );
           if (args.visible === false) homeEntityHidden[id] = true;
@@ -3571,7 +3577,7 @@
           if (!entities.some((e) => e.id === entityId))
             return Promise.reject(
               'I don\'t have a company called "' + entityId + '" on file, so I won\'t file ' +
-                "anything under it. Pick one of the companies I do have, or whoever set " +
+                "anything under it. Pick one of the companies I do have or whoever set " +
                 "RichOS up can add it."
             );
           chosenEntityId = entityId;

@@ -131,7 +131,7 @@ impl Finding {
         match self {
             Finding::FirstLock { sha256, version, path } => format!(
                 "First run on this machine: no whisper toolchain was locked yet, so there was nothing to \
-                 compare against. RichOS recorded what it found: whisper-cli {} (sha256 {}…) at {}, and \
+                 compare against. RichOS recorded what it found: whisper-cli {} (sha256 {}…) at {} and \
                  every later run is checked against it.",
                 version.as_deref().map(|v| format!("version {v}")).unwrap_or_else(|| "of unknown version".into()),
                 s(sha256),

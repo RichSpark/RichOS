@@ -517,7 +517,7 @@ pub const RETRY_STARTS: u32 = 2;
 /// died with the app. It names the answer by its uuid and never carries the answer again: the
 /// answer is already in the lead's context, once. A drop of a resent answer (P18 case B) is
 /// the same window, and is continued the same way.
-pub const CONTINUE_NOTE: &str = "RichOS restarted while you were working on his answer, and that turn ended before it \
+pub const CONTINUE_NOTE: &str = "RichOS restarted while you were working on his answer and that turn ended before it \
                                  finished.";
 
 /// The whole continuation for these relays: one message for every answer that one dead turn
@@ -534,7 +534,7 @@ fn continuation_text(relays: &[AnswerRelay]) -> String {
 /// Said when that bound is reached. His words to the conversation start his team as always,
 /// and the saved answer follows them.
 pub const RETRIES_SPENT: &str = "Your team ended again before it could take your answer, so I've stopped starting it \
-                                 for that. Speak to me in this conversation and I'll start it, and your answer goes \
+                                 for that. Speak to me in this conversation and I'll start it and your answer goes \
                                  to it then.";
 
 fn read_record(path: &Path) -> LeadRecord {
@@ -1825,8 +1825,8 @@ impl OperatorHost {
         match replied {
             Ok(reply) => match reply.still_queued.len() {
                 0 => "Stopped what your team was doing here. Its agents keep running.".into(),
-                1 => "Stopped what your team was doing here. Its agents keep running, and 1 of your messages is still queued and runs next.".into(),
-                n => format!("Stopped what your team was doing here. Its agents keep running, and {n} of your messages are still queued and run next."),
+                1 => "Stopped what your team was doing here. Its agents keep running and 1 of your messages is still queued and runs next.".into(),
+                n => format!("Stopped what your team was doing here. Its agents keep running and {n} of your messages are still queued and run next."),
             },
             Err(e) => format!("Your team could not be interrupted ({e}). It is still running."),
         }

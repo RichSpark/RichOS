@@ -119,6 +119,7 @@ richscribe.js           @shell @allui richos/app/src-tauri/src/ richos/app/crate
 dictation-overlay.js    richos/app/ui/dictation-bar.html richos/app/ui/dictation-bar.js richos/app/ui/dictation-menu.html richos/app/ui/dictation-menu.js richos/app/ui/dictation-overlay.css richos/app/ui/style.css richos/app/ui/theme-boot.js richos/app/ui/index.html
 retention.js            @shell richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js richos/app/crates/richos-core/src/config.rs richos/app/crates/richos-core/src/journal.rs
 rich-model.js           @shell richos/app/ui/mock.js richos/app/ui/settings-button.js
+oxford-comma.js         @shell richos/app/ui/oxford-comma.js richos/app/ui/timeline.js richos/app/ui/questions.js richos/app/ui/settings-button.js richos/app/ui/mock.js
 onboarding.js           @shell richos/app/ui/mock.js richos/app/src-tauri/src/main.rs
 onboarding-lifecycle.js @shell richos/app/ui/mock.js
 first-run-sheet.js      @shell richos/app/ui/mock.js

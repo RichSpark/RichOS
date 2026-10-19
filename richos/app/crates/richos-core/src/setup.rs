@@ -1212,7 +1212,7 @@ pub enum SetupError {
     #[error("The download opened, but what was inside it isn't a RichOS engine ({detail}). Nothing has been installed.")]
     EngineShapeInvalid { detail: String },
 
-    #[error("The download is the wrong engine: it says version {found}, and this copy of RichOS expects {expected}. Nothing has been installed.")]
+    #[error("The download is the wrong engine: it says version {found} and this copy of RichOS expects {expected}. Nothing has been installed.")]
     EngineVersionMismatch { expected: String, found: String },
 
     #[error("Anthropic's installer for Claude Code stopped with an error (exit {code}). It said: {stderr}")]

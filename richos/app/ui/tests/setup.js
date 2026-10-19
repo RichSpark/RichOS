@@ -1590,7 +1590,7 @@ async function main() {
     await page.evaluate(() => {
       window.__emit("rich://voice-error", {
         message:
-          "I can't take that on yet: the RichOS engine isn't on this Mac, and that's the " +
+          "I can't take that on yet: the RichOS engine isn't on this Mac and that's the " +
           "part of me that knows how I work. I've put the setting up back on your screen: " +
           "press Set it up and I'll fetch it. There's nothing to quit and nothing to reopen.",
         at: Date.now(),

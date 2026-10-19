@@ -2103,6 +2103,112 @@ def commit_msg(repo, message_file):
 
 
 # ---------------------------------------------------------------------------------------
+# The one fixer: no Oxford comma in the app's own text or in a doc a commit changes
+# ---------------------------------------------------------------------------------------
+# CEO, 2026-10-19: "in the UI as well as any of our docs etc, the Oxford comma must be always
+# off (no need to change existing docs)" and "when one of the existing docs gets changed/updated
+# etc, THEN the Oxford comma linter should clean that doc." So at every commit, before any check,
+# `oxford-comma.js` deletes the comma before " and", " or" and " nor" from the whole of every
+# Markdown doc the commit adds or changes and from the UI text of every UI file it changes. It
+# works on what is being committed: each file's staged bytes are read from the index, fixed, and
+# written back to the index; the working copy gets the same fix (its unstaged edits included), so
+# nothing shows as changed afterward. A file the commit does not touch is never read. This is the
+# only check here that changes what it checks: the rule is a deletion with nothing to decide, and
+# his word for it is "automatically". Code and test fixtures are never touched.
+
+OXFORD_FIXER = "richos/app/scripts/oxford-comma.js"
+
+
+def _oxford_candidate(path):
+    return (path.lower().endswith((".md", ".markdown"))
+            or (path.startswith("richos/app/ui/") and path.endswith((".js", ".html")))
+            or (path.startswith("richos/app/") and path.endswith(".rs")))
+
+
+def _git_bytes(args, data=None):
+    # The hook's own environment, so `git commit -a` and `git commit <path>` read and write the
+    # index git named in GIT_INDEX_FILE.
+    result = subprocess.run(["git", *args], input=data, capture_output=True,
+                            stdin=None if data is not None else subprocess.DEVNULL)
+    if result.returncode:
+        raise RuntimeError(f"git {' '.join(args)} failed ({result.returncode}): "
+                           f"{result.stderr.decode(errors='replace').strip()}")
+    return result.stdout
+
+
+def _oxford_run(repo, files):
+    node = shutil.which("node", path=repo.env.get("PATH"))
+    if not node:
+        raise RuntimeError("node is not on PATH, so the Oxford comma fixer cannot run")
+    payload = json.dumps({"files": [{"path": p, "content": c} for p, c in files]})
+    # A plain node process that reads files and writes JSON: nothing for run_bounded's group
+    # teardown to catch, and it needs stdin.
+    result = subprocess.run([node, str(repo.top / OXFORD_FIXER), "--json"], timeout=120, cwd=repo.top,
+                            env=repo.env, input=payload, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(f"oxford-comma.js exited {result.returncode}: {result.stderr.strip()[-2000:]}")
+    return {f["path"]: f["content"] for f in json.loads(result.stdout)["files"]}
+
+
+def oxford_fix(repo):
+    if not (repo.top / OXFORD_FIXER).is_file():
+        return 0
+    try:
+        named = _git_bytes(["diff", "--cached", "--name-only", "--no-renames", "--diff-filter=AM", "-z"])
+        staged = {}
+        for raw in named.split(b"\0"):
+            path = raw.decode("utf-8", errors="replace")
+            if not raw or not _oxford_candidate(path):
+                continue
+            entry = _git_bytes(["ls-files", "-s", "-z", "--", path]).split(b"\0")[0].decode()
+            mode, sha = entry.split()[:2]
+            if mode != "100644" and mode != "100755":
+                continue
+            try:
+                staged[path] = (mode, _git_bytes(["cat-file", "blob", sha]).decode("utf-8"))
+            except UnicodeDecodeError:
+                continue
+        if not staged:
+            return 0
+        fixed = _oxford_run(repo, [(p, c) for p, (_, c) in staged.items()])
+        if not fixed:
+            return 0
+        # The working copies: one that equals the staged bytes takes the fixed bytes; one with
+        # unstaged edits on top gets the same fix applied to its own content.
+        edited = []
+        for path in fixed:
+            work = repo.top / path
+            try:
+                now = work.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if now != staged[path][1]:
+                edited.append((path, now))
+        fixed_edits = _oxford_run(repo, edited) if edited else {}
+        for path, text in fixed.items():
+            sha = _git_bytes(["hash-object", "-w", "--stdin"], text.encode("utf-8")).decode().strip()
+            _git_bytes(["update-index", "--cacheinfo", f"{staged[path][0]},{sha},{path}"])
+            work = repo.top / path
+            if not work.is_file():
+                continue
+            if path in dict(edited):
+                if path in fixed_edits:
+                    work.write_text(fixed_edits[path], encoding="utf-8")
+            else:
+                work.write_text(text, encoding="utf-8")
+        say(f"autocheck: commit: the Oxford comma deleted in {len(fixed)} file(s) being committed: "
+            + ", ".join(sorted(fixed)))
+        return 0
+    except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
+        banner("COMMIT REFUSED: the Oxford comma fixer could not run", [
+            str(exc),
+            "It deletes the comma before and/or/nor in the docs and UI text this commit changes.",
+            "Fix the cause and commit again.",
+        ])
+        return 1
+
+
+# ---------------------------------------------------------------------------------------
 
 def main(argv):
     hook = argv[0] if argv else ""
@@ -2133,6 +2239,8 @@ def main(argv):
             return commit_msg(repo, argv[1]) if len(argv) > 1 else 0
         target = land_target(repo)
         if hook == "pre-commit":
+            if oxford_fix(repo):
+                return 1
             if target:
                 return land_from_index(repo, f"commit to {target}")
             rc = commit_check(repo, "commit")

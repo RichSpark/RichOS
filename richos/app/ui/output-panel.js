@@ -469,7 +469,7 @@
       p.appendChild(node("b", null, title));
       p.appendChild(
         document.createTextNode(
-          " has produced a file yet. The moment Rich or the team writes one, it is listed here, and the count on the Output button says so."
+          " has produced a file yet. The moment Rich or the team writes one, it is listed here and the count on the Output button says so."
         )
       );
       empty.appendChild(p);
@@ -1212,7 +1212,7 @@
   const SNAP_MS = 420;
   const PERSIST_AFTER_MS = 150;
   /// What the one polite region says when the pull changes the layout (round 17.1's notices).
-  const SAID_FULL = "Open completely. The conversation is one click back, and closing the panel brings it all back.";
+  const SAID_FULL = "Open completely. The conversation is one click back and closing the panel brings it all back.";
   const SAID_BACK = "The conversation is back.";
 
   const pull = {

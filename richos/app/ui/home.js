@@ -1698,9 +1698,9 @@ window.RichHome = (function () {
 
     var note = elem("p", "home-prefs-note");
     note.textContent =
-      "Every button shows a number, and clicking one slides that company's name out. Give a " +
-      "button its own label here instead, or take it off the home screen. This changes the " +
-      "button only. The company itself, and everything filed under it, stays exactly as it is.";
+      "Every button shows a number and clicking one slides that company's name out. Give a " +
+      "button its own label here instead or take it off the home screen. This changes the " +
+      "button only. The company itself and everything filed under it, stays exactly as it is.";
     panel.appendChild(note);
 
     panel.appendChild(elem("ul", "home-prefs-list", { id: "home-prefs-list" }));

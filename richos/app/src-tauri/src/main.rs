@@ -1874,7 +1874,7 @@ const LORO_DESK_ABSENT_MESSAGE: &str =
 /// is the worse direction: it teaches him not to look for a control that is right there.
 const ENTITY_UNRESOLVED_MESSAGE: &str =
     "I can't tell which company this work belongs to, so I won't guess. Filing it under \
-     the wrong one would mix two companies' records together, and that's not a mistake \
+     the wrong one would mix two companies' records together and that's not a mistake \
      worth risking to save you a question. Pick the company and I'll keep everything under \
      it from then on.";
 
@@ -2214,7 +2214,7 @@ fn main() {
             startup_alert::cannot_start(
                 &format!("application startup: {error}"),
                 "RichOS stopped before it could open a window. It was working out which copy \
-                 of itself to run, and that step did not finish, so it closed itself rather \
+                 of itself to run and that step did not finish, so it closed itself rather \
                  than start in a state it could not vouch for.\n\nOpening RichOS again is \
                  worth one try.",
             );
@@ -3961,6 +3961,8 @@ fn main() {
             // — appended ---
             home_team,
             // --- a job's result said on its own (2026-10-15) — appended ---
+            // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
+            set_oxford_comma,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -5071,7 +5073,7 @@ fn thread_turn_facts(ledger: &Ledger, thread_id: &str) -> (Option<String>, bool)
 /// §21 "Entity binding failure" wants one honest statement, and two independently-authored
 /// versions of it would drift the moment either side is edited.
 const UNBOUND_THREAD_EXPLANATION: &str =
-    "This thread has no entity home: it predates entity scoping, and Rich will not guess \
+    "This thread has no entity home: it predates entity scoping and Rich will not guess \
      which entity this work belongs to. An operator must bind it explicitly.";
 
 fn active_binding_view(spine: &dyn SpineView) -> Option<ActiveContext> {
@@ -5233,7 +5235,7 @@ struct OnboardingView {
 /// say one thing rather than two versions of one thing.
 const ONBOARDING_UNUSABLE_HEADLINE: &str = "I couldn't read your notes about this company.";
 const ONBOARDING_UNUSABLE_MESSAGE: &str =
-    "I'm working without them, and I won't guess at what they said. Whoever set RichOS up \
+    "I'm working without them and I won't guess at what they said. Whoever set RichOS up \
      will need to look at that.";
 
 fn onboarding_view_in(reader: &SpineReader) -> OnboardingView {
@@ -5485,7 +5487,7 @@ const ENTITY_PINNED_MESSAGE: &str =
 fn unknown_company_message(id: &str) -> String {
     format!(
         "I don't have a company called \"{id}\" on file, so I won't file anything under it. \
-         Pick one of the companies I do have, or whoever set RichOS up can add it."
+         Pick one of the companies I do have or whoever set RichOS up can add it."
     )
 }
 
@@ -6228,7 +6230,7 @@ const COMPANY_NAME_REQUIRED_MESSAGE: &str =
 fn company_folder_message(folder: &Path, why: &str) -> String {
     format!(
         "I couldn't use \"{}\" as this company's folder: {why}. Give me a folder that's \
-         already on this Mac, or leave it blank: a company works without one.",
+         already on this Mac or leave it blank: a company works without one.",
         folder.display()
     )
 }
@@ -6380,7 +6382,7 @@ fn register_entity(
             richos_core::entity::EntityError::OverlappingRoot { other, other_root, .. } => format!(
                 "That folder is inside (or contains) the folder I already have for \"{other}\" \
                  ({}). If I kept both I wouldn't be able to tell which company work in there \
-                 belongs to, and I won't guess. Pick a folder that isn't shared, or leave it \
+                 belongs to and I won't guess. Pick a folder that isn't shared or leave it \
                  blank.",
                 other_root.display()
             ),
@@ -8582,7 +8584,7 @@ fn spoken_unsuppress_term(state: State<AppState>, key: String) -> Result<(), Str
 /// fix, and it invents no control, because there genuinely is none in the app. Asking him
 /// what he thinks and then dropping the answer would be worse than not asking.
 const FEEDBACK_STORE_UNAVAILABLE: &str =
-    "I can't keep an answer right now: the file I record them in wouldn't open, and I'm \
+    "I can't keep an answer right now: the file I record them in wouldn't open and I'm \
      not going to ask you what you think and then lose it. That one is for whoever set \
      RichOS up to look at; it isn't yours to fix.";
 
@@ -9185,12 +9187,30 @@ struct Appearance {
     theme: String,
     /// A percentage of the 16px root, always one of `FONT_SCALE_STEPS`.
     font_scale: u16,
+    /// Whether he keeps the Oxford comma in what Claude writes (CEO, 2026-10-19). `false`, his
+    /// default, deletes it where Rich's and Stu's words and the question cards are drawn.
+    oxford_comma: bool,
 }
 
 #[richos_command::command]
 fn get_appearance(state: State<AppState>) -> Appearance {
     let config = state.config.lock().unwrap();
-    Appearance { theme: config.theme().as_str().to_string(), font_scale: config.font_scale() }
+    Appearance {
+        theme: config.theme().as_str().to_string(),
+        font_scale: config.font_scale(),
+        oxford_comma: config.oxford_comma(),
+    }
+}
+
+/// Persist the Oxford comma choice (CEO, 2026-10-19: "make the Oxford comma linter switchable in
+/// settings"), and tell a watching phone at once so its screen changes with this one's.
+#[richos_command::command]
+fn set_oxford_comma(app: AppHandle, state: State<AppState>, keep: bool) -> Result<(), String> {
+    state.config.lock().unwrap().set_oxford_comma(keep).map_err(|e| e.to_string())?;
+    if let Some(phone) = app.try_state::<Arc<phone::PhoneRuntime>>() {
+        phone.announce_oxford_comma(keep);
+    }
+    Ok(())
 }
 
 /// Persist the CEO's lighting. An unparseable string is REFUSED rather than coerced to the

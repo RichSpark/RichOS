@@ -55,7 +55,7 @@
   let axWait = null; // { blurred } while the window waits for Accessibility in System Settings
   let micWait = null; // { blurred } while it waits for the microphone in System Settings
   let capture = null; // { err } while "Press a different key" waits
-  let feedback = null; // "on": the drawn "RichScribe is on. Try it in the box on the right, or in any app."
+  let feedback = null; // "on": the drawn "RichScribe is on. Try it in the box on the right or in any app."
   let saved = false, savedTimer = null, lastRead = 0, reading = false, registered = false, nudged = false;
   let waiters = []; // RichDictation.turnOn's answers, given when the flow settles
   let flow = false;
@@ -184,7 +184,7 @@
         </div>
         <div class="dict-how-sec">
           <p class="dict-how-h">Not the same as talking to me</p>
-          <p class="dict-how-p is-soft">The round button beside my message box sends what you say to me. RichScribe only types. You read it, fix it if you like, and send it yourself.</p>
+          <p class="dict-how-p is-soft">The round button beside my message box sends what you say to me. RichScribe only types. You read it, fix it if you like and send it yourself.</p>
         </div>
         <div class="dict-how-sec dict-priv">${ICON.lock}<p class="dict-how-p"><b>Your voice stays on this Mac.</b> Nothing you say is sent anywhere.</p></div>
       </div></div></section>`;
@@ -224,7 +224,7 @@
     // the tool runs but watches no key: never "On" (recheck finding 6)
     else if (!view.keyTap) { st = "Not working yet: the key is not being watched. Turn the switch off and on again."; cls = " is-attention"; }
     // On, whichever copy's tool holds the key: round 19's line, true for both
-    else { st = `On. Tap ${kcap(k)} in any app, talk, and tap it again.`; cls = " is-on"; }
+    else { st = `On. Tap ${kcap(k)} in any app, talk and tap it again.`; cls = " is-on"; }
     const warn = view.on && ((!elsewhere() && (mic() === "denied" || ax() === "denied")) || (ready() && !!view.secure) || (ready() && view.owner !== "none" && !view.keyTap));
     // The gold card only with a tool that holds the key and watches it (recheck finding 6).
     let html = `<div class="dict-card${view.on && !warn && toolWorking() ? " is-on" : ""}${warn ? " is-warn" : ""}"><span class="dict-spine"></span>
@@ -232,7 +232,7 @@
       <button class="dict-switch" id="dict-switch" type="button" role="switch" data-act="toggle-on" aria-checked="${view.on}" aria-label="Dictate in any app"></button></div>`;
     // line 2: dictation works only while RichOS is open (every copy; the CEO, 2026-10-08), on or off
     html += `<p class="dict-copy-note" id="dict-copy-note">${ICON.info}<span><b>Works only while RichOS is open.</b> When you quit RichOS, RichScribe stops until you open it again.</span></p>`;
-    if (feedback === "on" && works()) html += `<p class="dict-feedback" id="dict-feedback" role="status">${ICON.check}<span>RichScribe is on. Try it in the box on the right, or in any app.</span></p>`;
+    if (feedback === "on" && works()) html += `<p class="dict-feedback" id="dict-feedback" role="status">${ICON.check}<span>RichScribe is on. Try it in the box on the right or in any app.</span></p>`;
     // the key
     html += `<section class="dict-sec"><div class="dict-sec-h"><h4 class="dict-sec-t">Your key</h4><span class="dict-sec-note">Tap once to start, once more to stop. Nothing to hold down.</span></div>`;
     if (capture) {
@@ -312,7 +312,7 @@
     const range = document.createRange(); range.selectNodeContents(tryBox); range.collapse(false);
     const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
   }
-  // The line under the card ("RichScribe is on. Try it in the box on the right, or in any app.")
+  // The line under the card ("RichScribe is on. Try it in the box on the right or in any app.")
   // is DECIDED here, where the flow reaches On, on round 19's own condition (dictation.html
   // `turnOn`, `afterGrant`, `ss-tog`: `if (ready()) S.feedback = "on"`), and DRAWN by `sheetHtml`
   // only once the tool holds the key and watches it (`works()`; never On without a working tool).

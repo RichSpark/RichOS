@@ -44,7 +44,7 @@
   sheet.setAttribute("data-dismiss", "control:#phone-close");
   sheet.innerHTML = `<div class="overlay-panel">
     <!-- THE BOX THAT SCROLLS, AND IT IS NOT THE PANEL ANY MORE.
-         The panel is a flex column of exactly two children: this, which scrolls, and the action
+         The panel is a flex column of exactly two children: this, which scrolls and the action
          row below, which does not. See .phone-scroll and .phone-actions in style.css for the
          measurements that forced the split and for why a sticky footer over one scrollport was
          tried first and rejected. Everything the sheet says lives in here; the way out lives
@@ -80,7 +80,7 @@
          5.78:1, identical to the four paragraphs above them (Ray's frames 21 and 22). A card
          where nothing is the top and nothing is the point.
 
-         So the phone's own name is the heading — it is what the card is ABOUT, and it is the one
+         So the phone's own name is the heading — it is what the card is ABOUT and it is the one
          string on it that changes — and the push line, which is the only line that asks the
          reader to go and do something, is the one that takes --ink. -->
     <div id="phone-paired" hidden>
@@ -104,7 +104,7 @@
       <p class="phone-words" id="phone-paired-words" hidden></p>
       <!-- THE PRESS ON THIS MAC, AND IT IS THE ONLY THING THAT LETS THE PHONE IN — Sage's pairing
            review F1 (High), richos-hq docs/research/2026-09-24-richconnect-pairing-protocol-review.md.
-           The phone's own "They match" was the only confirmation the Mac ever recorded, and the
+           The phone's own "They match" was the only confirmation the Mac ever recorded and the
            device being judged performed the judgment: anybody who saw the code on this screen
            could pair first and confirm themselves. Until one of these two is pressed the phone's
            key can answer the six words and do nothing else. "They do not match" is the same
@@ -115,11 +115,11 @@
         <button id="phone-mac-mismatch" class="desk-btn" type="button" data-no-autofocus>They do not match</button>
       </div>
       <!-- THE SPENT-CODE ALARM, AFTER HE HAD ALREADY CONFIRMED (Sage F1 item 4, "keep it and
-           warn"): the phone stays, and he is told somebody else used its code. -->
+           warn"): the phone stays and he is told somebody else used its code. -->
       <p class="overlay-note" id="phone-code-reused" role="status" hidden></p>
       <!-- THE ONE LINE ON THIS CARD WITH AN ERRAND IN IT. Either it says the phone can reach him
            — which is the finish — or it names the thing on the phone that has not been done yet,
-           in that phone's own menu names. Both are the point of the card, and both were set in
+           in that phone's own menu names. Both are the point of the card and both were set in
            the same ink as the sentence about removing a certificate. -->
       <p class="overlay-note phone-push-line" id="phone-push-state"></p>
       <!-- SCREEN 6's LIMIT, on the one screen where they live with it. The route chooser used
@@ -145,11 +145,11 @@
          unverified-certificate warnings, a trust QR and sixteen numbered taps through Apple's
          settings — the home path's half — hidden on the Tailscale route and shown on the other
          one. CEO §61 leaves one route, so those are gone from the product rather than hidden
-         behind a condition, and with them the whole class of defect where the wrong half was
+         behind a condition and with them the whole class of defect where the wrong half was
          drawn (Urban's blocker "esc-20260919T041857Z-640acd39", Ray's candidate .11 defect 3.1).
 
          THE CODE IS FIRST — Urban's G3 and G4. At 1024x700, the app's own minimum and the size it
-         restores itself to, this screen is about three viewport heights tall, and pressing "Set my
+         restores itself to, this screen is about three viewport heights tall and pressing "Set my
          phone up" used to land on a wall of instruction with the QR, the six words, the countdown
          and the only Close all out of sight (his frames 04 and 05). *"The four phone steps are
          preparation for a person who has not started; the code is what a person who is standing
@@ -158,7 +158,7 @@
          IT IS THE MARKUP'S OWN ORDER NOW, not a node moved at render time. The mover existed
          because the other path numbered its headings 1, 2, 3 and the numbers were load-bearing —
          the certificate at step 1 was what made the address at step 2 open at all — so the code
-         could not go above it there. With one path there is no sequence to contradict, and a
+         could not go above it there. With one path there is no sequence to contradict and a
          subtree that is re-inserted on every two-second poll is a subtree that can take the focus
          out of itself. -->
     <div id="phone-pairing" hidden>
@@ -166,7 +166,7 @@
            Android to the web app. -->
       <p id="phone-connect-pair-help" class="overlay-note" hidden>In the RichOS app on your phone, scan this code. Then compare the six words on both screens.</p>
       <!-- IT IS HIDDEN AS A WHOLE WHEN THERE IS NO CODE. Every one of its children was already
-           emptied on expiry (Ray's defect 3.3, and his defect B for the last of them); with the
+           emptied on expiry (Ray's defect 3.3 and his defect B for the last of them); with the
            block at the top of the screen an empty wrapper is a gap where the thing he came for
            used to be, so the container goes with its contents. -->
       <div id="phone-code-block">
@@ -187,12 +187,12 @@
            that are not there. The heading above it and the words below it were already cleared
            with the code; this one was missed, so it is now hidden by the same live test they
            are — and the control it names is Close, which is the button this sheet actually has
-           (id phone-close, and the sheet's own data-dismiss). -->
+           (id phone-close and the sheet's own data-dismiss). -->
       <!-- AND THE WORDS ARE NOT HERE ANY MORE — Sage's review 3.1 steps 1 and 4. They used to be
            printed beside the code before any phone had arrived, which made them carry nothing
            the code itself does not: anybody who could see the code could see the words. They are
            now derived over the key the phone actually registered, so they can only exist once a
-           phone has reached this Mac, and they appear on the paired card beside the two buttons
+           phone has reached this Mac and they appear on the paired card beside the two buttons
            that answer them. -->
       <p class="overlay-note" id="phone-words-note">Once your phone opens this code, six words
         appear on it and on this Mac. If they are the same six, press They match here. If they are
@@ -202,10 +202,10 @@
       <!-- THESE FOUR STEPS ARE THE CEO'S OWN, AND THEY OVERRIDE URBAN'S THREE.
            He installed and uninstalled Tailscale on Android THREE TIMES looking for a "connect to
            Mac" step that does not exist. Urban's Screen 5 had three steps and stopped at "sign in",
-           which is where that hunt begins: the app is signed in, nothing says it is finished, and
+           which is where that hunt begins: the app is signed in, nothing says it is finished and
            the user goes looking for the pairing screen Tailscale does not have. So the two missing
-           steps — the VPN permission prompt, and the switch reading Connected — are what end the
-           hunt, and the sentence below says outright that the thing he was hunting for is not
+           steps — the VPN permission prompt and the switch reading Connected — are what end the
+           hunt and the sentence below says outright that the thing he was hunting for is not
            there. Recorded in docs/verification/tailscale-path-2026-09-18.md.
 
            NOTHING ABOUT TAILNETS, MagicDNS OR MACHINE NAMES ON THIS SCREEN, by the same ruling.
@@ -213,19 +213,19 @@
            user does not have to think about. -->
       <div id="phone-ts-steps">
         <h3 class="phone-step-title">On your phone, four things</h3>
-        <!-- THE WHY COMES BEFORE THE STEPS, and it is here because the CEO said it is not obvious:
+        <!-- THE WHY COMES BEFORE THE STEPS and it is here because the CEO said it is not obvious:
              *"in hindsight this sounds obvious, but it's absolutely NOT obvious at all. Especially
              given that I would normally absolutely NEVER use the same identity on the Mac and on
              the phone."* A person whose habit is to keep two identities apart will follow a step
-             that says "sign in" and use the WRONG one, correctly by their own lights, and the
+             that says "sign in" and use the WRONG one, correctly by their own lights and the
              result is two networks that never see each other with nothing on either screen saying
-             why. So the reason is given before the instruction, and it names the habit it is
+             why. So the reason is given before the instruction and it names the habit it is
              asking them to break. -->
         <p class="overlay-note" id="phone-ts-why"></p>
         <ol class="phone-steps">
           <li class="overlay-note">Install Tailscale from the store.</li>
           <li class="overlay-note" id="phone-ts-step2">Sign in with the <strong>same</strong>
-            identity you used on this Mac. A different provider makes a different network, and then
+            identity you used on this Mac. A different provider makes a different network and then
             the two will never see each other.</li>
           <li class="overlay-note">Allow the VPN connection your phone asks about.</li>
           <li class="overlay-note">The switch says Connected.</li>
@@ -236,7 +236,7 @@
         <!-- THE MISMATCH IS DETECTED, NOT ONLY DESCRIBED — the CEO puts it at 9 in 10 users. A
              phone on the SAME account shows up in the daemon's own Peer list; one on a different
              provider's account is in a different tailnet and shows up nowhere. So this line is
-             evidence rather than advice, and it names the account to use. -->
+             evidence rather than advice and it names the account to use. -->
         <p class="overlay-note" id="phone-ts-peer" role="status"></p>
         <!-- THE TRIPWIRE, AND IT IS NOW THE ONLY SENTENCE IN THE PRODUCT ABOUT INSTALLING
              ANYTHING ON A PHONE. Nothing this Mac serves asks for a profile any more, so a phone
@@ -248,13 +248,13 @@
 
       <!-- THE ONE FAILURE THIS PATH ACTUALLY DIES OF, named where it happens. Sage's §2.3 failure
            mode is that the name simply stops resolving; from the phone that looks like "cannot
-           connect" with nothing saying why, and two different Tailscale accounts produce exactly
+           connect" with nothing saying why and two different Tailscale accounts produce exactly
            that, silently. -->
       <p class="overlay-note" id="phone-ts-failure" hidden>If the code opens to a page that cannot
         connect, your phone is signed in to a different Tailscale account than this Mac.</p>
 
       <!-- WHAT HAPPENS WHEN THE CODE RUNS OUT, ON THE SCREEN IT RAN OUT ON. It used to happen
-           in silence: the Mac dropped the window, the next poll returned no code, and the
+           in silence: the Mac dropped the window, the next poll returned no code and the
            dialog fell back to an earlier screen with the QR, the code and the six words simply
            gone. Ray's candidate .11 defect 3.3 — "he comes back to a screen that looks like he
            imagined the whole thing". The screen stays; the code is replaced by this. -->
@@ -265,19 +265,19 @@
       <!-- THE WAY BACK OUT, ON THE ONE SCREEN THAT DID NOT HAVE ONE — Urban's G2.
            *"Once Set my phone up is pressed, the route chooser is unreachable for the life of the
            app process"* — the expired state sets "pairing" as well, so waiting did not give it
-           back either, and he could not re-reach "This Mac is ready" in dark at all after his
+           back either and he could not re-reach "This Mac is ready" in dark at all after his
            walk.
 
            **THE CONTROL SURVIVES ITS OWN NAME.** It used to read "Pick a different way", which
-           named the chooser it returned to; with one path there is no different way to pick, and
+           named the chooser it returned to; with one path there is no different way to pick and
            the half of this button that was never about the chooser is the half that matters — it
            STOPS SERVING. It undoes a socket and a live code, which is why it calls
-           phone_stop_pairing rather than only redrawing, and the screen it returns to is
+           phone_stop_pairing rather than only redrawing and the screen it returns to is
            "This Mac is ready". See PhoneRuntime::stop_pairing for why that is not phone_forget.
 
            The four plain copies of this control — on the identity screen, on the two waiting
            screens and on "This Mac is ready" — are gone with the chooser they led to. Nothing was
-           behind them to put down, and a button that returns to the screen you are already on is
+           behind them to put down and a button that returns to the screen you are already on is
            a button that does nothing. Close is on every screen and always was.
 
            **AND THE TWO OF THEM NOW LIVE IN THE FOOTER, NOT HERE** — Ray's candidate-.16 new
@@ -294,12 +294,12 @@
          need to be made ABSOLUTELY UBER MEGA SUPER CRYSTAL-CLEAR to ever user of RichOS"*. What he
          hit: Tailscale has no email-and-password sign-in, only "Sign in with Apple / Google /
          Microsoft / GitHub"; the account IS the network; he signed in with Apple on the Mac and
-         Google on the Android, got two networks that cannot see each other, and REINSTALLED
+         Google on the Android, got two networks that cannot see each other and REINSTALLED
          Tailscale on the Android three times looking for a "connect to Mac" step that does not
          exist. Nothing on Tailscale's screens says any of this.
 
          **WHY IT IS ITS OWN SCREEN AND NOT A LINE ON THE DOWNLOAD SCREEN.** By the time somebody
-         is on the download screen the next thing they do is create the account, and the choice of
+         is on the download screen the next thing they do is create the account and the choice of
          identity is made inside somebody else's sign-in sheet where nothing of ours can reach
          them. A warning that arrives after that choice is a warning that costs a sign-out. His
          own sentence is the reason it cannot be a footnote: *"in hindsight this sounds obvious,
@@ -313,17 +313,17 @@
       <h3 class="phone-step-title">First: Tailscale has no password</h3>
       <p class="overlay-note">Tailscale has no username and password. It only offers
         <strong>Sign in with Google</strong>, <strong>Apple</strong>, <strong>Microsoft</strong> or
-        <strong>GitHub</strong>, and whichever one you pick, that identity <strong>is</strong> your
+        <strong>GitHub</strong> and whichever one you pick, that identity <strong>is</strong> your
         private network.</p>
       <p class="overlay-note">So this Mac and your phone have to sign in with the
         <strong>same</strong> one. Two different identities make two separate networks that cannot
-        see each other, and neither device says so: the phone simply never finds this Mac.</p>
+        see each other and neither device says so: the phone simply never finds this Mac.</p>
       <p class="overlay-note">There is no "connect to my Mac" step in Tailscale, on either device.
         Signing in on both with the same identity is the whole connection. If the phone cannot find
         this Mac, reinstalling Tailscale will not help: the identity is the only thing that
         decides it.</p>
       <p class="overlay-note">If you would rather not use a personal identity on both devices, make
-        one that is only for this: a new Google account, which costs nothing, and sign in with
+        one that is only for this: a new Google account, which costs nothing and sign in with
         that one here and on the phone.</p>
       <div class="desk-card-actions">
         <button id="phone-identity-ok" class="desk-btn desk-btn--confirm" type="button">I understand, show me what to do</button>
@@ -332,7 +332,7 @@
 
     <!-- SCREENS 2, 3 and 7 — the three "something is happening elsewhere" states. One block,
          because they differ only in their words and their one address: each is a thing the user
-         does in somebody else's software, and detection is what moves the screen on. -->
+         does in somebody else's software and detection is what moves the screen on. -->
     <div id="phone-ts-wait" hidden>
       <h3 class="phone-step-title" id="phone-ts-heading"></h3>
       <p class="overlay-note" id="phone-ts-note1"></p>
@@ -354,11 +354,11 @@
            used — that is the CEO's own account of the evening. This names it.
 
            **FIRST, AND IN BOLD** — Urban's G14. It was the third paragraph, under the machine
-           name, set in --ink-soft with the account given no weight at all, and visually identical
+           name, set in --ink-soft with the account given no weight at all and visually identical
            to the paragraphs either side of it (his frame 02). Two screens later the same account
            IS set in <strong> (his frame 04). *"That asymmetry is backwards: the screen that names
            the account first is the one that whispers it ... it is the thing that decides whether
-           this works, and the machine name is not."*
+           this works and the machine name is not."*
 
            AND THE PARAGRAPH BELOW STILL READS RIGHT, which is why the account went ABOVE the
            name rather than the name below it: "That is this Mac's name on your own Tailscale
@@ -368,10 +368,10 @@
       <p class="overlay-note" id="phone-ts-account"></p>
       <p class="phone-tailnet-name" id="phone-ts-name"></p>
       <p class="overlay-note">That is this Mac's name on your own Tailscale network. Only devices
-        signed in to your Tailscale account can reach it, and no port on this Mac is open to the
+        signed in to your Tailscale account can reach it and no port on this Mac is open to the
         internet.</p>
       <!-- AND THE WATCH LIVES HERE TOO, not only on the phone step. MEASURED: the pairing window
-           is 60 s (PAIRING_WINDOW_MS) and the join grace is 60 s, and the watch starts strictly
+           is 60 s (PAIRING_WINDOW_MS) and the join grace is 60 s and the watch starts strictly
            AFTER the window opens — so on the phone step alone the mismatch sentence could never
            be reached at all: by the time it was due, the code had expired and the block was
            hidden. Installing Tailscale on a phone and signing in takes minutes, not seconds, so
@@ -384,7 +384,7 @@
     </div>
 
     <!-- SCREEN 8 — THE ALARM BUTTON, ANSWERED. Ray's nightly .8 walk in the test VM, defect 1
-         (HIGH): pressing "They do not match" on the phone dropped the credential, and the sheet
+         (HIGH): pressing "They do not match" on the phone dropped the credential and the sheet
          in front of the person did not change at all. The Mac went on showing the pairing card,
          with the six words under it, while it had already forgotten the phone — and, until the
          commit this screen arrives in, while it was still answering on 8443. *"He has no way to
@@ -416,9 +416,9 @@
          survivable while "Set my phone up" was pressed on a screen whose own failure mode was
          a certificate this Mac makes for itself and can hardly fail to make. It is not
          survivable now: with one path, "phone_begin_pairing" fails whenever Tailscale will not
-         issue a certificate for this Mac, and that failure is read on "This Mac is ready" — a
+         issue a certificate for this Mac and that failure is read on "This Mac is ready" — a
          screen that would have shown the sentence to nobody. "Making a certificate for your
-         phone…" had the same problem pointing the other way, and so did the sentence
+         phone…" had the same problem pointing the other way and so did the sentence
          "Get Tailscale" shows when the Mac cannot open a link.
 
          The SOCKET DUMP that used to sit beside it is still gone — Urban's G5, *"the one thing
@@ -429,9 +429,9 @@
     </div>
 
     <!-- ONE CLOSE, OUTSIDE THE THREE STATES AND ALWAYS VISIBLE.
-         The first version of this sheet had three, one inside each state block, and
+         The first version of this sheet had three, one inside each state block and
          ui/tests/escape.js refused it on the spot: data-dismiss names ONE control, the
-         document-level Escape handler clicks it, and a button hidden with its block does
+         document-level Escape handler clicks it and a button hidden with its block does
          nothing at all. Two of the three states could not be dismissed from the keyboard. One
          button that is always on screen is both the simpler markup and the only shape that can
          satisfy the contract.
@@ -439,7 +439,7 @@
          **"ALWAYS VISIBLE" WAS A CLAIM ABOUT THE MARKUP AND NOT ABOUT THE SCREEN, AND A PERSON
          FOUND THE DIFFERENCE.** One Close outside the three states is what makes it always
          RENDERED; it is .phone-actions below that makes it always SEEN. With a code live at
-         1024x700 the panel's content is 1196px in a 590px scrollport, and this row sat 445px
+         1024x700 the panel's content is 1196px in a 590px scrollport and this row sat 445px
          below the window's bottom edge while the six-words note three screens above it read
          *"press Close and tell me"*. The row is now pinned to the bottom of the scrollport
          with position:sticky, so the how-to scrolls under it and the way out does not leave.
@@ -559,14 +559,14 @@
   /// cleanup that does not happen, it says the old build may have left something on the phone
   /// and where to look. It does not walk him through it: the product that asked for it is gone.
   const PAIRED_FORGET_NOTE_TAILNET =
-    "Forgetting it here stops this Mac answering it, deletes the keys, and stops this Mac " +
+    "Forgetting it here stops this Mac answering it, deletes the keys and stops this Mac " +
     "answering at its Tailscale name. There is nothing to remove from your phone.";
 
   /// A record from a build that paired some other way — or one written before the field existed.
   /// **It says what it knows and no more.** A default here would be the original defect with a
   /// longer comment on it.
   const PAIRED_FORGET_NOTE_OLD =
-    "Forgetting it here stops this Mac answering it, and deletes the keys. This phone was " +
+    "Forgetting it here stops this Mac answering it and deletes the keys. This phone was " +
     "paired by an older version of RichOS, which connected a way this one does not use. Pair " +
     "it again to keep using it. If that older version put a RichOS profile on the phone, you " +
     "can remove it in the phone's own settings; nothing RichOS does now needs one.";
@@ -588,7 +588,7 @@
   /// both of which this Mac can stand behind — and not about what never travels.
   const LEAD =
     "Your phone reaches this Mac over your own Tailscale network, from anywhere it has a " +
-    "signal. The connection to this Mac is encrypted, your conversations stay here, and it " +
+    "signal. The connection to this Mac is encrypted, your conversations stay here and it " +
     "costs one free Tailscale account signed in on both devices.";
 
   /// **WHAT AN EXPIRED CODE SAYS**, on the screen it expired on. It names what happened, says
@@ -661,7 +661,7 @@
   /// already gone, and the port is closed within milliseconds of it (measured at 1 ms in
   /// `phone::listen::tests::they_do_not_match_over_the_wire_stops_the_listener`).
   const REJECTED_NOTE =
-    "Your phone said the six words did not match, so I stopped answering, forgot the phone, " +
+    "Your phone said the six words did not match, so I stopped answering, forgot the phone " +
     "and deleted the certificate this Mac was serving.";
 
   /// **WHO STOPPED IT DECIDES THE SENTENCE, AND NOTHING ELSE.** `status.rejectedBy`
@@ -674,20 +674,20 @@
   const STOPPED_NOTES = {
     phone: REJECTED_NOTE,
     mac:
-      "You said the six words did not match, so I stopped answering, forgot the phone, and " +
+      "You said the six words did not match, so I stopped answering, forgot the phone and " +
       "deleted the certificate this Mac was serving.",
     "code-used-twice":
       "A second phone used the same code, which means someone else may have seen it, so I " +
-      "stopped answering, forgot the phone that used it first, and deleted the certificate this " +
+      "stopped answering, forgot the phone that used it first and deleted the certificate this " +
       "Mac was serving.",
     expired:
       "Nobody pressed They match on this Mac within five minutes, so I stopped answering, forgot " +
-      "the phone, and deleted the certificate this Mac was serving.",
+      "the phone and deleted the certificate this Mac was serving.",
     // Sage's pair-v2 review §2: this Mac pressed They match, and the phone never used the pairing
     // within the grace after the window. Written here in the shape above; Urban has not reviewed it.
     unfinished:
       "This Mac accepted your phone, but the phone never finished pairing, so I stopped " +
-      "answering, forgot the phone, and deleted the certificate this Mac was serving.",
+      "answering, forgot the phone and deleted the certificate this Mac was serving.",
   };
   function stoppedNoteFor(by) {
     return Object.prototype.hasOwnProperty.call(STOPPED_NOTES, by) ? STOPPED_NOTES[by] : REJECTED_NOTE;
@@ -778,7 +778,7 @@
     absent: {
       heading: "Install Tailscale on this Mac",
       note1:
-        "Tailscale is somebody else's app, and it is free for one person. It gives this Mac a name your phone can reach from anywhere, and it is the whole reason this path has no certificate in it.",
+        "Tailscale is somebody else's app and it is free for one person. It gives this Mac a name your phone can reach from anywhere and it is the whole reason this path has no certificate in it.",
       note2: "Download it, install it, then come back here. This screen moves on by itself when it sees it.",
       url: LINKS.mac,
       action: { label: "Get Tailscale", target: LINKS.mac },
@@ -786,21 +786,21 @@
     "needs-sign-in": {
       heading: "Sign in to Tailscale on this Mac",
       note1:
-        "Tailscale is installed here but not signed in. Open it and sign in. Any of the sign-in choices it offers is fine, and the free plan is enough. I cannot do this part for you.",
+        "Tailscale is installed here but not signed in. Open it and sign in. Any of the sign-in choices it offers is fine and the free plan is enough. I cannot do this part for you.",
       // THE SHORTENED WHY, ON THE SCREEN WHERE THE IDENTITY IS ACTUALLY CHOSEN. Same CEO ruling as
       // the phone screen's opening paragraph: he would "normally absolutely NEVER use the same
       // identity on the Mac and on the phone", so the choice has to be made KNOWING it will be
       // reused. Telling him afterwards, on the phone screen, is telling him after he has already
       // picked — and by then the fix is signing out of an account he just created.
       note2:
-        "Whichever you pick, you will sign in to the SAME one on your phone: your Tailscale account is your private network, and devices signed in to it are what can reach each other. Nothing else connects them.",
+        "Whichever you pick, you will sign in to the SAME one on your phone: your Tailscale account is your private network and devices signed in to it are what can reach each other. Nothing else connects them.",
       url: "",
       action: { label: "Open Tailscale", target: TAILSCALE_APP },
     },
     "certificates-off": {
       heading: "Tailscale is signed in, but this Mac has no name yet",
       note1:
-        "Tailscale gives each machine a name on your network, and this Mac does not have one I can use. In Tailscale's own admin console, turn on MagicDNS and HTTPS certificates for your network, then come back.",
+        "Tailscale gives each machine a name on your network and this Mac does not have one I can use. In Tailscale's own admin console, turn on MagicDNS and HTTPS certificates for your network, then come back.",
       note2: "",
       url: LINKS.console,
       action: { label: "Open the Tailscale console", target: LINKS.console },
@@ -1148,9 +1148,9 @@
       field("phone-ts-step2").innerHTML = tailnet.account
         ? "Sign in with <strong>" + escapeText(tailnet.account) +
           "</strong>, the same one this Mac is signed in to. A different provider makes a " +
-          "different network, and then the two will never see each other."
+          "different network and then the two will never see each other."
         : "Sign in with the <strong>same</strong> identity you used on this Mac. A different " +
-          "provider makes a different network, and then the two will never see each other.";
+          "provider makes a different network and then the two will never see each other.";
 
       // WAITING, THEN SAYING SO — the same three sentences Screen 4 uses, from the same helper,
       // so the two screens cannot word the same evidence differently.

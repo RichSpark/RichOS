@@ -351,16 +351,16 @@ impl TailnetState {
     pub fn sentence(&self) -> &'static str {
         match self {
             TailnetState::Absent => {
-                "Tailscale is not on this Mac. Installing it here and on your phone, and signing \
+                "Tailscale is not on this Mac. Installing it here and on your phone and signing \
                  in to the same free account on both, is what lets you reach me when you are away \
                  from your desk."
             }
             TailnetState::NotRunning => {
-                "Tailscale is on this Mac but it is not running right now. Open it, and I will \
+                "Tailscale is on this Mac but it is not running right now. Open it and I will \
                  pick it up."
             }
             TailnetState::NeedsSignIn => {
-                "Tailscale is on this Mac and nobody is signed in to it. Sign in, and sign in to \
+                "Tailscale is on this Mac and nobody is signed in to it. Sign in and sign in to \
                  the same free account on your phone."
             }
             TailnetState::NeedsApproval => {
@@ -376,12 +376,12 @@ impl TailnetState {
                  from yours."
             }
             TailnetState::CertificatesOff { .. } => {
-                "Tailscale has a name for this Mac, and your Tailscale account has not been told \
-                 to issue certificates for it yet. That is one switch on Tailscale's own website, \
+                "Tailscale has a name for this Mac and your Tailscale account has not been told \
+                 to issue certificates for it yet. That is one switch on Tailscale's own website \
                  and until it is on, your phone would still show a warning."
             }
             TailnetState::Ready { .. } => {
-                "Tailscale has a name for this Mac that your phone can reach from anywhere, and a \
+                "Tailscale has a name for this Mac that your phone can reach from anywhere and a \
                  certificate your phone already trusts. There is nothing to install on the phone."
             }
         }
