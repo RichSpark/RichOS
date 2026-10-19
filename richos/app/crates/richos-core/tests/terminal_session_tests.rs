@@ -809,14 +809,20 @@ fn stop_covers_a_question_card_answer_sent_before_it() {
     assert_eq!(accepted.outcome, "accepted");
     assert_eq!(store.highest_order().unwrap(), order, "a restart advances past the saved order");
     controls.for_thread(&thread).request_stop().unwrap();
+    assert!(controls.for_thread(&thread).stop_claim().is_some(), "the Stop is still pending at delivery");
     let mut answer = None;
     store.deliver(company.as_str(), &thread, "front_desk", |delivery| {
-        let id = spine.queue_question_answer(delivery).map_err(|e| e.to_string())?;
-        answer = Some(id.clone());
-        Ok(id)
+        let receipt = spine.queue_question_answer(delivery).map_err(|e| e.to_string())?;
+        answer = Some(receipt.trim_start_matches(richos_core::questions::STOPPED_RECEIPT_PREFIX).to_string());
+        Ok(receipt)
     }).unwrap();
     let answer = answer.expect("the saved answer was delivered");
     assert_eq!(spine.ledger().turn(&answer).unwrap().intake_id, order, "the order taken at the click reaches the ledger");
+    // The card says his Stop covered it (review rv-20261019T115204Z-2b619840-5405#2): with the
+    // Stop still pending, the receipt was an ordinary one and the card read "Rich has your answer".
+    let card = store.list(company.as_str(), &thread).unwrap().remove(0).public_value();
+    assert_eq!((&card["delivered"], &card["ended_before_taken"]), (&serde_json::json!(false), &serde_json::json!(true)),
+        "the card of an answer a pending Stop covered: {card}");
     let shared = Mutex::new(spine);
     drive_shared_turns(&shared).unwrap();
     let spine = shared.into_inner().unwrap();

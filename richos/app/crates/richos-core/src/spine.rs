@@ -2841,8 +2841,13 @@ impl Spine {
         if self.ledger.turn(&turn_id).is_some_and(|t|t.state==crate::ledger::TurnState::Received)
             && !self.pending_delivery.iter().any(|pending|pending.turn_id==turn_id) {
             if delivery.set_id.is_none(){self.emit_live(self.ceo_message_event(&binding,&turn_id));}
-            // Accepted before a Stop that settled before this delivery: stopped with the rest.
-            if let Some(claim)=delivery.order.and_then(|order|self.control.for_thread(binding.thread_id()).settled_stop_covering(order)) {
+            // Accepted before his Stop, settled or still pending when this delivery arrives:
+            // stopped with the rest (the pending case is the one `deliver` would stop).
+            let control=self.control.for_thread(binding.thread_id());
+            let intake=self.ledger.turn(&turn_id).and_then(|turn|turn.intake_id);
+            let covering=delivery.order.and_then(|order|control.settled_stop_covering(order))
+                .or_else(||control.stop_claim().filter(|claim|claim.covers(&turn_id,intake)));
+            if let Some(claim)=covering {
                 self.ledger.stop_turn(&turn_id,claim.requested_at)?;
                 self.emit_live(self.turn_status_event(&binding,&turn_id,TurnStatus::Stopped,None));
                 // The receipt says it was stopped, so the card does not say Rich has it.
