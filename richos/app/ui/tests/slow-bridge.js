@@ -544,14 +544,11 @@ async function main() {
       await page.waitForSelector(".nav-thread", { state: "attached" });
       await bootDone(page);
 
-      // The §3.3 flow a person takes: "+ New thread", pick the company, type, Return. The
-      // picker is skipped when the install knows exactly one company, so its presence is
-      // checked rather than assumed.
+      // The flow a person takes: "+ New chat or company", pick the company, type, Return
+      // (round 32: the company is picked in the button's own menu).
       await page.evaluate(() => document.getElementById("rail-new-thread").click());
       const picked = await page.evaluate(() => {
-        const picker = document.getElementById("entity-picker");
-        if (picker.hidden) return false;
-        const first = picker.querySelector(".picker-item");
+        const first = document.querySelector("#new-chat-menu .m-item[data-company]");
         if (!first) return false;
         first.click();
         return true;
@@ -647,7 +644,7 @@ async function main() {
       await page.close();
       return (
         `${frames.length} frames sampled across the create-thread-and-send chain` +
-        `${picked ? " (company picked from the §3.3 dialog)" : " (one company, so no dialog)"}: ` +
+        `${picked ? " (company picked from the New chat or company menu)" : " (no company in the menu)"}: ` +
         `the greeting on 0 of them, his sentence present on every frame from ${appeared} onward, one copy`
       );
     });

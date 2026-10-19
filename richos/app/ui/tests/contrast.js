@@ -1277,6 +1277,49 @@ const SURFACES = [
       await overlaySettled(p, "#entity-view");
     },
   },
+  // ROUND 32 (CEO 2026-10-19): "+ New chat or company", its menu, the company form inside it
+  // (with the app's refusal showing), a new chat's row and screen, and the plus's "+ New chat"
+  // tooltip, which keyboard focus holds up so the parked pointer cannot take it down.
+  {
+    name: "new-chat-menu",
+    what: "\"+ New chat or company\" open: New chat in each company, then New company",
+    drive: async (p) => {
+      await p.click("#rail-new-thread");
+      await p.waitForSelector("#new-chat-menu:not([hidden]) .m-item");
+      await overlaySettled(p, "#new-chat-menu");
+    },
+  },
+  {
+    name: "new-chat-company-form",
+    what: "New company: the company form inside the same menu, its refusal showing",
+    drive: async (p) => {
+      await p.click("#rail-new-thread");
+      await p.click("#new-chat-menu .m-item[data-new-company]");
+      await p.click("#entity-add-go");
+      await p.waitForSelector("#new-chat-menu #entity-add-error:not([hidden])");
+      await overlaySettled(p, "#new-chat-menu");
+    },
+  },
+  {
+    name: "new-chat",
+    what: "a new chat in a company: its New chat row with the gold dot, and its screen",
+    drive: async (p) => {
+      await p.click("#rail-new-thread");
+      await p.click("#new-chat-menu .m-item[data-company]");
+      await p.waitForSelector(".nav-thread-row.is-draft");
+      await p.waitForSelector("#entity-view:not([hidden])");
+      await pageSettled(p);
+    },
+  },
+  {
+    name: "rail-tooltip",
+    what: "a company heading's two controls and the plus's \"+ New chat\" tooltip",
+    drive: async (p) => {
+      await p.focus(".nav-group--entity .nav-group-add");
+      await p.waitForSelector("#rail-tip:not([hidden])");
+      await pageSettled(p);
+    },
+  },
   {
     name: "thread-menu",
     what: "the thread's own actions menu — rename, pin, archive (§3.1)",
