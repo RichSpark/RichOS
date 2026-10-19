@@ -693,10 +693,10 @@ impl CaptureBrain {
         confident: bool,
         out: &mut Vec<CapMsg>,
     ) {
-        // While Rich is silent a quiet frame inside the CEO's speech may not raise the VAD's floor,
-        // or the end of his sentence stops being speech (nightly 65, `vad::FLOOR_RISE_HOLD_FRAMES`).
+        // While Rich is silent the VAD's floor may not climb past the room inside the CEO's speech,
+        // or the end of his sentence stops being speech (nightly 65, `vad::ROOM_WINDOW_FRAMES`).
         // While Rich is audible the floor follows his echo exactly as before.
-        self.vad.set_hold_inside_speech(!speaking);
+        self.vad.set_cap_to_room(!speaking);
         let is_speech = self.vad.push_frame(frame);
 
         // How long since Rich was last audible, in frames. Saturating, and updated BEFORE any
