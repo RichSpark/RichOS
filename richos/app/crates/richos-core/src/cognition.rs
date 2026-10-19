@@ -14,6 +14,10 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// Writes the title of the conversation the given first message opens. It runs on a thread of
+/// its own and may take seconds, so nothing that answers him ever calls it in line.
+pub type TitleWriter = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CognitionError {
     #[error("Preparation stopped with {0}")]
@@ -286,6 +290,11 @@ pub trait Cognition: Send {
     /// App-authored conversation facts, identified by their existing ledger IDs.
     fn set_app_messages(&mut self, _messages: Vec<(String,String)>) {}
 
+    /// **Haiku, ready to name this conversation from its first message** (`thread_title.rs`).
+    /// `None` — the default — for a lease that has no Haiku beside it; the conversation then
+    /// keeps its provisional title.
+    fn title_writer(&self) -> Option<TitleWriter> { None }
+
     /// Current company setup data, delivered separately from the user input.
     fn set_company_context(&mut self, _context: Option<&str>) -> Result<bool, CognitionError> { Ok(false) }
 
@@ -423,6 +432,11 @@ pub struct MockCognition {
     pub between_updates: Arc<Mutex<VecDeque<serde_json::Value>>>,
     /// The lane's counter, mirroring `native::BetweenTurn::next_seq`.
     between_seq: Arc<Mutex<u64>>,
+    /// What [`Cognition::title_writer`] hands the spine. `None` unless a test sets one.
+    pub title_writer: Option<TitleWriter>,
+    /// How many times the spine asked this lease for its titler, counted as it asks, so a
+    /// test can say no title was started without waiting on a clock.
+    pub title_requests: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl MockCognition {
@@ -438,6 +452,8 @@ impl MockCognition {
             app_messages: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
+            title_writer: None,
+            title_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -456,6 +472,8 @@ impl MockCognition {
             app_messages: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
+            title_writer: None,
+            title_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -472,6 +490,10 @@ impl Cognition for MockCognition {
     }
     fn set_app_messages(&mut self,messages:Vec<(String,String)>) {*self.app_messages.lock().unwrap()=messages;}
     fn set_conversation_context(&mut self, context:&str) {self.conversation_contexts.lock().unwrap().push(context.into());}
+    fn title_writer(&self) -> Option<TitleWriter> {
+        self.title_requests.fetch_add(1, Ordering::SeqCst);
+        self.title_writer.clone()
+    }
 
     fn prepare_work_turn(&mut self, _: &crate::entity::ThreadBinding, turn: &str, original_turn: &str,
         _: crate::ledger::Source, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {

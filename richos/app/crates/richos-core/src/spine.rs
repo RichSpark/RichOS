@@ -318,6 +318,40 @@ fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot
     }
     Ok(spawned)
 }
+/// **Haiku names the conversation his first message opens, beside the reply and never in front
+/// of it** (CEO, 2026-10-19). The titler runs on a thread of its own: the reply does not wait
+/// for it, and a titler that fails or never answers leaves the provisional title in place.
+fn start_title(observer: Option<TitleObserver>, writer: Option<crate::cognition::TitleWriter>, thread: &str, first: String) {
+    let (Some(observer), Some(write)) = (observer, writer) else { return };
+    let thread = thread.to_string();
+    let started = std::thread::Builder::new().name("richos-title".into())
+        .spawn(move || title_conversation(&*write, &*observer, &thread, &first));
+    if let Err(error) = started {
+        eprintln!("[richos] the conversation keeps its first title: {error}");
+    }
+}
+/// The titler thread's whole body: Haiku's answer goes to the shell, and a failure sends
+/// nothing, so the provisional title stays. Returns whether a title was sent.
+fn title_conversation(write: &dyn Fn(&str) -> Result<String, String>, observer: &dyn Fn(&str, &str), thread: &str, first: &str) -> bool {
+    match write(first) {
+        Ok(title) => { observer(thread, &title); true }
+        Err(error) => { eprintln!("[richos] the conversation keeps its first title: {error}"); false }
+    }
+}
+#[cfg(test)]
+mod title_tests {
+    /// Item 3: Haiku cannot be reached, so nothing reaches the shell and the provisional
+    /// title stays. Synchronous: the body the titler thread runs, called directly.
+    #[test]
+    fn an_unreachable_haiku_sends_no_title() {
+        let sent = std::cell::RefCell::new(Vec::new());
+        let observer = |thread: &str, title: &str| sent.borrow_mut().push((thread.to_string(), title.to_string()));
+        assert!(!super::title_conversation(&|_| Err("Classifier disconnected".into()), &observer, "thr_a", "Draft the board update"));
+        assert!(sent.borrow().is_empty(), "a failure produced a title");
+        assert!(super::title_conversation(&|_| Ok("Board update".into()), &observer, "thr_a", "Draft the board update"));
+        assert_eq!(*sent.borrow(), vec![("thr_a".to_string(), "Board update".to_string())], "positive control");
+    }
+}
 fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Delivery) {
     let Some(plan) = delivery.connection.as_ref() else {
         return;
@@ -332,7 +366,7 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
     }
     let prepared=prepare_connection(state,plan,&delivery.lease,&delivery.turn_id).and_then(|_| {
         if stopped() {return Ok(())}
-        let (original,source,conversation,channel,app_messages)=state.state(|s| {
+        let (original,source,conversation,channel,app_messages,first_words)=state.state(|s| {
             let mut successor=delivery.turn_id.as_str();let mut seen=std::collections::HashSet::new();
             while let Some(previous)=s.ledger.turns().iter().find(|t|t.superseded_by.as_deref()==Some(successor)&&t.thread_id==plan.binding.thread_id()&&seen.insert(t.id.clone())) {
                 successor=&previous.id;
@@ -341,6 +375,11 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
             let channel=s.input_channels.get(&delivery.turn_id).cloned().or_else(||turn.channel.clone());
             let mut conversation=String::new();
             for message in s.ledger.messages_scoped(&plan.binding)?.into_iter().filter(|m|m.turn_id!=delivery.turn_id){conversation.push_str(&format!("{}: {}\n",message.role,message.text));}
+            // His first message in this conversation: nothing visible came before it, and the
+            // words are his (typed or spoken, at the desk or on the phone), never a pressed
+            // button's or another agent's.
+            let first_words=(conversation.is_empty() && matches!(turn.source,Source::Text|Source::Jam) && !turn.pressed)
+                .then(||turn.user_text.clone());
             let mut from=conversation.len().saturating_sub(8192);while !conversation.is_char_boundary(from){from+=1;}
             let scoped=s.ledger.thread_turns(plan.binding.thread_id())?;
             let current=|id:&str|scoped.iter().any(|turn|turn.id==id&&turn.superseded_by.is_none());
@@ -348,10 +387,13 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
                 .map(|turn|(turn.id.clone(),turn.assistant_text.clone())).collect();
             app_messages.extend(s.ledger.actions().iter().filter(|action|action.kind=="settings_change"&&action.turn_id.as_deref().is_some_and(current))
                 .map(|action|(action.id.clone(),action.detail.clone())));
-            Ok::<_,SpineError>((original,turn.source,conversation[from..].to_string(),channel,app_messages))
+            Ok::<_,SpineError>((original,turn.source,conversation[from..].to_string(),channel,app_messages,first_words))
         })?;
         let mut slot=delivery.lease.lock().unwrap();
         let lease=slot.as_mut().ok_or(SpineError::NoLease)?;
+        if let Some(first)=first_words {
+            start_title(state.state(|s|s.title_observer.clone()),lease.title_writer(),plan.binding.thread_id(),first);
+        }
         if let Some(scope)=state.state(|s|s.onboarding_tool_scope(&plan.binding)) {
             lease.set_onboarding_scope(plan.binding.entity_id(),&scope.central_root,&scope.record_path)?;
         }
@@ -562,7 +604,14 @@ pub struct Spine {
     /// How an overload retry waits out the CEO's schedule (`upstream::OVERLOAD_RETRY_WAITS`).
     /// The real clock in the app; a test drives the 158 minutes with a fake one.
     retry_clock: std::sync::Arc<dyn crate::upstream::RetryClock>,
+    /// Where Haiku's title for a new conversation goes (`thread_title.rs`). Called off the
+    /// spine, on the titler's own thread, with `(thread_id, title)`.
+    title_observer: Option<TitleObserver>,
 }
+
+/// Receives `(thread_id, title)` when Haiku has named a new conversation. The shell shows it
+/// unless the user has named the conversation himself.
+pub type TitleObserver = std::sync::Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 /// Where a timeline read finds the engine's worker-lifecycle rows.
 ///
@@ -675,7 +724,14 @@ impl Spine {
             proposal_observer: None,
             worker_events: WorkerEventsSource::Disabled,
             retry_clock: std::sync::Arc::new(crate::upstream::SystemRetryClock),
+            title_observer: None,
         }
+    }
+
+    /// Attach the sink for Haiku's conversation titles. Headless callers never set one, and
+    /// then no title is asked for.
+    pub fn set_title_observer(&mut self, observer: TitleObserver) {
+        self.title_observer = Some(observer);
     }
 
     /// Point the timeline read path at the engine's worker-lifecycle stream (UX §7).

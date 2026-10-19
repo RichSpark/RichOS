@@ -3636,6 +3636,7 @@ pub struct NativeCognition {
     prepare_turn_supported: bool,
     pending_onboarding: Option<crate::onboarding_tools::OnboardingToolScope>,
     pending_channel: Option<String>,
+    title_writer: Option<crate::cognition::TitleWriter>,
     routing_context: String,
     app_messages: Vec<(String,String)>,
 }
@@ -3656,7 +3657,7 @@ impl NativeCognition {
     pub fn start(claude_bin: &Path, engine_cwd: &Path, doctrine: &Path, skills: &Path) -> Result<Self, NativeError> {
         let client = NativeClient::spawn(claude_bin, engine_cwd, doctrine, skills)?;
         let session_id = client.session_id().to_string();
-        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
+        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None, title_writer: None })
     }
     /// A chat lease with app-owned, company-scoped persistence tools. The scope is
     /// supplied by the spine before priming, never selected by the model. The host
@@ -3672,7 +3673,7 @@ impl NativeCognition {
         let status = scopes.join(format!("{identity}-status.json"));
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((&doctrine, skills)), Some((executable, &scope, &assignments, &status)), None, None, None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None, title_writer: None })
     }
     pub fn start_with_continuity(bin: &Path, cwd: &Path, config_dir: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge,
@@ -3691,7 +3692,7 @@ impl NativeCognition {
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((&doctrine, skills)),
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None, title_writer: None })
     }
 
     /// Settings-isolated desktop lease from verified engine delivery.
@@ -3715,11 +3716,17 @@ impl NativeCognition {
         let status = scopes.join(format!("{identity}-status.json"));
         // Prepare Haiku alongside Rich, before this conversation can be used.
         let classifier=Some(Arc::new(Mutex::new(crate::request_classifier::RequestClassifier::new(bin,&profile,skills))));
+        // And the Haiku that names this conversation from its first message, started only
+        // when that message arrives (`thread_title.rs`).
+        let title_writer:Option<crate::cognition::TitleWriter>={
+            let (bin,profile)=(bin.to_path_buf(),profile.clone());
+            Some(Arc::new(move |first:&str|crate::thread_title::write(&bin,&profile,first)))
+        };
         let client = NativeClient::spawn_with_tools(bin, &profile.coordination, Some((doctrine, skills)),
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), Some(&profile), control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
         Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status),
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, classifier, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, classifier, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None, title_writer })
     }
 
     /// **The WORK lease** — the background-work spec §2.1's second compute lease, in the
@@ -3761,7 +3768,7 @@ impl NativeCognition {
             // A work lease has no `richos_continuity` server, so there is no second scope for
             // one — the file it does read is `richos_work`'s, and its grant is §5.4's standing
             // one, opened per assignment rather than per reply.
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None, title_writer: None })
     }
 
 
@@ -3871,6 +3878,7 @@ impl Cognition for NativeCognition {
     fn is_closed(&self)->bool {self.client.reader_closed.load(Ordering::SeqCst)}
     fn set_app_messages(&mut self,messages:Vec<(String,String)>) {self.app_messages=messages;}
     fn set_conversation_context(&mut self,context:&str) {self.routing_context=context.to_string();}
+    fn title_writer(&self)->Option<crate::cognition::TitleWriter> {self.title_writer.clone()}
     fn set_company_context(&mut self,context:Option<&str>)->Result<bool,CognitionError> {
         self.company_context=Some(context.unwrap_or("No company setup material is currently available.").to_string());
         Ok(true)
@@ -5092,7 +5100,7 @@ read -r scope_response"#);
             work_binding: None,
             engine_profile: None,
             role,
-            ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None,
+            ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None, title_writer: None,
         };
         (lease, root)
     }
@@ -5356,7 +5364,7 @@ read -r scope_response"#);
             work_binding: None,
             engine_profile: Some(fixture_profile(&root)),
             role: LeaseRole::Work,
-            ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None,
+            ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None, title_writer: None,
         };
         (lease, root)
     }
