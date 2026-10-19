@@ -1115,9 +1115,9 @@ fn create_thread(app: AppHandle, state: State<AppState>, title: String) -> Resul
     Ok(id)
 }
 
-/// A conversation was created or renamed: a paired phone hears its name now rather than at the
-/// next turn's end or its next `hello` (`phone::PhoneRuntime::threads_changed`). Off the
-/// command's thread, like the push after a turn, so the command never waits on the channel.
+/// A conversation was created, renamed or titled by Haiku: a paired phone hears its name now
+/// rather than at the next turn's end or its next `hello` (`phone::PhoneRuntime::threads_changed`).
+/// Off the caller's thread, like the push after a turn, so it never waits on the channel.
 fn tell_the_phone_the_threads(app: &AppHandle) {
     if let Some(runtime) = app.try_state::<Arc<phone::PhoneRuntime>>() {
         let runtime = Arc::clone(&runtime);
@@ -2725,6 +2725,20 @@ fn main() {
             // Attach the live UI sink: streamed reply deltas + turn-state events flow to
             // the webview via Tauri events (see app/STREAMING.md for the contract).
             spine.set_observer(Box::new(TauriEmitter { app: app.handle().clone() }));
+            // Haiku's title for a new conversation (`thread_title.rs`) arrives here, off the
+            // spine, after the first message. The sidebar is told to read its rows again, and a
+            // connected phone gets the list with the new name on its live stream.
+            let titles = app.handle().clone();
+            spine.set_title_observer(Arc::new(move |thread_id: &str, title: &str| {
+                let Some(state) = titles.try_state::<AppState>() else { return };
+                if show_haiku_title(&state.nav, thread_id, title) {
+                    let summary = serde_json::json!({ "threadId": thread_id });
+                    if let Err(e) = titles.emit(richos_core::live::EVENT_THREAD_SUMMARY_UPDATED, summary) {
+                        eprintln!("[richos] the sidebar was not told about the new title ({e})");
+                    }
+                    tell_the_phone_the_threads(&titles);
+                }
+            }));
 
             // Durable CEO preferences (company name, assertiveness dial, the raw-retention
             // window) — same app data dir as the ledger, same durability posture, survives
@@ -5087,8 +5101,7 @@ fn build_navigation_tree(spine: &dyn SpineView, nav_state: &nav::NavState) -> Na
     let summaries = spine.threads();
     let row = |s: &ThreadSummary| -> ThreadRow {
         let (last_turn_state, has_pending_turn) = thread_turn_facts(ledger, &s.id);
-        let display_title =
-            nav_state.renamed_threads.get(&s.id).cloned().unwrap_or_else(|| s.title.clone());
+        let display_title = nav_state.display_title(&s.id, &s.title);
         ThreadRow {
             id: s.id.clone(),
             title: s.title.clone(),
@@ -6528,7 +6541,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
     // 2. Thread titles (ledger title AND the CEO's rename override — searching for what
     //    you can see on screen has to work).
     for s in &summaries {
-        let display = nav_state.renamed_threads.get(&s.id).cloned().unwrap_or_else(|| s.title.clone());
+        let display = nav_state.display_title(&s.id, &s.title);
         let matched = find_folded(&fold_chars(&s.title), &needle).is_some()
             || find_folded(&fold_chars(&display), &needle).is_some();
         if matched {
@@ -6550,7 +6563,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
             break;
         }
         let Ok(messages) = ledger.messages(&s.id) else { continue };
-        let display = nav_state.renamed_threads.get(&s.id).cloned().unwrap_or_else(|| s.title.clone());
+        let display = nav_state.display_title(&s.id, &s.title);
         let mut per_thread = 0usize;
         for m in messages.iter().rev() {
             if per_thread >= SEARCH_HITS_PER_THREAD || hits.len() >= limit {
@@ -6633,6 +6646,19 @@ fn set_thread_pinned(state: State<AppState>, thread_id: String, pinned: bool) ->
 #[richos_command::command]
 fn set_thread_archived(state: State<AppState>, thread_id: String, archived: bool) -> Result<(), String> {
     state.nav.lock().unwrap().set_thread_archived(&thread_id, archived).map_err(|e| e.to_string())
+}
+
+/// **Haiku's title for a new conversation** (CEO, 2026-10-19), kept as a display title beside
+/// his renames. Returns whether it is now what the conversation is called: never when he has
+/// named the conversation himself (`nav::NavStore::set_auto_title`).
+fn show_haiku_title(nav: &Mutex<nav::NavStore>, thread_id: &str, title: &str) -> bool {
+    match nav.lock().unwrap().set_auto_title(thread_id, title) {
+        Ok(kept) => kept,
+        Err(e) => {
+            eprintln!("[richos] Haiku's conversation title was not saved ({e})");
+            false
+        }
+    }
 }
 
 /// A DISPLAY override. The ledger's title is evidence and is left exactly as written — see
@@ -7900,6 +7926,82 @@ mod navigation_tests {
         assert_eq!(row.title, "Running");
         assert_eq!(row.display_title, "Rich's desk");
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// CEO, 2026-10-19: Haiku's title replaces the provisional one in the sidebar by itself,
+    /// and "the user is free to manually change that thread title any time they want".
+    #[test]
+    fn haikus_title_names_the_row_and_his_own_name_is_never_replaced() {
+        let (mut spine, path) = spine_from_real_ledger("haiku-title");
+        let nav_path = path.with_extension("nav.json");
+        if nav_path.exists() {
+            std::fs::remove_file(&nav_path).unwrap();
+        }
+        let nav = Mutex::new(nav::NavStore::open(&nav_path));
+        let reader = spine.reader();
+        let shown = |nav: &Mutex<nav::NavStore>, id: &str| {
+            let tree = build_navigation_tree(&*reader.snapshot(), nav.lock().unwrap().state());
+            tree.groups.iter().flat_map(|g| &g.threads).chain(&tree.unbound)
+                .find(|t| t.id == id).expect("listed").display_title.clone()
+        };
+        assert_eq!(shown(&nav, BOUND_ID), "Running", "until Haiku answers, the provisional title stays");
+        assert!(show_haiku_title(&nav, BOUND_ID, "Weekly running plan"));
+        assert_eq!(shown(&nav, BOUND_ID), "Weekly running plan");
+
+        // He renames it afterwards: his name is shown, and a later answer changes nothing.
+        nav.lock().unwrap().rename_thread(BOUND_ID, "My plan").unwrap();
+        assert!(!show_haiku_title(&nav, BOUND_ID, "Something else"));
+        assert_eq!(shown(&nav, BOUND_ID), "My plan");
+
+        // He named it before Haiku answered: Haiku's title is never kept for it.
+        nav.lock().unwrap().rename_thread(UNBOUND_ID, "Old notes").unwrap();
+        assert!(!show_haiku_title(&nav, UNBOUND_ID, "General discussion"));
+        assert_eq!(shown(&nav, UNBOUND_ID), "Old notes");
+
+        // Durable: the same names after a relaunch.
+        let reopened = nav::NavStore::open(&nav_path);
+        assert_eq!(reopened.state().display_title(BOUND_ID, "Running"), "My plan");
+        assert_eq!(reopened.state().auto_titles.get(BOUND_ID).map(String::as_str), Some("Weekly running plan"));
+        std::fs::remove_file(&nav_path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// **Haiku's title reaches a phone that is already connected, as a `threads` frame** (review
+    /// `rv-20261019T135509Z-1d83fd75-da31`: it showed only on the phone's next list load). The
+    /// list is read the way `PhoneBridge::threads_changed` reads it (the reader's snapshot, named
+    /// as the sidebar names it) and sent the way `PhoneRuntime::threads_changed` sends it.
+    #[test]
+    fn a_saved_haiku_title_reaches_a_connected_phone_as_a_threads_frame() {
+        let (mut spine, path) = spine_from_real_ledger("haiku-title-phone");
+        let nav_path = path.with_extension("nav.json");
+        if nav_path.exists() {
+            std::fs::remove_file(&nav_path).unwrap();
+        }
+        let nav = Mutex::new(nav::NavStore::open(&nav_path));
+        let reader = spine.reader();
+        let hub = phone::stream::PhoneHub::new();
+        hub.set_live(true);
+        let mut connected = hub.subscribe();
+        let phone_hears = |rx: &mut tokio::sync::broadcast::Receiver<phone::stream::Frame>| {
+            let frame = rx.try_recv().expect("a threads frame on the live stream");
+            assert_eq!(frame.kind, "threads");
+            let data: serde_json::Value = serde_json::from_str(&frame.data).unwrap();
+            data["threads"].as_array().unwrap().iter()
+                .find(|t| t["id"] == BOUND_ID).expect("listed")["title"].as_str().unwrap().to_string()
+        };
+        let tell_the_phone =
+            || phone::send_threads(&hub, &phone::bridge::titled(reader.snapshot().threads(), nav.lock().unwrap().state()));
+
+        assert!(show_haiku_title(&nav, BOUND_ID, "Weekly running plan"));
+        tell_the_phone();
+        assert_eq!(phone_hears(&mut connected), "Weekly running plan", "Haiku's title, not the provisional one");
+
+        // He renames it: the phone hears his name, the same way.
+        nav.lock().unwrap().rename_thread(BOUND_ID, "My plan").unwrap();
+        tell_the_phone();
+        assert_eq!(phone_hears(&mut connected), "My plan");
+        std::fs::remove_file(&nav_path).unwrap();
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

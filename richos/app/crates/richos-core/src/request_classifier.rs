@@ -10,7 +10,7 @@ const WAIT: Duration = Duration::from_secs(5);
 const WARMUP: Duration = Duration::from_secs(30);
 const MAX_BYTES: usize = 64 * 1024;
 
-struct Live {
+pub(crate) struct Live {
     child: OwnedChild,
     input: Option<Sender<String>>,
     frames: Receiver<Result<Value,String>>,
@@ -49,9 +49,14 @@ impl Drop for RequestClassifier {
     }
 }
 
-struct Provider {
+/// A tool-free Haiku launch: the instruction file it is given (relative to the engine) and
+/// the private folder it runs in. The classifier and the conversation titler
+/// (`thread_title.rs`) start the same way and differ only in these two.
+pub(crate) struct Provider {
     bin: PathBuf,
     profile: EngineProfile,
+    instructions: &'static str,
+    folder: &'static str,
 }
 
 impl RequestClassifier {
@@ -61,13 +66,13 @@ impl RequestClassifier {
         let (send, requests)=mpsc::sync_channel::<Request>(0);
         let stopped=Arc::new(AtomicBool::new(false));
         let stop=stopped.clone();
-        let provider=Provider {bin:bin.to_path_buf(),profile:profile.clone()};
+        let provider=Provider::new(bin,profile,"app/routing.md","classification");
         let worker=std::thread::spawn(move || {
             while !stop.load(Ordering::Acquire) {
                 let run=||->Result<(),String> {
                     let mut live=provider.start()?;
                     live.exchange(json!({"type":"user","message":{"role":"user","content":"{\"warmup\":true}"}}).to_string(),
-                        Instant::now()+WARMUP,||stop.load(Ordering::Acquire))?;
+                        Instant::now()+WARMUP,||stop.load(Ordering::Acquire),choice)?;
                     eprintln!("[richos] classifier warm and ready");
                     while !stop.load(Ordering::Acquire) {
                         let request=match requests.recv() {
@@ -75,7 +80,7 @@ impl RequestClassifier {
                             Err(_)=>return Ok(()),
                         };
                         let answer=live.exchange(request.body,request.deadline,
-                            ||stop.load(Ordering::Acquire) || request.canceled.load(Ordering::Acquire));
+                            ||stop.load(Ordering::Acquire) || request.canceled.load(Ordering::Acquire),choice);
                         let failed=answer.is_err();
                         drop(request.reply.send(answer));
                         if failed {return Err("Classifier must prepare again".into())}
@@ -124,9 +129,13 @@ impl RequestClassifier {
 }
 
 impl Provider {
-    fn start(&self)->Result<Live,String> {
-        let standing=std::fs::read_to_string(self.profile.engine.join("app/routing.md")).map_err(|e|e.to_string())?;
-        let folder=self.profile.state.join("classification");
+    pub(crate) fn new(bin:&Path, profile:&EngineProfile, instructions:&'static str, folder:&'static str)->Self {
+        Provider {bin:bin.to_path_buf(),profile:profile.clone(),instructions,folder}
+    }
+
+    pub(crate) fn start(&self)->Result<Live,String> {
+        let standing=std::fs::read_to_string(self.profile.engine.join(self.instructions)).map_err(|e|e.to_string())?;
+        let folder=self.profile.state.join(self.folder);
         std::fs::create_dir_all(&folder).map_err(|e|e.to_string())?;
         let id=uuid::Uuid::new_v4().to_string();
         let (state,log)=crate::lease_commands::prepare(&self.profile.state,&id).map_err(|e|e.to_string())?;
@@ -176,7 +185,10 @@ impl Provider {
 }
 
 impl Live {
-    fn exchange(&mut self, request:String, deadline:Instant, canceled:impl Fn()->bool)->Result<String,String> {
+    /// One request, one answer. `answer` reads the provider's final `result` frame; another
+    /// model, a tool call or an error frame is refused before it is read.
+    pub(crate) fn exchange(&mut self, request:String, deadline:Instant, canceled:impl Fn()->bool,
+        answer:fn(&Value)->Result<String,String>)->Result<String,String> {
         if canceled() || Instant::now()>=deadline {return Err("Classification canceled or slow".into())}
         self.input.as_ref().ok_or("Classifier closed")?.send(request).map_err(|e|e.to_string())?;
         let mut model_seen=false;
@@ -198,7 +210,7 @@ impl Live {
             }
             if frame["type"]=="result" {
                 if !model_seen || frame["is_error"]!=false {return Err("Classifier failed".into())}
-                return choice(&frame);
+                return answer(&frame);
             }
         }
     }
@@ -214,7 +226,7 @@ fn choice(frame:&Value)->Result<String,String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     #[test]
     fn decisions_name_the_next_action_and_reject_ambiguous_recipient_names() {
@@ -225,7 +237,9 @@ mod tests {
             assert!(choice(&json!({"result":result})).is_err());
         }
     }
-    fn fixture(body:&str)->(PathBuf,PathBuf,EngineProfile,PathBuf) {
+    /// A stub `claude` (the Python `body`) over the real engine's instruction files; the
+    /// conversation titler's tests start their provider through it too.
+    pub(crate) fn fixture(body:&str)->(PathBuf,PathBuf,EngineProfile,PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let root=std::env::temp_dir().join(format!("richos-classifier-{}",uuid::Uuid::new_v4()));
         let skills=root.join("skills");

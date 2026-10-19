@@ -703,6 +703,11 @@ richos/app/
                               its turn boundary so work he gives typed, aloud or from the
                               phone starts the same way (CEO ruling §88); each road has a
                               test, and the active thread is shown NOT to be the answer
+    tests/thread_title_tests.rs 4 tests of HAIKU NAMING A NEW CONVERSATION from his first
+                              message (CEO, 2026-10-19): the whole first message is asked
+                              about once, the answer reaches the shell's title sink, a later
+                              message starts no second title (nor hides the first when both
+                              queue at the start), and his reply never waits on it
     tests/work_gate_cost.rs   what it costs to ask "is RichOS doing anything" — timed over
                               3,000 worker rows with 1,500 liveness syscalls, because the
                               ruling the gate serves is about not getting in the way
@@ -1182,7 +1187,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 1830 tests + 8 doc-tests (1826 direct, 4 ignored)
+cargo test -p richos-core                       # 1838 tests + 8 doc-tests (1834 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

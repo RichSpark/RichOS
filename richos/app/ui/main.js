@@ -1326,9 +1326,9 @@ function theOnlyCompany() {
   return groups.length === 1 ? groups[0].entity.id : null;
 }
 
-/// §3.3 step 4: a provisional title from the first message, replaced later by a concise
-/// outcome title when Rich supplies one (no such backend signal exists yet — when one
-/// lands, it replaces this, and the ledger title is the thing it should replace).
+/// §3.3 step 4: a provisional title from the first message. Haiku then writes the fitting
+/// title from the whole message (`thread_title.rs`, CEO 2026-10-19), which the rail shows in
+/// its place unless he has renamed the conversation (`nav.rs` `display_title`).
 function provisionalTitle(text) {
   const firstLine = text.split("\n")[0].trim();
   return firstLine.length > 48 ? firstLine.slice(0, 47).trimEnd() + "…" : firstLine || "New thread";
