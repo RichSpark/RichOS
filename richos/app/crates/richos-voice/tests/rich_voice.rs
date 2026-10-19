@@ -61,3 +61,45 @@ fn rich_speaks_through_pocket_tts_as_peter_yearsley() {
         speech.realtime_factor()
     );
 }
+
+/// **The last words of Rich's reply are in what he says** (nightly 65: his written reply ended
+/// "It resets Wednesday at 9:00 AM.", and he was heard to say "... at 9" and stop). The reply goes
+/// through the chunker the speaker uses, every sentence through Rich's own voice in order, and the
+/// last sentence's audio is transcribed: its last words must be "9 AM". Nothing is played; the
+/// audio stays in memory (CEO §53). Needs the pinned bundle and whisper's large-v3-turbo-q5_0.
+#[test]
+#[cfg_attr(not(pocket_voice), ignore = "Rich's Pocket TTS bundle is not installed on this machine (build.rs pocket_voice_cfg)")]
+fn the_last_words_of_his_reply_are_in_what_rich_says() {
+    use richos_voice::chunk::SentenceChunker;
+    use richos_voice::stt::Recognizer;
+    use richos_voice::vad::SAMPLE_RATE;
+
+    let reply = "Also, a heads-up: your Claude account has used 95% of this week's limit. It resets Wednesday at 9:00 AM.";
+    let mut chunker = SentenceChunker::new();
+    let mut sentences = chunker.push(reply);
+    sentences.extend(chunker.flush());
+
+    let dir = pocket::bundle_dir().expect("a models directory");
+    let synth = pocket::PocketSynth::load(&dir).expect("Rich's voice loads");
+    let scratch = std::env::temp_dir().join(format!("richos-rich-voice-tail-{}", std::process::id()));
+    let mut last = Vec::new();
+    for sentence in &sentences {
+        last.clear();
+        synth
+            .synthesize_stream(sentence, SAMPLE_RATE, &scratch, &mut |pcm| {
+                last.extend_from_slice(pcm);
+                true
+            })
+            .expect("Rich's voice synthesizes");
+    }
+    let ear = Recognizer::for_model("large-v3-turbo-q5_0").expect("whisper large-v3-turbo-q5_0 on this machine");
+    let (heard, _) = ear.transcribe(&last, &scratch).expect("the recognizer runs");
+    std::fs::remove_dir_all(&scratch).ok();
+    let words: String = heard.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
+    println!("[rich] said {sentences:?}; the last one heard as {heard:?}");
+    assert!(
+        words.ends_with("wednesdayat9am"),
+        "the end of Rich's reply was not said: the last sentence {:?} was heard as {heard:?}",
+        sentences.last()
+    );
+}
