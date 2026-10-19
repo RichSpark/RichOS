@@ -2840,10 +2840,15 @@ class Runner:
         of the logs by hand (nightly 65: run 20261018T154953Z-c752908c). Found by the line
         the build or release announces after its gates, `Building TAG...` or `Building and
         publishing TAG...`; `accept_passed_gates` then decides whether its gates count.
+
+        That line is written before the publisher reserves the version, so an attempt that
+        failed there leaves the tag free and its retry announces it again. Of several, the
+        one that finished building is the builder: only a finished build or release writes
+        its `phase timings for run` summary after the announcement.
         """
         said = {f"Building {tag}...", f"Building and publishing {tag}..."}
         logs = self.state / "logs"
-        found = []
+        found, finished = [], []
         for path in sorted(logs.glob("*.log")):
             if not re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", path.stem):
                 continue
@@ -2851,13 +2856,18 @@ class Runner:
                 outer, _ = self.coordinator_lines(path)
             except OSError:
                 continue
-            if said & set(outer):
+            at = next((i for i, line in enumerate(outer) if line in said), None)
+            if at is not None:
                 found.append(path.stem)
+                if any(line.startswith("phase timings for run ") for line in outer[at:]):
+                    finished.append(path.stem)
         if not found:
             raise ValueError(f"no run log in {logs} says it built {tag}, so there are no passed "
                              "gates to reuse, and `stable` never reruns them without being told. "
                              f"Name the run with {PASSED_GATES_FLAG} RUN, or run every gate again "
                              f"with {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
+        if len(found) > 1 and len(finished) == 1:
+            return finished[0]
         if len(found) > 1:
             raise ValueError(f"{len(found)} runs say they built {tag} ({', '.join(found)}); name "
                              f"the one to reuse with {PASSED_GATES_FLAG} RUN. Nothing was built.")

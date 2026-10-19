@@ -205,7 +205,9 @@ checked by the same rules as a written record entry (below). The gates are not r
 again: the run on this Mac that built that nightly is found in `~/.richos-nightly/logs`
 by its own `Building <tag>...` line, and its gates are reused with every refusal of
 `--gates-passed-in` (every gate passed, same source commit, same installed
-dependencies). If no single run says it built the tag, the command says so and stops;
+dependencies). When an attempt failed and its retry built the same tag, the run that
+finished (its `phase timings` summary follows the line) is the one. If no single run
+says it built the tag, the command says so and stops;
 it never reruns the gates on its own. `--gates-passed-in RUN` names the run explicitly;
 `--gates-at-once N|all` runs every gate again instead.
 

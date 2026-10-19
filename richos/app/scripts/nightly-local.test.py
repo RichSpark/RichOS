@@ -1452,6 +1452,23 @@ while True: time.sleep(.02)
         with self.assertRaisesRegex(ValueError, "2 runs say they built"):
             self.runner().run_that_built(self.NIGHTLY)
 
+    def test_stable_finds_the_retry_that_built_the_nightly_beside_the_attempt_that_failed(self):
+        # The announcement precedes the publisher's reservation of the version, so an attempt
+        # that failed before it leaves the tag free and its retry announces the same tag
+        # (review rv-20261019T004500Z-9d645b07-4e4f). Only the retry finished building.
+        self.write_log("20261018T000000Z-0000000c", [
+            f"Building and publishing {self.NIGHTLY}...", "=== phase build begins ===",
+            "=== phase build ends: 3.0s ==="])
+        self.recorded_run(grade="release")
+        with (self.root / "state" / "logs" / f"{self.RESUMED}.log").open("a") as log:
+            log.write(f"[2026-09-28T19:01:11.429Z] phase timings for run {self.RESUMED}:\n")
+        self.assertEqual(self.runner().run_that_built(self.NIGHTLY), self.RESUMED)
+        # Two that both finished are still two builders: named by hand, never guessed.
+        self.write_log("20261018T000000Z-0000000d", [
+            f"Building {self.NIGHTLY}...", "phase timings for run 20261018T000000Z-0000000d:"])
+        with self.assertRaisesRegex(ValueError, "3 runs say they built"):
+            self.runner().run_that_built(self.NIGHTLY)
+
     def test_his_words_reach_the_stable_plan(self):
         r = self.runner()
         plan = self.root / "state" / "stable-plan.json"
