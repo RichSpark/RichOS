@@ -102,6 +102,7 @@ const ROLES = {
   "questions.js": { role: "ui", why: "non-blocking question cards, explicit answers and delivery states" },
   "quit-question.js": { role: "ui", why: "the question he is asked before a quit stops running background work" },
   "timeline.js": { role: "ui", why: "the working timeline's model and render" },
+  "oxford-comma.js": { role: "ui", why: "the Oxford comma filter (CEO 2026-10-19): what Claude writes, drawn with the comma before and/or/nor deleted while the setting is off; it has no user-visible strings" },
   "home.js": { role: "ui", why: "the home screen the CEO lands on" },
   "updates.js": { role: "ui", why: "the update surface — CEO ruling §26" },
   "quota.js": { role: "ui", why: "Claude Code quota and weekly reset controls in Technical Settings" },

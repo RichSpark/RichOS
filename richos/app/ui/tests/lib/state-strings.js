@@ -80,7 +80,11 @@ const UI_DIR = SOURCES.UI_DIR;
 /// one sentence written across three source lines by prettier; scraped naively it becomes
 /// three entries, none of which is the sentence the CEO reads. Folding is what makes the
 /// registry key equal to the rendered text.
-function jsStringLiterals(src) {
+///
+/// `withOffsets` (the Oxford comma fixer, `oxford-ui-text.js`) adds `offsets`: for every
+/// character of `text`, the index in `src` it was read from, so a character found in the text
+/// can be deleted from the source.
+function jsStringLiterals(src, withOffsets) {
   const out = [];
   let i = 0;
   let line = 1;
@@ -132,19 +136,22 @@ function jsStringLiterals(src) {
       const quote = c;
       const startLine = line;
       let buf = "";
+      const offs = withOffsets ? [] : null;
+      const at = (k, len) => { if (offs) for (let x = 0; x < len; x++) offs.push(k); };
       i++;
       while (i < n) {
         const d = src[i];
         if (d === "\\") {
           // Keep the escaped character's VALUE where it is one the UI can render.
           const e = src[i + 1];
-          if (e === "n") buf += "\n";
-          else if (e === "t") buf += " ";
+          if (e === "n") { buf += "\n"; at(i, 1); }
+          else if (e === "t") { buf += " "; at(i, 1); }
           else if (e === "u" && /^[0-9a-fA-F]{4}$/.test(src.slice(i + 2, i + 6))) {
             buf += String.fromCharCode(parseInt(src.slice(i + 2, i + 6), 16));
+            at(i, 1);
             i += 6;
             continue;
-          } else buf += e;
+          } else { buf += e; at(i + 1, String(e).length); }
           i += 2;
           continue;
         }
@@ -164,12 +171,14 @@ function jsStringLiterals(src) {
           continue;
         }
         buf += d;
+        at(i, 1);
         i++;
       }
       if (sigSince !== null && sigSince.trim() === "+" && out.length) {
         out[out.length - 1].text += buf;
+        if (offs) out[out.length - 1].offsets.push(...offs);
       } else {
-        out.push({ text: buf, line: startLine });
+        out.push(offs ? { text: buf, line: startLine, offsets: offs } : { text: buf, line: startLine });
       }
       prevSig = quote;
       sigSince = "";
@@ -199,14 +208,16 @@ function htmlVisibleStrings(src) {
   const attrRe = /\b(placeholder|title|aria-label)\s*=\s*"([^"]*)"/g;
   let m;
   while ((m = attrRe.exec(cleaned)) !== null) {
-    out.push({ text: m[2], line: cleaned.slice(0, m.index).split("\n").length, kind: "attr:" + m[1] });
+    // `start`: where the value begins in `src` (the blanking above keeps every offset).
+    out.push({ text: m[2], line: cleaned.slice(0, m.index).split("\n").length, kind: "attr:" + m[1],
+      raw: m[2], start: m.index + m[0].length - 1 - m[2].length });
   }
 
   const textRe = />([^<]+)</g;
   while ((m = textRe.exec(cleaned)) !== null) {
     const t = m[1].replace(/\s+/g, " ").trim();
     if (!t) continue;
-    out.push({ text: t, line: cleaned.slice(0, m.index).split("\n").length, kind: "text" });
+    out.push({ text: t, line: cleaned.slice(0, m.index).split("\n").length, kind: "text", raw: m[1], start: m.index + 1 });
   }
   return out;
 }
@@ -422,7 +433,7 @@ function walk(dir, out) {
 /// CEO-facing sentence in main.rs is written across two or three lines with a trailing
 /// backslash, so a per-line regex saw only fragments — and it found the strings quoted in
 /// the TEST module instead of the const the app actually ships.
-function rustStringLiterals(src) {
+function rustStringLiterals(src, withOffsets) {
   const out = [];
   let i = 0;
   let line = 1;
@@ -466,6 +477,7 @@ function rustStringLiterals(src) {
     if (c === '"') {
       const startLine = line;
       let buf = "";
+      const offs = withOffsets ? [] : null;
       i++;
       while (i < n) {
         const d = src[i];
@@ -481,15 +493,17 @@ function rustStringLiterals(src) {
           if (e === "n") buf += " ";
           else if (e === "t") buf += " ";
           else buf += e;
+          if (offs) offs.push(e === "n" || e === "t" ? i : i + 1);
           i += 2;
           continue;
         }
         if (d === '"') { i++; break; }
         if (d === "\n") line++;
         buf += d;
+        if (offs) offs.push(i);
         i++;
       }
-      out.push({ text: buf, line: startLine });
+      out.push(offs ? { text: buf, line: startLine, offsets: offs } : { text: buf, line: startLine });
       continue;
     }
     i++;
@@ -573,9 +587,17 @@ function rustStrings() {
   const files = [];
   for (const r of RUST_ROOTS) walk(r, files);
   const out = [];
+  for (const f of files) out.push(...rustCeoLiterals(f, fs.readFileSync(f, "utf8")));
+  return out;
+}
+
+/// `rustStrings()` for one file, from its text: the CEO-facing literals of `src`, which is
+/// the content of the Rust file at absolute path `f`. `withOffsets` keeps each literal's
+/// `offsets` (see `rustStringLiterals`) for the Oxford comma fixer.
+function rustCeoLiterals(f, src, withOffsets) {
+  const out = [];
   const repoRoot = path.resolve(UI_DIR, "..", "..", "..");
-  for (const f of files) {
-    const src = fs.readFileSync(f, "utf8");
+  {
     const lines = src.split("\n");
 
     // Inline `#[cfg(test)] mod … { … }` — test prose is not product prose, and a
@@ -602,7 +624,7 @@ function rustStrings() {
       fnAt.push(currentFn);
     }
 
-    for (const lit of rustStringLiterals(src)) {
+    for (const lit of rustStringLiterals(src, withOffsets)) {
       const idx = lit.line - 1;
       if (inTests(idx)) continue;
       if (!looksLikeProse(lit.text)) continue;
@@ -614,7 +636,9 @@ function rustStrings() {
       const inCommandLayer = f.startsWith(RUST_COMMAND_LAYER + path.sep);
       const ceoFacing = fnAt[idx] === "ceo_message" || (inCommandLayer && RUST_CEO_CONTEXT.test(ctx));
       if (!ceoFacing) continue;
-      out.push({ text: lit.text, file: path.relative(repoRoot, f), line: lit.line });
+      const rec = { text: lit.text, file: path.relative(repoRoot, f), line: lit.line };
+      if (withOffsets) rec.offsets = lit.offsets;
+      out.push(rec);
     }
   }
   return out;
@@ -721,6 +745,7 @@ module.exports = {
   previewDataStrings,
   shaderStrings,
   rustStrings,
+  rustCeoLiterals,
   jsStringLiterals,
   htmlVisibleStrings,
   looksLikeProse,
