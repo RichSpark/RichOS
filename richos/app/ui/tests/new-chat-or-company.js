@@ -250,6 +250,42 @@ async function main() {
     return walk.join(", ") + "; Enter -> " + s.scope;
   });
 
+  // Mid-job review rv-20261019T132219Z-c8964a8e-f9d9: with the sidebar hidden the menu hung
+  // from the hidden button and opened off the left edge (menu_left=-284, 20px of it visible).
+  await run.check("⌘N with the sidebar hidden opens the whole menu on screen, under the sidebar toggle", async () => {
+    const page = await openApp(browser);
+    await page.keyboard.press("Meta+Shift+s");
+    await page.waitForFunction(() => document.body.classList.contains("rail-closed"));
+    await page.keyboard.press("Meta+n");
+    const m = await page.evaluate(() => {
+      const menu = document.getElementById("new-chat-menu");
+      const r = menu.getBoundingClientRect();
+      const t = document.getElementById("rail-toggle").getBoundingClientRect();
+      const a = document.activeElement;
+      return {
+        open: !menu.hidden,
+        left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom),
+        vw: window.innerWidth, vh: window.innerHeight,
+        underToggle: Math.round(r.top - t.bottom),
+        focused: a && a.closest("#new-chat-menu") ? a.textContent.trim() : null,
+      };
+    });
+    assert(m.open, "⌘N did not open the menu with the sidebar hidden");
+    assert(m.left >= 0 && m.right <= m.vw && m.top >= 0 && m.bottom <= m.vh, "the menu is not wholly on screen: " + JSON.stringify(m));
+    assert(m.underToggle >= 0 && m.underToggle <= 10, "the menu is not under the sidebar toggle: " + JSON.stringify(m));
+    assertEqual(m.focused, "Northwind Traders", "focus on open");
+    await page.keyboard.press("Escape");
+    assertEqual(await page.evaluate(() => document.activeElement && document.activeElement.id), "rail-toggle", "focus after Escape");
+    await page.keyboard.press("Meta+n");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    const s = await newChatScreen(page);
+    assert(s.onScreen && s.name === "Lumen Labs", "Enter did not start a chat in Lumen Labs: " + JSON.stringify(s));
+    assertEqual(page.__errors, [], "page errors");
+    await page.close();
+    return "menu at x " + m.left + "-" + m.right + " of " + m.vw + ", " + m.underToggle + "px under the toggle";
+  });
+
   await run.check('"New company" turns the same menu into the app\'s company form, with a back arrow to the menu', async () => {
     const page = await openApp(browser);
     await page.click("#rail-new-thread");
@@ -383,7 +419,13 @@ async function main() {
     const tools = () =>
       page.evaluate((sel) => {
         const h = document.querySelector(sel);
-        const vis = (n) => !!n && n.getClientRects().length > 0 && getComputedStyle(n).visibility !== "hidden" && Number(getComputedStyle(n).opacity) > 0;
+        // Painted at all: laid out, not hidden, and no transparent ancestor up to the heading
+        // (opacity is not inherited, so the control's own value says nothing about its row's).
+        const vis = (n) => {
+          if (!n || !n.getClientRects().length || getComputedStyle(n).visibility === "hidden") return false;
+          for (let a = n; a && a !== h.parentElement; a = a.parentElement) if (Number(getComputedStyle(a).opacity) === 0) return false;
+          return true;
+        };
         return { collapse: vis(h.querySelector(".nav-collapse")), plus: vis(h.querySelector(".nav-group-add")) };
       }, head);
     await page.mouse.move(700, 450);
@@ -432,12 +474,12 @@ async function main() {
     }, head);
     assert(real.shown && real.text === "+ New chat", "the real hover: " + JSON.stringify(real));
     assert(real.right > 0 && real.right <= 16 && Math.abs(real.midDelta) <= 2, "the tooltip is not beside the plus: " + JSON.stringify(real));
-    // Keyboard focus shows it too, reached the keyboard's way: Tab from the company's name to
-    // its collapse control, Tab to the plus.
+    // Keyboard focus shows it too. The plus has to be focusable while it is not shown (a
+    // `display: none` control is out of the focus order, so focus could never land on it to
+    // show it); WebKit's own Tab order skips buttons unless Full Keyboard Access is on, so the
+    // focus is placed directly, which is the event either path delivers.
     await page.mouse.move(700, 450);
-    await page.focus(head + " .nav-group-label");
-    await page.keyboard.press("Tab");
-    await page.keyboard.press("Tab");
+    await page.focus(head + " .nav-group-add");
     const kb = await page.evaluate(() => {
       const a = document.activeElement;
       const tip = document.getElementById("rail-tip");
@@ -512,7 +554,9 @@ async function main() {
         const page = await openApp(browser, { keep: spec.keep, theme });
         if (state !== "tooltip") await page.mouse.move(720, 600);
         await spec.drive(page);
-        if (state !== "tooltip" && state !== "menu" && state !== "form") await page.mouse.move(720, 600);
+        // The pointer leaves whatever it last pressed, so no picture catches a hover by chance
+        // (form-light differed in the hovered Add button, x 33-193 y 480-513, on the 2nd run).
+        if (state !== "tooltip") await page.mouse.move(720, 600);
         const s = await shot(page, "r32-" + state + "-" + theme, { fullPage: false });
         publishShotFile(s.file, path.join(SHOTS, state + "-" + theme + ".png"));
         assertEqual(page.__errors, [], state + "/" + theme + ": page errors");

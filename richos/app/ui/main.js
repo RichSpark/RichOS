@@ -1512,9 +1512,18 @@ function returnCompanyForm() {
   entityAddErrorEl.textContent = "";
 }
 
+/// The control the menu hangs from: the rail's button, or, while the sidebar is hidden (its
+/// toggle or ⌘⇧S, then ⌘N), the sidebar toggle at the top of the conversation, which is on
+/// screen and is the way back to the rail. Anchored to the hidden button the menu would open
+/// off the left edge of the window (mid-job review rv-20261019T132219Z-c8964a8e-f9d9).
+function newChatMenuAnchor() {
+  return railOpen ? railNewThreadBtn : railToggleBtn;
+}
+
 function placeNewChatMenu() {
-  const r = railNewThreadBtn.getBoundingClientRect();
-  newChatMenuEl.style.left = Math.round(r.left) + "px";
+  const r = newChatMenuAnchor().getBoundingClientRect();
+  const width = newChatMenuEl.offsetWidth || 304;
+  newChatMenuEl.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - width - 8))) + "px";
   newChatMenuEl.style.top = Math.round(r.bottom + 6) + "px";
 }
 
@@ -1611,7 +1620,7 @@ function closeNewChatMenu(refocus) {
   returnCompanyForm();
   newChatMenuEl.replaceChildren();
   railNewThreadBtn.setAttribute("aria-expanded", "false");
-  if (refocus || hadFocus) railNewThreadBtn.focus({ preventScroll: true });
+  if (refocus || hadFocus) newChatMenuAnchor().focus({ preventScroll: true });
 }
 
 railNewThreadBtn.addEventListener("click", (e) => {
@@ -7715,6 +7724,9 @@ let sidebarHiddenPref = false;
 let lastBreakpointNarrow = null;
 
 function setRailOpen(open) {
+  // "+ New chat or company" hangs from the rail or, with the rail away, from this toggle; the
+  // menu does not outlive the move of the thing it hangs from.
+  if (open !== railOpen) closeNewChatMenu();
   railOpen = open;
   const narrow = isNarrow();
   document.body.classList.toggle("rail-closed", !open);

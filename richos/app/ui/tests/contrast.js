@@ -1315,9 +1315,7 @@ const SURFACES = [
     name: "rail-tooltip",
     what: "a company heading's two controls and the plus's \"+ New chat\" tooltip",
     drive: async (p) => {
-      await p.focus(".nav-group--entity .nav-group-label");
-      await p.keyboard.press("Tab");
-      await p.keyboard.press("Tab");
+      await p.focus(".nav-group--entity .nav-group-add");
       await p.waitForSelector("#rail-tip:not([hidden])");
       await pageSettled(p);
     },
