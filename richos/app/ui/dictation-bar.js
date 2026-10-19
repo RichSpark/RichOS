@@ -105,7 +105,7 @@ window.RichDictationBar = (function () {
         (msg.problem === "model-missing" ? IC.down : IC.alert) +
         '</span><span class="dh-label is-plain">' + PROBLEMS[msg.problem](k) + "</span>" + fix + "</div>";
     } else if (msg.view === "off") {
-      html = '<div class="dov-notice">Dictation is off.</div>';
+      html = '<div class="dov-notice">RichScribe is off.</div>';
     }
     h.innerHTML = html;
     D.bars = Array.prototype.slice.call(h.querySelectorAll(".dh-meter i"));

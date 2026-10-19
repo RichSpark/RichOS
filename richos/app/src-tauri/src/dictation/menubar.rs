@@ -31,7 +31,7 @@ pub fn build(app: &AppHandle) -> Result<TrayIcon, String> {
     TrayIconBuilder::with_id(ID)
         .icon(icon)
         .icon_as_template(template)
-        .tooltip("Dictation")
+        .tooltip("RichScribe")
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
             let app = tray.app_handle();

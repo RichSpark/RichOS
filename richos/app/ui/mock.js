@@ -1452,11 +1452,11 @@
     mic: "unknown", ax: "unknown", owner: "none", keyTap: false, secure: null }, preset.dictationView || {});
   let dictationAxAsked = !!preset.dictationAxAsked;
   const dictationCalls = [];
-  // The "Dictation feature" conversation (`dictation_offer.rs` FEATURE_TITLE and feature_text,
+  // The "RichScribe feature" conversation (`dictation_offer.rs` FEATURE_TITLE and feature_text,
   // the CEO's words, 2026-10-13): created once, its id kept as `featureThread` is.
   let dictationFeatureThread = null;
   const dictationFeatureText = (key) =>
-    "Good news! Dictation is set up and enabled.\n\n" +
+    "Good news! RichScribe is set up and enabled.\n\n" +
     "So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:\n\n" +
     "Click into where you want your words to appear, tap F" + key + ", say what you want written, then tap it again. " +
     "See how your words appear where your cursor is.\n\n" +
@@ -3262,12 +3262,12 @@
           return structuredClone(dictationView);
         case "dictation_set_key":
           dictationCalls.push({ cmd, key: args.key });
-          if (!(Number.isInteger(args.key) && args.key >= 1 && args.key <= 19)) throw `F${args.key} is not a key dictation can use`;
+          if (!(Number.isInteger(args.key) && args.key >= 1 && args.key <= 19)) throw `F${args.key} is not a key RichScribe can use`;
           dictationView.key = args.key;
           return structuredClone(dictationView);
         case "dictation_set_accuracy":
           dictationCalls.push({ cmd, accuracy: args.accuracy });
-          if (args.accuracy !== "accurate" && args.accuracy !== "fast") throw `${args.accuracy} is not an accuracy dictation offers`;
+          if (args.accuracy !== "accurate" && args.accuracy !== "fast") throw `${args.accuracy} is not an accuracy RichScribe offers`;
           dictationView.accuracy = args.accuracy;
           return structuredClone(dictationView);
         case "dictation_ask_microphone":
@@ -3288,7 +3288,7 @@
           return null;
         case "dictation_open_settings":
           dictationCalls.push({ cmd, pane: args.pane });
-          if (args.pane !== "microphone" && args.pane !== "accessibility") throw `${args.pane} is not a pane dictation opens`;
+          if (args.pane !== "microphone" && args.pane !== "accessibility") throw `${args.pane} is not a pane RichScribe opens`;
           return null;
         case "dictation_take_sheet_request": {
           // A sheet request kept until a page takes it (main.rs `dictation_take_sheet_request`): true once.
@@ -3326,7 +3326,7 @@
           const here = threads.find((x) => x.id === activeThreadId);
           if (!here || !here.entity_id) return Promise.reject("No company is chosen yet, so I won't guess which one this belongs to.");
           const id = uid("thread");
-          threads.push({ id, title: "Dictation feature", entity_id: here.entity_id, created_at: at, message_count: 1,
+          threads.push({ id, title: "RichScribe feature", entity_id: here.entity_id, created_at: at, message_count: 1,
             last_activity: at, last_turn_state: "completed", has_pending_turn: false });
           messagesByThread[id] = [{ role: "assistant", text, turn_id: turnId, at }];
           turnsById.set(turnId, { threadId: id, entityId: here.entity_id, userText: null, proactive: true,
