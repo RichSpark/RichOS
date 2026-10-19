@@ -1257,6 +1257,28 @@ class Land(Fixture):
         self.assertEqual(self.recorded(), "")
         self.git("worktree", "remove", "--force", str(tree))
 
+    def test_a_commit_signaled_onto_a_release_branch_is_not_recorded_as_skipping_its_checks(self):
+        # Review rv-20261019T012055Z-137233a7-0122#1: a commit carrying LAND_TARGET runs the land
+        # check and writes a land receipt, not the commit check's marker, and post-commit looked
+        # for a land receipt only on main, so a good release-branch commit was recorded as one
+        # that skipped its checks.
+        self.make()
+        self.git("switch", "-q", "-c", "v1.2.1")
+        self.write("richos/app/src/thing.txt", "good release commit\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-q", "-m", "good release commit",
+                       env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.2.1"))
+        tree = self.git("rev-parse", "HEAD^{tree}").stdout.strip()
+        self.assertTrue((self.repo / ".git/richos-autocheck/land" / tree).is_file())
+        self.assertNotIn("AUTOCHECK SKIPPED", out.stderr)
+        self.assertEqual(self.recorded(), "")
+        # A commit with no land check behind it on that branch is still recorded.
+        self.write("richos/app/src/thing.txt", "unchecked release commit\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "--no-verify", "-m", "unchecked",
+                 env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.2.1"))
+        self.assertIn("skipped the automatic checks", self.recorded())
+
     def test_a_merge_whose_tree_holds_a_listed_device_identifier_is_refused_without_printing_it(self):
         # 2026-10-02: a CoreDevice id reached a branch in a commit made before the commit-time
         # scan existed, and a merge carries what a branch already holds. The gate reads the whole

@@ -31,6 +31,12 @@ spec=importlib.util.spec_from_file_location('walk_timeline',QA/'timeline.py')
 timeline=importlib.util.module_from_spec(spec);spec.loader.exec_module(timeline)
 
 
+# The wait band's headline while Rich works: "Rich is thinking" until the first sign of
+# work, then "Rich is working" or "Writing the reply" (ui/main.js). Every band matcher
+# takes all three, so the opening frames count as band-visible.
+WORKING_HEADLINE=r'(?m)^\s*(?:Rich is thinking|Rich is working|Writing the reply)[.\s]*$'
+
+
 def marker_pattern(token):
     # OCR can collapse or insert spaces. Do not accept lookalike characters.
     return r'(?<![a-z0-9])'+r'\s*'.join(map(re.escape,token))+r'(?![a-z0-9])'
@@ -227,13 +233,13 @@ class Walk:
     def wait_band(self,step,budget):
         x=self.samples[0];directory=Path(x['directory'])/('b' if self.a.band_side=='phone' else '')
         # Full coverage of every captured frame for the negative claim.
-        first=self.hit(x,r'(?m)^\s*(?:Rich is working|Writing the reply)[.\s]*$',self.a.band_side)
+        first=self.hit(x,WORKING_HEADLINE,self.a.band_side)
         result=subprocess.run([str(QA/'ocr-find.sh'),'Nothing.has.come.back',x['directory'],'--quiet'],capture_output=True,text=True,timeout=180)
         if result.returncode==0:raise Failure('product failure','old wait-band detail line appeared')
         if result.returncode!=1:raise Failure('harness failure',result.stderr)
         # Inspect every band-visible desktop frame. OCR is cached from the full scan.
         frames=sorted(directory.glob('*.png'))
-        visible=[f for f in frames if re.search(r'(?m)^\s*(?:Rich is working|Writing the reply)[.\s]*$',qaocr.text(f),re.I)]
+        visible=[f for f in frames if re.search(WORKING_HEADLINE,qaocr.text(f),re.I)]
         if len(visible)<2:raise Failure('prerequisite unavailable','fewer than two band-visible frames')
         boxes=[]
         for frame in visible:
@@ -269,7 +275,7 @@ class Walk:
         if index==0 or switched_at-frames[index-1][1]>1500:
             raise Failure('harness failure','no frame immediately before the visible switch')
         last=Path(self.phone['directory'])/('%04d.png'%frames[index-1][0])
-        if not re.search(r'(?m)^\s*(?:Rich is working|Writing the reply)[.\s]*$',qaocr.text(last),re.I):
+        if not re.search(WORKING_HEADLINE,qaocr.text(last),re.I):
             raise Failure('prerequisite unavailable','work was not visibly active immediately before the switch')
         chosen=[n for n,t in frames if switched_at<=t<=switched_at+3000]
         if not chosen:raise Failure('harness failure','capture does not cover post-switch interval')
