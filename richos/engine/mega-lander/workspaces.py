@@ -5308,6 +5308,8 @@ def merge_and_land(ref, me="", message=""):
     todo = [x for x in todo
             if not any(y[2] == x[2] and y[3] != x[3] and is_ancestor(x[2], x[3], y[3]) for y in todo)]
     reviews = _review_check(todo, _governing_entities(chain))
+    for main in sorted({x[2] for x in todo}):
+        _bring_fence_current(main)
     taken = []                  # [(main, holder args)]: the leases THIS command took, released at its end
     try:
         for repo, b, main, t in todo:
@@ -5512,6 +5514,27 @@ def _fence_program():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _bring_fence_current(main):
+    """Before anything is merged into `main`, its installed operator fence (the
+    copy git's reference-transaction hook runs) is made the engine's
+    (operator_fences_admin.bring_current), so a land is never refused by an
+    out-of-date copy after its whole land check has run (2026-10-19). A copy
+    that cannot be written refuses here, before that check, naming the fix."""
+    here = os.path.join(engine_root(), "scripts", "lib")
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import operator_fences_admin
+    try:
+        replaced = operator_fences_admin.bring_current(main)
+    except OSError as exc:
+        raise SpecError("nothing was merged into %s: its installed operator fence differs from the engine's and "
+                        "could not be brought current (%s). Run %s install --repo %s, then the same command again."
+                        % (main, exc, os.path.join(engine_root(), "scripts", "operator-fences.sh"), main))
+    if replaced:
+        sys.stderr.write("merge: the installed operator fence of %s was older than the engine's; brought current "
+                         "(%s).\n" % (main, ", ".join(replaced)))
 
 
 def _review_check(todo, entities=()):

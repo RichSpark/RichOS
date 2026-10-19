@@ -1168,6 +1168,39 @@ class StableChannelTests(GitFixture):
         with self.assertRaisesRegex(ValueError, "no promotion decision"):
             n.stable_plan(info["tag"], other, now=NOW)
 
+    def test_his_words_on_the_command_line_are_his_decision_with_no_record_committed_first(self):
+        """CEO, 2026-10-19, after nightly 65's record needed its own branch, review and merge:
+        "Will this whole retarded shitshow be repeated all over again?" His words are given
+        with the command, dated today, checked by the same rules, and committed in the
+        stable release commit's own promotion record."""
+        info = self.publish_a_nightly()
+        words = "fixture standing in for his sentence, given on the command line"
+        plan = n.stable_plan(info["tag"], "[]", now=NOW, words=words)
+        self.assertEqual(plan["promotion_words"], words)
+        self.assertEqual(plan["promotion_decided_on"], NOW.astimezone().strftime("%Y-%m-%d"))
+        built = n.prepare(plan)
+        record = json.loads(n.git("show", f"{built['build_commit']}:{n.PROMOTIONS}"))
+        self.assertEqual(record, [{"tag": info["tag"], "decided_on": plan["promotion_decided_on"],
+                                   "words": words}])
+        self.assertEqual(json.loads(n.git("show", f"{built['build_commit']}:{n.PROVENANCE}"))
+                         ["promotion_words"], words)
+        # The same rules as a written entry: no words is no decision, and a nightly the
+        # record already decides on is not decided twice.
+        n.git("checkout", "-q", "main")
+        for empty in ("", "   "):
+            with self.subTest(words=empty), self.assertRaisesRegex(ValueError, "missing words"):
+                n.stable_plan(info["tag"], "[]", now=NOW, words=empty)
+        with self.assertRaisesRegex(ValueError, "leave out --ceo-words"):
+            n.stable_plan(info["tag"], n.json_text([{**self.DECISION[0], "tag": info["tag"]}]),
+                          now=NOW, words=words)
+
+    def test_a_written_record_still_promotes_and_is_carried_into_the_release_commit(self):
+        info = self.publish_a_nightly()
+        decision = [{**self.DECISION[0], "tag": info["tag"]}]
+        built = n.prepare(n.stable_plan(info["tag"], n.json_text(decision), now=NOW))
+        record = json.loads(n.git("show", f"{built['build_commit']}:{n.PROMOTIONS}"))
+        self.assertEqual(record, decision)
+
     def test_a_tag_that_is_not_one_of_our_nightlies_is_refused(self):
         self.publish_a_nightly()
         n.git("tag", "v9.9.9-nightly.20260911.1", "main")

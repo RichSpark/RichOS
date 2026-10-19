@@ -1974,6 +1974,8 @@ def post_commit(repo):
         marker.unlink()
     if verified == tree:
         return 0
+    if land_target(repo) and repo.land_receipt(tree).exists():
+        return 0  # a commit the lander signaled onto a release branch ran the land check instead
     replaying = any(git_path(repo, name).exists() for name in
                     ("CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"))
     if replaying or (action and not action.startswith("commit")):
