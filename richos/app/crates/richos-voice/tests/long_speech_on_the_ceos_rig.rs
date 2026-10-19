@@ -276,6 +276,48 @@ fn his_turn_still_ends_when_the_noisy_room_also_has_clicks() {
     }
 }
 
+/// **A short reply in a quiet room still ends his turn** (review rv-20261019T160520Z, finding 1).
+/// 1.600 s of the passage at his level over the room of the 2026-09-17 recording (its quietest
+/// second, the room `self_voice_replay.rs` uses), then 20.000 s of that room alone. That room is
+/// not steady: its loudest frame is 7.2 x (17.1 dB) its quietest, and a floor capped close over
+/// its quietest frame kept its peaks reading as speech, so the reply was never sent. The reviewer
+/// measured it at RMS 0.003471 (-49.2 dBFS); it is also replayed up to -37.0 dBFS here, since a
+/// louder room of the same shape is the same question.
+#[test]
+fn a_short_reply_in_a_quiet_room_still_ends_his_turn() {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("tests/fixtures/echo-path/ceo-rig-2026-09-17-mic.wav");
+    let pcm = wav::read_pcm16(&std::fs::read(&p).unwrap()).unwrap();
+    let other = wav::to_mono(&pcm.samples, pcm.channels);
+    let second = SAMPLE_RATE as usize;
+    let quietest = (0..=(other.len() - second) / VAD_FRAME_SAMPLES)
+        .map(|f| f * VAD_FRAME_SAMPLES)
+        .min_by(|&a, &b| rms(&other[a..a + second]).total_cmp(&rms(&other[b..b + second])))
+        .unwrap();
+    let source = &other[quietest..quietest + second];
+    let mic = mic();
+    let speech = &mic[4 * second..4 * second + SPOKEN_FRAMES * VAD_FRAME_SAMPLES];
+    let speech_gain = gain_to(HIS_LEVEL_DBFS, speech);
+    for room_dbfs in [20.0 * 0.003471f32.log10(), -46.0, -43.0, -40.0, -37.0] {
+        let room: Vec<f32> = source.iter().map(|s| s * gain_to(room_dbfs, source)).collect();
+        let mut track: Vec<f32> = room.iter().cycle().take(SPOKEN_FRAMES * VAD_FRAME_SAMPLES).copied().collect();
+        track.extend(speech.iter().enumerate().map(|(i, s)| s * speech_gain + room[i % room.len()]));
+        let speech_ends = track.len() / VAD_FRAME_SAMPLES;
+        track.extend(room.iter().cycle().take(1250 * VAD_FRAME_SAMPLES));
+        let r = replay(&track);
+        let what = format!("short reply, room at {room_dbfs:.1} dBFS");
+        println!("[replay] {what}: admitted {:?}, end-of-turn quiet at frames {:?}, handed over at {:?}", r.spans, r.quiet, r.handed_over);
+        assert_eq!(r.spans.len(), 1, "{what}: his reply never closed as an utterance");
+        let within = speech_ends + frames_for_secs(TURN_ENDS_WITHIN_SECS) as usize;
+        assert!(
+            r.quiet.first().is_some_and(|&q| q <= within),
+            "{what}: his turn did not end within {TURN_ENDS_WITHIN_SECS:.3} s of his last word (quiet at {:?})",
+            r.quiet
+        );
+        assert_eq!(r.handed_over.len(), 1, "{what}: his reply was not handed over once");
+    }
+}
+
 /// **No input holds his turn open past 60.000 s** (`turn::MAX_TURN_FRAMES`). His turn ends on
 /// 2.000 s the VAD does not call speech; these two inputs never give it that, on main or on any
 /// round of this fix: words that never pause (the passage said three times over, no gap between),
