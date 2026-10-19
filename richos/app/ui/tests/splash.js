@@ -1825,6 +1825,21 @@ async function main() {
     assertEqual(before, true, "the opening screen is on by default");
     await page.uncheck("#splash-enabled");
     await page.waitForTimeout(200);
+    // THE PANEL IS PHOTOGRAPHED AT ITS BOTTOM, AND THIS LINE PUTS IT THERE. Where `uncheck` left
+    // it is Playwright's choice, not the app's: its first try scrolls the switch into view "if
+    // needed", which lands this panel at its bottom (scrollTop 475 of 475 at 1280x800), but a
+    // try that misses is retried with scrollIntoView block "end", then "center", then "start"
+    // (playwright-core 1.61.1, `_retryAction` in lib/coreBundle.js). Measured on this panel:
+    // "center" from the top leaves it at 275, and that is, pixel for pixel, the picture the
+    // merge gate took on a loaded host (2026-10-19, autocheck attempt-b7mrf6gl: 200px short of
+    // the bottom, Memory folder and Updates under the foot band; the same tree passed with the
+    // host free). One way a retry starts from the top, inferred and not caught in the act: a
+    // capability registering late rebuilds the open panel, and a rebuild reopens it at its top
+    // (settings-button.js `rebuild` then `open`).
+    await page.evaluate(() => {
+      const menu = document.getElementById("set-menu");
+      menu.scrollTop = menu.scrollHeight;
+    });
     fs.mkdirSync(SHOTS, { recursive: true });
     const sw = await shot(page, "splash-03-the-off-switch", { fullPage: false });
     publishShotFile(sw.file, path.join(SHOTS, "splash-03-the-off-switch.png"));
