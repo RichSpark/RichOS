@@ -36,9 +36,13 @@
 // person who reads it.
 //
 // TO REGENERATE ONE DELIBERATELY: `RICHOS_SHOTS_REGENERATE=shots-home/home-named.png node
-// home.js`, or a comma-separated list, a directory (`shots-home`), or `all`. Regeneration
-// ignores every bound below and writes whenever the picture differs at all — which is what a
-// deliberate regeneration means.
+// home.js`, or a comma-separated list of files. A file NAMED that way is written whenever the
+// picture differs at all, bounds or not — which is what a deliberate regeneration of that file
+// means. A directory (`shots-home`) or `all` is a sweep, not a decision about any one picture:
+// it writes every picture that differs EXCEPT one held inside its declared bound below, because
+// that difference is this file's own declared motion and keeping it would commit a noise-only
+// redraw of a picture nothing changed (verification reliability PRD R7, 2026-10-20). Name the
+// file to rewrite one of those.
 
 "use strict";
 
@@ -208,21 +212,35 @@ function ruleFor(file) {
   return key ? BY_FILE.get(key) || null : null;
 }
 
-/// Is this file being regenerated deliberately? `RICHOS_SHOTS_REGENERATE` takes `all`, a
-/// comma-separated list of `shots-x/y.png` paths, or a directory name (`shots-home`).
+/// Is this file being regenerated deliberately, and how was it asked for? `RICHOS_SHOTS_REGENERATE`
+/// takes `all`, a comma-separated list of `shots-x/y.png` paths, or a directory name
+/// (`shots-home`). Returns `"file"` when the file itself is named (that wins over a sweep that
+/// also covers it), `"directory"` or `"all"` for a sweep, and `false` otherwise.
 function regenerating(file) {
   const raw = (process.env.RICHOS_SHOTS_REGENERATE || "").trim();
   if (!raw) return false;
   const key = relKey(file);
   if (!key) return false;
+  let found = false;
   for (const piece of raw.split(",")) {
     const want = piece.trim().replace(/\/+$/, "");
     if (!want) continue;
-    if (want === "all") return true;
-    if (want === key) return true;
-    if (key.startsWith(want + "/")) return true;
+    if (want === key) return "file";
+    if (want === "all") found = found || "all";
+    else if (key.startsWith(want + "/")) found = "directory";
   }
-  return false;
+  return found;
+}
+
+/// Does a regeneration write this picture? A file named on its own is always written: that is a
+/// person's decision about that one picture. A sweep (`"directory"`, `"all"`) writes every
+/// picture that differs except one held inside its declared bound, which is the declared motion
+/// of a picture nothing changed, never a new reference (see the header). Returns
+/// `{ write, held, bound }`.
+function regenerationWrites(kind, rule, existing, fresh) {
+  if (kind === "file" || !rule || !existing) return { write: true, held: false, bound: rule ? describeBound(rule.bound) : null };
+  const verdict = heldBy(rule, existing, fresh);
+  return { write: !verdict.held, held: verdict.held, bound: verdict.bound };
 }
 
 /// Does the difference between a committed shot and a fresh one stay inside what this file
@@ -346,6 +364,24 @@ function describeBound(bound) {
   if (heldBy(deltaRule, Buffer.from("not a png"), byTwo).held) {
     throw new Error("lib/shot-stability.js: an unreadable side was held rather than written");
   }
+
+  //   3. A SWEEP DOES NOT KEEP A NOISE-ONLY REDRAW, AND A NAMED FILE IS STILL WRITTEN. Symmetric
+  //      for the same reason as 2: a regeneration that wrote nothing would pass a test that only
+  //      asked whether it skipped the noise.
+  for (const kind of ["directory", "all"]) {
+    if (regenerationWrites(kind, deltaRule, base, byTwo).write) {
+      throw new Error("lib/shot-stability.js: a " + kind + " regeneration rewrote a picture held inside its declared bound");
+    }
+    if (!regenerationWrites(kind, deltaRule, base, byThree).write) {
+      throw new Error("lib/shot-stability.js: a " + kind + " regeneration skipped a picture outside its declared bound");
+    }
+    if (!regenerationWrites(kind, null, base, byTwo).write) {
+      throw new Error("lib/shot-stability.js: a " + kind + " regeneration skipped an undeclared picture that differs");
+    }
+  }
+  if (!regenerationWrites("file", deltaRule, base, byTwo).write) {
+    throw new Error("lib/shot-stability.js: a picture named on its own was not written because of its bound");
+  }
 })();
 
-module.exports = { DECLARED, ruleFor, regenerating, heldBy, describeBound, relKey };
+module.exports = { DECLARED, ruleFor, regenerating, regenerationWrites, heldBy, describeBound, relKey };
