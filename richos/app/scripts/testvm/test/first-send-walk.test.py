@@ -39,6 +39,33 @@ class Verdict(unittest.TestCase):
         self.assertIn('did not reach the composer', said)
 
 
+class TwoSends(unittest.TestCase):
+    """The `two` step: both messages pressed before the conversation opened reach Rich, in order."""
+
+    def two(self, **over):
+        value = {'within': 120, 'conversation_open_when_sent': False, 'received_order': list(walk.TWO),
+                 'composer_after': ''}
+        value.update(over)
+        return value
+
+    def test_both_received_in_order_passes(self):
+        self.assertIsNone(walk.two_verdict(self.two()))
+
+    def test_the_reviewed_defect_a_correction_left_in_the_box_fails(self):
+        said = walk.two_verdict(self.two(received_order=[walk.TWO[0]], composer_after=walk.TWO[1]))
+        self.assertTrue(said.startswith('not received'), said)
+        self.assertIn('Correction', said)
+
+    def test_reversed_order_fails(self):
+        said = walk.two_verdict(self.two(received_order=list(reversed(walk.TWO))))
+        self.assertTrue(said.startswith('OUT OF ORDER'), said)
+
+    def test_sent_after_the_conversation_opened_tested_nothing(self):
+        for opened in (True, None):
+            said = walk.two_verdict(self.two(conversation_open_when_sent=opened))
+            self.assertTrue(said.startswith('did not test the window'), said)
+
+
 class Keys(unittest.TestCase):
     def test_a_quote_and_a_backslash_are_typed_as_written(self):
         self.assertEqual(walk.keystrokes('a "b" \\c'),

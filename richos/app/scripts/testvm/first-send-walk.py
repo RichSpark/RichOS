@@ -19,6 +19,9 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
              past their deadline) is left with Return, its own key, which puts the hand in the
              composer; the message typed at once with real keys, sent with the Return key
   click      the same after a second relaunch, sent with a real mouse click on Send
+  two        after a relaunch, two messages typed and each sent with the Return key before the launch
+             has opened his conversation; both must reach Rich, the first before the second (handover
+             review rv-20261020T191206Z-fa2ee4a4-778c: the second used to stay in the box)
 
 Each send is judged by the app's own durable record: a PromptReceived row in conversation-ledger.jsonl
 carrying the exact words, within --within seconds. Each records whether the launch had already
@@ -47,9 +50,11 @@ _spec.loader.exec_module(adopt_walk)
 StepFailed = adopt_walk.StepFailed
 command = adopt_walk.command
 
-STEPS = ['identity', 'first-run', 'return', 'click']
+STEPS = ['identity', 'first-run', 'return', 'click', 'two']
 WORDS = {'return': 'First send after a relaunch, sent with the Return key. Reply with one word: received.',
          'click': 'First send after a relaunch, sent with a click on Send. Reply with one word: received.'}
+TWO = ('Please send the proposal today. Reply with one word: noted.',
+       'Correction: do not send it until I approve. Reply with one word: received.')
 RETURN_KEY = '36'
 
 
@@ -74,6 +79,24 @@ def verdict(record):
         return ('SWALLOWED: the composer emptied and no PromptReceived row carries the words within %g s'
                 % record.get('within', 0))
     return 'not sent: the composer still reads %s and no PromptReceived row carries the words' % json.dumps(after)
+
+
+def two_verdict(record):
+    """None when both messages reached Rich in the order he sent them, else what happened."""
+    if record.get('conversation_open_when_sent') is not False:
+        return ('did not test the window: the conversation was %s when both had been sent'
+                % ('already open' if record.get('conversation_open_when_sent') else 'not read as closed'))
+    order = record.get('received_order') or []
+    missing = [w for w in TWO if w not in order]
+    if missing:
+        return ('not received: no PromptReceived row carries %s within %g s; the composer reads %s'
+                % (' or '.join(json.dumps(w) for w in missing), record.get('within', 0),
+                   json.dumps(record.get('composer_after'))))
+    if [w for w in order if w in TWO] != list(TWO):
+        return 'OUT OF ORDER: Rich received %s' % json.dumps(order)
+    if record.get('composer_after'):
+        return 'a sent message is still in the box: %s' % json.dumps(record.get('composer_after'))
+    return None
 
 
 class FirstSendWalk(adopt_walk.Walk):
@@ -174,6 +197,42 @@ class FirstSendWalk(adopt_walk.Walk):
     def return_(self):
         return self.first_send('return')
 
+    def two(self):
+        """Two messages, each sent with the Return key, before the launch opens his conversation."""
+        record = {'how': 'two', 'words': list(TWO), 'within': self.a.within}
+        launched = relaunch(self.vm)
+        record['relaunched'] = launched
+        record['home_left_after_s'] = self.through_home()
+        record['typed_at_ms'] = round(self.clock())
+        for words in TWO:
+            command([HERE / 'guest.sh', self.vm, 'osascript', '-e', keystrokes(words)], 120)
+            command([HERE / 'ax.sh', self.vm, '--key', RETURN_KEY])
+        record['sent_at_ms'] = round(self.clock())
+        self.shot('two-sent-at-once.png')
+        record['conversation_open_when_sent'] = self.opened_in('two-sent-at-once.png')
+        record['shown_after_send'] = [self.shown(w) for w in TWO]
+        end = time.monotonic() + self.a.within
+        rows = []
+        while time.monotonic() < end:
+            rows = [r for r in self.ledger_rows() if r.get('event') == 'PromptReceived'
+                    and r.get('text', '').strip() in TWO and (r.get('at') or 0) >= record['typed_at_ms']]
+            if len(rows) >= len(TWO):
+                break
+            time.sleep(2)
+        # The ledger is appended in the order Rich received them, so its line order is the order.
+        record['received_order'] = [r.get('text', '').strip() for r in rows]
+        record['received'] = [{'turn_id': r.get('turn_id'), 'thread_id': r.get('thread_id'), 'at': r.get('at'),
+                               'intake_id': r.get('intake_id')} for r in rows]
+        record['composer_after'] = self.composer().get('value')
+        self.shot('two-sent.png')
+        record['app_log_tail'] = guest(self.vm, 'tail -c 4000 ' + shlex.quote(launched['log']) + ' 2>/dev/null || true', 60)
+        (self.out / 'two.json').write_text(json.dumps(record, indent=2) + '\n')
+        failure = two_verdict(record)
+        if failure:
+            raise StepFailed(failure + '; see two.json')
+        return {k: record[k] for k in ('conversation_open_when_sent', 'shown_after_send', 'received_order',
+                                       'received', 'composer_after', 'home_left_after_s')}
+
     def click(self):
         return self.first_send('click')
 
@@ -217,7 +276,7 @@ def main():
                 walk.shot('failed-%s.png' % step)
             except (StepFailed, RuntimeError, subprocess.TimeoutExpired):
                 pass
-            if step not in ('return', 'click'):
+            if step not in ('return', 'click', 'two'):
                 break
     return 0 if ok else 1
 
