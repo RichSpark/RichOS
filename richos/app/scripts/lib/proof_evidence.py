@@ -1604,6 +1604,15 @@ class Record:
             item.evidence = self
         self.checkpoint(items)
 
+    def launched(self, item):
+        """Save a check as it starts. Its row records only that it is running: no pass is judged
+        on it (the completion's checkpoint reads the source for that), so it needs HEAD alone,
+        which is cheap, and never the whole source. Reading the whole source here (`git diff
+        --binary HEAD` and every untracked file, 5.5 s each on step 2's 124-path land replay) cost
+        one reading per started check, one after another, before each check could start."""
+        commit = self.current_commit()
+        self.save(item, self.source if commit == self.source["commit"] else dict(self.source, commit=commit))
+
     def checkpoint(self, items):
         # ONE SOURCE READING PER PASS (verification reliability PRD step 3, T14). The source is
         # the whole checkout (`git diff --binary HEAD` and every untracked file), and it was read
@@ -1860,6 +1869,39 @@ class Pool:
             self.finish(item)
 
 
+# A PASS WITH THE MUTATION PASSES ON STANDS IN FOR THE SAME CHECK WITH THEM OFF (decided by the
+# lead, esc-20261015T175325Z-3b86bfa5; ported 2026-10-20 from held cc/zach-opus-reuse58c). The
+# merge gate turns them off (autocheck MUTATION_SWITCH: both names "0"); the author's handover run
+# leaves them as its shell has them, unset. Every consumer skips its mutation pass only when the
+# value is "0" (`= 0` prints NOT RUN) or runs it only when it is "1", so a run with any value but
+# "0" ran every assertion the "0" run does, and more. The qualified recipes that bind these
+# names (the engine hook suites in proof-inputs.json) were therefore never reused from the
+# author's offered run at the land. A saved identity that differs from the wanted one only in
+# these names, each that differs being "0" in the wanted one and not "0" in the saved one,
+# stands in for it. Never the other way round: a pass with them off proves nothing about them.
+MUTATION_SWITCHES = ("RICHOS_MUTATION_PASSES", "RICHOS_FOURTEEN_MUTANTS")
+_MUTATION_OFF = digest("0")
+
+
+def stands_in(saved, wanted):
+    """Does a pass saved under identity `saved` stand for one under `wanted` (above)?"""
+    if saved == wanted:
+        return True
+    if not isinstance(saved, dict) or not isinstance(wanted, dict):
+        return False
+    have, want = saved.get("environment"), wanted.get("environment")
+    if not isinstance(have, dict) or not isinstance(want, dict):
+        return False
+    if ({k: v for k, v in saved.items() if k != "environment"}
+            != {k: v for k, v in wanted.items() if k != "environment"}):
+        return False
+    rest = lambda values: {k: v for k, v in values.items() if k not in MUTATION_SWITCHES}
+    if rest(have) != rest(want):
+        return False
+    return all(have.get(name) == want.get(name) or (want.get(name) == _MUTATION_OFF and have.get(name) != _MUTATION_OFF)
+               for name in MUTATION_SWITCHES)
+
+
 def evidence_gap(label, old, identity, plan, exact=False, source=None):
     """Why the saved outcome `old` cannot stand for check `label` whose inputs read `identity`
     now, or None. The one predicate reuse() and coverage() share."""
@@ -1875,7 +1917,7 @@ def evidence_gap(label, old, identity, plan, exact=False, source=None):
         # Only HEAD: a pass saved after an unrelated edit is valid for its own declared
         # inputs (Record says why), and the input identity is what decides it.
         return "the checkout's commit changed during the original execution"
-    if old.get("input") != identity:
+    if not stands_in(old.get("input"), identity):
         return "declared execution inputs changed"
     return None
 
@@ -2090,7 +2132,7 @@ def verify_target_receipts(directory, rows, root):
         historical = row.get("sha") != plan["source"]["commit"]
         provenance = outcome.get("provenance")
         if historical or outcome.get("reused_from"):
-            if (identity.get("fresh") or not provenance or provenance.get("input") != identity
+            if (identity.get("fresh") or not provenance or not stands_in(provenance.get("input"), identity)
                     or row.get("sha") != outcome.get("receipt_sha")
                     or row.get("schema") != 2 or row.get("execution_status") != "completed"
                     or row.get("verdict") != "PASS" or row.get("rc") != row.get("expected_rc")
