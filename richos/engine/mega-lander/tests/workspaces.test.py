@@ -3911,6 +3911,119 @@ class RichosBuildOutputDoesNotBlockAContinuation(Base):
         self.assertTrue(os.path.isfile(os.path.join(cc, ".claude", "notes.md")))
 
 
+class VerifierBuildOutputDoesNotBlockAContinuation(Base):
+    """Verification reliability PRD A14, T20. On 2026-10-19 two continuations were refused
+    because the finished workspace held the conformance verifier's Cargo output
+    (echo-opus-phone67: 1487 ignored entries; echo-opus-phone67b: 960), and Rich deleted it by
+    hand both times. The fixture carries this repository's own ignore files, the verifier's
+    included, exactly as committed: first without the root .gitignore's declaration of that
+    output (each refusal again), then as committed (each continued). Source work beside the
+    output still refuses, and another task's output is never touched."""
+
+    REPO = RichosBuildOutputDoesNotBlockAContinuation.REPO
+    IGNORES = RichosBuildOutputDoesNotBlockAContinuation.IGNORES + ("richos/mobile/conformance/verifier/.gitignore",)
+    DECLARATION = "#regenerable: richos/mobile/conformance/verifier/target/"
+    TARGET = "richos/mobile/conformance/verifier/target"
+
+    def _carry(self, declared):
+        RichosBuildOutputDoesNotBlockAContinuation._carry_the_real_ignore_files(self)
+        root = os.path.join(self.other, ".gitignore")
+        with open(root) as f:
+            text = f.read()
+        self.assertIn(self.DECLARATION + "\n", text)          # the declaration that ships
+        if not declared:
+            with open(root, "w") as f:
+                f.write(text.replace(self.DECLARATION + "\n", ""))
+            run("git", "-C", self.other, "commit", "-qam", "the ignore files before the declaration")
+        os.makedirs(os.path.join(self.other, "richos/mobile/conformance/verifier/src"), exist_ok=True)
+        with open(os.path.join(self.other, "richos/mobile/conformance/verifier/src/lib.rs"), "w") as f:
+            f.write("pub fn verify() {}\n")
+        run("git", "-C", self.other, "add", "richos/mobile/conformance/verifier/src/lib.rs")
+        run("git", "-C", self.other, "commit", "-qm", "the verifier's source")
+        # The main checkout has built the verifier too, so each workspace file it lacks is named.
+        built = os.path.join(self.other, self.TARGET, "shared-build-v1/debug/deps")
+        os.makedirs(built)
+        with open(os.path.join(built, "main-only.rlib"), "wb") as f:
+            f.write(b"rlib")
+
+    def _declare(self):
+        with open(os.path.join(self.other, ".gitignore"), "a") as f:
+            f.write(self.DECLARATION + "\n")
+        run("git", "-C", self.other, "commit", "-qam", "declare the verifier's output regenerable")
+
+    def _cargo_output(self, path, entries):
+        """`entries` files of Cargo output, named as the refused continuations named them."""
+        first = os.path.join(path, self.TARGET, "shared-build-v1/debug/.fingerprint/base64-2c3994cf87c86cb4")
+        os.makedirs(first)
+        with open(os.path.join(first, "dep-lib-base64"), "wb") as f:
+            f.write(b"fingerprint")
+        deps = os.path.join(path, self.TARGET, "shared-build-v1/debug/deps")
+        os.makedirs(deps)
+        for n in range(entries - 1):
+            with open(os.path.join(deps, "unit-%04d.rlib" % n), "wb") as f:
+                f.write(b"rlib")
+
+    def _finished_with_output(self, name, entries, base="HEAD"):
+        cc = self.make_cc(name, base=base)
+        aid, _npath = self.spawn(name, cc=cc)
+        self.commit(cc, fname=name + ".txt")
+        self._cargo_output(cc, entries)
+        self.assertEqual(ws.uncommitted(cc)[0], [])             # none of it is work
+        self.finish(aid)
+        return cc
+
+    def test_both_refused_continuations_are_continued_once_the_output_is_declared(self):
+        self._carry(declared=False)
+        # echo-opus-phone67 and echo-opus-phone67b, by the fixture's short names (its agent ids are
+        # a name's first twelve letters).
+        hops = (("zach-opus-v67", "zach-opus-w67", "zach-opus-x67", 1487),
+                ("zach-opus-v67b", "zach-opus-w67b", "zach-opus-x67b", 960))
+        for name, refused, _then, entries in hops:
+            with self.subTest(name):
+                cc = self._finished_with_output(name, entries)
+                self.assertEqual(len(ws.uncommitted(cc)[1]), entries)
+                nxt = self.make_cc(refused, base="cc/" + name)
+                with self.assertRaises(ws.SpecError) as e:
+                    self.spawn(refused, cc=nxt, extra="continues: %s\n" % name)
+                self.assertIn("%s has %d ignored entries the main checkout does not have (%s/shared-build-v1/"
+                              % (cc, entries, self.TARGET), str(e.exception))
+                self.assertTrue(os.path.isdir(os.path.join(cc, self.TARGET)))
+                run("git", "-C", self.other, "worktree", "remove", "--force", nxt)
+                run("git", "-C", self.other, "branch", "-D", "cc/" + refused)
+        self._declare()
+        for name, _refused, then, _entries in hops:
+            with self.subTest(name + " declared"):
+                cc = os.path.join(self.env.root, os.path.basename(self.other) + "-wt", name)
+                nxt = self.make_cc(then, base="cc/" + name)
+                self.spawn(then, cc=nxt, extra="continues: %s\n" % name)
+                self.assertEqual(self.rec(name)["disposition"]["kind"], "continued")
+                self.assertFalse(os.path.exists(cc))
+
+    def test_source_work_beside_the_output_still_refuses_and_another_tasks_output_is_untouched(self):
+        self._carry(declared=True)
+        other = self._finished_with_output("zach-opus-vo", 3)
+        done = self._finished_with_output("zach-opus-vd", 3)
+        nxt = self.make_cc("zach-opus-vdn", base="cc/zach-opus-vd")
+        self.spawn("zach-opus-vdn", cc=nxt, extra="continues: zach-opus-vd\n")
+        self.assertFalse(os.path.exists(done))
+        # Another task's workspace and its output are not that continuation's to touch.
+        self.assertEqual(sorted(os.listdir(os.path.join(other, self.TARGET, "shared-build-v1/debug/deps"))),
+                         ["unit-0000.rlib", "unit-0001.rlib"])
+        # Source work beside the output: refused, named, and left where it is.
+        cc = self._finished_with_output("zach-opus-vs", 3)
+        with open(os.path.join(cc, "richos/mobile/conformance/verifier/src/lib.rs"), "a") as f:
+            f.write("pub fn unfinished() {}\n")
+        with open(os.path.join(cc, "richos/mobile/conformance/verifier/src/new.rs"), "w") as f:
+            f.write("pub fn new() {}\n")
+        nxt = self.make_cc("zach-opus-vsn", base="cc/zach-opus-vs")
+        with self.assertRaises(ws.SpecError) as e:
+            self.spawn("zach-opus-vsn", cc=nxt, extra="continues: zach-opus-vs\n")
+        self.assertIn("uncommitted entr", str(e.exception))
+        self.assertIn("verifier/src/lib.rs", str(e.exception))
+        self.assertNotIn(self.TARGET, str(e.exception))
+        self.assertTrue(os.path.isfile(os.path.join(cc, "richos/mobile/conformance/verifier/src/new.rs")))
+
+
 class HuntV2_03_TheBudgetBoundsEveryCleanupStage(Base):
     """Hunt part 4 v2, V2-03: the shared deadline reached the retries and the
     proof, but process shutdown, container and test-instance cleanup, the
