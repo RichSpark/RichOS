@@ -1986,10 +1986,7 @@ def p15(ctx, r):
             rec['own_group'] = {label: bool(rec[label]) and all(m['pgid'] != rec['lead_pgid'] for m in rec[label])
                                 for label in ('fg', 'bg')}
             rec['trigger'] = trigger
-            if trigger == 'owner':
-                os.kill(lead.proc.pid, signal.SIGKILL)  # owned: the app stand-in this harness started
-            elif rec['claude_pid']:
-                os.kill(rec['claude_pid'], signal.SIGKILL)  # owned: the lead, our supervisor's own child
+            p15_trigger(lead, rec, trigger)
             grace = 5  # OPERATOR_REAP_GRACE's default (r3 (q) item 2)
             time.sleep(grace + 1)
             rec['alive_after_grace_plus_one'] = {name: alive(pid) for name, pid in recorded}
@@ -2009,6 +2006,26 @@ def p15(ctx, r):
                     except ProcessLookupError:
                         pass
     return grade_p15(r, reaps)
+
+
+# The supervisor records the lead's descendants once a second (provider-supervisor.py, "THE
+# LIMIT, STATED"), so a command younger than one snapshot when the lead crashes is reparented
+# to launchd unrecorded, on every engine. Measured 2026-10-20 on the host with the 40a01e7f and
+# the HEAD supervisor alike: a child whose provider was killed 0.3 s after the child started
+# survived 5 of 5 times, at 1.5 s 0 of 5. Found within a second of starting, the foreground command fell inside that
+# window, so the probe measured the poll, not the reap (FAIL on HEAD twice, PASS on 40a01e7f
+# twice, by phase). Two snapshots' worth of settling puts both commands past it.
+P15_SETTLE_SECONDS = 2.0
+
+
+def p15_trigger(lead, rec, trigger):
+    """End the run: once both commands are older than the supervisor's snapshot interval, kill
+    the app stand-in (owner) or the lead (lead crash)."""
+    time.sleep(P15_SETTLE_SECONDS)
+    if trigger == 'owner':
+        os.kill(lead.proc.pid, signal.SIGKILL)  # owned: the app stand-in this harness started
+    elif rec['claude_pid']:
+        os.kill(rec['claude_pid'], signal.SIGKILL)  # owned: the lead, our supervisor's own child
 
 
 # P15's context, said plainly: why the two commands run together, and that they are scratch.

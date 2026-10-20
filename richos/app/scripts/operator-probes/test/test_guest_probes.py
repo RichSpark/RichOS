@@ -362,6 +362,28 @@ class GradeP15Premise(unittest.TestCase):
         self.assertEqual(gp.grade_p15(r, True)[0], 'FAIL')
 
 
+class P15Trigger(unittest.TestCase):
+    """The supervisor snapshots once a second; a crash sooner than that after the foreground
+    command starts measures the snapshot phase, not the reap (2026-10-20, FAIL on HEAD twice)."""
+
+    def test_both_triggers_wait_past_two_snapshots_before_the_kill(self):
+        from unittest import mock
+
+        class Proc(object):
+            pid = 4001
+
+        class Lead(object):
+            proc = Proc()
+
+        for trigger, target in (('owner', 4001), ('lead', 4002)):
+            calls = []
+            with mock.patch.object(gp.time, 'sleep', side_effect=lambda s: calls.append(('sleep', s))), \
+                    mock.patch.object(gp.os, 'kill', side_effect=lambda pid, sig: calls.append(('kill', pid))):
+                gp.p15_trigger(Lead(), {'claude_pid': 4002}, trigger)
+            self.assertEqual(calls[-1], ('kill', target), trigger)
+            self.assertGreaterEqual(sum(s for kind, s in calls[:-1] if kind == 'sleep'), 2.0, trigger)
+
+
 class P15Processes(unittest.TestCase):
     ROWS = [
         {'pid': 10, 'ppid': 1, 'pgid': 10, 'command': 'python3 provider-supervisor.py claude'},
