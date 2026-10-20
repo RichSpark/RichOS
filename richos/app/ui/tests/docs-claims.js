@@ -304,4 +304,10 @@ async function main() {
   return failed;
 }
 
-main().then((f) => process.exit(f ? 1 : 0));
+// Exit by letting the event loop empty, never through process.exit(): Node 26.10 can deadlock
+// inside process.exit()'s shutdown (nodejs/node#54918's class), and this suite holds no handle
+// that would keep it alive. Measured: 3 of 120 runs hung with process.exit(), 0 of 400 without
+// (proof-for.test.sh K5 keeps it that way).
+main().then((f) => {
+  process.exitCode = f ? 1 : 0;
+});

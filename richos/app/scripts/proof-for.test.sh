@@ -367,6 +367,21 @@ if command -v node >/dev/null 2>&1; then
   else
     bad "K4 docs-claims.js checks its own row against its reads" "$(printf '%s' "$OUT" | grep -A3 'proof-for.ui-inputs selects' | tr '\n' ' ')"
   fi
+  # K5 (2026-10-20). docs-claims.js ends by letting Node exit, never through process.exit().
+  # Node 26.10's process.exit() can deadlock at shutdown (nodejs/node#54918's class: a background
+  # Maglev compile waits for a GC the exiting main thread never runs). Measured on this suite,
+  # 0.3 s of work: 3 of 120 runs hung for good, 0 of 400 that exited naturally. K4 runs it twice,
+  # so this suite timed out at a land (603 s against its 600 s budget) with nothing wrong in the tree.
+  printf '%s\n' 'const real = process.exit; process.exit = (c) => { process.stderr.write("K5: process.exit called\n"); real(c); };' \
+    > "$WORK/k5-exit.js"
+  K5_OUT="$(cd "$APP/ui/tests" && node --require "$WORK/k5-exit.js" docs-claims.js 2>&1)"; K5_RC=$?
+  if [ "$K5_RC" -eq 0 ] && printf '%s' "$K5_OUT" | grep -q 'PASS  proof-for.ui-inputs selects this suite' \
+     && ! printf '%s' "$K5_OUT" | grep -q 'K5: process.exit called'; then
+    ok "K5 docs-claims.js passes and exits naturally, never through Node's process.exit() shutdown"
+  else
+    bad "K5 docs-claims.js must end by setting process.exitCode, not by calling process.exit()" \
+        "exit $K5_RC: $(printf '%s' "$K5_OUT" | grep -E 'K5: |FAIL' | head -3 | tr '\n' ' ')"
+  fi
 else
   notrun "K4 docs-claims.js checks its own row against its reads" "node is not on PATH"
 fi

@@ -1314,14 +1314,16 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         record.checkpoint(failed)
         self.assertEqual(evidence.coverage(record.logdir, failed, {"check": dict(self.inputs)}, dict(self.source)),
                          {"check": "no validated passing execution"})
-        # A check with no input identity is proven only on the exact checkout source it ran on.
+        # A check with no input identity is never proven by a saved run, even one passed on this
+        # exact source: reuse() never accepts it (review rv-20261020T083937Z-2f73e49a-734e, where
+        # verification-pins' external reader changed under an unchanged checkout).
         fresh, record = self.attempt("fresh", engine=False, identities={"check": {"fresh": "no contract"}})
         self.passed(fresh, record)
-        self.assertIsNone(evidence.coverage(record.logdir, fresh, {"check": {"fresh": "no contract"}},
-                                            dict(self.source))["check"])
-        self.assertIn("checkout changed", evidence.coverage(
-            record.logdir, fresh, {"check": {"fresh": "no contract"}},
-            {**self.source, "tracked_diff_sha256": "a final edit"})["check"])
+        gap = evidence.coverage(record.logdir, fresh, {"check": {"fresh": "no contract"}}, dict(self.source))["check"]
+        self.assertTrue(gap and gap.startswith(evidence.FRESH_GAP), "coverage called it proven: %r" % gap)
+        again, current = self.attempt("fresh-again", engine=False, identities={"check": {"fresh": "no contract"}})
+        evidence.reuse(record.logdir, again, current)
+        self.assertEqual(again[0].state, "waiting", "coverage and reuse agree")
         # Nothing was written: coverage reads only.
         self.assertFalse((previous.logdir / "reused").exists())
 
@@ -1409,6 +1411,7 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
                 rc = runner.author_coverage(args)
         self.assertEqual(rc, 0, output.getvalue())
         self.assertIn("1 proven by the saved run", output.getvalue())
+        self.assertIn("0 run fresh at every seat", output.getvalue())
 
     def test_live_owner_prevents_resume_and_rotation(self):
         items, record = self.attempt("20260923T000000Z")
