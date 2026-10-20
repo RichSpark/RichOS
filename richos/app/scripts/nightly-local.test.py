@@ -41,6 +41,48 @@ def tearDownModule():
     m.Runner.write_changelog = WRITE_CHANGELOG
 
 
+def stub_main_fences(test, root):
+    """Stand-ins for the engine's land-lease.sh and second-review.sh beside a fixture's main.
+
+    Each call is recorded in `root/fence-calls` (the review with its tip and where main was
+    while it ran) and the review's request in `root/review-request`. The lease answers as
+    FENCE_LEASE says (acquired, renewed: this process already holds it, held: someone else
+    does) and the review as FENCE_REVIEW (passed, or changes-requested).
+    """
+    scripts = root / "engine-scripts"
+    scripts.mkdir()
+    (scripts / "land-lease.sh").write_text(
+        '#!/bin/sh\necho "land-lease.sh $1" >> "$FENCE_STUBS/fence-calls"\n'
+        'case "$1:$FENCE_LEASE" in\n'
+        '  acquire:held) echo "land-lease: HELD. Codex (process 4242) holds the land lease for $3, '
+        'taken 3 min ago; the repository is at rest. Waited 90 s. Run this command again."; exit 75 ;;\n'
+        '  acquire:renewed) echo "land-lease: RENEWED the land lease for $3 as your terminal." ;;\n'
+        '  acquire:*) echo "land-lease: ACQUIRED the land lease for $3 as your terminal." ;;\n'
+        '  release:*) echo "land-lease: RELEASED the land lease for $3." ;;\n'
+        'esac\n')
+    (scripts / "second-review.sh").write_text(
+        '#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n'
+        '    --repo) repo=$2; shift 2 ;;\n    --tip) tip=$2; shift 2 ;;\n'
+        '    --words-file) cp "$2" "$FENCE_STUBS/review-request"; shift 2 ;;\n'
+        '    *) shift ;;\n  esac\ndone\n'
+        'echo "second-review.sh $tip main-at:$(git -C "$repo" rev-parse refs/heads/main)" '
+        '>> "$FENCE_STUBS/fence-calls"\n'
+        'if [ "$FENCE_REVIEW" = passed ]; then\n'
+        '  echo "SECOND-REVIEW passed main@$tip by codex (gpt): 0 finding(s), 0 blocking, 0 P1. Record: /r"\n'
+        '  exit 0\nfi\n'
+        'echo "SECOND-REVIEW changes-requested main@$tip by codex (gpt): 1 finding(s), 1 blocking, '
+        '0 P1. Record: /r"\nexit 1\n')
+    patcher = patch.object(m, "ENGINE_SCRIPTS", scripts)
+    patcher.start()
+    test.addCleanup(patcher.stop)
+    os.environ.update({"FENCE_STUBS": str(root), "FENCE_LEASE": "acquired", "FENCE_REVIEW": "passed"})
+
+
+def fence_calls(root):
+    path = root / "fence-calls"
+    return path.read_text().splitlines() if path.exists() else []
+
+
 class LocalTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -3320,14 +3362,22 @@ class NextVersionTests(unittest.TestCase):
         self.git("commit", "-qm", "1.2.0")
         self.git("push", "-q", "origin", "main")
         self.released = self.git("rev-parse", "HEAD")
+        self.root = root
+        stub_main_fences(self, root)
         self.runner = m.Runner(self.main, root / "state", {}, io.StringIO())
 
     def on_remote(self, path):
         return self.git("show", f"refs/heads/main:{path}", cwd=self.remote)
 
     def test_a_published_stable_leaves_main_on_the_next_patch_version(self):
+        # This process already holds the land lease (a lead's land, say): it is used and kept.
+        os.environ["FENCE_LEASE"] = "renewed"
         commit = self.runner.bump_next_version("1.2.0")
         self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), commit)
+        self.assertEqual(fence_calls(self.root), [
+            "land-lease.sh acquire", f"second-review.sh {commit} main-at:{self.released}"])
+        self.assertIn("v1.2.0 is published. This commit is the bump of main's next release version",
+                      (self.root / "review-request").read_text())
         self.assertEqual(self.git("rev-parse", f"{commit}^"), self.released)
         self.assertEqual(self.on_remote(m.APP_MANIFEST) + "\n",
                          self.MANIFEST.replace('version = "1.2.0"\n', 'version = "1.2.1"\n', 1))
@@ -3467,6 +3517,7 @@ class ChangelogTests(unittest.TestCase):
         (self.root / "reply").write_text(self.DRAFT)
         os.environ.update({"PATH": f"{stub.parent}:{os.environ['PATH']}",
                            "STUB_DIR": str(self.root), "STUB_FAIL": ""})
+        stub_main_fences(self, self.root)
         self.runner = m.Runner(self.main, self.root / "state", {}, io.StringIO())
         self.runner.write_changelog = types.MethodType(WRITE_CHANGELOG, self.runner)
 
@@ -3562,7 +3613,8 @@ class ChangelogTests(unittest.TestCase):
         # The command that line names is that same step, and with the draft back it writes it.
         os.environ["STUB_FAIL"] = ""
         with patch.object(sys, "argv", ["nightly-local.py", "changelog", "--tag", self.TAG,
-                                        "--repo", str(self.main)]), \
+                                        "--repo", str(self.main),
+                                        "--state-dir", str(self.root / "state")]), \
                 contextlib.redirect_stdout(io.StringIO()):
             m.main()
         self.assertIn("## 1.2.1-nightly.20261020.68\n\n" + self.DRAFT,
@@ -3576,6 +3628,75 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("CHANGELOG ENTRY MISSING", out.getvalue())
         self.assertIn("the draft is not a list of `- ` lines", out.getvalue())
         self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.tip)
+
+    # Main's fences, met by the command itself (2026-10-20: nightly 68's entry, the v1.2.1 bump
+    # and v1.2.1's entry were each refused there, and each was landed by hand).
+    def nothing_moved(self):
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), self.tip)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.tip)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assert_no_checkout_left()
+
+    def assert_no_checkout_left(self):
+        self.assertEqual(len(self.git("worktree", "list", "--porcelain").split("\n\n")), 1)
+        state = self.root / "state"
+        self.assertEqual(list(state.iterdir()) if state.exists() else [], [])
+
+    def one_line(self, out):
+        missing = [line for line in out.getvalue().splitlines() if "CHANGELOG" in line]
+        self.assertEqual(len(missing), 1, out.getvalue())
+        self.assertTrue(missing[0].startswith(
+            "CHANGELOG ENTRY MISSING: docs/CHANGELOG-NIGHTLY.md has no entry for "
+            "1.2.1-nightly.20261020.68 ("), missing[0])
+        self.assertTrue(missing[0].endswith(
+            f"Write it: python3 richos/app/scripts/nightly-local.py changelog --tag {self.TAG}"))
+        return missing[0]
+
+    def test_a_passing_review_lands_the_entry_under_the_lease_and_main_moves_only_then(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.runner.write_changelog(self.TAG)
+        head = self.git("rev-parse", "refs/heads/main", cwd=self.remote)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), head)
+        self.assertEqual(self.git("rev-parse", f"{head}^"), self.tip)
+        # The lease, then the review of exactly the commit main moves to, with main not yet
+        # moved while it ran; then the lease this command took is released.
+        self.assertEqual(fence_calls(self.root), [
+            "land-lease.sh acquire", f"second-review.sh {head} main-at:{self.tip}",
+            "land-lease.sh release"])
+        request = (self.root / "review-request").read_text()
+        self.assertTrue(request.startswith(
+            f"{self.TAG} is published. This commit is the changelog entry for {self.TAG} in "
+            "docs/CHANGELOG-NIGHTLY.md"), request)
+        self.assertIn("Changelog: 1.2.1-nightly.20261020.68 in docs/CHANGELOG-NIGHTLY.md", request)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assert_no_checkout_left()
+        self.assertNotIn("CHANGELOG ENTRY MISSING", out.getvalue())
+
+    def test_a_refused_review_moves_nothing_and_says_so_in_one_line(self):
+        os.environ["FENCE_REVIEW"] = "changes-requested"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.runner.write_changelog(self.TAG)  # no exception: the release stands
+        line = self.one_line(out)
+        self.assertIn("did not pass, so main did not move (second-review.sh exit 1: "
+                      "SECOND-REVIEW changes-requested", line)
+        self.nothing_moved()
+        calls = fence_calls(self.root)
+        self.assertEqual([calls[0], calls[2]], ["land-lease.sh acquire", "land-lease.sh release"])
+        self.assertTrue(calls[1].endswith(f"main-at:{self.tip}"), calls)
+
+    def test_a_lease_held_elsewhere_moves_nothing_and_says_so_in_one_line(self):
+        os.environ["FENCE_LEASE"] = "held"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.runner.write_changelog(self.TAG)
+        line = self.one_line(out)
+        self.assertIn("this command could not take the land lease, so main did not move "
+                      "(land-lease.sh acquire exit 75: land-lease: HELD. Codex", line)
+        self.nothing_moved()
+        # No review is asked for, and nobody's lease is released.
+        self.assertEqual(fence_calls(self.root), ["land-lease.sh acquire"])
 
 
 class WalkRecipeTests(unittest.TestCase):
