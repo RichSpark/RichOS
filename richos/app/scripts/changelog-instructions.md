@@ -1,10 +1,10 @@
 # How to write a RichOS changelog entry
 
-`nightly-local.py` hands you these instructions when a nightly or a stable version has been published. Below them you get the version and every merge that landed for it, on main or on a release branch merged into main: each one's subject line names what landed and its body may add detail. Write the entry for that version.
+The changelog worker (`changelog-worker-brief.md`, beside this file) follows these instructions after a nightly or a stable version has been published. It reads every merge that landed for that version, on main or on a release branch merged into main: each one's subject line names what landed and its body may add detail. It writes the entry for that version.
 
-## What you write back
+## What the entry is
 
-Only the entry's lines, one per change and nothing else: no heading, no introduction, no closing remark, no code fence. The script adds the `## <version>` heading itself.
+The `## <version>` heading, a blank line, then the entry's lines, one per change and nothing else: no introduction, no closing remark, no code fence.
 
 Each line is `- ` followed by one of these words, then what changed as the user sees it:
 

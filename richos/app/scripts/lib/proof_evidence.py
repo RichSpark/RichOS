@@ -1016,7 +1016,8 @@ def recipe_identity(root, recipe, environment, snapshot=None):
     if recipe.get("fresh"):
         return {"fresh": recipe["fresh"]}
     required = {"paths", "tools", "environment", "external", "qualification"}
-    optional = {"isolation", "qualification_unit", "external_paths", "git_inputs", "subset", "family", "invocation"}
+    optional = {"isolation", "qualification_unit", "external_paths", "git_inputs", "subset", "family", "invocation",
+                "exists", "external_reads"}
     if set(recipe) - optional != required or not recipe["qualification"]:
         raise ValueError("incomplete verification input contract")
     root = Path(root).resolve()
@@ -1086,6 +1087,16 @@ def recipe_identity(root, recipe, environment, snapshot=None):
         # What the suite executes that git does not track, bound by what loads rather than by
         # where this checkout is (portable_dependencies).
         identity["installed"] = snapshot.portable(root, environment)
+        # Which pictures a library checks for (library_shot_names), by existence alone, as the
+        # content git would land has them (the same listing every family path is read from).
+        if recipe.get("exists"):
+            identity["exists"] = {rel: snapshot.content(root, rel) != {"absent": True}
+                                  for rel in recipe["exists"]}
+        if recipe.get("external_reads"):
+            reads = private_read_identity(recipe["external_reads"], environment, snapshot)
+            if reads.get("fresh"):
+                return {"fresh": reads["fresh"]}
+            identity["external_reads"] = reads
     return identity
 
 
@@ -1362,10 +1373,91 @@ def ui_family_recipe(root, label, family):
     for rel in paths:
         if Path(rel).is_absolute() or ".." in Path(rel).parts:
             raise ValueError("a UI input must be repository-relative: " + rel)
-    return {"family": UI_FAMILY, "invocation": {"cwd": family["suites"], "argv": ["node", label]},
-            "paths": sorted(paths), "tools": list(family["tools"]),
-            "environment": list(family["environment"]), "external": list(family.get("external", [])),
-            "qualification": family["qualification"], "qualification_unit": family["qualification_unit"]}
+    recipe = {"family": UI_FAMILY, "invocation": {"cwd": family["suites"], "argv": ["node", label]},
+              "paths": sorted(paths), "tools": list(family["tools"]),
+              "environment": list(family["environment"]), "external": list(family.get("external", [])),
+              "qualification": family["qualification"], "qualification_unit": family["qualification_unit"]}
+    exists = library_shot_names(root, family, label, closure, recipe["paths"])
+    if exists:
+        recipe["exists"] = exists
+    if label in family.get("private_reads", {}):
+        recipe["external_reads"] = private_reads(root, family["private_reads"][label])
+    return recipe
+
+
+# A LIBRARY THAT CHECKS WHICH PICTURES EXIST BINDS THEIR EXISTENCE, NEVER THEIR BYTES (review
+# rv-20261020T063426Z-03441b27-e3dd #1). lib/shot-stability.js proves at require time that every
+# picture it declares a bound for exists (`shots-home/home-named.png`, ...), so deleting one turns
+# every suite that loads it from a pass into a failure; the suite's identity bound neither the
+# picture nor the folder (it names no `shots-home`), so the old pass stood. A literal
+# `shots-<folder>/<file>` in any library of the suite's closure (the suites folder is the only
+# place pictures live) is therefore bound by whether it exists. Its content is not: binding it
+# would make every suite that loads the library run again whenever an unrelated suite's picture
+# is regenerated, which is the 87-check restart the family exists to end. The suite's own named
+# folders are bound by content above, so they are left out here.
+_SHOT_FILE = re.compile(r"""["'`](shots-[A-Za-z0-9_.-]+/[^"'`\s]+)["'`]""")
+
+
+def library_shot_names(root, family, label, closure, bound):
+    suite = family["suites"] + "/" + label
+    found = set()
+    for rel in closure:
+        if rel == suite or not rel.endswith((".js", ".cjs", ".mjs")):
+            continue
+        try:
+            text = (Path(root) / rel).read_text(errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.lstrip().startswith(("//", "*", "/*")):
+                continue  # a comment's example name is no read
+            for match in _SHOT_FILE.finditer(line):
+                name = family["suites"] + "/" + match.group(1)
+                if not any(name == path or name.startswith(path + "/") for path in bound):
+                    found.add(name)
+    return sorted(found)
+
+
+# A PRIVATE READ IS BOUND BY CONTENT, AND A STUDY THAT REACHES OUTSIDE ITS FOLDER IS NOT
+# QUALIFIED (PRD 2026-10-20, "private reads such as splash's studies"). splash.js check 18 opens,
+# beside each splash-library.js entry, the round study its `source` names in the private
+# richos-hq repository ($RICHOS_HQ, else ~/ab/richos-hq), and only when that repository exists.
+# The family entry declares where the names are (a shipped file, bound by content already) and
+# how the root is found; the recipe names each study's folder, and its identity binds whether the
+# root exists and every file in each folder. A study page loads its fonts and styles from its
+# own folder (round folders are self-contained and frozen); recipe_identity refuses one that
+# names a file outside it, so a reach the declaration does not bind leaves the suite unqualified.
+def private_reads(root, declaration):
+    text = (Path(root) / declaration["named_in"]).read_text(errors="replace")
+    folders = sorted({os.path.dirname(name) for name in re.findall(declaration["pattern"], text)})
+    for folder in folders:
+        if not folder or Path(folder).is_absolute() or ".." in Path(folder).parts:
+            raise ValueError("a private read must be relative to its root: " + folder)
+    return {"env": declaration["env"], "home": declaration["home"], "paths": folders}
+
+
+_ESCAPING_REFERENCE = re.compile(r"""(?:src|href)\s*=\s*["'](?!data:|https?:|#|mailto:)([^"']+)["']|url\(\s*["']?(?!data:|https?:|#)([^"')]+)""")
+
+
+def private_read_identity(declaration, environment, snapshot):
+    """{"fresh": why} or what the declared private reads hold (private_reads above)."""
+    home = environment.get("HOME") or os.path.expanduser("~")
+    base = Path(environment.get(declaration["env"]) or os.path.join(home, declaration["home"]))
+    if not base.is_dir():
+        return {"root": {"absent": True}}
+    folders = {}
+    for rel in declaration["paths"]:
+        folder = (base / rel).resolve()
+        for page in sorted(folder.rglob("*")) if folder.is_dir() else []:
+            if page.suffix not in (".html", ".css", ".js"):
+                continue
+            for match in _ESCAPING_REFERENCE.finditer(page.read_text(errors="replace")):
+                target = (page.parent / (match.group(1) or match.group(2)).split("?")[0].split("#")[0]).resolve()
+                if target != folder and folder not in target.parents:
+                    return {"fresh": "%s names %s, outside the study folder its declaration binds" % (
+                        os.path.relpath(page, base), match.group(1) or match.group(2))}
+        folders[rel] = digest(snapshot.path(folder))
+    return {"root": {"present": True}, "paths": folders}
 
 
 def family_invocation(root, recipe, cwd, argv):
@@ -1432,8 +1524,14 @@ def completed_receipt(item, sha, allow_known_red=False):
     path = receipt_path(item)
     if path is None:
         return None
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    unit = item.argv[item.argv.index("--only-units") + 1]
+    receipt_verdict(path, item.argv[item.argv.index("--only-units") + 1], sha, allow_known_red)
+    return {"path": str(path), "sha256": file_digest(path)}
+
+
+def receipt_verdict(path, unit, sha, allow_known_red=False):
+    """Refuse a receipt that is not one completed PASS of `unit` at `sha` (a KNOWN-RED one only
+    when allowed): the one receipt check reuse() and coverage() share."""
+    rows = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
     if (len(rows) != 1 or rows[0].get("unit") != unit or rows[0].get("sha") != sha
             or rows[0].get("schema") != 2 or rows[0].get("execution_status") != "completed"
             or not (rows[0].get("verdict") == "PASS" and rows[0].get("rc") == rows[0].get("expected_rc")
@@ -1507,13 +1605,22 @@ class Record:
         self.checkpoint(items)
 
     def checkpoint(self, items):
+        # ONE SOURCE READING PER PASS (verification reliability PRD step 3, T14). The source is
+        # the whole checkout (`git diff --binary HEAD` and every untracked file), and it was read
+        # once per changed check: on the round 32 land replay one reading took 5.5 s, and the
+        # first pass saves every planned check, so 88 checks waited about 8 minutes before the
+        # first one started, in every round. Every check this pass saves is saved at one instant;
+        # the reading is taken only when a pass has something to save.
+        source = None
         for item in items:
             if item.label not in self.identities:
                 continue  # Synthetic run findings never become reusable obligations.
             old = self.results.get(item.label, {})
             if old.get("state") == item.state and old.get("exit") == item.rc:
                 continue
-            self.save(item, self.current_source())
+            if source is None:
+                source = self.current_source()
+            self.save(item, source)
 
     def save(self, item, source):
         """Called before launch and after completion, independently of the summary."""
@@ -1753,6 +1860,106 @@ class Pool:
             self.finish(item)
 
 
+def evidence_gap(label, old, identity, plan, exact=False, source=None):
+    """Why the saved outcome `old` cannot stand for check `label` whose inputs read `identity`
+    now, or None. The one predicate reuse() and coverage() share."""
+    if label == "engine receipts":
+        return "coverage verifier runs over the reconciled receipt set"
+    if identity.get("fresh"):
+        return identity["fresh"]
+    if old.get("state") != "passed" or old.get("exit") != 0 or old.get("invalid"):
+        return "no validated passing execution"
+    if exact and plan["source"] != source:
+        return "source identity changed"
+    if (old.get("source") or {}).get("commit") != plan["source"]["commit"]:
+        # Only HEAD: a pass saved after an unrelated edit is valid for its own declared
+        # inputs (Record says why), and the input identity is what decides it.
+        return "the checkout's commit changed during the original execution"
+    if old.get("input") != identity:
+        return "declared execution inputs changed"
+    return None
+
+
+def _saved_artifacts_hold(old):
+    """None when a saved pass's log and receipt are the bytes it recorded, else why not."""
+    try:
+        if file_digest(old["log"]) != old["log_sha256"]:
+            return "result log changed"
+        if old.get("receipt") and file_digest(old["receipt"]["path"]) != old["receipt"]["sha256"]:
+            return "receipt changed"
+    except (OSError, KeyError, TypeError) as exc:
+        return "saved evidence failed validation: " + str(exc)
+    return None
+
+
+KNOWN_RED_GAP = "known-red:"
+
+
+def _receipt_proves(item, old):
+    """None when an engine unit's saved receipt is a completed PASS, exactly as reuse() demands
+    (receipt_verdict); a KNOWN-RED one is the declared exception, named apart, never proof
+    (review rv-20261020T073921Z-1e0461cc-0956 #2)."""
+    if not getattr(item, "engine_unit", False) or not old.get("receipt"):
+        return None
+    unit = item.argv[item.argv.index("--only-units") + 1]
+    sha = old.get("receipt_sha", (old.get("source") or {}).get("commit"))
+    try:
+        receipt_verdict(old["receipt"]["path"], unit, sha)
+        return None
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        try:
+            receipt_verdict(old["receipt"]["path"], unit, sha, allow_known_red=True)
+        except (OSError, ValueError, KeyError, TypeError):
+            return "saved evidence failed validation: " + str(exc)
+        return KNOWN_RED_GAP + " a declared exception the run let through, not proof"
+
+
+def coverage(previous, items, identities, source):
+    """{check: None when the saved run at `previous` proves it for the inputs read NOW, else why
+    not}, for every planned item. Reads only: nothing is copied, run or written.
+
+    THE READINESS PREFLIGHT'S QUESTION (verification reliability PRD, R3/A8): does the author's
+    saved run cover its candidate's whole selected plan? Asked in the author's own checkout, so
+    a check keyed by that checkout (cargo, packaging) is judged on the bytes it ran on, exactly as
+    reuse() would judge it there. Two kinds have no input identity to compare and are answered
+    from what the run itself recorded: a `fresh` check passed on this exact checkout source
+    (HEAD, tracked diff, untracked files) is covered; `engine receipts` is covered when it passed
+    and every engine unit of the plan is."""
+    previous = Path(previous)
+    plan = read_plan(previous)
+    try:
+        outcomes = json.loads((previous / "outcomes.json").read_text())
+    except FileNotFoundError:
+        outcomes = {}
+    found = {}
+    for item in items:
+        old = outcomes.get(item.label, {})
+        identity = identities[item.label]
+        if item.label == "engine receipts":
+            continue
+        if identity.get("fresh"):
+            if old.get("state") != "passed" or old.get("exit") != 0 or old.get("invalid"):
+                found[item.label] = "no validated passing execution"
+            elif old.get("source") != source:
+                found[item.label] = "the checkout changed since it ran, and it declares no inputs"
+            else:
+                found[item.label] = _saved_artifacts_hold(old)
+            continue
+        found[item.label] = (evidence_gap(item.label, old, identity, plan) or _saved_artifacts_hold(old)
+                             or _receipt_proves(item, old))
+    for item in items:
+        if item.label == "engine receipts":
+            old = outcomes.get(item.label, {})
+            units = [i.label for i in items if getattr(i, "engine_unit", False)]
+            if old.get("state") != "passed" or old.get("invalid"):
+                found[item.label] = "no validated passing execution"
+            elif any(found.get(unit) for unit in units):
+                found[item.label] = "an engine unit it covers is not proven"
+            else:
+                found[item.label] = _saved_artifacts_hold(old)
+    return found
+
+
 def reuse(previous, items, record, exact=True):
     """Select exact applicable passes; leave failed evidence in its original run."""
     previous = Path(previous)
@@ -1771,22 +1978,8 @@ def reuse(previous, items, record, exact=True):
         old = outcomes.get(item.label, {})
         item.retry_first = old.get("state") != "passed"
         identity = record.identities[item.label]
-        reason = None
-        if item.label == "engine receipts":
-            reason = "coverage verifier runs over the reconciled receipt set"
-        elif identity.get("fresh"):
-            reason = identity["fresh"]
-        elif old.get("state") != "passed" or old.get("exit") != 0 or old.get("invalid"):
-            reason = "no validated passing execution"
-        elif exact and plan["source"] != record.source:
-            reason = "source identity changed"
-        elif (old.get("source") or {}).get("commit") != plan["source"]["commit"]:
-            # Only HEAD: a pass saved after an unrelated edit is valid for its own declared
-            # inputs (Record says why), and the input identity below is what decides it.
-            reason = "the checkout's commit changed during the original execution"
-        elif old.get("input") != identity:
-            reason = "declared execution inputs changed"
-        else:
+        reason = evidence_gap(item.label, old, identity, plan, exact, record.source)
+        if reason is None:
             try:
                 if file_digest(old["log"]) != old["log_sha256"]:
                     raise ValueError("result log changed")

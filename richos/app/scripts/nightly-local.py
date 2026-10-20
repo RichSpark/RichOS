@@ -7,8 +7,10 @@ engine-pinned candidate for QA to walk; only an explicit later `publish --run
 <run-id>` makes that candidate's release installable and moves the update
 channel. `candidate --run <run-id>` prints what a walker needs to open it.
 Only `release` and `publish` may publish. Keys remain in the local
-Keychain/private files. Every publish (and `stable`) ends by writing the release's
-changelog entry on main; `changelog --tag <tag>` writes one that was left missing.
+Keychain/private files. Every publish (and `stable`) ends by raising ONE escalation for
+the lead: a worker, started from changelog-worker-brief.md, writes the release's changelog
+entry (and after a stable, main's next release version) on its own branch. This command
+never commits to or pushes main.
 """
 import argparse
 import base64
@@ -35,7 +37,6 @@ import sys
 import tempfile
 import threading
 import time
-import tomllib
 import uuid
 
 # Gate ceilings include rebuilds, not just reuse of successful receipts. Cargo
@@ -182,13 +183,6 @@ def owned_run(args, **kwargs):
 ROOT = Path(__file__).resolve().parents[3]
 REPO = "WebDevBooster/richos"
 SCRIPTS = Path("richos/app/scripts")
-# The engine's land-lease.sh and second-review.sh, in main's own checkout: the copies main's
-# fences name in their refusals (Runner.commit_on_main).
-ENGINE_SCRIPTS = Path("richos/engine/scripts")
-# autocheck.py's land target: a commit in a detached checkout runs the land checks a commit to
-# that branch runs, and leaves the receipt the fast-forward of main then finds.
-LAND_TARGET_ENV = "RICHOS_AUTOCHECK_LAND_TARGET"
-MAIN_COMMIT_CHECKOUT = "main-commit"
 GUI_BOOT_SUITE = SCRIPTS / "gui-boot.test.sh"
 
 # THE ONLY DECLARED HOST GAP OF THIS BUILD. `run-tests.sh` discovers every *.test.sh beside
@@ -1577,216 +1571,40 @@ class Runner:
                      "--output", path, timeout=300)
         return path, json.loads(path.read_text())
 
-    def bump_next_version(self, released):
-        """After stable `released` is published: main's next release version is the next patch.
+    def report_published(self, tag, stable=False):
+        """After `tag` is published: ONE escalation for the lead, or ONE line saying it is missing.
 
-        The CEO, 2026-10-19: "Can I assume that because v1.2.0 stable has now been published,
-        the next nightly version is automatically guaranteed to NOT start with
-        "1.2.0-nightly"?" Without this, the next nightly refuses at its plan (`v1.2.0 already
-        exists; bump the next release version first`) until somebody remembers.
-
-        An ordinary commit on main (`commit_on_main`). Returns the new commit, or None when
-        main had already moved past `released`.
-        """
-        moved = {}
-
-        def change(checkout):
-            bumped = next_patch_version_files((checkout / APP_MANIFEST).read_text(),
-                                              (checkout / APP_LOCK).read_text(), released)
-            if bumped is None:
-                return None
-            moved["following"], files = bumped
-            return files, (f"Next release version {moved['following']}: v{released} is published\n\n"
-                           f"Bumped by `nightly-local.py stable` after publishing v{released}, so "
-                           f"the next nightly is {moved['following']}-nightly.N and its plan does "
-                           "not refuse.")
-
-        commit = self.commit_on_main(change, "the bump of main's next release version", f"v{released}")
-        if commit is None:
-            self.announce(f"main's next release version is already past {released}; nothing bumped.")
-            return None
-        following = moved["following"]
-        self.announce(f"main's next release version is now {following} ({commit[:12]}, pushed): "
-                      f"the next nightly is {following}-nightly.N.")
-        return commit
-
-    def git(self, *args, cwd, env=None):
-        """`git ARGS` in `cwd`: its output, with everything it said in the run log."""
-        result = subprocess.run(["git", *map(str, args)], cwd=cwd, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, env=env)
-        self.log.write(result.stdout + result.stderr)
-        if result.returncode:
-            raise ValueError(f"git {args[0]} failed: {(result.stderr or result.stdout).strip()}")
-        return result.stdout
-
-    def engine_script(self, checkout, name, *args):
-        """The engine's `name` from main's own tree, as the fences name it: (exit code, what it said)."""
-        result = subprocess.run(["bash", str(checkout / ENGINE_SCRIPTS / name), *map(str, args)],
-                                cwd=checkout, stdin=subprocess.DEVNULL, capture_output=True, text=True)
-        said = (result.stdout + result.stderr).strip()
-        self.log.write(f"{name} {' '.join(map(str, args))}: exit {result.returncode}\n{said}\n")
-        return result.returncode, said
-
-    def commit_on_main(self, change, what, published):
-        """Commit `change`'s files on main and push them: the new commit, or None.
-
-        `change(checkout)` is given a checkout at origin/main and returns None when there is
-        nothing to change, else ({path: text}, commit message). `published` is the release
-        whose publish this commit follows.
-
-        LANDED AS RICH LANDED IT BY HAND (2026-10-20, 682f997c5, 712725060 and 11b89d23d, after
-        main's fences refused this command's own commits three times: the land lease was not
-        held and the commit had no second review). In order: the land lease is taken, or kept
-        when this process already holds it; the commit is made in a detached checkout of its
-        own, with the land checks a commit to main runs (its pre-commit hook, told the land
-        target), so main does not move before it is reviewed; the second review of exactly
-        that commit, asked with a request naming `published` and what the commit is; on a
-        passing verdict only, main is fast-forwarded to it where main is checked out and
-        pushed; a lease this call took is released. Anything short of that raises, main has
-        not moved, and the caller's one line names what is missing and the command for it.
-        Nothing is done where main is checked out unless it is on origin/main with no changes.
-        """
-        git = self.git
-        listed = git("worktree", "list", "--porcelain", cwd=self.repo).split("\n\n")
-        checkout = next((Path(block.split("\n", 1)[0].removeprefix("worktree "))
-                         for block in listed if "branch refs/heads/main" in block.splitlines()), None)
-        if checkout is None:
-            raise ValueError(f"main is not checked out in any worktree of {self.repo}")
-        code, said = self.engine_script(checkout, "land-lease.sh", "acquire", "--repo", checkout)
-        if code:
-            raise ValueError(f"this command could not take the land lease, so main did not move "
-                             f"(land-lease.sh acquire exit {code}: {said.splitlines()[-1] if said else ''})")
-        took = "land-lease: ACQUIRED" in said
-        # Per process: `changelog --tag` runs beside a nightly that may be committing too.
-        made = self.state / f"{MAIN_COMMIT_CHECKOUT}-{os.getpid()}"
-        request = self.state / f"{MAIN_COMMIT_CHECKOUT}-{os.getpid()}-request.txt"
-        try:
-            git("fetch", "origin", "refs/heads/main", cwd=checkout)
-            tip = git("rev-parse", "FETCH_HEAD", cwd=checkout).strip()
-            if git("rev-parse", "HEAD", cwd=checkout).strip() != tip:
-                raise ValueError(f"main in {checkout} is not origin/main ({tip[:12]}); it has to be, "
-                                 f"so that {what} is the only change pushed")
-            if git("status", "--porcelain", "--untracked-files=no", cwd=checkout).strip():
-                raise ValueError(f"main in {checkout} has uncommitted changes")
-            self.remove_main_commit_checkout(checkout, made)
-            made.parent.mkdir(parents=True, exist_ok=True)
-            git("worktree", "add", "--detach", made, tip, cwd=checkout)
-            changed = change(made)
-            if changed is None:
-                return None
-            files, message = changed
-            for path, text in files.items():
-                (made / path).write_text(text)
-            git("add", *files, cwd=made)
-            git("-c", "user.useConfigOnly=true", "commit", "-m", message, cwd=made,
-                env={**os.environ, LAND_TARGET_ENV: "main"})
-            commit = git("rev-parse", "HEAD", cwd=made).strip()
-            request.write_text(
-                f"{published} is published. This commit is {what}, which `nightly-local.py` writes "
-                f"on main by itself after that publish. Its message:\n\n{message}\n")
-            code, said = self.engine_script(checkout, "second-review.sh", "--repo", checkout,
-                                            "--tip", commit, "--words-file", request)
-            if code:
-                verdict = [line for line in said.splitlines()
-                           if line.startswith("SECOND-REVIEW ") and "RECEIPT" not in line]
-                raise ValueError(f"the second review of {commit[:12]} did not pass, so main did not "
-                                 f"move (second-review.sh exit {code}: "
-                                 f"{(verdict or said.splitlines() or [''])[-1]})")
-            try:
-                git("merge", "--ff-only", commit, cwd=checkout)
-            except ValueError:
-                # A fast-forward the fence refuses leaves this change's files staged where main
-                # is: put back exactly those that hold this commit's bytes, nothing else.
-                ours = [path for path in files
-                        if git("rev-parse", f":{path}", cwd=checkout)
-                        == git("rev-parse", f"{commit}:{path}", cwd=checkout)
-                        != git("rev-parse", f"HEAD:{path}", cwd=checkout)]
-                if ours:
-                    git("checkout", "HEAD", "--", *ours, cwd=checkout)
-                raise
-            git("push", "origin", "refs/heads/main:refs/heads/main", cwd=checkout)
-            return commit
-        finally:
-            request.unlink(missing_ok=True)
-            try:
-                self.remove_main_commit_checkout(checkout, made)
-            except ValueError as error:
-                self.announce(f"{made} could not be removed ({error}); "
-                              f"git worktree remove --force {made} removes it")
-            if took:
-                code, said = self.engine_script(checkout, "land-lease.sh", "release", "--repo", checkout)
-                if code:
-                    self.announce(f"the land lease this command took could not be released: {said}")
-
-    def remove_main_commit_checkout(self, checkout, made):
-        """The detached checkout `commit_on_main` commits in: gone, and no longer listed by git."""
-        listed = self.git("worktree", "list", "--porcelain", cwd=checkout)
-        if made.exists() or f"worktree {made}\n" in listed:
-            self.git("worktree", "remove", "--force", made, cwd=checkout)
-
-    def write_changelog(self, tag):
-        """After `tag` is published: its changelog entry on main, or ONE line saying it is missing.
+        The CEO, 2026-10-20: "why do I think that automatically writing a changelog is a
+        retarded idea? (as opposed to automatically triggering a worker for the job of
+        writing)". So this command writes no changelog and commits nothing to main: it raises
+        one escalation through the engine's ledger, whose watch wakes the lead, repeats until
+        it is acknowledged and survives a restart. The lead starts a worker from
+        CHANGELOG_WORKER_BRIEF with the tag filled in; the worker writes the entry (and, after
+        a stable, main's next release version) on its own branch, and it lands like any job.
 
         Never raises. The release is out whatever happens here, and saying otherwise would
-        be false; a missing entry is written later with the command the line names.
+        be false; an escalation that could not be raised leaves one line naming what to do.
         """
+        title, question = published_escalation(tag, stable)
+        argv = [str(ESCALATE), "raise", "--title", title, "--state", "work-complete",
+                "--for", "lead", "--question", question,
+                "--meanwhile", f"{tag} is published and installable; nothing waits on this.",
+                "--teammate", ESCALATION_TEAMMATE, "--worktree", str(self.repo), "--no-record"]
         try:
-            self.changelog_entry(tag)
+            result = subprocess.run(argv, cwd=self.repo, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=ESCALATE_TIMEOUT)
+            said = (result.stdout + result.stderr).strip()
+            self.log.write(f"escalate.sh raise: exit {result.returncode}\n{said}\n")
+            raised = re.search(r"^escalation RAISED: (\S+)$", result.stdout, re.M)
+            if result.returncode or not raised:
+                raise RuntimeError(f"escalate.sh raise exit {result.returncode}: "
+                                   f"{(said.splitlines() or [''])[0]}")
         except Exception as error:  # noqa: BLE001 -- the publish stands, whatever failed
-            self.log.write(f"changelog for {tag} failed: {type(error).__name__}: {error}\n")
-            self.announce(changelog_missing_line(tag, error))
-
-    def changelog_entry(self, tag):
-        """Add the entry for published `tag` to its changelog on main and push it.
-
-        WRITTEN AFTER THE JOB IS DONE, FROM EXACTLY WHAT WAS PUBLISHED (CEO, 2026-10-20: "why
-        do I think that a changelog can't always be written before the job is done and
-        probably can't be written MOST OF THE TIME before the job is done?"). What a build
-        contains is settled only when it is published: a failed build is rebuilt from newer
-        code, QA can send a candidate back, and a stable is a rebuild of whichever nightly is
-        promoted. So the range is read from the published releases themselves: from the
-        previous published release of the same kind's `Source:` commit to this one's.
-
-        Returns the new commit on main, or None when the changelog already has the entry.
-        """
-        kind, version, _ = release_kind(tag)
-        path = CHANGELOGS[kind]
-        published = published_releases()
-        if tag not in published or (kind == "stable" and published[tag]):
-            raise ValueError(f"{tag} is not a published {kind} release")
-        previous = previous_release(tag, published)
-        since, source = release_source(previous), release_source(tag)
-        self.git("fetch", "origin", "refs/heads/main", cwd=self.repo)
-        if changelog_has_entry(self.git("show", f"FETCH_HEAD:{path}", cwd=self.repo), version):
-            self.announce(f"{path} already has ## {version}; nothing written.")
+            self.log.write(f"the escalation for {tag} failed: {type(error).__name__}: {error}\n")
+            self.announce(escalation_missing_line(tag, stable, error))
             return None
-        commits = landed_merges(self.git("log", "--reverse", "--merges", "--format=%x1e%s%n%n%b",
-                                         f"{since}..{source}", cwd=self.repo))
-        if not commits.strip():
-            raise ValueError(f"nothing landed on main between {previous} ({since[:12]}) "
-                             f"and {tag} ({source[:12]})")
-        # Drafted BEFORE main is checked and changed, so the window in which a land could
-        # move main between the check and the push is seconds, never the draft's minute.
-        lines = draft_changelog_entry(version, commits)
-
-        def change(checkout):
-            text = (checkout / path).read_text()
-            if changelog_has_entry(text, version):
-                return None
-            return {path: changelog_with_entry(text, version, lines)}, (
-                f"Changelog: {version} in {path}\n\n"
-                f"Written by `nightly-local.py` after publishing {tag}: what landed on main from "
-                f"{previous}'s source {since[:12]} to {tag}'s source {source[:12]}, drafted by "
-                f"Claude ({CHANGELOG_MODEL}) from those commits with "
-                f"{CHANGELOG_INSTRUCTIONS.relative_to(ROOT)}.")
-
-        commit = self.commit_on_main(change, f"the changelog entry for {tag} in {path}", tag)
-        if commit is None:
-            self.announce(f"{path} already has ## {version}; nothing written.")
-            return None
-        self.announce(f"{path}: ## {version} added ({commit[:12]}, pushed), covering "
-                      f"{since[:12]}..{source[:12]} since {previous}.")
-        return commit
+        self.announce(f"Raised {raised[1]} for the lead: {title}")
+        return raised[1]
 
     def describe_stable(self, info):
         """Exactly what `stable` would build and publish, and nothing it would not.
@@ -3223,22 +3041,9 @@ class Runner:
                              "--out", out)
             print(f"Published https://github.com/{REPO}/releases/tag/{info['tag']}",
                   flush=True)
-            # The next nightly must not start with this version: bump it on main now.
-            not_bumped = None
-            with self.phase("next-version"):
-                try:
-                    self.bump_next_version(info["version"])
-                except (ValueError, OSError) as error:
-                    not_bumped = RuntimeError(
-                        f"{info['tag']} IS PUBLISHED, but main's next release version was not "
-                        f"bumped: {error}. Before the next nightly, on main: set the version past "
-                        f"{info['version']} in {APP_MANIFEST} and in {APP_LOCK}'s richos-tauri "
-                        "entry, commit and push.")
-            # Its changelog entry is written whether or not the bump went through.
-            with self.phase("changelog"):
-                self.write_changelog(info["tag"])
-            if not_bumped:
-                raise not_bumped
+            # Its changelog entry and main's next release version are a worker's job.
+            with self.phase("report"):
+                self.report_published(info["tag"], stable=True)
             self.summary()
             return
         if command == "candidate":
@@ -3264,8 +3069,8 @@ class Runner:
             # notarization credential is needed here, unlike the build step below.
             self.command(sys.executable, self.source / SCRIPTS / "nightly.py", "finish", "--out", out)
             print(f"Published https://github.com/{REPO}/releases/tag/{info['tag']}", flush=True)
-            with self.phase("changelog"):
-                self.write_changelog(info["tag"])
+            with self.phase("report"):
+                self.report_published(info["tag"])
             return
 
         with self.phase("fetch"):
@@ -3373,8 +3178,8 @@ class Runner:
                              "--plan", plan_path, "--out", out, credentials=True,
                              release_build=True)
             print(f"Published https://github.com/{REPO}/releases/tag/{info['tag']}", flush=True)
-            with self.phase("changelog"):
-                self.write_changelog(info["tag"])
+            with self.phase("report"):
+                self.report_published(info["tag"])
             self.summary()
             return
         # command == "build": stop at the signed, notarized, engine-pinned candidate.
@@ -3421,177 +3226,42 @@ def simulated_phones_value(text):
     raise argparse.ArgumentTypeError(f"{text!r} is not a whole number of at least 1")
 
 
-APP_MANIFEST = Path("richos/app/src-tauri/Cargo.toml")
-APP_LOCK = Path("richos/app/src-tauri/Cargo.lock")
+# AFTER A PUBLISH, ONE ESCALATION FOR THE LEAD (Runner.report_published). The changelog entry
+# and, after a stable, main's next release version are written by a worker the lead starts
+# from the fixed brief beside this script, never by this command. How an entry reads lives in
+# changelog-instructions.md, which that brief points the worker to.
+ESCALATE = Path(__file__).resolve().parents[2] / "engine/scripts/escalate.sh"
+ESCALATE_TIMEOUT = 60
+ESCALATION_TEAMMATE = "nightly-local"
+CHANGELOG_WORKER_BRIEF = SCRIPTS / "changelog-worker-brief.md"
+# The brief's one placeholder, replaced by the lead: everything else is handed over unchanged.
+BRIEF_TAG = "<TAG>"
 
 
-def next_patch_version_files(manifest, lock, released):
-    """Cargo.toml and Cargo.lock with the app moved from `released` to the next patch version:
-    (that version, {path: text}), or None when Cargo.toml no longer says `released`.
-
-    Cargo.toml is the only copy of the application version (make-release.sh says so), and
-    Cargo.lock repeats it in the app's own package entry; both move together, as
-    `nightly.py release_files` moves them for a nightly.
-    """
-    if not re.fullmatch(r"\d+\.\d+\.\d+", released):
-        raise ValueError(f"{released!r} is not a stable version")
-    if tomllib.loads(manifest)["package"]["version"] != released:
-        return None
-    major, minor, patch = released.split(".")
-    following = f"{major}.{minor}.{int(patch) + 1}"
-    manifest, in_manifest = re.subn(r'^version = "' + re.escape(released) + r'"$',
-                                    f'version = "{following}"', manifest, count=1, flags=re.M)
-    lock, in_lock = re.subn(r'(\[\[package\]\]\nname = "richos-tauri"\nversion = ")'
-                            + re.escape(released) + r'("\n)',
-                            lambda m: m[1] + following + m[2], lock)
-    if in_manifest != 1 or in_lock != 1:
-        raise ValueError(f"cannot move the app version {released} to {following} in "
-                         f"{APP_MANIFEST} and {APP_LOCK}")
-    return following, {APP_MANIFEST: manifest, APP_LOCK: lock}
+def published_escalation(tag, stable):
+    """(title, question) of the escalation a publish of `tag` raises. A stable also moves
+    main's next release version; a nightly does not, so it is not asked to."""
+    if stable:
+        title = f"{tag} published; write its changelog entry and bump main's next release version."
+        does = "writes its changelog entry and bumps main's next release version"
+    else:
+        title = f"{tag} published; write its changelog entry."
+        does = "writes its changelog entry"
+    return title, (f"Start the changelog worker: spawn.sh with --brief {CHANGELOG_WORKER_BRIEF}, "
+                   f"its {BRIEF_TAG} replaced by {tag} and nothing else changed. It reads what "
+                   f"went into {tag}, {does} as commits on its own branch, and hands over; "
+                   "second review, then you land it.")
 
 
-# THE TWO CHANGELOGS, one entry per PUBLISHED release (Runner.changelog_entry). The entry is
-# drafted by Claude from the commits that landed, following the writing instructions in the
-# Markdown file beside this script: how an entry reads lives there, never in this code.
-CHANGELOGS = {"nightly": Path("docs/CHANGELOG-NIGHTLY.md"), "stable": Path("docs/CHANGELOG.md")}
-CHANGELOG_INSTRUCTIONS = Path(__file__).resolve().with_name("changelog-instructions.md")
-CHANGELOG_MODEL = "sonnet"
-# A draft of a stable's whole range (hundreds of lands) is one long answer; a hang is not.
-CHANGELOG_DRAFT_TIMEOUT = 900
-CLAUDE = "claude"
-STABLE_VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
-NIGHTLY_VERSION = re.compile(STABLE_VERSION.pattern + r"-nightly\.([0-9]{8})\.([1-9][0-9]*)")
-
-
-def release_kind(tag):
-    """("nightly" or "stable", version, sort key) for a release tag such as `v1.2.0`."""
-    version = tag.removeprefix("v")
-    for kind, pattern in (("nightly", NIGHTLY_VERSION), ("stable", STABLE_VERSION)):
-        match = pattern.fullmatch(version)
-        if tag.startswith("v") and match:
-            return kind, version, tuple(map(int, match.groups()))
-    raise ValueError(f"{tag!r} is not a nightly or stable release tag")
-
-
-def published_releases():
-    """{tag: is it still a prerelease} for every release on GitHub that is not a draft."""
-    listed = subprocess.run(["gh", "release", "list", "--repo", REPO, "--limit", "1000",
-                             "--json", "tagName,isDraft,isPrerelease"], stdin=subprocess.DEVNULL,
-                            capture_output=True, text=True, timeout=120)
-    if listed.returncode:
-        raise RuntimeError(f"gh release list failed: {listed.stderr.strip()}")
-    return {release["tagName"]: release["isPrerelease"]
-            for release in json.loads(listed.stdout) if not release["isDraft"]}
-
-
-def release_source(tag):
-    """The commit published release `tag` was built from: the `Source:` line nightly.py's
-    `release_notes` writes into every release's notes."""
-    viewed = subprocess.run(["gh", "release", "view", tag, "--repo", REPO, "--json", "body"],
-                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
-    if viewed.returncode:
-        raise RuntimeError(f"gh release view {tag} failed: {viewed.stderr.strip()}")
-    match = re.search(r"^Source: ([0-9a-f]{40})$", json.loads(viewed.stdout)["body"], re.M)
-    if not match:
-        raise ValueError(f"{tag}'s release notes name no Source: commit")
-    return match[1]
-
-
-def previous_release(tag, published):
-    """The published release of `tag`'s kind just before it: for a nightly the previous
-    published nightly, for a stable the previous stable (a prerelease is not one yet)."""
-    kind, _, key = release_kind(tag)
-    earlier = []
-    for other, prerelease in published.items():
-        try:
-            other_kind, _, other_key = release_kind(other)
-        except ValueError:
-            continue
-        if other_kind == kind and other_key < key and (kind == "nightly" or not prerelease):
-            earlier.append((other_key, other))
-    if not earlier:
-        raise ValueError(f"no {kind} release was published before {tag}")
-    return max(earlier)[1]
-
-
-# "Merge branch 'v1.2.1' into cc/echo-opus-acctswitch4": main or a release branch taken into a
-# branch before its land. It says nothing of its own; the land that follows says it.
-SYNC_MERGE = re.compile(r"Merge (branch )?'?\S+'? into \S+")
-
-
-def landed_merges(log):
-    """`git log --merges --format=%x1e%s%n%n%b` as the draft's input: every merge that landed
-    work, on main or on a release branch merged into it, each ending with a line of four
-    dashes; the merges that only took main or a release branch into a branch are left out."""
-    kept = []
-    for record in log.split("\x1e")[1:]:
-        subject = record.split("\n", 1)[0]
-        if not SYNC_MERGE.fullmatch(subject.strip()):
-            kept.append(record.strip() + "\n----\n")
-    return "\n".join(kept)
-
-
-def changelog_has_entry(text, version):
-    return f"## {version}" in text.splitlines()
-
-
-def changelog_with_entry(text, version, lines):
-    """`text` with `## <version>` and `lines` above the first entry for an older version:
-    the top, for the version just published; its own place, for one written late."""
-    key = release_kind("v" + version)[2]
-    entry = f"## {version}\n\n" + "\n".join(lines) + "\n\n"
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        if line.startswith("## "):
-            try:
-                older = release_kind("v" + line[3:].strip())[2] < key
-            except ValueError:
-                older = False
-            if older:
-                return text[:offset] + entry + text[offset:]
-        offset += len(line)
-    return text.rstrip("\n") + "\n\n" + entry.rstrip("\n") + "\n"
-
-
-def draft_changelog_entry(version, commits):
-    """The entry's lines for `version`, drafted by Claude from `commits`.
-
-    `claude -p` with no tools, its system prompt the instructions file, the commits on stdin
-    (a stable's range is far longer than a command line may be), run in an empty directory
-    so no repository's CLAUDE.md is read into the draft. Refused unless every line it
-    returns is a `- ` line, so a refusal or a chatty answer never reaches the changelog.
-    """
-    prompt = (f"Version: {version}\n\nThe merges that landed for it, oldest first, each "
-              f"ending with a line of four dashes:\n\n{commits}")
-    with tempfile.TemporaryDirectory(prefix="richos-changelog-") as empty:
-        result = subprocess.run(
-            [CLAUDE, "-p", "--model", CHANGELOG_MODEL, "--tools", "", "--no-session-persistence",
-             "--system-prompt-file", str(CHANGELOG_INSTRUCTIONS)],
-            input=prompt, capture_output=True, text=True, cwd=empty,
-            timeout=CHANGELOG_DRAFT_TIMEOUT)
-    if result.returncode:
-        raise RuntimeError(f"the draft ({CLAUDE} -p) exited {result.returncode}: "
-                           f"{(result.stderr or result.stdout).strip()}")
-    lines = [line.strip() for line in result.stdout.splitlines()
-             if line.strip() and not line.strip().startswith("```")]
-    wrong = next((line for line in lines if not re.fullmatch(r"- \S.*", line)), None)
-    if not lines or wrong is not None:
-        raise ValueError(f"the draft is not a list of `- ` lines: {wrong or 'it is empty'}")
-    return lines
-
-
-def changelog_missing_line(tag, error):
-    """The one line a failed entry leaves: which entry is missing and the command that writes it."""
-    try:
-        kind, version, _ = release_kind(tag)
-        missing = f"{CHANGELOGS[kind]} has no entry for {version}"
-    except ValueError:
-        missing = f"no changelog entry was written for {tag}"
+def escalation_missing_line(tag, stable, error):
+    """The one line a publish whose escalation could not be raised leaves: what to do by hand."""
     reason = " ".join(str(error).split())
     if len(reason) > 300:
         reason = reason[:297] + "..."
-    return (f"CHANGELOG ENTRY MISSING: {missing} ({reason}). The release itself is published. "
-            f"Write it: python3 {SCRIPTS / 'nightly-local.py'} changelog --tag {tag}")
+    title, _ = published_escalation(tag, stable)
+    return (f"ESCALATION NOT RAISED ({reason}). The release itself is published. {title} "
+            f"Start the worker by hand: spawn.sh --brief {CHANGELOG_WORKER_BRIEF} with "
+            f"{BRIEF_TAG} replaced by {tag}.")
 
 
 def chosen_by():
@@ -3610,11 +3280,7 @@ def chosen_by():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["check", "build", "publish", "candidate",
-                                           "release", "stable", "gate-environment", "changelog"])
-    parser.add_argument("--tag", metavar="TAG",
-                        help="changelog only: the published release (v1.2.1-nightly.20261020.68, "
-                             "v1.2.1) whose entry to write, if publishing it left that entry "
-                             "missing. The same step publish, release and stable end with")
+                                           "release", "stable", "gate-environment"])
     parser.add_argument("--repo", type=Path, default=ROOT)
     parser.add_argument("--state-dir", type=Path, default=Path.home() / ".richos-nightly")
     parser.add_argument("--runtime-dir", type=Path, help="existing verified runtime cache")
@@ -3683,16 +3349,6 @@ def main():
                             ("per-step", GATE_SET_PER_STEP)):
             for name in names:
                 print(f"{kind}\t{name}")
-        return
-    if (args.tag is not None) != (args.command == "changelog"):
-        parser.error("changelog requires --tag <published release tag>, and --tag means "
-                     "nothing to any other command")
-    if args.command == "changelog":
-        # No build state and no release lock: it reads published releases and commits on
-        # main, so it runs beside a nightly that is building.
-        with open(os.devnull, "w") as quiet:
-            Runner(args.repo.resolve(), args.state_dir.expanduser().absolute(), {},
-                   quiet).changelog_entry(args.tag)
         return
     if args.command in ("publish", "candidate") and not args.run:
         parser.error(f"{args.command} requires --run <run-id> (see the output of a prior `build`)")

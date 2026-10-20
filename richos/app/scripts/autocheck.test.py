@@ -2188,8 +2188,8 @@ class ActiveGate(Fixture):
         self.git("worktree", "remove", "--force", str(tree))
 
     def test_a_detached_commit_named_onto_main_is_checked_and_reviewed_after_it_exists(self):
-        # nightly-local.py commit_on_main: the commit is made in a detached checkout with the land
-        # target named, so main does not move before that new commit is reviewed. No review of a
+        # A commit made in a detached checkout with the land target named: main does not move
+        # before that new commit is reviewed. No review of a
         # commit can exist before it, so the early question is not asked there.
         self.make()
         self.fence()
@@ -2649,6 +2649,67 @@ class AuthorRuns(unittest.TestCase):
                     os.environ.pop(module.AUTHOR_RUNS, None)
                 else:
                     os.environ[module.AUTHOR_RUNS] = before
+
+
+    def test_the_land_releases_only_the_handover_holds_of_the_candidates_it_merged(self):
+        """PRD A11: the final consumer releases the handover's `retain` marker once its own
+        evidence is written; a hold for anything else, or for a candidate it did not merge, stays."""
+        from types import SimpleNamespace
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as top:
+            repo = Path(top) / "repo"
+            repo.mkdir()
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            def git(*args):
+                return subprocess.run(["git", "-C", str(repo), "-c", "user.name=f", "-c", "user.email=f@x.invalid",
+                                       "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", *args],
+                                      env=env, capture_output=True, text=True, check=True).stdout.strip()
+            git("init", "-q", "-b", "main")
+            git("commit", "-q", "--allow-empty", "-m", "base")
+            git("checkout", "-q", "-b", "side")
+            git("commit", "-q", "--allow-empty", "-m", "never landed")
+            side = git("rev-parse", "HEAD")
+            git("checkout", "-q", "main")
+            git("commit", "-q", "--allow-empty", "-m", "the handover")
+            landed = git("rev-parse", "HEAD")
+            runs = {}
+            for name, hold in (("merged", {"holder": "handover", "candidate": landed}),
+                               ("unmerged", {"holder": "handover", "candidate": side}),
+                               ("foreign", {"holder": "operator", "candidate": landed})):
+                runs[name] = Path(top) / name
+                runs[name].mkdir()
+                (runs[name] / "retain").write_text(json.dumps(hold))
+            before = os.environ.get(module.AUTHOR_RUNS)
+            os.environ[module.AUTHOR_RUNS] = os.pathsep.join(str(path) for path in runs.values())
+            try:
+                with mock.patch.object(module, "say"):
+                    module.release_author_runs(SimpleNamespace(top=repo), landed)
+            finally:
+                if before is None:
+                    os.environ.pop(module.AUTHOR_RUNS, None)
+                else:
+                    os.environ[module.AUTHOR_RUNS] = before
+            self.assertFalse((runs["merged"] / "retain").exists())
+            self.assertTrue((runs["unmerged"] / "retain").exists())
+            self.assertTrue((runs["foreign"] / "retain").exists())
+
+    def test_the_preflight_says_when_no_author_proof_was_offered(self):
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        said = []
+        before = os.environ.pop(module.AUTHOR_RUNS, None)
+        try:
+            with mock.patch.object(module, "say", side_effect=said.append):
+                module.author_preflight("land")
+        finally:
+            if before is not None:
+                os.environ[module.AUTHOR_RUNS] = before
+        self.assertIn("no saved author run was offered", " ".join(said))
 
 
 class TimeLimit(unittest.TestCase):

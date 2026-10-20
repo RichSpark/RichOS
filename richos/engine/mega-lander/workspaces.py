@@ -275,6 +275,17 @@ AUTHOR_RUNS_ENV = "RICHOS_AUTOCHECK_AUTHOR_RUNS"
 
 def _land_env(target, author_runs=()):
     env = _git_env()
+    # THE GATE RUNS IN THE CALLER'S LOCALE (verification reliability PRD step 3, A10/R8).
+    # _git_env's LC_ALL=C is for reading git's own output in this tool; this merge's output is
+    # only shown, never parsed, and its pre-merge-commit hook runs every check of the gate in
+    # the environment it gets. So a managed land ran its checks under LC_ALL=C while a plain-Git
+    # land, the nightly (which passes the operator's locale through) and the author's handover
+    # run did not: every UI suite binds LC_ALL, and no author pass could ever match the managed
+    # land's identity. The merge passes the caller's locale on, as `git merge` from a shell does.
+    if "LC_ALL" in os.environ:
+        env["LC_ALL"] = os.environ["LC_ALL"]
+    else:
+        env.pop("LC_ALL", None)
     env[LAND_TARGET_ENV] = target
     if author_runs:
         env[AUTHOR_RUNS_ENV] = os.pathsep.join(author_runs)
@@ -2646,6 +2657,7 @@ def record_handed_in(session_id, agent_id="", name=""):
 # unreadable or slow report can never delay or prevent that fact.
 PROOF_REPORT_RUNS = 5
 PROOF_REPORT_SECONDS = 3.0
+PROOF_REPORT_HELD_SCAN = 20
 PROOF_RUN_NAME = re.compile(r"\d{8}T\d{6}Z(-[A-Za-z0-9_]+)?")
 
 
@@ -2660,12 +2672,23 @@ def _proof_history(path):
 
 
 def proof_report(path, deadline=None):
-    """The pointer for the checkout at `path` (above), or {"unavailable": why}."""
+    """The pointer for the checkout at `path` (above), or {"unavailable": why}.
+
+    EVERY READ IS BOUNDED BY WHAT IS LEFT OF THE SHARED DEADLINE (review
+    rv-20261020T044017Z-ebbb640b-fc3b #2): the HEAD read gets only the time left, and the time is
+    asked again after each file read, so a slow read can spend the budget but never turn an
+    overrun into a report. A report that ran out says so; the lifecycle fact was saved before."""
     deadline = deadline or (time.monotonic() + PROOF_REPORT_SECONDS)
+    spent = "the report's time budget ran out"
     try:
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-        head = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True,
-                              timeout=5, stdin=subprocess.DEVNULL, env=env)
+        if time.monotonic() >= deadline:
+            return {"unavailable": spent}
+        try:
+            head = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True,
+                                  timeout=max(0.05, deadline - time.monotonic()), stdin=subprocess.DEVNULL, env=env)
+        except subprocess.TimeoutExpired:
+            return {"unavailable": spent}
         if head.returncode != 0:
             return {"unavailable": "cannot read the workspace's HEAD"}
         head = head.stdout.strip()
@@ -2674,15 +2697,19 @@ def proof_report(path, deadline=None):
             names = sorted((n for n in os.listdir(history) if PROOF_RUN_NAME.fullmatch(n)), reverse=True)
         except FileNotFoundError:
             return {"unavailable": "no saved proof run for this checkout", "head": head}
+        if time.monotonic() > deadline:
+            return {"unavailable": spent, "head": head}
         for name in names[:PROOF_REPORT_RUNS]:
             if time.monotonic() > deadline:
-                return {"unavailable": "the report's time budget ran out", "head": head}
+                return {"unavailable": spent, "head": head}
             run = os.path.join(history, name)
             try:
                 with open(os.path.join(run, "plan.json")) as stream:
                     plan = json.load(stream)
             except (OSError, ValueError):
                 continue
+            if time.monotonic() > deadline:
+                return {"unavailable": spent, "head": head}
             source = plan.get("source") or {}
             if plan.get("root") != path or source.get("commit") != head:
                 continue
@@ -2697,24 +2724,53 @@ def proof_report(path, deadline=None):
             except (OSError, ValueError):
                 report["unavailable"] = "the run has no readable summary (still running, or ended without one)"
                 return report
+            if time.monotonic() > deadline:
+                report["unavailable"] = spent
+                return report
+            # Held for its consumer (proof-run.py HANDOVER_HOLD): rotation never removes it, and the
+            # land that consumes it releases it. Any other held run of this checkout is named, so a
+            # superseded handover is released by Rich once nothing still needs it.
+            # The scan is bounded twice (review rv-20261020T073921Z-1e0461cc-0956 #3): at most
+            # PROOF_REPORT_HELD_SCAN runs, and the deadline is asked before every read and after
+            # the last one, so a slow disk can spend the budget but never turn it into a report.
+            report["held"] = os.path.exists(os.path.join(run, "retain"))
+            others = []
+            for n in [n for n in names if n != name][:PROOF_REPORT_HELD_SCAN]:
+                if time.monotonic() > deadline:
+                    break
+                if os.path.exists(os.path.join(history, n, "retain")):
+                    others.append(os.path.join(history, n))
+            if time.monotonic() > deadline:
+                report["unavailable"] = spent
+                return report
+            if others:
+                report["also_held"] = others[:PROOF_REPORT_RUNS]
             rows = summary.get("checks") or []
             counts = {}
             for row in rows:
                 counts[row.get("result")] = counts.get(row.get("result"), 0) + 1
             reused = sum(1 for row in rows if row.get("reused_from"))
+            # A KNOWN-RED unit is a declared exception the runner lets through (proof-run.py
+            # known_red), never a pass: it is named with the checks that are not complete.
             unresolved = [{"check": row.get("check"), "result": row.get("result"),
-                           "why": (row.get("not_run") or {}).get("why")}
-                          for row in rows if row.get("result") != "passed"]
+                           "why": "known-red, a declared exception" if row.get("known_red")
+                           else (row.get("not_run") or {}).get("why")}
+                          for row in rows if row.get("result") != "passed" or row.get("known_red")]
+            known_red = sum(1 for row in rows if row.get("known_red"))
             report.update(outcomes=counts, reused=reused, unresolved=unresolved,
                           crashed=summary.get("crashed"))
             report["line"] = ("%d planned, %d passed (%d of them reused)%s" % (
-                report["planned"], counts.get("passed", 0), reused,
+                report["planned"], counts.get("passed", 0) - known_red, reused,
                 "; NOT complete: " + ", ".join("%s (%s)" % (u["check"], u["why"] or u["result"])
                                                for u in unresolved[:20])
                 + (" and %d more" % (len(unresolved) - 20) if len(unresolved) > 20 else "")
                 if unresolved else "; every planned check passed"))
             if selection.get("candidate") and selection["candidate"] != head:
                 report["line"] += "; the plan's candidate %s is not HEAD" % selection["candidate"][:12]
+            if report.get("also_held"):
+                report["line"] += ("; %d earlier handover run(s) of this checkout still held (also_held): "
+                                   "release each once nothing needs it, proof-run.py --release <run>"
+                                   % len(others))
             return report
         return {"unavailable": "no saved proof run of HEAD %s" % head[:12], "head": head}
     except Exception as exc:  # noqa: BLE001  (a report never breaks the lifecycle fact it follows)
