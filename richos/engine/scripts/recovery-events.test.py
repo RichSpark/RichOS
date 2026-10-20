@@ -423,7 +423,8 @@ class Mechanics(W.Base):
                             "print(json.dumps(dict(type='result',structured_output=answer,total_cost_usd=0.0005,usage=dict(input_tokens=9,output_tokens=3))))\n")
         provider.chmod(0o755)
         quota = Path(self.env.root) / "quota"
-        quota.write_text("#!/bin/sh\necho fine\nexit 0\n")
+        readings = Path(self.env.root) / "quota-readings"
+        quota.write_text("#!/bin/sh\necho read >> %s\necho fine\nexit 0\n" % readings)
         quota.chmod(0o755)
         aid = self.dispatch("detached")
         self.send("detached", "note", "Status: proof run started.", received=aid)
@@ -434,6 +435,7 @@ class Mechanics(W.Base):
         summary = json.loads(result.stdout.splitlines()[-1])
         self.assertEqual(sorted(e["id"] for e in summary["events"]), ["note", "tu-detached"])
         self.assertEqual(summary["triage_calls"], 2)
+        self.assertEqual(readings.read_text().count("read"), 1)  # one quota reading per drain, not per event
         self.assertEqual(summary["alarms"], [])
         self.assertTrue((R.root() / "events.cursor.json").exists())
         # A second drain while one holds the lock exits at once and changes nothing.

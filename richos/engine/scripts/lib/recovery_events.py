@@ -476,7 +476,16 @@ def drain(engine, entity, ws, triage=None, schedule=None):
     import recovery_runner as RR
     import recovery_triage
     import recovery_controls as C
-    triage = triage or recovery_triage.triage
+    if triage is None:
+        # One quota reading per drain, not per event: each reading costs
+        # seconds of CPU (measured 7.4 s wall, 3.3 s CPU on this Mac).
+        import second_review as SR
+        reading = []
+
+        def triage(value):
+            if not reading:
+                reading.append(SR.quota_hold(str(ENGINE)))
+            return recovery_triage.triage(value, quota=reading[0])
     schedule = schedule or C.schedule
     declaration = R.mode(entity)
     summary = dict(mode=declaration["mode"], events=[], refused=[], gaps=[], alarms=[], triage_calls=0, triage_cost_usd=0.0)

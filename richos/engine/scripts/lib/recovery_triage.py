@@ -156,8 +156,10 @@ def claimed(path):
         os.close(fd)
 
 
-def triage(value, claude="", account=None):
-    """The decision for one validated input. Always returns a result dict."""
+def triage(value, claude="", account=None, quota=None):
+    """The decision for one validated input. Always returns a result dict.
+    `quota` is a (held, reading) pair the caller already read under the
+    existing quota rule; a caller triaging several events reads it once."""
     validate(value)
     prompt = PROMPT.read_text()
     ident = identity(value, prompt)
@@ -176,7 +178,7 @@ def triage(value, claude="", account=None):
                       prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest())
         body = json.dumps(value, ensure_ascii=False, sort_keys=True)
         cli = SR.find_claude(claude)
-        held, reading = SR.quota_hold(str(ENGINE))
+        held, reading = quota if quota is not None else SR.quota_hold(str(ENGINE))
         if len(body.encode()) > MAX_INPUT:
             result["error"] = "triage input exceeds %d bytes; the adapter must bound it by reference" % MAX_INPUT
         elif not cli:
