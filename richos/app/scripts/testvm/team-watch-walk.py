@@ -30,6 +30,13 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
              during a turn): the QUOTA-THRESHOLD notice naming that teammate (or, when the
              threshold was read before any lead ran, kept and sent to it first at its start), the
              CODEX-WATCH entry and the ESCALATION-WATCH block. Evidence is pulled to --out.
+  reminder   a finished teammate of his lead, waiting for its review, is registered; once his
+             lead's turn has ended (the host's turn_ended in team-watch-lead.json: a --print
+             transcript never records it), stall-watch's UNFINISHED-WORK reminder naming that wait
+             is in his lead's own transcript. Its 12-hour interval is --reminder-seconds in this
+             guest only (the declaration's STALL_WATCH_PENDING_WORK_SECONDS), set only when this
+             step is walked. On its own after `lead`: --steps identity,first-run,fixture,relaunch,
+             watchers,task,lead,reminder.
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
 """
@@ -53,7 +60,9 @@ StepFailed = command_walk.StepFailed
 
 REPO = HERE.parents[3]
 PROBES = HERE.parent / 'operator-probes'
-STEPS = ['identity', 'first-run', 'fixture', 'relaunch', 'watchers', 'task', 'lead', 'notices', 'observe']
+STEPS = ['identity', 'first-run', 'fixture', 'relaunch', 'watchers', 'task', 'lead', 'notices', 'observe', 'reminder']
+# What stall-watch's unfinished-work reminder starts with, and the finished teammate's wait it names.
+REMINDER = {'stall-watch reminder': 'UNFINISHED-WORK', 'its recorded wait': 'waiting for its review'}
 TASK = ('Please ask my team to read the first line of CLAUDE.md in their repository and tell me what it says. '
         'Nothing else is needed.')
 WATCHERS = ('quota-watch', 'stall-watch', 'codex-watch')
@@ -90,6 +99,65 @@ class TeamWatchWalk(command_walk.CommandWalk):
             time.sleep(2)
         return {'home_on_screen_after_s': None}
 
+    def received(self):
+        """His typed messages on the walk's conversation, as the conversation ledger records them
+        (output-walk.py's PromptReceived rows): a Send press is confirmed by the turn it became."""
+        rows = []
+        for line in self.read(self.data + '/conversation-ledger.jsonl').splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if (row.get('event') == 'PromptReceived' and row.get('thread_id') == self.facts.get('thread')
+                    and row.get('source') != 'internal'):
+                rows.append(row.get('turn_id'))
+        return rows
+
+    def task(self):
+        """CommandWalk's task, confirmed: his words must become a turn on the conversation (its
+        PromptReceived row) within 30 s of Send. On 2026-10-20 five runs in a row typed the task
+        into the composer (its value read back), pressed the one Send button there is (clicked),
+        and the app recorded nothing: no message on screen, no relay, no lead. What it typed into,
+        what the press reached, the composer afterwards and a frame are kept for each attempt
+        (task.json); a send the ledger did not record is typed and sent once more, never more."""
+        before = self.clock()
+        known = set(self.received())
+        attempts = []
+        for attempt in (1, 2):
+            try:
+                typed = self.type_into(self.a.task, '--role', 'AXTextArea', '--title', 'Message to Rich')
+                pressed = self.press('Send')
+            except (StepFailed, subprocess.TimeoutExpired) as exc:
+                # An accessibility read past ax.sh's 20 s deadline on a busy host (run 8: exit 124
+                # at 89% CPU) is not a lost send: the first attempt records it and the second runs.
+                if attempt == 2:
+                    raise
+                attempts.append({'failed': str(exc)[:400]})
+                continue
+            end = time.monotonic() + 30
+            new = []
+            while time.monotonic() < end and not new:
+                new = [t for t in self.received() if t not in known]
+                if not new:
+                    time.sleep(2)
+            try:
+                composer = self.ax('find', '--title', 'Message to Rich', '--role', 'AXTextArea', '--contains', '--first')
+            except (StepFailed, subprocess.TimeoutExpired) as exc:
+                composer = 'not read: %s' % str(exc)[:300]
+            self.shot('task-attempt-%d.png' % attempt)
+            attempts.append({'typed_into': typed, 'pressed': pressed, 'turns': new, 'composer_after': composer})
+            if new:
+                break
+        self.facts['sent_ms'] = [before, self.clock()]
+        self.save()
+        evidence = {'sent_between_guest_ms': [round(v) for v in self.facts['sent_ms']], 'attempts': attempts}
+        (self.out / 'task.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        if not attempts[-1]['turns']:
+            raise StepFailed('his typed words never became a turn on the conversation (no PromptReceived row '
+                             'in 30 s, twice); see task.json and task-attempt-*.png')
+        return {'sent_between_guest_ms': evidence['sent_between_guest_ms'], 'attempts': len(attempts),
+                'turn': attempts[-1]['turns'][-1]}
+
     def read(self, path, limit=200000):
         return guest(self.vm, 'tail -c %d %s 2>/dev/null || true' % (limit, shlex.quote(path)), 60)
 
@@ -103,8 +171,10 @@ class TeamWatchWalk(command_walk.CommandWalk):
             (made / name).write_bytes((PROBES / name).read_bytes())
         (made / 'team-watch-guest.py').write_bytes((HERE / 'team-watch-guest.py').read_bytes())
         command_walk.command([HERE / 'guest.sh', self.vm, '--push', made, self.payload + '/'], 300)
-        said = guest(self.vm, '/usr/bin/python3 %s setup %s' % (
-            shlex.quote(self.payload + '/probes/team-watch-guest.py'), shlex.quote(self.payload)), 900)
+        # The reminder's interval is shortened in this guest only, and only when it is walked.
+        reminder = str(int(self.a.reminder_seconds)) if 'reminder' in self.a.steps.split(',') else ''
+        said = guest(self.vm, '/usr/bin/python3 %s setup %s %s' % (
+            shlex.quote(self.payload + '/probes/team-watch-guest.py'), shlex.quote(self.payload), reminder), 900)
         record = json.loads(said.splitlines()[-1])
         (self.out / 'fixture.json').write_text(json.dumps(record, indent=2) + '\n')
         fences = record.get('fence_status') or [1, '']
@@ -134,8 +204,13 @@ class TeamWatchWalk(command_walk.CommandWalk):
         return pids
 
     def lead(self):
-        end = time.monotonic() + self.a.within
+        began = time.monotonic()
+        end = began + self.a.within
+        shot = False
         while time.monotonic() < end:
+            if not shot and time.monotonic() - began >= 20:
+                self.shot('after-task.png')   # his words on screen, or not, before a lead could start
+                shot = True
             log = self.read(self.operator + '/operator.log')
             pointer = json.loads(self.read(self.operator + '/team-watch-lead.json') or '{}')
             if 'lead started for' in log and pointer.get('session'):
@@ -145,8 +220,11 @@ class TeamWatchWalk(command_walk.CommandWalk):
                         'started': [l for l in log.splitlines() if 'lead started for' in l][-1]}
             time.sleep(3)
         (self.out / 'operator.log').write_text(self.read(self.operator + '/operator.log') + '\n')
+        relaunched = json.loads((self.out / 'relaunch-observed.json').read_text())['relaunched']['log']
+        (self.out / 'app-at-lead-failure.log').write_text(self.read(relaunched) + '\n')
         self.shot('lead-missing.png')
-        raise StepFailed('no lead of his team started within %g s of the task; see operator.log' % self.a.within)
+        raise StepFailed('no lead of his team started within %g s of the task; see operator.log, '
+                         'app-at-lead-failure.log and after-task.png' % self.a.within)
 
     def turn_state(self, path):
         """'ended' when the last main-thread conversation row of the lead's transcript ends its
@@ -229,7 +307,7 @@ class TeamWatchWalk(command_walk.CommandWalk):
             shlex.quote(self.home), shlex.quote(self.facts['session'])))
         return found.splitlines()[0] if found else ''
 
-    def sent_to_lead(self, path):
+    def sent_to_lead(self, path, markers=MARKERS):
         """Each watcher's notice, as a user message in his lead's own transcript: the first line of
         each, so the evidence carries no more of the fixture than it needs. A message that reaches
         the lead during a turn is written as a queued user message (an attachment of type
@@ -254,7 +332,7 @@ class TeamWatchWalk(command_walk.CommandWalk):
                   '            out[k]={"timestamp":r.get("timestamp"),"as":how,"line":line[:300]}\n'
                   'print(json.dumps(out))\n')
         return json.loads(guest(self.vm, 'python3 -c %s %s %s' % (
-            shlex.quote(script), shlex.quote(path), shlex.quote(json.dumps(MARKERS))), 60) or '{}')
+            shlex.quote(script), shlex.quote(path), shlex.quote(json.dumps(markers))), 60) or '{}')
 
     def observe(self):
         # One quota-watch poll past --within: the teammate registered in `notices` is seen at
@@ -283,6 +361,64 @@ class TeamWatchWalk(command_walk.CommandWalk):
                              % (waited, ', '.join(missing), json.dumps(said)))
         return got
 
+    def reminder(self):
+        """Stall-watch's unfinished-work reminder reaches his lead once its turn has ended. His lead
+        runs `claude --print`, whose transcript never records a turn's end, so stall-watch takes the
+        host's word for it (team-watch-lead.json's turn_ended). A finished teammate of his lead,
+        waiting for its review, is registered; within the reminder's interval (shortened for this
+        guest, --reminder-seconds), a stall-watch poll and his lead's turn, his lead's own transcript
+        holds the UNFINISHED-WORK notice naming that wait, sent by the host.
+
+        The teammate is registered only once the host says his lead is between turns: a record
+        with no workspace counts as already landed, and the engine's turn-end gate (its Stop hook,
+        pending() with auto-land) resolves it, so one registered during the turn is gone before
+        the reminder is due (run 7, 2026-10-20: stall-watch idle, every 120 s, pending [])."""
+        between = time.monotonic() + self.a.within
+        while time.monotonic() < between:
+            if '"turn_ended"' in self.read(self.operator + '/team-watch-lead.json', 4096):
+                break
+            time.sleep(3)
+        else:
+            raise StepFailed('the host never said his lead was between turns within %g s (no turn_ended in '
+                             'team-watch-lead.json)' % self.a.within)
+        mate = guest(self.vm, '/usr/bin/python3 %s finished %s %s' % (
+            shlex.quote(self.payload + '/probes/team-watch-guest.py'), shlex.quote(self.payload),
+            shlex.quote(self.facts['session'])), 60)
+        waited = self.a.within + self.a.reminder_seconds + 120
+        end = time.monotonic() + waited
+        got, path, pointers = {}, '', []
+        while time.monotonic() < end:
+            path = path or self.transcript()
+            pointer = self.read(self.operator + '/team-watch-lead.json', 4096)
+            if not pointers or pointers[-1] != pointer:
+                pointers.append(pointer)
+            got = self.sent_to_lead(path, REMINDER) if path else {}
+            if len(got) == len(REMINDER):
+                break
+            time.sleep(5)
+        (self.out / 'operator.log').write_text(self.read(self.operator + '/operator.log') + '\n')
+        (self.out / 'stall-watch.log').write_text(self.read(self.data + '/engine-state/team-watch/stall-watch.log') + '\n')
+        if path:
+            (self.out / 'lead-transcript-rows.txt').write_text(self.row_shapes(path) + '\n')
+        # What stall-watch's reminder sees at the end, asked of the guest's engine under the watchers'
+        # own environment: idle, the start, the interval, the pending list and its kept state.
+        check = guest(self.vm, '/usr/bin/python3 %s remind-check %s %s %s' % (
+            shlex.quote(self.payload + '/probes/team-watch-guest.py'), shlex.quote(self.payload),
+            shlex.quote(self.facts['session']), shlex.quote(self.operator + '/team-watch-lead.json')), 120)
+        try:
+            check = json.loads(check.splitlines()[-1])
+        except (ValueError, IndexError):
+            pass
+        evidence = {'session': self.facts.get('session'), 'transcript': path, 'teammate': mate,
+                    'reminder_seconds': self.a.reminder_seconds, 'sent_to_lead': got,
+                    'lead_file_as_seen': pointers, 'stall_watch_sees': check}
+        (self.out / 'reminder.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        if len(got) != len(REMINDER):
+            raise StepFailed('no UNFINISHED-WORK notice naming the wait in his lead\'s transcript within %.0f s '
+                             '(lead file as seen: %s; stall-watch sees: %s); see reminder.json, stall-watch.log and '
+                             'lead-transcript-rows.txt' % (waited, ' | '.join(pointers), json.dumps(check)[:600]))
+        return evidence
+
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -293,6 +429,8 @@ def main():
     p.add_argument('--within', type=float, default=300, help='seconds for a lead to start, and for the notices')
     p.add_argument('--relaunch-within', type=float, default=120)
     p.add_argument('--approvals', type=int, default=0)
+    p.add_argument('--reminder-seconds', type=float, default=120,
+                   help='stall-watch\'s unfinished-work reminder interval in this guest (12 hours otherwise)')
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     steps = a.steps.split(',')

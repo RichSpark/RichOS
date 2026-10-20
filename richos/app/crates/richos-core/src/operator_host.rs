@@ -708,6 +708,12 @@ struct TeamLead {
     /// raised before stall-watch's first look counts as backlog (review
     /// rv-20261020T132202Z-c5ab9358-2de8).
     started: HashMap<String, u64>,
+    /// When each lead's last turn ended (Unix seconds), by session, while it is between turns:
+    /// removed the moment it is given a message or a turn begins. Written beside the session for
+    /// stall-watch's unfinished-work reminder, which waits for an idle lead: the terminal's sign
+    /// of one is the transcript's `turn_duration` row, which a `--print` lead's transcript never
+    /// has (0 of 794 on the CEO's Mac, 2026-10-20), while this host sees every turn end.
+    turn_ended: HashMap<String, u64>,
     /// Leads started this launch. A notice is kept only if none started since it looked for a
     /// running lead, so a lead that starts meanwhile is never passed over (its start hands over
     /// what was kept before it, under this lock).
@@ -755,7 +761,7 @@ impl OperatorHost {
             team_lead: Mutex::new(TeamLead::default()),
         });
         // No lead runs at launch: the watchers watch for none until one starts.
-        host.write_team_lead(None, None);
+        host.write_team_lead(&TeamLead::default());
         host
     }
 
@@ -959,7 +965,9 @@ impl OperatorHost {
     }
 
     /// The file naming the session of his team's lead, `{"session": "..."}` (`""` while none
-    /// runs), which the watchers read at every look (`engine/scripts/lib/host_child.py`).
+    /// runs), with its start and, while it is between turns, its last turn's end
+    /// ([`Self::write_team_lead`]), which the watchers read at every look
+    /// (`engine/scripts/lib/host_child.py`).
     pub fn team_watch_lead_path(&self) -> PathBuf {
         self.root.join("team-watch-lead.json")
     }
@@ -996,7 +1004,22 @@ impl OperatorHost {
         let mut lead = self.team_lead.lock().unwrap();
         if lead.session.as_deref() != Some(session) {
             lead.session = Some(session.to_string());
-            self.write_team_lead(Some(session), lead.started.get(session).copied());
+            self.write_team_lead(&lead);
+        }
+    }
+
+    /// The lead of `session` ended a turn at `ended` (Unix seconds) with nothing given to it
+    /// since, or (`None`) was given a message or began a turn. Written for the watchers only
+    /// when it changes and only for his team's lead; kept for any lead, so a lead later named
+    /// his team's by his words is written as it is.
+    fn team_lead_turn(&self, session: &str, ended: Option<u64>) {
+        let mut lead = self.team_lead.lock().unwrap();
+        let changed = match ended {
+            Some(at) => lead.turn_ended.insert(session.to_string(), at) != Some(at),
+            None => lead.turn_ended.remove(session).is_some(),
+        };
+        if changed && lead.session.as_deref() == Some(session) {
+            self.write_team_lead(&lead);
         }
     }
 
@@ -1007,9 +1030,11 @@ impl OperatorHost {
         let mut lead = self.team_lead.lock().unwrap();
         lead.starts += 1;
         lead.started.insert(session.to_string(), launched_at);
+        // A new process has ended no turn yet (and is about to be given a message).
+        lead.turn_ended.remove(session);
         // Written at every start, even of the same session: a resumed lead is a new process.
         lead.session = Some(session.to_string());
-        self.write_team_lead(Some(session), Some(launched_at));
+        self.write_team_lead(&lead);
         let path = self.team_watch_kept_path();
         let kept = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice::<Vec<String>>(&bytes),
@@ -1033,12 +1058,18 @@ impl OperatorHost {
         }
     }
 
-    /// `{"session": "...", "started": <Unix seconds>}`; `started` only when known.
-    fn write_team_lead(&self, session: Option<&str>, started: Option<u64>) {
+    /// `{"session": "...", "started": <Unix seconds>, "turn_ended": <Unix seconds>}` for his
+    /// team's lead; `started` only when known, `turn_ended` only while it is between turns. The
+    /// caller holds `team_lead`.
+    fn write_team_lead(&self, lead: &TeamLead) {
         let path = self.team_watch_lead_path();
-        let mut body = serde_json::json!({"session": session.unwrap_or("")});
-        if let Some(at) = started {
+        let session = lead.session.as_deref().unwrap_or("");
+        let mut body = serde_json::json!({"session": session});
+        if let Some(at) = lead.started.get(session) {
             body["started"] = serde_json::json!(at);
+        }
+        if let Some(at) = lead.turn_ended.get(session) {
+            body["turn_ended"] = serde_json::json!(at);
         }
         if let Err(e) = write_json(&path, &body) {
             self.log(&format!("the watchers' lead file {} could not be written ({e})", path.display()));
@@ -1124,6 +1155,8 @@ impl OperatorHost {
         })?;
         c.sent.insert(uuid.clone(), handle.map(str::to_string));
         c.awaiting.insert(uuid.clone());
+        // A message waits for it: no longer between turns, for the watchers.
+        self.team_lead_turn(&lead.session_id(), None);
         c.last_relay = Some(SystemTime::now());
         // Every untold held handle was named in this message (above), and it was written.
         c.record.untold.clear();
@@ -1394,7 +1427,11 @@ impl OperatorHost {
                 }
                 let taken = self.answer_taken(&mut c, &uuid);
                 self.continuation_taken(&mut c, &uuid);
+                let session = c.lead.as_ref().map(|l| l.session_id());
                 drop(c);
+                if let Some(session) = session {
+                    self.team_lead_turn(&session, None);
+                }
                 // The inbox lets the answer go only now (design §2.2). An answer that never
                 // entered the inbox (a direct call) has nothing to let go of.
                 if let Some(id) = taken {
@@ -1439,6 +1476,11 @@ impl OperatorHost {
                     if let Some(h) = c.turn_handle.clone() {
                         c.handle_agents.entry(h).or_default().insert(task.name.clone());
                     }
+                }
+                let session = c.lead.as_ref().map(|l| l.session_id());
+                drop(c);
+                if let Some(session) = session {
+                    self.team_lead_turn(&session, None);
                 }
             }
             LeadEvent::TurnEnded(end) => self.turn_ended(&conversation, end),
@@ -1765,7 +1807,12 @@ impl OperatorHost {
                 c.texts.pop_front();
             }
         }
+        // Between turns only with nothing more given to it: a message still awaited starts the next.
+        let idle = c.lead.as_ref().filter(|_| c.awaiting.is_empty()).map(|l| l.session_id());
         drop(c);
+        if let Some(session) = idle {
+            self.team_lead_turn(&session, Some(unix_seconds()));
+        }
         if let Some(text) = deliver {
             self.delivery.say(&key, &lane, Say::Update, &text);
         }
@@ -2553,6 +2600,51 @@ pub(crate) mod tests {
         assert!(message.contains("from fixture-mate, state=proceeding, for=lead"), "{message}");
         assert!(r.host.conversation(&key("a"), "").lock().unwrap().awaiting.len() >= 2,
                 "the host awaits the turn its notice starts, as it awaits his words");
+    }
+
+    /// **The host tells stall-watch when his team's lead is between turns**, for its
+    /// unfinished-work reminder: a `--print` lead's transcript never records a turn's end. The
+    /// lead file carries `turn_ended` only after a turn ends with nothing more given to the
+    /// lead, and loses it the moment the lead is given a message or a turn begins.
+    #[test]
+    fn the_lead_file_says_when_his_teams_lead_is_between_turns() {
+        let r = rig();
+        let read = || -> Value { serde_json::from_slice(&std::fs::read(r.host.team_watch_lead_path()).unwrap()).unwrap() };
+        let first = r.host.relay(&key("a"), "A", None, "build it", Origin::DeskTyped).unwrap();
+        let Relayed::Sent { uuid: first } = first else { panic!("not sent") };
+        let a = lead_of(&r, "a");
+        assert_eq!(read()["session"], a.session.as_str());
+        assert!(read().get("turn_ended").is_none(), "a lead given a message is not between turns: {}", read());
+        r.host.handle(&key("a"), LeadEvent::Took(first.clone()));
+        // A second message waits when the first turn ends: the next turn starts from it.
+        let Relayed::Sent { uuid: second } = r.host.relay(&key("a"), "A", None, "and this", Origin::DeskTyped).unwrap()
+            else { panic!("not sent") };
+        r.host.handle(&key("a"), turn(&[first.as_str()], Some("Working on it.")));
+        assert!(read().get("turn_ended").is_none(), "a message still waits: {}", read());
+        r.host.handle(&key("a"), LeadEvent::Took(second.clone()));
+        let before = unix_seconds();
+        r.host.handle(&key("a"), turn(&[second.as_str()], Some("Done.")));
+        let ended = read();
+        assert!(ended["turn_ended"].as_u64().is_some_and(|at| at >= before && at <= unix_seconds()), "{ended}");
+        assert_eq!(ended["session"], a.session.as_str());
+        assert!(ended["started"].as_u64().is_some(), "the start stays beside it: {ended}");
+        // A turn the platform began (an agent's frame) is not between turns either.
+        r.host.handle(&key("a"), LeadEvent::Agent(AgentTask { name: "fixture-mate".into(), task_id: "task-1".into(),
+                                                              tool_use_id: "t-1".into(), status: TaskStatus::Running }));
+        assert!(read().get("turn_ended").is_none(), "{}", read());
+        r.host.handle(&key("a"), turn(&[], None));
+        assert!(read()["turn_ended"].as_u64().is_some(), "{}", read());
+        // A watcher's notice is a message too.
+        let Told::Sent(notice) = r.host.tell_team("UNFINISHED-WORK 10:00Z: 1 finished-work item(s) remain unresolved.")
+            .unwrap() else { panic!("kept, though a lead runs") };
+        assert!(read().get("turn_ended").is_none(), "{}", read());
+        // His words name another conversation's lead: a turn of the first lead ending is not written.
+        r.host.relay(&key("b"), "B", None, "other", Origin::DeskTyped).unwrap();
+        let b = lead_of(&r, "b");
+        r.host.handle(&key("a"), turn(&[notice.as_str()], None));
+        let named = read();
+        assert_eq!(named["session"], b.session.as_str(), "his words named b's lead");
+        assert!(named.get("turn_ended").is_none(), "b's own message still waits: {named}");
     }
 
     /// **Codex-watch wakes his team's lead in the app**: Codex writes an entry to the lead; the

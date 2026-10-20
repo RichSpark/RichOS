@@ -36,6 +36,7 @@ class ReminderTests(unittest.TestCase):
                                           "STALL_WATCH_SESSION_START": str(self.start)})
         self.env.start()
         self.addCleanup(self.env.stop)
+        os.environ.pop("RICHOS_WATCH_LEAD", None)   # a terminal watcher unless a case names the host's file
 
     def write_rows(self, *rows):
         self.transcript.write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -84,6 +85,49 @@ class ReminderTests(unittest.TestCase):
         self.src.ws.pending.assert_not_called()
         self.transcript.unlink()
         self.assertEqual(self.remind(self.due)[0], [])
+
+    def host_says(self, **lead):
+        """The app host's lead file (operator_host.rs write_team_lead), named as the host names it."""
+        path = self.root / "team-watch-lead.json"
+        path.write_text(json.dumps(lead))
+        os.environ["RICHOS_WATCH_LEAD"] = str(path)
+        return path
+
+    def test_app_host_turn_end_is_idle_for_a_print_mode_lead(self):
+        """THE APP'S LEAD. It runs `claude --print`, whose transcript never has a turn_duration row
+        (0 of 794 print-mode transcripts on this Mac, 2026-10-20): its turn ends on an end_turn
+        assistant row. Under the host, the host's word that the turn ended is the idle signal, so
+        the reminder reaches that lead; while the host says a turn runs (no turn_ended), it waits."""
+        self.write_rows({"type": "user", "message": {"content": "Check on my team."}},
+                        {"type": "assistant", "message": {"stop_reason": "end_turn"}})
+        self.host_says(session="session", started=self.start, turn_ended=self.due - 5)
+        lines, state, problems = self.remind(self.due)
+        self.assertIn("UNFINISHED-WORK", "\n".join(lines))
+        self.assertIn("waiting for its review", "\n".join(lines))
+        self.assertEqual((problems, state["checked_at"]), ([], self.due))
+        # A turn running (the host removed turn_ended), another lead named, or the file unreadable:
+        # never idle, even beside a transcript that would read as idle in the terminal.
+        self.write_rows({"type": "system", "subtype": "turn_duration"})
+        for lead in ({"session": "session", "started": self.start},
+                     {"session": "another-session", "started": self.start, "turn_ended": self.due},
+                     {"session": "session", "turn_ended": True}):
+            with self.subTest(lead=lead):
+                self.host_says(**lead)
+                self.assertEqual(self.remind(self.due)[0], [])
+        self.host_says(session="session").write_text("{broken")
+        self.assertEqual(self.remind(self.due)[0], [])
+        self.src.ws.pending.assert_called_once()
+
+    def test_terminal_control_still_refuses_a_bare_end_of_reply_row(self):
+        """The terminal's rule is unchanged: with no host file named, an end_turn row alone is not
+        idle; only the recorded turn end is."""
+        self.write_rows({"type": "user", "message": {"content": "Check on my team."}},
+                        {"type": "assistant", "message": {"stop_reason": "end_turn"}})
+        self.assertNotIn("RICHOS_WATCH_LEAD", os.environ)
+        self.assertEqual(self.remind(self.due)[0], [])
+        self.src.ws.pending.assert_not_called()
+        self.write_rows({"type": "system", "subtype": "turn_duration"})
+        self.assertTrue(self.remind(self.due)[0])
 
     def test_large_transcript_and_sidechain_use_latest_lead_turn_end(self):
         self.transcript.write_text('x' * (300 * 1024) + '\n' +
