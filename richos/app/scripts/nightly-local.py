@@ -182,6 +182,13 @@ def owned_run(args, **kwargs):
 ROOT = Path(__file__).resolve().parents[3]
 REPO = "WebDevBooster/richos"
 SCRIPTS = Path("richos/app/scripts")
+# The engine's land-lease.sh and second-review.sh, in main's own checkout: the copies main's
+# fences name in their refusals (Runner.commit_on_main).
+ENGINE_SCRIPTS = Path("richos/engine/scripts")
+# autocheck.py's land target: a commit in a detached checkout runs the land checks a commit to
+# that branch runs, and leaves the receipt the fast-forward of main then finds.
+LAND_TARGET_ENV = "RICHOS_AUTOCHECK_LAND_TARGET"
+MAIN_COMMIT_CHECKOUT = "main-commit"
 GUI_BOOT_SUITE = SCRIPTS / "gui-boot.test.sh"
 
 # THE ONLY DECLARED HOST GAP OF THIS BUILD. `run-tests.sh` discovers every *.test.sh beside
@@ -1594,7 +1601,7 @@ class Runner:
                            f"the next nightly is {moved['following']}-nightly.N and its plan does "
                            "not refuse.")
 
-        commit = self.commit_on_main(change, "the bump")
+        commit = self.commit_on_main(change, "the bump of main's next release version", f"v{released}")
         if commit is None:
             self.announce(f"main's next release version is already past {released}; nothing bumped.")
             return None
@@ -1603,25 +1610,41 @@ class Runner:
                       f"the next nightly is {following}-nightly.N.")
         return commit
 
-    def git(self, *args, cwd):
+    def git(self, *args, cwd, env=None):
         """`git ARGS` in `cwd`: its output, with everything it said in the run log."""
         result = subprocess.run(["git", *map(str, args)], cwd=cwd, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, env=env)
         self.log.write(result.stdout + result.stderr)
         if result.returncode:
             raise ValueError(f"git {args[0]} failed: {(result.stderr or result.stdout).strip()}")
         return result.stdout
 
-    def commit_on_main(self, change, what):
+    def engine_script(self, checkout, name, *args):
+        """The engine's `name` from main's own tree, as the fences name it: (exit code, what it said)."""
+        result = subprocess.run(["bash", str(checkout / ENGINE_SCRIPTS / name), *map(str, args)],
+                                cwd=checkout, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        said = (result.stdout + result.stderr).strip()
+        self.log.write(f"{name} {' '.join(map(str, args))}: exit {result.returncode}\n{said}\n")
+        return result.returncode, said
+
+    def commit_on_main(self, change, what, published):
         """Commit `change`'s files on main and push them: the new commit, or None.
 
-        `change(checkout)` is given the checkout where main is, at origin/main, and returns
-        None when there is nothing to change, else ({path: text}, commit message).
+        `change(checkout)` is given a checkout at origin/main and returns None when there is
+        nothing to change, else ({path: text}, commit message). `published` is the release
+        whose publish this commit follows.
 
-        An ordinary commit on main, made where main is checked out, exactly as a hand edit
-        would be: its pre-commit hook runs the land checks and its push is the usual push of
-        main. Nothing is skipped, and nothing is done to a checkout that is not on
-        origin/main with no changes: then it refuses, and the caller names what to do by hand.
+        LANDED AS RICH LANDED IT BY HAND (2026-10-20, 682f997c5, 712725060 and 11b89d23d, after
+        main's fences refused this command's own commits three times: the land lease was not
+        held and the commit had no second review). In order: the land lease is taken, or kept
+        when this process already holds it; the commit is made in a detached checkout of its
+        own, with the land checks a commit to main runs (its pre-commit hook, told the land
+        target), so main does not move before it is reviewed; the second review of exactly
+        that commit, asked with a request naming `published` and what the commit is; on a
+        passing verdict only, main is fast-forwarded to it where main is checked out and
+        pushed; a lease this call took is released. Anything short of that raises, main has
+        not moved, and the caller's one line names what is missing and the command for it.
+        Nothing is done where main is checked out unless it is on origin/main with no changes.
         """
         git = self.git
         listed = git("worktree", "list", "--porcelain", cwd=self.repo).split("\n\n")
@@ -1629,29 +1652,77 @@ class Runner:
                          for block in listed if "branch refs/heads/main" in block.splitlines()), None)
         if checkout is None:
             raise ValueError(f"main is not checked out in any worktree of {self.repo}")
-        git("fetch", "origin", "refs/heads/main", cwd=checkout)
-        tip = git("rev-parse", "FETCH_HEAD", cwd=checkout).strip()
-        if git("rev-parse", "HEAD", cwd=checkout).strip() != tip:
-            raise ValueError(f"main in {checkout} is not origin/main ({tip[:12]}); it has to be, "
-                             f"so that {what} is the only change pushed")
-        if git("status", "--porcelain", "--untracked-files=no", cwd=checkout).strip():
-            raise ValueError(f"main in {checkout} has uncommitted changes")
-        made = change(checkout)
-        if made is None:
-            return None
-        files, message = made
-        for path, text in files.items():
-            (checkout / path).write_text(text)
+        code, said = self.engine_script(checkout, "land-lease.sh", "acquire", "--repo", checkout)
+        if code:
+            raise ValueError(f"this command could not take the land lease, so main did not move "
+                             f"(land-lease.sh acquire exit {code}: {said.splitlines()[-1] if said else ''})")
+        took = "land-lease: ACQUIRED" in said
+        # Per process: `changelog --tag` runs beside a nightly that may be committing too.
+        made = self.state / f"{MAIN_COMMIT_CHECKOUT}-{os.getpid()}"
+        request = self.state / f"{MAIN_COMMIT_CHECKOUT}-{os.getpid()}-request.txt"
         try:
-            git("add", *files, cwd=checkout)
-            git("-c", "user.useConfigOnly=true", "commit", "-m", message, cwd=checkout)
-        except ValueError:
-            # Back to exactly what was there: this change's own files, nothing else.
-            git("checkout", "HEAD", "--", *files, cwd=checkout)
-            raise
-        commit = git("rev-parse", "HEAD", cwd=checkout).strip()
-        git("push", "origin", "refs/heads/main:refs/heads/main", cwd=checkout)
-        return commit
+            git("fetch", "origin", "refs/heads/main", cwd=checkout)
+            tip = git("rev-parse", "FETCH_HEAD", cwd=checkout).strip()
+            if git("rev-parse", "HEAD", cwd=checkout).strip() != tip:
+                raise ValueError(f"main in {checkout} is not origin/main ({tip[:12]}); it has to be, "
+                                 f"so that {what} is the only change pushed")
+            if git("status", "--porcelain", "--untracked-files=no", cwd=checkout).strip():
+                raise ValueError(f"main in {checkout} has uncommitted changes")
+            self.remove_main_commit_checkout(checkout, made)
+            made.parent.mkdir(parents=True, exist_ok=True)
+            git("worktree", "add", "--detach", made, tip, cwd=checkout)
+            changed = change(made)
+            if changed is None:
+                return None
+            files, message = changed
+            for path, text in files.items():
+                (made / path).write_text(text)
+            git("add", *files, cwd=made)
+            git("-c", "user.useConfigOnly=true", "commit", "-m", message, cwd=made,
+                env={**os.environ, LAND_TARGET_ENV: "main"})
+            commit = git("rev-parse", "HEAD", cwd=made).strip()
+            request.write_text(
+                f"{published} is published. This commit is {what}, which `nightly-local.py` writes "
+                f"on main by itself after that publish. Its message:\n\n{message}\n")
+            code, said = self.engine_script(checkout, "second-review.sh", "--repo", checkout,
+                                            "--tip", commit, "--words-file", request)
+            if code:
+                verdict = [line for line in said.splitlines()
+                           if line.startswith("SECOND-REVIEW ") and "RECEIPT" not in line]
+                raise ValueError(f"the second review of {commit[:12]} did not pass, so main did not "
+                                 f"move (second-review.sh exit {code}: "
+                                 f"{(verdict or said.splitlines() or [''])[-1]})")
+            try:
+                git("merge", "--ff-only", commit, cwd=checkout)
+            except ValueError:
+                # A fast-forward the fence refuses leaves this change's files staged where main
+                # is: put back exactly those that hold this commit's bytes, nothing else.
+                ours = [path for path in files
+                        if git("rev-parse", f":{path}", cwd=checkout)
+                        == git("rev-parse", f"{commit}:{path}", cwd=checkout)
+                        != git("rev-parse", f"HEAD:{path}", cwd=checkout)]
+                if ours:
+                    git("checkout", "HEAD", "--", *ours, cwd=checkout)
+                raise
+            git("push", "origin", "refs/heads/main:refs/heads/main", cwd=checkout)
+            return commit
+        finally:
+            request.unlink(missing_ok=True)
+            try:
+                self.remove_main_commit_checkout(checkout, made)
+            except ValueError as error:
+                self.announce(f"{made} could not be removed ({error}); "
+                              f"git worktree remove --force {made} removes it")
+            if took:
+                code, said = self.engine_script(checkout, "land-lease.sh", "release", "--repo", checkout)
+                if code:
+                    self.announce(f"the land lease this command took could not be released: {said}")
+
+    def remove_main_commit_checkout(self, checkout, made):
+        """The detached checkout `commit_on_main` commits in: gone, and no longer listed by git."""
+        listed = self.git("worktree", "list", "--porcelain", cwd=checkout)
+        if made.exists() or f"worktree {made}\n" in listed:
+            self.git("worktree", "remove", "--force", made, cwd=checkout)
 
     def write_changelog(self, tag):
         """After `tag` is published: its changelog entry on main, or ONE line saying it is missing.
@@ -1709,7 +1780,7 @@ class Runner:
                 f"Claude ({CHANGELOG_MODEL}) from those commits with "
                 f"{CHANGELOG_INSTRUCTIONS.relative_to(ROOT)}.")
 
-        commit = self.commit_on_main(change, "the changelog entry")
+        commit = self.commit_on_main(change, f"the changelog entry for {tag} in {path}", tag)
         if commit is None:
             self.announce(f"{path} already has ## {version}; nothing written.")
             return None
