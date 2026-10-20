@@ -3011,6 +3011,11 @@ class Runner:
         failed there leaves the tag free and its retry announces it again. Of several, the
         one that finished building is the builder: only a finished build or release writes
         its `phase timings for run` summary after the announcement.
+
+        ONLY A RUN THAT FINISHED IS EVER THE BUILDER, ALONE AS WELL (verification reliability
+        PRD A13, 2026-10-20). One run that announced the tag was taken as its builder whether
+        or not it finished: a build that failed, was stopped, or is still going supplied the
+        "run that built" the nightly. Announcing a tag is not building it.
         """
         said = {f"Building {tag}...", f"Building and publishing {tag}..."}
         logs = self.state / "logs"
@@ -3032,12 +3037,16 @@ class Runner:
                              "gates to reuse, and `stable` never reruns them without being told. "
                              f"Name the run with {PASSED_GATES_FLAG} RUN, or run every gate again "
                              f"with {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
-        if len(found) > 1 and len(finished) == 1:
+        if len(finished) == 1:
             return finished[0]
-        if len(found) > 1:
-            raise ValueError(f"{len(found)} runs say they built {tag} ({', '.join(found)}); name "
-                             f"the one to reuse with {PASSED_GATES_FLAG} RUN. Nothing was built.")
-        return found[0]
+        if not finished:
+            raise ValueError(f"{len(found)} run(s) announced {tag} ({', '.join(found)}) and none of "
+                             "them finished building it (no `phase timings for run` after the "
+                             "announcement): a failed, stopped or unfinished attempt built nothing, so "
+                             f"its gates are not reused. Name the run with {PASSED_GATES_FLAG} RUN, or "
+                             f"run every gate again with {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
+        raise ValueError(f"{len(found)} runs say they built {tag} ({', '.join(found)}); name "
+                         f"the one to reuse with {PASSED_GATES_FLAG} RUN. Nothing was built.")
 
     def accept_passed_gates(self, run_id, command):
         """What `--gates-passed-in RUN` may reuse: RUN's source and its suite record, or refuse.

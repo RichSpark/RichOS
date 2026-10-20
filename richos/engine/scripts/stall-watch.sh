@@ -14,6 +14,9 @@
 #                              looks every 60 s and prints each stall once;
 #                              every printed block reaches the lead as a
 #                              notification, and it keeps going.
+#                              About every 12 hours, at an idle opportunity,
+#                              it also reminds the lead of unresolved finished
+#                              work, including work with a recorded wait.
 #   stall-watch.sh --alive     one line: is this session watched, and when did
 #                              it last look (0 watched, 1 not, 2 no session)
 #   stall-watch.sh --watch     the fallback where plugin monitors do not run:

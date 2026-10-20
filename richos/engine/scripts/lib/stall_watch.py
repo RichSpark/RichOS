@@ -73,6 +73,10 @@ WHAT IS A STALL (every threshold, and why)
    minutes for a turn that no hook could start. It prints its own
    ESCALATION-WATCH block, first in the look's output.
 
+5. UNRESOLVED FINISHED WORK: about every twelve hours, at an idle opportunity,
+   the canonical pending-work list is read without changing it. Recorded waits
+   are included for reassessment. An empty list produces no notification.
+
 ===========================================================================
 HOW OFTEN IT SPEAKS (nothing spams)
 ===========================================================================
@@ -138,6 +142,7 @@ POLL_SECONDS = 60
 SILENT_MINUTES = 20
 SELF_WAIT_MINUTES = 2
 REPEAT_MINUTES = 30
+PENDING_WORK_SECONDS = 12 * 60 * 60
 CLEAR_AFTER_MISSES = 2
 STATE_KEEP_SECONDS = 2 * 86400
 PROOF_SLOT_REASON = "proof-run: waiting for a proof-run slot"
@@ -1369,6 +1374,90 @@ def escalation_watch(src, now, sid, prev, th):
 
 
 # ---------------------------------------------------------------------------
+# unfinished-work reminders
+# ---------------------------------------------------------------------------
+
+def lead_is_idle(src, sid):
+    """Use the recorded turn end, never a quiet-but-still-running model call.
+
+    Read only a bounded tail. An unreadable or incomplete transcript leaves
+    the reminder due until a later look can establish that the lead is idle.
+    """
+    path = lead_transcript(src, sid)
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            start = max(0, size - 256 * 1024)
+            fh.seek(start)
+            tail = fh.read()
+        if not tail.endswith(b"\n"):
+            return False
+        rows = tail.splitlines()[1 if start else 0:]
+        for raw in reversed(rows):
+            row = json.loads(raw)
+            if not isinstance(row, dict):
+                return False
+            if row.get("isSidechain"):
+                continue
+            if row.get("type") in ("user", "assistant"):
+                return False
+            if row.get("type") == "system" and row.get("subtype") == "turn_duration":
+                return True
+            if (row.get("attachment") or {}).get("type") == "queued_command":
+                return False
+    except (OSError, ValueError, TypeError):
+        pass
+    return False
+
+
+def pending_work_reminder(src, now, sid, prev):
+    """A read-only reminder about every twelve hours, at an idle opportunity.
+
+    The existing session state preserves the clock across monitor restarts.
+    New sessions already receive the workspace lifecycle's reconciliation.
+    A recorded wait remains on this list; the reminder expires no wait and
+    never lands, discards or modifies the workspace registry.
+    """
+    prev = dict(prev or {})
+    if not sid or src.ws is None:
+        return [], prev, []
+    checked = prev.get("checked_at")
+    if not isinstance(checked, (int, float)):
+        checked = session_started(src, sid)
+        checked = now if checked is None else checked
+    if checked > now:
+        checked = now
+    state = {"checked_at": checked}
+    if prev.get("problem"):
+        state["problem"] = prev["problem"]
+    problems = [state["problem"]] if state.get("problem") else []
+    if now - checked < PENDING_WORK_SECONDS or not lead_is_idle(src, sid):
+        return [], state, problems
+    try:
+        if src.ws.damaged_records():
+            raise ValueError("the workspace registry contains unreadable records")
+        items = src.ws.pending(sid, auto=False, dry=True)
+    except Exception as exc:  # noqa: BLE001: a failed read leaves the reminder due
+        state["problem"] = "unfinished work could not be read (%s: %s)" % (
+            exc.__class__.__name__, str(exc)[:160])
+        return [], state, [state["problem"]]
+    state = {"checked_at": now}
+    if not items:
+        return [], state, []
+    lines = ["UNFINISHED-WORK %s: %d finished-work item(s) remain unresolved. Review their recorded waits "
+             "and handle anything that can now proceed; keep legitimate waits." % (hhmm(now), len(items))]
+    for item in items[:10]:
+        name = " ".join(str(item["name"]).split())
+        reason = " ".join(str(item.get("waiting_on") or item.get("why") or "unresolved").split())
+        lines.append("  %s: %s" % (name[:100], reason[:200]))
+    if len(items) > 10:
+        lines.append("  %d more item(s)." % (len(items) - 10))
+    lines.append("  Read the full pending list with mega-lander/workspaces.sh status. This is a reminder, "
+                 "not a completion deadline or authorization to discard work.")
+    return lines, state, []
+
+
+# ---------------------------------------------------------------------------
 # state, the session, and the loop
 # ---------------------------------------------------------------------------
 
@@ -1470,6 +1559,7 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
     state = _read_json(path)
     esc_prev = state.get("esc")
     idle_prev = state.get("idle")
+    pending_lines, pending_state, pending_problems = pending_work_reminder(src, now, sid, state.get("pending_work"))
     try:
         # Before the look, so a stall it ends is never also announced as one.
         idle_lines, idle_state = idle_end(src, now, sid, idle_prev)
@@ -1483,7 +1573,7 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
         esc_problems = ["the escalation watch failed (%s: %s)" % (exc.__class__.__name__, str(exc)[:160])]
     try:
         stalls, problems = look(src, now, sid, th)
-        problems = problems + esc_problems
+        problems = problems + esc_problems + pending_problems
     except Exception as exc:  # noqa: BLE001: one failed look is reported, never the end of watching
         stalls, problems = [], []
         problems.append("a look failed (%s: %s)" % (exc.__class__.__name__, str(exc)[:160]))
@@ -1501,15 +1591,16 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
     if esc_state is not None:
         state["esc"] = esc_state
     state["idle"] = idle_state
+    state["pending_work"] = pending_state
     # The ESCALATION-WATCH block goes FIRST: a monitor event counts as having
     # told the lead only when its <event> body starts with ESCALATION-WATCH
     # (escalations.monitor_event_keys).
-    lines = esc_lines + idle_lines + lines
-    _write_json(path, state)
+    lines = esc_lines + idle_lines + lines + pending_lines
     if lines:
         text = "\n".join(lines)
         out.write((json.dumps({"text": text}) if json_lines else text) + "\n")
         out.flush()
+    _write_json(path, state)
     return len(lines), len(state.get("open") or {})
 
 
