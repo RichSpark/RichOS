@@ -49,6 +49,50 @@ class ProductionQualification(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "qualification omits tools: " + tool):
                         evidence.recipe_identity(root, broken, {})
 
+    def test_every_declared_ui_suite_resolves_through_the_one_family_entry(self):
+        """Every row of proof-for.ui-inputs is a family recipe that qualifies, or is left
+        unqualified with its reason; removing a floor input refuses it (PRD 2026-10-20, A10)."""
+        root = HERE.parents[2]
+        data = json.loads((HERE / "proof-inputs.json").read_text())
+        family = data["families"][evidence.UI_FAMILY]
+        rows, _aliases = evidence.ui_declaration(root / family["declaration"])
+        self.assertGreater(len(rows), 50)
+        self.assertFalse(set(family["unqualified"]) - set(rows), "an unqualified suite with no row")
+        for label in rows:
+            with self.subTest(label=label):
+                recipe = evidence.contract_for(root, label)
+                if label in family["unqualified"]:
+                    self.assertIn("leaves %s unqualified" % label, recipe["fresh"])
+                    continue
+                self.assertEqual(recipe.get("family"), evidence.UI_FAMILY, recipe.get("fresh"))
+                evidence.qualify_recipe(root, recipe)
+                self.assertIn("richos/app/ui/tests/" + label, recipe["paths"])
+                self.assertIn("richos/app/ui/theme-boot.js", recipe["paths"])
+        contract = json.loads((root / family["qualification"]).read_text())["units"][family["qualification_unit"]]
+        recipe = evidence.contract_for(root, "setup.js")
+        for field in ("paths", "tools", "environment"):
+            for value in contract["common"]["requires"][field] + contract["requires"][field]:
+                with self.subTest(field=field, value=value):
+                    broken = {**recipe, field: [v for v in recipe[field] if v != value]}
+                    with self.assertRaisesRegex(ValueError, "qualification omits " + field):
+                        evidence.qualify_recipe(root, broken)
+
+    def test_every_environment_name_a_ui_suite_reads_is_bound_or_operational(self):
+        """The family binds the environment names its review lists; a suite that starts reading
+        a new one must add it there (or say why it is operational) before reuse can skip it."""
+        import re
+        root = HERE.parents[2]
+        family = json.loads((HERE / "proof-inputs.json").read_text())["families"][evidence.UI_FAMILY]
+        tests = root / family["suites"]
+        read = set()
+        for path in [*tests.glob("*.js"), *tests.glob("lib/*.js"), *tests.glob("fixtures/*.js")]:
+            read |= set(re.findall(r"process\.env(?:\.|\[[\"'])([A-Z_][A-Z0-9_]*)", path.read_text(errors="replace")))
+        self.assertGreater(len(read), 10)
+        missing = sorted(read - set(family["environment"]) - set(family["operational"]))
+        self.assertEqual(missing, [], "environment names UI suites read that the family neither binds "
+                                      "nor declares operational")
+        self.assertFalse(set(family["environment"]) & set(family["operational"]))
+
     def test_every_subset_identity_binds_the_guard_the_host_shield_loads(self):
         """The host shield runs every check and judges it with the guard's own analyzer, read out
         of guard-host-display-power.sh at run time. A subset recipe that left that file out kept
