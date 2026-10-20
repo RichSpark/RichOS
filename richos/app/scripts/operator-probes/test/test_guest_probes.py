@@ -123,6 +123,22 @@ class KernelEnvironment(unittest.TestCase):
         self.assertIsNone(self.read(['/bin/sleep', '30'], {'PROBE_NAME_ONE': 'x', 'PATH': '/usr/bin:/bin'}))
 
 
+class StoredEnvironment(unittest.TestCase):
+    """His terminal runs `claude` by name, so the PATH enable.sh stores from it finds claude, and
+    his engine's hooks (Pierce's `shutil.which('claude')`) rely on that. The guest's login shell
+    does not put the installer's folder on PATH; on 2026-10-20 every probe that starts a teammate
+    was refused by Pierce with "Claude Code executable was not found on PATH" for that reason."""
+
+    def test_the_stored_path_finds_the_guest_claude_first_and_keeps_the_rest(self):
+        stored = gp.stored_environment({'PATH': '/opt/homebrew/bin:/usr/bin:/bin', 'USER': 'admin', 'SECRET': 'x'})
+        self.assertEqual(stored['PATH'], '/Users/admin/.local/bin:/opt/homebrew/bin:/usr/bin:/bin')
+        self.assertEqual(sorted(stored), ['LANG', 'PATH', 'USER'])
+
+    def test_a_path_that_already_finds_it_is_stored_unchanged(self):
+        path = '/opt/homebrew/bin:/Users/admin/.local/bin:/usr/bin:/bin'
+        self.assertEqual(gp.stored_environment({'PATH': path})['PATH'], path)
+
+
 class Record(unittest.TestCase):
     def test_the_record_step_refuses_the_public_repository_and_bounds_long_strings(self):
         rspec = importlib.util.spec_from_file_location('record', HERE.parent / 'record.py')

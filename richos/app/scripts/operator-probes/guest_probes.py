@@ -341,6 +341,19 @@ def login_environment():
     return env
 
 
+def stored_environment(login):
+    """What enable.sh stores from his terminal: the allowlist, with `claude` findable on PATH.
+    His terminal runs `claude` by name, so its PATH has the installer's folder, and his engine's
+    hooks rely on that (Pierce runs `shutil.which('claude')`). The guest's login shell does not
+    add it, so the harness does, first, unless it is already there."""
+    stored = {k: login[k] for k in ALLOWLIST if k in login}
+    stored.setdefault('LANG', 'en_US.UTF-8')
+    folder = os.path.dirname(GUEST_CLAUDE)
+    path = stored.get('PATH', '/usr/bin:/bin')
+    stored['PATH'] = path if folder in path.split(':') else folder + ':' + path
+    return stored
+
+
 def git(cwd, *args):
     code, out, err = run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false',
                           '-c', 'user.name=Probe', '-c', 'user.email=probe@example.invalid'] + list(args),
@@ -466,8 +479,7 @@ class Context(object):
         self.p = p
         self.timeout = timeout
         self.login = login_environment()
-        self.stored = {k: self.login[k] for k in ALLOWLIST if k in self.login}
-        self.stored.setdefault('LANG', 'en_US.UTF-8')
+        self.stored = stored_environment(self.login)
         self.ssh_auth_sock, self.ssh_method = derive_ssh_auth_sock()
         code, out, _ = run(['getconf', 'DARWIN_USER_TEMP_DIR'])
         self.tmpdir = out.strip()
@@ -2733,9 +2745,8 @@ def w2_fixture(ctx, r):
     lc.write_text('#!/bin/sh\n[ "$1 $2" = "getenv SSH_AUTH_SOCK" ] || exit 9\necho %s\n' % (sock or ''))
     os.chmod(str(lc), 0o755)
     # The stored environment enable.sh would write: the allowlist, plus the harness's pin, with
-    # the guest's claude first on PATH.
+    # the guest's claude on PATH (stored_environment).
     stored = dict(ctx.stored, **HARNESS_PIN)
-    stored['PATH'] = '/Users/admin/.local/bin:' + stored.get('PATH', '/usr/bin:/bin')
     import hashlib
     decl = {'schema': 1, 'entity_root': str(p.entity), 'engine_root': str(p.engine), 'home': str(p.home),
             'claim': {'file': str(p.claude_dir / 'state' / 'operator-lead.json'),
