@@ -24,63 +24,31 @@ spec = importlib.util.spec_from_file_location("local_nightly", Path(__file__).wi
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
-# Every publish, release and stable ends by writing its changelog entry, which reads GitHub,
-# runs `claude` and pushes main. No test reaches any of those by accident: each Runner records
-# the tags it was asked to write instead. ChangelogTests runs the real step, against a real
-# main and remote of its own, with GitHub's answers given and a stub in place of `claude`.
-WRITE_CHANGELOG = m.Runner.write_changelog
+# Every publish, release and stable ends by raising one escalation for the lead. No test reaches
+# the operator's real escalation ledger by accident: each Runner records the (tag, stable) it was
+# asked to report instead, and the ledger is pointed at a file of this run's own besides.
+# PublishedReportTests runs the real step, with the real escalate.sh, against a ledger and a
+# real main and remote of its own.
+REPORT_PUBLISHED = m.Runner.report_published
+LEDGER = tempfile.TemporaryDirectory(prefix="nightly-local-ledger-")
+LEDGER_ENV = "RICHOS_ESCALATION_LEDGER"
+LEDGER_BEFORE = os.environ.get(LEDGER_ENV)
 
 
 def setUpModule():
-    def record(runner, tag):
-        runner.__dict__.setdefault("changelogs_written", []).append(tag)
-    m.Runner.write_changelog = record
+    def record(runner, tag, stable=False):
+        runner.__dict__.setdefault("published_reported", []).append((tag, stable))
+    m.Runner.report_published = record
+    os.environ[LEDGER_ENV] = str(Path(LEDGER.name) / "escalations.jsonl")
 
 
 def tearDownModule():
-    m.Runner.write_changelog = WRITE_CHANGELOG
-
-
-def stub_main_fences(test, root):
-    """Stand-ins for the engine's land-lease.sh and second-review.sh beside a fixture's main.
-
-    Each call is recorded in `root/fence-calls` (the review with its tip and where main was
-    while it ran) and the review's request in `root/review-request`. The lease answers as
-    FENCE_LEASE says (acquired, renewed: this process already holds it, held: someone else
-    does) and the review as FENCE_REVIEW (passed, or changes-requested).
-    """
-    scripts = root / "engine-scripts"
-    scripts.mkdir()
-    (scripts / "land-lease.sh").write_text(
-        '#!/bin/sh\necho "land-lease.sh $1" >> "$FENCE_STUBS/fence-calls"\n'
-        'case "$1:$FENCE_LEASE" in\n'
-        '  acquire:held) echo "land-lease: HELD. Codex (process 4242) holds the land lease for $3, '
-        'taken 3 min ago; the repository is at rest. Waited 90 s. Run this command again."; exit 75 ;;\n'
-        '  acquire:renewed) echo "land-lease: RENEWED the land lease for $3 as your terminal." ;;\n'
-        '  acquire:*) echo "land-lease: ACQUIRED the land lease for $3 as your terminal." ;;\n'
-        '  release:*) echo "land-lease: RELEASED the land lease for $3." ;;\n'
-        'esac\n')
-    (scripts / "second-review.sh").write_text(
-        '#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n'
-        '    --repo) repo=$2; shift 2 ;;\n    --tip) tip=$2; shift 2 ;;\n'
-        '    --words-file) cp "$2" "$FENCE_STUBS/review-request"; shift 2 ;;\n'
-        '    *) shift ;;\n  esac\ndone\n'
-        'echo "second-review.sh $tip main-at:$(git -C "$repo" rev-parse refs/heads/main)" '
-        '>> "$FENCE_STUBS/fence-calls"\n'
-        'if [ "$FENCE_REVIEW" = passed ]; then\n'
-        '  echo "SECOND-REVIEW passed main@$tip by codex (gpt): 0 finding(s), 0 blocking, 0 P1. Record: /r"\n'
-        '  exit 0\nfi\n'
-        'echo "SECOND-REVIEW changes-requested main@$tip by codex (gpt): 1 finding(s), 1 blocking, '
-        '0 P1. Record: /r"\nexit 1\n')
-    patcher = patch.object(m, "ENGINE_SCRIPTS", scripts)
-    patcher.start()
-    test.addCleanup(patcher.stop)
-    os.environ.update({"FENCE_STUBS": str(root), "FENCE_LEASE": "acquired", "FENCE_REVIEW": "passed"})
-
-
-def fence_calls(root):
-    path = root / "fence-calls"
-    return path.read_text().splitlines() if path.exists() else []
+    m.Runner.report_published = REPORT_PUBLISHED
+    if LEDGER_BEFORE is None:
+        os.environ.pop(LEDGER_ENV, None)
+    else:
+        os.environ[LEDGER_ENV] = LEDGER_BEFORE
+    LEDGER.cleanup()
 
 
 class LocalTests(unittest.TestCase):
@@ -1180,8 +1148,8 @@ while True: time.sleep(.02)
         # The publisher is the step that signs, notarizes and signs the updater manifest.
         self.assertIs(r.command.call_args.kwargs["credentials"], True)
         self.assertEqual(r.plan.call_count, 2)
-        # Published, so its changelog entry is the last step.
-        self.assertEqual(r.changelogs_written, ["v1.2.0-nightly.20260916.1"])
+        # Published, so asking the lead for its changelog entry is the last step.
+        self.assertEqual(r.published_reported, [("v1.2.0-nightly.20260916.1", False)])
 
     def test_only_the_build_step_is_registered_with_the_cpu_guard_as_a_release_build(self):
         # Run 20260928T190111Z-40a16163: every gate passed, then the CPU guard's 10-second
@@ -1387,38 +1355,27 @@ while True: time.sleep(.02)
         r.summary = Mock()
         r.stable_plan = Mock(return_value=(self.root / "stable-plan.json", {
             "tag": "v1.2.0", "version": "1.2.0", "source_commit": source_commit or self.SOURCE}))
-        r.bump_next_version = Mock()
         r.env["RICHOS_NIGHTLY_RUN_ID"] = "20261019T120000Z-0000000f"
         r.vm_boot_proof = Mock(return_value=None)
         return r
 
-    def test_a_published_stable_ends_by_bumping_main_and_says_so_when_it_cannot(self):
+    def test_a_published_stable_ends_by_asking_for_its_changelog_entry_and_mains_bump(self):
         # CEO, 2026-10-19: "Can I assume that because v1.2.0 stable has now been published,
         # the next nightly version is automatically guaranteed to NOT start with
-        # "1.2.0-nightly"?" Yes: the stable run's last step bumps main.
+        # "1.2.0-nightly"?" and 2026-10-20: a worker writes, the release command does not. So
+        # the stable run's last step asks the lead for both, as a stable.
         self.recorded_run(grade="build")
         r = self.stable_runner()
         with contextlib.redirect_stdout(io.StringIO()):
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
-        r.bump_next_version.assert_called_once_with("1.2.0")
-        self.assertEqual(r.changelogs_written, ["v1.2.0"])
-        # A bump that fails after the upload never hides that the release is out, and the
-        # release's changelog entry is still written.
-        r = self.stable_runner()
-        r.bump_next_version = Mock(side_effect=ValueError("main has uncommitted changes"))
-        with self.assertRaisesRegex(RuntimeError, "v1.2.0 IS PUBLISHED, but main's next release "
-                                    "version was not bumped: main has uncommitted changes"), \
-                contextlib.redirect_stdout(io.StringIO()):
-            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
-        self.assertEqual(r.changelogs_written, ["v1.2.0"])
-        # A dry run publishes nothing, so it bumps nothing.
+        self.assertEqual(r.published_reported, [("v1.2.0", True)])
+        # A dry run publishes nothing, so it asks for nothing.
         r = self.stable_runner()
         r.describe_stable = Mock()
         with contextlib.redirect_stdout(io.StringIO()):
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED,
                       dry_run=True)
-        r.bump_next_version.assert_not_called()
-        self.assertNotIn("changelogs_written", r.__dict__)
+        self.assertNotIn("published_reported", r.__dict__)
 
     def test_stable_reuses_the_gates_of_the_run_that_built_the_promoted_nightly(self):
         # CEO, 2026-10-19: "what fucking checks are there needed if ALL OF THE FUCKING CHECKS
@@ -1460,14 +1417,14 @@ while True: time.sleep(.02)
         self.assertEqual(order, ["build", "boot 20261019T120000Z-0000000f", "finish"])
         pointer = json.loads(r.run_pointer("20261019T120000Z-0000000f").read_text())
         self.assertEqual(pointer["out"], str(r.state / "releases" / "v1.2.0"))
-        # A boot that was not proven publishes nothing and bumps nothing.
+        # A boot that was not proven publishes nothing and asks for nothing.
         r = self.stable_runner()
         r.vm_boot_proof.return_value = "THE CANDIDATE IS BUILT, AND ITS BOOT WAS NOT PROVEN"
         with self.assertRaisesRegex(RuntimeError, "v1.2.0 IS NOT PUBLISHED. THE CANDIDATE IS BUILT"), \
                 contextlib.redirect_stdout(io.StringIO()):
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
         self.assertNotIn("finish", [str(c.args[2]) for c in r.command.call_args_list])
-        r.bump_next_version.assert_not_called()
+        self.assertNotIn("published_reported", r.__dict__)
 
     def test_stable_refuses_the_gates_of_another_source_a_failed_run_or_changed_dependencies(self):
         # Another commit's pass proves nothing about this one: refused after the plan names
@@ -1798,7 +1755,7 @@ while True: time.sleep(.02)
         self.assertEqual(args[2], "finish")
         self.assertEqual(Path(args[args.index("--out") + 1]), out)
         self.assertNotIn("credentials", kwargs)
-        self.assertEqual(r.changelogs_written, [self.CANDIDATE_INFO["tag"]])
+        self.assertEqual(r.published_reported, [(self.CANDIDATE_INFO["tag"], False)])
 
     def moved_worktree(self):
         """A real repository whose dedicated worktree built a release commit, then moved.
@@ -3035,12 +2992,14 @@ class GatesAtOnceTests(unittest.TestCase):
             m.main()
         return stop.exception.code, err.getvalue()
 
-    def test_changelog_needs_a_tag_and_no_other_command_takes_one(self):
-        for argv in (("changelog",), ("check", "--tag", "v1.2.0")):
+    def test_there_is_no_changelog_command_any_more(self):
+        # A missing entry is a worker started from changelog-worker-brief.md, like every entry.
+        for argv in (("changelog", "--tag", "v1.2.0"), ("check", "--tag", "v1.2.0")):
             with self.subTest(argv=argv):
                 code, err = self.main_refusal(*argv)
                 self.assertEqual(code, 2)
-                self.assertIn("changelog requires --tag <published release tag>", err)
+                self.assertTrue("invalid choice: 'changelog'" in err
+                                or "unrecognized arguments: --tag v1.2.0" in err, err)
 
     def test_a_build_that_does_not_name_the_gates_at_once_does_not_start(self):
         # `stable` is not in this list: without --gates-at-once it reuses the gates of the run
@@ -3360,141 +3319,22 @@ class GatesAtOnceTests(unittest.TestCase):
                 self.assertFalse((self.root / "state").exists())
 
 
-class NextVersionTests(unittest.TestCase):
-    """After stable vX.Y.Z is published, main says X.Y.(Z+1): a real main and a real remote.
+class PublishedReportTests(unittest.TestCase):
+    """After a release is published, ONE escalation for the lead and nothing on main: the real
+    escalate.sh, a ledger of this test's own, and a real main and remote.
 
-    The CEO, 2026-10-19: "Can I assume that because v1.2.0 stable has now been published, the
-    next nightly version is automatically guaranteed to NOT start with "1.2.0-nightly"?"
+    The CEO, 2026-10-20: "why do I think that automatically writing a changelog is a retarded
+    idea? (as opposed to automatically triggering a worker for the job of writing)". So the
+    command writes no changelog, commits nothing and pushes nothing; it asks the lead, through
+    the escalation ledger whose watch repeats until it is acknowledged, to start the worker
+    from changelog-worker-brief.md.
     """
 
-    MANIFEST = '[package]\nname = "richos-tauri"\nversion = "1.2.0"\n\n[dependencies]\nserde = { version = "1.2.0" }\n'
-    LOCK = ('version = 4\n\n[[package]]\nname = "richos-tauri"\nversion = "1.2.0"\n\n'
-            '[[package]]\nname = "serde"\nversion = "1.2.0"\n')
-
-    def git(self, *args, cwd=None):
-        return subprocess.run(["git", *args], cwd=cwd or self.main, check=True, text=True,
-                              capture_output=True).stdout.strip()
-
-    def setUp(self):
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        environment = patch.dict(os.environ, {})
-        environment.start()
-        self.addCleanup(environment.stop)
-        for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
-                     "GIT_COMMITTER_EMAIL", "EMAIL", "GIT_DIR", "GIT_INDEX_FILE"):
-            os.environ.pop(name, None)
-        root = Path(temp.name)
-        self.remote, self.main = root / "remote.git", root / "main"
-        self.git("init", "--bare", "-q", str(self.remote), cwd=root)
-        self.git("init", "-q", "-b", "main", str(self.main), cwd=root)
-        for key, value in (("user.name", "Fixture"), ("user.email", "fixture@example.invalid"),
-                           ("core.hooksPath", "/dev/null")):
-            self.git("config", key, value)
-        self.git("remote", "add", "origin", str(self.remote))
-        for path, text in ((m.APP_MANIFEST, self.MANIFEST), (m.APP_LOCK, self.LOCK)):
-            (self.main / path).parent.mkdir(parents=True, exist_ok=True)
-            (self.main / path).write_text(text)
-        self.git("add", ".")
-        self.git("commit", "-qm", "1.2.0")
-        self.git("push", "-q", "origin", "main")
-        self.released = self.git("rev-parse", "HEAD")
-        self.root = root
-        stub_main_fences(self, root)
-        self.runner = m.Runner(self.main, root / "state", {}, io.StringIO())
-
-    def on_remote(self, path):
-        return self.git("show", f"refs/heads/main:{path}", cwd=self.remote)
-
-    def test_a_published_stable_leaves_main_on_the_next_patch_version(self):
-        # This process already holds the land lease (a lead's land, say): it is used and kept.
-        os.environ["FENCE_LEASE"] = "renewed"
-        commit = self.runner.bump_next_version("1.2.0")
-        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), commit)
-        self.assertEqual(fence_calls(self.root), [
-            "land-lease.sh acquire", f"second-review.sh {commit} main-at:{self.released}"])
-        self.assertIn("v1.2.0 is published. This commit is the bump of main's next release version",
-                      (self.root / "review-request").read_text())
-        self.assertEqual(self.git("rev-parse", f"{commit}^"), self.released)
-        self.assertEqual(self.on_remote(m.APP_MANIFEST) + "\n",
-                         self.MANIFEST.replace('version = "1.2.0"\n', 'version = "1.2.1"\n', 1))
-        # The app's own lock entry moves; a dependency that happens to share the number does not.
-        self.assertEqual(self.on_remote(m.APP_LOCK) + "\n",
-                         self.LOCK.replace('"richos-tauri"\nversion = "1.2.0"', '"richos-tauri"\nversion = "1.2.1"'))
-        self.assertEqual(self.git("diff", "--name-only", self.released, commit).splitlines(),
-                         [str(m.APP_LOCK), str(m.APP_MANIFEST)])
-        self.assertEqual(self.git("status", "--porcelain"), "")
-        # Run again, or after a hand bump: main is already past 1.2.0, so nothing moves.
-        self.assertIsNone(self.runner.bump_next_version("1.2.0"))
-        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), commit)
-
-    def test_a_main_with_changes_or_not_at_origin_is_left_alone(self):
-        (self.main / "notes.txt").write_text("someone's work\n")
-        self.git("add", "notes.txt")
-        with self.assertRaisesRegex(ValueError, "uncommitted changes"):
-            self.runner.bump_next_version("1.2.0")
-        self.git("commit", "-qm", "unpushed land")
-        with self.assertRaisesRegex(ValueError, "is not origin/main"):
-            self.runner.bump_next_version("1.2.0")
-        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.released)
-        self.assertEqual(self.git("show", f"HEAD:{m.APP_MANIFEST}") + "\n", self.MANIFEST)
-
-    def test_a_refused_commit_puts_the_two_files_back(self):
-        hooks = self.main.parent / "hooks"
-        hooks.mkdir()
-        (hooks / "pre-commit").write_text("#!/bin/sh\necho 'land checks failed' >&2\nexit 1\n")
-        (hooks / "pre-commit").chmod(0o755)
-        self.git("config", "core.hooksPath", str(hooks))
-        with self.assertRaisesRegex(ValueError, "land checks failed"):
-            self.runner.bump_next_version("1.2.0")
-        self.assertEqual(self.git("status", "--porcelain"), "")
-        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.released)
-
-    def test_the_real_tree_moves_to_the_next_patch_in_exactly_two_lines(self):
-        manifest = (m.ROOT / m.APP_MANIFEST).read_text()
-        lock = (m.ROOT / m.APP_LOCK).read_text()
-        version = m.tomllib.loads(manifest)["package"]["version"]
-        following, files = m.next_patch_version_files(manifest, lock, version)
-        major, minor, patch = version.split(".")
-        self.assertEqual(following, f"{major}.{minor}.{int(patch) + 1}")
-        for path, before in ((m.APP_MANIFEST, manifest), (m.APP_LOCK, lock)):
-            changed = [(a, b) for a, b in zip(before.splitlines(), files[path].splitlines()) if a != b]
-            self.assertEqual(changed, [(f'version = "{version}"', f'version = "{following}"')], path)
-        self.assertIsNone(m.next_patch_version_files(files[m.APP_MANIFEST], files[m.APP_LOCK], version))
-
-
-class ChangelogTests(unittest.TestCase):
-    """After a release is published, its changelog entry is on main: a real main and remote.
-
-    The CEO, 2026-10-20: "Can I assume that both changelog files will ALWAYS be automatically
-    handled correctly from now on and I'll never have to worry about that?" and "why do I
-    think that a changelog can't always be written before the job is done and probably can't
-    be written MOST OF THE TIME before the job is done?" So the entry is written after the
-    publish, from the range the published releases name. GitHub's answers are given here and
-    `claude` is a stub on PATH that records what it was asked.
-    """
-
-    NIGHTLY_INTRO = ("# Nightly changelog\n\nWhat changed in each RichOS nightly build, newest "
-                     "first.\n\n")
-    STABLE_INTRO = "# Changelog\n\nWhat changed in each stable version of RichOS, newest first.\n\n"
-    NIGHTLY_67 = "## 1.2.1-nightly.20261019.67\n\n- Fixed Escape not closing the panels\n"
-    STABLE_120 = "## 1.2.0\n\n- Added working voice\n\n## 1.0.2\n\n- Fixed the setup sheet\n"
     TAG = "v1.2.1-nightly.20261020.68"
-    DRAFT = "- Added the Output panel\n- Fixed the window opening larger than the screen\n"
 
     def git(self, *args, cwd=None):
         return subprocess.run(["git", *args], cwd=cwd or self.main, check=True, text=True,
                               capture_output=True).stdout.strip()
-
-    def land(self, subject):
-        """A land into the branch checked out: a merge commit named `subject`."""
-        into = self.git("rev-parse", "--abbrev-ref", "HEAD")
-        self.lands += 1
-        self.git("checkout", "-q", "-b", f"work{self.lands}")
-        self.git("commit", "-q", "--allow-empty", "-m", f"work commit {self.lands}")
-        self.git("checkout", "-q", into)
-        self.git("merge", "-q", "--no-ff", "-m", subject, f"work{self.lands}")
-        return self.git("rev-parse", "HEAD")
 
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -3506,6 +3346,8 @@ class ChangelogTests(unittest.TestCase):
                      "GIT_COMMITTER_EMAIL", "EMAIL", "GIT_DIR", "GIT_INDEX_FILE"):
             os.environ.pop(name, None)
         self.root = Path(temp.name).resolve()
+        self.ledger = self.root / "escalations.jsonl"
+        os.environ[LEDGER_ENV] = str(self.ledger)
         self.remote, self.main = self.root / "remote.git", self.root / "main"
         self.git("init", "--bare", "-q", str(self.remote), cwd=self.root)
         self.git("init", "-q", "-b", "main", str(self.main), cwd=self.root)
@@ -3513,122 +3355,29 @@ class ChangelogTests(unittest.TestCase):
                            ("core.hooksPath", "/dev/null")):
             self.git("config", key, value)
         self.git("remote", "add", "origin", str(self.remote))
-        for path, text in ((m.CHANGELOGS["nightly"], self.NIGHTLY_INTRO + self.NIGHTLY_67),
-                           (m.CHANGELOGS["stable"], self.STABLE_INTRO + self.STABLE_120)):
-            (self.main / path).parent.mkdir(parents=True, exist_ok=True)
-            (self.main / path).write_text(text)
+        (self.main / "docs").mkdir()
+        (self.main / "docs" / "CHANGELOG-NIGHTLY.md").write_text("# Nightly changelog\n")
         self.git("add", ".")
-        self.git("commit", "-qm", "the two changelogs")
-        self.lands = 0
-        self.land("Merge before-67: in the previous build already")
-        self.since = self.land("Merge last-of-67: the previous build's source")
-        # Lands onto a release branch reach main in one merge of that branch.
-        self.git("checkout", "-q", "-b", "v1.2.1")
-        self.land("Merge output1 onto v1.2.1: Added the Output panel")
-        self.land("Merge branch 'v1.2.1' into cc/sync1")
-        self.git("checkout", "-q", "main")
-        self.git("merge", "-q", "--no-ff", "-m", "Merge v1.2.1: the follow-ups", "v1.2.1")
-        self.source = self.land("Merge window1: the window opens no larger than its screen")
-        self.land("Merge after1: landed after this build's source")
+        self.git("commit", "-qm", "main as it was published from")
         self.git("push", "-q", "origin", "main")
         self.tip = self.git("rev-parse", "HEAD")
-        # GitHub, as it answers once TAG is published: 67 before it, a draft and a stable beside.
-        self.published = {self.TAG: True, "v1.2.1-nightly.20261019.67": True,
-                          "v1.2.0-nightly.20261018.65": True, "v1.2.1": False, "v1.2.0": False,
-                          "v1.0.2": False, "nightly": True}
-        self.sources = {self.TAG: self.source, "v1.2.1-nightly.20261019.67": self.since,
-                        "v1.2.1": self.source, "v1.2.0": self.since}
-        for name, value in (("published_releases", lambda: dict(self.published)),
-                            ("release_source", lambda tag: self.sources[tag])):
-            patcher = patch.object(m, name, side_effect=value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        # The stub `claude`: what it was run with and given, then the draft or a failure.
-        stub = self.root / "bin" / "claude"
-        stub.parent.mkdir()
-        stub.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$STUB_DIR/argv"\n'
-                        'cat > "$STUB_DIR/stdin"\npwd > "$STUB_DIR/cwd"\n'
-                        'if [ -n "$STUB_FAIL" ]; then echo "$STUB_FAIL" >&2; exit 1; fi\n'
-                        'cat "$STUB_DIR/reply"\n')
-        stub.chmod(0o755)
-        (self.root / "reply").write_text(self.DRAFT)
-        os.environ.update({"PATH": f"{stub.parent}:{os.environ['PATH']}",
-                           "STUB_DIR": str(self.root), "STUB_FAIL": ""})
-        stub_main_fences(self, self.root)
         self.runner = m.Runner(self.main, self.root / "state", {}, io.StringIO())
-        self.runner.write_changelog = types.MethodType(WRITE_CHANGELOG, self.runner)
+        self.runner.report_published = types.MethodType(REPORT_PUBLISHED, self.runner)
+        # Every program this command starts by itself, in the order it starts them.
+        self.started = []
+        real_run = subprocess.run
 
-    def on_remote(self, path):
-        return self.git("show", f"refs/heads/main:{path}", cwd=self.remote) + "\n"
+        def run(argv, *args, **kwargs):
+            self.started.append([str(a) for a in argv])
+            return real_run(argv, *args, **kwargs)
+        patcher = patch.object(m.subprocess, "run", side_effect=run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
-    def asked(self):
-        return (self.root / "argv").read_text().splitlines(), (self.root / "stdin").read_text()
-
-    def test_a_published_nightly_gets_its_entry_at_the_top_from_exactly_its_range(self):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            self.runner.write_changelog(self.TAG)
-        self.assertEqual(self.on_remote(m.CHANGELOGS["nightly"]),
-                         self.NIGHTLY_INTRO + "## 1.2.1-nightly.20261020.68\n\n" + self.DRAFT
-                         + "\n" + self.NIGHTLY_67)
-        # The stable changelog is not touched by a nightly.
-        self.assertEqual(self.on_remote(m.CHANGELOGS["stable"]), self.STABLE_INTRO + self.STABLE_120)
-        # From 67's source to 68's: what landed before or after is not in the draft's input.
-        argv, given = self.asked()
-        self.assertIn("Version: 1.2.1-nightly.20261020.68", given)
-        self.assertIn("Merge output1 onto v1.2.1: Added the Output panel", given)
-        self.assertIn("Merge v1.2.1: the follow-ups", given)
-        self.assertIn("Merge window1: the window opens no larger", given)
-        # Not what landed before or after, not a merge that only took a branch in, not the
-        # branches' own commits: the merges say what landed.
-        for outside in ("before-67", "last-of-67", "after1", "cc/sync1", "work commit"):
-            self.assertNotIn(outside, given)
-        self.assertLess(given.index("output1"), given.index("window1"))
-        # Sonnet, no tools, the instructions file beside the script, in no repository.
-        self.assertEqual(argv[:3], ["-p", "--model", "sonnet"])
-        self.assertEqual(argv[argv.index("--tools") + 1], "")
-        self.assertEqual(argv[argv.index("--system-prompt-file") + 1],
-                         str(Path(__file__).resolve().with_name("changelog-instructions.md")))
-        self.assertTrue(m.CHANGELOG_INSTRUCTIONS.is_file())
-        self.assertNotEqual(Path((self.root / "cwd").read_text().strip()).resolve(), self.main)
-        # One commit on main, pushed, with main left clean.
-        head = self.git("rev-parse", "refs/heads/main", cwd=self.remote)
-        self.assertEqual(self.git("rev-parse", f"{head}^"), self.tip)
-        self.assertEqual(self.git("diff", "--name-only", self.tip, head), str(m.CHANGELOGS["nightly"]))
-        self.assertEqual(self.git("status", "--porcelain"), "")
-        self.assertIn("## 1.2.1-nightly.20261020.68 added", out.getvalue())
-        self.assertNotIn("CHANGELOG ENTRY MISSING", out.getvalue())
-        # Asked again (the subcommand after a publish that did write it): nothing is drafted.
-        (self.root / "stdin").unlink()
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertIsNone(self.runner.changelog_entry(self.TAG))
-        self.assertFalse((self.root / "stdin").exists())
-        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), head)
-
-    def test_a_published_stable_gets_its_entry_from_the_previous_stables_source(self):
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.runner.write_changelog("v1.2.1")
-        self.assertEqual(self.on_remote(m.CHANGELOGS["stable"]),
-                         self.STABLE_INTRO + "## 1.2.1\n\n" + self.DRAFT + "\n" + self.STABLE_120)
-        self.assertEqual(self.on_remote(m.CHANGELOGS["nightly"]), self.NIGHTLY_INTRO + self.NIGHTLY_67)
-        _, given = self.asked()
-        self.assertIn("output1", given)
-        self.assertNotIn("last-of-67", given)
-        # The previous stable is the previous STABLE: never a nightly, never a prerelease.
-        self.assertEqual(m.previous_release("v1.2.1", self.published), "v1.2.0")
-        self.assertEqual(m.previous_release("v1.2.1", {**self.published, "v1.2.0": True}), "v1.0.2")
-        self.assertEqual(m.previous_release(self.TAG, self.published), "v1.2.1-nightly.20261019.67")
-
-    def test_an_entry_written_late_goes_in_its_own_place(self):
-        text = self.NIGHTLY_INTRO + "## 1.2.1-nightly.20261021.70\n\n- Fixed b\n\n" + self.NIGHTLY_67
-        self.assertEqual(m.changelog_with_entry(text, "1.2.1-nightly.20261020.68", ["- Fixed a"]),
-                         self.NIGHTLY_INTRO + "## 1.2.1-nightly.20261021.70\n\n- Fixed b\n\n"
-                         "## 1.2.1-nightly.20261020.68\n\n- Fixed a\n\n" + self.NIGHTLY_67)
-
-    def test_a_failing_draft_leaves_the_release_published_and_says_so_in_one_line(self):
-        os.environ["STUB_FAIL"] = "Claude usage limit reached"
+    def published(self, command="release"):
+        """`command` run to its end with every build and publish step stood in for: what it printed."""
         r = self.runner
-        r.checkout = Mock(return_value=self.source)
+        r.checkout = Mock(return_value=self.tip)
         r.plan = Mock(return_value=(self.root / "plan.json", {
             "build": True, "tag": self.TAG, "version": self.TAG[1:]}))
         for name in ("preflight", "runtime", "gates", "command", "summary"):
@@ -3636,104 +3385,87 @@ class ChangelogTests(unittest.TestCase):
         r.installed_dependencies_digest = Mock(return_value="")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            r.perform("release")  # no exception: the release stands
-        printed = out.getvalue().splitlines()
-        self.assertIn(f"Published https://github.com/{m.REPO}/releases/tag/{self.TAG}", printed)
-        missing = [line for line in printed if "CHANGELOG" in line]
-        self.assertEqual(missing, [
-            "CHANGELOG ENTRY MISSING: docs/CHANGELOG-NIGHTLY.md has no entry for "
-            "1.2.1-nightly.20261020.68 (the draft (claude -p) exited 1: Claude usage limit "
-            "reached). The release itself is published. Write it: python3 "
-            f"richos/app/scripts/nightly-local.py changelog --tag {self.TAG}"])
-        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.tip)
-        self.assertEqual(self.git("status", "--porcelain"), "")
-        # The command that line names is that same step, and with the draft back it writes it.
-        os.environ["STUB_FAIL"] = ""
-        with patch.object(sys, "argv", ["nightly-local.py", "changelog", "--tag", self.TAG,
-                                        "--repo", str(self.main),
-                                        "--state-dir", str(self.root / "state")]), \
-                contextlib.redirect_stdout(io.StringIO()):
-            m.main()
-        self.assertIn("## 1.2.1-nightly.20261020.68\n\n" + self.DRAFT,
-                      self.on_remote(m.CHANGELOGS["nightly"]))
+            r.perform(command)  # no exception, whatever the report does: the release stands
+        return out.getvalue().splitlines()
 
-    def test_a_draft_that_is_not_a_list_never_reaches_the_changelog(self):
-        (self.root / "reply").write_text("I could not find any user-facing changes.\n")
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            self.runner.write_changelog(self.TAG)
-        self.assertIn("CHANGELOG ENTRY MISSING", out.getvalue())
-        self.assertIn("the draft is not a list of `- ` lines", out.getvalue())
-        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.tip)
+    def rows(self):
+        return ([json.loads(line) for line in self.ledger.read_text().splitlines()]
+                if self.ledger.exists() else [])
 
-    # Main's fences, met by the command itself (2026-10-20: nightly 68's entry, the v1.2.1 bump
-    # and v1.2.1's entry were each refused there, and each was landed by hand).
-    def nothing_moved(self):
+    def main_untouched(self):
+        """No commit and no push: main and the remote where they were, nothing staged or left."""
+        # Taken first: this test's own git below runs through the same recorded subprocess.run.
+        started = [argv[0] for argv in self.started]
+        # This command runs no git and no model: the escalation is the one program it starts.
+        self.assertEqual(started, [str(m.ESCALATE)])
         self.assertEqual(self.git("rev-parse", "refs/heads/main"), self.tip)
         self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.tip)
-        self.assertEqual(self.git("status", "--porcelain"), "")
-        self.assert_no_checkout_left()
-
-    def assert_no_checkout_left(self):
+        self.assertEqual(self.git("for-each-ref", "--format=%(refname)", cwd=self.remote),
+                         "refs/heads/main")
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
         self.assertEqual(len(self.git("worktree", "list", "--porcelain").split("\n\n")), 1)
-        state = self.root / "state"
-        self.assertEqual(list(state.iterdir()) if state.exists() else [], [])
 
-    def one_line(self, out):
-        missing = [line for line in out.getvalue().splitlines() if "CHANGELOG" in line]
-        self.assertEqual(len(missing), 1, out.getvalue())
-        self.assertTrue(missing[0].startswith(
-            "CHANGELOG ENTRY MISSING: docs/CHANGELOG-NIGHTLY.md has no entry for "
-            "1.2.1-nightly.20261020.68 ("), missing[0])
-        self.assertTrue(missing[0].endswith(
-            f"Write it: python3 richos/app/scripts/nightly-local.py changelog --tag {self.TAG}"))
-        return missing[0]
+    def test_a_published_nightly_raises_exactly_that_escalation_and_moves_nothing_on_main(self):
+        printed = self.published()
+        self.assertIn(f"Published https://github.com/{m.REPO}/releases/tag/{self.TAG}", printed)
+        rows = self.rows()
+        self.assertEqual(len(rows), 1, rows)
+        row = rows[0]
+        self.assertEqual(row["title"], f"{self.TAG} published; write its changelog entry.")
+        self.assertEqual((row["state"], row["for"], row["teammate"], row["worktree"], row["record"]),
+                         ("work-complete", "lead", "nightly-local", str(self.main), ""))
+        self.assertEqual(row["question"], (
+            "Start the changelog worker: spawn.sh with --brief "
+            "richos/app/scripts/changelog-worker-brief.md, its <TAG> replaced by "
+            f"{self.TAG} and nothing else changed. It reads what went into {self.TAG}, writes "
+            "its changelog entry as commits on its own branch, and hands over; second review, "
+            "then you land it."))
+        self.assertEqual([line for line in printed if row["id"] in line],
+                         [f"Raised {row['id']} for the lead: {row['title']}"])
+        self.assertFalse(any("NOT RAISED" in line for line in printed), printed)
+        # No record file in main's checkout: the ledger row is the delivery.
+        self.assertFalse((self.main / "docs" / "verification").exists())
+        self.main_untouched()
 
-    def test_a_passing_review_lands_the_entry_under_the_lease_and_main_moves_only_then(self):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            self.runner.write_changelog(self.TAG)
-        head = self.git("rev-parse", "refs/heads/main", cwd=self.remote)
-        self.assertEqual(self.git("rev-parse", "refs/heads/main"), head)
-        self.assertEqual(self.git("rev-parse", f"{head}^"), self.tip)
-        # The lease, then the review of exactly the commit main moves to, with main not yet
-        # moved while it ran; then the lease this command took is released.
-        self.assertEqual(fence_calls(self.root), [
-            "land-lease.sh acquire", f"second-review.sh {head} main-at:{self.tip}",
-            "land-lease.sh release"])
-        request = (self.root / "review-request").read_text()
-        self.assertTrue(request.startswith(
-            f"{self.TAG} is published. This commit is the changelog entry for {self.TAG} in "
-            "docs/CHANGELOG-NIGHTLY.md"), request)
-        self.assertIn("Changelog: 1.2.1-nightly.20261020.68 in docs/CHANGELOG-NIGHTLY.md", request)
-        self.assertEqual(self.git("status", "--porcelain"), "")
-        self.assert_no_checkout_left()
-        self.assertNotIn("CHANGELOG ENTRY MISSING", out.getvalue())
+    def test_a_published_stable_asks_for_main_s_bump_as_well(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            raised = self.runner.report_published("v1.2.1", stable=True)
+        (row,) = self.rows()
+        self.assertEqual(row["id"], raised)
+        self.assertEqual(row["title"], "v1.2.1 published; write its changelog entry and bump "
+                                       "main's next release version.")
+        self.assertIn("writes its changelog entry and bumps main's next release version as "
+                      "commits on its own branch", row["question"])
+        self.main_untouched()
 
-    def test_a_refused_review_moves_nothing_and_says_so_in_one_line(self):
-        os.environ["FENCE_REVIEW"] = "changes-requested"
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            self.runner.write_changelog(self.TAG)  # no exception: the release stands
-        line = self.one_line(out)
-        self.assertIn("did not pass, so main did not move (second-review.sh exit 1: "
-                      "SECOND-REVIEW changes-requested", line)
-        self.nothing_moved()
-        calls = fence_calls(self.root)
-        self.assertEqual([calls[0], calls[2]], ["land-lease.sh acquire", "land-lease.sh release"])
-        self.assertTrue(calls[1].endswith(f"main-at:{self.tip}"), calls)
+    def test_an_escalation_that_cannot_be_raised_leaves_the_release_published_and_one_line(self):
+        # The ledger's folder is a file: the real escalate.sh cannot write the row.
+        (self.root / "not-a-folder").write_text("")
+        os.environ[LEDGER_ENV] = str(self.root / "not-a-folder" / "escalations.jsonl")
+        printed = self.published()
+        self.assertIn(f"Published https://github.com/{m.REPO}/releases/tag/{self.TAG}", printed)
+        (line,) = [line for line in printed if "ESCALATION" in line]
+        self.assertTrue(line.startswith("ESCALATION NOT RAISED (escalate.sh raise exit 2: "), line)
+        self.assertTrue(line.endswith(
+            f"The release itself is published. {self.TAG} published; write its changelog "
+            "entry. Start the worker by hand: spawn.sh --brief "
+            f"richos/app/scripts/changelog-worker-brief.md with <TAG> replaced by {self.TAG}."),
+            line)
+        self.main_untouched()
 
-    def test_a_lease_held_elsewhere_moves_nothing_and_says_so_in_one_line(self):
-        os.environ["FENCE_LEASE"] = "held"
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            self.runner.write_changelog(self.TAG)
-        line = self.one_line(out)
-        self.assertIn("this command could not take the land lease, so main did not move "
-                      "(land-lease.sh acquire exit 75: land-lease: HELD. Codex", line)
-        self.nothing_moved()
-        # No review is asked for, and nobody's lease is released.
-        self.assertEqual(fence_calls(self.root), ["land-lease.sh acquire"])
+    def test_the_worker_brief_is_handed_over_with_only_its_tag_replaced(self):
+        brief = (m.ROOT / m.CHANGELOG_WORKER_BRIEF).read_text()
+        self.assertEqual(m.CHANGELOG_WORKER_BRIEF.parent, m.SCRIPTS)
+        self.assertIn(m.BRIEF_TAG, brief)
+        handed = brief.replace(m.BRIEF_TAG, self.TAG)
+        self.assertNotIn("<TAG>", handed)
+        # It points at the instructions beside it, which exist, and at both changelogs and the
+        # two files a stable's bump moves.
+        for named in ("richos/app/scripts/changelog-instructions.md", "docs/CHANGELOG-NIGHTLY.md",
+                      "docs/CHANGELOG.md", "richos/app/src-tauri/Cargo.toml",
+                      "richos/app/src-tauri/Cargo.lock"):
+            self.assertIn(named, handed)
+        self.assertTrue((m.ROOT / "richos/app/scripts/changelog-instructions.md").is_file())
 
 
 class WalkRecipeTests(unittest.TestCase):
