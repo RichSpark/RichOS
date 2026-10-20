@@ -1055,6 +1055,35 @@ class ChangelogTests(GitFixture):
         document = (self.repo / n.CHANGELOG_FILES["nightly"]).read_text()
         self.assertIn(n.changelog_section(record).strip(), document)
 
+    def test_changed_baseline_can_replace_unpublished_approved_notes_after_review(self):
+        for _ in range(2):
+            earlier, _ = self.candidate()
+            n.git("checkout", "-q", "main")
+        info, _ = self.candidate()
+        self.approve(info)
+        with patch.object(n, "published_changelog_base",
+                          return_value=(earlier["tag"], earlier["source_commit"])):
+            request = n.changelog_request(info)
+            n.git("checkout", "-qb", "revised-notes", "origin/main")
+            n.write_changelog_draft(request, "- Fixed another lost message")
+            n.git("add", "docs")
+            n.git("commit", "-qm", "reviewed revised notes")
+            n.git("push", "-q", "origin", "HEAD:main")
+            self.assertEqual(n.approved_changelog(info), "- Fixed another lost message")
+        self.assertEqual(n.remote_tags(), set())
+
+    def test_draft_cannot_rewrite_notes_after_the_release_body_appears(self):
+        info, out = self.candidate()
+        self.approve(info)
+        n.finish(info, out)
+        request = n.changelog_request(info)
+        original = self.releases[info["tag"]]["body"]
+        n.git("checkout", "-qb", "attempted-rewrite", "origin/main")
+        with self.assertRaisesRegex(ValueError, "never rewrite"):
+            n.write_changelog_draft(request, "- Changed the published notes")
+        self.assertEqual(self.releases[info["tag"]]["body"], original)
+        self.assertEqual(n.git("status", "--porcelain"), "")
+
 
 class CommittedChangelogTests(unittest.TestCase):
     def test_every_approved_record_matches_its_public_user_facing_entry(self):

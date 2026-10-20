@@ -1307,8 +1307,13 @@ def write_changelog_draft(request, entry):
     records = json.loads(path.read_text()) if path.exists() else {}
     if not isinstance(records, dict):
         raise ValueError("changelog approval registry is not an object")
-    if record["tag"] in records and records[record["tag"]] != record:
-        raise ValueError("this version already has different notes; reconcile them before replacing")
+    prior = records.get(record["tag"])
+    if prior != record:
+        if get_release(record["tag"]) is not None:
+            raise ValueError("this version already has a public release body; never rewrite its notes")
+        reserved = remote_ref(f"refs/tags/{record['tag']}")
+        if reserved and reserved != record["build_commit"]:
+            raise ValueError("the version tag belongs to a different candidate")
     document = ROOT / CHANGELOG_FILES[record["channel"]]
     text = document.read_text()
     heading = f"## {record['version']}"
@@ -1316,7 +1321,9 @@ def write_changelog_draft(request, entry):
     section = changelog_section(record)
     if existing:
         if existing[0].strip() != section.strip():
-            raise ValueError("the changelog already has a different entry for this version")
+            if not prior or existing[0].strip() != changelog_section(prior).strip():
+                raise ValueError("the changelog already has an unrecognized entry for this version")
+            document.write_text(text[:existing.start()] + section + "\n" + text[existing.end():])
     else:
         at = re.search(r"^## ", text, re.M)
         offset = at.start() if at else len(text.rstrip()) + 2
