@@ -317,6 +317,43 @@ class Async(unittest.TestCase):
         record['repeat_responses'] = {'axel': [dict(answer_ids=['new'])]}
         self.assertEqual(RR.repeat_replies(record, 'axel'), [])
 
+    def test_shared_reader_sees_lead_dispatches_and_sends_with_their_results(self):
+        import datetime
+        stamp = lambda n: datetime.datetime.fromtimestamp(n, datetime.timezone.utc).isoformat()
+        def use(uid, at, tool, call, data, text=None):
+            content = ([dict(type='text', text=text)] if text else []) + [dict(type='tool_use', id=call, name=tool, input=data)]
+            return dict(uuid=uid, type='assistant', timestamp=stamp(at), message=dict(content=content))
+        def result(uid, at, call, error=False, text='ok'):
+            return dict(uuid=uid, type='user', timestamp=stamp(at), message=dict(content=[dict(type='tool_result', tool_use_id=call, is_error=error, content=text)]))
+        rows = [use('d', 1, 'Agent', 'call-agent', dict(name='zach-opus-fix1', prompt='Fix the bug')),
+                result('dr', 2, 'call-agent', text='Async agent launched successfully.'),
+                use('s1', 3, 'SendMessage', 'call-refused', dict(to='zach-opus-fix1', message='Also add hardening')),
+                result('s1r', 4, 'call-refused', error=True, text='PreToolUse:SendMessage hook error: REFUSED'),
+                use('s2', 5, 'SendMessage', 'call-sent', dict(to='zach-opus-fix1', message='Also add hardening'), text='Sending the addition.'),
+                result('s2r', 6, 'call-sent'),
+                use('w', 7, 'Read', 'call-read', dict(file_path='/x')),
+                dict(uuid='side', type='assistant', isSidechain=True, timestamp=stamp(8), message=dict(content=[dict(type='tool_use', id='call-side', name='SendMessage', input=dict(to='main', message='worker'))]))]
+        transcript = self.base / 'lead-actions.jsonl'
+        transcript.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+        actions = RR.transcript_actions(str(transcript))
+        self.assertEqual([(a['id'], a['result']['is_error']) for a in actions],
+                         [('call-agent', False), ('call-refused', True), ('call-sent', False)])
+        conversation = RR.recent_conversation(str(transcript))
+        kinds = [(m.get('kind', 'text'), m['uuid']) for m in conversation]
+        self.assertIn(('action', 's2#call-sent'), kinds)
+        self.assertIn(('text', 's2'), kinds)
+        refused = next(m for m in conversation if m['uuid'] == 's1#call-refused')
+        self.assertIn('refused', refused['text'])
+        self.assertNotIn('call-read', json.dumps(conversation))
+        self.assertNotIn('call-side', json.dumps(conversation))
+        # The owner's later actions, not just prose, are witnessed answers.
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce',
+                             signal=R.round_signal(4, 'start-4', 'zach-opus-fix'))
+        record = R.repeat_questioned(record['id'], 'axel', dict(job=record['id'], acceptance='acceptance',
+            frontier=record['evidence_cursor'], questions=[dict(question='Why another addition?', evidence='send')]), 'q', [str(transcript)])
+        record['deliveries'] = {R.repeat_question_key(record, 'axel'): dict(at=4.5, owner='owner')}
+        self.assertEqual(sorted(r['uuid'] for r in RR.repeat_replies(record, 'axel')), ['s2', 's2#call-sent'])
+
     def test_actual_background_pipeline_and_exact_profile_capabilities(self):
         provider = self.base / "fake-claude"
         provider.write_text('''#!/usr/bin/env python3

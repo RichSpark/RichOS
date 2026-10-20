@@ -219,15 +219,76 @@ def source_export(record, tip):
     return dict(reference=str(directory),original=record["repo"],tip=tip,kind="git archive")
 
 
+ACTION_TOOLS = ("Agent", "SendMessage")
+
+
+def _result_text(content):
+    if isinstance(content, list):
+        content = "\n".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+    return content if isinstance(content, str) else ""
+
+
+def transcript_actions(path):
+    """The lead's own Agent dispatches and SendMessage instructions, each with
+    its tool result, in transcript order. Event capture and answer/action
+    observation read the same rows. A call with no result yet has result None;
+    an error result (a denied PreToolUse hook, a refused send) is a call that
+    did not happen. Quoted text is data, never an instruction."""
+    import pierce
+    calls, out = {}, []
+    for line, row in enumerate(pierce.transcript_rows(path, complete=True)):
+        if row.get("isSidechain"):
+            continue
+        content = (row.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "tool_use" and part.get("name") in ACTION_TOOLS and part.get("id"):
+                item = dict(kind="tool_use", tool=part["name"], id=part["id"], input=part.get("input") or {},
+                            uuid=row.get("uuid"), timestamp=row.get("timestamp"), line=line, result=None)
+                calls[part["id"]] = item
+                out.append(item)
+            elif part.get("type") == "tool_result" and part.get("tool_use_id") in calls:
+                calls[part["tool_use_id"]]["result"] = dict(is_error=bool(part.get("is_error")),
+                    text=_result_text(part.get("content"))[:2000], uuid=row.get("uuid"), timestamp=row.get("timestamp"))
+    return out
+
+
+def action_text(action):
+    """One line a model can read: who was dispatched or told what, and whether it happened."""
+    data = action["input"]
+    if action["tool"] == "Agent":
+        head = "Agent dispatch %s (%s)" % (data.get("name") or "", data.get("description") or "")
+        body = str(data.get("prompt") or "")
+    else:
+        head = "SendMessage to %s (%s)" % (data.get("to") or "", data.get("summary") or "")
+        body = data.get("message") if isinstance(data.get("message"), str) else json.dumps(data.get("message"))
+    result = action.get("result")
+    state = "no result yet" if result is None else ("refused: " + result["text"][:300] if result["is_error"] else "accepted")
+    return "%s [%s]:\n%s" % (head, state, body)
+
+
 def recent_conversation(path):
-    """Include the lead's recent decisions as context, not human authority."""
+    """Include the lead's recent decisions and actions as context, not human
+    authority: its text, plus the Agent dispatches and SendMessage instructions
+    it actually issued and their results."""
     import pierce
     messages = deque(maxlen=40)
+    actions = {a["id"]: a for a in transcript_actions(path)}
     for row in pierce.transcript_rows(path, complete=True):
         if row.get("isSidechain") or row.get("type") not in ("user", "assistant"):
             continue
         content = row.get("message", {}).get("content")
         if isinstance(content, list):
+            for part in content:
+                if (isinstance(part, dict) and part.get("type") == "tool_use" and part.get("id") in actions
+                        and row["type"] == "assistant"):
+                    # Its own identity: one row can carry text and a tool call.
+                    messages.append(dict(role="assistant", kind="action", uuid="%s#%s" % (row.get("uuid"), part["id"]),
+                                         timestamp=row.get("timestamp"),
+                                         tool_use_id=part["id"], text=action_text(actions[part["id"]])[-4000:]))
             content = "\n".join(p.get("text", "") for p in content
                                 if isinstance(p, dict) and p.get("type") == "text")
         if isinstance(content, str) and content.strip():
