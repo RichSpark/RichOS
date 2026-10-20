@@ -211,6 +211,25 @@ async function main() {
       assertEqual(r.code, 1, "the child suite's exit code");
       return "the reference was written, and the run that wrote it failed naming it";
     });
+
+    await run.check("9  the page state at the shutter reaches the evidence however the scratch picture was encoded", async () => {
+      // Mid-job review rv-20261020T073921Z-cb26c0d0-d6f0: the state was keyed by the fresh
+      // picture's bytes, and a scratch file holding the same pixels in other bytes is kept as
+      // it is, so `publishShotFile` (corrections.js's path) read bytes the state was not under.
+      const seen = {};
+      for (const variant of ["none", "identical", "reencoded"]) {
+        const results = path.join(scratch, "state-" + variant);
+        const r = runFixture("state-" + variant, null, { RICHOS_TEST_RESULTS_ROOT: results });
+        fs.rmSync(KEPT, { force: true });
+        assertEqual(r.code, 1, "the child suite's exit code (" + variant + ")");
+        const file = path.join(results, "shots", "changed", FIXTURE_KEY, "state.json");
+        assert(fs.existsSync(file), "no state.json for the " + variant + " scratch file:\n" + r.out);
+        const at = JSON.parse(fs.readFileSync(file, "utf8")).pageAtShutter;
+        seen[variant] = at && at.scrollers ? at.scrollers[0].scrollTop : JSON.stringify(at);
+      }
+      assertEqual(seen, { none: 101, identical: 101, reencoded: 101 }, "the scrolled column recorded at the shutter");
+      return "a new, an identical and a re-encoded scratch file all carry the shutter's state (scrollTop 101)";
+    });
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
     fs.rmSync(path.dirname(REFERENCE), { recursive: true, force: true });

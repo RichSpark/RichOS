@@ -505,6 +505,12 @@ function publishShot(buf, file) {
     /* no previous shot */
   }
   if (existing && png.samePicture(existing, buf)) {
+    // The file keeps its own bytes, which can encode the same pixels differently: the page
+    // state taken with THESE pixels goes with the bytes that stay, so a later publish of this
+    // file (`publishShotFile`, reading those bytes) still finds it (mid-job review
+    // rv-20261020T073921Z-cb26c0d0-d6f0).
+    const state = shotStates.get(bytesKey(buf));
+    if (state && !existing.equals(buf)) rememberShotState(existing, state);
     return { file, written: false, bytes: existing.length };
   }
   if (!key) {
