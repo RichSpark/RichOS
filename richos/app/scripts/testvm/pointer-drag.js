@@ -37,6 +37,26 @@ function run() {
     $.CGEventPost(0, ev);
   }
   var pts = P.points;
+  // P.hover: the pointer only MOVES (CGEventType 5, no button) through the points, resting at each, the
+  // way a hand hovers. A tooltip that must appear "at once" is shown by `mouseover`, which a drag with
+  // the button held does not deliver. Added with the nightly 68 walk (the "+ New chat" tooltip).
+  if (P.hover) {
+    mouse(5, pts[0][0], pts[0][1]);
+    delay(0.25);
+    var moved = 0;
+    for (var h = 1; h < pts.length; h++) {
+      var gx = pts[h - 1][0], gy = pts[h - 1][1], ux = pts[h][0], uy = pts[h][1];
+      var span = Math.max(Math.abs(ux - gx), Math.abs(uy - gy));
+      var n = Math.max(1, Math.ceil(span / P.step));
+      for (var q = 1; q <= n; q++) {
+        mouse(5, gx + (ux - gx) * q / n, gy + (uy - gy) * q / n);
+        moved += 1;
+        delay(P.pause);
+      }
+      delay(P.rest);
+    }
+    return out({ hovered: true, points: pts, moves: moved, pid: P.pid });
+  }
   // 5 moved; left: 1 down, 6 dragged, 2 up; right: 3 down, 7 dragged, 4 up (CGEventType).
   var DOWN = P.right ? 3 : 1, DRAGGED = P.right ? 7 : 6, UP = P.right ? 4 : 2;
   mouse(5, pts[0][0], pts[0][1]);

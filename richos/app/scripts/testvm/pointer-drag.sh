@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # pointer-drag.sh — drag inside the app under test with the real mouse, the way a hand does.
 #
-#   testvm/pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right]
+#   testvm/pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover]
+#
+#   --hover presses no button at all: the pointer only moves through the points (one is enough) and
+#   rests on the last, the way a hand hovers, so a tooltip shown by `mouseover` can be looked at.
+#   Added with the nightly 68 walk: a drag holds the button, and WebKit sends no hover while it is held.
 #
 #   --right holds the RIGHT button instead. Given the same point twice it is a real right-click
 #   (a `contextmenu` event in the app), the way a hand opens an Output panel row's menu (PRD
@@ -36,23 +40,29 @@ if [ "${TESTVM_AX_SUPERVISED:-}" != 1 ]; then
 fi
 . "$HERE/lib.sh"
 
-usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right]"
+usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover]"
 VM="${1:-}"
 [ -n "$VM" ] || die "$usage"
 shift
 POINTS=()
-STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0
+STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --step) STEP="${2:-}"; shift 2 ;;
     --pause) PAUSE="${2:-}"; shift 2 ;;
     --rest) REST="${2:-}"; shift 2 ;;
     --right) RIGHT=1; shift ;;
+    --hover) HOVER=1; shift ;;
     *,*) POINTS+=("$1"); shift ;;
     *) die "unknown argument: $1 — $usage" ;;
   esac
 done
-[ "${#POINTS[@]}" -ge 2 ] || die "a drag needs at least two points — $usage"
+[ "$HOVER" = 0 ] || [ "$RIGHT" = 0 ] || die "--hover moves with no button, so it cannot also be --right — $usage"
+if [ "$HOVER" = 1 ]; then
+  [ "${#POINTS[@]}" -ge 1 ] || die "a hover needs at least one point — $usage"
+else
+  [ "${#POINTS[@]}" -ge 2 ] || die "a drag needs at least two points — $usage"
+fi
 
 ag() {  # one indirection to the guest, as ax.sh has, so the tests can use a stub guest
   if [ -n "${TESTVM_GUEST_EXEC:-}" ]; then "$TESTVM_GUEST_EXEC" "$VM" "$@"; else guest_ssh "$VM" "$@"; fi
@@ -81,7 +91,7 @@ DEADLINE
 )"
 
 # Every number is parsed here, so the guest program only ever receives JSON.
-PARAMS="$(PD_PID="$PID" PD_STEP="$STEP" PD_PAUSE="$PAUSE" PD_REST="$REST" PD_RIGHT="$RIGHT" python3 - "${POINTS[@]}" <<'PY'
+PARAMS="$(PD_PID="$PID" PD_STEP="$STEP" PD_PAUSE="$PAUSE" PD_REST="$REST" PD_RIGHT="$RIGHT" PD_HOVER="$HOVER" python3 - "${POINTS[@]}" <<'PY'
 import json, os, sys
 try:
     points = [[float(v) for v in p.split(',', 1)] for p in sys.argv[1:]]
@@ -91,7 +101,8 @@ except (ValueError, AssertionError):
     raise SystemExit("points are x,y numbers; --step > 0, --pause 0..1 s, --rest 0..5 s")
 print("var DRAG_PARAMS = " + json.dumps({"pid": int(os.environ['PD_PID']), "points": points,
                                          "step": step, "pause": pause, "rest": rest,
-                                         "right": os.environ['PD_RIGHT'] == '1'}) + ";")
+                                         "right": os.environ['PD_RIGHT'] == '1',
+                                         "hover": os.environ['PD_HOVER'] == '1'}) + ";")
 PY
 )"
 
@@ -99,5 +110,5 @@ PY
 { printf '%s\n' "$PARAMS"; cat "$HERE/pointer-drag.js"; } | ag "$REMOTE_OSA" 2>&1 | {
   answer="$(cat)"
   printf '%s\n' "$answer"
-  case "$answer" in *'"error"'*) exit 3 ;; *'"dragged"'*) exit 0 ;; *) exit 4 ;; esac
+  case "$answer" in *'"error"'*) exit 3 ;; *'"dragged"'*|*'"hovered"'*) exit 0 ;; *) exit 4 ;; esac
 }

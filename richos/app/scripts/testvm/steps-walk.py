@@ -21,7 +21,9 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
   pull   src dest                      guest.sh VM --pull src <out>/dest: a guest file kept whole (a `guest`
                                        step's output is cut at 2,000 characters), e.g. the app's log
   handfile mode path [to]              hand-file.sh VM paste|drag path [--to x,y]
-  pointer points[] [right]             pointer-drag.sh VM x,y x,y ... [--right]: the REAL mouse. The same
+  pointer points[] [right|hover]       pointer-drag.sh VM x,y x,y ... [--right|--hover]: the REAL mouse
+                                       ("hover": moves only, no button, one point is enough: a tooltip
+                                       shown on mouseover can be looked at). The same
                                        point twice is a click, the way a hand clicks; `ax click --at` is
                                        System Events' accessibility press at a point and does not focus
                                        a text box (candidate 50 rewalk, run K)
@@ -108,7 +110,8 @@ def step_run(vm, step, out):
         extra = [x for pair in step.get('env', []) for x in ('--env', pair)]
         return run([str(HERE / 'relaunch.py'), vm] + extra, timeout=90)
     if op == 'pointer':
-        return run([str(HERE / 'pointer-drag.sh'), vm] + step['points'] + (['--right'] if step.get('right') else []))
+        return run([str(HERE / 'pointer-drag.sh'), vm] + step['points'] + (['--right'] if step.get('right') else [])
+                   + (['--hover'] if step.get('hover') else []))
     if op == 'openlink':
         return open_link(vm, step)
     if op == 'wait':
@@ -155,7 +158,7 @@ REQUIRED = {
     'wait': {'seconds': (int, float)}, 'until': {'args': list, 'contains': str}, 'relaunch': {},
     'pointer': {'points': list}, 'openlink': {'pattern': str},
 }
-OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str}, 'pointer': {'right': bool},
+OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str}, 'pointer': {'right': bool, 'hover': bool},
             'relaunch': {'env': list}, 'openlink': {'app': str, 'seconds': (int, float)},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
@@ -181,8 +184,10 @@ def problems(steps):
                                 or (isinstance(step[key], bool) and kind != bool)):
                 found.append(f'step {i} ({op}): {key!r} has the wrong type')
         if op == 'pointer' and isinstance(step.get('points'), list) and (
-                len(step['points']) < 2 or not all(isinstance(pt, str) and pt.count(',') == 1 for pt in step['points'])):
-            found.append(f'step {i} (pointer): \'points\' needs at least two "x,y" strings (the same one twice is a click)')
+                len(step['points']) < (1 if step.get('hover') is True else 2)
+                or not all(isinstance(pt, str) and pt.count(',') == 1 for pt in step['points'])):
+            found.append(f'step {i} (pointer): \'points\' needs at least two "x,y" strings (the same one twice is a click; '
+                         f'one is enough with "hover")')
     return found
 
 
