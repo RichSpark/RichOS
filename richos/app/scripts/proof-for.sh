@@ -143,7 +143,9 @@
 # changed product path; a tooling path selects the suites that cover it, are it, or name it
 # exactly. Coverage is unchanged (a directory input never covered anything), so UNCOVERED is
 # exactly what it is without --gate. Without --gate nothing changes: the commit check, an
-# engineer's own proof and the nightly still get the full selection.
+# engineer's own proof and the nightly still get the full selection. A suite that checks every
+# file in a tooling directory says so with `# run-tests: gate-inputs <dir>`, and any file under
+# it selects that suite under --gate too (proof-qualification and the UI tests, 2026-10-20).
 # =========================================================================================
 
 set -uo pipefail
@@ -539,6 +541,12 @@ while IFS= read -r p; do
       if [ "$p" = "$decl" ]; then
         printf '%s\n' "$s" >> "$WORK/script"; MATCHED=1; note "behavior covered by $s ($decl)"
       fi
+    elif [ "$kind" = gate ]; then
+      # `# run-tests: gate-inputs`: the suite checks every file under this directory, so any of
+      # them selects it under --gate too (lib/proof_declarations.py, suite_gate_inputs).
+      case "$p" in
+        "$decl"/*) printf '%s\n' "$s" >> "$WORK/script"; note "a file $s checks ($decl, gate-inputs)" ;;
+      esac
     else
       for d in $decl; do
         case "$p" in
