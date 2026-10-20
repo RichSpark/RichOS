@@ -25,6 +25,20 @@ MAX_RECOVERIES = 3
 EXECUTION_SECONDS = 3 * 3600
 LOCK_SECONDS = 4
 MAX_LEDGER_BYTES = 16 * 1024 * 1024
+# questions-only (PRD 2026-10-20 section 8): triage, advisors and owner question
+# delivery run; worker controls, holds, budgets and finding resolution stay as
+# in observe. Every mode branch asks one of these two questions explicitly.
+MODES = ("off", "observe", "questions-only", "enforce")
+
+
+def quiet(mode):
+    """Observe-side branch: record gaps and proposals, never refuse or control."""
+    return mode in ("observe", "questions-only")
+
+
+def asks(mode):
+    """Enforce-side branch for owner questions and acknowledged delivery only."""
+    return mode in ("questions-only", "enforce")
 
 
 class Unavailable(ValueError):
@@ -103,7 +117,7 @@ def read(identity, ledger=None):
     for field in ("deadline", "wes_deadline", "created_at"):
         if not isinstance(value.get(field), (int, float)) or not math.isfinite(value[field]):
             raise Unavailable("invalid recovery budget %s" % path)
-    if (value.get("mode") not in ("observe", "enforce") or value.get("status") not in
+    if (value.get("mode") not in MODES[1:] or value.get("status") not in
             ("investigating", "reviewing_premise", "recovering", "accepted", "resolved_findings", "awaiting_alex", "unavailable")
             or any(not isinstance(value.get(k), list) for k in ("attempts", "controls", "consults", "budgets"))):
         raise Unavailable("invalid recovery state %s" % path)
@@ -181,6 +195,11 @@ def repeat_signal(name):
     return dict(name=name, job=match[1], iteration=number) if number >= REPEAT_ITERATION else None
 
 
+def signal_label(signal):
+    """A short human label for an alarm, for owner notices."""
+    return str((signal or {}).get("label") or (signal or {}).get("name") or "work")
+
+
 def repeat_pending(record, role):
     return bool(record.get("repeat_signal") and
                 (record.get("repeat_questions", {}).get(role) or {}).get("frontier") != record["evidence_cursor"])
@@ -201,7 +220,7 @@ def repeat_question_key(record, role):
 def repeat_ready(record):
     """Questions reach the lead before a later judgment can run."""
     return all(not repeat_pending(record, role) and
-               (record["mode"] != "enforce" or repeat_question_key(record, role) in record.get("deliveries", {}))
+               (not asks(record["mode"]) or repeat_question_key(record, role) in record.get("deliveries", {}))
                for role in ("axel", "wes"))
 
 
@@ -596,7 +615,9 @@ def complete(identity, row):
 
 def mode(entity):
     """An absent declaration leaves installation inert. Observation has no
-    control effects. Enforcement requires a named qualification report.
+    control effects. questions-only also delivers advisor questions to the
+    owner, with no control effects and no prior qualification. Enforcement
+    requires a named qualification report.
     """
     path = Path(entity or ".") / ".claude" / "recovery.json"
     try:
@@ -606,7 +627,7 @@ def mode(entity):
     except FileNotFoundError:
         return dict(mode="off", repositories=[])
     if (not isinstance(declaration, dict) or declaration.get("schema") != 1
-            or declaration.get("mode") not in ("off", "observe", "enforce")
+            or declaration.get("mode") not in MODES
             or not isinstance(declaration.get("repositories"), list)
             or not all(isinstance(p, str) and os.path.isabs(p) for p in declaration["repositories"])
             or declaration.get("wes_policy", "carried") not in ("carried", "all")):

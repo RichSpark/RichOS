@@ -5058,7 +5058,7 @@ def recovery_stop(key, record, control, tip):
 def _baseline_review_identity(rec, observation=False):
     assignment = rec.get("recovery_assignment") or {}
     authority = assignment.get("authority") or {}
-    return not observation and (authority.get("mode") in ("off", "observe") or
+    return not observation and (authority.get("mode") in ("off", "observe", "questions-only") or
         (not authority.get("host") and _recovery_unclassified(rec)))
 
 
@@ -5097,7 +5097,7 @@ def _baseline_recovery_assignment(payload, rec, mode):
     return dict(kind=kind if kind in ("implementation", "review", "helper") else "implementation",
         outcome=host.get("outcome") or "teammate:"+rec["key"], correction_of=[],
         acceptance=host.get("acceptance") or hashlib.sha256(prompt.encode()).hexdigest(),
-        observation_only=mode=="observe", authority=dict(host=host, mode=mode,
+        observation_only=mode in ("observe", "questions-only"), authority=dict(host=host, mode=mode,
             session=str(payload.get("session_id") or ""), tool_use_id=str(payload.get("tool_use_id") or ""),
             transcript=str(payload.get("transcript_path") or ""), brief_sha256=hashlib.sha256(prompt.encode()).hexdigest()))
 
@@ -5111,7 +5111,8 @@ def _recovery_assignment(payload, rec, continues, lands_pending, inspection=None
         return _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection)
     # Observation has its own projection. Never rewrite live review identity
     # or predecessor records because a would-be classification changed.
-    baseline = _baseline_recovery_assignment(payload, rec, "observe")
+    # questions-only takes the same projection: identity gaps never refuse.
+    baseline = _baseline_recovery_assignment(payload, rec, declaration["mode"])
     rec.pop("recovery_observation_assignment", None)
     rec.pop("recovery_observation_gap", None)
     try:

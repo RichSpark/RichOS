@@ -118,6 +118,24 @@ with s.execution_claim(sys.argv[2],'a'*40,wait_seconds=10,say=lambda message:pri
             self.assertEqual(len(launches),2)
             self.assertEqual(len(set([first_log]+launches)),3)
 
+    def test_questions_only_delivers_questions_and_coverage_gaps_never_control_notices(self):
+        questions = dict(questions=[dict(question='What does the addition protect?', evidence='send')], frontier='f', consultation='c')
+        base = dict(id='job', mode='questions-only', status='investigating', owner='lead', work='teammate:w', acceptance='a',
+                    evidence_cursor='f', repeat_signal=dict(label='zach-opus-prd3c'), repeat_questions=dict(axel=questions))
+        notice = RR.owner_notice(base)
+        self.assertIn('AXEL QUESTIONS', notice['lines'][0])
+        self.assertEqual(notice['mode'], 'questions-only')
+        quiet = dict(base, repeat_signal=None, repeat_questions={})
+        for change in (dict(status='recovering', plan=dict(accepted=True, id='plan')), dict(status='awaiting_alex'),
+                       dict(wes=dict(verdict=dict(action='withdraw_finding', finding='r#1')))):
+            self.assertIsNone(RR.owner_notice(dict(quiet, **change)), change)
+        gap = RR.owner_notice(dict(quiet, status='unavailable'))
+        self.assertIn('unavailable', gap['lines'][0])
+        self.assertIsNone(RR.owner_notice(dict(base, mode='observe')))
+        with patch.object(R, 'read', return_value=dict(base, controls=[dict(action='stop', workers={'w': 'source'})])):
+            ws = SimpleNamespace(recovery_stop=lambda *a: self.fail('questions-only applied a control'))
+            RR.apply_controls('job', ws)
+
     def test_observed_advice_cannot_steer_reviews_or_dispatch_replacements(self):
         import second_review as SR
         record=dict(mode='observe',status='recovering',plan=dict(accepted=True,id='plan'),wes=dict(verdict=dict(action='withdraw_finding',finding='r#1')))

@@ -1797,7 +1797,8 @@ def tell(now, sstate, rows, book, items, problems, attempts):
     else:
         shown, lines = [n for n, s in enumerate(owners) if for_this_monitor(s)], []
     if shown and not HOST_JSON["on"]:
-        recovery_on = bool(recovery_runner.NOTICES)
+        # Only an enforce notice can stop work; questions-only notices are questions.
+        recovery_on = any(n.get("mode") == "enforce" for n in recovery_runner.NOTICES)
         contract = "declared recovery control may stop exact affected workers" if recovery_on else "it only starts reviews and reports: nothing was paused, stopped or killed"
         lines = ["REVIEW-WATCH %s: %d second-review notice%s (%s)" % (hhmm(now), len(shown), "" if len(shown)==1 else "s", contract)]
         used = len(lines[0])

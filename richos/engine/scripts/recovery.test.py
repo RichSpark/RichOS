@@ -417,6 +417,39 @@ class Recovery(unittest.TestCase):
         self.assertEqual(first["number"], replacement["number"])
         self.assertEqual(len(R.read(record["id"])["attempts"]), 1)
 
+    def test_questions_only_declaration_needs_no_qualification_and_never_controls(self):
+        entity = self.base / "entity"
+        (entity / ".claude").mkdir(parents=True)
+        (entity / ".claude/recovery.json").write_text(json.dumps(dict(schema=1, mode="questions-only", repositories=[str(self.repo)])))
+        self.assertEqual(R.mode(str(entity))["mode"], "questions-only")
+        self.assertTrue(R.quiet("questions-only") and R.asks("questions-only"))
+        self.assertFalse(R.asks("observe") or R.quiet("enforce") or R.quiet("off") or R.asks("off"))
+        (entity / ".claude/recovery.json").write_text(json.dumps(dict(schema=1, mode="questions only", repositories=[])))
+        with self.assertRaises(R.Unavailable):
+            R.mode(str(entity))
+        record = R.reconcile(str(self.repo), "teammate:questions", {"teammate:questions"}, "owner", "acceptance",
+                             mode="questions-only", name="zach-opus-lease4")
+        self.assertEqual(R.read(record["id"])["mode"], "questions-only")
+        # Controls, holds, budgets and finding resolution follow observe.
+        self.assertIsNone(R.admission(record, "worker", "ordinary correction"))
+        self.assertEqual(R.read(record["id"])["attempts"], [])
+        self.assertEqual(R.landing_gap(str(self.repo), "teammate:questions"), "")
+        # Acknowledged question delivery follows enforce.
+        answer = dict(job=record["id"], acceptance="acceptance", frontier=record["evidence_cursor"],
+                      questions=[dict(question="What does this addition protect?", evidence="send-1")])
+        for role in ("axel", "wes"):
+            record = R.repeat_questioned(record["id"], role, answer, role)
+        self.assertFalse(R.repeat_ready(record))
+        for role in ("axel", "wes"):
+            R.owner_delivered(str(R.root()/(record["id"]+".json")), R.repeat_question_key(record, role), "owner")
+        self.assertTrue(R.repeat_ready(R.read(record["id"])))
+        observed = R.read(record["id"])
+        observed["repeat_recovery"] = True
+        R.save(observed, "fixture-escalated")
+        control = R.control(record["id"], dict(job=record["id"], acceptance="acceptance", frontier=record["evidence_cursor"],
+            action="stop", workers={}, reason="repeated unsatisfying answers", evidence="replies"), "advisor")
+        self.assertTrue(control["observe_only"])
+
     def test_observe_mode_never_refuses_or_reserves(self):
         record = R.reconcile(str(self.repo), self.work, self.aliases, "owner", "acceptance", mode="observe")
         self.assertIsNone(R.admission(record, "worker", "ordinary correction"))

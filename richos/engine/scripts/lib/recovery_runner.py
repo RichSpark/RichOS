@@ -672,15 +672,16 @@ def tick(items, engine, entity, ws):
             C.schedule(R.read(record["id"]), engine, item.env)
             record = R.read(record["id"])
             wes = record.get("wes") or {}
+            if R.asks(record["mode"]):
+                notice = owner_notice(record)
+                if notice and not any(n["key"]==notice["key"] for n in NOTICES):
+                    NOTICES.append(notice)
             if record["mode"] != "enforce":
-                continue  # observations cannot recheck, close or redirect live work
+                continue  # observations and questions cannot recheck, close or redirect live work
             if item.state=="ended" and wes.get("verdict", {}).get("action") in ("withdraw_finding", "correct_interpretation"):
                 effective, _ = R.F.review_of(R.rows(R.F.review_ledger_default()), item.tip, item.repo)
                 if effective and effective.get("wes_consultation") != wes["consultation"]:
                     requests.append((item, effective["id"]))
-            notice = owner_notice(record)
-            if notice and not any(n["key"]==notice["key"] for n in NOTICES):
-                NOTICES.append(notice)
             plan = record.get("plan") or {}
             if item.state=="ended" and plan.get("accepted") and record["status"]=="recovering":
                 effective, _ = R.F.review_of(R.rows(R.F.review_ledger_default()), item.tip, item.repo)
@@ -698,7 +699,10 @@ def tick(items, engine, entity, ws):
 
 
 def owner_notice(record):
-    if record["mode"] != "enforce":
+    """Questions reach the owner in questions-only and enforce. In questions-only
+    the only other notice is the technical coverage gap: no control, plan or
+    finding-resolution instruction is delivered."""
+    if not R.asks(record["mode"]):
         return None
     if record.get("repeat_signal"):
         for role in ("axel", "wes"):
@@ -708,13 +712,15 @@ def owner_notice(record):
             if key in record.get("deliveries", {}):
                 continue
             questions = record["repeat_questions"][role]["questions"]
-            return dict(key=key, session=record["owner"], record=str(R.root()/(record["id"]+".json")),
-                lines=["  [%s QUESTIONS] %s" % (role.upper(), record["repeat_signal"]["name"])] +
+            return dict(key=key, session=record["owner"], record=str(R.root()/(record["id"]+".json")), mode=record["mode"],
+                lines=["  [%s QUESTIONS] %s" % (role.upper(), R.signal_label(record["repeat_signal"]))] +
                     [line for q in questions for line in ("      " + q["question"], "      Context: " + q["evidence"])] +
                     ["      Address these questions before deciding on another correction. No advisor verdict is required to reconsider the work."])
     status = record["status"]
     wes = record.get("wes") or {}
     plan = record.get("plan") or {}
+    if record["mode"] != "enforce" and not (status=="unavailable" or record.get("control_unavailable")):
+        return None
     if status=="awaiting_alex":
         action = "Bring this job to Alex. Three recovery attempts failed; no automatic fourth is permitted."
     elif status=="unavailable" or record.get("control_unavailable"):
@@ -727,7 +733,7 @@ def owner_notice(record):
     else:
         return None
     key = "recovery:%s:%s" % (record["id"], R.digest([status, plan.get("id"), wes.get("consultation"), record.get("control_unavailable")]))
-    return dict(key=key, session=record["owner"], record=str(R.root()/(record["id"]+".json")),
+    return dict(key=key, session=record["owner"], record=str(R.root()/(record["id"]+".json")), mode=record["mode"],
         lines=["  [RECOVERY %s] %s: %s" % (record["mode"], record["work"], action),
             "      Original acceptance: %s. Record: %s" % (record["acceptance"], R.root()/(record["id"]+".json"))])
 
