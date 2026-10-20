@@ -650,6 +650,128 @@ async function main() {
     });
   }
 
+  // ---- 7. words typed while the launch is still opening his thread stay in the box -------
+  //
+  // THE FIFTH DEFECT OF THIS EXACT SHAPE (esc-20261020T171021Z-8fd0fca7). After a relaunch the
+  // composer is on screen and typable while `init()` is still awaiting the reads in front of
+  // its restore (in the test guest, first-send-walk.py's frame at +44 s after the relaunch shows
+  // his typed words over a conversation the restore had not yet started opening). The restore's
+  // `openThread` then emptied the box: `stashThreadViewState` parks the words only against a
+  // thread already on screen, and at launch there is none yet, so they were dropped, and the
+  // destination's (empty) draft was put in their place. A person who typed his first sentence
+  // in that window saw it vanish, or pressed Send on an empty box and nothing reached Rich.
+  //
+  // TYPED WITH REAL KEY EVENTS and sent with the Return key, the way a person does it. 0 ms is
+  // left out for the same reason as check 3: the window is the length of the awaits.
+  for (const lag of LATENCIES.filter((l) => l > 0)) {
+    await run.check(`words typed while the launch is still opening his thread are kept and sent (${lag}ms bridge)`, async () => {
+      const page = await open(browser, lag);
+      await page.waitForSelector("#input", { state: "visible" });
+      const SENTENCE = "Please ask my team to read the first line of CLAUDE.md";
+      await page.click("#input");
+      await page.keyboard.type(SENTENCE);
+      // IN the window, and asserted to be in it: typing after the restore had begun would pass
+      // without ever touching the defect.
+      const during = await page.evaluate(() => ({
+        restoring: (window.__bridgeIssued || []).indexOf("switch_thread") >= 0,
+        box: document.getElementById("input").value,
+      }));
+      assertEqual(during.restoring, false, "the launch had already started opening the thread, so nothing was tested");
+      assertEqual(during.box, SENTENCE, "the keystrokes did not reach the composer");
+
+      await bootDone(page);
+      await observe(page, 6 * lag + 400, "the restore's openThread paints within a few call-times of the boot's end");
+      const settled = await page.evaluate(() => ({
+        box: document.getElementById("input").value,
+        thread: window.__RICHOS_TIMELINE__ ? window.__RICHOS_TIMELINE__().threadId : null,
+      }));
+      assertEqual(settled.thread, "general", "the launch did not restore the last session's thread");
+      assertEqual(
+        settled.box,
+        SENTENCE,
+        `the words he typed while the launch was opening his thread are gone from the composer ` +
+          `(it reads ${JSON.stringify(settled.box)}) — the swallowed first send`
+      );
+
+      await page.focus("#input");
+      await page.keyboard.press("Enter");
+      const arrived = await page
+        .waitForFunction(
+          (t) => Array.from(document.querySelectorAll(".tl-user-text")).some((n) => n.textContent.trim() === t),
+          SENTENCE,
+          { timeout: 60000 } // a hang guard: a held or kept send is in the thread or it never will be
+        )
+        .then(() => true)
+        .catch(() => false);
+      assert(arrived, "Return on the kept words did not put his message in the conversation");
+      const after = await page.evaluate((t) => ({
+        copies: Array.from(document.querySelectorAll(".tl-user-text")).filter((n) => n.textContent.trim() === t).length,
+        box: document.getElementById("input").value,
+      }), SENTENCE);
+      assertEqual(after.copies, 1, `his sentence is on screen ${after.copies} times`);
+      assertEqual(after.box, "", "the composer still holds a sentence that was sent");
+      assertEqual(page.__errors, [], "the shell logged errors while the launch restored his thread");
+      await page.close();
+      return `typed before the restore began; the words were still in the box on "general" and Return sent them once`;
+    });
+  }
+
+  // ---- 8. ...and Return pressed in that window sends them, once, to the thread it opens ------
+  //
+  // WHAT THE TEST GUEST MEASURED WITH REAL KEYS (first-send-walk.py, bundle a7db7f70b): typed and
+  // Return pressed while no conversation was open yet; the composer emptied, no message appeared
+  // and no PromptReceived row was written. `send()` sent with no thread, `send_message` refused
+  // it (`thread_id: String`), and the restore then emptied the box the refusal had put the words
+  // back in. The mock used to accept a send with no thread, which is why no check here saw it.
+  for (const lag of LATENCIES.filter((l) => l > 0)) {
+    await run.check(`Return pressed while the launch is still opening his thread sends his words once (${lag}ms bridge)`, async () => {
+      const page = await open(browser, lag);
+      await page.waitForSelector("#input", { state: "visible" });
+      const SENTENCE = "First send after a relaunch, sent with the Return key";
+      await page.click("#input");
+      await page.keyboard.type(SENTENCE);
+      await page.keyboard.press("Enter");
+      const during = await page.evaluate((t) => ({
+        restoring: (window.__bridgeIssued || []).indexOf("switch_thread") >= 0,
+        box: document.getElementById("input").value,
+        shown: Array.from(document.querySelectorAll(".tl-user-text")).some((n) => n.textContent.trim() === t),
+      }), SENTENCE);
+      assertEqual(during.restoring, false, "the launch had already started opening the thread, so nothing was tested");
+
+      await bootDone(page);
+      const arrived = await page
+        .waitForFunction(
+          (t) => Array.from(document.querySelectorAll(".tl-user-text")).some((n) => n.textContent.trim() === t) &&
+            window.__RICHOS_TIMELINE__ && window.__RICHOS_TIMELINE__().threadId === "general",
+          SENTENCE,
+          { timeout: 60000 } // a hang guard: a held or kept send is in the thread or it never will be
+        )
+        .then(() => true)
+        .catch(() => false);
+      await observe(page, 6 * lag + 400, "a second copy, or a refusal, would arrive within a few call-times");
+      const after = await page.evaluate((t) => ({
+        copies: Array.from(document.querySelectorAll(".tl-user-text")).filter((n) => n.textContent.trim() === t).length,
+        box: document.getElementById("input").value,
+        thread: window.__RICHOS_TIMELINE__ ? window.__RICHOS_TIMELINE__().threadId : null,
+        refused: (document.getElementById("messages").textContent || "").includes("invalid args"),
+      }), SENTENCE);
+      assert(
+        arrived,
+        `Return in the launch window never put his message in "general": the composer reads ` +
+          `${JSON.stringify(after.box)} and the thread shows ${after.copies} copies — the swallowed first send`
+      );
+      assertEqual(after.copies, 1, `his sentence is on screen ${after.copies} times`);
+      assertEqual(after.box, "", "the composer still holds the sentence that was sent");
+      assertEqual(after.refused, false, "a refusal of a send with no thread is on screen");
+      assertEqual(page.__errors, [], "the shell logged errors while the held send went out");
+      await page.close();
+      return (
+        `Return pressed before the restore began; his message was ${during.shown ? "on screen at once" : "not yet drawn"}, ` +
+        `the box ${JSON.stringify(during.box)}, and it reached "general" once`
+      );
+    });
+  }
+
   await browser.close();
   process.exit(run.report() > 0 ? 1 : 0);
 }

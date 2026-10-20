@@ -426,6 +426,11 @@ const liveStatus = new Map();
 // snapshot, with `sessionLiveTurns` carrying what is running in threads that are not on
 // screen.
 let activeThreadId = null;
+/// A Send pressed while `init()` had not yet opened any conversation — `{ text, at, id }`, `id`
+/// its bubble — sent by `openThread` once it has (`send()`'s launch hold). `null` when none waits.
+let launchSendHeld = null;
+/// `init()` has made its landing decision; from here no Send is held (`send()`).
+let launchLanded = false;
 let voiceMode = false;
 /// **CAN THIS MACHINE TURN SPEECH INTO WORDS?** Read once at launch from `voice_readiness`.
 ///
@@ -1061,7 +1066,7 @@ function showUnboundView(row, rawError) {
 function showEntityView(entityId, mode) {
   const entity = entityOf(entityId);
   if (!entity) return;
-  stashThreadViewState();
+  stashThreadViewState(ENTITY_DRAFT_PREFIX + entityId);
   viewEntityId = entityId;
   viewEntityMode = mode;
   // A draft thread bound to this entity, with NO record persisted (§3.3). The record is
@@ -1222,12 +1227,22 @@ window.RichCompanyOnScreen = companyOnScreen;
 /// half-written sentence from one entity's thread sitting in another entity's composer
 /// means one Enter files it in the wrong company. So the composer is emptied on every
 /// move and only ever re-filled from the draft belonging to what is now on screen.
-function stashThreadViewState() {
+///
+/// `destination` is the draft key of what is about to be on screen. WORDS TYPED BEFORE ANYTHING
+/// WAS ON SCREEN TO OWN THEM go there (esc-20261020T171021Z-8fd0fca7). After a relaunch the
+/// composer is typable while `init()` is still reading what to open (in the test guest, still
+/// so 44 s after a relaunch), and no thread is active yet, so nothing above parked them: the
+/// restore emptied the box and his first sentence was gone before he pressed Send. They were
+/// addressed to no company, so they go to the first thing he lands on, after any draft it kept.
+function stashThreadViewState(destination) {
   if ((mainView === "conversation" || mainView === "opening") && activeThreadId) {
     drafts.set(activeThreadId, inputEl.value);
     if (mainView === "conversation") scrollTops.set(activeThreadId, conversationEl.scrollTop);
   } else if (mainView === "entity" && viewEntityId) {
     drafts.set(ENTITY_DRAFT_PREFIX + viewEntityId, inputEl.value);
+  } else if (destination && inputEl.value.trim()) {
+    const kept = drafts.get(destination);
+    drafts.set(destination, kept && kept.trim() ? kept + "\n\n" + inputEl.value : inputEl.value);
   }
   inputEl.value = "";
   autoGrow();
@@ -1296,7 +1311,12 @@ async function openThread(threadId, opts) {
   if (mainView === "conversation") rememberThreadView();
   const cached = threadViews.get(threadViewKey(row.entity_id, threadId));
   const previousModel = openingThread ? openingThread.previousModel : timelineModel;
-  stashThreadViewState();
+  // A Send held at launch travels with the first conversation opened, its bubble carried across
+  // the model this replaces exactly as a new thread's first message is (see `send()`).
+  if (launchSendHeld && !opts.pendingUser) {
+    opts = Object.assign({}, opts, { pendingUser: { text: launchSendHeld.text, at: launchSendHeld.at } });
+  }
+  stashThreadViewState(threadId);
   clearLiveMark(threadId);
   activeThreadId = threadId;
   savedWork = {items: [], omitted: 0};
@@ -1437,6 +1457,14 @@ async function openThread(threadId, opts) {
   restoreThreadViewState(threadId);
   resetWaitBandForThread();
   scheduleRender();
+  // THE SEND HE PRESSED BEFORE THE LAUNCH HAD A CONVERSATION OPEN goes now, to the one it opened:
+  // exactly the words at the press, adopting the bubble carried above, and whatever he has typed
+  // since stays in the box as his next draft.
+  if (launchSendHeld) {
+    const held = launchSendHeld;
+    launchSendHeld = null;
+    send(held.text);
+  }
   // **AND THE CHIP CARRIES THIS THREAD'S WORK IN THE FIRST RENDERED SECOND, not the fourth.**
   //
   // The synchronous head above clears all four pieces of state `renderDrillChip` reads, so from
@@ -2612,6 +2640,21 @@ async function send(explicitText, opts) {
   if (sendBlockedReason) {
     composerBlockedEl.textContent = sendBlockedReason;
     composerBlockedEl.hidden = false;
+    return;
+  }
+  // A SEND PRESSED BEFORE THE LAUNCH HAS OPENED ANY CONVERSATION is held: his message goes up at
+  // once, as any send does, and `openThread` sends it the moment the thread he lands on is open.
+  // There is no thread to send it to yet (`send_message` takes one), and sending anyway was
+  // refused with an argument error over a box the restore then emptied: the swallowed first send
+  // after a relaunch (esc-20261020T171021Z-8fd0fca7, measured in the test guest with real keys).
+  if (!launchLanded && !preserveDraft && !files && !activeThreadId && !draftEntityId && mainView === "conversation") {
+    if (launchSendHeld) return; // one is already waiting; these words stay in the box
+    const at = Date.now();
+    launchSendHeld = { text, at, id: window.RichTimeline.addPendingUserMessage(timelineModel, text, at) };
+    inputEl.value = "";
+    autoGrow();
+    followBottom = true;
+    scheduleRender();
     return;
   }
   // THE FILES GO INTO THE CONVERSATION'S FOLDER BEFORE THE WORDS LEAVE THE BOX, so a refusal
@@ -10191,6 +10234,18 @@ async function init() {
     startNewThreadFlow();
   }
   if (startupWaits) askStartupQuestionsOffHome();
+  // A LAUNCH THAT OPENED NO CONVERSATION sends nothing he pressed before it: his words go back in
+  // the box for whatever he chooses next, and are never sent there unasked. A conversation he
+  // pressed himself that is still opening takes them instead.
+  launchLanded = true;
+  if (launchSendHeld && mainView !== "opening") {
+    const held = launchSendHeld;
+    launchSendHeld = null;
+    window.RichTimeline.dropPendingUserMessage(timelineModel, held.id);
+    inputEl.value = held.text + (inputEl.value.trim() ? "\n\n" + inputEl.value : "");
+    autoGrow();
+    scheduleRender();
+  }
   // WHAT IS RUNNING RIGHT NOW, read from the backend rather than assumed from the absence
   // of events. A webview reload does not restart the Rust side, so a turn can be mid-flight
   // with this script one second old; without this the row renders "Status unavailable" and
