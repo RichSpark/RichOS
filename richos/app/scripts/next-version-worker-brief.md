@@ -9,3 +9,5 @@
 5. Inspect the two-line diff, commit on your branch, merge local main once and hand over to Rich for independent review and normal landing. Do not ask the CEO for a version bump or changelog decision.
 
 Rich owns completion and retries. Until this lands, the next nightly's existing stable-version collision guard refuses to build under a version already published.
+
+Rich starts Zach with the exact dispatched command (`--repo richos --type zach --model sonnet --brief` pointing to this filled brief). Newt owns changelog prose; Zach owns only this version bump.

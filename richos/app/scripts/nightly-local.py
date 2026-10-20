@@ -1648,13 +1648,18 @@ class Runner:
         """Notes were a precondition. Only stable's next-version bump remains."""
         if not stable:
             return None
-        title, question = published_escalation(tag, stable)
+        slug = re.sub(r"[^a-z0-9]+", "-", tag.lower()).strip("-")[:40].rstrip("-")
+        brief = self.state / "next-versions" / slug / "next-version-worker-brief.md"
+        title, question = published_escalation(tag, stable, brief)
         try:
+            brief.parent.mkdir(parents=True, exist_ok=True)
+            brief.write_text((ROOT / SCRIPTS / "next-version-worker-brief.md").read_text()
+                             .replace(BRIEF_TAG, tag))
             return self.raise_release_job(title, question, f"{tag} is published with its changelog.")
-        except RuntimeError as error:
+        except (OSError, RuntimeError) as error:
             # Do not report a published release as failed because its later version bump
             # needs recovery. The next build's version collision guard remains in force.
-            self.announce(escalation_missing_line(tag, stable, error))
+            self.announce(escalation_missing_line(tag, stable, error, brief))
             return None
 
     def describe_stable(self, info):
@@ -3283,25 +3288,31 @@ ESCALATE = Path(__file__).resolve().parents[2] / "engine/scripts/escalate.sh"
 ESCALATE_TIMEOUT = 60
 ESCALATION_TEAMMATE = "nightly-local"
 CHANGELOG_WORKER_BRIEF = SCRIPTS / "changelog-worker-brief.md"
-# The brief's one placeholder, replaced by the lead: everything else is handed over unchanged.
+# The tag placeholder is filled before either worker brief is dispatched.
 BRIEF_TAG = "<TAG>"
 
 
-def published_escalation(tag, stable):
+def published_escalation(tag, stable, brief):
+    slug = re.sub(r"[^a-z0-9]+", "-", tag.lower()).strip("-")[:40].rstrip("-")
+    start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
+                        f"zach-sonnet-next-version-{slug}", "--repo", "richos",
+                        "--type", "zach", "--model", "sonnet", "--brief", str(brief)])
     title = f"{tag} published; bump main's next release version."
-    return title, (f"The changelog is already published with {tag}. Start the next-version "
-                   "worker from richos/app/scripts/next-version-worker-brief.md, replacing "
-                   f"<TAG> with {tag}. Review and land its version-only commit. No changelog "
+    return title, (f"The changelog is already published with {tag}. Start Zach with this exact "
+                   f"command: `{start}`. The brief already names the published tag. "
+                   "Review and land its version-only commit. No changelog "
                    "writing or CEO intervention is needed.")
 
 
-def escalation_missing_line(tag, stable, error):
+def escalation_missing_line(tag, stable, error, brief):
     """The one line a publish whose escalation could not be raised leaves: what to do by hand."""
     reason = " ".join(str(error).split())
     if len(reason) > 300:
         reason = reason[:297] + "..."
-    title, question = published_escalation(tag, stable)
+    title, question = published_escalation(tag, stable, brief)
     return (f"ESCALATION NOT RAISED ({reason}). The release itself is published. {title} "
+            f"If its brief is missing, fill {brief} from "
+            f"richos/app/scripts/next-version-worker-brief.md with <TAG> replaced by {tag}. "
             f"{question}")
 
 
