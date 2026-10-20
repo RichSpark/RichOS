@@ -2365,6 +2365,61 @@ class ActiveGate(Fixture):
         self.assertIn("autocheck: commit: passed", out.stderr)
 
 
+class ReferenceLooks(Fixture):
+    """Verification reliability PRD R7 and A5 (group B's T06, group D's gate): a reference picture
+    in ui/tests/shots-* is kept only with a recorded look at it, one line per picture."""
+
+    PICTURE = "richos/app/ui/tests/shots-x/button-dark.png"
+    LOOK = "Look shots-x/button-dark.png: the button sits 2px left, nothing else in the picture differs"
+
+    def picture_commit(self, message, expect=0, no_verify=False, picture=None, data=b"\x89PNG fixture v2"):
+        path = self.repo / (picture or self.PICTURE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self.git("add", "-A")
+        return self.git("commit", "-q", "-m", message, *(["--no-verify"] if no_verify else []), expect=expect)
+
+    def test_a_changed_picture_is_committed_only_with_its_look(self):
+        self.make()
+        self.git("checkout", "-q", "-b", "feature")
+        before = self.head()
+        out = self.picture_commit("redraw the button", expect=1)
+        self.assertIn("COMMIT REFUSED: a changed reference picture has no recorded look", out.stderr)
+        self.assertIn(self.PICTURE, out.stderr)
+        self.assertEqual(self.head(), before)
+        # A line too thin to say what was seen is no look.
+        out = self.picture_commit("redraw the button\n\nLook shots-x/button-dark.png: ok", expect=1)
+        self.assertIn("has no recorded look", out.stderr)
+        self.picture_commit("redraw the button\n\n" + self.LOOK)
+        self.assertNotEqual(self.head(), before)
+        # Deleting a picture, or a picture outside shots-*, needs no look.
+        (self.repo / self.PICTURE).unlink()
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "drop the picture")
+        self.picture_commit("an icon", picture="richos/app/ui/icons/plus.png")
+
+    def test_a_land_refuses_a_picture_no_incoming_commit_looked_at(self):
+        self.make()
+        self.git("checkout", "-q", "-b", "unlooked")
+        self.picture_commit("redraw the button", no_verify=True)
+        self.git("checkout", "-q", "main")
+        self.log.unlink(missing_ok=True)
+        before = self.head("main")
+        out = self.git("merge", "--no-ff", "-m", "land unlooked", "unlooked", expect=1)
+        self.assertIn("MERGE INTO MAIN REFUSED: a changed reference picture has no recorded look", out.stderr)
+        self.assertIn(self.PICTURE, out.stderr)
+        self.assertNotIn("run cd richos/app && bash scripts/suite.sh", self.tools())   # before any check
+        self.assertEqual(self.head("main"), before)
+        self.git("merge", "--abort")
+        # The look added afterwards, as an empty commit on the branch, answers it.
+        self.git("checkout", "-q", "unlooked")
+        self.git("commit", "-q", "--allow-empty", "-m", "the look\n\n" + self.LOOK)
+        self.git("checkout", "-q", "main")
+        self.git("merge", "--no-ff", "-m", "land unlooked", "unlooked")
+        self.assertIn("run cd richos/app && bash scripts/suite.sh", self.tools())
+        self.assertEqual(self.head("main^2"), self.head("unlooked"))
+
+
 class Tables(unittest.TestCase):
     def test_every_suite_the_merge_leaves_to_the_nightly_exists_in_this_tree(self):
         # A named table rots when a suite is renamed; this reads it against the real tree.

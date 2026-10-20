@@ -162,6 +162,22 @@ copy; each of these is now settled by the policy in force before any check runs
   for ten days. An installed copy that differs from the shim committed on main runs that one.
   This needs the one reinstall that puts this shim in place (`install.sh`) and never another.
 
+## A changed reference picture carries a recorded look (2026-10-20)
+
+Verification reliability PRD R7 and A5. A picture in `ui/tests/shots-*` is the expected answer
+of a check and the run that drew a new one is no evidence that it is right. The harness keeps
+each regenerated picture's reference, new picture, difference and page state
+(`.shots/regenerated/<picture>/`, `../../ui/tests/README.md`) and asks for one line per picture
+saying what a look at them found. Every reference picture a commit adds or changes needs that
+line in the commit's message (`commit-msg`):
+
+    Look shots-<dir>/<name>.png: <what the look found, three words or more>
+
+and a land checks every picture it brings against its incoming commits' messages before any
+check runs, so a commit made with `--no-verify` or before this rule is caught where it lands (an
+empty commit on the branch carrying the line answers it). A deleted picture needs no look.
+`../autocheck.test.py` `ReferenceLooks`.
+
 ## What every commit refuses, the merge refuses (2026-10-11)
 
 The merge of `codex/axel-wes-recovery` (`9c5f0f6dc`) passed this gate and left

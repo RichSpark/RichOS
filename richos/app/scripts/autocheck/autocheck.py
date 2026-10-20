@@ -1922,6 +1922,11 @@ def land_from_index(repo, what, receipt=True, target=""):
         return 1
     staged = [p for p in git("diff", "--cached", "--name-only", "--no-renames").splitlines() if p]
     heads = merge_heads(repo)
+    if receipt and heads:
+        incoming = "\n".join(git("log", "--format=%B", f"HEAD..{head}", cwd=repo.top) for head in heads)
+        missing = unlooked(changed_pictures(repo, ["--cached", "HEAD"]), incoming)
+        if missing:
+            return refuse_unlooked(what, missing, "a commit this land brings (an empty commit on the branch will do)")
     range_argv = land_range(repo, heads)
     if receipt and target and repo.branch == target and \
             review_before_checks(repo, what, landed_commit(repo, heads, range_argv)):
@@ -2285,6 +2290,48 @@ def post_merge(repo, squash):
     return 0
 
 
+# A CHANGED REFERENCE PICTURE CARRIES A RECORDED LOOK (verification reliability PRD R7 and A5,
+# 2026-10-20). A picture in ui/tests/shots-* is the expected answer of a check, and the run that
+# drew a new one is no evidence that it is right ("generating a picture does not approve it"). The
+# harness keeps each regenerated picture's reference, new picture, difference and page state
+# (.shots/regenerated/<picture>/) and asks for one line per picture saying what a look at them
+# found, in the commit that keeps it (group B, step 3). Nothing refused a commit or a land
+# without it. Now every reference picture a commit adds or changes needs, in that commit's
+# message, the line
+#     Look shots-<dir>/<name>.png: <what the look found, three words or more>
+# and a land checks every picture it brings against its incoming commits' messages, so a commit
+# made with --no-verify, or before this rule, is still caught where it lands (an empty commit
+# carrying the line answers it). A deleted picture needs no look.
+SHOTS_ROOT = "richos/app/ui/tests/"
+LOOK_LINE = re.compile(r"^[ \t]*Look[ \t]+(?:richos/app/ui/tests/)?(shots-[^\s:]+?)(?:\.png)?:[ \t]*(\S.*?)[ \t]*$",
+                       re.M)
+
+
+def changed_pictures(repo, diff_args):
+    """The reference pictures `git diff <diff_args>` adds or changes."""
+    out = git("diff", "--name-only", "--no-renames", "--diff-filter=AM", *diff_args, "--",
+              SHOTS_ROOT + "shots-*", cwd=repo.top)
+    return sorted(p for p in out.splitlines() if p.endswith(".png"))
+
+
+def unlooked(pictures, text):
+    """The pictures `text` holds no look line for."""
+    seen = {m.group(1) for m in LOOK_LINE.finditer(text) if len(m.group(2).split()) >= 3}
+    return [p for p in pictures if p[len(SHOTS_ROOT):-len(".png")] not in seen]
+
+
+def refuse_unlooked(what, missing, where):
+    banner(f"{what.upper()} REFUSED: a changed reference picture has no recorded look", [
+        *missing,
+        "",
+        f"Each needs one line in {where} saying what a look at it found:",
+        f"    Look {missing[0][len(SHOTS_ROOT):]}: <what the look found>",
+        "The harness keeps the reference, the new picture, their difference and the page's state in",
+        ".shots/regenerated/<picture>/ (ui/tests/README.md). A picture nobody looked at is not approved.",
+    ])
+    return 1
+
+
 def commit_msg(repo, message_file):
     """commit-msg: a commit touching richos/mobile/ must carry a Battery-check trailer that GIT
     parses (CEO ruling §81). 2026-10-01: a trailer wrapped over three unindented lines was no
@@ -2302,6 +2349,11 @@ def commit_msg(repo, message_file):
         for pid in ancestors())
     against = ["HEAD^"] if amend and git("rev-parse", "-q", "--verify", "HEAD^", check=False,
                                           cwd=repo.top).returncode == 0 else []
+    message = Path(message_file).read_text(errors="replace")
+    message = "\n".join(line for line in message.splitlines() if not line.startswith("#"))
+    missing = unlooked(changed_pictures(repo, ["--cached", *against]), message)
+    if missing:
+        return refuse_unlooked("commit", missing, "this commit's message")
     paths = git("diff", "--cached", "--name-only", "--no-renames", *against, cwd=repo.top).splitlines()
     if not any(p.startswith(MOBILE) for p in paths):
         return 0
