@@ -459,6 +459,7 @@ class LocalTests(unittest.TestCase):
             "build": build, "reason": "already published", "tag": "v1.2.0-nightly.20260916.1"}))
         for name in ("preflight", "runtime", "gates", "command"):
             setattr(r, name, Mock())
+        r.restore_build_commit = Mock()
         r.installed_dependencies_digest = Mock(return_value=self.DEPENDENCIES)
         def completed(out):
             if not (out / "candidate.json").exists():
@@ -1250,7 +1251,7 @@ while True: time.sleep(.02)
         r.checkout.assert_called_once_with(self.SOURCE)       # that run's commit, not main's tip
         ancestry, build = r.command.call_args_list
         self.assertEqual(ancestry.args[:4], ("git", "merge-base", "--is-ancestor", self.SOURCE))
-        self.assertEqual(build.args[2], "run")
+        self.assertEqual(build.args[2], "build")
         self.assertIs(build.kwargs["release_build"], True)
         plan = json.loads((self.root / "plan.json").read_text())
         self.assertEqual(plan["gates_passed_in"], {"run_id": self.RESUMED, "source_commit": self.SOURCE})
@@ -1814,6 +1815,7 @@ while True: time.sleep(.02)
         run("worktree", "add", "-q", "--detach", str(source), "main", cwd=repo)
         info = {**self.CANDIDATE_INFO, "build_commit": build_commit}
         r = self.runner()
+        r.restore_build_commit = types.MethodType(m.Runner.restore_build_commit, r)
         r.repo = repo
         at_finish = []
         def command(*args, cwd=None, capture=False, **kwargs):
