@@ -2726,6 +2726,14 @@ def proof_report(path, deadline=None):
             if time.monotonic() > deadline:
                 report["unavailable"] = spent
                 return report
+            # Held for its consumer (proof-run.py HANDOVER_HOLD): rotation never removes it, and the
+            # land that consumes it releases it. Any other held run of this checkout is named, so a
+            # superseded handover is released by Rich once nothing still needs it.
+            report["held"] = os.path.exists(os.path.join(run, "retain"))
+            others = [os.path.join(history, n) for n in names if n != name
+                      and os.path.exists(os.path.join(history, n, "retain"))]
+            if others:
+                report["also_held"] = others[:PROOF_REPORT_RUNS]
             rows = summary.get("checks") or []
             counts = {}
             for row in rows:
@@ -2744,6 +2752,10 @@ def proof_report(path, deadline=None):
                 if unresolved else "; every planned check passed"))
             if selection.get("candidate") and selection["candidate"] != head:
                 report["line"] += "; the plan's candidate %s is not HEAD" % selection["candidate"][:12]
+            if report.get("also_held"):
+                report["line"] += ("; %d earlier handover run(s) of this checkout still held (also_held): "
+                                   "release each once nothing needs it, proof-run.py --release <run>"
+                                   % len(others))
             return report
         return {"unavailable": "no saved proof run of HEAD %s" % head[:12], "head": head}
     except Exception as exc:  # noqa: BLE001  (a report never breaks the lifecycle fact it follows)

@@ -2268,6 +2268,52 @@ class AuthorRuns(unittest.TestCase):
                     os.environ[module.AUTHOR_RUNS] = before
 
 
+    def test_the_land_releases_only_the_handover_holds_of_the_candidates_it_merged(self):
+        """PRD A11: the final consumer releases the handover's `retain` marker once its own
+        evidence is written; a hold for anything else, or for a candidate it did not merge, stays."""
+        from types import SimpleNamespace
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as top:
+            repo = Path(top) / "repo"
+            repo.mkdir()
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            def git(*args):
+                return subprocess.run(["git", "-C", str(repo), "-c", "user.name=f", "-c", "user.email=f@x.invalid",
+                                       "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", *args],
+                                      env=env, capture_output=True, text=True, check=True).stdout.strip()
+            git("init", "-q", "-b", "main")
+            git("commit", "-q", "--allow-empty", "-m", "base")
+            git("checkout", "-q", "-b", "side")
+            git("commit", "-q", "--allow-empty", "-m", "never landed")
+            side = git("rev-parse", "HEAD")
+            git("checkout", "-q", "main")
+            git("commit", "-q", "--allow-empty", "-m", "the handover")
+            landed = git("rev-parse", "HEAD")
+            runs = {}
+            for name, hold in (("merged", {"holder": "handover", "candidate": landed}),
+                               ("unmerged", {"holder": "handover", "candidate": side}),
+                               ("foreign", {"holder": "operator", "candidate": landed})):
+                runs[name] = Path(top) / name
+                runs[name].mkdir()
+                (runs[name] / "retain").write_text(json.dumps(hold))
+            before = os.environ.get(module.AUTHOR_RUNS)
+            os.environ[module.AUTHOR_RUNS] = os.pathsep.join(str(path) for path in runs.values())
+            try:
+                with mock.patch.object(module, "say"):
+                    module.release_author_runs(SimpleNamespace(top=repo), landed)
+            finally:
+                if before is None:
+                    os.environ.pop(module.AUTHOR_RUNS, None)
+                else:
+                    os.environ[module.AUTHOR_RUNS] = before
+            self.assertFalse((runs["merged"] / "retain").exists())
+            self.assertTrue((runs["unmerged"] / "retain").exists())
+            self.assertTrue((runs["foreign"] / "retain").exists())
+
+
 class TimeLimit(unittest.TestCase):
     """A check that runs out of time ends gracefully and leaves no process (2026-10-09: the
     test browser of a UI suite killed by subprocess.run's SIGKILL aborted at launch, parent

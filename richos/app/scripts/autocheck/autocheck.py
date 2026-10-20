@@ -1411,6 +1411,29 @@ def offered_author_runs(what):
     return argv
 
 
+def release_author_runs(repo, head):
+    """After a land that consumed them: remove the handover hold (proof-run.py HANDOVER_HOLD) of
+    each offered author run whose candidate this land merged, once the land's own evidence is
+    written (its receipt for this tree). A hold for anything else is never touched."""
+    for run in [r for r in os.environ.get(AUTHOR_RUNS, "").split(os.pathsep) if r]:
+        marker = Path(run) / "retain"
+        try:
+            hold = json.loads(marker.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(hold, dict) or hold.get("holder") != "handover" or not hold.get("candidate"):
+            continue
+        merged = git("merge-base", "--is-ancestor", hold["candidate"], head, check=False, cwd=repo.top)
+        if merged.returncode != 0:
+            continue
+        try:
+            marker.unlink()
+        except OSError:
+            continue
+        say(f"autocheck: released the handover hold on {run}: its candidate {hold['candidate'][:12]} landed in "
+            f"{head[:12]}, whose own evidence is written; rotation applies to it again")
+
+
 def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
     """Run the suites proof-for.sh assigns plus the lint on the working tree, which the
     caller has established IS the tree being landed. Returns 0 and writes the receipt when
@@ -2071,7 +2094,9 @@ def post_merge(repo, squash):
         orig = git("rev-parse", "-q", "--verify", "ORIG_HEAD", check=False, cwd=repo.top).stdout.strip()
         phone_watch(repo, orig, head)
         refresh_hook_sidecars(repo, orig, head)
-        if not repo.land_receipt(tree).exists():
+        if repo.land_receipt(tree).exists():
+            release_author_runs(repo, head)
+        else:
             how = "git merge --no-verify" if merged else "a fast-forward"
             record_skip(repo, f"main moved to {head[:12]} without the land checks ({how})",
                         f"Was landing {head[:12]} on main without its suites deliberate? The next push of main runs them.")
@@ -2080,7 +2105,9 @@ def post_merge(repo, squash):
     if target:
         # The lander's merge tree: the land check ran at pre-merge-commit and left its receipt.
         # The phone watch and the hook sidecars belong to the main checkout, not to this tree.
-        if merged and not repo.land_receipt(tree).exists():
+        if repo.land_receipt(tree).exists():
+            release_author_runs(repo, head)
+        elif merged:
             record_skip(repo, f"{target} moved to {head[:12]} without the land checks (git merge --no-verify)",
                         f"Was landing {head[:12]} on {target} without its suites deliberate?")
         return 0

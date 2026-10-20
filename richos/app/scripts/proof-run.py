@@ -4,6 +4,7 @@
     proof-run.py [proof-for arguments]          e.g.  origin/main..main   |  --working  |  <sha>
     proof-run.py --commands <file>              a saved `proof-for.sh --quiet` output
     proof-run.py --resume <run-directory>       retry a frozen plan, preserving valid results
+    proof-run.py --release <run-directory>      remove a handover hold once nothing needs that run
     options:
       --fail-fast          cancel independent unfinished work after a failure (opt-in)
       --keep-going         compatibility alias for default continuation
@@ -2279,6 +2280,53 @@ def rotate(parent):
             lease.close()
 
 
+# A HANDOVER RUN IS HELD UNTIL ITS LAND HAS CONSUMED IT (verification reliability PRD, A11).
+# An author's run over an explicit `<recorded base>..<candidate>` range in a teammate workspace is
+# the evidence its handover points at (workspaces.py proof_report) and its land validates. Rotation
+# keeps only the last KEEP_RUNS successful runs of a checkout, so three narrow green runs after the
+# handover would have removed it before the land read it. So that run gets rotate()'s existing
+# `retain` marker before its pointer exists (the `logs:` line, then the registry's report), naming
+# what it holds and for whom. The land that merges its candidate removes it once the land's own
+# evidence is written (autocheck.py post_merge, release_author_runs), and rotation applies again.
+# A superseded or abandoned handover is named in the report (also_held) and released by the lead
+# with `--release <run>` after checking nothing still needs it; nothing sweeps holds, and
+# `--release` removes only a handover hold. The main checkout is never a handover seat.
+HANDOVER_HOLD = "handover"
+
+
+def hold_for_handover(logdir, selected):
+    if not (selected and selected.get("base") and selected.get("candidate")):
+        return
+    if engine_pass.is_main_checkout(ROOT):
+        return
+    marker = os.path.join(logdir, "retain")
+    proof_evidence.atomic(marker, {"holder": HANDOVER_HOLD, "checkout": ROOT, "base": selected["base"],
+                                   "candidate": selected["candidate"], "mode": selected.get("mode"),
+                                   "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+    print("  held for its handover until its land consumes it: %s" % marker, flush=True)
+
+
+def release_hold(run):
+    """--release RUN: remove RUN's handover hold; refuse any other kind of hold."""
+    marker = os.path.join(run, "retain")
+    try:
+        with open(marker) as stream:
+            hold = json.load(stream)
+    except FileNotFoundError:
+        print("proof-run: %s holds no handover hold; nothing to release" % run)
+        return 0
+    except (OSError, ValueError):
+        hold = None
+    if not isinstance(hold, dict) or hold.get("holder") != HANDOVER_HOLD:
+        print("proof-run: REFUSED: %s is not a handover hold, so it is not this command's to remove" % marker)
+        return 2
+    os.unlink(marker)
+    print("proof-run: released the handover hold on %s (candidate %s); rotation applies to it again" % (
+        run, str(hold.get("candidate"))[:12]))
+    rotate(os.path.dirname(os.path.realpath(run)))
+    return 0
+
+
 # The exit of a run that crashed: no verdict. Not 1 (a check failed) nor 3 (a check not run), the
 # two codes the merge gate reads a summary for, so a crash is refused as "not a verdict".
 CRASHED = 70
@@ -2337,8 +2385,12 @@ def run_main(argv, run_state):
     p.add_argument("--summary-out", help="also write summary.json to this file")
     p.add_argument("--without-nightly-conditions", action="store_true",
                    help="run every check in the caller's environment only (diagnosis; refused in the land checks)")
+    p.add_argument("--release", metavar="RUN",
+                   help="remove the handover hold from RUN once nothing still needs it (HANDOVER_HOLD)")
     args, rest = p.parse_known_args(argv)
     args.proof_for_args = rest
+    if args.release:
+        return release_hold(args.release)
     if args.without_nightly_conditions:
         if os.environ.get("RICHOS_AUTOCHECK_ACTIVE"):
             p.error("--without-nightly-conditions is refused inside the land checks: the merge gate "
@@ -2407,6 +2459,8 @@ def run_main(argv, run_state):
     print("  " + conditions_line(items))
     if args.dry_run:
         return 0
+    if not args.log_dir:
+        hold_for_handover(logdir, selected)
     print("  logs: %s" % logdir, flush=True)
     global SLOT
     try:

@@ -1145,6 +1145,40 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
                     process.terminate()
                     process.wait(timeout=20)
 
+    def test_a_handover_run_is_held_until_its_land_releases_it(self):
+        """PRD A11: rotate() keeps three successful runs; three narrow green runs after a handover
+        removed the run its land was to validate. The explicit-range run is held with rotate()'s
+        own `retain` marker, and only a handover hold is released by --release."""
+        parent = Path(self.tmp.name) / "history"
+        def run(name):
+            directory = parent / name
+            directory.mkdir(parents=True)
+            evidence.atomic(directory / "summary.json", {"checks": [{"result": "passed"}]})
+            return directory
+        handover = run("20261020T000000Z-handover")
+        selected = {"arguments": ["b..c"], "mode": "normal", "base": "b" * 40, "candidate": "c" * 40}
+        with patch.object(runner.engine_pass, "is_main_checkout", return_value=True):
+            runner.hold_for_handover(str(handover), selected)
+        self.assertFalse((handover / "retain").exists(), "the main checkout is no handover seat")
+        with patch.object(runner.engine_pass, "is_main_checkout", return_value=False):
+            runner.hold_for_handover(str(handover), {"arguments": ["--working"], "mode": "normal"})
+            self.assertFalse((handover / "retain").exists(), "a run with no recorded range stands for no handover")
+            runner.hold_for_handover(str(handover), selected)
+        hold = json.loads((handover / "retain").read_text())
+        self.assertEqual((hold["holder"], hold["candidate"]), ("handover", "c" * 40))
+        narrow = [run("20261020T00000%dZ-narrow" % n) for n in range(1, 5)]
+        runner.rotate(str(parent))
+        self.assertTrue(handover.exists(), "later narrow green runs cannot rotate the handover away")
+        self.assertFalse(narrow[0].exists(), "rotation still applies to everything else")
+        # Someone else's hold is not this command's to remove.
+        foreign = run("20261020T000005Z-foreign")
+        (foreign / "retain").write_text("kept by an operator\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(runner.release_hold(str(foreign)), 2)
+            self.assertTrue((foreign / "retain").exists())
+            self.assertEqual(runner.release_hold(str(handover)), 0)
+        self.assertFalse(handover.exists(), "released, it rotates like any other green run")
+
     def test_live_owner_prevents_resume_and_rotation(self):
         items, record = self.attempt("20260923T000000Z")
         with self.assertRaisesRegex(ValueError, "active owner"):

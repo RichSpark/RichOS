@@ -7041,6 +7041,21 @@ class ProofReport_TheHandoverPointsAtItsSavedRun(Base):
             # This tool still reads git's own output in the C locale.
             self.assertEqual(ws._git_env()["LC_ALL"], "C")
 
+    def test_the_report_says_whether_its_run_is_held_and_names_other_held_runs(self):
+        """PRD A11: an explicit abandonment or supersession names the run for Rich to release."""
+        older = self.saved_run("20261020T000000Z-old", {"checks": [{"check": "a.js", "result": "passed"}]},
+                               head="c" * 40)
+        with open(os.path.join(older, "retain"), "w") as f:
+            json.dump({"holder": "handover", "candidate": "c" * 40}, f)
+        newer = self.saved_run("20261020T000001Z-new", {"checks": [{"check": "a.js", "result": "passed"}]})
+        with open(os.path.join(newer, "retain"), "w") as f:
+            json.dump({"holder": "handover", "candidate": self.head()}, f)
+        report = ws.proof_report(self.path)
+        self.assertEqual(report["run"], newer)
+        self.assertTrue(report["held"])
+        self.assertEqual(report["also_held"], [older])
+        self.assertIn("1 earlier handover run(s) of this checkout still held", report["line"])
+
     def test_the_merge_offers_only_the_run_reported_for_the_tip_it_merges(self):
         run_dir = self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
         self.handed_in()
