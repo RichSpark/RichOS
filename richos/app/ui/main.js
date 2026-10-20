@@ -430,6 +430,16 @@ let activeThreadId = null;
 /// them — `{ text, at, id }`, `id` its bubble — sent in that order by `openThread` as it starts
 /// opening one (`send()`'s launch hold). Empty when none waits.
 let launchSendsHeld = [];
+/// **HELD SENDS GO TO RICH IN LINE, one after another.** Tauri runs every command as its own task
+/// on a multi-threaded runtime (`crates/richos-command/src/lib.rs`), so two `send_message` calls
+/// issued together race each other to the intake log, and nightly 69 lost that race: the
+/// correction pressed second became intake 1 (esc-20261020T225934Z-0d59dda7). So a held send,
+/// and any send pressed while one is still in line, goes out only after the one ahead of it has
+/// been accepted: its thread's `turn-status: queued` arrived, or its call ended. `sendLine` is the
+/// last send in line until then, null when the line is empty (so an ordinary send never waits);
+/// `sendWaitingForAcceptance` is the one call in flight, `{ threadId, leave }`.
+let sendLine = null;
+let sendWaitingForAcceptance = null;
 /// `init()` has made its landing decision; from here no Send is held (`send()`).
 let launchLanded = false;
 let voiceMode = false;
@@ -1400,13 +1410,16 @@ async function openThread(threadId, opts) {
   // from the line that set `activeThreadId` above, a later Send goes straight out, so the held
   // ones must be issued first or his messages reach Rich out of order (second review
   // rv-20261020T181204Z-11d18147-df79). Each is an ordinary send in the opening window, which is
-  // honored (slow-bridge check 3), and each `send()` issues its `send_message` before its first
-  // await, so the bridge sees them in this loop's order (handover review
+  // honored (slow-bridge check 3), and none is dropped (handover review
   // rv-20261020T191206Z-fa2ee4a4-778c: a correction pressed second must never be dropped).
+  // ISSUING THEM IN ORDER IS NOT ENOUGH: they go out in line, each after Rich has accepted the
+  // one before (see `sendLine`), because two calls issued together reach him in either order
+  // (nightly 69, esc-20261020T225934Z-0d59dda7). Every `send()` is still called here, now, so
+  // each bubble is on screen at once.
   // Exactly the words at each press; whatever he has typed since stays in the box.
   const heldSends = launchSendsHeld;
   launchSendsHeld = [];
-  for (const held of heldSends) send(held.text);
+  for (const held of heldSends) send(held.text, { inLine: true });
   try {
     await switchThreadInOrder(threadId);
   } catch (e) {
@@ -2845,6 +2858,23 @@ async function send(explicitText, opts) {
     return !!turn && turn.status === "failed";
   };
 
+  // A HELD SEND, OR ANY SEND WHILE ONE IS STILL IN LINE, waits here for Rich to accept the one
+  // ahead of it (see `sendLine`). Nothing else waits: with the line empty this is skipped.
+  let leaveLine = null;
+  if ((opts && opts.inLine) || sendLine) {
+    const ahead = sendLine;
+    let release;
+    const place = new Promise((resolve) => (release = resolve));
+    sendLine = place;
+    leaveLine = () => {
+      if (sendWaitingForAcceptance && sendWaitingForAcceptance.leave === leaveLine) sendWaitingForAcceptance = null;
+      if (sendLine === place) sendLine = null;
+      release();
+    };
+    if (ahead) await ahead;
+    sendWaitingForAcceptance = { threadId: sentThreadId, leave: leaveLine };
+  }
+
   try {
     await Bridge.invoke(
       "send_message",
@@ -2950,6 +2980,8 @@ async function send(explicitText, opts) {
     // than a refusal, every time, for as long as the pieces are missing.
     if (setupPending) maybeAskAboutSetup();
   } finally {
+    // Accepted or not, this call is over, so the next send in line may go.
+    if (leaveLine) leaveLine();
     pendingSends.delete(pendingId);
     startOrStopWaitTimer();
     renderWaitBand();
@@ -3972,6 +4004,9 @@ jumpLatestBtn.addEventListener("click", jumpToLatest);
 // gate, the idempotent upsert and the supersession merge all live in `timeline.js`.
 // ---------------------------------------------------------------------------------------
 Bridge.listen("rich://turn-status", ({ payload }) => {
+  // The send in line has been accepted: the next one may go (`sendLine`).
+  if (payload.status === "queued" && !payload.supersedesTurnId && sendWaitingForAcceptance &&
+      sendWaitingForAcceptance.threadId === payload.threadId) sendWaitingForAcceptance.leave();
   updateCachedThread("onTurnStatus", payload);
   // Session-wide first, so a BACKGROUND thread's live turn is remembered and revived when
   // the CEO opens it (§2: "return to a running thread without losing its live state").
