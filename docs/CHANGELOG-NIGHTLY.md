@@ -2,6 +2,28 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.2.1-nightly.20261020.68
+
+- Added See what's new in Settings, Updates, which opens the changelog in your default browser
+- Added a Show email option so you can tell your Claude accounts apart
+- Added Haiku naming each new conversation
+- Added a setting for the Oxford comma, which is off by default
+- Added + New chat or company in the sidebar, with companies as section headings, an open folder and an instant + New chat tooltip
+- Changed dictation's name to RichScribe
+- Improved the phone page: it picks up where the stream left off, keeps the conversation list after a reconnect and shows Rich's answers as formatted text, with code exactly as written
+- Improved your spoken turn so it keeps every word over silence and room noise and always ends
+- Improved Rich's spoken times on the hour so they are said whole
+- Fixed Rich dropping "do it yourself" requests
+- Fixed Escape not closing the report over Connected folders
+- Fixed right-clicking in a PDF highlighting text
+- Fixed Rich's sentences being split by a queued notice
+- Fixed a withdrawn card showing an id
+- Fixed Restore appearing on words that were not his own
+- Fixed a quotation not ending a table
+- Fixed a card showing the wrong state after Stop and Stop not being remembered across a restart
+- Fixed the "Voice is ready" line staying after you have learned the round button
+- Fixed the wording under Under the hood so it is accurate
+
 ## 1.2.1-nightly.20261019.67
 
 - Changed the status band to say "Rich is thinking" until something comes back from Rich
