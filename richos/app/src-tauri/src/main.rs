@@ -383,6 +383,38 @@ fn ensure_operator_review_watch(desk: &Arc<richos_core::operator_desk::OperatorD
     }
 }
 
+/// **His team's install: quota-watch, stall-watch and codex-watch, run the same way**
+/// (`richos_core::team_watch`): the host's own children from launch to quit, each notice sent
+/// to his team's lead as a message the host sends
+/// ([`richos_core::operator_desk::OperatorDesk::tell_team`]), or kept until a lead starts.
+fn ensure_operator_team_watch(desk: &Arc<richos_core::operator_desk::OperatorDesk>, data_dir: &Path) {
+    let declaration = desk.declaration().clone();
+    let weak = Arc::downgrade(desk);
+    let sink: richos_core::team_watch::NoticeSink = Arc::new(move |watcher: richos_core::team_watch::Watcher, text: String| {
+        let Some(desk) = weak.upgrade() else {
+            eprintln!("[richos] his team: a {} notice came after his team was closed", watcher.name());
+            return;
+        };
+        if let Err(e) = desk.tell_team(&text) {
+            eprintln!("[richos] his team: a {} notice was neither delivered nor kept ({e})", watcher.name());
+        }
+    });
+    let launch = richos_core::team_watch::Launch {
+        engine: declaration.engine_root.clone(),
+        entity: declaration.entity_root.clone(),
+        state: data_dir.join("engine-state"),
+        lead: desk.team_watch_lead(),
+        environment: richos_core::operator_declaration::script_environment(&declaration),
+        sink,
+    };
+    for watcher in richos_core::team_watch::Watcher::ALL {
+        match richos_core::team_watch::ensure(&launch, watcher) {
+            Ok(pid) => eprintln!("[richos] his team: {} runs as pid {pid}", watcher.name()),
+            Err(e) => eprintln!("[richos] his team: {} could not start ({e})", watcher.name()),
+        }
+    }
+}
+
 fn operator_desk_at_boot(
     declaration: richos_core::operator_declaration::Declaration,
     data_dir: &Path,
@@ -3247,6 +3279,7 @@ fn main() {
             }
             if let Some(desk) = &operator_desk {
                 ensure_operator_review_watch(desk, &data_dir);
+                ensure_operator_team_watch(desk, &data_dir);
             }
 
             // Release grants from the old process. Stu owns job recovery through his inbox.
@@ -4089,6 +4122,13 @@ fn main() {
                     let watchers = richos_core::review_watch::stop_all();
                     if !watchers.is_empty() {
                         eprintln!("[richos] quit: the second review's watcher(s) {watchers:?} ended.");
+                    }
+                    // **HIS TEAM'S QUOTA, STALL AND CODEX WATCHERS END WITH THE APP** the same way,
+                    // within `team_watch::STOP_BOUND`; a notice they print after his team quit is
+                    // kept for its next lead.
+                    let watchers = richos_core::team_watch::stop_all();
+                    if !watchers.is_empty() {
+                        eprintln!("[richos] quit: his team's watcher(s) {watchers:?} ended.");
                     }
                     if let Err(e) = state.launch.lock().unwrap().note_clean_exit() {
                         eprintln!("[richos] launch record: could not mark a clean exit: {e}");
