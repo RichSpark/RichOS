@@ -2616,7 +2616,7 @@ class Runner:
     def needs_gui_proof(cls, info):
         """Whether the candidate still needs its guest proof, including both screen suites
         for new builds. This is the same requirement publication enforces."""
-        if info.get("screen_suites_required"):
+        if info.get("screen_suites_required") or info.get("channel") == "stable":
             return True
         state = cls.gui_boot_state(info)
         if state == "passed":
@@ -2699,7 +2699,9 @@ class Runner:
                 print(f"Using the build's own VM boot proof: {own}", flush=True)
                 gui_proof = own
         state = self.gui_boot_state(info)
-        if state is None and not info.get("no_host_screen") and not info.get("screen_suites_required"):
+        stable = info.get("channel") == "stable"
+        if (state is None and not info.get("no_host_screen")
+                and not info.get("screen_suites_required") and not stable):
             # A candidate from before this field existed. `build` had no way to hold the
             # suite back, so it ran. See gui_boot_state.
             if gui_proof:
@@ -2707,7 +2709,7 @@ class Runner:
                     "this candidate predates the gui-boot record and was built with the suite "
                     "running, so --gui-proof names evidence nothing is waiting for.")
             return None
-        if state == "passed" and not info.get("screen_suites_required"):
+        if state == "passed" and not info.get("screen_suites_required") and not stable:
             if gui_proof:
                 raise ValueError(
                     "this candidate ran gui-boot.test.sh during its build and it passed, so "
@@ -2743,6 +2745,10 @@ class Runner:
         if fields.get("result") != "pass":
             raise ValueError(f"--gui-proof records {fields.get('result')!r}, not a pass. "
                              "A failed boot is not evidence of a working one.")
+        if stable and (fields.get("suite") != "shipped-bundle-boot"
+                       or fields.get("commit") != info.get("build_commit")):
+            raise ValueError("stable publication requires the rebuilt bundle's own boot proof, "
+                             "naming its exact build commit; the nightly's proof cannot substitute")
         if info.get("screen_suites_required"):
             for suite in ("front-door", "gui-boot"):
                 if fields.get(f"{suite}_exit") != "0":
@@ -3226,8 +3232,9 @@ class Runner:
             # a build installable. See make-engine-asset.sh's CHECK_PROOF_DIR note.
             self.command(sys.executable, self.source / SCRIPTS / "nightly.py", "build",
                          "--plan", plan_path, "--out", out, credentials=True,
-                         env_extra={"RICHOS_ENGINE_CHECK_PROOF_DIR":
-                                    str(self.state / "engine-repro-proofs")},
+                         env_extra=({"RICHOS_ENGINE_CHECK_PROOF_DIR":
+                                     str(self.state / "engine-repro-proofs")}
+                                    if command == "build" else None),
                          release_build=True)
         candidate_info = self.completed_build(out)
         self.prepare_changelog(candidate_info, out)

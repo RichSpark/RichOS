@@ -2499,6 +2499,20 @@ while True: time.sleep(.02)
                 with self.assertRaisesRegex(ValueError, "front-door exit 0"):
                     r.require_gui_proof(info, self.proof(suite="shipped-bundle-boot"))
 
+    def test_resumed_stable_still_requires_its_own_rebuilt_bundle_boot(self):
+        r, info = self.gui_candidate()
+        info["channel"] = "stable"
+        self.assertTrue(r.needs_gui_proof(info))
+        with self.assertRaisesRegex(ValueError, "seen the app"):
+            r.require_gui_proof(info, None)
+        for suite, commit in (("gui-boot.test.sh", info["build_commit"]),
+                              ("shipped-bundle-boot", info["source_commit"])):
+            with self.subTest(suite=suite, commit=commit), self.assertRaisesRegex(ValueError, "rebuilt bundle"):
+                r.require_gui_proof(info, self.proof(suite=suite, commit=commit))
+        accepted = r.require_gui_proof(info, self.proof(suite="shipped-bundle-boot",
+                                                     commit=info["build_commit"]))
+        self.assertEqual(accepted["result"], "pass")
+
     def test_screen_proof_keeps_failure_refusal_missing_result_and_source_mismatch_red(self):
         r, info = self.gui_candidate(gui_state="not-run", no_host_screen=True)
         info["screen_suites_required"] = True
