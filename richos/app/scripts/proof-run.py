@@ -2211,11 +2211,15 @@ def summarize(items, wall, logdir, budget_seconds=600, monitor_lines=()):
                      "repeated_cpu_seconds": attempt_cpu(it.previous_attempts),
                      "failing_tests": list(it.failing), "results": kept,
                      "not_run": getattr(it, "not_run", None),
+                     "known_red": known_red(it),
                      "rerun": getattr(it, "rerun", None),
                      "command": "cd %s && %s" % (os.path.relpath(it.cwd, ROOT), " ".join(shlex.quote(a) for a in it.argv))})
+    coverage = coverage_line(rows)
     with open(os.path.join(logdir, "summary.json"), "w") as fh:
         json.dump({"wall_seconds": round(wall, 1), "serial_seconds": round(serial, 1), "host": list(monitor_lines),
-                   "checks": rows}, fh, indent=1)
+                   "coverage": coverage, "checks": rows}, fh, indent=1)
+    print("")
+    print("proof-run: coverage: " + coverage)
     try:
         os.rmdir(os.path.join(logdir, "results"))  # only when no check kept anything
     except OSError:
@@ -2235,10 +2239,47 @@ def summarize(items, wall, logdir, budget_seconds=600, monitor_lines=()):
         print("    logs: %s" % logdir)
         return 3
     reused = sum(bool(getattr(it, "reused_from", None)) for it in items)
-    print("=== proof-run: all %d check(s) passed in %.0f s%s ===" % (
-        len(items), wall, "; reconciled with %d reused result(s)" % reused if reused else ""))
+    red = [row["check"] for row in rows if row["known_red"]]
+    print("=== proof-run: all %d check(s) passed in %.0f s%s%s ===" % (
+        len(items), wall, "; reconciled with %d reused result(s)" % reused if reused else "",
+        "; %d of them KNOWN-RED, a declared exception and not a pass: %s" % (len(red), ", ".join(red))
+        if red else ""))
     print("    logs: %s" % logdir)
     return 0
+
+
+def known_red(it):
+    """True for a check that passed only as a declared KNOWN-RED engine unit (its receipt's
+    verdict). The policy lets it through; a report never counts it as passed (PRD A14)."""
+    if it.state != "passed" or not getattr(it, "engine_unit", False):
+        return False
+    try:
+        path = proof_evidence.receipt_path(it)
+        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        return len(rows) == 1 and rows[0].get("verdict") == "KNOWN-RED"
+    except (OSError, ValueError, AttributeError, TypeError):
+        return False
+
+
+def coverage_line(rows):
+    """THE GENERATED COVERAGE LINE (verification reliability PRD, A11/A14): what the summary
+    holds, counted from its own rows, so nobody reports arithmetic such as total minus failed
+    (the October 19 "86 passed" counted four checks that never ran). Reused passes are named
+    inside the passes, KNOWN-RED and NOT RUN beside them, never inside."""
+    counts = {}
+    for row in rows:
+        counts[row["result"]] = counts.get(row["result"], 0) + 1
+    red = sum(1 for row in rows if row["known_red"])
+    passed = counts.pop("passed", 0) - red
+    reused = sum(1 for row in rows if row["result"] == "passed" and row["reused_from"] and not row["known_red"])
+    idle = counts.pop("not-run", 0)
+    parts = ["%d planned" % len(rows), "%d passed (%d of them reused)" % (passed, reused)]
+    if red:
+        parts.append("%d KNOWN-RED (a declared exception, not a pass)" % red)
+    if idle:
+        parts.append("%d NOT RUN (not a pass)" % idle)
+    parts += ["%d %s" % (n, state) for state, n in sorted(counts.items())]
+    return ", ".join(parts)
 
 
 def attempt_cpu(attempts):

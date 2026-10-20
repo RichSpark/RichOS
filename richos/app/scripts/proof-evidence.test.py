@@ -1208,6 +1208,25 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         # Nothing was written: coverage reads only.
         self.assertFalse((previous.logdir / "reused").exists())
 
+    def test_the_summary_carries_its_own_coverage_line_and_never_counts_known_red_as_passed(self):
+        """PRD A11/A14: the line is counted from the summary's own rows, a KNOWN-RED unit is named
+        beside the passes (an established exception, never a pass) and NOT RUN is never a pass."""
+        rows = [{"result": "passed", "reused_from": None, "known_red": False},
+                {"result": "passed", "reused_from": "/r", "known_red": False},
+                {"result": "passed", "reused_from": None, "known_red": True},
+                {"result": "not-run", "reused_from": None, "known_red": False},
+                {"result": "timed-out", "reused_from": None, "known_red": False}]
+        self.assertEqual(runner.coverage_line(rows),
+                         "5 planned, 2 passed (1 of them reused), 1 KNOWN-RED (a declared exception, not a pass), "
+                         "1 NOT RUN (not a pass), 1 timed-out")
+        unit, record = self.attempt("known-red")
+        self.passed(unit, record)
+        self.assertFalse(runner.known_red(unit[0]))
+        receipt = evidence.receipt_path(unit[0])
+        row = json.loads(receipt.read_text())
+        receipt.write_text(json.dumps({**row, "verdict": "KNOWN-RED"}) + "\n")
+        self.assertTrue(runner.known_red(unit[0]))
+
     def test_live_owner_prevents_resume_and_rotation(self):
         items, record = self.attempt("20260923T000000Z")
         with self.assertRaisesRegex(ValueError, "active owner"):

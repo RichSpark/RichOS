@@ -2739,13 +2739,17 @@ def proof_report(path, deadline=None):
             for row in rows:
                 counts[row.get("result")] = counts.get(row.get("result"), 0) + 1
             reused = sum(1 for row in rows if row.get("reused_from"))
+            # A KNOWN-RED unit is a declared exception the runner lets through (proof-run.py
+            # known_red), never a pass: it is named with the checks that are not complete.
             unresolved = [{"check": row.get("check"), "result": row.get("result"),
-                           "why": (row.get("not_run") or {}).get("why")}
-                          for row in rows if row.get("result") != "passed"]
+                           "why": "known-red, a declared exception" if row.get("known_red")
+                           else (row.get("not_run") or {}).get("why")}
+                          for row in rows if row.get("result") != "passed" or row.get("known_red")]
+            known_red = sum(1 for row in rows if row.get("known_red"))
             report.update(outcomes=counts, reused=reused, unresolved=unresolved,
                           crashed=summary.get("crashed"))
             report["line"] = ("%d planned, %d passed (%d of them reused)%s" % (
-                report["planned"], counts.get("passed", 0), reused,
+                report["planned"], counts.get("passed", 0) - known_red, reused,
                 "; NOT complete: " + ", ".join("%s (%s)" % (u["check"], u["why"] or u["result"])
                                                for u in unresolved[:20])
                 + (" and %d more" % (len(unresolved) - 20) if len(unresolved) > 20 else "")

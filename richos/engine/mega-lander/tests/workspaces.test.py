@@ -6977,6 +6977,30 @@ class ProofReport_TheHandoverPointsAtItsSavedRun(Base):
         # Never counted as passes: total minus failed would say 3.
         self.assertNotIn("3 passed", report["line"])
 
+    def test_a_known_red_unit_is_never_reported_as_a_pass(self):
+        self.saved_run("20261020T000000Z-x", {"checks": [
+            {"check": "a.js", "result": "passed"},
+            {"check": "engine u", "result": "passed", "known_red": True}]})
+        self.handed_in()
+        self.assertEqual(self.report()["line"], "4 planned, 1 passed (0 of them reused); NOT complete: "
+                                                "engine u (known-red, a declared exception)")
+
+    def test_a_deferred_end_attaches_no_report_and_the_real_end_does(self):
+        """PRD A8: the SubagentStop deferral as a controlled witness. While a command the agent
+        started still runs, the end is not recorded and no report is attached; the later real end
+        records both."""
+        self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
+        with patch.object(ws, "_running_calls", return_value=[("toolu_fixture", "sleep 600")]):
+            self.finish(self.aid)
+        record = self.rec("zach-opus-pr")
+        self.assertFalse(record.get("end"))
+        self.assertEqual(record["history"][-1]["fact"], ws.END_DEFERRED_FACT)
+        self.assertIsNone(self.report())
+        with patch.object(ws, "_running_calls", return_value=[]):
+            self.finish(self.aid)
+        self.assertTrue(self.rec("zach-opus-pr").get("end"))
+        self.assertEqual(self.report()["on"], "end")
+
     def test_a_run_of_an_older_head_is_not_this_handovers_report(self):
         self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
         self.commit(self.cc, "later.txt")
