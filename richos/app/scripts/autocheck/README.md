@@ -146,8 +146,8 @@ copy; each of these is now settled by the policy in force before any check runs
   2026-10-18 cannot bring itself current; then `operator_fences.py review-check` judges the move
   from HEAD to the commit being landed exactly as the fence judges a move of main, follow-up
   rulings and recovery included. A land onto a release branch is asked it too, which the fence
-  itself never sees. A commit made in a detached checkout (`nightly-local.py` commit_on_main)
-  moves no branch and is reviewed once it exists.
+  itself never sees. A commit made in a detached checkout with the land target named moves no
+  branch and is reviewed once it exists.
 - **What a land onto a release branch is and which gate judges it.** The shim ran HEAD's
   `autocheck.py`, which for a land onto a release branch is that branch's own copy: v1.3.0 was
   cut before the land check learned its target (d2c2c28dc), so every land onto it ran the commit

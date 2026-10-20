@@ -2188,8 +2188,8 @@ class ActiveGate(Fixture):
         self.git("worktree", "remove", "--force", str(tree))
 
     def test_a_detached_commit_named_onto_main_is_checked_and_reviewed_after_it_exists(self):
-        # nightly-local.py commit_on_main: the commit is made in a detached checkout with the land
-        # target named, so main does not move before that new commit is reviewed. No review of a
+        # A commit made in a detached checkout with the land target named: main does not move
+        # before that new commit is reviewed. No review of a
         # commit can exist before it, so the early question is not asked there.
         self.make()
         self.fence()
