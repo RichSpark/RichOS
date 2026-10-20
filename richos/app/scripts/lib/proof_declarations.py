@@ -124,6 +124,32 @@ def suite_pins(root, suite):
     return out
 
 
+def suite_gate_inputs(root, suite, inputs):
+    """`# run-tests: gate-inputs <dir>...`: directory inputs the suite checks file by file, so a
+    change to any file under them selects it at the merge gate too (proof-for.sh --gate), where
+    a directory input otherwise selects only for a product path. Each must be a directory in the
+    tree and among the suite's inputs. Without it, the land of 0fe37b286 (2026-10-20) added a UI
+    test reading a new environment name, never ran proof-qualification, and nightly 69 failed it."""
+    rows = []
+    for number, line in enumerate(Path(suite).read_text().splitlines(), 1):
+        match = re.fullmatch(r"# run-tests: gate-inputs(?:\s+(.*))?", line)
+        if match:
+            rows.append((number, (match[1] or "").split()))
+    if len(rows) > 1 or (rows and not rows[0][1]):
+        raise InvalidDeclaration(f"{suite}: at most one '# run-tests: gate-inputs' row, and it names directories")
+    out = []
+    for number, paths in rows:
+        for path in paths:
+            where = f"{suite}:{number}: gate-inputs {path}"
+            _literal(path, where)
+            if not (Path(root) / path).is_dir():
+                raise InvalidDeclaration(f"{where}: not a directory in the tree")
+            if not any(path == dep or path.startswith(dep + "/") for dep in inputs):
+                raise InvalidDeclaration(f"{where}: not among this suite's inputs")
+            out.append(path)
+    return out
+
+
 def main():
     if sys.argv[1:2] == ["--pinned"] and len(sys.argv) == 4:
         try:
@@ -133,14 +159,18 @@ def main():
             return 2
         return 0
     try:
-        rows = read_declarations(Path(sys.argv[1]), Path(sys.argv[2]))
+        root, directory = Path(sys.argv[1]), Path(sys.argv[2])
+        rows = [(suite, inputs, covers, suite_gate_inputs(root, directory / suite, inputs))
+                for suite, inputs, covers in read_declarations(root, directory)]
     except (OSError, InvalidDeclaration) as exc:
         print(f"proof-for.sh: {exc}", file=sys.stderr)
         return 2
-    for suite, inputs, covers in rows:
+    for suite, inputs, covers, gate in rows:
         print("inputs", suite, " ".join(inputs), sep="\t")
         for path in covers:
             print("covers", suite, path, sep="\t")
+        for path in gate:
+            print("gate", suite, path, sep="\t")
     return 0
 
 

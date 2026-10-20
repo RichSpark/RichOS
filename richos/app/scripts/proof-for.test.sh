@@ -674,6 +674,22 @@ if M4_BLOB="$( { git -C "$ROOT" show "HEAD:$M4_FILE"; printf '# proof-for M4 fix
 else
   bad "M4 the covered-file fixture commit could not be built from HEAD"
 fi
+# M5. A SUITE THAT CHECKS EVERY FILE IN A TOOLING DIRECTORY (2026-10-20). proof-qualification
+#    checks every UI test file for the environment names it reads, through the directory input
+#    `richos/app/ui/tests`. The land of echo-opus-firstsend2 (0fe37b286) added a UI test reading
+#    a new name; --gate did not follow the directory for a tooling path, the merge ran 84 checks
+#    without proof-qualification, and nightly 69 failed it. Its `gate-inputs` row selects it.
+if have_commit 0fe37b286; then
+  run_pf "$WORK/m5.out" --quiet --gate 0fe37b286^1..0fe37b286; M5_RC=$RC
+  if [ "$M5_RC" -eq 0 ] && grep -q -- '--only proof-qualification.test.sh' "$WORK/m5.out"; then
+    ok "M5 a new UI test file at the gate selects the check that reads every UI test file"
+  else
+    bad "M5 a new UI test file at the gate selects the check that reads every UI test file" \
+        "exit $M5_RC: $(tr '\n' ' ' < "$WORK/m5.out")"
+  fi
+else
+  bad "M5 0fe37b286 is not in this clone — the gate fixture could not run"
+fi
 
 # R46 — A REFERENCE SHOT SELECTS BY WHOLE FOLDER NAME (hunt part 2, R46). shots-5 is a prefix of
 # shots-5b and shots-5c; a suite that only reads those must not be selected for a shots-5 file.
