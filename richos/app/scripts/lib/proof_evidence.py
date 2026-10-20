@@ -1524,8 +1524,14 @@ def completed_receipt(item, sha, allow_known_red=False):
     path = receipt_path(item)
     if path is None:
         return None
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    unit = item.argv[item.argv.index("--only-units") + 1]
+    receipt_verdict(path, item.argv[item.argv.index("--only-units") + 1], sha, allow_known_red)
+    return {"path": str(path), "sha256": file_digest(path)}
+
+
+def receipt_verdict(path, unit, sha, allow_known_red=False):
+    """Refuse a receipt that is not one completed PASS of `unit` at `sha` (a KNOWN-RED one only
+    when allowed): the one receipt check reuse() and coverage() share."""
+    rows = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
     if (len(rows) != 1 or rows[0].get("unit") != unit or rows[0].get("sha") != sha
             or rows[0].get("schema") != 2 or rows[0].get("execution_status") != "completed"
             or not (rows[0].get("verdict") == "PASS" and rows[0].get("rc") == rows[0].get("expected_rc")
@@ -1886,6 +1892,28 @@ def _saved_artifacts_hold(old):
     return None
 
 
+KNOWN_RED_GAP = "known-red:"
+
+
+def _receipt_proves(item, old):
+    """None when an engine unit's saved receipt is a completed PASS, exactly as reuse() demands
+    (receipt_verdict); a KNOWN-RED one is the declared exception, named apart, never proof
+    (review rv-20261020T073921Z-1e0461cc-0956 #2)."""
+    if not getattr(item, "engine_unit", False) or not old.get("receipt"):
+        return None
+    unit = item.argv[item.argv.index("--only-units") + 1]
+    sha = old.get("receipt_sha", (old.get("source") or {}).get("commit"))
+    try:
+        receipt_verdict(old["receipt"]["path"], unit, sha)
+        return None
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        try:
+            receipt_verdict(old["receipt"]["path"], unit, sha, allow_known_red=True)
+        except (OSError, ValueError, KeyError, TypeError):
+            return "saved evidence failed validation: " + str(exc)
+        return KNOWN_RED_GAP + " a declared exception the run let through, not proof"
+
+
 def coverage(previous, items, identities, source):
     """{check: None when the saved run at `previous` proves it for the inputs read NOW, else why
     not}, for every planned item. Reads only: nothing is copied, run or written.
@@ -1917,7 +1945,8 @@ def coverage(previous, items, identities, source):
             else:
                 found[item.label] = _saved_artifacts_hold(old)
             continue
-        found[item.label] = evidence_gap(item.label, old, identity, plan) or _saved_artifacts_hold(old)
+        found[item.label] = (evidence_gap(item.label, old, identity, plan) or _saved_artifacts_hold(old)
+                             or _receipt_proves(item, old))
     for item in items:
         if item.label == "engine receipts":
             old = outcomes.get(item.label, {})

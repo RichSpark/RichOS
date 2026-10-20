@@ -2657,6 +2657,7 @@ def record_handed_in(session_id, agent_id="", name=""):
 # unreadable or slow report can never delay or prevent that fact.
 PROOF_REPORT_RUNS = 5
 PROOF_REPORT_SECONDS = 3.0
+PROOF_REPORT_HELD_SCAN = 20
 PROOF_RUN_NAME = re.compile(r"\d{8}T\d{6}Z(-[A-Za-z0-9_]+)?")
 
 
@@ -2729,9 +2730,19 @@ def proof_report(path, deadline=None):
             # Held for its consumer (proof-run.py HANDOVER_HOLD): rotation never removes it, and the
             # land that consumes it releases it. Any other held run of this checkout is named, so a
             # superseded handover is released by Rich once nothing still needs it.
+            # The scan is bounded twice (review rv-20261020T073921Z-1e0461cc-0956 #3): at most
+            # PROOF_REPORT_HELD_SCAN runs, and the deadline is asked before every read and after
+            # the last one, so a slow disk can spend the budget but never turn it into a report.
             report["held"] = os.path.exists(os.path.join(run, "retain"))
-            others = [os.path.join(history, n) for n in names if n != name
-                      and os.path.exists(os.path.join(history, n, "retain"))]
+            others = []
+            for n in [n for n in names if n != name][:PROOF_REPORT_HELD_SCAN]:
+                if time.monotonic() > deadline:
+                    break
+                if os.path.exists(os.path.join(history, n, "retain")):
+                    others.append(os.path.join(history, n))
+            if time.monotonic() > deadline:
+                report["unavailable"] = spent
+                return report
             if others:
                 report["also_held"] = others[:PROOF_REPORT_RUNS]
             rows = summary.get("checks") or []

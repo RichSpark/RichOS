@@ -7080,6 +7080,23 @@ class ProofReport_TheHandoverPointsAtItsSavedRun(Base):
         self.assertEqual(report["also_held"], [older])
         self.assertIn("1 earlier handover run(s) of this checkout still held", report["line"])
 
+    def test_the_held_run_scan_stays_inside_the_shared_budget(self):
+        """Review rv-20261020T073921Z-1e0461cc-0956 #3: the retain markers were read after the last
+        deadline check; a slow read past the budget still returned a complete report."""
+        self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
+        clock = [100.0]
+        real_exists = os.path.exists
+
+        def slow_exists(path):
+            if str(path).endswith("retain"):
+                clock[0] = 104.0
+            return real_exists(path)
+        with patch.object(ws.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(ws.os.path, "exists", side_effect=slow_exists):
+            report = ws.proof_report(self.path, deadline=103.0)
+        self.assertIn("time budget", report.get("unavailable", ""), report)
+        self.assertNotIn("line", report)
+
     def test_the_merge_offers_only_the_run_reported_for_the_tip_it_merges(self):
         run_dir = self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
         self.handed_in()

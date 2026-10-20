@@ -1227,6 +1227,72 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         receipt.write_text(json.dumps({**row, "verdict": "KNOWN-RED"}) + "\n")
         self.assertTrue(runner.known_red(unit[0]))
 
+    def test_coverage_names_a_known_red_unit_as_an_exception_never_proof(self):
+        """Review rv-20261020T073921Z-1e0461cc-0956 #2: a normally saved KNOWN-RED receipt was
+        counted as proven while reuse() rejects it. Both now share receipt_verdict()."""
+        old, previous = self.attempt("old")
+        self.passed(old, previous)
+        self.assertIsNone(evidence.coverage(previous.logdir, old, {"check": self.inputs}, self.source)["check"])
+        receipt = evidence.receipt_path(old[0])
+        row = json.loads(receipt.read_text())
+        receipt.write_text(json.dumps({**row, "verdict": "KNOWN-RED", "rc": 1}) + "\n")
+        previous.save(old[0], self.source)  # saved as a run saves it: its digest recorded
+        gap = evidence.coverage(previous.logdir, old, {"check": self.inputs}, self.source)["check"]
+        self.assertTrue(gap.startswith(evidence.KNOWN_RED_GAP), gap)
+        new, current = self.attempt("new")
+        evidence.reuse(previous.logdir, new, current)
+        self.assertEqual(new[0].state, "waiting", "coverage and reuse agree")
+
+    def test_coverage_reads_inputs_after_the_runtime_setup_a_run_gives(self):
+        """Review rv-20261020T073921Z-1e0461cc-0956 #1: a run supplies RICHOS_RUNTIME_DIR before
+        its checks' inputs are read; --coverage did not, so an unchanged check that binds it was
+        reported missing. The reviewer's probe, its assertion now the fixed behavior."""
+        import runtime_cache
+        base = Path(self.tmp.name)
+        root = base / "rt-repo"
+        root.mkdir()
+        runtime = base / "verified-runtime"
+        runtime.mkdir()
+        (runtime / "fixture").write_text("runtime bytes\n")
+        (root / "review.md").write_text("Fixture external runtime input.\n")
+        (root / "fixture.sh").write_text("exit 0\n")
+        evidence.atomic(root / "qualification.json", {"schema": 1, "review": "review.md", "requires": {
+            "paths": [], "tools": [], "environment": [], "external": ["RICHOS_RUNTIME_DIR"]}})
+        (root / "richos/app/scripts").mkdir(parents=True)
+        evidence.atomic(root / "richos/app/scripts/proof-inputs.json", {"schema": 1, "checks": {"fixture": {
+            "paths": ["fixture.sh"], "tools": [], "environment": [], "external": ["RICHOS_RUNTIME_DIR"],
+            "qualification": "qualification.json"}}})
+        source = {"commit": "c" * 40, "tracked_diff_sha256": "clean", "untracked_sha256": "clean"}
+        saved = base / "rt-saved"
+        saved.mkdir()
+        lines = ["cd . && bash fixture.sh"]
+        with patch.object(runner, "author_coverage", side_effect=lambda args: args):
+            args = runner.run_main(["--coverage", str(saved)], {})
+        verified = (patch.object(runtime_cache, "cache_path", return_value=runtime),
+                    patch.object(runner.subprocess, "run", return_value=SimpleNamespace(returncode=0)))
+        clean = {k: v for k, v in os.environ.items() if k not in ("RICHOS_RUNTIME_DIR", "RICHOS_GUI_SPEECH_MODELS")}
+        with patch.object(runner, "ROOT", str(root)), \
+                patch.object(runner, "head_commit", return_value=source["commit"]), \
+                patch.object(runner, "source_identity", return_value=source), \
+                patch.object(runner, "default_logdir", return_value=str(base / "rt-history")), \
+                patch.object(runner, "selection", return_value=lines), \
+                patch.dict(os.environ, clean, clear=True):
+            items = runner.plan(lines, args, str(saved), {})
+            with verified[0], verified[1]:
+                runner.supply_runtime(items)
+            identities = {i.label: runner.input_identity(i, args, str(saved)) for i in items}
+            record = evidence.Record(root, saved, items, source, identities, selection={
+                "base": "b" * 40, "candidate": source["commit"], "mode": "normal"})
+            self.addCleanup(record.close)
+            items[0].state, items[0].rc, items[0].log = "passed", 0, str(saved / "execution.log")
+            Path(items[0].log).write_text("passed\n")
+            record.checkpoint(items)
+            evidence.atomic(saved / "summary.json", {"checks": [{"check": "fixture", "result": "passed"}]})
+            with verified[0], verified[1], contextlib.redirect_stdout(io.StringIO()) as output:
+                rc = runner.author_coverage(args)
+        self.assertEqual(rc, 0, output.getvalue())
+        self.assertIn("1 proven by the saved run", output.getvalue())
+
     def test_live_owner_prevents_resume_and_rotation(self):
         items, record = self.attempt("20260923T000000Z")
         with self.assertRaisesRegex(ValueError, "active owner"):

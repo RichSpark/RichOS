@@ -916,8 +916,9 @@ def finish_attempt(item):
 
 # A REFUSED CHECK CARRIES THE COMMAND THAT RERUNS IT AS THE GATE RAN IT (2026-10-05).
 # The merge gate ran `git merge` with LC_ALL=C (workspaces.py _git_env, until _land_env passed the
-# caller's locale on, 2026-10-20), its hooks inherited it, and so did every check; a shell has en_GB.UTF-8. land-completeness.test.sh failed only in the gate
-# and passed every hand rerun by silently skipping its check (fixed in 3c0383fba), because nobody
+# caller's locale on, 2026-10-20), its hooks inherited it, and so did every check; a shell has
+# en_GB.UTF-8. land-completeness.test.sh failed only in the gate and passed every hand rerun by
+# silently skipping its check (fixed in 3c0383fba), because nobody
 # could rerun it the way the gate had. So each check's exact environment, directory and command
 # are written to <run>/rerun/<nn>-<check>.sh when it starts (`env -i`, every variable it got), and
 # a check that did not pass is printed with that file and the locale and time zone it ran under.
@@ -2383,7 +2384,8 @@ def author_coverage(args):
     run = os.path.realpath(args.coverage)
     try:
         saved = proof_evidence.read_plan(run)
-        outcomes = json.load(open(os.path.join(run, "outcomes.json")))
+        with open(os.path.join(run, "outcomes.json")) as stream:
+            outcomes = json.load(stream)
         try:
             with open(os.path.join(run, "summary.json")) as stream:
                 not_run = {row.get("check"): (row.get("not_run") or {}).get("why")
@@ -2412,6 +2414,11 @@ def author_coverage(args):
     scratch = tempfile.mkdtemp(prefix="coverage-")
     try:
         items = plan(lines, args, scratch, history_weights(default_logdir()))
+        # The same runtime setup a run gives its checks before their inputs are read (review
+        # rv-20261020T073921Z-1e0461cc-0956 #1): without it, every check that binds the runtime's
+        # environment read differently here than it ran, and valid proof was called missing.
+        supply_runtime(items)
+        supply_speech_models(items)
         for item in items:
             proof_evidence.prepare_environment(item, ROOT, scratch, execution_environment(item))
         snapshot = proof_evidence.InputSnapshot()
@@ -2427,13 +2434,15 @@ def author_coverage(args):
             missing.append((item.label, "selected now, never in the run's plan"))
         elif gaps.get(item.label) is None:
             proven.append(item.label)
+        elif gaps[item.label].startswith(proof_evidence.KNOWN_RED_GAP):
+            eligible.append((item.label, gaps[item.label]))
         elif old.get("state") == "not-run":
             eligible.append((item.label, "NOT RUN (%s), the existing NOT RUN eligibility" % (
                 not_run.get(item.label) or "no reason saved")))
         else:
             missing.append((item.label, "%s: %s" % (old.get("state") or "no outcome", gaps[item.label])))
     line = ("author coverage of %s (base %s, %s selection): %d planned, %d proven by the saved run, "
-            "%d NOT RUN (eligibility, not proof), %d missing" % (
+            "%d NOT RUN or KNOWN-RED (an existing exception, not proof), %d missing" % (
                 chosen["candidate"][:12], chosen["base"][:12], chosen.get("mode") or "normal",
                 len(items), len(proven), len(eligible), len(missing)))
     print("proof-run: " + line)

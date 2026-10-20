@@ -1494,7 +1494,8 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
         return rc
     if (rc := publication_completeness_gate(repo, what)):
         return rc
-    author_preflight(what)
+    if what != "push":
+        author_preflight(what)  # a push backstop is offered no handover
     commands = []
     covered = set()
     if range_argv:
