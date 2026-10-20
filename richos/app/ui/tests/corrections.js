@@ -30,6 +30,8 @@
 const fs = require("fs");
 const path = require("path");
 const { leaveHome,
+  shellSettled,
+  parkPointer,
   loadPlaywright,
   shot,
   publishShotFile,
@@ -90,19 +92,30 @@ async function openApp(browser, viewport) {
   await leaveHome(page);
   await page.waitForSelector(".nav-thread", { state: "attached" });
   // `init()` reads both desks LAST, after the composer is focused, so the badge is not up
-  // the instant the rail is. Waiting on the read rather than on a timer.
-  await page.waitForFunction(() => document.getElementById("nav-corrections-count") !== null);
+  // the instant the rail is. Waiting on the read rather than on a timer — `shellSettled`, which
+  // waits for the badge's TEXT. The wait that stood here asked whether `#nav-corrections-count`
+  // exists, and it is in `index.html`, so it returned at once and waited for nothing (found
+  // 2026-10-20 measuring check 8 under `SLOW_BRIDGE`: the desk was opened mid-boot, and
+  // `init()`'s last statements then took focus back from it).
+  await shellSettled(page);
   page.__errors = errors;
   return page;
 }
 
 /// Drive `mock.js`'s desk into one state, then open the panel through the button the CEO
 /// presses. `setup` runs in the page against `window.__RICHOS_MOCK__` and touches no DOM.
+///
+/// IT RETURNS WHEN `openCorrections()` HAS FINISHED, not when the overlay appears. The overlay
+/// is unhidden first and the panel painted from what was read before; then both desks are read
+/// again and the panel repainted, and the LAST thing it does is move focus into the panel. So
+/// focus inside the overlay is the end state, and nothing after it repaints the desk (`init()`
+/// is already over, `openApp`).
 async function openDesk(browser, setup, viewport) {
   const page = await openApp(browser, viewport);
   if (setup) await page.evaluate("(" + setup.toString() + ")(window.__RICHOS_MOCK__)");
   await page.click("#nav-corrections");
   await page.waitForSelector("#corrections-overlay:not([hidden])");
+  await page.waitForFunction(() => document.getElementById("corrections-overlay").contains(document.activeElement));
   return page;
 }
 
@@ -438,11 +451,45 @@ async function main() {
     // (scroll event at ~800ms, before the click event) happens on an idle host and which did NOT
     // happen in the nightly of 2026-10-03 (host ~90% CPU: 279170/1330000 px differ, scrollTop 0).
     // So the position is set here, to the same 101px, and the click then has nothing to scroll.
-    await page.$eval(".desk-body", (el) => {
+    //
+    // AND SET AGAIN AFTER THE CLICK, BECAUSE THE CLICK CAN STILL MOVE IT (2026-10-20). Setting
+    // it only before the click held until the merge gate of 2026-10-19, which failed this
+    // picture with the 2026-10-03 numbers exactly (279170/1330000, delta 211, scrollTop 0).
+    // Two ways reproduce that picture, pixel for pixel inside the panel:
+    //   * a click attempt that misses on a busy host: Playwright 1.61's retry #1 scrolls the
+    //     button with `scrollIntoView({ block: "end" })` before clicking, and "end" puts this
+    //     column at 0 (one intercepted attempt, no bridge latency);
+    //   * the column measured before the desk has read: at `SLOW_BRIDGE(120)` `.desk-body` was
+    //     still 91px of 91 when this line ran, so "the end" was 0 (closed by `openDesk` now
+    //     waiting for `openCorrections()` to finish).
+    // So the end is measured once the desk has read, and the column is put back there after
+    // the record has opened, whichever way the click scrolled it; the picture is then this
+    // check's, and the assertion below says so by name before the picture can.
+    const end = await page.$eval("#corrections-body", (el) => {
       el.scrollTop = el.scrollHeight - el.clientHeight;
+      return el.scrollTop;
     });
     await page.click("#desk-loro-list .desk-btn--show");
     await page.waitForSelector("#desk-loro-list .desk-record:not([hidden])");
+    const at = await page.$eval(
+      "#corrections-body",
+      (el, top) => {
+        el.scrollTop = top;
+        return el.scrollTop;
+      },
+      end
+    );
+    assertEqual(at, end, "the column is where this check put it (the end of the desk before the record opened)");
+    assert(end > 0, "the desk scrolls at all before the record opens: " + end);
+    // And the pointer rests on the button it pressed, as the reference shows it (hovered): a
+    // retried click presses it where the retry scrolled it, so once the column is put back the
+    // button is no longer under the pointer (1885 px, the hover ring, measured with one missed
+    // attempt injected). Parked by the check, like the column.
+    const show = await page.$eval("#desk-loro-list .desk-btn--show", (b) => {
+      const r = b.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    });
+    await parkPointer(page, show);
     const shown = await page.textContent("#desk-loro-list .desk-record");
     const fromCommand = await page.evaluate(() =>
       window.RichBridge
@@ -453,7 +500,7 @@ async function main() {
     assert(shown !== (await page.textContent("#desk-loro-list .desk-preview")), "and it is NOT the preview");
     const st = await deskState(page);
     assertEqual(st.proposals, [{ id: "prop-1", state: "awaiting-ceo" }], "reading answered nothing");
-    bump(4);
+    bump(6);
     await settledShot(page, "5b-08-record-and-preview");
     await page.close();
     return "current record and proposed record on screen together, nothing answered";
@@ -928,6 +975,10 @@ main().catch((e) => {
 //  7b  main.js `answerLoro`: drop the `(done && done.failure)` half of the notice
 //        -> he is told nothing changed and never told why
 //  8   main.js the `loro_show_record` handler: assign `p.preview` to `showRecord`
+//  8   (2026-10-20) this file: drop the column's re-set after the click, and make one click
+//      attempt miss (a cover over the page until Playwright's retry scrolls the column)
+//        -> "the column is where this check put it", expected 101, actual 0: the merge
+//           gate's 2026-10-19 picture, named by the check before the picture can be
 //        -> "what is on record now" shows what WOULD be written
 //  9   main.js: remove the `rich://correction-staged` listener
 //        -> the badge never moves until the panel is reopened
