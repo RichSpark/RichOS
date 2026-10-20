@@ -1471,12 +1471,64 @@ def root_entries_gate(repo, what, tree, where=LAND_BRANCH):
     return 1
 
 
-def offered_author_runs(what):
-    """`--reuse <run>` for each saved author run offered in AUTHOR_RUNS (above) that has a plan.
+def author_checkouts(repo, head):
+    """Every other checkout of this repository whose HEAD is exactly `head` (git worktree list)."""
+    listed = git("worktree", "list", "--porcelain", check=False, cwd=repo.top, env=repo.env)
+    if listed.returncode:
+        return []
+    found, path = [], None
+    for line in listed.stdout.splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree "):]
+        elif line.startswith("HEAD ") and line.split()[1] == head and path \
+                and os.path.realpath(path) != os.path.realpath(repo.top):
+            found.append(path)
+    return found
+
+
+def held_author_runs(repo, head):
+    """The runs proof-run.py holds for a handover of exactly `head`, newest first: its handover
+    hold (`retain`, holder "handover") names the candidate, in the runner's own log directory of
+    each checkout at `head`. A bounded read of one directory per checkout, never a history scan,
+    so a run made after the handover report (the recovery job) is found without a copied path."""
+    try:
+        base = Path(machine_storage(repo).state("proof-runs", "RICHOS_PROOF_RUN_DIR"))
+    except (ValueError, OSError):
+        return []
+    runs = []
+    for checkout in author_checkouts(repo, head):
+        logs = base / hashlib.sha256(checkout.encode()).hexdigest()[:12]
+        try:
+            names = sorted(os.listdir(logs), reverse=True)
+        except OSError:
+            continue
+        for name in names:
+            try:
+                hold = json.loads((logs / name / "retain").read_text())
+            except (OSError, ValueError):
+                continue
+            if isinstance(hold, dict) and hold.get("holder") == "handover" and hold.get("candidate") == head:
+                runs.append(str(logs / name))
+    return runs
+
+
+def author_runs(repo, heads):
+    """The author runs of this land: each offered in AUTHOR_RUNS, then each held for exactly one
+    of the incoming `heads`. Every one is evidence to validate, never a verdict."""
+    runs = []
+    for run in [r for r in os.environ.get(AUTHOR_RUNS, "").split(os.pathsep) if r] + \
+            [r for head in heads for r in held_author_runs(repo, head)]:
+        if os.path.realpath(run) not in [os.path.realpath(r) for r in runs]:
+            runs.append(run)
+    return runs
+
+
+def offered_author_runs(what, runs):
+    """`--reuse <run>` for each author run of this land (author_runs) that has a saved plan.
 
     A run with no saved plan is named and left out; the runner validates every one it is given."""
     argv = []
-    for run in [r for r in os.environ.get(AUTHOR_RUNS, "").split(os.pathsep) if r]:
+    for run in runs:
         if (Path(run) / "plan.json").is_file():
             say(f"autocheck: {what}: offered the author's saved run for validation: {run}")
             argv += ["--reuse", run]
@@ -1485,56 +1537,120 @@ def offered_author_runs(what):
     return argv
 
 
-# THE READINESS PREFLIGHT, INFORMATIONAL UNTIL THE ROLLOUT (verification reliability PRD, R3/A8).
-# Before the gate runs anything, each offered author run is asked, in its own checkout, whether it
-# proves its candidate's whole selected plan (proof-run.py --coverage: reads only, the same
-# predicate reuse() applies). The answer is printed with the one runner job that would resolve
-# every missing check; nothing is refused on it until the rollout switches the refusal on, and
-# the gate's own obligations are unchanged. A land offered no author run says so: no usable
-# pointer is missing proof under the same rule, never an exception.
+# THE READINESS PREFLIGHT, SWITCHED ON IN THE ROLLOUT (verification reliability PRD, R3/A8, lines
+# 49 and 59). Before the gate runs anything, a land of a branch asks whether the author's saved run
+# proves that branch's candidate's whole selected plan: proof-run.py --coverage, asked in the
+# author's own checkout, reads only and applies the predicate reuse() applies. When it does not,
+# the land is REFUSED with every unresolved check named and ONE existing runner job that resolves
+# the whole missing plan (`proof-run.py <base>..<candidate> --reuse <run>` in the author's
+# checkout): no check runs inside the preflight, nothing is retried in a loop, and a failing
+# assertion still needs a fix on the branch. A NOT RUN check is the existing eligibility and a
+# `fresh` one runs at every seat, so neither is missing. No usable run is missing proof under the
+# same rule, never an exception. A commit made on the landed branch itself brings no handover,
+# and a branch whose range selects no check needs no author proof.
 PREFLIGHT_SECONDS = 300
 
 
-def author_preflight(what):
-    runs = [r for r in os.environ.get(AUTHOR_RUNS, "").split(os.pathsep) if r]
-    if not runs:
-        say(f"autocheck: {what}: author proof: no saved author run was offered, so none is proven here "
-            "(informational until the rollout; the gate below runs its whole plan)")
-        return
+def coverage_of(run):
+    """(exit, summary or None, output lines, the run's checkout or None) of
+    `proof-run.py --coverage RUN`, asked in the run's own checkout. Exit 2: no answer."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.pop(AUTHOR_RUNS, None)
-    for run in runs:
+    try:
+        root = json.loads((Path(run) / "plan.json").read_text())["root"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return 2, None, [f"{run} has no readable plan ({exc})"], None
+    script = Path(root) / PROOF_RUN
+    try:
+        current = "--coverage" in script.read_text(errors="replace")
+    except OSError:
+        current = False
+    if not current:
+        return 2, None, [f"the runner in {root} predates the readiness preflight, so nothing can say what {run} proves"], root
+    with tempfile.TemporaryDirectory(prefix="autocheck-coverage-") as scratch:
+        answer = Path(scratch) / "coverage.json"
         try:
-            root = json.loads((Path(run) / "plan.json").read_text())["root"]
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            say(f"autocheck: {what}: author proof: {run} has no readable plan ({exc}); its coverage is missing")
-            continue
-        script = Path(root) / PROOF_RUN
-        try:
-            current = "--coverage" in script.read_text(errors="replace")
-        except OSError:
-            current = False
-        if not current:
-            say(f"autocheck: {what}: author proof: the runner in {root} predates the readiness preflight; "
-                f"no coverage is derived for {run}")
-            continue
-        try:
-            result = subprocess.run([sys.executable, str(script), "--coverage", run], cwd=root, env=env,
-                                    capture_output=True, text=True, timeout=PREFLIGHT_SECONDS,
-                                    stdin=subprocess.DEVNULL)
-            out = (result.stdout + result.stderr).strip()
+            result = subprocess.run([sys.executable, str(script), "--coverage", run, "--summary-out", str(answer)],
+                                    cwd=root, env=env, capture_output=True, text=True,
+                                    timeout=PREFLIGHT_SECONDS, stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
-            out = f"no answer within {PREFLIGHT_SECONDS} s"
-        say(f"autocheck: {what}: author proof (informational until the rollout):")
-        for line in out.splitlines()[-40:]:
-            say("    " + line)
+            return 2, None, [f"no answer about {run} within {PREFLIGHT_SECONDS} s"], root
+        try:
+            summary = json.loads(answer.read_text())
+        except (OSError, ValueError):
+            summary = None
+    return result.returncode, summary, (result.stdout + result.stderr).strip().splitlines(), root
 
 
-def release_author_runs(repo, head):
+def author_preflight(repo, what, heads, runs):
+    """0 when each incoming head's author run proves its candidate's whole selected plan, or its
+    range selects nothing; else 1, after naming what is unresolved and the one job per head."""
+    if not heads:
+        say(f"autocheck: {what}: author proof: no branch is merged here, so there is no handover to ask "
+            "about; the gate runs its whole plan")
+        return 0
+    asked, refusal = {}, []
+    for head in heads:
+        answers = []
+        for run in runs:
+            if run not in asked:
+                asked[run] = coverage_of(run)
+            rc, summary, out, root = asked[run]
+            if summary and summary.get("candidate") != head:
+                continue  # a run of another commit proves nothing about this one
+            answers.append((run, rc, summary, out, root))
+            if rc == 0 and summary:
+                break
+        if answers and answers[-1][1] == 0 and answers[-1][2]:
+            run, _rc, summary, _out, _root = answers[-1]
+            say(f"autocheck: {what}: author proof of {head[:12]}: {summary.get('line', '')} ({run})")
+            continue
+        base = git("merge-base", "HEAD", head, check=False, cwd=repo.top).stdout.strip()
+        lines = [f"{head[:12]}, the branch this land merges:"]
+        if not any(summary for _run, _rc, summary, _out, _root in answers):
+            found, _rc = select(repo, [f"{base}..{head}"]) if base else (None, 1)
+            if found == []:
+                say(f"autocheck: {what}: author proof of {head[:12]}: its range {base[:12]}..{head[:12]} selects no "
+                    "check, so it needs none")
+                continue
+            lines.append("  no author run of it was offered or is held for it, so its whole plan is unproven:")
+            lines += ["    " + c for c in found or ["(the selector refused the range; its output is above)"]]
+        for run, rc, summary, out, _root in answers:
+            lines.append(f"  {run}:")
+            lines += ["    " + line for line in out[-40:]]
+        recovery = next((summary.get("recovery") for _run, _rc, summary, _out, _root in answers
+                         if summary and summary.get("recovery")), None)
+        if not recovery:
+            # Only a checkout AT the head: the runner checks the bytes of the checkout it runs in.
+            seats = author_checkouts(repo, head)
+            seat = seats[0] if seats else f"<a checkout of {head[:12]}>"
+            # Every author run made in that checkout, an earlier candidate's included: the runner
+            # reuses what still matches and executes only the rest.
+            reuse = "".join(f" --reuse {shlex.quote(run)}" for run in runs
+                            if run in asked and asked[run][3] and os.path.realpath(asked[run][3]) == os.path.realpath(seat))
+            recovery = f"cd {shlex.quote(seat)} && python3 {PROOF_RUN} {base or '<base>'}..{head}{reuse}"
+        lines.append(f"  the one job: {recovery}")
+        refusal.append(lines)
+    if not refusal:
+        return 0
+    banner(f"{what.upper()} REFUSED: the author's proof does not cover what this land brings", [
+        *(line for lines in refusal for line in lines),
+        "Run each job once, in that checkout. It reuses every check already proven and executes only the",
+        "rest, as the author's last step would have. Then land again: the next attempt finds that run by",
+        f"its handover hold in that checkout (or name it: {AUTHOR_RUNS}=<its logs directory>).",
+        "A check that fails there needs a fix on the branch, never another run of the same inputs.",
+        "Nothing was run here and nothing was committed.",
+        "git's --no-verify skips this, and every skip is recorded in the lead's escalation ledger.",
+    ])
+    return 1
+
+
+def release_author_runs(repo, head, merged=()):
     """After a land that consumed them: remove the handover hold (proof-run.py HANDOVER_HOLD) of
-    each offered author run whose candidate this land merged, once the land's own evidence is
-    written (its receipt for this tree). A hold for anything else is never touched."""
-    for run in [r for r in os.environ.get(AUTHOR_RUNS, "").split(os.pathsep) if r]:
+    each author run of this land (author_runs: offered, or held for a `merged` head) whose
+    candidate this land merged, once the land's own evidence is written (its receipt for this
+    tree). A hold for anything else is never touched."""
+    for run in author_runs(repo, merged):
         marker = Path(run) / "retain"
         try:
             hold = json.loads(marker.read_text())
@@ -1568,8 +1684,12 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
         return rc
     if (rc := publication_completeness_gate(repo, what)):
         return rc
-    if what != "push":
-        author_preflight(what)  # a push backstop is offered no handover
+    runs = []
+    if what != "push":  # a push backstop is offered no handover
+        heads = merge_heads(repo)
+        runs = author_runs(repo, heads)
+        if author_preflight(repo, what, heads, runs):
+            return 1
     commands = []
     covered = set()
     if range_argv:
@@ -1647,7 +1767,7 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
     summary_path = str(root / (directory.name + "-summary.json"))
     argv = (["--resume", str(previous)] if previous and saved_identity == identity
             else ["--commands", plan, *(["--reuse", str(previous)] if previous else []),
-                  *offered_author_runs(what)])
+                  *offered_author_runs(what, runs)])
     reason = os.environ.get("RICHOS_AUTOCHECK_RETRY_REASON")
     if reason:
         argv += ["--retry-reason", reason]
@@ -2354,7 +2474,7 @@ def post_merge(repo, squash):
         phone_watch(repo, orig, head)
         refresh_hook_sidecars(repo, orig, head)
         if repo.land_receipt(tree).exists():
-            release_author_runs(repo, head)
+            release_author_runs(repo, head, parents[1:])
         else:
             how = "git merge --no-verify" if merged else "a fast-forward"
             record_skip(repo, f"main moved to {head[:12]} without the land checks ({how})",
@@ -2367,7 +2487,7 @@ def post_merge(repo, squash):
         # recorded as main's is; its push asks the review and runs the land check (pre_push). The
         # phone watch and the hook sidecars belong to the main checkout, not to this tree.
         if repo.land_receipt(tree).exists():
-            release_author_runs(repo, head)
+            release_author_runs(repo, head, parents[1:])
         else:
             how = "git merge --no-verify" if merged else "a fast-forward"
             record_skip(repo, f"{target} moved to {head[:12]} without the land checks ({how})",
