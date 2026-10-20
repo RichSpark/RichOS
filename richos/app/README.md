@@ -989,7 +989,7 @@ nothing:
 
 | Claim | Joined to |
 |---|---|
-| every test file named in this file | the test files that exist on disk |
+| every test file named in this file, with no count beside it | the test files that exist on disk |
 | the suite table in `ui/tests/README.md` | the inventory `run.js` discovers from disk |
 | every `rich://` name in `STREAMING.md` | the `pub const … = "rich://…"` the Rust source declares |
 
@@ -1316,12 +1316,14 @@ setup. Never copy compiled Cargo output between checkouts.
 Contract and rules: [`richos/app/ui/tests/README.md`](ui/tests/README.md). Two notes that belong
 here rather than there:
 
-- **The counts above are checked, not remembered.** `richos/app/ui/tests/docs-claims.js` reads the
-  `#[test]` attributes out of the tree and fails if any number in this file disagrees — per
-  test file and per crate. It exists because both totals had gone stale by a wide margin
-  (`97/97` against 304, `121/121` against 163) while every sentence around them stayed true,
-  which is the one thing `richos/engine/scripts/publication-completeness.sh` explicitly cannot
-  catch: *"Every path in a document can resolve while the sentence around it is false."*
+- **This file states no test count and that is checked.** Cargo prints its own counts. The
+  totals this file used to carry went stale by a wide margin (`97/97` against 304, `121/121`
+  against 163) while every sentence around them stayed true, which is the one thing
+  `richos/engine/scripts/publication-completeness.sh` explicitly cannot catch: *"Every path in
+  a document can resolve while the sentence around it is false."* Checking them kept them true
+  but made every branch that added a test edit the same line and two such branches conflicted
+  on nothing but the number (2026-10-19). So `richos/app/ui/tests/docs-claims.js` now checks that
+  every test file is named and that no count is written beside one.
 - **CI covers the spine and the browser suites and neither has ever run.**
   `.github/workflows/app-spine-ci.yml` runs `cargo test -p richos-core` and a release
   build; `.github/workflows/ui-suite-ci.yml` runs every suite under `richos/app/ui/tests` on
