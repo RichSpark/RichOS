@@ -74,7 +74,10 @@ pub const DISALLOWED_TOOL: &str = "AskUserQuestion";
 ///
 /// 2.1.282: the operator probes P1-P15, 2026-09-24/25, every run report's `claude_version`
 /// (richos-hq `docs/verification/2026-09-24-operator-probes/summary.json`).
-pub const MEASURED_CLAUDE_VERSIONS: &[&str] = &["2.1.282"];
+///
+/// 2.1.304: the same probes P1-P18, 2026-10-20, every verdict as on 2.1.282, every probe's
+/// `claude_version` (richos-hq `docs/verification/2026-10-20-operator-probes-2.1.304/summary.json`).
+pub const MEASURED_CLAUDE_VERSIONS: &[&str] = &["2.1.282", "2.1.304"];
 
 /// The two values derived fresh at every lead start (r3 (i)).
 #[derive(Clone, Debug, PartialEq, Eq)]
