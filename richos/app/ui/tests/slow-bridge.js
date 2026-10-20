@@ -93,6 +93,8 @@ const LATENCIES = [0, 120, 400];
 const INSTRUMENTED_BRIDGE = (ms) => {
   window.__bridgeIssued = [];
   window.__bridgeReturned = [];
+  // The words of every `send_message`, in the order the page issued them (check 9).
+  window.__sentTexts = [];
   let real;
   Object.defineProperty(window, "RichBridge", {
     configurable: true,
@@ -102,6 +104,7 @@ const INSTRUMENTED_BRIDGE = (ms) => {
       const invoke = v.invoke.bind(v);
       v.invoke = async (name, args) => {
         window.__bridgeIssued.push(name);
+        if (name === "send_message") window.__sentTexts.push(args && args.text);
         if (ms > 0) await new Promise((r) => setTimeout(r, ms));
         try {
           return await invoke(name, args);
@@ -769,6 +772,44 @@ async function main() {
         `Return pressed before the restore began; his message was ${during.shown ? "on screen at once" : "not yet drawn"}, ` +
         `the box ${JSON.stringify(during.box)}, and it reached "general" once`
       );
+    });
+  }
+
+  // ---- 9. ...and a second Send while that thread opens never overtakes the held one ------
+  //
+  // Second review rv-20261020T181204Z-11d18147-df79: the held send went out only when the
+  // opening had finished, but `openThread` binds `activeThreadId` before it awaits anything, so a
+  // Send pressed in the opening window went straight out FIRST. "Please send the proposal
+  // today." then "Correction: do not send it until I approve." reached Rich reversed.
+  for (const lag of LATENCIES.filter((l) => l > 0)) {
+    await run.check(`a Send pressed while the launch opens his thread goes after the held one (${lag}ms bridge)`, async () => {
+      const page = await open(browser, lag);
+      await page.waitForSelector("#input", { state: "visible" });
+      const FIRST = "Please send the proposal today.";
+      const SECOND = "Correction: do not send it until I approve.";
+      await page.click("#input");
+      await page.keyboard.type(FIRST);
+      await page.keyboard.press("Enter");
+      const held = await page.evaluate(() => (window.__bridgeIssued || []).indexOf("switch_thread") < 0);
+      assert(held, "the launch had already started opening the thread, so nothing was held");
+      // The restore has started opening the thread: the opening window, where a Send goes out at once.
+      await page.waitForFunction(() => document.getElementById("composer-row").dataset.mode === "opening", null, {
+        timeout: 60000, // a hang guard: the restore opens the thread or the boot is broken
+      });
+      await page.keyboard.type(SECOND);
+      const mode = await page.evaluate(() => document.getElementById("composer-row").dataset.mode);
+      assertEqual(mode, "opening", "the thread finished opening before the second Send, so the overtaking window was not tested");
+      await page.keyboard.press("Enter");
+      await bootDone(page);
+      await page.waitForFunction(() => window.__sentTexts.length >= 2, null, {
+        timeout: 60000, // a hang guard: both sends are issued or one was lost
+      });
+      await observe(page, 6 * lag + 400, "a third, duplicate send would be issued within a few call-times");
+      const sent = await page.evaluate(() => window.__sentTexts.slice());
+      assertEqual(sent, [FIRST, SECOND], "his two messages reached Rich in a different order from the one he sent them in");
+      assertEqual(page.__errors, [], "the shell logged errors while the two sends went out");
+      await page.close();
+      return `held "${FIRST}", then sent "${SECOND}" in the opening window: send_message issued in his order, once each`;
     });
   }
 

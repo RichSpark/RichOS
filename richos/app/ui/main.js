@@ -427,7 +427,8 @@ const liveStatus = new Map();
 // screen.
 let activeThreadId = null;
 /// A Send pressed while `init()` had not yet opened any conversation — `{ text, at, id }`, `id`
-/// its bubble — sent by `openThread` once it has (`send()`'s launch hold). `null` when none waits.
+/// its bubble — sent by `openThread` as it starts opening one (`send()`'s launch hold). `null`
+/// when none waits.
 let launchSendHeld = null;
 /// `init()` has made its landing decision; from here no Send is held (`send()`).
 let launchLanded = false;
@@ -1311,11 +1312,6 @@ async function openThread(threadId, opts) {
   if (mainView === "conversation") rememberThreadView();
   const cached = threadViews.get(threadViewKey(row.entity_id, threadId));
   const previousModel = openingThread ? openingThread.previousModel : timelineModel;
-  // A Send held at launch travels with the first conversation opened, its bubble carried across
-  // the model this replaces exactly as a new thread's first message is (see `send()`).
-  if (launchSendHeld && !opts.pendingUser) {
-    opts = Object.assign({}, opts, { pendingUser: { text: launchSendHeld.text, at: launchSendHeld.at } });
-  }
   stashThreadViewState(threadId);
   clearLiveMark(threadId);
   activeThreadId = threadId;
@@ -1399,6 +1395,17 @@ async function openThread(threadId, opts) {
   renderRail();
   startOrStopWaitTimer();
   announce("Opening conversation.");
+  // THE SEND HE PRESSED BEFORE THE LAUNCH HAD A CONVERSATION OPEN goes now, the moment there is
+  // one to send it to, and BEFORE this function awaits anything: from the line that set
+  // `activeThreadId` above, a later Send goes straight out, so the held one must be issued first
+  // or his messages reach Rich out of order (second review rv-20261020T181204Z-11d18147-df79).
+  // It is an ordinary send in the opening window, which is honored (slow-bridge check 3): exactly
+  // the words at the press; whatever he has typed since stays in the box as his next draft.
+  if (launchSendHeld) {
+    const held = launchSendHeld;
+    launchSendHeld = null;
+    send(held.text);
+  }
   try {
     await switchThreadInOrder(threadId);
   } catch (e) {
@@ -1457,14 +1464,6 @@ async function openThread(threadId, opts) {
   restoreThreadViewState(threadId);
   resetWaitBandForThread();
   scheduleRender();
-  // THE SEND HE PRESSED BEFORE THE LAUNCH HAD A CONVERSATION OPEN goes now, to the one it opened:
-  // exactly the words at the press, adopting the bubble carried above, and whatever he has typed
-  // since stays in the box as his next draft.
-  if (launchSendHeld) {
-    const held = launchSendHeld;
-    launchSendHeld = null;
-    send(held.text);
-  }
   // **AND THE CHIP CARRIES THIS THREAD'S WORK IN THE FIRST RENDERED SECOND, not the fourth.**
   //
   // The synchronous head above clears all four pieces of state `renderDrillChip` reads, so from
@@ -2643,7 +2642,7 @@ async function send(explicitText, opts) {
     return;
   }
   // A SEND PRESSED BEFORE THE LAUNCH HAS OPENED ANY CONVERSATION is held: his message goes up at
-  // once, as any send does, and `openThread` sends it the moment the thread he lands on is open.
+  // once, as any send does, and `openThread` sends it as soon as it has a thread to send it to.
   // There is no thread to send it to yet (`send_message` takes one), and sending anyway was
   // refused with an argument error over a box the restore then emptied: the swallowed first send
   // after a relaunch (esc-20261020T171021Z-8fd0fca7, measured in the test guest with real keys).
