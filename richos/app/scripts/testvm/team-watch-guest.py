@@ -11,6 +11,7 @@ Run by team-watch-walk.py over ssh, with the guest's /usr/bin/python3 (3.9), nev
   team-watch-guest.py ledger PAYLOAD   the escalation ledger path his engine reads
   team-watch-guest.py teammate PAYLOAD SESSION   a working teammate of that lead
   team-watch-guest.py finished PAYLOAD SESSION   a finished teammate of that lead, waiting for its review
+  team-watch-guest.py remind-check PAYLOAD SESSION LEAD_FILE   what stall-watch's reminder sees now
 
 `setup` builds the operator probes' own fixture (operator-probes/guest_probes.py setup_fixture,
 pushed beside this file): a fixture entity at <home>/ab/femcboost, his engine from
@@ -121,6 +122,30 @@ def finished(payload, session):
                                                  'waiting': {'kind': 'started', 'on': 'waiting for its review'}})
 
 
+def remind_check(payload, session, lead_file):
+    """What stall-watch's unfinished-work reminder sees for the lead of `session` right now, asked
+    of the engine under the environment the host gives its watchers (the declaration's, its HOME,
+    RICHOS_ENTITY_ROOT and the lead file): whether that lead is idle, its start, the pending list
+    and the reminder's kept state. Prints one JSON line; changes nothing."""
+    p = g.Paths(payload)
+    decl = json.loads((p.home / 'Library' / 'Application Support' / 'com.richos.app' / 'operator.json').read_text())
+    env = dict(decl['environment'], HOME=decl['home'], RICHOS_ENTITY_ROOT=decl['entity_root'],
+               RICHOS_WATCH_LEAD=lead_file)
+    code, out, err = g.run(['python3', '-c',
+                            'import json, os, sys; sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "lib")); '
+                            'import stall_watch as sw; src = sw.Sources(sys.argv[1]); sid = sys.argv[2]; '
+                            'state = sw._read_json(os.path.join(sw.state_root(), sid, "announced.json")); '
+                            'pending = src.ws.pending(sid, auto=False, dry=True) if src.ws else None; '
+                            'mate = src.ws.load_agent(sid + "--finished-mate") if src.ws else None; '
+                            'print(json.dumps({"idle": sw.lead_is_idle(src, sid), "started": sw.session_started(src, sid), '
+                            '"every": sw._env_float("STALL_WATCH_PENDING_WORK_SECONDS", sw.PENDING_WORK_SECONDS), '
+                            '"pending": pending, "kept": state.get("pending_work"), "state_keys": sorted(state), '
+                            '"finished_mate": {k: (mate or {}).get(k) for k in ("end", "waiting", "disposition", "workspaces")}}, '
+                            'default=str))',
+                            decl['engine_root'], session], env=env, timeout=60)
+    print(out.strip() if code == 0 else json.dumps({'failed': code, 'stderr': err[-2000:]}))
+
+
 def ledger(payload):
     p = g.Paths(payload)
     code, out, err = g.run(['/usr/bin/python3', '-c', 'import sys; sys.path.insert(0, sys.argv[1]); import escalations; '
@@ -132,4 +157,5 @@ def ledger(payload):
 
 
 if __name__ == '__main__':
-    {'setup': setup, 'ledger': ledger, 'teammate': teammate, 'finished': finished}[sys.argv[1]](*sys.argv[2:])
+    {'setup': setup, 'ledger': ledger, 'teammate': teammate, 'finished': finished,
+     'remind-check': remind_check}[sys.argv[1]](*sys.argv[2:])
