@@ -24,7 +24,7 @@
 //
 // So this suite joins the kinds of claim in `app/`'s documents to the tree:
 //
-//   1. test files named            against the test files on disk (no counts: a stated count
+//   1. test files named            against the test files on disk, with no count beside them (a stated count
 //                                  made every branch that adds a test conflict on the README)
 //   2. the browser-suite table     against the inventory `run.js` discovers from disk
 //   3. `rich://` event names       against the constants the Rust source declares
@@ -167,7 +167,28 @@ async function main() {
   });
 
   // =====================================================================================
-  // 4. The browser-suite table vs the inventory run.js discovers
+  // 2. ...and states no test COUNT beside a test file or a `cargo test` line
+  // =====================================================================================
+  //
+  // The counts were removed on purpose (2026-10-19, CLAUDE.md §136): every branch that added
+  // a test had to edit the same README line, and two such branches conflicted on nothing but
+  // the number. Once nothing checked them, the ones left behind drifted (the voice crate's
+  // "327 library tests" stood while the crate had 432). So the rule is the absence: a count
+  // written back fails here, and cargo's own output is where a count is read.
+
+  await run.check("app/README.md states no test count beside a test file or a cargo test line", async () => {
+    const counts = [];
+    readme.split("\n").forEach((line, i) => {
+      if (/tests\/[a-z0-9_]+\.rs\s+\d+\s/.test(line) || /cargo test -p richos-[a-z]+.*#.*\b\d+ (?:[a-z-]+ )?tests?\b/.test(line)) {
+        counts.push(`README.md:${i + 1}: ${line.trim()}`);
+      }
+    });
+    assertEqual(counts, [], "test counts in app/README.md (a count goes stale and makes branches conflict; name the file, not the number)");
+    return "no stated count";
+  });
+
+  // =====================================================================================
+  // 3. The browser-suite table vs the inventory run.js discovers
   // =====================================================================================
 
   await run.check("app/ui/tests/README.md's table is exactly the inventory run.js discovers", async () => {
@@ -192,7 +213,7 @@ async function main() {
   });
 
   // =====================================================================================
-  // 5. Event names: the contract document vs the constants the app declares
+  // 4. Event names: the contract document vs the constants the app declares
   // =====================================================================================
 
   await run.check("app/STREAMING.md documents every `rich://` event the app declares", async () => {
@@ -242,7 +263,7 @@ async function main() {
   });
 
   // =====================================================================================
-  // 7. LAST, because it checks the reads of everything above: the land selects this suite
+  // 5. LAST, because it checks the reads of everything above: the land selects this suite
   //    for every file it read. `proof-for.sh` picks the suites a land runs from this suite's
   //    row in proof-for.ui-inputs; a place this suite reads that the row does not reach is a
   //    change that can make a claim here false with nothing running it.

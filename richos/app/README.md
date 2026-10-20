@@ -208,7 +208,7 @@ richos/app/
                               can never be re-issued; a planted secret reaches no report;
                               and the anti-vacuous test that an untouched desk holds NOTHING
                               back and a real proposal still reaches the writer
-    tests/entity_binding_tests.rs 10 entity-scope tests: the cross-entity leak NEGATIVE
+    tests/entity_binding_tests.rs entity-scope tests: the cross-entity leak NEGATIVE
                               CONTROL (proven failing with the guard removed), immutability,
                               the fail-closed unbound legacy thread + its one-way explicit
                               adoption, the activation fence, and restart
@@ -218,31 +218,31 @@ richos/app/
                               rather than four directory names, including the multi-root
                               proof (`richos` + `richos-hq` -> one entity id) and the
                               string-prefix trap beside it
-    tests/spine_tests.rs     12 spine invariant tests (no live Claude needed). One is the
+    tests/spine_tests.rs     spine invariant tests (no live Claude needed). One is the
                               nightly D4 pair: a failed TEXT turn and a failed VOICE turn are
                               classified identically, which is what makes the operator line
                               impossible to write for only one surface
-    tests/native_input_provenance_tests.rs 1 native input provenance witness.
-    tests/terminal_session_tests.rs 15 native session continuity and overlapping-input regressions.
-    tests/rotation_tests.rs 12 account-resume, native model-control and quota-notice tests.
+    tests/native_input_provenance_tests.rs native input provenance witness.
+    tests/terminal_session_tests.rs native session continuity and overlapping-input regressions.
+    tests/rotation_tests.rs account-resume, native model-control and quota-notice tests.
     tests/questions.rs       durable question sets, revisions, delivery, engine witnesses and the app-run ask gate
-    tests/action_ledger_tests.rs 5 action-ledger WRITER tests (the ledger is non-empty
+    tests/action_ledger_tests.rs action-ledger WRITER tests (the ledger is non-empty
                               at runtime; CEO-facing actions cross a rotation; machinery
                               stays out of every priming prompt)
-    tests/machinery_tests.rs 16 machinery routing/retention tests, driven by native wire
+    tests/machinery_tests.rs machinery routing/retention tests, driven by native wire
                               frames actually measured against the binary
-    tests/steering_tests.rs  16 stop/steer tests (UX §9.2/§9.3). Includes the CONCURRENCY
+    tests/steering_tests.rs  stop/steer tests (UX §9.2/§9.3). Includes the CONCURRENCY
                               proof: the spine goes behind an Arc<Mutex<..>> exactly as the
                               Tauri shell holds it, a real turn runs on one thread, and the
                               test asserts try_lock FAILS at the instant the stop is pressed
                               — so it cannot silently start passing for the wrong reason.
                               Also: a turn the CEO stopped is never crash-replayed, and a
                               stop request that outlived the process is applied at startup
-    tests/native_onboarding_grant_tests.rs 6 real-child checks for scoped visible-turn grants and safe revocation.
-    tests/native_cancel_tests.rs 7 interrupt tests against a REAL CHILD PROCESS over real
+    tests/native_onboarding_grant_tests.rs real-child checks for scoped visible-turn grants and safe revocation.
+    tests/native_cancel_tests.rs interrupt tests against a REAL CHILD PROCESS over real
                               stdio (a POSIX-sh fake `claude` the test writes itself), in two
                               variants: compliant, and deliberately deaf to the interrupt
-    tests/replay_work_host_tests.rs 4 recorded-provider checks: native turn endings and
+    tests/replay_work_host_tests.rs recorded-provider checks: native turn endings and
                               late command notifications never manufacture job completion,
                               a user reply or another model prompt. Separate handoffs
                               use the same independent Stu session.
@@ -295,7 +295,7 @@ richos/app/
     examples/onboarding_probe.rs what THIS install will do about onboarding, one line per
                               company, plus `--block <entity>` for the exact bytes the
                               priming turn would carry
-    tests/doctrine_sentinel.rs 1 LIVE test, #[ignore] by default, and a RELEASE GATE rather
+    tests/doctrine_sentinel.rs LIVE test, #[ignore] by default, and a RELEASE GATE rather
                               than a one-off: does the standing instruction RichOS renders
                               (src/doctrine.rs) actually reach the model? Two cells against
                               the real binary through the PRODUCT'S own arg vector and
@@ -433,7 +433,7 @@ richos/app/
     tests/spoken_trigger_tests.rs for the completion criterion — speaking a
                               correction records it with no command typed, ordinary
                               conversation stages nothing, internal traffic is never mined
-    tests/timeline_tests.rs  16 typed-timeline tests: the cross-entity machinery NEGATIVE
+    tests/timeline_tests.rs  typed-timeline tests: the cross-entity machinery NEGATIVE
                               CONTROL (both clauses proven failing when removed — one leaks
                               a row, one leaks THROUGH the toolCallId merge), the one shared
                               per-turn sequence live and after a restart, the visibility
@@ -444,7 +444,7 @@ richos/app/
                               Mac drew the greeting twice where the phone drew it once). Both
                               runs are retained; the repeat renders in no mode.
                               with its session clause
-    tests/live_event_tests.rs 20 additive-family tests (§13): the four original events
+    tests/live_event_tests.rs additive-family tests (§13): the four original events
                               asserted BYTE-IDENTICAL with and without the new family, the
                               wire and the reload agreeing field by field, phase honestly
                               `unknown`, the states that are never emitted, the
@@ -484,7 +484,7 @@ richos/app/
                               assuming support
     tests/onboarding_persistence_tests.rs regressions for verified tool persistence, per-company answers, resumption and MCP transport.
     tests/request_preparation_tests.rs regressions for cancellable preparation, independent replies and startup, rotation, provider retries and restart outcomes.
-    tests/restart_continuation_tests.rs 8 restart tests for atomic continuation, uncertain native attempts, preserved control provenance and durable Stop across replay.
+    tests/restart_continuation_tests.rs restart tests for atomic continuation, uncertain native attempts, preserved control provenance and durable Stop across replay.
     tests/routing_context_tests.rs verifies that classification receives the existing scoped visible conversation, including formatted replies, without hidden inputs.
     tests/onboarding_declination_tests.rs over the two spine methods the first-run
                               notice is built on. `record_declination` shipped with no caller
@@ -502,13 +502,13 @@ richos/app/
                               (in use, parked, spare) and finds the decline in each one's next
                               priming; the seventh presses it while a spare is starting and
                               finds no extra priming turn at that spare's first message
-    tests/loro_lane_map_tests.rs 11 lane-map tests: the default map is the CEO's six
+    tests/loro_lane_map_tests.rs lane-map tests: the default map is the CEO's six
                               companies, a lane the corpus does not have is DROPPED rather
                               than sent (loro exits 2 on one, which would make every
                               re-prime Unavailable), the cross-entity guard still refuses
                               after a drop, and a thread reading another company's in-repo
                               record is told whose record it is
-    tests/evidence_lookup_tests.rs 11 Tier-E tests: the consult gate is EXACTLY none and
+    tests/evidence_lookup_tests.rs Tier-E tests: the consult gate is EXACTLY none and
                               adjacent, a compiler that reports no coverage label never opens
                               the owner's files, a covered question spends no process at all,
                               the block is injected verbatim BELOW the company-memory heading
@@ -714,7 +714,7 @@ richos/app/
                               its turn boundary so work he gives typed, aloud or from the
                               phone starts the same way (CEO ruling §88); each road has a
                               test, and the active thread is shown NOT to be the answer
-    tests/thread_title_tests.rs 4 tests of HAIKU NAMING A NEW CONVERSATION from his first
+    tests/thread_title_tests.rs tests of HAIKU NAMING A NEW CONVERSATION from his first
                               message (CEO, 2026-10-19): the whole first message is asked
                               about once, the answer reaches the shell's title sink, a later
                               message starts no second title (nor hides the first when both
@@ -1197,9 +1197,9 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 8 doc-tests; direct and ignored tests counted by the tree
+cargo test -p richos-core                       # unit, integration and doc-tests; cargo reports its own counts
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
-# Ordinary passes and doc-test passes are separate; do not add them into the total above.
+# Ordinary passes and doc-test passes are separate; do not add them together.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside
 #     every repository and is on no clean checkout. `home_field::tests::
 #     against_a_real_corpus_when_one_is_configured` compiles one into the home screen's
@@ -1226,13 +1226,13 @@ cargo test -p richos-core                       # 8 doc-tests; direct and ignore
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
 cargo test -p richos-voice                      # live-device tests are ignored without a device
-#     The 327 library tests include four `ignored, LIVE AUDIO: …` tests, each naming its own
+#     The library tests include four `ignored, LIVE AUDIO: …` tests, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test
 #     that returns is reported `ok`, so they were four green lines asserting nothing on every
 #     machine but the CEO's and on every CI run. `crates/richos-voice/build.rs` turns the
 #     variable below into `cfg(live_audio)` so the default run says `ignored` instead.
-RICHOS_VOICE_LIVE_AUDIO=1 cargo test -p richos-voice   # all 359 run, incl. the audible ones
+RICHOS_VOICE_LIVE_AUDIO=1 cargo test -p richos-voice   # all run, incl. the audible ones
 cargo run -p richos-voice --example device_probe       # what the audio hardware really is
 
 # 2. The desktop shell (from richos/app/src-tauri/):
