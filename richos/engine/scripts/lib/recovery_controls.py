@@ -28,11 +28,12 @@ def work(ws, rec):
 
 def admitted(ws, payload, rec, assignment, repos, entity, dry=False):
     declaration = R.mode(entity)
-    if declaration["mode"] == "observe":
+    if R.quiet(declaration["mode"]):
         assignment = rec.get("recovery_observation_assignment") or assignment
-    if declaration["mode"] == "off" or (assignment["kind"] != "implementation" and not R.repeat_signal(rec.get("name"))):
+    if declaration["mode"] == "off" or assignment["kind"] != "implementation":
         return []
-    if declaration["mode"] == "observe":
+    if R.quiet(declaration["mode"]):
+        # Dispatch admission follows observe: a recovery gap never refuses.
         try:
             return _admitted(ws, payload, rec, assignment, repos, declaration, dry)
         except Exception as error:
@@ -60,7 +61,7 @@ def _admitted(ws, payload, rec, assignment, repos, declaration, dry):
         if repo not in {os.path.realpath(p) for p in declaration["repositories"]}:
             continue
         record = R.reconcile(repo, identity, aliases, rec["session_id"], acceptance,
-                             mode=declaration["mode"], dry=dry, premises=declaration.get("wes_policy", "carried"), name=rec.get("name", ""))
+                             mode=declaration["mode"], dry=dry, premises=declaration.get("wes_policy", "carried"))
         if not record:
             continue
         R.admission(record, rec["key"], body, disposition[0] if disposition else "", dry=dry,
@@ -75,8 +76,8 @@ def begin_tool(ws, payload, rec):
     """
     if not rec.get("recovery_control"):
         declaration = R.mode(rec.get("entity"))
-        if declaration["mode"] == "observe":
-            return True, ""
+        if R.quiet(declaration["mode"]):
+            return True, ""  # no holds outside enforce
         if not rec.get("recovery_jobs") and (declaration["mode"] != "enforce" or
                 (rec.get("recovery_assignment") or {}).get("kind") != "implementation"):
             return True, ""
@@ -297,7 +298,7 @@ def schedule(record, engine, env=None):
     try:
         return _schedule(record, engine, env)
     except Exception as error:
-        if record["mode"] != "observe":
+        if not R.quiet(record["mode"]):
             raise
         return dict(observation_gap=str(error))
 

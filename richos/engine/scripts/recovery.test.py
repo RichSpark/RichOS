@@ -80,38 +80,74 @@ class Recovery(unittest.TestCase):
         self.assertEqual(current()['deadline'],deadline)
         self.assertEqual(current()['status'],'investigating')
 
-    def test_fourth_named_fix_triggers_with_no_failed_reviews(self):
+    def test_actual_round_four_triggers_and_a_name_suffix_never_does(self):
         self.ledger.write_text('')
-        for name in ('zach-opus-hostshim1', 'zach-opus-hostshim2', 'zach-opus-hostshim3'):
-            self.assertIsNone(R.reconcile(str(self.repo), name, {name}, 'owner', 'acceptance', name=name))
+        # A visible suffix is not a round: names alone schedule nothing.
+        for name in ('zach-opus-hostshim4', 'zach-opus-lease4', 'zach-opus-lease9'):
+            self.assertIsNone(R.reconcile(str(self.repo), name, {name}, 'owner', 'acceptance'))
+        for number in (1, 2, 3):
+            self.assertIsNone(R.round_signal(number, 'start-%d' % number, 'job'))
         # Both real incidents had ordinary explanations and passing reviews.
-        # Neither is an exemption from inspection at the visible number four.
-        for name in ('zach-opus-hostshim4', 'zach-opus-lease4'):
-            self.review('a'*40, name, verdict='passed', work=name)
-            record = R.reconcile(str(self.repo), name, {name}, 'owner', 'acceptance', name=name)
+        # Neither is an exemption from inspection at the actual fourth round.
+        for work in ('teammate:hostshim', 'teammate:lease'):
+            self.review('a'*40, work, verdict='passed', work=work)
+            record = R.reconcile(str(self.repo), work, {work}, 'owner', 'acceptance',
+                                 signal=R.round_signal(4, work+':start-4', work))
             self.assertEqual(record['status'], 'investigating')
-            self.assertEqual(record['repeat_signal']['iteration'], 4)
+            self.assertEqual(record['repeat_signal']['round'], 4)
+            self.assertEqual(record['repeat_signal']['events'], [work+':start-4'])
             self.assertEqual(record['failed'], [])
             self.assertEqual(record['recovery_failures'], 0)
             self.assertTrue(all(R.repeat_pending(record, role) for role in ('axel', 'wes')))
 
     def test_repeat_inspection_does_not_renew_pending_budget_or_count_a_failure(self):
         self.ledger.write_text('')
-        def check(name, now):
-            return R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', name=name, now=now)
-        first = check('zach-opus-hostshim4', 100)
-        self.assertEqual(first, check('zach-opus-hostshim4', 100))
-        later = check('echo-sonnet-hostshim5', 200)
+        def check(number, now):
+            return R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance',
+                               signal=R.round_signal(number, 'start-%d' % number, 'numbered'), now=now)
+        first = check(4, 100)
+        self.assertEqual(first, check(4, 100))
+        # Round 5 starts before either advisor asked: it joins the pending
+        # alarm (same identity and budget) and moves the evidence frontier.
+        later = check(5, 200)
         self.assertEqual(later['deadline'], first['deadline'])
+        self.assertEqual(later['repeat_signal']['id'], first['repeat_signal']['id'])
         self.assertNotEqual(later['evidence_cursor'], first['evidence_cursor'])
-        self.assertEqual(later['repeat_signal']['iteration'], 5)
-        self.assertEqual(check('zach-opus-hostshim3', 201)['repeat_signal']['iteration'], 5)
+        self.assertEqual(later['repeat_signal']['round'], 5)
+        self.assertEqual(later['repeat_signal']['events'], ['start-4', 'start-5'])
+        self.assertEqual(check(3, 201)['repeat_signal']['round'], 5)
         self.assertEqual(later['recovery_failures'], 0)
         self.assertEqual(later['aliases'], ['numbered'])
 
+    def test_event_alarms_coalesce_until_asked_then_a_new_event_reopens(self):
+        self.ledger.write_text('')
+        def alarm(*events):
+            return R.reconcile(str(self.repo), 'teammate:scope', {'teammate:scope'}, 'owner', 'acceptance',
+                               mode='enforce', signal=R.event_signal(list(events), 'triage inspect: '+events[0], 'zach-opus-prd3c'))
+        first = alarm('send-1')
+        second = alarm('send-2')
+        self.assertEqual(second['repeat_signal']['id'], first['repeat_signal']['id'])
+        self.assertNotEqual(second['evidence_cursor'], first['evidence_cursor'])
+        self.assertEqual(second['repeat_signal']['events'], ['send-1', 'send-2'])
+        self.assertIn('send-2', second['repeat_signal']['reason'])
+        stale = dict(job=first['id'], acceptance='acceptance', frontier=first['evidence_cursor'],
+                     questions=[dict(question='Why add send-1?', evidence='send-1 only')])
+        with self.assertRaises(R.Unavailable):  # an answer that never saw send-2
+            R.repeat_questioned(first['id'], 'axel', stale, 'stale')
+        answer = dict(stale, frontier=second['evidence_cursor'],
+                      questions=[dict(question='Which original requirement does each addition serve?', evidence='send-1, send-2')])
+        for role in ('axel', 'wes'):
+            R.repeat_questioned(first['id'], role, answer, role)
+        self.assertEqual(alarm('send-2')['evidence_cursor'], second['evidence_cursor'])  # duplicate delivery
+        reopened = alarm('send-3')
+        self.assertNotEqual(reopened['repeat_signal']['id'], first['repeat_signal']['id'])
+        self.assertNotEqual(reopened['evidence_cursor'], second['evidence_cursor'])
+        self.assertEqual(reopened['repeat_signal']['events'], ['send-1', 'send-2', 'send-3'])
+        self.assertTrue(all(R.repeat_pending(reopened, role) for role in ('axel', 'wes')))
+
     def test_questions_are_not_verdicts_and_both_deliveries_complete_the_alarm(self):
         self.ledger.write_text('')
-        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-lease4')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(4, 'start-4', 'lease'))
         answer = dict(job=record['id'], acceptance='acceptance', frontier=record['evidence_cursor'],
             questions=[dict(question='What required work remains after the fix already landed?', evidence='Predecessor handover')])
         for role in ('axel', 'wes'):
@@ -136,7 +172,7 @@ class Recovery(unittest.TestCase):
         self.assertEqual(record['status'], 'resolved_findings')
         self.assertIsNone(record['plan'])
         self.assertEqual(record['controls'], [])
-        again = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-lease5')
+        again = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(5, 'start-5', 'lease'))
         self.assertEqual(again['status'], 'investigating')
         self.assertTrue(R.repeat_pending(again, 'wes'))
         self.assertFalse(R.repeat_ready(again))
@@ -144,7 +180,7 @@ class Recovery(unittest.TestCase):
             R.repeat_questioned(again['id'], 'wes', answer, 'stale')
 
     def test_delivered_questions_do_not_discharge_real_recovery_or_existing_control(self):
-        record = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', mode='enforce', name='zach-opus-hostshim4')
+        record = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(4, 'start-4', 'hostshim'))
         answer = dict(job=record['id'], acceptance='acceptance', frontier=record['evidence_cursor'],
             questions=[dict(question='Why is the same failure still recurring?', evidence='Three failed handovers')])
         for role in ('axel', 'wes'):
@@ -158,7 +194,7 @@ class Recovery(unittest.TestCase):
 
     def test_stronger_control_needs_a_bad_answer_then_a_delivered_followup_and_new_bad_answer(self):
         self.ledger.write_text('')
-        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-hostshim4')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(4, 'start-4', 'hostshim'))
         questions = [dict(question='Who would write that payload?', evidence='Deliberately constructed script')]
         record = R.repeat_questioned(record['id'], 'wes', dict(job=record['id'], acceptance='acceptance',
             frontier=record['evidence_cursor'], questions=questions), 'question-1')
@@ -169,7 +205,7 @@ class Recovery(unittest.TestCase):
         with self.assertRaises(R.Unavailable):
             R.repeat_response(record['id'], 'wes', answer, 'premature', [dict(uuid='a1')])
         control = dict(job=record['id'], acceptance='acceptance', frontier=record['evidence_cursor'], action='stop',
-            workers={}, reason='A fourth name alone', evidence='name')
+            workers={}, reason='A fourth round alone', evidence='round count')
         with self.assertRaises(R.Unavailable):
             R.control(record['id'], control, 'premature-control')
         self.assertIsNone(R.admission(record, 'worker', 'brief'))
@@ -190,7 +226,7 @@ class Recovery(unittest.TestCase):
         record = R.read(self.record['id'])
         record['status'] = 'awaiting_alex'
         R.save(record, 'fixture-escalation')
-        current = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', name='zach-opus-lease4')
+        current = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', signal=R.round_signal(4, 'start-4', 'lease'))
         self.assertEqual(current['status'], 'awaiting_alex')
 
     def test_conflicting_pass_creates_one_focused_independent_reconciliation(self):
@@ -352,7 +388,7 @@ class Recovery(unittest.TestCase):
         import shutil
         source=Path(R.__file__).resolve().parents[2]
         installed=self.base/'installed'
-        for path in ['scripts/lib/operator_fences.py','scripts/lib/recovery.py','scripts/lib/machine_settings.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py','scripts/lib/pierce.py','recovery-profiles/axel.md','recovery-profiles/wes.md','mega-lander/workspaces.py','scripts/app-engine-hook.py']:
+        for path in ['scripts/lib/operator_fences.py','scripts/lib/recovery.py','scripts/lib/machine_settings.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py','scripts/lib/recovery_triage.py','scripts/lib/recovery_events.py','scripts/lib/teammate-identity.py','scripts/lib/pierce.py','recovery-profiles/axel.md','recovery-profiles/wes.md','recovery-profiles/triage.md','mega-lander/workspaces.py','scripts/app-engine-hook.py']:
             destination=installed/path
             destination.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(source/path,destination)
@@ -416,6 +452,78 @@ class Recovery(unittest.TestCase):
         replacement = R.admission(record, "replacement", plan["brief"], plan["id"], replaces="first", safe=lambda w: w=="first")
         self.assertEqual(first["number"], replacement["number"])
         self.assertEqual(len(R.read(record["id"])["attempts"]), 1)
+
+    def test_a_concern_arriving_after_an_advisor_started_reopens_instead_of_being_absorbed(self):
+        # Review finding 2: a coalesced concern must still reach the advisors.
+        self.ledger.write_text('')
+        def alarm(event):
+            return R.reconcile(str(self.repo), 'teammate:mid', {'teammate:mid'}, 'owner', 'acceptance', mode='questions-only',
+                               signal=R.event_signal([event], 'triage inspect: ' + event, 'worker'))
+        first = alarm('e1')
+        with R.locked(first['id']):
+            started = R.read(first['id'])
+            started['consults'].append(dict(id='c', role='wes', phase='questions', input='i', frontier=started['evidence_cursor'],
+                                            started_at=1, status='running'))
+            R.save(started, 'fixture-question-consultation-started')
+        second = alarm('e2')
+        self.assertNotEqual(second['evidence_cursor'], first['evidence_cursor'])
+        self.assertEqual(second['repeat_signal']['events'], ['e1', 'e2'])
+        self.assertTrue(all(R.repeat_pending(second, role) for role in ('axel', 'wes')))
+
+    def test_an_advisor_may_dismiss_without_a_question_and_two_dismissals_settle_the_alarm(self):
+        # Review finding 4 / PRD section 6: never fabricate a question.
+        self.ledger.write_text('')
+        record = R.reconcile(str(self.repo), 'teammate:healthy', {'teammate:healthy'}, 'owner', 'acceptance', mode='questions-only',
+                             signal=R.event_signal(['d1'], 'triage uncertain: dispatch', 'worker'))
+        base = dict(job=record['id'], acceptance='acceptance', frontier=record['evidence_cursor'])
+        for bad in (dict(base, questions=[]), dict(base, questions=[], dismissal=' '),
+                    dict(base, questions=[dict(question='Why?', evidence='e')], dismissal='nothing to challenge')):
+            with self.assertRaises(R.Unavailable):
+                R.repeat_questioned(record['id'], 'axel', bad, 'bad')
+        record = R.repeat_questioned(record['id'], 'axel', dict(base, questions=[], dismissal='The dispatch carries out the user request as written.'), 'a')
+        self.assertFalse(R.repeat_pending(record, 'axel'))
+        self.assertEqual(record['status'], 'investigating')
+        record = R.repeat_questioned(record['id'], 'wes', dict(base, questions=[], dismissal='No added scope; the brief matches the request.'), 'w')
+        self.assertTrue(R.repeat_ready(record))
+        self.assertEqual((record['status'], record['repeat_outcome']), ('resolved_findings', 'dismissed'))
+        self.assertEqual(record['controls'], [])
+        reopened = R.reconcile(str(self.repo), 'teammate:healthy', {'teammate:healthy'}, 'owner', 'acceptance', mode='questions-only',
+                               signal=R.event_signal(['d2'], 'triage inspect: a new addition', 'worker'))
+        self.assertEqual(reopened['status'], 'investigating')
+        self.assertNotIn('repeat_outcome', reopened)
+
+    def test_questions_only_declaration_needs_no_qualification_and_never_controls(self):
+        entity = self.base / "entity"
+        (entity / ".claude").mkdir(parents=True)
+        (entity / ".claude/recovery.json").write_text(json.dumps(dict(schema=1, mode="questions-only", repositories=[str(self.repo)])))
+        self.assertEqual(R.mode(str(entity))["mode"], "questions-only")
+        self.assertTrue(R.quiet("questions-only") and R.asks("questions-only"))
+        self.assertFalse(R.asks("observe") or R.quiet("enforce") or R.quiet("off") or R.asks("off"))
+        (entity / ".claude/recovery.json").write_text(json.dumps(dict(schema=1, mode="questions only", repositories=[])))
+        with self.assertRaises(R.Unavailable):
+            R.mode(str(entity))
+        record = R.reconcile(str(self.repo), "teammate:questions", {"teammate:questions"}, "owner", "acceptance",
+                             mode="questions-only", signal=R.event_signal(["send-1"], "triage inspect", "worker"))
+        self.assertEqual(R.read(record["id"])["mode"], "questions-only")
+        # Controls, holds, budgets and finding resolution follow observe.
+        self.assertIsNone(R.admission(record, "worker", "ordinary correction"))
+        self.assertEqual(R.read(record["id"])["attempts"], [])
+        self.assertEqual(R.landing_gap(str(self.repo), "teammate:questions"), "")
+        # Acknowledged question delivery follows enforce.
+        answer = dict(job=record["id"], acceptance="acceptance", frontier=record["evidence_cursor"],
+                      questions=[dict(question="What does this addition protect?", evidence="send-1")])
+        for role in ("axel", "wes"):
+            record = R.repeat_questioned(record["id"], role, answer, role)
+        self.assertFalse(R.repeat_ready(record))
+        for role in ("axel", "wes"):
+            R.owner_delivered(str(R.root()/(record["id"]+".json")), R.repeat_question_key(record, role), "owner")
+        self.assertTrue(R.repeat_ready(R.read(record["id"])))
+        observed = R.read(record["id"])
+        observed["repeat_recovery"] = True
+        R.save(observed, "fixture-escalated")
+        control = R.control(record["id"], dict(job=record["id"], acceptance="acceptance", frontier=record["evidence_cursor"],
+            action="stop", workers={}, reason="repeated unsatisfying answers", evidence="replies"), "advisor")
+        self.assertTrue(control["observe_only"])
 
     def test_observe_mode_never_refuses_or_reserves(self):
         record = R.reconcile(str(self.repo), self.work, self.aliases, "owner", "acceptance", mode="observe")

@@ -583,6 +583,32 @@ else:raise AssertionError('blocked review was accepted')
         with patch.object(control.R,'mode',return_value=dict(mode='enforce',repositories=[self.other])), patch.object(ws,'_classified_recovery_assignment',side_effect=ws.SpecError('identity gap')):
             with self.assertRaises(ws.SpecError):ws._recovery_assignment(payload,rec,[],[])
 
+    def test_questions_only_dispatch_follows_observe_for_identity_admission_and_holds(self):
+        # PRD 2026-10-20 section 8: a failed recovery classification cannot refuse
+        # a questions-only dispatch, and no recovery hold reaches the worker.
+        cc=self.make_cc('questions-only')
+        aid,_path=self.spawn('questions-only',cc)
+        rec=next(r for r in ws.all_agents() if r.get('agent_id')==aid)
+        control,host=ws._recovery_adapter()
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='implement the requested change'))
+        with patch.object(control.R,'mode',return_value=dict(mode='questions-only',repositories=[self.other])):
+            with patch.object(ws,'_classified_recovery_assignment',side_effect=ws.SpecError('identity gap')):
+                assignment=ws._recovery_assignment(payload,rec,[],[])
+            self.assertEqual(assignment['authority']['observation_gap'],'identity gap')
+            self.assertTrue(assignment['observation_only'])
+            self.assertEqual(assignment['authority']['mode'],'questions-only')
+            rec['recovery_assignment']=assignment
+            ws.save_agent(rec)
+            self.assertEqual(ws.recovery_work_key(rec),'teammate:'+rec['key'])
+            with patch.object(control.R,'reconcile',side_effect=control.R.Unavailable('ledger unavailable')):
+                self.assertEqual(control.admitted(host,payload,rec,dict(kind='implementation',acceptance='source'),[self.other],self.entity),[])
+            self.assertEqual(rec['recovery_observation_gap'],'ledger unavailable')
+            self.assertEqual(control.begin_tool(host,dict(tool_use_id='t1',tool_name='Bash'),dict(rec,recovery_jobs=['job'])),(True,''))
+            self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name='Bash'))[0],'REGISTERED')
+        import recovery_runner as RR
+        with patch.object(RR,'launch',side_effect=OSError('launch unavailable')):
+            self.assertEqual(control.schedule(dict(mode='questions-only',axel_required=False,wes_candidates=[],repeat_signal=dict(label='w')),'engine')['observation_gap'],'launch unavailable')
+
     def test_read_only_classification_cannot_grant_a_writer_a_new_budget(self):
         cc = self.make_cc('helper')
         aid, _path = self.spawn('helper', cc, extra='recovery-role: helper')

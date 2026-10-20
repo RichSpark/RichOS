@@ -70,6 +70,30 @@ class Pierce(unittest.TestCase):
                 self.assertEqual(result['verdict'],'PASS' if mode=='observe' else 'UNAVAILABLE')
                 if mode=='observe':self.assertIn('registry unavailable',result['recovery_observation_gaps'][0])
 
+    def test_questions_only_classification_failure_never_refuses_but_findings_still_do(self):
+        # PRD 2026-10-20 section 8: questions-only follows observe for recovery
+        # classification failures, while ordinary Pierce refusals stay effective.
+        import recovery as R
+        verdicts = {'PASS': P.Verdict(dict(verdict='PASS', report='valid assignment', notes=[])),
+                    'FINDINGS': P.Verdict(dict(verdict='FINDINGS', report='The brief adds an unrequested feature.', notes=[]))}
+        for expected, verdict in verdicts.items():
+            with self.subTest(verdict=expected), patch.object(R, 'mode', return_value=dict(mode='questions-only')), \
+                    patch.object(P, 'classification_context', side_effect=RuntimeError('registry unavailable')), \
+                    patch.object(P, 'invoke', return_value=verdict):
+                result = P.inspect({**self.payload, 'tool_use_id': 'questions-only-' + expected})
+                self.assertEqual(result['verdict'], expected)
+                self.assertIn('registry unavailable', result['recovery_observation_gaps'][0])
+                if expected == 'PASS':
+                    self.assertIsNone(P.refusal(result))
+                else:
+                    self.assertIn('The worker has not started', P.refusal(result))
+        request = dict(recovery_assignment_context=dict(mode='questions-only'))
+        verdict = dict(verdict='PASS', report='valid assignment', notes=[], assignment_classification=dict(kind='invalid'))
+        P.checked_classification(request, verdict)
+        self.assertNotIn('assignment_classification', verdict)
+        self.assertTrue(P.quiet_recovery(request))
+        self.assertFalse(P.quiet_recovery(dict(recovery_assignment_context=dict(mode='enforce'))))
+
     def test_observation_classification_is_optional_and_cannot_refuse(self):
         request=dict(recovery_assignment_context=dict(mode='observe'))
         verdict=dict(verdict='PASS',report='valid assignment',notes=[],assignment_classification=dict(kind='invalid'))
