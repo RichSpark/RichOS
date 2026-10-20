@@ -1160,7 +1160,8 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         with patch.object(runner.engine_pass, "is_main_checkout", return_value=True):
             runner.hold_for_handover(str(handover), selected)
         self.assertFalse((handover / "retain").exists(), "the main checkout is no handover seat")
-        with patch.object(runner.engine_pass, "is_main_checkout", return_value=False):
+        with patch.object(runner.engine_pass, "is_main_checkout", return_value=False), \
+                contextlib.redirect_stdout(io.StringIO()):
             runner.hold_for_handover(str(handover), {"arguments": ["--working"], "mode": "normal"})
             self.assertFalse((handover / "retain").exists(), "a run with no recorded range stands for no handover")
             runner.hold_for_handover(str(handover), selected)
@@ -1178,6 +1179,34 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
             self.assertTrue((foreign / "retain").exists())
             self.assertEqual(runner.release_hold(str(handover)), 0)
         self.assertFalse(handover.exists(), "released, it rotates like any other green run")
+
+    def test_coverage_says_what_a_saved_run_proves_for_the_inputs_read_now(self):
+        """PRD R3/A8, the readiness preflight's predicate: what reuse() would accept, read only."""
+        old, previous = self.attempt("covered", engine=False)
+        self.passed(old, previous)
+        found = evidence.coverage(previous.logdir, old, {"check": dict(self.inputs)}, dict(self.source))
+        self.assertEqual(found, {"check": None})
+        # A final edit to its inputs, a check the run never passed, a damaged log: each is missing.
+        self.assertEqual(evidence.coverage(previous.logdir, old, {"check": {"paths": {"fixture": "edited"}}},
+                                           dict(self.source))["check"], "declared execution inputs changed")
+        Path(old[0].log).write_text("rewritten\n")
+        self.assertEqual(evidence.coverage(previous.logdir, old, {"check": dict(self.inputs)},
+                                           dict(self.source))["check"], "result log changed")
+        failed, record = self.attempt("failed", engine=False)
+        failed[0].state, failed[0].rc = "failed", 1
+        record.checkpoint(failed)
+        self.assertEqual(evidence.coverage(record.logdir, failed, {"check": dict(self.inputs)}, dict(self.source)),
+                         {"check": "no validated passing execution"})
+        # A check with no input identity is proven only on the exact checkout source it ran on.
+        fresh, record = self.attempt("fresh", engine=False, identities={"check": {"fresh": "no contract"}})
+        self.passed(fresh, record)
+        self.assertIsNone(evidence.coverage(record.logdir, fresh, {"check": {"fresh": "no contract"}},
+                                            dict(self.source))["check"])
+        self.assertIn("checkout changed", evidence.coverage(
+            record.logdir, fresh, {"check": {"fresh": "no contract"}},
+            {**self.source, "tracked_diff_sha256": "a final edit"})["check"])
+        # Nothing was written: coverage reads only.
+        self.assertFalse((previous.logdir / "reused").exists())
 
     def test_live_owner_prevents_resume_and_rotation(self):
         items, record = self.attempt("20260923T000000Z")

@@ -1411,6 +1411,51 @@ def offered_author_runs(what):
     return argv
 
 
+# THE READINESS PREFLIGHT, INFORMATIONAL UNTIL THE ROLLOUT (verification reliability PRD, R3/A8).
+# Before the gate runs anything, each offered author run is asked, in its own checkout, whether it
+# proves its candidate's whole selected plan (proof-run.py --coverage: reads only, the same
+# predicate reuse() applies). The answer is printed with the one runner job that would resolve
+# every missing check; nothing is refused on it until the rollout switches the refusal on, and
+# the gate's own obligations are unchanged. A land offered no author run says so: no usable
+# pointer is missing proof under the same rule, never an exception.
+PREFLIGHT_SECONDS = 300
+
+
+def author_preflight(what):
+    runs = [r for r in os.environ.get(AUTHOR_RUNS, "").split(os.pathsep) if r]
+    if not runs:
+        say(f"autocheck: {what}: author proof: no saved author run was offered, so none is proven here "
+            "(informational until the rollout; the gate below runs its whole plan)")
+        return
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.pop(AUTHOR_RUNS, None)
+    for run in runs:
+        try:
+            root = json.loads((Path(run) / "plan.json").read_text())["root"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            say(f"autocheck: {what}: author proof: {run} has no readable plan ({exc}); its coverage is missing")
+            continue
+        script = Path(root) / PROOF_RUN
+        try:
+            current = "--coverage" in script.read_text(errors="replace")
+        except OSError:
+            current = False
+        if not current:
+            say(f"autocheck: {what}: author proof: the runner in {root} predates the readiness preflight; "
+                f"no coverage is derived for {run}")
+            continue
+        try:
+            result = subprocess.run([sys.executable, str(script), "--coverage", run], cwd=root, env=env,
+                                    capture_output=True, text=True, timeout=PREFLIGHT_SECONDS,
+                                    stdin=subprocess.DEVNULL)
+            out = (result.stdout + result.stderr).strip()
+        except subprocess.TimeoutExpired:
+            out = f"no answer within {PREFLIGHT_SECONDS} s"
+        say(f"autocheck: {what}: author proof (informational until the rollout):")
+        for line in out.splitlines()[-40:]:
+            say("    " + line)
+
+
 def release_author_runs(repo, head):
     """After a land that consumed them: remove the handover hold (proof-run.py HANDOVER_HOLD) of
     each offered author run whose candidate this land merged, once the land's own evidence is
@@ -1449,6 +1494,7 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
         return rc
     if (rc := publication_completeness_gate(repo, what)):
         return rc
+    author_preflight(what)
     commands = []
     covered = set()
     if range_argv:

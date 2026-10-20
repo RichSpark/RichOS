@@ -2313,6 +2313,21 @@ class AuthorRuns(unittest.TestCase):
             self.assertTrue((runs["unmerged"] / "retain").exists())
             self.assertTrue((runs["foreign"] / "retain").exists())
 
+    def test_the_preflight_says_when_no_author_proof_was_offered(self):
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        said = []
+        before = os.environ.pop(module.AUTHOR_RUNS, None)
+        try:
+            with mock.patch.object(module, "say", side_effect=said.append):
+                module.author_preflight("land")
+        finally:
+            if before is not None:
+                os.environ[module.AUTHOR_RUNS] = before
+        self.assertIn("no saved author run was offered", " ".join(said))
+
 
 class TimeLimit(unittest.TestCase):
     """A check that runs out of time ends gracefully and leaves no process (2026-10-09: the

@@ -4,6 +4,8 @@
     proof-run.py [proof-for arguments]          e.g.  origin/main..main   |  --working  |  <sha>
     proof-run.py --commands <file>              a saved `proof-for.sh --quiet` output
     proof-run.py --resume <run-directory>       retry a frozen plan, preserving valid results
+    proof-run.py --coverage <run-directory>     readiness preflight, reads only: does a saved
+                                                handover run prove its candidate's whole plan here?
     proof-run.py --release <run-directory>      remove a handover hold once nothing needs that run
     options:
       --fail-fast          cancel independent unfinished work after a failure (opt-in)
@@ -2327,6 +2329,90 @@ def release_hold(run):
     return 0
 
 
+def author_coverage(args):
+    """--coverage RUN: THE READINESS PREFLIGHT (verification reliability PRD, R3/A8), reads only.
+
+    Does the saved handover RUN prove its candidate's whole selected plan? Asked in RUN's own
+    checkout at its candidate: the selection is made again from the run's recorded range and
+    mode, so a suite the run never planned is missing, and every planned check's inputs are read
+    now and judged against the run's outcomes by the predicate reuse() applies
+    (proof_evidence.coverage). Nothing runs, nothing is copied. A NOT RUN check is the existing
+    NOT RUN eligibility, named separately and never proven. Exit 0: every planned check proven;
+    1: some are not, with the one runner job that resolves them all; 2: no answer here."""
+    run = os.path.realpath(args.coverage)
+    try:
+        saved = proof_evidence.read_plan(run)
+        outcomes = json.load(open(os.path.join(run, "outcomes.json")))
+        try:
+            with open(os.path.join(run, "summary.json")) as stream:
+                not_run = {row.get("check"): (row.get("not_run") or {}).get("why")
+                           for row in json.load(stream).get("checks") or []}
+        except FileNotFoundError:
+            not_run = {}
+    except (OSError, ValueError, AttributeError) as exc:
+        print("proof-run: coverage: %s is not a readable saved run: %s" % (run, exc))
+        return 2
+    chosen = saved.get("selection") or {}
+    if saved.get("root") != ROOT:
+        print("proof-run: coverage: %s ran in %s; its coverage is asked there" % (run, saved.get("root")))
+        return 2
+    if not (chosen.get("base") and chosen.get("candidate")):
+        print("proof-run: coverage: %s names no recorded <base>..<candidate> range, so it stands for no handover" % run)
+        return 2
+    if head_commit() != chosen["candidate"]:
+        print("proof-run: coverage: this checkout is at %s, not at the run's candidate %s" % (
+            head_commit()[:12], chosen["candidate"][:12]))
+        return 2
+    started = time.monotonic()
+    args.commands = None
+    args.proof_for_args = [*(["--gate"] if chosen.get("mode") == "gate" else []),
+                           "%s..%s" % (chosen["base"], chosen["candidate"])]
+    lines = selection(args)
+    scratch = tempfile.mkdtemp(prefix="coverage-")
+    try:
+        items = plan(lines, args, scratch, history_weights(default_logdir()))
+        for item in items:
+            proof_evidence.prepare_environment(item, ROOT, scratch, execution_environment(item))
+        snapshot = proof_evidence.InputSnapshot()
+        identities = {item.label: input_identity(item, args, scratch, snapshot) for item in items}
+        gaps = proof_evidence.coverage(run, items, identities, source_identity())
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    planned_before = {row["check"] for row in saved["items"]}
+    proven, eligible, missing = [], [], []
+    for item in items:
+        old = outcomes.get(item.label, {})
+        if item.label not in planned_before:
+            missing.append((item.label, "selected now, never in the run's plan"))
+        elif gaps.get(item.label) is None:
+            proven.append(item.label)
+        elif old.get("state") == "not-run":
+            eligible.append((item.label, "NOT RUN (%s), the existing NOT RUN eligibility" % (
+                not_run.get(item.label) or "no reason saved")))
+        else:
+            missing.append((item.label, "%s: %s" % (old.get("state") or "no outcome", gaps[item.label])))
+    line = ("author coverage of %s (base %s, %s selection): %d planned, %d proven by the saved run, "
+            "%d NOT RUN (eligibility, not proof), %d missing" % (
+                chosen["candidate"][:12], chosen["base"][:12], chosen.get("mode") or "normal",
+                len(items), len(proven), len(eligible), len(missing)))
+    print("proof-run: " + line)
+    for label, why in eligible + missing:
+        print("  %s: %s" % (label, why))
+    recovery = None
+    if missing:
+        recovery = "cd %s && python3 richos/app/scripts/proof-run.py %s --reuse %s" % (
+            shlex.quote(ROOT), " ".join(args.proof_for_args), shlex.quote(run))
+        print("  recovery, ONE runner job over the whole missing plan in this checkout (every proven check "
+              "is reused, only the missing ones run): %s" % recovery)
+    print("  derived in %.1f s, nothing run" % (time.monotonic() - started))
+    if args.summary_out:
+        proof_evidence.atomic(args.summary_out, {"run": run, "line": line, "planned": len(items),
+            "proven": proven, "not_run": dict(eligible), "missing": dict(missing), "recovery": recovery,
+            "candidate": chosen["candidate"], "base": chosen["base"], "mode": chosen.get("mode"),
+            "seconds": round(time.monotonic() - started, 1)})
+    return 1 if missing else 0
+
+
 # The exit of a run that crashed: no verdict. Not 1 (a check failed) nor 3 (a check not run), the
 # two codes the merge gate reads a summary for, so a crash is refused as "not a verdict".
 CRASHED = 70
@@ -2385,12 +2471,19 @@ def run_main(argv, run_state):
     p.add_argument("--summary-out", help="also write summary.json to this file")
     p.add_argument("--without-nightly-conditions", action="store_true",
                    help="run every check in the caller's environment only (diagnosis; refused in the land checks)")
+    p.add_argument("--coverage", metavar="RUN",
+                   help="readiness preflight: does the saved handover RUN prove its candidate's whole selected "
+                        "plan in this checkout? Reads only (author_coverage)")
     p.add_argument("--release", metavar="RUN",
                    help="remove the handover hold from RUN once nothing still needs it (HANDOVER_HOLD)")
     args, rest = p.parse_known_args(argv)
     args.proof_for_args = rest
     if args.release:
         return release_hold(args.release)
+    if args.coverage:
+        if rest or args.commands or args.resume or args.reuse:
+            p.error("--coverage takes its selection from the saved run")
+        return author_coverage(args)
     if args.without_nightly_conditions:
         if os.environ.get("RICHOS_AUTOCHECK_ACTIVE"):
             p.error("--without-nightly-conditions is refused inside the land checks: the merge gate "

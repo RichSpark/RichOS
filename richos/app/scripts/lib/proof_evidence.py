@@ -1854,6 +1854,83 @@ class Pool:
             self.finish(item)
 
 
+def evidence_gap(label, old, identity, plan, exact=False, source=None):
+    """Why the saved outcome `old` cannot stand for check `label` whose inputs read `identity`
+    now, or None. The one predicate reuse() and coverage() share."""
+    if label == "engine receipts":
+        return "coverage verifier runs over the reconciled receipt set"
+    if identity.get("fresh"):
+        return identity["fresh"]
+    if old.get("state") != "passed" or old.get("exit") != 0 or old.get("invalid"):
+        return "no validated passing execution"
+    if exact and plan["source"] != source:
+        return "source identity changed"
+    if (old.get("source") or {}).get("commit") != plan["source"]["commit"]:
+        # Only HEAD: a pass saved after an unrelated edit is valid for its own declared
+        # inputs (Record says why), and the input identity is what decides it.
+        return "the checkout's commit changed during the original execution"
+    if old.get("input") != identity:
+        return "declared execution inputs changed"
+    return None
+
+
+def _saved_artifacts_hold(old):
+    """None when a saved pass's log and receipt are the bytes it recorded, else why not."""
+    try:
+        if file_digest(old["log"]) != old["log_sha256"]:
+            return "result log changed"
+        if old.get("receipt") and file_digest(old["receipt"]["path"]) != old["receipt"]["sha256"]:
+            return "receipt changed"
+    except (OSError, KeyError, TypeError) as exc:
+        return "saved evidence failed validation: " + str(exc)
+    return None
+
+
+def coverage(previous, items, identities, source):
+    """{check: None when the saved run at `previous` proves it for the inputs read NOW, else why
+    not}, for every planned item. Reads only: nothing is copied, run or written.
+
+    THE READINESS PREFLIGHT'S QUESTION (verification reliability PRD, R3/A8): does the author's
+    saved run cover its candidate's whole selected plan? Asked in the author's own checkout, so
+    a check keyed by that checkout (cargo, packaging) is judged on the bytes it ran on, exactly as
+    reuse() would judge it there. Two kinds have no input identity to compare and are answered
+    from what the run itself recorded: a `fresh` check passed on this exact checkout source
+    (HEAD, tracked diff, untracked files) is covered; `engine receipts` is covered when it passed
+    and every engine unit of the plan is."""
+    previous = Path(previous)
+    plan = read_plan(previous)
+    try:
+        outcomes = json.loads((previous / "outcomes.json").read_text())
+    except FileNotFoundError:
+        outcomes = {}
+    found = {}
+    for item in items:
+        old = outcomes.get(item.label, {})
+        identity = identities[item.label]
+        if item.label == "engine receipts":
+            continue
+        if identity.get("fresh"):
+            if old.get("state") != "passed" or old.get("exit") != 0 or old.get("invalid"):
+                found[item.label] = "no validated passing execution"
+            elif old.get("source") != source:
+                found[item.label] = "the checkout changed since it ran, and it declares no inputs"
+            else:
+                found[item.label] = _saved_artifacts_hold(old)
+            continue
+        found[item.label] = evidence_gap(item.label, old, identity, plan) or _saved_artifacts_hold(old)
+    for item in items:
+        if item.label == "engine receipts":
+            old = outcomes.get(item.label, {})
+            units = [i.label for i in items if getattr(i, "engine_unit", False)]
+            if old.get("state") != "passed" or old.get("invalid"):
+                found[item.label] = "no validated passing execution"
+            elif any(found.get(unit) for unit in units):
+                found[item.label] = "an engine unit it covers is not proven"
+            else:
+                found[item.label] = _saved_artifacts_hold(old)
+    return found
+
+
 def reuse(previous, items, record, exact=True):
     """Select exact applicable passes; leave failed evidence in its original run."""
     previous = Path(previous)
@@ -1872,22 +1949,8 @@ def reuse(previous, items, record, exact=True):
         old = outcomes.get(item.label, {})
         item.retry_first = old.get("state") != "passed"
         identity = record.identities[item.label]
-        reason = None
-        if item.label == "engine receipts":
-            reason = "coverage verifier runs over the reconciled receipt set"
-        elif identity.get("fresh"):
-            reason = identity["fresh"]
-        elif old.get("state") != "passed" or old.get("exit") != 0 or old.get("invalid"):
-            reason = "no validated passing execution"
-        elif exact and plan["source"] != record.source:
-            reason = "source identity changed"
-        elif (old.get("source") or {}).get("commit") != plan["source"]["commit"]:
-            # Only HEAD: a pass saved after an unrelated edit is valid for its own declared
-            # inputs (Record says why), and the input identity below is what decides it.
-            reason = "the checkout's commit changed during the original execution"
-        elif old.get("input") != identity:
-            reason = "declared execution inputs changed"
-        else:
+        reason = evidence_gap(item.label, old, identity, plan, exact, record.source)
+        if reason is None:
             try:
                 if file_digest(old["log"]) != old["log_sha256"]:
                     raise ValueError("result log changed")
