@@ -48,4 +48,4 @@ for (const plist of bundles) {
   );
 }
 
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

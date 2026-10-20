@@ -2868,7 +2868,7 @@ async function main() {
       ? `\n${failed} check(s) FAILED — an actionable state is rendering without its control.`
       : "\nthe affordance rule holds."
   );
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main().catch((e) => {

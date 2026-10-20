@@ -924,7 +924,7 @@ async function main() {
       ? "\n" + failed + " check(s) FAILED"
       : "\nthe correction ask is rendered, answerable, and honest about which desks are running."
   );
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main().catch((e) => {

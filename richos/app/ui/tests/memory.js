@@ -539,7 +539,7 @@ async function main() {
       ? "\n" + failed + " check(s) FAILED"
       : "\na machine with no memory asks once, takes one click, and never picks a location on its own."
   );
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main().catch((e) => {

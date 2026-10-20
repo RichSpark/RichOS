@@ -425,7 +425,7 @@ function hitsIn(file, kind) {
       : "\nno home-network phone path in " + filesScanned + " file(s) across " + SURFACES.length +
         " surfaces — and the scanner is proved able to find all " + BANNED.length + " of them."
   );
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 })().catch((e) => {
   console.error(e);
   process.exit(1);

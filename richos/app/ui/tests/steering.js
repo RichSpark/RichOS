@@ -771,7 +771,7 @@ async function main() {
   const painted = stoppedShot.distinct != null ? `, ${stoppedShot.distinct} distinct colours` : "";
   console.log(`\n  evidence: ${stoppedShot.file} (${stoppedShot.bytes}B${painted})`);
   const failed = run.report();
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main().catch((e) => {

@@ -393,7 +393,7 @@ async function main() {
 
   await browser.close();
   const failed = run.report();
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main().catch((e) => {

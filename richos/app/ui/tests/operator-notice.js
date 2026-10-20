@@ -527,7 +527,7 @@ async function main() {
   }
 
   await browser.close();
-  process.exit(run.report() ? 1 : 0);
+  process.exitCode = run.report() ? 1 : 0;
 }
 
 main().catch((e) => {

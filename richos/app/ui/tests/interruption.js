@@ -486,7 +486,7 @@ async function main() {
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
   await browser.close();
   // `report()` returns the FAILED COUNT, not a verdict. Same form as every other suite here.
-  process.exit(run.report() > 0 ? 1 : 0);
+  process.exitCode = run.report() > 0 ? 1 : 0;
 }
 
 main().catch((e) => {

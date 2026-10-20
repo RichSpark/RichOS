@@ -715,7 +715,7 @@ async function main() {
 
   const failed = run.report();
   await browser.close();
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main().catch((e) => {

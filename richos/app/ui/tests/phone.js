@@ -2571,7 +2571,7 @@ async function openSheet(browser, theme, preset) {
       : "\nthe sheet opens on the one path §61 leaves, nothing is installed on the phone, and " +
         "the code is black on white with a white quiet zone — measured from the pixels, in both themes."
   );
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 })().catch((e) => {
   console.error(e);
   process.exit(1);
