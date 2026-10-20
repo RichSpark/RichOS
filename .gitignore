@@ -76,3 +76,8 @@ richos/app/ui/tests/receipts/
 #regenerable: richos/app/ui/tests/.shots/
 #regenerable: richos/app/ui/tests/.vouch/
 #regenerable: richos/app/src-tauri/connect-helper
+
+# The conformance verifier's Cargo output, ignored by richos/mobile/conformance/verifier/.gitignore
+# and rebuilt by `cargo build` there on every run. Declared regenerable after two continuations on
+# 2026-10-19 were refused over it (1487 and 960 entries) and it was deleted by hand both times.
+#regenerable: richos/mobile/conformance/verifier/target/

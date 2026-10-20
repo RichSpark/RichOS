@@ -1225,8 +1225,10 @@ while True: time.sleep(.02)
     DEPENDENCIES = "d" * 64
 
     def recorded_run(self, verdicts=None, at_once=2, grade="release", reached_recheck=True,
-                     inside=(), suites_run=None, suites_commit=None, dependencies=DEPENDENCIES):
-        """A run log shaped like the coordinator writes it, and its script-suites record."""
+                     inside=(), suites_run=None, suites_commit=None, dependencies=DEPENDENCIES,
+                     finished=True):
+        """A run log shaped like the coordinator writes it, and its script-suites record. A run
+        that announced its build ends, as a finished one does, with its phase timings."""
         verdicts = verdicts or {}
         lines = [f"Gates at once: {at_once} (--gates-at-once {at_once}, chosen by fixture)",
                  "=== phase fetch begins ===", "=== phase fetch ends: 1.0s ===", f"Source: {self.SOURCE}"]
@@ -1249,6 +1251,8 @@ while True: time.sleep(.02)
             lines += ["=== phase plan-recheck begins ===", "=== phase plan-recheck ends: 5.0s ==="]
             lines += (["Building and publishing v1.2.0-nightly.20260928.28..."] if grade == "release"
                       else ["Building v1.2.0-nightly.20260928.28..."] if grade == "build" else [])
+            if grade and finished:
+                lines += [f"phase timings for run {self.RESUMED}:", "  build : 3.0s"]
         logs = self.root / "state" / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         (logs / f"{self.RESUMED}.log").write_text(
@@ -1539,8 +1543,41 @@ while True: time.sleep(.02)
         with self.assertRaisesRegex(ValueError, "no run log .* says it built v1\\.2\\.0-nightly\\.20260928\\.28,"):
             self.runner().run_that_built(self.NIGHTLY)
         self.recorded_run(grade="build")
-        self.write_log("20261018T000000Z-0000000c", [f"Building and publishing {self.NIGHTLY}..."])
+        self.write_log("20261018T000000Z-0000000c", [f"Building and publishing {self.NIGHTLY}...",
+                                                     "phase timings for run 20261018T000000Z-0000000c:"])
         with self.assertRaisesRegex(ValueError, "2 runs say they built"):
+            self.runner().run_that_built(self.NIGHTLY)
+
+    def test_a_failed_stopped_or_merely_announced_build_never_supplies_the_builder(self):
+        # Verification reliability PRD A13: one run that announced the tag was taken as its
+        # builder whether or not it finished. A build that failed after its announcement, was
+        # stopped, or is still going has built nothing; its gates are not reused on its say.
+        cases = {
+            "failed in the build": [f"Building {self.NIGHTLY}...", "=== phase build begins ===",
+                                    "nightly: make-release.sh failed (exit 1)"],
+            "stopped": [f"Building and publishing {self.NIGHTLY}...", "=== phase build begins ===",
+                        "nightly: stopped by SIGTERM"],
+            "merely announced": [f"Building {self.NIGHTLY}..."],
+        }
+        for name, lines in cases.items():
+            with self.subTest(name):
+                shutil.rmtree(self.root / "state" / "logs", ignore_errors=True)
+                self.write_log("20261018T000000Z-0000000e", lines)
+                with self.assertRaisesRegex(ValueError, "none of them finished building it"):
+                    self.runner().run_that_built(self.NIGHTLY)
+                # Nor beside another unfinished attempt: two failures are no builder either.
+                self.write_log("20261018T000000Z-0000000f", [f"Building {self.NIGHTLY}..."])
+                with self.assertRaisesRegex(ValueError, "2 run\\(s\\) announced .* none of them finished"):
+                    self.runner().run_that_built(self.NIGHTLY)
+        # The run that finished is still found by itself, beside an attempt that did not.
+        self.recorded_run(grade="build")
+        self.assertEqual(self.runner().run_that_built(self.NIGHTLY), self.RESUMED)
+        # A summary written inside a gate's section is a suite's output, not the run finishing.
+        shutil.rmtree(self.root / "state" / "logs")
+        self.write_log("20261018T000000Z-0000000e", [
+            f"Building {self.NIGHTLY}...", "=== phase gates/ui-suite begins ===",
+            "phase timings for run manual:", "=== phase gates/ui-suite ends: 1.0s ==="])
+        with self.assertRaisesRegex(ValueError, "none of them finished building it"):
             self.runner().run_that_built(self.NIGHTLY)
 
     def test_stable_finds_the_retry_that_built_the_nightly_beside_the_attempt_that_failed(self):
