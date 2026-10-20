@@ -4,7 +4,10 @@
 //! feeding each `rich://chunk` delta to the sentence chunker (`ui/main.js` relays it to
 //! `voice_speak_delta`), and the chunker holds a sentence until it sees past its full stop. So a
 //! reply that opens "On it!" and goes on is spoken from "On it!" as it is shown, and the rest at
-//! turn end; a reply that is only "On it!" is spoken when the turn completes.
+//! turn end. A reply that is only "On it!" followed by tool work is NOT spoken until the turn
+//! completes, so it is shown but silent through the work: that is an open defect, not the design
+//! (follow-up 36, review `rv-20261019T165156Z-b72c7cc9-7c52#1`), and this test asserts nothing
+//! about that case either way.
 //!
 //! This runs the real spine with a mock model and the production chunker, relaying exactly as
 //! `ui/main.js` does. No audio device, synthesizer or app is started.
