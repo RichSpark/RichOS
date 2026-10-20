@@ -2597,7 +2597,7 @@
       "family": "ui-suite",
       "review": "A browser suite run directly (cd richos/app/ui/tests && node <suite>.js) reads its own file and what it reaches by relative require, the shipped UI through index.html, the files its proof-for.ui-inputs row names (audited suite by suite on 2026-10-11 and reconciled by proof-for.sh on every invocation), the shots folders it names, and its harness. harness.js loads the Playwright package from RICHOS_PLAYWRIGHT, Node's lookup, then the main checkout's install (playwright_package_candidates mirrors that order, so a change to loadPlaywright needs this review renewed), launches the installed browsers, and reads and writes reference pictures. The family identity binds all of that by content, the installs by what loads, the tools and the environment names the suites read. It never runs in the private profile: it keeps the nightly's UI gate conditions. splash.js and vouch-template.js stay unqualified (proof-inputs.json says why).",
       "sources": {
-        "richos/app/ui/tests/lib/harness.js": "e92ea4f5e3aa918327f37e924e6a4452b9c09395f0d8a4c8572c5186046515f6"
+        "richos/app/ui/tests/lib/harness.js": "9427956328e1492efe4345e2e524f59dc041edf0a90f9896ffad5a8e00cb7a38"
       },
       "common": {
         "requires": {

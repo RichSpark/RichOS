@@ -3706,7 +3706,8 @@
         "TMPDIR": "where a suite writes its scratch; the nightly's conditions set it",
         "RICHOS_UI_TESTS_LEDGER": "the runner's per-run evidence ledger",
         "RICHOS_UI_NAV_EVIDENCE_DIR": "where a navigation failure writes its evidence",
-        "RICHOS_WORKER_TOKENS": "the run's worker budget (admission)",
+        "RICHOS_TEST_RESULTS_ROOT": "the runner's per-check results folder, where a differing or regenerated picture leaves its evidence",
+        "RICHOS_WORKER_TOKENS":"the run's worker budget (admission)",
         "RICHOS_WORKER_TOKENS_TOOL": "the worker-token helper's path (admission)",
         "RICHOS_WORKER_BORROW_LOCK": "the caller's held worker slot (admission)",
         "RICHOS_WORKER_SLOT_HELD": "the caller's held worker slot (admission)"
