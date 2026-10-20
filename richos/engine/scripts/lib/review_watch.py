@@ -28,6 +28,11 @@ reviewed (the review ledger and the locks). Nothing waits for an event.
      commits are reviewed anyway. A mid-job verdict does not stand in for the
      handover one: a mid-job reviewer is told to list what is not yet claimed
      instead of reporting it, so it never judged the work as handed over.
+     Work stopped before it finished, whose recorded wait (workspaces.sh wait)
+     names the `continues:` job that finishes it, is not handed over: it is
+     reviewed when that continuation hands over, whose range holds its commits
+     (CEO 2026-10-20: "why does the handover of the unfinished work from the
+     previous session needs a "review" here in this session???").
   2. A LONG JOB. A teammate still running has commits with no verdict, and 60
      minutes (LONG_JOB_MINUTES, an estimate taken from echo-fable-dict5's run)
      have passed since its clock started. THE CLOCK (Sage §1.2): the
@@ -169,6 +174,7 @@ GIT_SECONDS = 10
 CONFIG_KEY = "SECOND_REVIEW_REPOS"
 MID_JOB = ("long-job", "quiet")
 HANDOVER_KINDS = ("handover", "manual")
+CONTINUES_RE = re.compile(r"(?<![\w-])continues:")   # a recorded wait naming the job that continues the work
 DEFAULT_TO_RICH = "~/.richos-coordination/rich-codex/to-rich.md"
 DEFAULT_TO_CODEX = "~/.richos-coordination/rich-codex/to-codex.md"
 SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
@@ -408,6 +414,7 @@ class Item(object):
 
     env = None          # app mode: the partition this item's registry lives in (RICHOS_WORKSPACES_DIR)
     session = ""        # the lead session that registered the work (the operator host delivers to it)
+    stopped_early = False   # ended unfinished, its recorded wait naming a continues: job
     claude = ""         # app mode: the Claude CLI the app ships
     accounts = ""       # app mode: the app's account list (claude-accounts.json), read when the reviewer starts
     codex_reviews = ""  # app mode: the app's Codex review switch (codex-reviews.json), read when the review starts
@@ -579,6 +586,8 @@ class World(object):
                 item = Item(work, name, repo, tip, base, state, started=started, branch=w["branch"],
                             ref=rec["key"], quiet=quiet, continued=rec["key"] in continued)
                 item.session = str(rec.get("session_id") or "")
+                item.stopped_early = state == "ended" and bool(
+                    CONTINUES_RE.search(str((rec.get("waiting") or {}).get("on") or "")))
                 items.append(item)
         return items, problems
 
@@ -894,8 +903,8 @@ def due(items, book, now, seen, long_seconds, handover=True):
             continue                                # told once; nothing more starts by itself
         running = book.running.get(key)
         if it.state == "ended":
-            if book.handover_verdict(key):
-                continue
+            if book.handover_verdict(key) or it.stopped_early:
+                continue                            # stopped early: its continuation's handover covers these commits
             if running and running.get("trigger") in MID_JOB:
                 out.append((it, "handover", running))  # the handover replaces a mid-job review of this tip
                 continue

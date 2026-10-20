@@ -2456,6 +2456,37 @@ PY
 check "W34 the NOT CONVERGING notice is kept until accepted, like its verdict: a failed pipe or no acknowledgment tells it again" \
     $? "see above"
 
+# --- W35 ---------------------------------------------------------------------
+# echo-opus-watchers1, 2026-10-20: stopped mid-job for a session restart, the lead recorded
+# `workspaces.sh wait --started '... then a continues: echo-opus-watchers1 job ...'`, and the
+# next session's watcher spent a full handover review on it anyway. The CEO: "why does the
+# handover of the unfinished work from the previous session needs a "review" here in this
+# session???" Work stopped before it finished is reviewed when its continuation hands over.
+resetstate
+reg echo-sonnet-w1 600 30
+python3 - "$SB" <<'PY'
+import json, os, sys, time
+p = os.path.join(sys.argv[1], "workspaces", "agents", "sess-w--echo-sonnet-w1.json")
+r = json.load(open(p))
+r["waiting"] = {"kind": "started", "at": time.time() - 20, "todo": "",
+                "on": "stopped early on the CEO word for the session restart; next session: a continues: "
+                      "echo-sonnet-w1 job finishes the VM check, then land"}
+json.dump(r, open(p, "w"))
+PY
+tickrw
+# A started review's lock is taken inside the look itself (Watcher.start -> take_lock), before
+# --tick returns, so no lock is the fact that none started; no clock is waited on.
+[ "$RC" -eq 0 ] && [ "$(ncalls)" = "0" ] && [ -z "$(ls "$SB/rw/locks" 2>/dev/null)" ]
+check "W35 ended, with a recorded wait naming its continues: job: no handover review (its continuation's covers these commits)" \
+    $? "rc=$RC calls=$(ncalls) locks=$(ls "$SB/rw/locks" 2>/dev/null) out=$OUT"
+resetstate
+reg echo-sonnet-w1 600 30
+FAKE_SR_MODE=passed tickrw
+waitcalls 1
+A="$(lastargv)"
+[ "$RC" -eq 0 ] && [ "$(ncalls)" = "1" ] && has "$A" '"--trigger", "handover"'
+check "W35 the same end with no stop or wait recorded (a silent death): still one handover review" $? "calls=$(ncalls) argv=$A out=$OUT"
+
 # --- W04 ---------------------------------------------------------------------
 resetstate
 reg echo-sonnet-w1 300 -
