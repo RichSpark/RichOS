@@ -63,6 +63,8 @@ MAX_ITEM = 1500
 MAX_CITED_LINES = 20
 MAX_MESSAGE = 4000
 CITATION = re.compile(r"§\s?\d+[a-z]?|\bruling\s+\d+\b", re.I)
+TEAMMATE_MESSAGE = re.compile(r'<teammate-message\s+teammate_id="([^"]+)"[^>]*>(.*?)(?:</teammate-message>|\Z)', re.S)
+TASK_NOTIFICATION = re.compile(r"<task-notification>(.*?)(?:</task-notification>|\Z)", re.S)
 RECEIPT_MATCH = 300
 
 
@@ -165,7 +167,10 @@ def human_requests(path):
             except ValueError:
                 continue
             if isinstance(row, dict):
-                out += [(str(row.get("timestamp") or ""), m) for m in pierce.human_messages([row])]
+                # A worker's message arrives behind a host line ("Another Claude
+                # session sent a message:"), so it is excluded wherever its tag is.
+                out += [(str(row.get("timestamp") or ""), m) for m in pierce.human_messages([row])
+                        if not TEAMMATE_MESSAGE.search(m)]
     return out
 
 
@@ -202,6 +207,47 @@ def bound_message(text, transcript, gaps):
     gaps.append("a user message of %d characters is shown as its first and last %d characters; the %d characters "
                 "between are omitted by bound and remain in %s" % (len(text), half, omitted, transcript))
     return "%s\n[... %d characters omitted by bound ...]\n%s" % (text[:half], omitted, text[-half:])
+
+
+def worker_messages(path):
+    """[(timestamp, sender, text)]: what workers told the lead, oldest first:
+    a teammate message (sender is its teammate_id) and a background agent's
+    completion notice (sender is its dispatch tool-use id). Context for
+    triage, never the user's authority."""
+    out = []
+    with open(path, encoding="utf-8") as stream:
+        for text in stream:
+            if not text.endswith("\n"):
+                break
+            if "teammate-message" not in text and "task-notification" not in text:
+                continue
+            try:
+                row = json.loads(text)
+            except ValueError:
+                continue
+            if not isinstance(row, dict) or row.get("isSidechain"):
+                continue
+            attachment = row.get("attachment") if row.get("type") == "attachment" else None
+            if isinstance(attachment, dict) and attachment.get("type") == "queued_command":
+                content = attachment.get("prompt")
+            elif row.get("type") == "user":
+                content = (row.get("message") or {}).get("content")
+            else:
+                continue
+            if isinstance(content, list):
+                if any(isinstance(p, dict) and p.get("type") == "tool_result" for p in content):
+                    continue
+                content = "\n".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+            if not isinstance(content, str):
+                continue
+            stamp = str(row.get("timestamp") or "")
+            for sender, body in TEAMMATE_MESSAGE.findall(content):
+                out.append((stamp, sender, body.strip()))
+            for body in TASK_NOTIFICATION.findall(content):
+                ident = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", body)
+                if ident:
+                    out.append((stamp, ident.group(1).strip(), body.strip()))
+    return out
 
 
 def cited_instructions(texts, sources):
@@ -553,6 +599,11 @@ def drain(engine, entity, ws, triage=None, schedule=None):
             messages = human_requests(transcript)
         except (OSError, ValueError, RecursionError) as error:
             summary["gaps"].append("the user's own words are unavailable from %s: %s" % (transcript, error))
+        reports = None  # read once per lead transcript; None retries in event_context and names the gap
+        try:
+            reports = worker_messages(transcript)
+        except (OSError, ValueError) as error:
+            summary["gaps"].append("workers' messages to the lead are unavailable from %s: %s" % (transcript, error))
         for worker in sorted(group, key=lambda w: str(w.get("spawned_at") or "")):
             dispatch = next((a for a in actions if a["id"] == worker["tool_use_id"]), None)
             if dispatch is None:
@@ -575,7 +626,7 @@ def drain(engine, entity, ws, triage=None, schedule=None):
                 events += [e for e in result_events(worker, work, aliases, repo_ids, review_rows) if e["id"] not in taken]
             if not events:
                 continue
-            context = event_context(ws, transcript, messages, worker, dispatch, events, actions, entity)
+            context = event_context(ws, transcript, messages, worker, dispatch, events, actions, entity, reports)
             try:
                 process(ws, worker, events, context, declaration, engine, summary, triage, schedule)
             except Exception as error:  # noqa: BLE001 -- one worker's fault never stops the drain
@@ -583,9 +634,19 @@ def drain(engine, entity, ws, triage=None, schedule=None):
     return summary
 
 
-def event_context(ws, transcript, messages, worker, dispatch, events, actions, entity):
-    """What triage reads for this worker's events, each bounded by reference."""
+def event_context(ws, transcript, messages, worker, dispatch, events, actions, entity, reports=None):
+    """What triage reads for this worker's events, each bounded by reference.
+    Preceding activity is the lead's sends, this worker's own messages to the
+    lead and review results (PRD 2026-10-20 section 4)."""
     gaps = []
+    if reports is None:
+        try:
+            reports = worker_messages(transcript)
+        except (OSError, ValueError) as error:
+            reports = []
+            gaps.append("the worker's messages to the lead could not be read from %s: %s" % (transcript, error))
+    senders = {s for s in (worker.get("name"), worker.get("agent_id"), worker.get("tool_use_id")) if s}
+    told = [(stamp, body) for stamp, sender, body in reports if sender in senders]
     try:
         sources = standing_sources(worker, dispatch["input"], entity)
     except (OSError, ValueError, KeyError) as error:
@@ -604,6 +665,7 @@ def event_context(ws, transcript, messages, worker, dispatch, events, actions, e
     def preceding(event):
         items = [dict(at=a["timestamp"] or "", kind="lead-send", text=RR.action_text(a)[:MAX_ITEM])
                  for a in history if (a["timestamp"] or "") < event["at"]]
+        items += [dict(at=stamp, kind="worker-message", text=body[:MAX_ITEM]) for stamp, body in told if stamp < event["at"]]
         items += [dict(at=e["at"], kind="review-result", text=(e["head"] + ": " + e["body"])[:MAX_ITEM])
                   for e in events if e["kind"] == "result" and e["at"] < event["at"]]
         return sorted(items, key=lambda i: i["at"])

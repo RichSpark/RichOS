@@ -332,6 +332,32 @@ class Mechanics(W.Base):
         self.assertIn("End of background.", sent["original_requests"][-1])
         self.assertTrue(any("omitted by bound" in g and str(self.lead) in g for g in sent["gaps"]), sent["gaps"])
 
+    def test_triage_reads_the_workers_own_messages_that_preceded_a_send(self):
+        # Handover review rv-20261020T163803Z-dfc01448-bfd1, finding 3: the
+        # worker's report that its first correction still fails is the
+        # evidence that tells a new corrective pass from continued work.
+        self.dispatch("reporter")
+        self.lead_rows(
+            dict(type="user", uuid="m1", timestamp=self.tick(), message=dict(content=(
+                'Another Claude session sent a message:\n<teammate-message teammate_id="reporter" summary="still failing">'
+                "WORKER_FAILURE: The report still shows stale passes after my first correction.</teammate-message>"))),
+            dict(type="attachment", uuid="m2", timestamp=self.tick(), attachment=dict(type="queued_command", prompt=(
+                "<task-notification>\n<task-id>x</task-id>\n<tool-use-id>tu-reporter</tool-use-id>\n<status>completed</status>\n"
+                "<summary>Agent finished</summary>\n<result>WORKER_HANDOVER: committed, proof red.</result>\n</task-notification>"))),
+            dict(type="user", uuid="m3", timestamp=self.tick(), message=dict(content=(
+                '<teammate-message teammate_id="someone-else">OTHER_WORKER: unrelated.</teammate-message>'))))
+        self.send("reporter", "fix-that", "FIX THAT FAILURE; do not add extra work.")
+        self.drain()
+        sent = next(c for c in self.fakes.calls if c["event"]["id"] == "fix-that")
+        told = [p["text"] for p in sent["preceding"] if p["kind"] == "worker-message"]
+        self.assertEqual(len(told), 2, sent["preceding"])
+        self.assertIn("WORKER_FAILURE", told[0])
+        self.assertIn("WORKER_HANDOVER", told[1])
+        self.assertNotIn("OTHER_WORKER", json.dumps(sent))
+        self.assertNotIn("WORKER_FAILURE", json.dumps(sent["original_requests"]))  # context, never the user's authority
+        dispatched = next(c for c in self.fakes.calls if c["event"]["id"] == "tu-reporter")
+        self.assertEqual([p for p in dispatched["preceding"] if p["kind"] == "worker-message"], [])
+
     def test_provider_failure_routes_to_one_inspection_and_never_storms(self):
         import recovery_triage as T
         provider = Path(self.env.root) / "failing-claude"
