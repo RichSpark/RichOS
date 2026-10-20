@@ -1980,8 +1980,8 @@ def land_from_index(repo, what, receipt=True, target=""):
     runs the same check, written nowhere (receipt=False), and asks no review: it moves nothing.
     `target`: the branch landed onto (land_target). The second review is asked first only when
     this checkout is on it, so this commit or merge is itself the move of it; a commit made in a
-    detached checkout of it (nightly-local.py commit_on_main) moves no branch, is reviewed once
-    it exists, and the fence judges the later move of main."""
+    detached checkout of it, with the target named, moves no branch, is reviewed once it
+    exists, and the fence judges the later move of main."""
     dirty = git("diff", "--quiet", check=False)
     if dirty.returncode:
         banner(f"{what.upper()} REFUSED: the working tree differs from what is being committed", [
