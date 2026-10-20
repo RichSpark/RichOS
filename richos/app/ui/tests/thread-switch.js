@@ -3,6 +3,7 @@
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { loadPlaywright, leaveHome, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
+const contrast = require("./lib/contrast");
 const APP = "file://" + path.join(UI_DIR, "index.html");
 
 async function open(page, id) {
@@ -251,6 +252,160 @@ async function main() {
     await run.check("the app's own menu still opens on a thread row", async () => {
       const view = await rightClick(row, box => ({ x: 20, y: box.height / 2 }));
       assert(view.open, "the thread menu must still open");
+    });
+
+    // CEO, 2026-10-19: "And of course, the user is free to manually change that thread title any
+    // time they want." Round 35 (approved 2026-10-20): Rename… makes the row a field in place.
+    // It used to call window.prompt, which the app's WebView answers with nothing (nightly 68).
+    await page.goto(APP);
+    await leaveHome(page);
+    await open(page, "acme");
+    await page.evaluate(() => {
+      const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+      window.renames = [];
+      window.RichBridge.invoke = async (cmd, args) => {
+        if (cmd === "rename_thread") window.renames.push(args);
+        return invoke(cmd, args);
+      };
+    });
+    const acmeTitle = () => page.locator('.nav-thread[data-thread-id="acme"] .nav-thread-title').innerText();
+    const field = page.locator(".nav-rename-input");
+    const fieldView = () => page.evaluate(() => {
+      const input = document.querySelector(".nav-rename-input");
+      const note = document.querySelector(".nav-rename-note");
+      if (!input) return null;
+      const cs = getComputedStyle(input);
+      return {
+        focused: document.activeElement === input,
+        value: input.value,
+        selected: [input.selectionStart, input.selectionEnd],
+        textLeft: input.getBoundingClientRect().left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft),
+        invalid: input.getAttribute("aria-invalid"),
+        edge: cs.borderTopColor,
+        danger: getComputedStyle(document.documentElement).getPropertyValue("--danger").trim(),
+        note: note ? note.innerText.replace(/\s+/g, " ").trim() : null,
+      };
+    });
+    const focusedRow = () => page.evaluate(() => {
+      const a = document.activeElement;
+      return a && a.classList.contains("nav-thread") ? a.dataset.threadId : (a ? a.tagName + "." + a.className : null);
+    });
+    const before = await acmeTitle();
+    await run.check("Rename… from the ⋯ turns the row into a field in place, title selected, hint under it", async () => {
+      const titleLeft = await page.evaluate(() =>
+        document.querySelector('.nav-thread[data-thread-id="acme"] .nav-thread-title').getBoundingClientRect().left);
+      await page.hover('.nav-thread[data-thread-id="acme"]');
+      await page.click('.nav-thread[data-thread-id="acme"] + .nav-thread-more');
+      await page.locator("#thread-menu button", { hasText: /^Rename…$/ }).click();
+      await field.waitFor();
+      const v = await fieldView();
+      assert(v.focused, "the field has the keyboard");
+      assertEqual(v.value, before, "the field starts with the chat's title");
+      assertEqual(v.selected, [0, before.length], "the whole title is selected");
+      assertEqual(v.note, "Enter to save · Esc to cancel", "the hint under the field");
+      assert(Math.abs(v.textLeft - titleLeft) <= 1, `the first letter stays put: ${titleLeft} before, ${v.textLeft} in the field`);
+      return `"${before}" selected; first letter at ${titleLeft.toFixed(1)} px before, ${v.textLeft.toFixed(1)} px in the field`;
+    });
+    await run.check("Enter saves through rename_thread: the row, the header and the store carry it, focus back on the row", async () => {
+      await page.keyboard.type("Acme counteroffer");
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => window.renames.length === 1);
+      assertEqual(await page.evaluate(() => window.renames), [{ threadId: "acme", title: "Acme counteroffer" }]);
+      await page.waitForFunction(() => document.querySelector('.nav-thread[data-thread-id="acme"] .nav-thread-title').textContent === "Acme counteroffer");
+      assertEqual(await field.count(), 0, "the field is gone");
+      assertEqual(await page.locator(".nav-rename-note").count(), 0, "the hint is gone");
+      assertEqual(await page.locator("#scope-thread").innerText(), "Acme counteroffer", "the header above the chat changes with it");
+      const stored = await page.evaluate(async () => {
+        const tree = await window.RichBridge.invoke("navigation_tree");
+        for (const g of tree.groups) for (const t of g.threads) if (t.id === "acme") return t.display_title;
+        return null;
+      });
+      assertEqual(stored, "Acme counteroffer", "the store keeps the new title");
+      assertEqual(await focusedRow(), "acme", "the keyboard is back on the row");
+      assert(await page.locator('.nav-thread-row:has(.nav-thread[data-thread-id="acme"])').evaluate(n => n.classList.contains("is-renamed")),
+        "the renamed row catches the gold light");
+    });
+    await run.check("Escape cancels: the old title comes back and nothing is saved (menu by Shift-F10)", async () => {
+      await page.locator('.nav-thread[data-thread-id="acme"]').focus();
+      await page.keyboard.press("Shift+F10");
+      await page.waitForSelector("#thread-menu:not([hidden])");
+      await page.keyboard.press("Enter"); // Rename… is the first item and has the keyboard
+      await field.waitFor();
+      await page.keyboard.type("Throwaway");
+      await page.keyboard.press("Escape");
+      assertEqual(await field.count(), 0, "the field is gone");
+      assertEqual(await acmeTitle(), "Acme counteroffer", "the title is unchanged");
+      assertEqual(await page.evaluate(() => window.renames.length), 1, "Escape saves nothing");
+      assertEqual(await focusedRow(), "acme", "the keyboard is back on the row");
+      assert(await page.locator("#thread-menu").isHidden(), "Escape in the field closes nothing else");
+    });
+    await run.check("an empty title is never saved: red edge and the refusal; typing clears it; clicking away restores", async () => {
+      const box = await page.locator('.nav-thread-row:has(.nav-thread[data-thread-id="acme"])').boundingBox();
+      await page.mouse.click(box.x + 30, box.y + box.height / 2, { button: "right" });
+      await page.locator("#thread-menu button", { hasText: /^Rename…$/ }).click();
+      await field.waitFor();
+      await page.keyboard.press("Backspace");
+      await page.keyboard.press("Enter");
+      let v = await fieldView();
+      assert(v, "the field stays open");
+      assertEqual(v.invalid, "true", "the field is marked invalid");
+      assertEqual(v.note, "A chat needs a name. Esc keeps the old one.", "the refusal under the field");
+      const danger = await page.evaluate(c => { const s = document.createElement("span"); s.style.color = c; document.body.appendChild(s); const out = getComputedStyle(s).color; s.remove(); return out; }, v.danger);
+      assertEqual(v.edge, danger, "the field's edge turns the danger color");
+      assertEqual(await page.evaluate(() => window.renames.length), 1, "nothing was saved");
+      await page.keyboard.type("x");
+      v = await fieldView();
+      assertEqual(v.invalid, null, "typing clears the refusal");
+      assertEqual(v.note, "Enter to save · Esc to cancel", "the hint is back");
+      await page.keyboard.press("Backspace");
+      await page.mouse.click(900, 500);
+      assertEqual(await field.count(), 0, "clicking away closes the field");
+      assertEqual(await acmeTitle(), "Acme counteroffer", "clicking away from an empty field puts the old title back");
+      assertEqual(await page.evaluate(() => window.renames.length), 1, "nothing was saved");
+    });
+    await run.check("the hint and the refusal are 16px and pass 4.5:1 in both themes", async () => {
+      const ratios = [];
+      await page.hover('.nav-thread[data-thread-id="acme"]');
+      await page.click('.nav-thread[data-thread-id="acme"] + .nav-thread-more');
+      await page.locator("#thread-menu button", { hasText: /^Rename…$/ }).click();
+      await field.waitFor();
+      for (const state of ["hint", "refusal"]) {
+        if (state === "refusal") { await page.keyboard.press("Backspace"); await page.keyboard.press("Enter"); }
+        for (const theme of ["dark", "light"]) {
+          // The app's own checker (lib/contrast.js): it composites the translucent --ink-soft and
+          // the translucent dark rail over what is really painted behind them.
+          const probe = await page.evaluate(async ([t, script]) => {
+            document.documentElement.dataset.theme = t;
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            if (!window.__contrastProbe) (0, eval)(script);
+            const out = window.__contrastProbe({ surface: "rename", theme: t });
+            const ours = (bucket) => Object.entries(bucket).filter(([k, v]) => /rename-note|nav-rename/.test(k + " " + (v.selector || v.path || "")));
+            const sizes = [...document.querySelectorAll(".nav-rename-note, .nav-rename-note *")].map(n => parseFloat(getComputedStyle(n).fontSize));
+            return {
+              measured: out.measuredPaths.filter(p => /rename-note/.test(p)).length,
+              failures: ours(out.failures), unresolvable: ours(out.unresolvable), sizes,
+            };
+          }, [theme, contrast.pageScript()]);
+          assert(probe.measured > 0, `${state} ${theme}: the checker measured none of the note's text`);
+          assertEqual(probe.failures, [], `${state} ${theme}: below 4.5:1`);
+          assertEqual(probe.unresolvable, [], `${state} ${theme}: unresolvable`);
+          assert(probe.sizes.every(px => px >= 16), `${state} ${theme}: sizes ${probe.sizes}`);
+          ratios.push(`${state} ${theme}: ${probe.measured} text node(s) measured, 0 below 4.5:1`);
+        }
+      }
+      await page.keyboard.press("Escape");
+      return ratios.join("; ");
+    });
+    await run.check("clicking away from a changed title saves it", async () => {
+      await page.hover('.nav-thread[data-thread-id="acme"]');
+      await page.click('.nav-thread[data-thread-id="acme"] + .nav-thread-more');
+      await page.locator("#thread-menu button", { hasText: /^Rename…$/ }).click();
+      await field.waitFor();
+      await page.keyboard.type("Acme deal, closed");
+      await page.mouse.click(900, 500);
+      await page.waitForFunction(() => window.renames.length === 2);
+      assertEqual(await page.evaluate(() => window.renames[1]), { threadId: "acme", title: "Acme deal, closed" });
+      await page.waitForFunction(() => document.querySelector("#scope-thread").textContent === "Acme deal, closed");
     });
     await page.goto(APP);
     await leaveHome(page);
