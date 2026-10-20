@@ -16,7 +16,8 @@ What the three share, and nothing else:
              never leaves it running (review_watch.py run_host_loop, the real
              second review of 16c154f5a, finding 2)
   session()  the session of his team's lead, read at every look from the file
-             the host names in LEAD_ENV ({"session": "...", "started": <epoch s>},
+             the host names in LEAD_ENV ({"session": "...", "started": <epoch s>,
+             "turn_ended": <epoch s>, only while it is between turns},
              "" while no lead runs). It is also put in RICHOS_SESSION_ID, so the
              watcher's own session logic (workspaces.current_session) sees that
              lead, as it sees the terminal lead it runs inside
@@ -25,6 +26,12 @@ What the three share, and nothing else:
              lead is the watcher's sibling, so that finds nothing, and an
              escalation raised before the watcher's first look would count as
              backlog and never be told (review rv-20261020T132202Z-c5ab9358-2de8)
+  idle()     whether that lead is between turns, from the same file's
+             "turn_ended" (the time its last turn ended, written by the host
+             and removed when it gives that lead a message or a turn begins).
+             The app's lead runs with --print, whose transcript never records
+             a turn's end, so stall-watch's unfinished-work reminder takes the
+             host's word for it here
   line()     one notice as one JSON line, {"text": ...}: a notice has many
              lines, and the host sends each whole
 """
@@ -81,6 +88,20 @@ def started(sid):
     if isinstance(at, bool) or not isinstance(at, (int, float)) or at <= 0:
         return None
     return float(at)
+
+
+def idle(sid):
+    """Under the host: True when the host says the lead of `sid` ended its last turn and has
+    been given nothing since, else False (another lead named, a turn running, the file
+    unreadable). None with no host file named at all (RICHOS_WATCH_LEAD unset): a terminal
+    watcher, which judges idle by its lead's own transcript."""
+    if not (os.environ.get(LEAD_ENV) or "").strip():
+        return None
+    data = _lead()
+    if not sid or str(data.get("session") or "").strip() != sid:
+        return False
+    at = data.get("turn_ended")
+    return not isinstance(at, bool) and isinstance(at, (int, float)) and at > 0
 
 
 def line(text):
