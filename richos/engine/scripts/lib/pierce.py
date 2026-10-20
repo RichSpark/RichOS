@@ -29,6 +29,7 @@ if str(LIBRARY) not in sys.path:
     sys.path.insert(0, str(LIBRARY))
 
 ENGINE = LIBRARY.parents[1]
+SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 LIMIT = 300
 TTL = 900
 CONTEXT_LIMIT = 128000
@@ -946,7 +947,12 @@ def inspect(payload):
                     verdict = Verdict({"verdict": "UNAVAILABLE", "report": str(error)})
                     verdict.metrics = getattr(error, "metrics", {})
             result = {"id": identity, "at": time.time(), "session_id": payload["session_id"],
-                      "tool_use_id": payload["tool_use_id"], "review_mode": review["review"]["mode"], **verdict}
+                      "tool_use_id": payload["tool_use_id"], "review_mode": review["review"]["mode"], **verdict,
+                      "metrics": getattr(verdict, "metrics", {}),
+                      "hook_seconds": round(time.monotonic() - began, 3),
+                      "inspection": {"request": review, "source_sha256": SOURCE_SHA256,
+                                     "profile_sha256": hashlib.sha256(profile.encode()).hexdigest(),
+                                     "rules_sha256": hashlib.sha256(REVIEW_RULES.encode()).hexdigest()}}
             if request.get("recovery_observation_gaps"):
                 result["recovery_observation_gaps"] = request["recovery_observation_gaps"]
             if classification:

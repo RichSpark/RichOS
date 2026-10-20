@@ -554,6 +554,42 @@ class Pierce(unittest.TestCase):
         return {**self.payload, "tool_use_id": "call-2", "tool_input": {
             **self.payload["tool_input"], "prompt": self.payload["tool_input"]["prompt"] + suffix}}
 
+    def test_native_evidence_retains_exact_initial_and_revision_inputs_without_shadow(self):
+        reports = [P.Verdict(dict(verdict="FINDINGS", report="The API removal is not authorized.", notes=[])),
+                   P.Verdict(dict(verdict="PASS", report="The revision preserves the API.", notes=[]))]
+        for report in reports:
+            report.metrics = dict(duration_ms=450, total_cost_usd=0.125,
+                                  modelUsage={"fixture-model": dict(inputTokens=120, outputTokens=20)})
+        with patch.object(P, "shadow_start", return_value=None), \
+                patch.object(P, "invoke", side_effect=reports) as reviewer:
+            first = P.inspect(self.payload)
+            cached = P.inspect(self.payload)
+            revision = P.inspect(self.revised())
+        self.assertEqual(first, cached)
+        self.assertEqual(reviewer.call_count, 2)
+        for result, call, mode in zip((first, revision), reviewer.call_args_list, ("initial", "revision")):
+            stored = json.loads((P.state_dir() / (result["id"] + ".json")).read_text())
+            self.assertEqual(stored["metrics"], reports[0].metrics)
+            self.assertEqual(stored["inspection"]["request"], call.args[0])
+            self.assertEqual(stored["inspection"]["request"]["review"]["mode"], mode)
+            self.assertEqual(stored["inspection"]["source_sha256"],
+                             hashlib.sha256((HERE / "pierce.py").read_bytes()).hexdigest())
+            self.assertEqual(stored["inspection"]["profile_sha256"],
+                             hashlib.sha256(call.args[1].encode()).hexdigest())
+            self.assertEqual(stored["inspection"]["rules_sha256"],
+                             hashlib.sha256(P.REVIEW_RULES.encode()).hexdigest())
+            self.assertGreaterEqual(stored["hook_seconds"], 0)
+
+    def test_native_unavailable_evidence_retains_returned_metrics_without_inventing_usage(self):
+        with patch.object(P, "invoke", side_effect=P.ReviewError("provider unavailable", dict(wall_seconds=2.5))):
+            result = P.inspect(self.payload)
+        stored = json.loads((P.state_dir() / (result["id"] + ".json")).read_text())
+        self.assertEqual(stored["verdict"], "UNAVAILABLE")
+        self.assertEqual(stored["metrics"], dict(wall_seconds=2.5))
+        self.assertNotIn("total_cost_usd", stored["metrics"])
+        self.assertEqual(stored["inspection"]["request"]["outgoing_assignment"],
+                         P.effective_assignment(self.payload))
+
     def test_revision_checks_delta_and_previous_findings_without_repeating_standing_context(self):
         project_alias = self.root / "project alias"
         project_alias.symlink_to(self.project.resolve(), target_is_directory=True)
