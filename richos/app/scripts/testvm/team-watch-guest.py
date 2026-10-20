@@ -77,6 +77,27 @@ def setup(payload):
     print(json.dumps(record))
 
 
+def teammate(payload, session):
+    """One working teammate of the lead of `session`, registered as spawn.sh registers one
+    (workspaces.new_record, written where every watcher's registry reads, under the declaration's
+    own environment): quota-watch pauses only somebody working, so at the threshold with nobody
+    working it rightly says nothing (run 7, 2026-10-20: "at the threshold with nothing working").
+    Prints the record's path."""
+    p = g.Paths(payload)
+    decl = json.loads((p.home / 'Library' / 'Application Support' / 'com.richos.app' / 'operator.json').read_text())
+    env = dict(decl['environment'], HOME=decl['home'])
+    # The declaration's own PATH picks python3, as it does for the watchers that read the record.
+    code, out, err = g.run(['python3', '-c',
+                            'import sys; sys.path.insert(0, sys.argv[1]); import workspaces as w; '
+                            'w._ensure_dirs(); key = sys.argv[2] + "--fixture-mate"; '
+                            'w.write_json(w.agent_path(key), w.new_record(key, name="fixture-mate", session_id=sys.argv[2])); '
+                            'print(w.agent_path(key))', str(p.engine / 'mega-lander'), session],
+                           env=env, timeout=60)
+    if code != 0:
+        raise SystemExit('the teammate could not be registered: ' + err)
+    print(out.strip())
+
+
 def ledger(payload):
     p = g.Paths(payload)
     code, out, err = g.run(['/usr/bin/python3', '-c', 'import sys; sys.path.insert(0, sys.argv[1]); import escalations; '
@@ -88,4 +109,4 @@ def ledger(payload):
 
 
 if __name__ == '__main__':
-    {'setup': setup, 'ledger': ledger}[sys.argv[1]](sys.argv[2])
+    {'setup': setup, 'ledger': ledger, 'teammate': teammate}[sys.argv[1]](*sys.argv[2:])

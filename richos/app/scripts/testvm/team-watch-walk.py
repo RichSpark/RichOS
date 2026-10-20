@@ -22,11 +22,14 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
   watchers   the app's own log names the three children's pids, each record names a live pid
   task       typed into the composer: ask his team to reply with one word, so a lead starts
   lead       his team's lead started (the operator log), its session named to the watchers
-  notices    once his lead's turn has ended (it is idle, so only a watcher can wake it): Codex
-             writes an entry to the lead's channel and a teammate's escalation is raised
-  observe    within --within seconds his lead's own transcript holds, as messages it was sent:
-             the QUOTA-THRESHOLD notice (kept while no lead ran, sent to it first at its start),
-             the CODEX-WATCH entry and the ESCALATION-WATCH block. Evidence is pulled to --out.
+  notices    once his lead's turn has ended (it is idle, so only a watcher can wake it): a
+             teammate of his lead is registered working, Codex writes an entry to the lead's
+             channel and a teammate's escalation is raised
+  observe    within --within seconds (at least one quota-watch poll) his lead's own transcript
+             holds, as messages it was sent (user rows, or queued user messages when one arrives
+             during a turn): the QUOTA-THRESHOLD notice naming that teammate (or, when the
+             threshold was read before any lead ran, kept and sent to it first at its start), the
+             CODEX-WATCH entry and the ESCALATION-WATCH block. Evidence is pulled to --out.
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
 """
@@ -58,12 +61,34 @@ WATCHERS = ('quota-watch', 'stall-watch', 'codex-watch')
 MARKERS = {'quota-watch': 'QUOTA-THRESHOLD', 'codex-watch': 'CODEX-WATCH', 'stall-watch': 'ESCALATION-WATCH'}
 CODEX_WORDS = 'READY TO LAND: codex/team-watch-walk, a fixture entry'
 ESCALATION_ID = 'esc-team-watch-walk'
+QUOTA_POLL_SECONDS = 300  # quota_watch.py's poll once a reading is known
 
 
 class TeamWatchWalk(command_walk.CommandWalk):
     def __init__(self, a):
         super().__init__(a)
         self.operator = self.data + '/operator'
+
+    def after_relaunch(self):
+        """The relaunch opens on the home screen, whose live canvas keeps every accessibility read
+        past ax.sh's 20 s deadline (run 5, 2026-10-20: CommandWalk.relaunch's first composer read
+        ended 124 on it). As asked-again-walk.py does: the home screen is recognized by OCR on a
+        frame, and Enter, its own key for Talk to Rich, goes in; the composer is read after that."""
+        began = time.monotonic()
+        while time.monotonic() - began < self.a.relaunch_within:
+            self.shot('home-after-relaunch.png')
+            found = subprocess.run([str(HERE.parent / 'qa' / 'ocr-find.sh'), 'Talk to Rich',
+                                    str(self.out / 'home-after-relaunch.png'), '--first', '--quiet'],
+                                   capture_output=True, text=True, timeout=60)
+            if found.returncode not in (0, 1):
+                raise StepFailed('ocr-find could not read the frame: ' + found.stderr)
+            if found.returncode == 0:
+                seen = round(time.monotonic() - began, 1)
+                command_walk.command([HERE / 'ax.sh', self.vm, '--key', '36'])
+                time.sleep(3)
+                return {'home_on_screen_after_s': seen, 'entered_with': 'Enter'}
+            time.sleep(2)
+        return {'home_on_screen_after_s': None}
 
     def read(self, path, limit=200000):
         return guest(self.vm, 'tail -c %d %s 2>/dev/null || true' % (limit, shlex.quote(path)), 60)
@@ -123,29 +148,63 @@ class TeamWatchWalk(command_walk.CommandWalk):
         self.shot('lead-missing.png')
         raise StepFailed('no lead of his team started within %g s of the task; see operator.log' % self.a.within)
 
-    def idle(self, path):
-        """stall_watch.lead_is_idle's rule, on the guest's copy of the lead's transcript: the last
-        main-thread row is the turn's end (a `turn_duration` system row)."""
-        script = ('import json,sys\n'
+    def turn_state(self, path):
+        """'ended' when the last main-thread conversation row of the lead's transcript ends its
+        turn, else 'busy'; and the transcript's size. His lead runs `claude --print`, whose
+        transcript never carries the interactive `turn_duration` row (measured 2026-10-20 on this
+        Mac: 0 of 296 print-mode transcripts, 76 of 97 interactive ones), so stall_watch's
+        lead_is_idle rule never sees it end; its turn ends on an assistant row whose stop_reason
+        is end_turn (or stop_sequence), after which only bookkeeping rows are written."""
+        script = ('import json,os,sys\n'
                   'rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]\n'
+                  'state="busy"\n'
                   'for r in reversed(rows):\n'
                   '    if r.get("isSidechain"): continue\n'
-                  '    if r.get("type") in ("user","assistant"): print("busy"); break\n'
-                  '    if r.get("type")=="system" and r.get("subtype")=="turn_duration": print("idle"); break\n')
-        return guest(self.vm, 'python3 -c %s %s 2>/dev/null || true' % (shlex.quote(script), shlex.quote(path)), 60) == 'idle'
+                  '    if r.get("type")=="system" and r.get("subtype")=="turn_duration": state="ended"; break\n'
+                  '    if r.get("type")=="user": break\n'
+                  '    if r.get("type")=="assistant":\n'
+                  '        m=r.get("message") if isinstance(r.get("message"),dict) else {}\n'
+                  '        state="ended" if m.get("stop_reason") in ("end_turn","stop_sequence") else "busy"; break\n'
+                  'print(state, os.path.getsize(sys.argv[1]))\n')
+        said = guest(self.vm, 'python3 -c %s %s 2>/dev/null || true' % (shlex.quote(script), shlex.quote(path)), 60).split()
+        return (said[0], int(said[1])) if len(said) == 2 and said[1].isdigit() else ('busy', -1)
+
+    def row_shapes(self, path):
+        """The lead transcript's rows as type/subtype/stop_reason only, for a failure's evidence."""
+        script = ('import json,sys\n'
+                  'for l in open(sys.argv[1]):\n'
+                  '    try: r=json.loads(l)\n'
+                  '    except Exception: print("unparsed"); continue\n'
+                  '    m=r.get("message") if isinstance(r.get("message"),dict) else {}\n'
+                  '    print(r.get("type"), r.get("subtype") or "-", m.get("stop_reason") or "-",\n'
+                  '          "side" if r.get("isSidechain") else "main", r.get("timestamp") or "-")\n')
+        return guest(self.vm, 'python3 -c %s %s 2>&1 || true' % (shlex.quote(script), shlex.quote(path)), 60)
 
     def notices(self):
+        """Once his lead's turn has ended and its transcript stayed unchanged for 15 s (a Stop hook
+        or a queued message would have written to it), so only a watcher can wake it."""
         end = time.monotonic() + self.a.within
-        path = ''
+        path, last = '', None
         while time.monotonic() < end:
             path = path or self.transcript()
-            if path and self.idle(path):
+            now = self.turn_state(path) if path else ('busy', -1)
+            if now[0] == 'ended' and last == now:
                 break
-            time.sleep(5)
+            last = now
+            time.sleep(15)
         else:
-            raise StepFailed('his lead never went idle within %g s (transcript %s)' % (self.a.within, path or 'none'))
+            if path:
+                (self.out / 'lead-transcript-rows.txt').write_text(self.row_shapes(path) + '\n')
+            (self.out / 'operator.log').write_text(self.read(self.operator + '/operator.log') + '\n')
+            raise StepFailed('his lead\'s turn never ended within %g s (transcript %s; its rows are in '
+                             'lead-transcript-rows.txt)' % (self.a.within, path or 'none'))
+        # A teammate of his lead, working: quota-watch, already past QUOTA_PAUSE_PERCENT=1, names
+        # it at its next poll (QUOTA_POLL_SECONDS), as it would a teammate of his to pause.
+        mate = guest(self.vm, '/usr/bin/python3 %s teammate %s %s' % (
+            shlex.quote(self.payload + '/probes/team-watch-guest.py'), shlex.quote(self.payload),
+            shlex.quote(self.facts['session'])), 60)
         channel = self.facts['channels'][0]
-        entry = '## %s — fixture\n%s\n' % (time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime()), CODEX_WORDS)
+        entry ='## %s — fixture\n%s\n' % (time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime()), CODEX_WORDS)
         guest(self.vm, 'printf %%s %s >> %s' % (shlex.quote(entry), shlex.quote(channel)))
         ledger = guest(self.vm, '/usr/bin/python3 %s ledger %s' % (
             shlex.quote(self.payload + '/probes/team-watch-guest.py'), shlex.quote(self.payload)), 60)
@@ -158,9 +217,9 @@ class TeamWatchWalk(command_walk.CommandWalk):
                'tried': '', 'meanwhile': '', 'record': '', 'session_id': '', 'actor': 'team-watch-walk'}
         guest(self.vm, 'mkdir -p %s && printf %%s\\\\n %s >> %s' % (
             shlex.quote(str(Path(ledger).parent)), shlex.quote(json.dumps(row)), shlex.quote(ledger)))
-        self.facts.update({'ledger': ledger, 'raised': raised})
+        self.facts.update({'ledger': ledger, 'raised': raised, 'teammate': mate})
         self.save()
-        return {'channel': channel, 'ledger': ledger, 'raised': raised}
+        return {'teammate': mate, 'channel': channel, 'ledger': ledger, 'raised': raised}
 
     def transcript(self):
         found = guest(self.vm, 'ls %s/.claude/projects/*/%s.jsonl 2>/dev/null || true' % (
@@ -169,25 +228,34 @@ class TeamWatchWalk(command_walk.CommandWalk):
 
     def sent_to_lead(self, path):
         """Each watcher's notice, as a user message in his lead's own transcript: the first line of
-        each, so the evidence carries no more of the fixture than it needs."""
+        each, so the evidence carries no more of the fixture than it needs. A message that reaches
+        the lead during a turn is written as a queued user message (an attachment of type
+        queued_command, its text in `prompt`), one taken between turns as a user row (run 7: the
+        notice sent at 14:11:25Z, during the turn the 14:11:10Z one started, was the former)."""
         script = ('import json,sys\n'
                   'out={}\n'
                   'for l in open(sys.argv[1]):\n'
                   '    try: r=json.loads(l)\n'
                   '    except Exception: continue\n'
-                  '    if r.get("type")!="user": continue\n'
-                  '    c=(r.get("message") or {}).get("content")\n'
-                  '    t=c if isinstance(c,str) else " ".join(x.get("text","") for x in c or [] if isinstance(x,dict))\n'
+                  '    a=r.get("attachment") if isinstance(r.get("attachment"),dict) else {}\n'
+                  '    if r.get("type")=="user":\n'
+                  '        c=(r.get("message") or {}).get("content"); how="user row"\n'
+                  '        t=c if isinstance(c,str) else " ".join(x.get("text","") for x in c or [] if isinstance(x,dict))\n'
+                  '    elif r.get("type")=="attachment" and a.get("type")=="queued_command" and isinstance(a.get("prompt"),str):\n'
+                  '        t=a["prompt"]; how="queued user message"\n'
+                  '    else: continue\n'
                   '    for k,m in json.loads(sys.argv[2]).items():\n'
                   '        if m in t and k not in out:\n'
                   '            line=next(s for s in t.splitlines() if m in s)\n'
-                  '            out[k]={"timestamp":r.get("timestamp"),"line":line[:300]}\n'
+                  '            out[k]={"timestamp":r.get("timestamp"),"as":how,"line":line[:300]}\n'
                   'print(json.dumps(out))\n')
         return json.loads(guest(self.vm, 'python3 -c %s %s %s' % (
             shlex.quote(script), shlex.quote(path), shlex.quote(json.dumps(MARKERS))), 60) or '{}')
 
     def observe(self):
-        end = time.monotonic() + self.a.within
+        # One quota-watch poll past --within: the teammate registered in `notices` is seen at
+        # its next poll, up to QUOTA_POLL_SECONDS later (its log: "polling every 300 s").
+        end = time.monotonic() + max(self.a.within, QUOTA_POLL_SECONDS + 60)
         got, path = {}, ''
         while time.monotonic() < end:
             path = path or self.transcript()
@@ -196,6 +264,8 @@ class TeamWatchWalk(command_walk.CommandWalk):
                 break
             time.sleep(5)
         (self.out / 'operator.log').write_text(self.read(self.operator + '/operator.log') + '\n')
+        if path:
+            (self.out / 'lead-transcript-rows.txt').write_text(self.row_shapes(path) + '\n')
         for name in WATCHERS:
             (self.out / ('%s.log' % name)).write_text(self.read(self.data + '/engine-state/team-watch/%s.log' % name) + '\n')
         evidence = {'session': self.facts.get('session'), 'transcript': path, 'sent_to_lead': got}
