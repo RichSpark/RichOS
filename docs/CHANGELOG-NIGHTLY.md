@@ -2,6 +2,8 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+Release notes may be prepared before publication. A version’s GitHub release link confirms its availability.
+
 ## 1.2.1-nightly.20261020.68
 
 - Added See what's new in Settings, Updates, which opens the changelog in your default browser

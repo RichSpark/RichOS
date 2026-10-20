@@ -1203,7 +1203,8 @@ def ensure_version_tag(info):
 
 
 def release_notes(info):
-    notes = (f"{describe_release(info)}\n\nSource: {info['source_commit']}\n"
+    entry = approved_changelog(info)
+    notes = (f"{entry}\n\n{describe_release(info)}\n\nSource: {info['source_commit']}\n"
              f"Build: {info['build_commit']}\nRun: {info['run_id']} / {info['run_attempt']}\n")
     if info["channel"] == "nightly":
         notes += f"Build number: {nightly_key(info['version'])[-1]}\n"
@@ -1213,24 +1214,173 @@ def release_notes(info):
     return notes
 
 
-def ensure_nightly_release(info):
+CHANGELOG_RECORDS = Path("docs/release-notes")
+CHANGELOG_FILES = {"nightly": Path("docs/CHANGELOG-NIGHTLY.md"),
+                   "stable": Path("docs/CHANGELOG.md")}
+CHANGELOG_IDENTITY = ("schema", "tag", "version", "channel", "source_commit", "build_commit",
+                      "previous_tag", "previous_source")
+
+
+@release_step
+def changelog_identity(info):
+    if (info.get("channel") not in CHANGELOG_FILES
+            or info.get("tag") != "v" + info.get("version", "")
+            or not re.fullmatch(BASE_RE + (r"-nightly\.[0-9]{8}\.[1-9][0-9]*"
+                                           if info.get("channel") == "nightly" else ""),
+                                info.get("version", ""))
+            or any(not re.fullmatch(r"[0-9a-f]{40}", info.get(key, ""))
+                   for key in ("source_commit", "build_commit"))):
+        raise ValueError("invalid changelog candidate identity")
+    return {"schema": 1, **{key: info[key] for key in
+                            ("tag", "version", "channel", "source_commit", "build_commit")}}
+
+
+def published_changelog_base(info):
+    """Only a moved update channel counts. A half-uploaded prerelease never does."""
+    if info["channel"] == "nightly":
+        _, previous = channel()
+        return previous and (previous["tag"], previous["source_commit"])
+    previous = github_json(f"repos/{REPO}/releases/latest", missing_ok=True)
+    if previous is None:
+        return None
+    if previous.get("draft") or previous.get("prerelease"):
+        raise ValueError("GitHub's latest stable release is not published")
+    source = re.search(r"^Source: ([0-9a-f]{40})$", previous.get("body", ""), re.M)
+    if not source or not re.fullmatch("v" + BASE_RE, previous.get("tag_name", "")):
+        raise ValueError("the previous stable has no valid source provenance")
+    return previous["tag_name"], source[1]
+
+
+def changelog_request(info):
+    request = changelog_identity(info)
+    previous = published_changelog_base(info)
+    if previous and previous[0] == info["tag"]:
+        record, _ = read_changelog_record(info)
+        previous = ((record["previous_tag"], record["previous_source"])
+                    if record["previous_tag"] else None)
+    request.update(previous_tag=previous[0] if previous else None,
+                   previous_source=previous[1] if previous else None)
+    if previous:
+        git("merge-base", "--is-ancestor", previous[1], info["source_commit"])
+    revision = (previous[1] + ".." if previous else "") + info["source_commit"]
+    # Include ordinary commits as well as merges. Release-branch lands and empty ranges
+    # are both valid; the writer consolidates user-visible changes, not Git operations.
+    request["changes"] = git("log", "--reverse", "--format=%H%n%s%n%b%x1e", revision)
+    return request
+
+
+@release_step
+def changelog_section(record):
+    return (f"## {record['version']}\n\n"
+            f"[GitHub release](https://github.com/{REPO}/releases/tag/{record['tag']})\n\n"
+            f"{record['entry']}\n")
+
+
+@release_step
+def validate_changelog_entry(entry):
+    if (not isinstance(entry, str) or not entry or entry != entry.strip()
+            or any(not re.fullmatch(r"- (Added|Changed|Improved|Fixed) \S.*", line)
+                   for line in entry.splitlines())):
+        raise ValueError("changelog must contain only Added, Changed, Improved or Fixed bullet lines")
+    return entry
+
+
+def write_changelog_draft(request, entry):
+    """Write on the worker's branch only. Rich reviews and lands after QA accepts it."""
+    if git("branch", "--show-current") in ("", "main"):
+        raise ValueError("write changelog drafts on a work branch, never main or detached HEAD")
+    identity = changelog_identity(request)
+    expected = changelog_request(request)
+    if any(request.get(key) != expected[key] for key in CHANGELOG_IDENTITY):
+        raise ValueError("changelog request is stale; prepare it against the published channel again")
+    validate_changelog_entry(entry)
+    # Use the commit hook's own prose rule before writing BOTH copies. Otherwise a
+    # hook can clean the Markdown alone and leave the approved record disagreeing.
+    cleaned = json.loads(run("node", str(Path(__file__).with_name("oxford-comma.js")), "--json",
+                             input=json_text({"files": [{"path": str(CHANGELOG_FILES[identity["channel"]]),
+                                                         "content": entry}]})))["files"]
+    if cleaned:
+        entry = cleaned[0]["content"]
+    record = {**identity, **{key: request[key] for key in ("previous_tag", "previous_source")},
+              "entry": validate_changelog_entry(entry)}
+    path = ROOT / CHANGELOG_RECORDS / (record["tag"] + ".json")
+    if path.exists() and json.loads(path.read_text()) != record:
+        raise ValueError("this version already has different notes; reconcile them before replacing")
+    document = ROOT / CHANGELOG_FILES[record["channel"]]
+    text = document.read_text()
+    heading = f"## {record['version']}"
+    existing = re.search(r"^" + re.escape(heading) + r"\n.*?(?=^## |\Z)", text, re.M | re.S)
+    section = changelog_section(record)
+    if existing:
+        if existing[0].strip() != section.strip():
+            raise ValueError("the changelog already has a different entry for this version")
+    else:
+        at = re.search(r"^## ", text, re.M)
+        offset = at.start() if at else len(text.rstrip()) + 2
+        text = text.rstrip() + "\n\n" if not at else text
+        document.write_text(text[:offset] + section + "\n" + text[offset:])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json_text(record))
+    return path
+
+
+def read_changelog_record(info):
+    """Only Rich lands reviewed, QA-accepted notes. Read remote main, never a draft."""
+    identity = changelog_identity(info)
+    git("fetch", "--no-tags", "origin", "main")
+    main = git("rev-parse", "FETCH_HEAD")
+    path = CHANGELOG_RECORDS / (info["tag"] + ".json")
+    try:
+        record = json.loads(git("show", f"{main}:{path}"))
+        document = git("show", f"{main}:{CHANGELOG_FILES[info['channel']]}")
+    except (subprocess.CalledProcessError, ValueError) as error:
+        raise ValueError(f"publication refused for {info['tag']}: reviewed changelog is not on main; "
+                         "the lead must finish the candidate's changelog job, then retry publish") from error
+    if (not isinstance(record, dict) or any(record.get(key) != value for key, value in identity.items())
+            or any(key not in record for key in CHANGELOG_IDENTITY)):
+        raise ValueError("approved changelog belongs to a different candidate")
+    validate_changelog_entry(record.get("entry"))
+    section = re.search(r"^## " + re.escape(info["version"]) + r"\n.*?(?=^## |\Z)",
+                        document, re.M | re.S)
+    if not section or section[0].strip() != changelog_section(record).strip():
+        raise ValueError("approved notes and the public changelog disagree")
+    return record, main
+
+
+def approved_changelog(info):
+    record, main = read_changelog_record(info)
+    previous = published_changelog_base(info)
+    if not previous or previous[0] != info["tag"]:
+        baseline = (record["previous_tag"], record["previous_source"])
+        if baseline != (previous or (None, None)):
+            raise ValueError("the published baseline changed; review this candidate's notes again")
+    if record["previous_source"]:
+        git("merge-base", "--is-ancestor", record["previous_source"], info["source_commit"])
+    git("merge-base", "--is-ancestor", info["source_commit"], main)
+    return record["entry"]
+
+
+def ensure_nightly_release(info, notes=None):
+    notes = release_notes(info) if notes is None else notes
     release = get_release(info["tag"])
     if release is None:
         try:
             execute("gh", "release", "create", info["tag"], "--repo", REPO, "--verify-tag",
                     "--prerelease", "--latest=false", "--title", f"RichOS {info['version']}",
-                    "--notes", release_notes(info))
+                    "--notes", notes)
         except subprocess.CalledProcessError:
             if get_release(info["tag"]) is None:
                 raise
         release = get_release(info["tag"])
     if not release or release.get("draft") or not release.get("prerelease"):
         raise ValueError("candidate publication requires a public prerelease")
+    if release.get("body", "").strip() != notes.strip():
+        raise ValueError("the existing release has different notes; never overwrite a published body")
     return release
 
 
-def upload_candidate_assets(info, out, assets):
-    release = ensure_nightly_release(info)
+def upload_candidate_assets(info, out, assets, notes=None):
+    release = ensure_nightly_release(info, notes)
     existing = {a["name"] for a in release_assets(release["id"])}
     # latest.json is deliberately last. A retry compares existing files and only
     # uploads missing ones, without overwriting even one tested byte.
@@ -1348,6 +1498,18 @@ def finish(info, out):
             f"--detach {info['build_commit']}` and finish again")
     verify_candidate_manifest(info, out)
     verify_source_is_current(info["source_commit"])
+    # Before any public tag, release or app upload. A usage hold, rejected draft or
+    # failed writing/review job can delay publication, never leave a release without notes.
+    notes = release_notes(info)
+    existing = get_release(info["tag"])
+    if info["channel"] == "stable" and existing and not existing.get("prerelease"):
+        if (not existing or existing.get("draft")
+                or existing.get("body", "").strip() != notes.strip()
+                or remote_ref(f"refs/tags/{info['tag']}") != info["build_commit"]):
+            raise ValueError("the published release disagrees with this candidate or its approved notes")
+        execute("bash", str(ROOT / APP / "scripts/make-release.sh"), "verify-assets", "--out", str(out))
+        print(f"Already published {info['tag']} with its approved changelog; channel unchanged", flush=True)
+        return
     hidden = info.get("candidate_ref") or info.get("reservation_ref")
     if info.get("candidate_ref"):
         verify_candidate_ref(info)
@@ -1367,7 +1529,7 @@ def finish(info, out):
         # THE PUBLISH STEP, and the first moment the version exists publicly. The tag is
         # created with an empty lease, so of two builds only one can ever publish it.
         ensure_version_tag(info)
-        upload_candidate_assets(info, out, assets)
+        upload_candidate_assets(info, out, assets, notes)
     else:
         execute("gh", "release", "upload", info["tag"], "--repo", REPO, *assets)
         execute("gh", "release", "upload", info["tag"], "--repo", REPO, str(out / "latest.json"))
@@ -1570,6 +1732,22 @@ def _release_smoke(work):
             raise ValueError("release-smoke: the release commit lost the parent's tree")
     checked.append(f"release commit carries {len(nightly_files)} files over its parent")
 
+    # The same candidate identity and prose format used by the publication gate.
+    note_info = {**nightly_info, "source_commit": parent, "build_commit": commit}
+    note_record = {**changelog_identity(note_info), "previous_tag": None,
+                   "previous_source": None, "entry": "- Fixed a lost message"}
+    validate_changelog_entry(note_record["entry"])
+    section = changelog_section(note_record)
+    if note_record["tag"] not in section or note_record["entry"] not in section:
+        raise ValueError("release-smoke: changelog section lost its version or approved prose")
+    refuses("notes for an invalid candidate", lambda: changelog_identity(
+        {**note_info, "build_commit": "wrong"}))
+    refuses("notes whose version and tag disagree", lambda: changelog_identity(
+        {**note_info, "tag": "v9.9.9"}))
+    refuses("empty notes", lambda: validate_changelog_entry(""))
+    refuses("unreviewed explanatory prose", lambda: validate_changelog_entry("Here are changes"))
+    checked.append("changelog: exact candidate identity and user-facing prose, invalid inputs refused")
+
     # --- the candidate's recorded bytes, and the tamper check over them ---------------
     candidate = work / "candidate"
     candidate.mkdir()
@@ -1673,6 +1851,7 @@ def _release_smoke(work):
 
 
 def main():
+    global ROOT
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("plan")
@@ -1683,6 +1862,14 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p = sub.add_parser("finish")
     p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--source", type=Path, help="the candidate's immutable build checkout")
+    p = sub.add_parser("notes-request", help="prepare the worker's exact-candidate changelog input")
+    p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--source", type=Path, help="the candidate's immutable build checkout")
+    p = sub.add_parser("notes-draft", help="write reviewed prose on the worker's branch, never main")
+    p.add_argument("--request", type=Path, required=True)
+    p.add_argument("--entry", type=Path, required=True)
     sub.add_parser("check-rules")
     p = sub.add_parser("release-smoke")
     p.add_argument("--out", type=Path, required=True,
@@ -1701,7 +1888,20 @@ def main():
     p.add_argument("--engine", type=Path, required=True,
                    help="that release's engine archive, byte-identical to its published asset")
     args = parser.parse_args()
-    if args.command == "attach-gpl-sources":
+    if getattr(args, "source", None):
+        ROOT = args.source.resolve()
+    if args.command == "notes-request":
+        out = args.out.resolve()
+        info = json.loads((out / CANDIDATE_MANIFEST).read_text())["info"]
+        verify_candidate_manifest(info, out)
+        request = changelog_request(info)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json_text(request))
+        print(args.output)
+    elif args.command == "notes-draft":
+        print(write_changelog_draft(json.loads(args.request.read_text()),
+                                    args.entry.read_text().strip()))
+    elif args.command == "attach-gpl-sources":
         attach_gpl_sources(args.tag, args.engine.resolve())
     elif args.command == "release-smoke":
         release_smoke(args.out.resolve())

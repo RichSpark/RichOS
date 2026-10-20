@@ -2,6 +2,8 @@
 
 What changed in each stable version of RichOS, newest first; nightly builds are in the [nightly changelog](CHANGELOG-NIGHTLY.md).
 
+Release notes may be prepared before publication. A version’s GitHub release link confirms its availability.
+
 ## 1.2.1
 
 - Added a "See what's new" link in Settings, Updates that opens the changelog in your default browser

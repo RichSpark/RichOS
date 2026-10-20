@@ -1,10 +1,10 @@
 # How to write a RichOS changelog entry
 
-The changelog worker (`changelog-worker-brief.md`, beside this file) follows these instructions after a nightly or a stable version has been published. It reads every merge that landed for that version, on main or on a release branch merged into main: each one's subject line names what landed and its body may add detail. It writes the entry for that version.
+The changelog worker (`changelog-worker-brief.md`, beside this file) follows these instructions before publication, from the candidate request. It reads every commit in the exact source range, including work merged through a release branch. Its draft stays on its branch until QA accepts that candidate and Rich independently reviews and lands it. Publication requires the matching approved entry on remote main.
 
 ## What the entry is
 
-The `## <version>` heading, a blank line, then the entry's lines, one per change and nothing else: no introduction, no closing remark, no code fence.
+The worker writes only the entry's bullet lines. `nightly.py notes-draft` adds the version heading and GitHub release link and saves the candidate identity beside the changelog. The link confirms publication; preparing notes does not publish a version. No introduction, closing remark or code fence belongs in the entry.
 
 Each line is `- ` followed by one of these words, then what changed as the user sees it:
 
@@ -24,7 +24,7 @@ Put the lines in that order: every Added line first, then Changed, Improved and 
 - Name things by what the user sees on screen: "Talk to Rich", "the Output panel", "Settings, Updates", "question cards", "the phone page".
 - Never a file name, function, branch, agent or teammate name, commit id, review id, round number, follow-up number or escalation id.
 - One line per change a user would notice. Several merges that fix the same thing are one line.
-- Write only what the merges say. Never guess at a change they do not describe.
+- Write only changes supported by the requested source range. Never guess at a change the commits do not describe.
 
 ## What you leave out
 
