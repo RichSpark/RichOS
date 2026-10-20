@@ -422,6 +422,36 @@ class Mechanics(W.Base):
         self.assertEqual(record["repeat_outcome"], "self_correction")
         self.assertEqual(record["controls"], [])
 
+    def test_questions_reach_the_owner_before_the_worker_has_any_commit(self):
+        # Handover review rv-20261020T163803Z-dfc01448-bfd1, finding 1: the
+        # watcher's items carry only work ahead of its integration branch, and
+        # an unnecessary instruction can come before any commit.
+        aid = self.dispatch("no-commit-yet")
+        self.fakes.decisions["grow"] = ("inspect", "continuation")
+        self.send("no-commit-yet", "grow", "Also build the cross-group table before you start the fix.", received=aid)
+        self.drain()
+        record = self.record_for("no-commit-yet")
+        R.repeat_questioned(record["id"], "wes", dict(job=record["id"], acceptance=record["acceptance"],
+            frontier=record["evidence_cursor"], questions=[dict(question="Which requirement needs the table?", evidence="grow")]), "wes-q")
+        with patch.object(RR, "launch") as launch:
+            RR.tick([], str(HERE.parent), self.entity, ws)
+        self.assertEqual([n["record"] for n in RR.NOTICES], [str(R.root() / (record["id"] + ".json"))])
+        self.assertIn("WES QUESTIONS", RR.NOTICES[0]["lines"][0])
+        self.assertIn("axel", [c.args[1] for c in launch.call_args_list])  # the advisor that has not answered is consulted
+        # An item for the same job does not deliver the notice twice.
+        rec = ws.load_agent(ws.named_key(self.sid, "no-commit-yet"))
+        from types import SimpleNamespace
+        item = SimpleNamespace(source="native", repo=self.other, ref=rec["key"], session=self.sid, state="running",
+                               started=1, env={}, claude="", accounts="", tip="a" * 40)
+        with patch.object(RR, "launch"):
+            RR.tick([item], str(HERE.parent), self.entity, ws)
+        self.assertEqual(len(RR.NOTICES), 1)
+        # Observe stays silent.
+        (Path(self.entity) / ".claude/recovery.json").write_text(json.dumps(dict(schema=1, mode="observe", repositories=[self.other])))
+        with patch.object(RR, "launch"):
+            RR.tick([], str(HERE.parent), self.entity, ws)
+        self.assertEqual(RR.NOTICES, [])
+
     def test_a_failed_classification_cannot_refuse_a_questions_only_dispatch_but_ordinary_refusals_hold(self):
         cc = self.make_cc("identity-gap")
         payload = dict(session_id=self.sid, tool_use_id="tu-identity-gap", tool_name="Agent", transcript_path=str(self.lead),

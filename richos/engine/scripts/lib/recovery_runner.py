@@ -715,7 +715,7 @@ def tick(items, engine, entity, ws):
     declaration = R.mode(entity)
     if declaration["mode"] == "off":
         return
-    requests = []
+    requests, done = [], set()
     for item in sorted(items, key=lambda i:(i.state=="running", i.started or 0)):
         if item.source == "codex" or os.path.realpath(item.repo) not in {
                 os.path.realpath(p) for p in declaration["repositories"]}:
@@ -735,6 +735,7 @@ def tick(items, engine, entity, ws):
                                  mode=declaration["mode"], premises="all" if routes else declaration.get("wes_policy", "carried"))
             if not record:
                 continue
+            done.add(record["id"])
             if item.state == "ended":
                 R.handover(record["id"], rec["key"], item.tip)
             with ws.Lock():
@@ -771,7 +772,42 @@ def tick(items, engine, entity, ws):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
+    if R.asks(declaration["mode"]):
+        uncommitted_questions(ws, engine, declaration, done)
     return requests
+
+
+def uncommitted_questions(ws, engine, declaration, done):
+    """Questions reach the owner, and consultations are updated, for a governed
+    worker that has no reviewable commit yet: the item list above carries only
+    work ahead of its integration branch, while unnecessary instructions can
+    precede any commit (PRD 2026-10-20 sections 2 and 6). Only a job the event
+    adapter already raised is read; nothing new is created here."""
+    import recovery_controls as C
+    import recovery_events as E
+    repos = {os.path.realpath(p) for p in declaration["repositories"]}
+    for rec in ws.all_agents():
+        if not E.governed(rec, declaration["mode"], repos):
+            continue
+        try:
+            work = C.work(ws, dict(rec, recovery_assignment=E.quiet_projection(rec, declaration["mode"])))[0]
+        except Exception:  # noqa: BLE001 -- registry SpecError is not a ValueError; the drain reports it
+            continue
+        for repo in sorted({os.path.realpath(w["repo"]) for w in rec.get("workspaces") or [] if w.get("repo")} & repos):
+            identity = R.key(repo, work)
+            if identity in done:
+                continue
+            done.add(identity)
+            try:
+                record = R.read(identity)
+                if not record or not record.get("repeat_signal"):
+                    continue
+                C.schedule(record, engine)
+                notice = owner_notice(R.read(identity))
+            except (OSError, ValueError):
+                continue  # an unreadable job is retried at the next tick
+            if notice and not any(n["key"] == notice["key"] for n in NOTICES):
+                NOTICES.append(notice)
 
 
 def owner_notice(record):
