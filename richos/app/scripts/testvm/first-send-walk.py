@@ -21,10 +21,10 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
   click      the same after a second relaunch, sent with a real mouse click on Send
 
 Each send is judged by the app's own durable record: a PromptReceived row in conversation-ledger.jsonl
-carrying the exact words, within --within seconds. Each records whether the launch had opened his
-conversation yet when the words were typed (the Output button is drawn only once it has: the window
-the escalation's walk typed in), the composer's value before and after the send, the guest-clock
-times and two screenshots. Evidence: <out>/<step>.json, <out>/<step>-typed.png and -sent.png.
+carrying the exact words, within --within seconds. Each records whether the launch had started
+opening his conversation when the words were typed (`thread_open`: the scope header is empty until
+it has, the window the escalation's walk typed in), the composer's value before and after the send,
+the guest-clock times and two screenshots. Evidence: <out>/<step>.json, <out>/<step>-typed.png and -sent.png.
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
 """
@@ -95,9 +95,29 @@ class FirstSendWalk(adopt_walk.Walk):
         return nodes[0]
 
     def thread_open(self):
-        """Whether the launch has opened his conversation: the Output buttons are drawn only then
-        (output-panel.js `paintButtons`: hidden while no thread is on screen)."""
-        return self.present('Output')
+        """What the launch has done about his conversation, read off the screen: `header` is the
+        company the scope header names, written the moment the restore starts opening a thread
+        (main.js `openThread` -> `renderScopeHeader`) and empty before; `output` is whether the
+        Output buttons are drawn, which happens only once its record is read, later. Words typed
+        while `header` is empty were typed before the launch had a conversation to give them to."""
+        try:
+            nodes = [n for n in self.ax('find', '--id', 'scope-entity', '--first') if not n.get('meta')]
+        except StepFailed as exc:
+            if 'notfound' not in str(exc) and 'nothing matched' not in str(exc):
+                raise
+            nodes = []
+        header = (nodes[0].get('value') or nodes[0].get('title') or '') if nodes else ''
+        return {'header': header, 'output': self.present('Output')}
+
+    def shown(self, words):
+        """Whether his message is drawn in the conversation (a text node carrying its first words)."""
+        try:
+            return bool([n for n in self.ax('find', '--value', words[:40], '--contains', '--first') if not n.get('meta')
+                         and n.get('role') != 'AXTextArea'])
+        except StepFailed as exc:
+            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+                return False
+            raise
 
     def through_home(self, seconds=120):
         began = time.monotonic()
@@ -136,12 +156,15 @@ class FirstSendWalk(adopt_walk.Walk):
                 raise StepFailed('no Send button on screen')
             record['send_button'] = {k: send[0][k] for k in ('x', 'y', 'w', 'h')}
             command([HERE / 'pointer-drag.sh', self.vm, center(send[0]), center(send[0])], 60)
+        record['shown_after_send'] = self.shown(words)
         end = time.monotonic() + self.a.within
         while time.monotonic() < end:
             rows = [r for r in self.ledger_rows() if r.get('event') == 'PromptReceived' and r.get('text', '').strip() == words]
             if rows:
-                record['received'] = {'turn_id': rows[-1].get('turn_id'), 'thread_id': rows[-1].get('thread_id'),
-                                      'at': rows[-1].get('at')}
+                at = rows[-1].get('at')
+                record['received'] = {'turn_id': rows[-1].get('turn_id'), 'thread_id': rows[-1].get('thread_id'), 'at': at,
+                                      'after_send_s': round((at - record['sent_at_ms']) / 1000, 1)
+                                      if isinstance(at, (int, float)) else None}
                 break
             time.sleep(2)
         record['composer_after'] = self.composer().get('value')
@@ -151,8 +174,8 @@ class FirstSendWalk(adopt_walk.Walk):
         failure = verdict(record)
         if failure:
             raise StepFailed(failure + '; see %s.json' % how)
-        return {k: record[k] for k in ('thread_open_before_typing', 'thread_open_after_typing', 'received',
-                                       'composer_after', 'home_left_after_s')}
+        return {k: record[k] for k in ('thread_open_before_typing', 'thread_open_after_typing', 'shown_after_send',
+                                       'received', 'composer_after', 'home_left_after_s')}
 
     def return_(self):
         return self.first_send('return')
@@ -166,7 +189,9 @@ def main():
     p.add_argument('vm')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--expect-sha', required=True, help='the commit the bundle under test was built from')
-    p.add_argument('--within', type=float, default=30, help='seconds for the PromptReceived row after a send')
+    p.add_argument('--within', type=float, default=120,
+                   help='seconds for the PromptReceived row after a send: a Send pressed before the launch '
+                        'opened his conversation goes out when it does, over 30 s later in the guest')
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     steps = a.steps.split(',')
