@@ -8,6 +8,7 @@
 #   Q4  a pin for a removed file is refused, never dropped
 #   Q5  a PATH that is not pinned is reported, and nothing changes
 #   Q6  the hook's refusal message names the tool
+#   Q7  --note records the renewal in the renewed unit's own review text and nowhere else
 # run-tests: no-host-screen: a throwaway directory only; nothing is launched on any screen
 # run-tests: inputs richos/app/scripts/qualification-pins.test.sh richos/app/scripts/autocheck/qualification-pins.py
 # run-tests: covers richos/app/scripts/autocheck/qualification-pins.py
@@ -83,5 +84,32 @@ else bad "Q5  rc=$RC: $OUT"; fi
 if grep -q 'qualification-pins.py --renew' "$here/autocheck/autocheck.py"; then
     ok "Q6  the commit hook's refusal message names the renewal tool"
 else bad "Q6  autocheck.py does not name qualification-pins.py --renew"; fi
+
+# Q7: two units, one pinning the changed file; the note lands in that unit's review only, and
+# a unit whose review text is identical but pins nothing that moved keeps it byte for byte.
+ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
+cat > "$R/docs/development/verification-input-qualifications.json" <<EOF
+{
+  "units": {
+    "pins c": {
+      "review": "the same text",
+      "sources": {"src/c.sh": "$ZEROS"}
+    },
+    "pins a": {
+      "review": "the same text",
+      "sources": {"src/a.sh": "$(sum "$R/src/a.sh")"}
+    }
+  }
+}
+EOF
+OUT="$(run --renew --note "reads nothing new" src/c.sh 2>&1)"; RC=$?
+review() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["units"][sys.argv[2]]["review"])' \
+    "$R/docs/development/verification-input-qualifications.json" "$1"; }
+NOTE_C="$(review "pins c")"
+NOTE_A="$(review "pins a")"
+if [ "$RC" = 0 ] && grep -Eq '^the same text Renewed [0-9-]+: src/c.sh 00000000 to [0-9a-f]{8}\. reads nothing new$' <<<"$NOTE_C" \
+   && [ "$NOTE_A" = "the same text" ] && run --all >/dev/null 2>&1; then
+    ok "Q7  --note records the renewal in the renewed unit's own review text and nowhere else"
+else bad "Q7  rc=$RC c=[$NOTE_C] a=[$NOTE_A]: $OUT"; fi
 
 if [ "$FAILS" = 0 ]; then echo "=== qualification-pins tests: all passed ==="; else echo "=== qualification-pins tests: $FAILS FAILED ==="; exit 1; fi

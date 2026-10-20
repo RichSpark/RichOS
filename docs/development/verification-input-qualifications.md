@@ -251,17 +251,9 @@ the whole checkout, it runs in every checkout.
 
 ## Renewals
 
-- 2026-09-29, `richos/engine/mega-lander/workspaces.py`, pinned by 22 unit contracts,
-  `2af6d481…` to `98d5ba20…` after `a2355c58`. That change replaces one 0.2 s sleep in
-  `stop_processes` with a bounded poll of the existing `_alive` check and adds the constant
-  `PROCESS_KILL_WAIT`. It reads no new file, environment variable, tool or outside path, so
-  every contract's input floor is unchanged. Without the renewal every one of those
-  contracts refused qualification and `proof-run.test.sh` was red on main at `6ef73abf`.
-- 2026-10-20, `richos/engine/mega-lander/workspaces.py`, pinned by 22 unit contracts,
-  `5185e546…` to `f32296f7…`. The change attaches a proof-run report pointer to a workspace
-  record on TaskCompleted and a normal SubagentStop (reads the checkout's HEAD and saved
-  `plan.json`/`summary.json` files under the proof-run directory machine settings name) and
-  offers the reported runs to the merge gate in `workspaces.sh merge`. None of the 22 units
-  reaches those paths: their fixtures exercise worktree guards, hook registration and Git
-  jurisdiction. Module import gains only constants, so every contract's input floor is
-  unchanged.
+A renewal note goes into the renewed unit's own `review` text in the JSON
+(`qualification-pins.py --renew --note <why the review still holds> <file>`), never
+here. This prose is a whole-file input of every qualified identity, so a note here
+discarded every reusable pass, the UI suites' included; a unit's review is only in its
+own slice, which its pin renewal changes anyway. The two notes this section held (the
+2026-09-29 and 2026-10-20 renewals of `workspaces.py`) are in the 22 units that pin it.
