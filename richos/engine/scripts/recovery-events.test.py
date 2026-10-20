@@ -62,6 +62,9 @@ class Mechanics(W.Base):
         root = Path(self.env.root)
         self.saved_env = {k: os.environ.get(k) for k in ("SECOND_REVIEW_STATE_DIR", "RICHOS_PROJECTS_DIR", "INFLIGHT_TEAMS_DIR",
                                                          "CLAUDE_PROJECT_DIR")}
+        # Redirect the registry explicitly, to the sandbox's own default location: the base
+        # class already moved HOME and CLAUDE_CONFIG_DIR, and this states it where L21 reads.
+        os.environ["RICHOS_WORKSPACES_DIR"] = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "state", "workspaces")
         os.environ["CLAUDE_PROJECT_DIR"] = self.entity  # as the PreToolUse hook runs registration
         os.environ["SECOND_REVIEW_STATE_DIR"] = str(root / "state")
         os.environ["RICHOS_PROJECTS_DIR"] = str(root / "projects")
