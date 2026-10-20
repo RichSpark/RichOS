@@ -145,6 +145,13 @@ copy; each of these is now settled by the policy in force before any check runs
   as the fence judges a move of main, follow-up rulings and recovery included. A land onto a
   release branch is asked it too, which the fence itself never sees. A commit made in a detached
   checkout (`nightly-local.py` commit_on_main) moves no branch and is reviewed once it exists.
+- **The gate a release-branch land runs.** The shim ran HEAD's `autocheck.py`, which for a land
+  onto a release branch is that branch's own copy: v1.3.0 was cut before the land check learned
+  its target (d2c2c28dc), so every land onto it ran the commit check. A land the lander names
+  now runs main's copy first, the gate in force, as the engine that names it is main's.
+- **The installed shim.** `install.sh` copied the shim once and the copy was older than the file
+  for ten days. An installed copy that differs from the shim committed on main runs that one.
+  This needs the one reinstall that puts this shim in place (`install.sh`) and never another.
 
 ## What every commit refuses, the merge refuses (2026-10-11)
 
@@ -418,8 +425,9 @@ the note names the changed paths and every check that had started by then, inste
 - `autocheck.py`: the checks, one file, standard library only. Its header is the reference.
 - `shim.sh`: copied into `<git-common-dir>/hooks/` as `pre-commit`, `commit-msg`, `pre-merge-commit`,
   `post-commit`, `post-merge` and `pre-push`. It runs the committed `autocheck.py` from git's
-  object store: HEAD's, else main's, else the incoming branch's (the land that introduces it).
-  With none of them, it does nothing.
+  object store: HEAD's, else main's, else the incoming branch's (the land that introduces it);
+  main's first for a land the lander names. With none of them, it does nothing. An installed
+  copy that differs from the shim committed on main runs that one.
 - `install.sh [--check|--uninstall] [<repo>]`: installs the shim and proves git will call it.
   On this Mac `core.hooksPath` points at a global dispatcher that chains to the repository's
   own hooks; `--check` reports a hook that would never run. It never replaces a hook it did

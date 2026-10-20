@@ -2238,6 +2238,60 @@ class ActiveGate(Fixture):
         self.assertEqual(program.read_text(), text)
         self.git("worktree", "remove", "--force", str(tree))
 
+    def test_a_land_onto_a_release_branch_cut_before_a_gate_fix_runs_the_gate_on_main(self):
+        # v1.3.0 was cut on 2026-10-14, before d2c2c28dc: its own autocheck.py ignores the target
+        # the lander names, so a land onto it ran only the commit check. Main's gate is in force.
+        self.make()
+        self.git("checkout", "-q", "-b", "v1.3.0")
+        checker = self.repo / "richos/app/scripts/autocheck/autocheck.py"
+        current = checker.read_text()
+        older = current.replace('named = os.environ.get(LAND_TARGET, "").strip()', 'named = ""', 1)
+        self.assertNotEqual(older, current)
+        checker.write_text(older)
+        self.git("commit", "-q", "-am", "a release branch cut before the gate learned its target")
+        self.git("checkout", "-q", "main")
+        self.branch_with("broken", "richos/app/src/thing.txt", "BROKEN\n")
+        before = self.head("v1.3.0")
+        tree = self.base / "release-tree"
+        self.git("worktree", "add", "-q", str(tree), "v1.3.0")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        out = self.git("merge", "--no-ff", "-m", "land broken", "broken", cwd=tree, expect=1,
+                       env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.3.0"))
+        text = out.stdout + out.stderr
+        self.assertIn("MERGE INTO V1.3.0 REFUSED", text)
+        self.assertIn("suite: FAIL src/thing.txt is broken", text)
+        self.assertEqual(self.head("v1.3.0"), before)
+        self.git("merge", "--abort", cwd=tree)
+        # A commit that is no land is still checked by its own branch's copy.
+        self.write("richos/app/src/other.txt", "on the release branch\n", cwd=tree)
+        self.git("add", "-A", cwd=tree)
+        out = self.git("commit", "-q", "-m", "a branch commit", cwd=tree)
+        self.assertNotIn("COMMIT TO", out.stderr)
+        self.git("worktree", "remove", "--force", str(tree))
+
+    def test_an_installed_shim_older_than_main_runs_the_shim_on_main(self):
+        # install.sh copied the shim once; the copy on the operator's Mac was ten days older than
+        # the committed file. Main's shim is the one in force, as main's autocheck.py is.
+        self.make()
+        shim = self.repo / "richos/app/scripts/autocheck/shim.sh"
+        lines = shim.read_text().split("\n")
+        marked = "\n".join(lines[:1] + ['echo "fixture: the shim on main ran" >&2'] + lines[1:])
+        self.branch_with("newshim", "richos/app/scripts/autocheck/shim.sh", marked)
+        out = self.git("merge", "--no-ff", "-m", "land newshim", "newshim")
+        # The land's own check ran while main still held the installed shim; once main moved, its
+        # post-merge hook ran the new one. The installed copy itself was never rewritten.
+        before, receipt, after = out.stderr.partition("receipt for tree")
+        self.assertTrue(receipt, out.stderr)
+        self.assertNotIn("the shim on main ran", before)
+        self.assertIn("fixture: the shim on main ran", after)
+        self.assertNotEqual((self.repo / ".git/hooks/pre-commit").read_text(), marked)
+        self.git("checkout", "-q", "-b", "feature")
+        self.write("richos/app/src/thing.txt", "fine, later\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-q", "-m", "a later commit")
+        self.assertIn("fixture: the shim on main ran", out.stderr)
+        self.assertIn("autocheck: commit: passed", out.stderr)
+
 
 class Tables(unittest.TestCase):
     def test_every_suite_the_merge_leaves_to_the_nightly_exists_in_this_tree(self):
