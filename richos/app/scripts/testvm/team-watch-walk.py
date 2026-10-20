@@ -61,6 +61,9 @@ StepFailed = command_walk.StepFailed
 REPO = HERE.parents[3]
 PROBES = HERE.parent / 'operator-probes'
 STEPS = ['identity', 'first-run', 'fixture', 'relaunch', 'watchers', 'task', 'lead', 'notices', 'observe', 'reminder']
+# Not in the default run: `version-notice` is walked on its own after `lead` (see its docstring).
+OPTIONAL_STEPS = ['version-notice']
+UNMEASURED_SENTENCE = "a version Rich hasn't checked this setup against yet"
 # What stall-watch's unfinished-work reminder starts with, and the finished teammate's wait it names.
 REMINDER = {'stall-watch reminder': 'UNFINISHED-WORK', 'its recorded wait': 'waiting for its review'}
 TASK = ('Please ask my team to read the first line of CLAUDE.md in their repository and tell me what it says. '
@@ -225,6 +228,26 @@ class TeamWatchWalk(command_walk.CommandWalk):
         self.shot('lead-missing.png')
         raise StepFailed('no lead of his team started within %g s of the task; see operator.log, '
                          'app-at-lead-failure.log and after-task.png' % self.a.within)
+
+    def version_notice(self):
+        """Whether the app told the user his team's Claude Code version is unmeasured (operator_profile.rs
+        init_check: "Your team is running on Claude Code <v>, a version Rich hasn't checked this setup against
+        yet."). The words are looked for in everything the app keeps in its data folder, and on the screen. The
+        guest's claude version is read from the binary itself. --expect-notice no (a measured version, 2.1.304)
+        fails when the sentence is found; yes (an unmeasured one) fails when it is not, which is the positive
+        control that proves this step can see the sentence at all. On its own after `lead`:
+        --steps identity,first-run,fixture,relaunch,watchers,task,lead,version-notice."""
+        version = guest(self.vm, 'perl -e "alarm shift; exec @ARGV" 60 "$HOME/.local/bin/claude" --version 2>&1 | head -1', 90).strip()
+        found = guest(self.vm, 'grep -rIl %s %s 2>/dev/null || true' % (
+            shlex.quote(UNMEASURED_SENTENCE), shlex.quote(self.data)), 120).split()
+        self.shot('version-notice.png')
+        evidence = {'guest_claude': version, 'sentence': UNMEASURED_SENTENCE, 'found_in': found,
+                    'expect_notice': self.a.expect_notice}
+        (self.out / 'version-notice.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        if (self.a.expect_notice == 'yes') != bool(found):
+            raise StepFailed('expected the unmeasured-version sentence to be %s, and it was %s (guest claude %s); see version-notice.json'
+                             % ('shown' if self.a.expect_notice == 'yes' else 'absent', 'found' if found else 'not found', version))
+        return evidence
 
     def turn_state(self, path):
         """'ended' when the last main-thread conversation row of the lead's transcript ends its
@@ -432,9 +455,11 @@ def main():
     p.add_argument('--reminder-seconds', type=float, default=120,
                    help='stall-watch\'s unfinished-work reminder interval in this guest (12 hours otherwise)')
     p.add_argument('--steps', default=','.join(STEPS))
+    p.add_argument('--expect-notice', choices=['yes', 'no'], default='no',
+                   help='step version-notice: is the unmeasured-version sentence expected (yes, an unmeasured claude) or not (no)')
     a = p.parse_args()
     steps = a.steps.split(',')
-    unknown = [s for s in steps if s not in STEPS]
+    unknown = [s for s in steps if s not in STEPS + OPTIONAL_STEPS]
     if unknown:
         p.error('unknown step(s): ' + ', '.join(unknown))
     walk = TeamWatchWalk(a)
