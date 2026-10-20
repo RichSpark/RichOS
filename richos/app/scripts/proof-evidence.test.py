@@ -1529,6 +1529,66 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         self.assertIn("%s..%s --reuse %s" % (main, tip, run), text)
         self.assertEqual(selected, [])
 
+    def test_the_runner_environment_is_the_same_whether_or_not_reserve_launched_it(self):
+        """03-E, found by the recovery demonstration: a job run through reserve.py (the documented
+        launch) saved identities with reserve.py's Cargo environment (RUSTC_WRAPPER, SCCACHE_DIR, the
+        cargo shim on PATH), and the land's preflight, launched without it, read every pass as
+        "declared execution inputs changed". The runner applies the same rule itself, idempotently."""
+        import cargo_identity
+        seen = []
+        base = {k: v for k, v in os.environ.items()
+                if k not in ("RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER", "SCCACHE_DIR")}
+        shim = str(HERE / "bin")
+        base["PATH"] = os.pathsep.join(p for p in base.get("PATH", "").split(os.pathsep) if p != shim)
+        for start in (base, cargo_identity.enable_environment(base)):     # direct; through reserve.py
+            with patch.dict(os.environ, start, clear=True), \
+                    patch.object(runner, "author_coverage", side_effect=lambda args: seen.append(dict(os.environ))):
+                runner.run_main(["--coverage", str(self.root)], {})
+        self.assertEqual(seen[0], seen[1])
+        self.assertEqual(seen[0]["PATH"].split(os.pathsep).count(shim), 1)
+
+    def test_the_preflight_reads_run_files_under_a_resolved_scratch(self):
+        """03-E, found by the recovery demonstration: a run-tests.sh check's command names its result
+        file as $RUN/... only when the path starts with the resolved run directory, and the
+        preflight's scratch was not resolved, so under a TMPDIR behind a symlink (macOS's /var ->
+        /private/var) every such check read as "declared execution inputs changed"."""
+        real = Path(self.tmp.name) / "real-tmp"
+        real.mkdir()
+        linked = Path(self.tmp.name) / "linked-tmp"
+        linked.symlink_to(real)
+        saved = Path(self.tmp.name) / "scratch-run"
+        saved.mkdir()
+        lines = ["cd . && scripts/run-tests.sh --no-host-screen --only fixture.test.sh"]
+        args = SimpleNamespace(coverage=str(saved), summary_out=str(saved / "coverage.json"), capacity=2,
+                               engine_shards=1, fail_fast=False, as_printed=False)
+        with patch.object(runner, "ROOT", str(self.root)):
+            items = runner.plan(lines, args, str(saved), {})
+        self.assertTrue(any("results-out" in a for a in items[0].argv), items[0].argv)
+
+        def identity(item, _args, logdir, *_rest):
+            return {"paths": {"fixture": "digest"}, "command": evidence.command_identity(item, str(self.root), logdir)}
+
+        with patch.object(runner, "ROOT", str(self.root)):
+            record = evidence.Record(str(self.root), saved, items, dict(self.source),
+                                     {items[0].label: identity(items[0], args, str(saved))},
+                                     selection={"base": "b" * 40, "candidate": self.source["commit"], "mode": "normal"})
+        self.addCleanup(record.close)
+        items[0].state, items[0].rc, items[0].log = "passed", 0, str(saved / "execution.log")
+        Path(items[0].log).write_text("passed\n")
+        record.checkpoint(items)
+        with patch.object(runner, "ROOT", str(self.root)), \
+                patch.object(tempfile, "tempdir", str(linked)), \
+                patch.object(runner, "head_commit", return_value=self.source["commit"]), \
+                patch.object(runner, "source_identity", return_value=dict(self.source)), \
+                patch.object(runner, "supply_runtime"), patch.object(runner, "supply_speech_models"), \
+                patch.object(evidence, "prepare_environment"), \
+                patch.object(runner, "execution_environment", return_value={}), \
+                patch.object(runner, "input_identity", side_effect=identity), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            rc = runner.author_coverage(args)
+        summary = json.loads(Path(args.summary_out).read_text())
+        self.assertEqual((rc, summary["proven"]), (0, [items[0].label]), output.getvalue())
+
     def test_the_summary_carries_its_own_coverage_line_and_never_counts_known_red_as_passed(self):
         """PRD A11/A14: the line is counted from the summary's own rows, a KNOWN-RED unit is named
         beside the passes (an established exception, never a pass) and NOT RUN is never a pass."""

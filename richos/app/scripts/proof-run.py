@@ -2445,7 +2445,11 @@ def author_coverage(args):
     # final edit adds is still missing. The inputs of every check are read now either way.
     now = source_identity()
     same_bytes = saved.get("source") == now
-    scratch = tempfile.mkdtemp(prefix="coverage-")
+    # Resolved, as a run's own log directory is (machine storage resolves it): a check's command
+    # names its result file as $RUN/... only when the path starts with the resolved directory,
+    # so under a TMPDIR behind a symlink (macOS's /var -> /private/var) every run-tests.sh check
+    # read as "declared execution inputs changed" (03-E, the recovery demonstration).
+    scratch = os.path.realpath(tempfile.mkdtemp(prefix="coverage-"))
     try:
         if same_bytes:
             items = place([proof_evidence.decode_item(row, Item, ROOT, scratch) for row in saved["items"]], args)
@@ -2535,6 +2539,14 @@ def main(argv=None):
 
 
 def run_main(argv, run_state):
+    # THE RUNNER'S ENVIRONMENT DOES NOT DEPEND ON WHAT LAUNCHED IT (03-E). reserve.py, the documented
+    # way to launch heavy work, adds the Cargo environment (RUSTC_WRAPPER, SCCACHE_DIR, the cargo
+    # shim on PATH) before its command starts; a land hook or a shell launching this runner directly
+    # did not, and those values are part of check identities, so a valid author run made through
+    # reserve.py read as changed inputs at every land and preflight. The runner applies the same
+    # rule itself (cargo_identity.enable_environment, idempotent), so both launches agree.
+    import cargo_identity
+    os.environ.update(cargo_identity.enable_environment(os.environ))
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
                                 usage="proof-run.py [options] [proof-for arguments]")
     p.add_argument("--commands")
