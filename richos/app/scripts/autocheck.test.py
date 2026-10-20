@@ -2072,6 +2072,173 @@ class Land(Fixture):
         self.assertIn("MERGE INTO MAIN REFUSED", out.stderr)
 
 
+class ActiveGate(Fixture):
+    """Verification reliability PRD A9 (T10, T11): every entrance of a land asks the policy in
+    force, before any check runs. The operator fence is installed as `operator-fences.sh install`
+    installs it, with the second review on for this repository and the lease switch off (no
+    Claude session runs here, so the lease is not this class's question). The review ledger and
+    the fence's home are this fixture's own."""
+
+    SUITE_RAN = "run cd richos/app && bash scripts/suite.sh"
+
+    def fence(self):
+        entity = self.base / "entity"
+        entity.mkdir()
+        (entity / "orchestration.config").write_text(
+            'OPERATOR_FENCES="on"\nLAND_LEASE_HOLDERS=""\nOPERATOR_FENCES_REPOS=""\nSECOND_REVIEW_REPOS="repo"\n')
+        self.env.update(CLAUDE_CONFIG_DIR=str(self.base / "claude"),
+                        SECOND_REVIEW_STATE_DIR=str(self.base / "review-state"))
+        out = self.run_(["bash", str(ENGINE / "scripts/operator-fences.sh"), "install", "--repo", str(self.repo),
+                         "--entity", str(entity)])
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        launcher = (self.repo / ".git/hooks/reference-transaction").read_text()
+        self.assertIn('OPERATOR_FENCES_REVIEWS="%s"' % (self.base / "review-state/reviews.jsonl"), launcher)
+        self.ledger_dir = self.base / "review-state"
+        self.ledger_dir.mkdir(exist_ok=True)
+        self.log.unlink(missing_ok=True)
+
+    def identity(self):
+        common = self.git("rev-parse", "--git-common-dir").stdout.strip()
+        return os.path.realpath(self.repo / common)
+
+    def verdict(self, tip, verdict="passed", findings=()):
+        """A handover verdict on exactly `tip`, as second-review.sh writes it. Returns its id."""
+        rid = "rv-fixture-%s-%d" % (tip[:8], len(list(self.ledger_dir.glob("rv-*"))))
+        record = self.ledger_dir / rid
+        record.mkdir()
+        found = [{"priority": 2, "title": title, "files": ["src/thing.txt:1"], "evidence": "seen", "fixture": ""}
+                 for title in findings]
+        (record / "verdict.json").write_text(json.dumps({"answer": {"verdict": verdict, "findings": found}}))
+        with open(self.ledger_dir / "reviews.jsonl", "a") as f:
+            f.write(json.dumps({"id": rid, "repo": str(self.repo), "repo_id": self.identity(), "tip": tip,
+                                "verdict": verdict, "trigger": "handover", "reviewer": "codex",
+                                "reviewer_model": "fixture", "findings": len(found), "p1": 0,
+                                "record": str(record)}) + "\n")
+        return rid
+
+    def follow_up(self, finding, tip):
+        """The lead's ruling that a blocking finding is a follow-up (second-review.sh --follow-up)."""
+        with open(self.ledger_dir / "review-deferrals.jsonl", "a") as f:
+            f.write(json.dumps({"action": "follow-up", "finding": finding, "repo": str(self.repo),
+                                "repo_id": self.identity(), "tip": tip, "why": "the lead's ruling"}) + "\n")
+
+    def test_a_plain_git_merge_with_no_review_of_its_tip_is_refused_before_any_check_runs(self):
+        # 2026-10-19 02:44Z: a plain `git merge` of v1.2.1 into main ran its whole land check and
+        # was then refused by the fence: its exact tip had never had a second review.
+        self.make()
+        self.fence()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
+        tip, before = self.head("feature"), self.head("main")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("MERGE INTO MAIN REFUSED: what this lands has no passing second review", text)
+        self.assertIn("no second review of %s" % tip[:12], text)
+        self.assertNotIn(self.SUITE_RAN, self.tools())          # no check ran for a land the fence refuses
+        self.assertEqual(self.head("main"), before)
+        self.git("merge", "--abort")
+        # A passing review of exactly that tip: the land's checks run and main moves.
+        self.verdict(tip)
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature")
+        self.assertIn("the second review of what this lands passes (asked before the checks)", out.stderr)
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("main^2"), tip)
+
+    def test_a_follow_up_ruling_is_accepted_and_an_unresolved_finding_still_refuses_first(self):
+        self.make()
+        self.fence()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, with a finding\n")
+        tip, before = self.head("feature"), self.head("main")
+        rid = self.verdict(tip, "changes-requested", findings=["an answer lands in another conversation"])
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("Blocking finding id(s): %s#1" % rid, text)
+        self.assertIn("an answer lands in another conversation", text)
+        self.assertNotIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("main"), before)
+        self.git("merge", "--abort")
+        self.follow_up(rid + "#1", tip)
+        self.git("merge", "--no-ff", "-m", "land feature", "feature")
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("main^2"), tip)
+
+    def test_a_land_onto_a_release_branch_asks_the_same_review_first(self):
+        # workspaces.sh merge asks it of every target (_review_check); a plain git land onto a
+        # release branch was never asked it, because the fence runs only when main moves.
+        self.make()
+        self.fence()
+        self.git("branch", "v1.2.1")
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, for the release\n")
+        tip, before = self.head("feature"), self.head("v1.2.1")
+        tree = self.base / "release-tree"
+        self.git("worktree", "add", "-q", str(tree), "v1.2.1")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        land = dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.2.1")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree, env=land, expect=1)
+        self.assertIn("MERGE INTO V1.2.1 REFUSED: what this lands has no passing second review",
+                      out.stdout + out.stderr)
+        self.assertNotIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("v1.2.1"), before)
+        self.git("merge", "--abort", cwd=tree)
+        self.verdict(tip)
+        self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree, env=land)
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("v1.2.1^2"), tip)
+        self.git("worktree", "remove", "--force", str(tree))
+
+    def test_a_detached_commit_named_onto_main_is_checked_and_reviewed_after_it_exists(self):
+        # nightly-local.py commit_on_main: the commit is made in a detached checkout with the land
+        # target named, so main does not move before that new commit is reviewed. No review of a
+        # commit can exist before it, so the early question is not asked there.
+        self.make()
+        self.fence()
+        tree = self.base / "detached"
+        self.git("worktree", "add", "-q", "--detach", str(tree), "main")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        self.write("richos/app/src/thing.txt", "the changelog entry\n", cwd=tree)
+        self.git("add", "-A", cwd=tree)
+        out = self.git("commit", "-q", "-m", "changelog", cwd=tree,
+                       env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="main"))
+        self.assertNotIn("second review", out.stderr)
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.git("worktree", "remove", "--force", str(tree))
+
+    def stale_installed_fence(self):
+        """The hook's copy of the fence made as old as one installed before this check existed: it
+        has no review-check and reads no follow-up ruling. Returns (its path, the engine's text)."""
+        program = self.repo / ".git/hooks/operator-fences/operator_fences.py"
+        text = (ENGINE / "scripts/lib/operator_fences.py").read_text()
+        older = text.replace("def read_deferrals(ledger):",
+                             "def read_deferrals(ledger):\n    return {}\n\n\ndef _newer_read_deferrals(ledger):", 1)
+        older = older.replace('    if cmd == "review-check":\n', '    if cmd == "not-yet-review-check":\n', 1)
+        self.assertNotEqual(older.count("not-yet-review-check"), 0)
+        self.assertNotEqual(older, text)
+        program.write_text(older)
+        return program, text
+
+    def test_a_stale_installed_fence_is_brought_current_before_it_answers(self):
+        # 2026-10-19 05:29Z: the hook's copy of the fence, installed on 18 October, could not see
+        # a follow-up ruling and refused a land whose checks had all passed. In the main checkout
+        # git's own ORIG_HEAD update runs the fence, which brings itself current, before this
+        # hook; a land onto a release branch runs in a checkout of its own, where nothing does.
+        self.make()
+        self.fence()
+        self.git("branch", "v1.2.1")
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, ruled\n")
+        tip = self.head("feature")
+        rid = self.verdict(tip, "changes-requested", findings=["a finding the lead ruled a follow-up"])
+        self.follow_up(rid + "#1", tip)
+        tree = self.base / "release-tree"
+        self.git("worktree", "add", "-q", str(tree), "v1.2.1")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        program, text = self.stale_installed_fence()
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree,
+                       env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.2.1"))
+        self.assertIn("the second review of what this lands passes (asked before the checks)", out.stderr)
+        self.assertEqual(self.head("v1.2.1^2"), tip)
+        self.assertEqual(program.read_text(), text)
+        self.git("worktree", "remove", "--force", str(tree))
+
+
 class Tables(unittest.TestCase):
     def test_every_suite_the_merge_leaves_to_the_nightly_exists_in_this_tree(self):
         # A named table rots when a suite is renamed; this reads it against the real tree.

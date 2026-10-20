@@ -1830,9 +1830,13 @@ def refuse_selection(what, rc):
     return 1
 
 
-def land_from_index(repo, what, receipt=True):
+def land_from_index(repo, what, receipt=True, target=""):
     """pre-commit or pre-merge-commit on main: the index is the tree being landed. `measure`
-    runs the same check, written nowhere (receipt=False)."""
+    runs the same check, written nowhere (receipt=False), and asks no review: it moves nothing.
+    `target`: the branch landed onto (land_target). The second review is asked first only when
+    this checkout is on it, so this commit or merge is itself the move of it; a commit made in a
+    detached checkout of it (nightly-local.py commit_on_main) moves no branch, is reviewed once
+    it exists, and the fence judges the later move of main."""
     dirty = git("diff", "--quiet", check=False)
     if dirty.returncode:
         banner(f"{what.upper()} REFUSED: the working tree differs from what is being committed", [
@@ -1843,7 +1847,80 @@ def land_from_index(repo, what, receipt=True):
     if root_entries_gate(repo, what, git("write-tree", cwd=repo.top)):
         return 1
     staged = [p for p in git("diff", "--cached", "--name-only", "--no-renames").splitlines() if p]
-    return land_check(repo, what, staged, land_range(repo, merge_heads(repo)), receipt=receipt)
+    heads = merge_heads(repo)
+    range_argv = land_range(repo, heads)
+    if receipt and target and repo.branch == target and \
+            review_before_checks(repo, what, landed_commit(repo, heads, range_argv)):
+        return 1
+    return land_check(repo, what, staged, range_argv, receipt=receipt)
+
+
+# THE SECOND REVIEW IS ASKED BEFORE THE LAND'S CHECKS (verification reliability PRD R8, A9;
+# 2026-10-19). A plain `git merge` of v1.2.1 into main ran its whole land check, every suite
+# passed, and the operator fence then refused the move of main: the branch's exact final commit
+# had no second review. `workspaces.sh merge` asks that question before it merges anything
+# (workspaces.py _review_check); a plain git land asked it only at the end. So every land this
+# hook runs asks the fence the same question first, through the fence's own program: the
+# installed copy is brought current by its existing `fence prepared` entry (given no ref lines,
+# it decides nothing and records nothing), then `review-check` judges the move from HEAD to the
+# commit being landed exactly as it judges a move of main, deferrals and recovery included. It is
+# asked when this checkout is on the branch landed onto, so this commit or merge is that move. A
+# land onto a release branch named by the lander asks it too, which the fence itself never sees
+# (it runs for refs/heads/main only). A repository whose launcher carries no review ledger asks
+# nothing, as the fence asks nothing; a fence that cannot answer refuses, as the fence would.
+FENCE_LAUNCHER_MARKER = "richos-operator-fence-launcher"
+
+
+def landed_commit(repo, heads, range_argv):
+    """The commit main (or the named release branch) would point at: the merge land_range wrote
+    for one incoming head, else the index written as a commit on HEAD and every incoming head."""
+    if range_argv:
+        return range_argv[0].split("..", 1)[1]
+    parents = [arg for head in ["HEAD", *heads] for arg in ("-p", head)]
+    return git("-c", "user.name=autocheck", "-c", "user.email=autocheck@invalid", "commit-tree",
+               git("write-tree", cwd=repo.top), *parents, "-m", "autocheck: the commit being landed",
+               cwd=repo.top)
+
+
+def review_before_checks(repo, what, landed):
+    """0 when the fence would let this land through its second review, else 1 after printing why."""
+    launcher = repo.common / "hooks" / "reference-transaction"
+    try:
+        text = launcher.read_text(errors="replace")[:65536]
+    except OSError:
+        return 0
+    found = re.search(r'(?m)^OPERATOR_FENCES_PROGRAM="([^"]*)"\s*$', text)
+    if FENCE_LAUNCHER_MARKER not in text or not found:
+        return 0
+    program = found.group(1)
+    env = {k: v for k, v in repo.env.items() if not k.startswith("GIT_")}
+    head = git("rev-parse", "HEAD", cwd=repo.top)
+    said = []
+    # An empty stdin is no ref lines: `fence prepared` brings the copy current and decides nothing.
+    for argv in ([program, "fence", str(launcher), "prepared"],
+                 [program, "review-check", str(launcher), head, landed]):
+        try:
+            result = run_bounded([sys.executable, *argv], timeout=120, cwd=repo.top, env=env, text=True,
+                                 stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            said, rc = [f"The fence program {program} could not be asked ({exc})."], 2
+            break
+        rc = result.returncode
+        said = [(result.stdout + result.stderr).strip()]
+        if rc:
+            break
+    if rc == 0:
+        say(f"autocheck: {what}: the second review of what this lands passes (asked before the checks)")
+        return 0
+    if said[0]:
+        sys.stderr.write(said[0][-6000:] + "\n")
+    banner(f"{what.upper()} REFUSED: what this lands has no passing second review", [
+        "The fence refuses this same move when main moves; it is asked first, so no check runs",
+        "for a land it would refuse. Nothing was committed, and no check ran. The fence's own words",
+        "are just above: what it found, and the way through.",
+        *([] if rc == 1 else [f"The fence program exited {rc}, which is not a verdict, so this refuses."]),
+    ])
+    return 1
 
 
 def land_range(repo, heads):
@@ -2266,11 +2343,11 @@ def main(argv):
             if oxford_fix(repo):
                 return 1
             if target:
-                return land_from_index(repo, f"commit to {target}")
+                return land_from_index(repo, f"commit to {target}", target=target)
             rc = commit_check(repo, "commit")
         elif hook == "pre-merge-commit":
             if target:
-                return land_from_index(repo, f"merge into {target}")
+                return land_from_index(repo, f"merge into {target}", target=target)
             rc = commit_check(repo, "merge")
         elif hook == "post-commit":
             return post_commit(repo)

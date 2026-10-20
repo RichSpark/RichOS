@@ -6,7 +6,7 @@ Git runs these itself. Nobody runs them by hand and nobody has to be told to (CE
 
 | When | On | What runs | A failure |
 | --- | --- | --- | --- |
-| `git commit` | every branch but `main`, in every worktree | `lint.sh --changed --strict`: the lint ratchets for what differs from `HEAD` (static and load rules; Clippy for a Rust set whose inputs changed), and no count may grow, whatever room a ceiling has | refuses the commit, with the lint's reason |
+| `git commit` | every branch but `main`, in every worktree | `lint.sh --changed --strict`: the lint ratchets for what differs from `HEAD` (static and load rules; Clippy for a Rust set whose inputs changed) and no count may grow, whatever room a ceiling has | refuses the commit, with the lint's reason |
 | `git commit` | every branch but `main`, in every worktree | a branch-changed file that a reviewed check pins by SHA-256 in `docs/development/verification-input-qualifications.json` must have its pin renewed in the same change (the merge would refuse it with `UnqualifiedReader`); read only when a changed path is named there | refuses the commit, naming the file, the unit and the fix |
 | `git merge` into a branch | every branch but `main` | `lint.sh --changed` (ceilings; what main brings was held to its land) | refuses the merge |
 | `git merge` into `main`, a commit on `main` | the main checkout | the suites that own the changed files (`proof-for.sh --gate`), run by `proof-run.py`, plus `lint.sh --changed` when the land changes something under `richos/app` and that selection does not already include `lint.test.sh`, plus `publication-completeness.sh` over the whole tree being landed (see "What every commit refuses, the merge refuses"); each check capped at 600 s, the gate run in rounds of at most 900 s that keep every pass (at most six) | a failing check refuses the merge before main moves, unless it passes when run again alone, once; nothing else does |
@@ -17,27 +17,27 @@ No formatter runs: the repository does not enforce one.
 
 **A branch commit is checked on the bytes it commits.** Until 2026-09-30 the commit check
 linted the working tree and approved the staged copy, so a bad staged edit whose unstaged
-replacement passed was committed with no record, and a clean staged edit was refused over
+replacement passed was committed with no record and a clean staged edit was refused over
 unstaged work it did not hold (hunt part 2, finding 10). Now, when anything under
 `richos/app` is staged, the unstaged difference is saved as a binary patch and untracked
 files are moved into `<worktree git dir>/richos-autocheck-aside/` for the length of the
 check, so the working tree is exactly what is being committed (the index git hands the
 hook, including the temporary one of `git commit <path>` and `-a`); afterwards both are put
 back. This is the design of pre-commit's `staged_files_only`. Ignored files are never moved.
-If a check is killed while work is set aside, or it cannot be put back, it stays in that
-directory, whose `README.txt` says how to restore it, and every later commit check refuses
+If a check is killed while work is set aside or it cannot be put back, it stays in that
+directory, whose `README.txt` says how to restore it and every later commit check refuses
 until it is gone.
 
 **Putting work back never overwrites a later save** (recheck N01, 2026-09-30). Editing goes
 on while a commit is checked. A tracked file written during the check, by the check or by
 an editor, is left exactly as found and named, unless the set-aside edits also touch it.
 In that case the newer bytes are first moved to `changed-during-check/` in the same
-directory, your edit from before the check is put back, and the commit is refused so you
+directory, your edit from before the check is put back and the commit is refused so you
 can compare the two and keep what you want. Until 2026-09-30 that collision reset the whole
 working tree to the index, which erased saves in files the edits never touched.
 
 **The one escape is `--no-verify`.** Git cannot be stopped from honoring it, so it is recorded:
-a commit whose tree the commit check never passed, or a main that moved to a tree with no land
+a commit whose tree the commit check never passed or a main that moved to a tree with no land
 receipt, raises an escalation in the lead's ledger (`richos/engine/scripts/escalate.sh`, read
 at every session start and turn end) and is appended to
 `<git-common-dir>/richos-autocheck/bypass.log`. A rebase, cherry-pick or revert on a branch
@@ -47,18 +47,18 @@ replays commits and is not recorded; its land runs the full checks.
 
 `richos/engine/scripts/lib/verification-dependencies.json` pins every reviewed reader by
 SHA-256. A stale pin makes `verification_inputs.py` refuse every unit that reaches it
-("changed reader requires input qualification"), and `verification-inputs.test.sh` fails. On
+("changed reader requires input qualification") and `verification-inputs.test.sh` fails. On
 2026-09-30 that happened twice in one day on main (95 failures, then 108), each time summed
 from branches whose own commits had passed. So every branch commit also runs
 `dependency-pins.py` (the committed copy at `HEAD`, else `main`'s): over the branch's changed
 files only, it compares each file the declaration pins (a node source, a hook-reader source, an
-external reader in this repository, and any pin the branch typed by hand) with the bytes being
-committed, and refuses a mismatch, naming the file, the row and the renewal command:
+external reader in this repository and any pin the branch typed by hand) with the bytes being
+committed and refuses a mismatch, naming the file, the row and the renewal command:
 
     python3 richos/app/scripts/autocheck/dependency-pins.py --renew <file> ...
 
 Renew only after reading the file's added lines for a new configuration key, environment
-variable or file it now reads, and declaring it in that row. `--all [--rev <commit>]` lists
+variable or file it now reads and declaring it in that row. `--all [--rev <commit>]` lists
 every stale pin in the file. It parses the declaration only when a changed path is named in it,
 and takes under a second on a branch that renewed 274 pins. `../dependency-pins.test.sh` proves
 it with throwaway repositories and checks its digests against `verification_inputs.py`.
@@ -66,9 +66,9 @@ it with throwaway repositories and checks its digests against `verification_inpu
 **The commit also runs every selected check that is fast (2026-10-09, section 97).** After the
 selection, the commit runs each selected check whose recorded duration is under 10 seconds,
 fastest first, until 40 seconds of recorded time are spent (about 30 s of wall clock at most; a
-commit that selects none adds nothing), and refuses on a failure; slower ones stay at the land.
+commit that selects none adds nothing) and refuses on a failure; slower ones stay at the land.
 The durations are the merge gate's own medians (`weights.tsv` under the proof-runs folder, the
-main checkout's), and a check with no record is not assumed fast. It also runs
+main checkout's) and a check with no record is not assumed fast. It also runs
 `mutation-anchors.py` when the change touches the engine. Cause: a merge refused after 25
 minutes by two 3-4 second checks.
 
@@ -86,16 +86,16 @@ are unit execution times, not a measured complete-job saving.
 
 **Two branches that renewed pins merge by themselves (2026-10-05).** Because every branch renews
 the pins of the readers it changed, any two branches built in parallel used to conflict in both
-maps, and somebody took one side and re-ran `renew-verification-pins.py` by hand. A `.gitattributes`
+maps and somebody took one side and re-ran `renew-verification-pins.py` by hand. A `.gitattributes`
 beside each map names the merge driver `richos-verification-pins`
 (`richos/engine/scripts/lib/merge-verification-pins.py`), which `install.sh` registers: it merges
-the two maps as JSON, keeps every entry from both sides, and sets a pin both sides changed to the
+the two maps as JSON, keeps every entry from both sides and sets a pin both sides changed to the
 sha256 of the merged file (the three versions merged with `git merge-file`), which is what renewing
 it by hand after the merge gives. A value both sides changed that is not a pin (a review) is still
 a conflict with git's markers. `install.sh --check` reports the driver;
 `richos/engine/scripts/lib/merge-verification-pins.test.sh` proves it in a throwaway repository.
 
-## The merge gate: small, capped, and blocking only on a failure (2026-09-30)
+## The merge gate: small, capped and blocking only on a failure (2026-09-30)
 
 The CEO, after a day of 25-71 minute merge checks that failed on everything but the fixes:
 *"That whole CI shitshow had the exact same end effect as what has been happening today"*.
@@ -110,25 +110,41 @@ every job capped at 10 minutes. A merge into main runs exactly:
    cover or name its files. The merge of zach-opus-lander1 (three mega-lander files) ran
    make-engine-asset, gui-boot and proof-for for that reason; it no longer does.
 3. **Caps**: `proof-run.py --cap 600` stops every check, engine units included, at ten
-   minutes whatever a dated weight predicts, and `--run-cap` ends each round at 900 s (the
+   minutes whatever a dated weight predicts and `--run-cap` ends each round at 900 s (the
    first at what is left of it after the selection); admission and the proof-run slot wait at
    most 900 s in every round.
 4. **Rounds (since 2026-10-02)**: a round that ends with checks that have no verdict (timed
-   out at their cap, or ended at the round's cap) is followed by another that resumes it,
-   keeps every pass, and runs only those checks. See "A large land runs in rounds" below.
+   out at their cap or ended at the round's cap) is followed by another that resumes it,
+   keeps every pass and runs only those checks. See "A large land runs in rounds" below.
 5. **A failure is retried alone, once (since 2026-10-08)**: see the next section.
 
 ## A land onto a release branch is checked as a land onto main (2026-10-13, landed 2026-10-19)
 
 `workspaces.sh merge` lands onto a branch the main checkout is not on (v1.2.1, v1.3.0) in a
 temporary checkout of that branch. The gate chose the land check only for a checked-out main,
-so there it ran the commit check, and work the land into main refuses went onto the release
+so there it ran the commit check and work the land into main refuses went onto the release
 branch (review rv-20261013T095956Z-f4ae06df-2813, finding 1). On 2026-10-18 eighteen fixes
-landed onto v1.2.1 that way, and two app suites one of them broke were found only when v1.2.1
-was merged into main. The lander now names the branch it lands onto in `RICHOS_AUTOCHECK_LAND_TARGET`, and a merge
+landed onto v1.2.1 that way and two app suites one of them broke were found only when v1.2.1
+was merged into main. The lander now names the branch it lands onto in `RICHOS_AUTOCHECK_LAND_TARGET` and a merge
 or commit carrying it, detached or on that same branch, runs the land check. A name that
 disagrees with the checked-out branch is ignored, so it can add the check and never remove
 it. `../autocheck.test.py` proves it for v1.2.1 and main, detached and checked out.
+
+## The policy in force is asked first, on every entrance (2026-10-20)
+
+Verification reliability PRD R8 and A9. What a land is held to was decided late or by an older
+copy; each of these is now settled by the policy in force before any check runs
+(`../autocheck.test.py`, `ActiveGate`):
+
+- **The second review.** A plain `git merge` of v1.2.1 into main ran its whole land check on
+  2026-10-19 and was then refused by the operator fence: its exact tip had no review.
+  `workspaces.sh merge` already asked first. Every land whose checkout is on the branch it lands
+  onto (main or a release branch the lander names) now asks the fence the same question before
+  its checks: the installed fence copy is brought current by its own `fence prepared` entry, then
+  `operator_fences.py review-check` judges the move from HEAD to the commit being landed exactly
+  as the fence judges a move of main, follow-up rulings and recovery included. A land onto a
+  release branch is asked it too, which the fence itself never sees. A commit made in a detached
+  checkout (`nightly-local.py` commit_on_main) moves no branch and is reviewed once it exists.
 
 ## What every commit refuses, the merge refuses (2026-10-11)
 
@@ -137,12 +153,12 @@ The merge of `codex/axel-wes-recovery` (`9c5f0f6dc`) passed this gate and left
 engine's commit guard `guard-completeness-commits.sh` runs `publication-completeness.sh` over
 the whole tree at every `git commit`, so every commit on every branch was refused until
 `918319ed0` reworded the citation. A merge makes its commit without `git commit`, so that guard
-never saw it, and a merge can make the finding from two clean sides (one branch moves a file,
+never saw it and a merge can make the finding from two clean sides (one branch moves a file,
 another cites its old path).
 
 So every land (merge into main, commit on main, the push backstop) runs the same checker from
 the tree being landed, as the commit guard runs it (`--skip-private-trees`), before any suite
-starts, and refuses what the guard refuses: findings, or a check that did not complete. A tree
+starts and refuses what the guard refuses: findings or a check that did not complete. A tree
 with no `.publication-boundary` is NOT APPLICABLE and is said so. The engine's other commit
 guards are not in this position: the leak, vendoring and hook-registration guards judge what a
 commit changes against its HEAD, so a later commit that does not touch a finding still passes,
@@ -152,23 +168,23 @@ with a merge whose citation dangles only after the land before it.
 ## Nothing appears at the root of main without the CEO's authorization (2026-10-15)
 
 The CEO: *"ANY PUBLICLY VISIBLE ITEM IN ROOT on GitHub must always require my explicit
-authorization."* The root rule was a manual step at each land, and `AGENTS.md` reached the root
-of main through one. So every commit and merge onto main, before any suite, and every push of
-any branch (main, with or without a land receipt, and the release branches), each a root
+authorization."* The root rule was a manual step at each land and `AGENTS.md` reached the root
+of main through one. So every commit and merge onto main, before any suite and every push of
+any branch (main, with or without a land receipt and the release branches), each a root
 publicly visible on GitHub, refuses a tree whose top level holds an entry not in
 `AUTHORIZED_ROOT_ENTRIES` (`autocheck.py`):
 `.claude-plugin`, `.github`, `.gitignore`, `.richos`, `LICENSE`, `docs`, `richos`. The refusal names each entry and says that a new root item needs his
 explicit authorization. The list is read from main's own copy of `autocheck.py`, so an item he
 has authorized is added to the list in a land of its own, before the item.
 
-A tag push is not asked. The `nightly` tag is the update feed, and its root has always held
-`latest.json` and `build-info.json`; the check refused nightly 58's feed on 2026-10-15, and the
+A tag push is not asked. The `nightly` tag is the update feed and its root has always held
+`latest.json` and `build-info.json`; the check refused nightly 58's feed on 2026-10-15 and the
 CEO: *"since when do I need to authorize every fart like this?"*
 
 ## A check that fails under the gate's own load runs again alone, once (2026-10-08)
 
 Twice on 2026-10-08 the gate refused a merge on one timing check while its own parallel checks
-held the Mac at 97-99% CPU, and the same check passed when Rich reran it alone on the same tree:
+held the Mac at 97-99% CPU and the same check passed when Rich reran it alone on the same tree:
 `setup.js` case 24 (`page.waitForFunction: Timeout 30000ms exceeded`) and `splash.js` case 10b
 (the shutter's window moved from 236 ms to 358 ms). His step each time was the first step of
 `docs/development/verification-retries.md`: retry the failed unit alone, with normal parallelism
@@ -178,15 +194,15 @@ and admission. The gate now takes that step itself:
    `proof-run.py --resume <that round> --only-check <the check> --retry-reason ...`, the same caps,
    admission and proof-run slot as any round, every validated pass carried, nothing else run.
 2. **Passed alone**: it no longer refuses the merge. The gate prints
-   `FAILED UNDER LOAD, PASSED ALONE: <check>` with the log of each run, the final line names it, and
+   `FAILED UNDER LOAD, PASSED ALONE: <check>` with the log of each run, the final line names it and
    the land receipt lists it under `failed_under_load_passed_alone` with both logs. Any check that
    still has no verdict then gets its rounds as before.
-3. **Failed alone, or no verdict alone**: the gate refuses as before, and the refusal names both
+3. **Failed alone or no verdict alone**: the gate refuses as before and the refusal names both
    logs. The first check that fails alone ends the retries; the gate refuses whatever the others
    would do.
 4. Once per check per gate run: never a second retry, never a loop. Only `failed` is retried:
    `blocked` is a failure the runner refuses to repeat on unchanged inputs, `invalid` is a check
-   that could not show it ran, and the no-verdict states have their rounds.
+   that could not show it ran and the no-verdict states have their rounds.
 
 ## A large land runs in rounds (2026-10-02)
 
@@ -199,18 +215,18 @@ checks), was refused four times without a failing check. Measured from those att
   `P` 198 s, `verification-inputs` 192 s, section `MT` 181 s, `native-android-ui` 180 s, `lint`
   171 s, section `manifest` 170 s, `quota-watch` 151 s, `autocheck` 148 s. 36 never reached one.
 - Every run kept only about three checks going at once (2557-3291 s of check time in each
-  ~914 s run): a check starts only when total CPU is under CEO ruling §77's 80% line, and the
+  ~914 s run): a check starts only when total CPU is under CEO ruling §77's 80% line and the
   gate's own checks keep the Mac above it. Summed, checks waited 64,000-91,000 s for admission
   in each run. So the plan needed about 2200 s even when the Mac was 78% idle at the start; no
   run of 900 s could hold it.
 - Every retry re-ran what had passed. 214 of 214 identities differed from the run before only in
   `settings`: the first run waited for admission what was left of the gate (893 s) and its retry
-  900 s, and both waits were part of each check's identity. And 91 engine units with no reviewed
+  900 s and both waits were part of each check's identity. And 91 engine units with no reviewed
   input contract were `fresh`, which the runner never reuses.
 
 Now:
 
-1. **A pass survives the round, and the attempt.** A check's identity no longer holds how long
+1. **A pass survives the round and the attempt.** A check's identity no longer holds how long
    it may wait to start (`proof-run.py` IDENTITY_SETTINGS), every round passes the same waits,
    and an engine unit with no contract is keyed by the checkout's content like every other
    unqualified check (its receipt is copied with its provenance; `engine receipts` re-reads
@@ -219,13 +235,13 @@ Now:
    whose inputs changed. The next `git merge` (or the `git commit` that concludes a refused one)
    on the same tree resumes the last round, so it too runs only what has no verdict.
 2. **Rounds, not one scaled cap.** A cap derived from planned weights trusts dated data that is
-   wrong in both directions; a round boundary instead saves every verdict, and a round that
+   wrong in both directions; a round boundary instead saves every verdict and a round that
    decides nothing ends the gate at once instead of spending a longer cap. Each round is at most
    900 s and names only the checks with no verdict (`--only-check`).
 3. **It stops** when every check has a verdict (the land), when a check fails (refused, as
    before), when a check times out at its own 600 s cap a second time ("NO VERDICT AFTER ONE
    RETRY", a hang is still ended and reported), when a round decides nothing the round before it
-   had not, or after six rounds: **the total bound is 6 x 900 s = 5400 s**, about twice what
+   had not or after six rounds: **the total bound is 6 x 900 s = 5400 s**, about twice what
    this land needed. The last two refuse with "NO VERDICT AFTER N ROUNDS: <check>". A land that
    fits one round, as most do, behaves exactly as before.
 4. The land receipt records `rounds`.
@@ -237,13 +253,13 @@ the host's or the test VM's guest (read off the suite as `proof-run.py` reads it
 **No mutation pass runs in the merge (2026-09-30).** The merge of cc/zach-opus-q1
 (`4e73fd89`) ran `scripts/operator-fences-mutation.test.sh`, a unit whose whole job is the fence
 suite's mutation pass, planned at 1408 s: a comment in it names `ci-unit-weights.tsv`, the land
-changed that file, and the engine's selector maps a file to every unit that mentions its name.
-It ran into its cap, the Mac stayed too busy to start anything else, and the gate passed with
+changed that file and the engine's selector maps a file to every unit that mentions its name.
+It ran into its cap, the Mac stayed too busy to start anything else and the gate passed with
 60 of 63 checks NOT RUN. Now:
 
-1. An engine unit that is a mutation pass (named `<suite>-mutation.test.sh`, or declaring
+1. An engine unit that is a mutation pass (named `<suite>-mutation.test.sh` or declaring
    `# merge-gate: mutation-pass` in its header) is dropped from the selection, whatever chose
-   it, and named NOT RUN.
+   it and named NOT RUN.
 2. Every other check runs with `RICHOS_MUTATION_PASSES=0` and `RICHOS_FOURTEEN_MUTANTS=0`.
    Every `*.mutation.sh` and `*.mutation.py` harness reads the switch as its first command,
    prints one NOT RUN line and exits 0, so the suite that invokes it reaches its own verdict on
@@ -260,55 +276,55 @@ It ran into its cap, the Mac stayed too busy to start anything else, and the gat
 that had passed for their engineers, because the build hands its suites a long TMPDIR and
 variables (RICHOS_IOS_POOL_WAIT) an engineer's shell does not. Now `proof-run.py` gives every
 check of a suite a desktop nightly gate runs (a `run-tests.sh --only` suite in `run-tests.sh
---for desktop --list`, and a UI suite run directly) what that gate gives it:
+--for desktop --list` and a UI suite run directly) what that gate gives it:
 `nightly-local.py gate_conditions()`, built by the same functions the gates call, so nothing is
 copied and nothing can drift. That is macOS's per-user temporary folder (`getconf
-DARWIN_USER_TEMP_DIR`, which the nightly now uses whoever starts it), the nightly's PATH, and
+DARWIN_USER_TEMP_DIR`, which the nightly now uses whoever starts it), the nightly's PATH and
 every variable it sets for that gate; a check's own values still win. The plan prints a
 `nightly conditions:` line naming them. Deliberate differences: the mutation switches above
-stay 0, RUN_TESTS_SKIP_UNCHANGED is never set, and RICHOS_RUNTIME_DIR comes from
+stay 0, RUN_TESTS_SKIP_UNCHANGED is never set and RICHOS_RUNTIME_DIR comes from
 `supply_runtime()`. `--without-nightly-conditions` runs a diagnosis without them and is refused
 here. `merge-check-scope.test.py` (NightlyConditions) proves it against the real gate code.
 
-**A check planned past its cap is never started, and the long checks go first (2026-10-05).**
+**A check planned past its cap is never started and the long checks go first (2026-10-05).**
 Under `--cap`, `proof-run.py` names a check whose planned weight is over the cap NOT RUN before
 anything starts ("planned N s, over its 600 s cap; not started, the nightly runs it"): it
-takes no token, lane or admission, and an engine unit leaves the receipts proof. The rest
+takes no token, lane or admission and an engine unit leaves the receipts proof. The rest
 start longest first, so the long poles overlap everything else instead of following it: started
 cheapest first (2026-09-30 to 2026-10-05), they were the work a round's 900 s cap ended after
 most of it was done, 15,508 s redone in a later round. The planned weight is the median of the
 check's last nine measured executions in this checkout (`weights.tsv` in the proof-run store,
 engine units included); a check never measured here keeps its dated row
-(`lib/ci-unit-weights.tsv` for an engine unit), and the engine lanes are packed with the same
+(`lib/ci-unit-weights.tsv` for an engine unit) and the engine lanes are packed with the same
 numbers (`ci-units.sh`, `CI_UNIT_WEIGHTS_MEASURED`).
 
 **A refusal names the command that reruns the check as the gate ran it (2026-10-05).** The gate's
-checks inherit `LC_ALL=C` from the merge (and the nightly's conditions, and what the runner sets),
+checks inherit `LC_ALL=C` from the merge (and the nightly's conditions and what the runner sets),
 where a shell has its own locale, so a hand rerun could pass where the gate failed
 (`land-completeness.test.sh`, fixed in 3c0383fba). Every check's exact directory, environment
 (`env -i`) and command are written to `<run>/rerun/<nn>-<check>.sh` when it starts; the summary
 prints `rerun as the gate ran it: sh <file>` with its locale and time zone beside every check that
-did not pass, `summary.json` carries it as `rerun`, and the refusal banner repeats it.
+did not pass, `summary.json` carries it as `rerun` and the refusal banner repeats it.
 It also reruns the same TREE: the merge is aborted after a refusal, so the main checkout is back
 on main (a front-door.js failure "passed" its rerun on main that way, attempt-ioj6a1_a). The
 tree the checkout held when the run started is recorded (`lib/rerun_tree.py`), the summary line
-shows it as `tree=`, and the file runs the check in the checkout while it still holds that tree,
+shows it as `tree=` and the file runs the check in the checkout while it still holds that tree,
 otherwise in a scratch git worktree of it (the recorded HEAD and MERGE_HEAD, removed afterwards).
 
 **What blocks**: a check that failed (`failed`), an unchanged failure the runner refuses to
-run again (`blocked`), and an `invalid` result for any reason except inputs that changed while
+run again (`blocked`) and an `invalid` result for any reason except inputs that changed while
 the gate ran (an invalid result can hide a failure, for example a UI suite whose ledger
 records a failed check). `engine receipts` blocks only when every engine unit passed.
 **Nothing else blocks**: a check over its cap, ended at the gate's cap, not admitted, stopped
-by the verification controller, NOT RUN for any reason, or left to the nightly is named in
+by the verification controller, NOT RUN for any reason or left to the nightly is named in
 the verdict and written to the receipt's `not_run` with its reason. The nightlies run all of
-it: `nightly-local.py` for the app, and it stays the release gate; `nightly-engine.py` for
+it: `nightly-local.py` for the app and it stays the release gate; `nightly-engine.py` for
 every engine unit, which gates no release.
 
 ### Measuring the gate
 
 `python3 richos/app/scripts/autocheck/autocheck.py measure`, run by hand in a checkout, runs
-the land check of what is staged there against HEAD, exactly as a commit onto main does, and
+the land check of what is staged there against HEAD, exactly as a commit onto main does and
 writes no land receipt. To replay a land: detach, stage the land's change on top of a base
 without it, run `measure`, then return to the branch.
 
@@ -332,7 +348,7 @@ from other work for most of each run:
 
 Of the 12 failures in the first replay, 3 units are red on main by themselves, 8
 contract-integrity sections fail their intact-probe case only under proof-run's private
-execution profile (they pass through `ci-shard.sh` directly), and 1 was this branch's own (a
+execution profile (they pass through `ci-shard.sh` directly) and 1 was this branch's own (a
 test pinning SCR's stale weight, fixed). Escalation esc-20261001T002153Z-46ac290e has the
 detail. A qualified engine unit sees only the environment its contract declares, so every
 qualified unit that reads a harness declares `RICHOS_MUTATION_PASSES` and
@@ -345,16 +361,16 @@ A check `proof-run.py` could not run is reported as its own state, `not-run`, wi
 guest named), `host-gap` (a declared host gap), `unchanged-inputs` (a suite skipped by
 `RUN_TESTS_SKIP_UNCHANGED`) or `suite-skipped` (a UI suite run directly whose evidence ledger
 records only a skip, such as `realbytes.js` with no `cargo`). Until 2026-09-29 `front-door` and
-`gui-boot` were recorded as `passed` in exactly that case, and until 2026-09-30 so was a
+`gui-boot` were recorded as `passed` in exactly that case and until 2026-09-30 so was a
 skipped UI suite.
 
 **The land's decision (since 2026-09-30): no NOT RUN refuses the land; each is named.** Until
-then a `host-gap`, `unchanged-inputs` or `suite-skipped` NOT RUN refused it, and only
+then a `host-gap`, `unchanged-inputs` or `suite-skipped` NOT RUN refused it and only
 `no-screen` was accepted, for the reasons below. A check that did not run is not a failure of
-the change, and the merge gate blocks only on failures (above); the nightly answers for it.
+the change and the merge gate blocks only on failures (above); the nightly answers for it.
 
 **One exception (since 2026-10-01): an owning check that ends `timed-out` or `cancelled` is run
-again, and refuses the merge if it never reaches a verdict.** Merge `7af4c981e` landed
+again and refuses the merge if it never reaches a verdict.** Merge `7af4c981e` landed
 although its owning suites `native-android-app` (timed out) and `native-android-ui` (ended at the
 gate's cap) had no verdict, with the Mac near 99% CPU; both passed when run alone afterward. So
 when such a unit appears, the gate resumes the saved plan (`proof-run.py --resume`, every pass
@@ -369,11 +385,11 @@ The original reasoning for the screen case, which still holds:
 
 - A land may never put anything on this Mac's screen (CEO ruling §65; `--no-host-screen` is
   how every land runs), so a screen suite can never run in one here. Refusing would make every
-  land that touches the app's screen inputs impossible, and the only way through would be
+  land that touches the app's screen inputs impossible and the only way through would be
   `--no-verify`, which skips every other check too.
-- It is still not a pass, and nothing records it as one: the verdict line says
+- It is still not a pass and nothing records it as one: the verdict line says
   `ALLOWED WITH N CHECK(S) NOT RUN, WHICH IS NOT A PASS` and names each one, the land receipt
-  lists them under `not_run`, and `nightly-local.py publish` refuses a build of that commit
+  lists them under `not_run` and `nightly-local.py publish` refuses a build of that commit
   until a gui-boot proof taken against it exists (`--gui-proof`). The screen proof is made
   where a screen may be used, the test VM, before anything is published.
 - With `RICHOS_GUI_HOST` naming a guest, the same suites run in the guest and are real passes
@@ -430,7 +446,7 @@ Measured on this Mac on 2026-09-29, on the commits and the land check that built
 
 Before this, the same checks cost 35 to 49 s for the static pass and 49 s for a warm Clippy
 fast set on every run: `richos-voice`'s build script watched `~/ab/richos-wt`, whose mtime
-moves whenever any worktree is created, and recompiled the crate each time (fixed alongside).
+moves whenever any worktree is created and recompiled the crate each time (fixed alongside).
 
 The land check costs what `proof-for.sh` assigns to the change, which is what a land was
 supposed to run anyway, plus about 4 s of its own (selection and receipt). Measured: a land of
@@ -476,5 +492,5 @@ reports retain the distinction between newly executed and reused cases.
 
 A commit touching `richos/mobile/` is refused at the commit unless its message carries a
 `Battery-check: NO — <evidence>` trailer that git itself parses (`battery-check.py --message`,
-the verdict the land gives). One line, or every continuation line indented; a wrapped answer
+the verdict the land gives). One line or every continuation line indented; a wrapped answer
 with unindented continuation lines is plain text to git and is refused, with the way to write it.
