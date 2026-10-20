@@ -16201,7 +16201,7 @@
     "scripts/lib/recovery.py": {
       "source": "scripts/lib/recovery.py",
       "sha256": "7a270446add687eec689fa686e27badfcebd3991acb7d622e1c1f9ba03c558d2",
-      "evidence": "Recovery fixtures bind review ledgers, repository identity and recovery JSON to private state. Standard-library locks and atomic state are host operations. mode reads the entity-local .claude/recovery.json and named qualification files, not orchestration.config. Runtime knobs are recorded with the fixture inputs. Storage reads absolute host RICHOS_RECOVERY_EVIDENCE_ROOT and RICHOS_RECOVERY_WIP_ROOT overrides; fixtures bind their destinations. macOS default mount and non-macOS private-state fallback are runtime inputs, never orchestration.config keys. Fourth-or-later iteration is derived from the registered worker name passed by the caller; no additional configuration or environment reader. Question delivery uses the existing owner acknowledgment ledger; response identities and question references are host-bound before any stronger control.",
+      "evidence": "Recovery fixtures bind review ledgers, repository identity and recovery JSON to private state. Standard-library locks and atomic state are host operations. mode reads the entity-local .claude/recovery.json and named qualification files, not orchestration.config. Runtime knobs are recorded with the fixture inputs. Storage reads absolute host RICHOS_RECOVERY_EVIDENCE_ROOT and RICHOS_RECOVERY_WIP_ROOT overrides; fixtures bind their destinations. macOS default mount and non-macOS private-state fallback are runtime inputs, never orchestration.config keys. Actual-round and triage-event alarms are passed in by the event adapter; no name is read and no additional configuration or environment reader exists. questions-only is one more value of the existing entity-local declaration. Question delivery uses the existing owner acknowledgment ledger; response identities and question references are host-bound before any stronger control.",
       "keys": [],
       "edges": [
         {
@@ -16215,7 +16215,7 @@
     "scripts/lib/recovery_controls.py": {
       "source": "scripts/lib/recovery_controls.py",
       "sha256": "9c28efc40db32c5bb3f63402db88de53ddfff82e30aaca47bd02bcb9ca334be5",
-      "evidence": "Workspace adapter closure includes recovery state, private registry/session records, exact Git commit/delta/untracked identities and owned-command observations. Production preservation uses the external SSD. Workspace fixtures hold an in-flight native tool so no WIP export is started. Ordinary fixture entities have no recovery declaration; no model launches on those paths. Observer reconciliation and scheduler errors are data gaps with no control refusal. Storage is selected by the recovery host helper, not an inherited model path. Numeric iteration admission reads the existing registered worker name and uses the same repository declaration and recovery state.",
+      "evidence": "Workspace adapter closure includes recovery state, private registry/session records, exact Git commit/delta/untracked identities and owned-command observations. Production preservation uses the external SSD. Workspace fixtures hold an in-flight native tool so no WIP export is started. Ordinary fixture entities have no recovery declaration; no model launches on those paths. Observer reconciliation and scheduler errors are data gaps with no control refusal. Storage is selected by the recovery host helper, not an inherited model path. Admission reads no worker name; questions-only follows the observe branches of the same repository declaration and recovery state.",
       "keys": [],
       "edges": [
         {
@@ -16229,7 +16229,7 @@
     "scripts/lib/recovery_runner.py": {
       "source": "scripts/lib/recovery_runner.py",
       "sha256": "8de0e48eadf0f4a00110c9bd18cdb89a4b71c0d26cb8eb4f85108db52a7c9eef",
-      "evidence": "Asynchronous fixture executes a literal fake provider with a private registry/ledger, explicit fake quota command and explicit CPU test seam. Other fixture closures import this module with recovery disabled and launch no model. Production model consultations use existing quota/CPU admission, fixed tools and indexed evidence. The source remains in the complete engine input floor. Repetition context reads the existing native registry, worker transcripts and lead authority transcript through the declared workspace, second_review and pierce edges; recent messages and same-session/repository iteration context are evidence only, not additional authority. Question-first follow-up reads only the registered lead transcript paths through pierce, with UUIDs and timestamps after acknowledged question delivery. Worker chatter and pre-delivery text are excluded. No new config or environment readers.",
+      "evidence": "Asynchronous fixture executes a literal fake provider with a private registry/ledger, explicit fake quota command and explicit CPU test seam. Other fixture closures import this module with recovery disabled and launch no model. Production model consultations use existing quota/CPU admission, fixed tools and indexed evidence. The source remains in the complete engine input floor. Repetition context reads the existing native registry, worker transcripts and lead authority transcript through the declared workspace, second_review and pierce edges; recent messages and the lead's own Agent/SendMessage calls with their tool results are evidence only, not additional authority; no name-stem context join remains. Question-first follow-up reads only the registered lead transcript paths through pierce, with UUIDs and timestamps after acknowledged question delivery. Worker chatter and pre-delivery text are excluded. No new config or environment readers.",
       "keys": [],
       "edges": [
         {
@@ -16262,11 +16262,14 @@
     },
     "scripts/lib/recovery_admin.py": {
       "source": "scripts/lib/recovery_admin.py",
-      "sha256": "8b134111204ddf2bda7fd650b038499b46d9a00a3b1b15268c773be2d23855e8",
+      "sha256": "0085e525b98b49248724315f4af423516d852378ac57749b62e3c6758cd564d0",
       "keys": [],
       "edges": [
         {
           "to": "scripts/lib/recovery.py"
+        },
+        {
+          "to": "scripts/lib/recovery_triage.py"
         }
       ],
       "evidence": "Host inspection reads bounded recovery records/events. Explicit dispute uses scoped effective findings. Contract reads host-selected installed runtime/profile files and executes its read-only mode reader with a finite subprocess timeout. CLI arguments and entity-local recovery.json are data, not orchestration.config keys. Report never mutates records or treats missing costs as zero."
@@ -16316,6 +16319,20 @@
           "to": "ecs/adapters/app.py#desktop-work-fixtures"
         }
       ]
+    },
+    "scripts/lib/recovery_triage.py": {
+      "source": "scripts/lib/recovery_triage.py",
+      "sha256": "90c7428a729ca36073d50f693ee17349f65fe302cef2eeb1386221197ed5e95c",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/recovery.py"
+        },
+        {
+          "to": "scripts/lib/second_review.py"
+        }
+      ],
+      "evidence": "One tool-free Haiku triage call per distinct input. Reads its fixed prompt recovery-profiles/triage.md beside the engine, an absolute caller-named input file and optionally the app's account list; results are written beside the review ledger under recovery/triage. The provider, quota reading and account resolution come through second_review (SECOND_REVIEW_CLAUDE and SECOND_REVIEW_QUOTA_CMD test seams; fixtures bind both to literal fakes and a private SECOND_REVIEW_STATE_DIR). No orchestration.config key or new environment reader."
     }
   },
   "units": {

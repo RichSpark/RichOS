@@ -380,7 +380,7 @@ class Recovery(unittest.TestCase):
         import shutil
         source=Path(R.__file__).resolve().parents[2]
         installed=self.base/'installed'
-        for path in ['scripts/lib/operator_fences.py','scripts/lib/recovery.py','scripts/lib/machine_settings.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py','scripts/lib/pierce.py','recovery-profiles/axel.md','recovery-profiles/wes.md','mega-lander/workspaces.py','scripts/app-engine-hook.py']:
+        for path in ['scripts/lib/operator_fences.py','scripts/lib/recovery.py','scripts/lib/machine_settings.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py','scripts/lib/recovery_triage.py','scripts/lib/pierce.py','recovery-profiles/axel.md','recovery-profiles/wes.md','recovery-profiles/triage.md','mega-lander/workspaces.py','scripts/app-engine-hook.py']:
             destination=installed/path
             destination.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(source/path,destination)

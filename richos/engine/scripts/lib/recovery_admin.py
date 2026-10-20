@@ -54,7 +54,7 @@ def report(job=None):
         scope='Durable host records only. Empty or incomplete data does not prove successful native cancellation or semantic efficacy.')
 
 
-CONTRACT_PATHS = ['recovery-profiles/axel.md','recovery-profiles/wes.md','scripts/lib/recovery.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py',
+CONTRACT_PATHS = ['recovery-profiles/axel.md','recovery-profiles/wes.md','recovery-profiles/triage.md','scripts/lib/recovery.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py','scripts/lib/recovery_triage.py',
     'scripts/lib/pierce.py','mega-lander/workspaces.py','scripts/app-engine-hook.py']
 
 
@@ -110,12 +110,19 @@ def main(argv=None):
     snapshot = commands.add_parser('contract-snapshot')
     snapshot.add_argument('--entity', required=True)
     snapshot.add_argument('--output', required=True)
+    triage = commands.add_parser('triage', help='one Haiku triage decision for one recorded work event (contract: recovery_triage.py)')
+    triage.add_argument('--input', required=True)
+    triage.add_argument('--claude', default='')
+    triage.add_argument('--accounts', default='')
     dispute = commands.add_parser('dispute')
     dispute.add_argument('--repo', required=True)
     dispute.add_argument('--work', required=True)
     dispute.add_argument('--tip', required=True)
     dispute.add_argument('--finding', action='append', required=True)
     args = ap.parse_args(argv)
+    if args.command=='triage':
+        import recovery_triage
+        return recovery_triage.main(['--input',args.input,'--claude',args.claude,'--accounts',args.accounts])
     if args.command=='report':
         print(json.dumps(report(args.job),indent=2,sort_keys=True))
         return 0
