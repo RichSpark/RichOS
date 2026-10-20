@@ -1935,6 +1935,11 @@ def _saved_artifacts_hold(old):
 
 
 KNOWN_RED_GAP = "known-red:"
+# A check reuse() never accepts (a `fresh` one, and `engine receipts`) executes wherever it is
+# required; no saved run proves it, whatever source it ran on, so coverage names it apart and
+# never "proven" (review rv-20261020T083937Z-2f73e49a-734e: verification-pins validates
+# external readers no identity binds, and a source-only match called it proven).
+FRESH_GAP = "fresh at every seat:"
 
 
 def _receipt_proves(item, old):
@@ -1963,10 +1968,9 @@ def coverage(previous, items, identities, source):
     THE READINESS PREFLIGHT'S QUESTION (verification reliability PRD, R3/A8): does the author's
     saved run cover its candidate's whole selected plan? Asked in the author's own checkout, so
     a check keyed by that checkout (cargo, packaging) is judged on the bytes it ran on, exactly as
-    reuse() would judge it there. Two kinds have no input identity to compare and are answered
-    from what the run itself recorded: a `fresh` check passed on this exact checkout source
-    (HEAD, tracked diff, untracked files) is covered; `engine receipts` is covered when it passed
-    and every engine unit of the plan is."""
+    reuse() would judge it there. It never says proven where reuse() would refuse: a `fresh`
+    check and `engine receipts` are never reused, so they are named apart (FRESH_GAP), neither
+    proven nor missing: they execute at every seat, and a recovery job could not prove them."""
     previous = Path(previous)
     plan = read_plan(previous)
     try:
@@ -1977,28 +1981,11 @@ def coverage(previous, items, identities, source):
     for item in items:
         old = outcomes.get(item.label, {})
         identity = identities[item.label]
-        if item.label == "engine receipts":
-            continue
-        if identity.get("fresh"):
-            if old.get("state") != "passed" or old.get("exit") != 0 or old.get("invalid"):
-                found[item.label] = "no validated passing execution"
-            elif old.get("source") != source:
-                found[item.label] = "the checkout changed since it ran, and it declares no inputs"
-            else:
-                found[item.label] = _saved_artifacts_hold(old)
+        if item.label == "engine receipts" or identity.get("fresh"):
+            found[item.label] = "%s %s" % (FRESH_GAP, evidence_gap(item.label, old, identity, plan))
             continue
         found[item.label] = (evidence_gap(item.label, old, identity, plan) or _saved_artifacts_hold(old)
                              or _receipt_proves(item, old))
-    for item in items:
-        if item.label == "engine receipts":
-            old = outcomes.get(item.label, {})
-            units = [i.label for i in items if getattr(i, "engine_unit", False)]
-            if old.get("state") != "passed" or old.get("invalid"):
-                found[item.label] = "no validated passing execution"
-            elif any(found.get(unit) for unit in units):
-                found[item.label] = "an engine unit it covers is not proven"
-            else:
-                found[item.label] = _saved_artifacts_hold(old)
     return found
 
 

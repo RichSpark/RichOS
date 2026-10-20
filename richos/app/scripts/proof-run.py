@@ -2433,13 +2433,15 @@ def author_coverage(args):
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     planned_before = {row["check"] for row in saved["items"]}
-    proven, eligible, missing = [], [], []
+    proven, eligible, fresh, missing = [], [], [], []
     for item in items:
         old = outcomes.get(item.label, {})
         if item.label not in planned_before:
             missing.append((item.label, "selected now, never in the run's plan"))
         elif gaps.get(item.label) is None:
             proven.append(item.label)
+        elif gaps[item.label].startswith(proof_evidence.FRESH_GAP):
+            fresh.append((item.label, gaps[item.label]))
         elif gaps[item.label].startswith(proof_evidence.KNOWN_RED_GAP):
             eligible.append((item.label, gaps[item.label]))
         elif old.get("state") == "not-run":
@@ -2448,11 +2450,12 @@ def author_coverage(args):
         else:
             missing.append((item.label, "%s: %s" % (old.get("state") or "no outcome", gaps[item.label])))
     line = ("author coverage of %s (base %s, %s selection): %d planned, %d proven by the saved run, "
-            "%d NOT RUN or KNOWN-RED (an existing exception, not proof), %d missing" % (
+            "%d NOT RUN or KNOWN-RED (an existing exception, not proof), "
+            "%d run fresh at every seat (never proven by a saved run), %d missing" % (
                 chosen["candidate"][:12], chosen["base"][:12], chosen.get("mode") or "normal",
-                len(items), len(proven), len(eligible), len(missing)))
+                len(items), len(proven), len(eligible), len(fresh), len(missing)))
     print("proof-run: " + line)
-    for label, why in eligible + missing:
+    for label, why in eligible + fresh + missing:
         print("  %s: %s" % (label, why))
     recovery = None
     if missing:
@@ -2463,7 +2466,8 @@ def author_coverage(args):
     print("  derived in %.1f s, nothing run" % (time.monotonic() - started))
     if args.summary_out:
         proof_evidence.atomic(args.summary_out, {"run": run, "line": line, "planned": len(items),
-            "proven": proven, "not_run": dict(eligible), "missing": dict(missing), "recovery": recovery,
+            "proven": proven, "not_run": dict(eligible), "fresh": dict(fresh), "missing": dict(missing),
+            "recovery": recovery,
             "candidate": chosen["candidate"], "base": chosen["base"], "mode": chosen.get("mode"),
             "seconds": round(time.monotonic() - started, 1)})
     return 1 if missing else 0
