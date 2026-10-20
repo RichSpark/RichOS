@@ -14048,7 +14048,7 @@
     },
     "scripts/lib/stall_watch.py#review-watch-helpers": {
       "source": "scripts/lib/stall_watch.py",
-      "sha256": "46e5d68dddd978f6e9641852b2a6970171003130db8134ad2f9b02b6c2245dfa",
+      "sha256": "cb2429a86836df48911737b3bbf8225a2a5d7772c8029d74841a9a2591a73fa0",
       "evidence": "Added 2026-10-09 (second review slice 4) for review_watch.py, which imports this module and uses its helpers; the --notice path stays bound by scripts/lib/stall_watch.py#notice. Module load: standard-library imports, the sibling imports resource_waits and escalations (neither reads configuration at import), constants. Helpers review_watch.py calls: hhmm, _env_float, _read_json/_write_json (JSON state files it names), _load (a module by fixed path, None when absent), Sources(engine_root) (loads mega-lander/workspaces.py by fixed path, loads richos/app/scripts/lib/proof_slots.py beside the engine without calling it, imports sibling agent_hold.py without calling it; reserve.py is loaded only by cpu_busy, which review_watch never calls), thresholds (environment STALL_WATCH_SILENT_MINUTES, STALL_WATCH_SELF_WAIT_MINUTES, STALL_WATCH_REPEAT_MINUTES and, through resource_waits.wait_minutes, RICHOS_RESOURCE_WAIT_MINUTES), _git_last_commit (git log -1 in the workspace), _transcript (workspaces.platform_agent_transcript), _try_lock/lock_held (flock on a named file), and in the monitor loop only session_alive_check (ps) and _nap. No orchestration.config read and no engine execution.",
       "keys": [],
       "edges": [
@@ -15776,7 +15776,7 @@
     },
     "scripts/stall-watch.sh#notice": {
       "source": "scripts/stall-watch.sh",
-      "sha256": "404d225a221e40dbaa7eb9d9932b9d46b49d2c6cf51b6d29f0c92c2e8a5e00de",
+      "sha256": "e95089afd394bdd95260cc10a40c17b1cf58382bc9fdd89f64c983b8a5106154",
       "evidence": "Resolves the engine and entity roots, then tests only whether the entity's orchestration.config exists; it never sources the file and reads no key. --notice is passed to the reviewed Python notice path.",
       "keys": [],
       "edges": [
@@ -15791,7 +15791,7 @@
     },
     "scripts/lib/stall_watch.py#notice": {
       "source": "scripts/lib/stall_watch.py",
-      "sha256": "46e5d68dddd978f6e9641852b2a6970171003130db8134ad2f9b02b6c2245dfa",
+      "sha256": "cb2429a86836df48911737b3bbf8225a2a5d7772c8029d74841a9a2591a73fa0",
       "evidence": "--notice parses arguments and prints fixed text; its numbers are this file's constants or the STALL_WATCH_* and RICHOS_RESOURCE_WAIT_MINUTES environment overrides. It returns before the registry, the slot line or the CPU sampler is loaded. The module imports resource_waits.py, which reads no configuration at import. Renewed 2026-10-01: the module also imports escalations.py (the ESCALATION watch), which reads no configuration at import; --notice prints fixed text about it and reads neither the ledger nor any transcript.",
       "keys": [],
       "edges": [
