@@ -7,18 +7,28 @@ night of thirteen handoffs hand-edited those pins with sed, and one agent wrote 
 helper. This is that helper, committed (a helper you needed and did not find is added to the
 toolkit). It is the qualification-record twin of dependency-pins.py --renew.
 
-  qualification-pins.py --renew [PATH..]  set every "sources" pin of each repository-relative
+  qualification-pins.py --renew [--note TEXT] [PATH..]
+                                          set every "sources" pin of each repository-relative
                                           PATH to the working-tree bytes. With no PATH: every
                                           pinned file that differs from its pin (so it also
                                           covers a file changed in an earlier commit). Prints
                                           each pin it moved. A pinned file that no longer
-                                          exists is refused, never silently dropped.
+                                          exists is refused, never silently dropped. --note
+                                          appends why the review still holds to the "review"
+                                          text of each unit whose pin moved, and only there.
   qualification-pins.py --all             list every stale pin; exit 1 when there is one
                                           (read-only)
 
 Only the 64-hex digest after the path is rewritten, in place, so the file's formatting, key
 order and every "review" text stay byte-identical. A changed file's unit "review" text still
 has to be re-read by a human: renewing the pin does not say the review is still true.
+
+WHERE A RENEWAL NOTE GOES (2026-10-20, verification reliability PRD step 2, finding 2): into the
+renewed unit's own "review" text (--note), never into the prose review
+(verification-input-qualifications.md). The prose is a whole-file input of every qualified
+identity, so one note there discarded every reusable pass, UI suites included; a unit's review
+is in its own slice only (proof_evidence.qualification_slice), which its pin renewal changes
+anyway.
 
 The hash is `shasum -a 256 <file>` over the raw bytes, which is what the commit hook compares.
 The repository root is the current directory's Git top (override: QUALIFICATION_PINS_TOP).
@@ -29,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 RECORD = "docs/development/verification-input-qualifications.json"
 
@@ -62,7 +73,19 @@ def stale(root, data):
     return [(u, p, pin, sha(root, p)) for u, p, pin in pins(data) if sha(root, p) != pin]
 
 
-def renew(root, wanted):
+def note_review(text, data, unit, note):
+    """`text` with `note` appended to unit `unit`'s own "review" string, everything else as it was."""
+    review = data["units"][unit]["review"]
+    key = text.index(json.dumps(unit) + ":")
+    at = text.index('"review"', key)
+    start = text.index('"', text.index(":", at))
+    value, end = json.JSONDecoder().raw_decode(text, start)
+    if value != review:
+        raise SystemExit(f"qualification-pins: cannot find unit \"{unit}\"'s own review text to note")
+    return text[:start] + json.dumps(review.rstrip() + " " + note.strip(), ensure_ascii=False) + text[end:]
+
+
+def renew(root, wanted, note=None):
     record = os.path.join(root, RECORD)
     with open(record, encoding="utf-8", newline="") as handle:
         text = handle.read()
@@ -73,6 +96,7 @@ def renew(root, wanted):
         if path not in known:
             print(f"qualification-pins: {path} is not pinned in {RECORD}; nothing to renew")
     moved = 0
+    noted = set()
     for path in sorted(set(targets) & known):
         now = sha(root, path)
         if now is None:
@@ -85,7 +109,16 @@ def renew(root, wanted):
                 moved += 1
                 print(f"renewed {path}: {match.group(2)[:12]} -> {now[:12]}")
             return match.group(1) + now + match.group(3)
+        if note:
+            noted |= {(unit, path, pin) for unit, p, pin in pins(data) if p == path and pin != now}
         text = pattern.sub(swap, text)
+    for unit in sorted({unit for unit, _p, _pin in noted}):
+        moved_here = sorted((p, pin) for u, p, pin in noted if u == unit)
+        stamp = time.strftime("%Y-%m-%d", time.gmtime())
+        text = note_review(text, json.loads(text), unit, "Renewed %s: %s. %s" % (
+            stamp, ", ".join("%s %s to %s" % (p, pin[:8], (sha(root, p) or "")[:8]) for p, pin in moved_here),
+            note))
+        print(f"noted the renewal in unit \"{unit}\"'s review")
     with open(record, "w", encoding="utf-8", newline="") as handle:
         handle.write(text)
     json.loads(text)
@@ -105,7 +138,13 @@ def main(argv):
             print(f"{path} (unit \"{unit}\"): pinned {pin[:12]}, now {(now or '(removed)')[:12]}")
         return 1 if found else 0
     if argv[:1] == ["--renew"]:
-        return renew(root, argv[1:])
+        rest, note = argv[1:], None
+        if rest[:1] == ["--note"]:
+            if len(rest) < 2 or not rest[1].strip():
+                print("qualification-pins: --note needs the reason the review still holds", file=sys.stderr)
+                return 2
+            note, rest = rest[1], rest[2:]
+        return renew(root, rest, note)
     print(__doc__, file=sys.stderr)
     return 2
 

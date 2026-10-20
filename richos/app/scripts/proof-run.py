@@ -4,6 +4,9 @@
     proof-run.py [proof-for arguments]          e.g.  origin/main..main   |  --working  |  <sha>
     proof-run.py --commands <file>              a saved `proof-for.sh --quiet` output
     proof-run.py --resume <run-directory>       retry a frozen plan, preserving valid results
+    proof-run.py --coverage <run-directory>     readiness preflight, reads only: does a saved
+                                                handover run prove its candidate's whole plan here?
+    proof-run.py --release <run-directory>      remove a handover hold once nothing needs that run
     options:
       --fail-fast          cancel independent unfinished work after a failure (opt-in)
       --keep-going         compatibility alias for default continuation
@@ -912,9 +915,10 @@ def finish_attempt(item):
 
 
 # A REFUSED CHECK CARRIES THE COMMAND THAT RERUNS IT AS THE GATE RAN IT (2026-10-05).
-# The merge gate runs `git merge` with LC_ALL=C (workspaces.py _git_env), its hooks inherit it, and
-# so does every check; a shell has en_GB.UTF-8. land-completeness.test.sh failed only in the gate
-# and passed every hand rerun by silently skipping its check (fixed in 3c0383fba), because nobody
+# The merge gate ran `git merge` with LC_ALL=C (workspaces.py _git_env, until _land_env passed the
+# caller's locale on, 2026-10-20), its hooks inherited it, and so did every check; a shell has
+# en_GB.UTF-8. land-completeness.test.sh failed only in the gate and passed every hand rerun by
+# silently skipping its check (fixed in 3c0383fba), because nobody
 # could rerun it the way the gate had. So each check's exact environment, directory and command
 # are written to <run>/rerun/<nn>-<check>.sh when it starts (`env -i`, every variable it got), and
 # a check that did not pass is printed with that file and the locale and time zone it ran under.
@@ -1088,6 +1092,12 @@ def launch(item, n, logdir, tokens_dir, reserved):
         if os.path.exists(item.ui_ledger):
             os.unlink(item.ui_ledger)    # an earlier attempt's records are not this attempt's
         env["RICHOS_UI_TESTS_LEDGER"] = item.ui_ledger
+        # And its navigation-failure bundles go to the check's own results folder in this run's
+        # evidence (PRD step 3, T07/R9): left to lib/navigation-evidence.js's default, they went
+        # to the checkout's `.shots/`, which a land in a temporary checkout removes with it. The
+        # same folder takes the suite's failing pictures (RICHOS_TEST_RESULTS_ROOT, group B).
+        # Per run, so here and never in item.env: no part of any input identity.
+        env["RICHOS_UI_NAV_EVIDENCE_DIR"] = os.path.join(item.results, "navigation-failures")
     # Python bytecode is never a check's output into the checkout (2026-09-30): a hook test that
     # ran guard-idle-land.py wrote hooks/__pycache__/guard-idle-land.cpython-314.pyc inside six
     # other checks' declared inputs, and all six became "invalid: execution inputs changed
@@ -2208,11 +2218,15 @@ def summarize(items, wall, logdir, budget_seconds=600, monitor_lines=()):
                      "repeated_cpu_seconds": attempt_cpu(it.previous_attempts),
                      "failing_tests": list(it.failing), "results": kept,
                      "not_run": getattr(it, "not_run", None),
+                     "known_red": known_red(it),
                      "rerun": getattr(it, "rerun", None),
                      "command": "cd %s && %s" % (os.path.relpath(it.cwd, ROOT), " ".join(shlex.quote(a) for a in it.argv))})
+    coverage = coverage_line(rows)
     with open(os.path.join(logdir, "summary.json"), "w") as fh:
         json.dump({"wall_seconds": round(wall, 1), "serial_seconds": round(serial, 1), "host": list(monitor_lines),
-                   "checks": rows}, fh, indent=1)
+                   "coverage": coverage, "checks": rows}, fh, indent=1)
+    print("")
+    print("proof-run: coverage: " + coverage)
     try:
         os.rmdir(os.path.join(logdir, "results"))  # only when no check kept anything
     except OSError:
@@ -2232,10 +2246,47 @@ def summarize(items, wall, logdir, budget_seconds=600, monitor_lines=()):
         print("    logs: %s" % logdir)
         return 3
     reused = sum(bool(getattr(it, "reused_from", None)) for it in items)
-    print("=== proof-run: all %d check(s) passed in %.0f s%s ===" % (
-        len(items), wall, "; reconciled with %d reused result(s)" % reused if reused else ""))
+    red = [row["check"] for row in rows if row["known_red"]]
+    print("=== proof-run: all %d check(s) passed in %.0f s%s%s ===" % (
+        len(items), wall, "; reconciled with %d reused result(s)" % reused if reused else "",
+        "; %d of them KNOWN-RED, a declared exception and not a pass: %s" % (len(red), ", ".join(red))
+        if red else ""))
     print("    logs: %s" % logdir)
     return 0
+
+
+def known_red(it):
+    """True for a check that passed only as a declared KNOWN-RED engine unit (its receipt's
+    verdict). The policy lets it through; a report never counts it as passed (PRD A14)."""
+    if it.state != "passed" or not getattr(it, "engine_unit", False):
+        return False
+    try:
+        path = proof_evidence.receipt_path(it)
+        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        return len(rows) == 1 and rows[0].get("verdict") == "KNOWN-RED"
+    except (OSError, ValueError, AttributeError, TypeError):
+        return False
+
+
+def coverage_line(rows):
+    """THE GENERATED COVERAGE LINE (verification reliability PRD, A11/A14): what the summary
+    holds, counted from its own rows, so nobody reports arithmetic such as total minus failed
+    (the October 19 "86 passed" counted four checks that never ran). Reused passes are named
+    inside the passes, KNOWN-RED and NOT RUN beside them, never inside."""
+    counts = {}
+    for row in rows:
+        counts[row["result"]] = counts.get(row["result"], 0) + 1
+    red = sum(1 for row in rows if row["known_red"])
+    passed = counts.pop("passed", 0) - red
+    reused = sum(1 for row in rows if row["result"] == "passed" and row["reused_from"] and not row["known_red"])
+    idle = counts.pop("not-run", 0)
+    parts = ["%d planned" % len(rows), "%d passed (%d of them reused)" % (passed, reused)]
+    if red:
+        parts.append("%d KNOWN-RED (a declared exception, not a pass)" % red)
+    if idle:
+        parts.append("%d NOT RUN (not a pass)" % idle)
+    parts += ["%d %s" % (n, state) for state, n in sorted(counts.items())]
+    return ", ".join(parts)
 
 
 def attempt_cpu(attempts):
@@ -2277,6 +2328,145 @@ def rotate(parent):
             shutil.rmtree(path, ignore_errors=True)
         finally:
             lease.close()
+
+
+# A HANDOVER RUN IS HELD UNTIL ITS LAND HAS CONSUMED IT (verification reliability PRD, A11).
+# An author's run over an explicit `<recorded base>..<candidate>` range in a teammate workspace is
+# the evidence its handover points at (workspaces.py proof_report) and its land validates. Rotation
+# keeps only the last KEEP_RUNS successful runs of a checkout, so three narrow green runs after the
+# handover would have removed it before the land read it. So that run gets rotate()'s existing
+# `retain` marker before its pointer exists (the `logs:` line, then the registry's report), naming
+# what it holds and for whom. The land that merges its candidate removes it once the land's own
+# evidence is written (autocheck.py post_merge, release_author_runs), and rotation applies again.
+# A superseded or abandoned handover is named in the report (also_held) and released by the lead
+# with `--release <run>` after checking nothing still needs it; nothing sweeps holds, and
+# `--release` removes only a handover hold. The main checkout is never a handover seat.
+HANDOVER_HOLD = "handover"
+
+
+def hold_for_handover(logdir, selected):
+    if not (selected and selected.get("base") and selected.get("candidate")):
+        return
+    if engine_pass.is_main_checkout(ROOT):
+        return
+    marker = os.path.join(logdir, "retain")
+    proof_evidence.atomic(marker, {"holder": HANDOVER_HOLD, "checkout": ROOT, "base": selected["base"],
+                                   "candidate": selected["candidate"], "mode": selected.get("mode"),
+                                   "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+    print("  held for its handover until its land consumes it: %s" % marker, flush=True)
+
+
+def release_hold(run):
+    """--release RUN: remove RUN's handover hold; refuse any other kind of hold."""
+    marker = os.path.join(run, "retain")
+    try:
+        with open(marker) as stream:
+            hold = json.load(stream)
+    except FileNotFoundError:
+        print("proof-run: %s holds no handover hold; nothing to release" % run)
+        return 0
+    except (OSError, ValueError):
+        hold = None
+    if not isinstance(hold, dict) or hold.get("holder") != HANDOVER_HOLD:
+        print("proof-run: REFUSED: %s is not a handover hold, so it is not this command's to remove" % marker)
+        return 2
+    os.unlink(marker)
+    print("proof-run: released the handover hold on %s (candidate %s); rotation applies to it again" % (
+        run, str(hold.get("candidate"))[:12]))
+    rotate(os.path.dirname(os.path.realpath(run)))
+    return 0
+
+
+def author_coverage(args):
+    """--coverage RUN: THE READINESS PREFLIGHT (verification reliability PRD, R3/A8), reads only.
+
+    Does the saved handover RUN prove its candidate's whole selected plan? Asked in RUN's own
+    checkout at its candidate: the selection is made again from the run's recorded range and
+    mode, so a suite the run never planned is missing, and every planned check's inputs are read
+    now and judged against the run's outcomes by the predicate reuse() applies
+    (proof_evidence.coverage). Nothing runs, nothing is copied. A NOT RUN check is the existing
+    NOT RUN eligibility, named separately and never proven. Exit 0: every planned check proven;
+    1: some are not, with the one runner job that resolves them all; 2: no answer here."""
+    run = os.path.realpath(args.coverage)
+    try:
+        saved = proof_evidence.read_plan(run)
+        with open(os.path.join(run, "outcomes.json")) as stream:
+            outcomes = json.load(stream)
+        try:
+            with open(os.path.join(run, "summary.json")) as stream:
+                not_run = {row.get("check"): (row.get("not_run") or {}).get("why")
+                           for row in json.load(stream).get("checks") or []}
+        except FileNotFoundError:
+            not_run = {}
+    except (OSError, ValueError, AttributeError) as exc:
+        print("proof-run: coverage: %s is not a readable saved run: %s" % (run, exc))
+        return 2
+    chosen = saved.get("selection") or {}
+    if saved.get("root") != ROOT:
+        print("proof-run: coverage: %s ran in %s; its coverage is asked there" % (run, saved.get("root")))
+        return 2
+    if not (chosen.get("base") and chosen.get("candidate")):
+        print("proof-run: coverage: %s names no recorded <base>..<candidate> range, so it stands for no handover" % run)
+        return 2
+    if head_commit() != chosen["candidate"]:
+        print("proof-run: coverage: this checkout is at %s, not at the run's candidate %s" % (
+            head_commit()[:12], chosen["candidate"][:12]))
+        return 2
+    started = time.monotonic()
+    args.commands = None
+    args.proof_for_args = [*(["--gate"] if chosen.get("mode") == "gate" else []),
+                           "%s..%s" % (chosen["base"], chosen["candidate"])]
+    lines = selection(args)
+    scratch = tempfile.mkdtemp(prefix="coverage-")
+    try:
+        items = plan(lines, args, scratch, history_weights(default_logdir()))
+        # The same runtime setup a run gives its checks before their inputs are read (review
+        # rv-20261020T073921Z-1e0461cc-0956 #1): without it, every check that binds the runtime's
+        # environment read differently here than it ran, and valid proof was called missing.
+        supply_runtime(items)
+        supply_speech_models(items)
+        for item in items:
+            proof_evidence.prepare_environment(item, ROOT, scratch, execution_environment(item))
+        snapshot = proof_evidence.InputSnapshot()
+        identities = {item.label: input_identity(item, args, scratch, snapshot) for item in items}
+        gaps = proof_evidence.coverage(run, items, identities, source_identity())
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    planned_before = {row["check"] for row in saved["items"]}
+    proven, eligible, missing = [], [], []
+    for item in items:
+        old = outcomes.get(item.label, {})
+        if item.label not in planned_before:
+            missing.append((item.label, "selected now, never in the run's plan"))
+        elif gaps.get(item.label) is None:
+            proven.append(item.label)
+        elif gaps[item.label].startswith(proof_evidence.KNOWN_RED_GAP):
+            eligible.append((item.label, gaps[item.label]))
+        elif old.get("state") == "not-run":
+            eligible.append((item.label, "NOT RUN (%s), the existing NOT RUN eligibility" % (
+                not_run.get(item.label) or "no reason saved")))
+        else:
+            missing.append((item.label, "%s: %s" % (old.get("state") or "no outcome", gaps[item.label])))
+    line = ("author coverage of %s (base %s, %s selection): %d planned, %d proven by the saved run, "
+            "%d NOT RUN or KNOWN-RED (an existing exception, not proof), %d missing" % (
+                chosen["candidate"][:12], chosen["base"][:12], chosen.get("mode") or "normal",
+                len(items), len(proven), len(eligible), len(missing)))
+    print("proof-run: " + line)
+    for label, why in eligible + missing:
+        print("  %s: %s" % (label, why))
+    recovery = None
+    if missing:
+        recovery = "cd %s && python3 richos/app/scripts/proof-run.py %s --reuse %s" % (
+            shlex.quote(ROOT), " ".join(args.proof_for_args), shlex.quote(run))
+        print("  recovery, ONE runner job over the whole missing plan in this checkout (every proven check "
+              "is reused, only the missing ones run): %s" % recovery)
+    print("  derived in %.1f s, nothing run" % (time.monotonic() - started))
+    if args.summary_out:
+        proof_evidence.atomic(args.summary_out, {"run": run, "line": line, "planned": len(items),
+            "proven": proven, "not_run": dict(eligible), "missing": dict(missing), "recovery": recovery,
+            "candidate": chosen["candidate"], "base": chosen["base"], "mode": chosen.get("mode"),
+            "seconds": round(time.monotonic() - started, 1)})
+    return 1 if missing else 0
 
 
 # The exit of a run that crashed: no verdict. Not 1 (a check failed) nor 3 (a check not run), the
@@ -2337,8 +2527,19 @@ def run_main(argv, run_state):
     p.add_argument("--summary-out", help="also write summary.json to this file")
     p.add_argument("--without-nightly-conditions", action="store_true",
                    help="run every check in the caller's environment only (diagnosis; refused in the land checks)")
+    p.add_argument("--coverage", metavar="RUN",
+                   help="readiness preflight: does the saved handover RUN prove its candidate's whole selected "
+                        "plan in this checkout? Reads only (author_coverage)")
+    p.add_argument("--release", metavar="RUN",
+                   help="remove the handover hold from RUN once nothing still needs it (HANDOVER_HOLD)")
     args, rest = p.parse_known_args(argv)
     args.proof_for_args = rest
+    if args.release:
+        return release_hold(args.release)
+    if args.coverage:
+        if rest or args.commands or args.resume or args.reuse:
+            p.error("--coverage takes its selection from the saved run")
+        return author_coverage(args)
     if args.without_nightly_conditions:
         if os.environ.get("RICHOS_AUTOCHECK_ACTIVE"):
             p.error("--without-nightly-conditions is refused inside the land checks: the merge gate "
@@ -2407,6 +2608,8 @@ def run_main(argv, run_state):
     print("  " + conditions_line(items))
     if args.dry_run:
         return 0
+    if not args.log_dir:
+        hold_for_handover(logdir, selected)
     print("  logs: %s" % logdir, flush=True)
     global SLOT
     try:

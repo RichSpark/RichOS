@@ -3727,8 +3727,16 @@
       },
       "qualification": "docs/development/verification-input-qualifications.json",
       "qualification_unit": "ui-suite family",
+      "private_reads": {
+        "splash.js": {
+          "why": "check 18 opens, beside each splash-library.js entry, the round study its source names in the private richos-hq repository, when that repository exists",
+          "env": "RICHOS_HQ",
+          "home": "ab/richos-hq",
+          "named_in": "richos/app/ui/splash-library.js",
+          "pattern": "\"source\"\\s*:\\s*\"richos-hq (\\S+)\""
+        }
+      },
       "unqualified": {
-        "splash.js": "check 18 reads the private richos-hq studies each splash-library.js entry names, outside this repository; no declaration binds them",
         "vouch-template.js": "downloads the vouch release with curl from the network; its digest-verified cache is test output, not a bound input"
       }
     }

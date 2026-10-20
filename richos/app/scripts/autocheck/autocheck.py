@@ -877,10 +877,11 @@ def stale_pins(repo):
         "",
         f"A reviewed check reads these files, and {QUALIFICATIONS} pins each by SHA-256.",
         "The merge would refuse this branch with UnqualifiedReader (proof_evidence.qualify_recipe).",
-        "Fix: run  python3 richos/app/scripts/autocheck/qualification-pins.py --renew <file>..",
+        "Fix: run  python3 richos/app/scripts/autocheck/qualification-pins.py --renew --note '<why>' <file>..",
         "(no <file>: every stale pin) instead of editing the JSON by hand; it sets each pin to the",
-        "file's SHA-256 and touches nothing else. Then re-check that the unit's \"review\" text",
-        "still describes what the changed file reads.",
+        "file's SHA-256 and adds <why> to the renewed units' own \"review\" text, never to the prose",
+        "review (a whole-file input of every qualified identity). First re-check that each unit's",
+        "\"review\" text still describes what the changed file reads.",
     ]
     banner("COMMIT REFUSED: a changed file is pinned by a reviewed check", lines)
     return 1
@@ -1484,6 +1485,74 @@ def offered_author_runs(what):
     return argv
 
 
+# THE READINESS PREFLIGHT, INFORMATIONAL UNTIL THE ROLLOUT (verification reliability PRD, R3/A8).
+# Before the gate runs anything, each offered author run is asked, in its own checkout, whether it
+# proves its candidate's whole selected plan (proof-run.py --coverage: reads only, the same
+# predicate reuse() applies). The answer is printed with the one runner job that would resolve
+# every missing check; nothing is refused on it until the rollout switches the refusal on, and
+# the gate's own obligations are unchanged. A land offered no author run says so: no usable
+# pointer is missing proof under the same rule, never an exception.
+PREFLIGHT_SECONDS = 300
+
+
+def author_preflight(what):
+    runs = [r for r in os.environ.get(AUTHOR_RUNS, "").split(os.pathsep) if r]
+    if not runs:
+        say(f"autocheck: {what}: author proof: no saved author run was offered, so none is proven here "
+            "(informational until the rollout; the gate below runs its whole plan)")
+        return
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.pop(AUTHOR_RUNS, None)
+    for run in runs:
+        try:
+            root = json.loads((Path(run) / "plan.json").read_text())["root"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            say(f"autocheck: {what}: author proof: {run} has no readable plan ({exc}); its coverage is missing")
+            continue
+        script = Path(root) / PROOF_RUN
+        try:
+            current = "--coverage" in script.read_text(errors="replace")
+        except OSError:
+            current = False
+        if not current:
+            say(f"autocheck: {what}: author proof: the runner in {root} predates the readiness preflight; "
+                f"no coverage is derived for {run}")
+            continue
+        try:
+            result = subprocess.run([sys.executable, str(script), "--coverage", run], cwd=root, env=env,
+                                    capture_output=True, text=True, timeout=PREFLIGHT_SECONDS,
+                                    stdin=subprocess.DEVNULL)
+            out = (result.stdout + result.stderr).strip()
+        except subprocess.TimeoutExpired:
+            out = f"no answer within {PREFLIGHT_SECONDS} s"
+        say(f"autocheck: {what}: author proof (informational until the rollout):")
+        for line in out.splitlines()[-40:]:
+            say("    " + line)
+
+
+def release_author_runs(repo, head):
+    """After a land that consumed them: remove the handover hold (proof-run.py HANDOVER_HOLD) of
+    each offered author run whose candidate this land merged, once the land's own evidence is
+    written (its receipt for this tree). A hold for anything else is never touched."""
+    for run in [r for r in os.environ.get(AUTHOR_RUNS, "").split(os.pathsep) if r]:
+        marker = Path(run) / "retain"
+        try:
+            hold = json.loads(marker.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(hold, dict) or hold.get("holder") != "handover" or not hold.get("candidate"):
+            continue
+        merged = git("merge-base", "--is-ancestor", hold["candidate"], head, check=False, cwd=repo.top)
+        if merged.returncode != 0:
+            continue
+        try:
+            marker.unlink()
+        except OSError:
+            continue
+        say(f"autocheck: released the handover hold on {run}: its candidate {hold['candidate'][:12]} landed in "
+            f"{head[:12]}, whose own evidence is written; rotation applies to it again")
+
+
 def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
     """Run the suites proof-for.sh assigns plus the lint on the working tree, which the
     caller has established IS the tree being landed. Returns 0 and writes the receipt when
@@ -1499,6 +1568,8 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
         return rc
     if (rc := publication_completeness_gate(repo, what)):
         return rc
+    if what != "push":
+        author_preflight(what)  # a push backstop is offered no handover
     commands = []
     covered = set()
     if range_argv:
@@ -1616,7 +1687,7 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
             *([why_not] if why_not else []),
             *(line for row in blocking or [] for line in
               [row.get("message") or f"FAILED: {row['check']} ({row['result']})", *alone_lines(alone.get(row["check"]))]),
-            # The gate's environment is not a shell's (LC_ALL=C from the merge, TZ, the nightly's
+            # The gate's environment is not a shell's (the merge's locale, TZ, the nightly's
             # conditions): this file reruns the check exactly as it ran here (proof-run.py write_rerun).
             *(f"  rerun {row['check']} as the gate ran it: sh {shlex.quote(row['rerun'])}"
               for row in blocking or [] if row.get("rerun")),
@@ -2282,7 +2353,9 @@ def post_merge(repo, squash):
         orig = git("rev-parse", "-q", "--verify", "ORIG_HEAD", check=False, cwd=repo.top).stdout.strip()
         phone_watch(repo, orig, head)
         refresh_hook_sidecars(repo, orig, head)
-        if not repo.land_receipt(tree).exists():
+        if repo.land_receipt(tree).exists():
+            release_author_runs(repo, head)
+        else:
             how = "git merge --no-verify" if merged else "a fast-forward"
             record_skip(repo, f"main moved to {head[:12]} without the land checks ({how})",
                         f"Was landing {head[:12]} on main without its suites deliberate? The next push of main runs them.")
@@ -2293,7 +2366,9 @@ def post_merge(repo, squash):
         # at pre-merge-commit and left its receipt. A fast-forward ran nothing, as on main, and is
         # recorded as main's is; its push asks the review and runs the land check (pre_push). The
         # phone watch and the hook sidecars belong to the main checkout, not to this tree.
-        if not repo.land_receipt(tree).exists():
+        if repo.land_receipt(tree).exists():
+            release_author_runs(repo, head)
+        else:
             how = "git merge --no-verify" if merged else "a fast-forward"
             record_skip(repo, f"{target} moved to {head[:12]} without the land checks ({how})",
                         f"Was landing {head[:12]} on {target} without its review and suites deliberate? "

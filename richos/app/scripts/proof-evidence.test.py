@@ -467,6 +467,25 @@ class Evidence(unittest.TestCase):
         record.finalize(verifier)
         self.assertEqual(verifier[0].state, "passed", verifier[0].notes)
 
+    def test_a_checkpoint_pass_reads_the_source_once_however_many_checks_it_saves(self):
+        # PRD step 3, T14: one `git diff --binary HEAD` reading took 5.5 s on the round 32 land,
+        # and every changed check took one, so 88 checks waited 8 minutes before the first ran.
+        path = Path(self.tmp.name) / "many"
+        path.mkdir()
+        items = [runner.Item("check-%d" % n, str(self.root), ["true"]) for n in range(12)]
+        record = evidence.Record(str(self.root), path, items, dict(self.source),
+                                 {item.label: self.inputs for item in items})
+        self.addCleanup(record.close)
+        reads = []
+        record.current_source = lambda: reads.append(1) or dict(self.source)
+        for item in items:
+            item.state, item.rc = "running", None
+        record.checkpoint(items)
+        self.assertEqual(len(reads), 1, "one reading for a pass that saves twelve checks")
+        record.checkpoint(items)
+        self.assertEqual(len(reads), 1, "a pass with nothing to save reads nothing")
+        self.assertEqual({row["state"] for row in record.results.values()}, {"running"})
+
     def test_an_untracked_file_that_vanishes_while_it_is_read_is_a_changed_identity_not_a_crash(self):
         # 2026-09-30: a land crashed with FileNotFoundError in source_identity() on
         # richos/app/.updater-key-under-test.key, listed by `git ls-files --others` and removed
@@ -1125,6 +1144,154 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
                 if process.poll() is None:
                     process.terminate()
                     process.wait(timeout=20)
+
+    def test_a_handover_run_is_held_until_its_land_releases_it(self):
+        """PRD A11: rotate() keeps three successful runs; three narrow green runs after a handover
+        removed the run its land was to validate. The explicit-range run is held with rotate()'s
+        own `retain` marker, and only a handover hold is released by --release."""
+        parent = Path(self.tmp.name) / "history"
+        def run(name):
+            directory = parent / name
+            directory.mkdir(parents=True)
+            evidence.atomic(directory / "summary.json", {"checks": [{"result": "passed"}]})
+            return directory
+        handover = run("20261020T000000Z-handover")
+        selected = {"arguments": ["b..c"], "mode": "normal", "base": "b" * 40, "candidate": "c" * 40}
+        with patch.object(runner.engine_pass, "is_main_checkout", return_value=True):
+            runner.hold_for_handover(str(handover), selected)
+        self.assertFalse((handover / "retain").exists(), "the main checkout is no handover seat")
+        with patch.object(runner.engine_pass, "is_main_checkout", return_value=False), \
+                contextlib.redirect_stdout(io.StringIO()):
+            runner.hold_for_handover(str(handover), {"arguments": ["--working"], "mode": "normal"})
+            self.assertFalse((handover / "retain").exists(), "a run with no recorded range stands for no handover")
+            runner.hold_for_handover(str(handover), selected)
+        hold = json.loads((handover / "retain").read_text())
+        self.assertEqual((hold["holder"], hold["candidate"]), ("handover", "c" * 40))
+        narrow = [run("20261020T00000%dZ-narrow" % n) for n in range(1, 5)]
+        runner.rotate(str(parent))
+        self.assertTrue(handover.exists(), "later narrow green runs cannot rotate the handover away")
+        self.assertFalse(narrow[0].exists(), "rotation still applies to everything else")
+        # Someone else's hold is not this command's to remove.
+        foreign = run("20261020T000005Z-foreign")
+        (foreign / "retain").write_text("kept by an operator\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(runner.release_hold(str(foreign)), 2)
+            self.assertTrue((foreign / "retain").exists())
+            self.assertEqual(runner.release_hold(str(handover)), 0)
+        self.assertFalse(handover.exists(), "released, it rotates like any other green run")
+
+    def test_coverage_says_what_a_saved_run_proves_for_the_inputs_read_now(self):
+        """PRD R3/A8, the readiness preflight's predicate: what reuse() would accept, read only."""
+        old, previous = self.attempt("covered", engine=False)
+        self.passed(old, previous)
+        found = evidence.coverage(previous.logdir, old, {"check": dict(self.inputs)}, dict(self.source))
+        self.assertEqual(found, {"check": None})
+        # A final edit to its inputs, a check the run never passed, a damaged log: each is missing.
+        self.assertEqual(evidence.coverage(previous.logdir, old, {"check": {"paths": {"fixture": "edited"}}},
+                                           dict(self.source))["check"], "declared execution inputs changed")
+        Path(old[0].log).write_text("rewritten\n")
+        self.assertEqual(evidence.coverage(previous.logdir, old, {"check": dict(self.inputs)},
+                                           dict(self.source))["check"], "result log changed")
+        failed, record = self.attempt("failed", engine=False)
+        failed[0].state, failed[0].rc = "failed", 1
+        record.checkpoint(failed)
+        self.assertEqual(evidence.coverage(record.logdir, failed, {"check": dict(self.inputs)}, dict(self.source)),
+                         {"check": "no validated passing execution"})
+        # A check with no input identity is proven only on the exact checkout source it ran on.
+        fresh, record = self.attempt("fresh", engine=False, identities={"check": {"fresh": "no contract"}})
+        self.passed(fresh, record)
+        self.assertIsNone(evidence.coverage(record.logdir, fresh, {"check": {"fresh": "no contract"}},
+                                            dict(self.source))["check"])
+        self.assertIn("checkout changed", evidence.coverage(
+            record.logdir, fresh, {"check": {"fresh": "no contract"}},
+            {**self.source, "tracked_diff_sha256": "a final edit"})["check"])
+        # Nothing was written: coverage reads only.
+        self.assertFalse((previous.logdir / "reused").exists())
+
+    def test_the_summary_carries_its_own_coverage_line_and_never_counts_known_red_as_passed(self):
+        """PRD A11/A14: the line is counted from the summary's own rows, a KNOWN-RED unit is named
+        beside the passes (an established exception, never a pass) and NOT RUN is never a pass."""
+        rows = [{"result": "passed", "reused_from": None, "known_red": False},
+                {"result": "passed", "reused_from": "/r", "known_red": False},
+                {"result": "passed", "reused_from": None, "known_red": True},
+                {"result": "not-run", "reused_from": None, "known_red": False},
+                {"result": "timed-out", "reused_from": None, "known_red": False}]
+        self.assertEqual(runner.coverage_line(rows),
+                         "5 planned, 2 passed (1 of them reused), 1 KNOWN-RED (a declared exception, not a pass), "
+                         "1 NOT RUN (not a pass), 1 timed-out")
+        unit, record = self.attempt("known-red")
+        self.passed(unit, record)
+        self.assertFalse(runner.known_red(unit[0]))
+        receipt = evidence.receipt_path(unit[0])
+        row = json.loads(receipt.read_text())
+        receipt.write_text(json.dumps({**row, "verdict": "KNOWN-RED"}) + "\n")
+        self.assertTrue(runner.known_red(unit[0]))
+
+    def test_coverage_names_a_known_red_unit_as_an_exception_never_proof(self):
+        """Review rv-20261020T073921Z-1e0461cc-0956 #2: a normally saved KNOWN-RED receipt was
+        counted as proven while reuse() rejects it. Both now share receipt_verdict()."""
+        old, previous = self.attempt("old")
+        self.passed(old, previous)
+        self.assertIsNone(evidence.coverage(previous.logdir, old, {"check": self.inputs}, self.source)["check"])
+        receipt = evidence.receipt_path(old[0])
+        row = json.loads(receipt.read_text())
+        receipt.write_text(json.dumps({**row, "verdict": "KNOWN-RED", "rc": 1}) + "\n")
+        previous.save(old[0], self.source)  # saved as a run saves it: its digest recorded
+        gap = evidence.coverage(previous.logdir, old, {"check": self.inputs}, self.source)["check"]
+        self.assertTrue(gap.startswith(evidence.KNOWN_RED_GAP), gap)
+        new, current = self.attempt("new")
+        evidence.reuse(previous.logdir, new, current)
+        self.assertEqual(new[0].state, "waiting", "coverage and reuse agree")
+
+    def test_coverage_reads_inputs_after_the_runtime_setup_a_run_gives(self):
+        """Review rv-20261020T073921Z-1e0461cc-0956 #1: a run supplies RICHOS_RUNTIME_DIR before
+        its checks' inputs are read; --coverage did not, so an unchanged check that binds it was
+        reported missing. The reviewer's probe, its assertion now the fixed behavior."""
+        import runtime_cache
+        base = Path(self.tmp.name)
+        root = base / "rt-repo"
+        root.mkdir()
+        runtime = base / "verified-runtime"
+        runtime.mkdir()
+        (runtime / "fixture").write_text("runtime bytes\n")
+        (root / "review.md").write_text("Fixture external runtime input.\n")
+        (root / "fixture.sh").write_text("exit 0\n")
+        evidence.atomic(root / "qualification.json", {"schema": 1, "review": "review.md", "requires": {
+            "paths": [], "tools": [], "environment": [], "external": ["RICHOS_RUNTIME_DIR"]}})
+        (root / "richos/app/scripts").mkdir(parents=True)
+        evidence.atomic(root / "richos/app/scripts/proof-inputs.json", {"schema": 1, "checks": {"fixture": {
+            "paths": ["fixture.sh"], "tools": [], "environment": [], "external": ["RICHOS_RUNTIME_DIR"],
+            "qualification": "qualification.json"}}})
+        source = {"commit": "c" * 40, "tracked_diff_sha256": "clean", "untracked_sha256": "clean"}
+        saved = base / "rt-saved"
+        saved.mkdir()
+        lines = ["cd . && bash fixture.sh"]
+        with patch.object(runner, "author_coverage", side_effect=lambda args: args):
+            args = runner.run_main(["--coverage", str(saved)], {})
+        verified = (patch.object(runtime_cache, "cache_path", return_value=runtime),
+                    patch.object(runner.subprocess, "run", return_value=SimpleNamespace(returncode=0)))
+        clean = {k: v for k, v in os.environ.items() if k not in ("RICHOS_RUNTIME_DIR", "RICHOS_GUI_SPEECH_MODELS")}
+        with patch.object(runner, "ROOT", str(root)), \
+                patch.object(runner, "head_commit", return_value=source["commit"]), \
+                patch.object(runner, "source_identity", return_value=source), \
+                patch.object(runner, "default_logdir", return_value=str(base / "rt-history")), \
+                patch.object(runner, "selection", return_value=lines), \
+                patch.dict(os.environ, clean, clear=True):
+            items = runner.plan(lines, args, str(saved), {})
+            with verified[0], verified[1]:
+                runner.supply_runtime(items)
+            identities = {i.label: runner.input_identity(i, args, str(saved)) for i in items}
+            record = evidence.Record(root, saved, items, source, identities, selection={
+                "base": "b" * 40, "candidate": source["commit"], "mode": "normal"})
+            self.addCleanup(record.close)
+            items[0].state, items[0].rc, items[0].log = "passed", 0, str(saved / "execution.log")
+            Path(items[0].log).write_text("passed\n")
+            record.checkpoint(items)
+            evidence.atomic(saved / "summary.json", {"checks": [{"check": "fixture", "result": "passed"}]})
+            with verified[0], verified[1], contextlib.redirect_stdout(io.StringIO()) as output:
+                rc = runner.author_coverage(args)
+        self.assertEqual(rc, 0, output.getvalue())
+        self.assertIn("1 proven by the saved run", output.getvalue())
 
     def test_live_owner_prevents_resume_and_rotation(self):
         items, record = self.attempt("20260923T000000Z")
@@ -2038,6 +2205,57 @@ class UiFamily(unittest.TestCase):
                         {"schema": 1, "checks": {}, "families": {"ui-suite": family}})
         self.assertEqual(evidence.contract_for(self.root, "fine.js").get("family"), "ui-suite")
         self.assertEqual(evidence.contract_for(self.root, "py.js").get("family"), None)
+
+    def test_a_picture_a_library_checks_for_is_bound_by_existence_not_content(self):
+        """Review rv-20261020T063426Z-03441b27-e3dd #1: lib/shot-stability.js proves at require
+        time that every picture it declares exists, so deleting one fails every suite that loads
+        it; the suite's identity bound neither the picture nor its folder."""
+        (self.root / "richos/app/ui/tests/lib/bounds.js").write_text(
+            '// an example in a comment: "shots-b/example.png"\n'
+            'const DECLARED = [{ file: "shots-b/one.png" }];\n')
+        self.edit("richos/app/ui/tests/a.js", 'require("./lib/harness"); require("./lib/bounds"); // reads shots-a\n')
+        recipe = evidence.contract_for(self.root, "a.js")
+        self.assertEqual(recipe.get("exists"), ["richos/app/ui/tests/shots-b/one.png"])
+        before = self.identity(self.root)
+        # Another suite's picture, regenerated: its bytes are no input of this suite.
+        (self.root / "richos/app/ui/tests/shots-b/one.png").write_text("picture b, regenerated\n")
+        self.assertEqual(self.identity(self.root), before)
+        # Deleted: the library would refuse, so the identity differs.
+        (self.root / "richos/app/ui/tests/shots-b/one.png").unlink()
+        self.assertNotEqual(self.identity(self.root), before)
+        # A suite whose closure has no such library binds nothing of shots-b.
+        self.assertNotIn("exists", evidence.contract_for(self.root, "b.js"))
+
+    def test_private_study_reads_are_bound_by_content_and_must_stay_in_their_folder(self):
+        """PRD 2026-10-20: bind private reads such as splash's studies. A suite opens the study a
+        shipped library entry names, under $RICHOS_HQ, when that repository exists."""
+        hq = Path(self.tmp.name) / "hq"
+        (self.root / "richos/app/ui/library.js").write_text(
+            '{"source": "richos-hq studies/one/index.html"}\n')
+        family = {**self.family, "private_reads": {"a.js": {
+            "why": "fixture", "env": "RICHOS_HQ", "home": "ab/hq",
+            "named_in": "richos/app/ui/library.js", "pattern": '"source"\\s*:\\s*"richos-hq (\\S+)"'}}}
+        evidence.atomic(self.root / "richos/app/scripts/proof-inputs.json",
+                        {"schema": 1, "checks": {}, "families": {"ui-suite": family}})
+        self.assertEqual(evidence.contract_for(self.root, "a.js")["external_reads"]["paths"], ["studies/one"])
+        environment = {**self.environment, "RICHOS_HQ": str(hq)}
+        absent = self.identity(self.root, environment=environment)
+        self.assertEqual(absent["external_reads"], {"root": {"absent": True}})
+        (hq / "studies/one/fonts").mkdir(parents=True)
+        (hq / "studies/one/index.html").write_text('<link href="fonts/fonts.css">\n')
+        (hq / "studies/one/fonts/fonts.css").write_text('@font-face { src: url("Inter.woff2"); }\n')
+        (hq / "studies/two").mkdir()
+        (hq / "studies/two/index.html").write_text("an unnamed study\n")
+        present = self.identity(self.root, environment=environment)
+        self.assertNotEqual(present, absent)
+        (hq / "studies/two/index.html").write_text("an unnamed study, changed\n")
+        self.assertEqual(self.identity(self.root, environment=environment), present)
+        (hq / "studies/one/fonts/fonts.css").write_text('@font-face { src: url("Inter-2.woff2"); }\n')
+        changed = self.identity(self.root, environment=environment)
+        self.assertNotEqual(changed, present)
+        # A study that loads a file outside its folder reaches what nothing binds.
+        (hq / "studies/one/index.html").write_text('<link href="../shared/engine.css">\n')
+        self.assertIn("outside the study folder", self.identity(self.root, environment=environment)["fresh"])
 
     def test_a_changed_harness_needs_its_review_renewed(self):
         self.edit("richos/app/ui/tests/lib/harness.js", 'require("./ui-sources"); require("fs");\n')

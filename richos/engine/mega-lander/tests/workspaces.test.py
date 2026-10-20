@@ -7090,6 +7090,30 @@ class ProofReport_TheHandoverPointsAtItsSavedRun(Base):
         # Never counted as passes: total minus failed would say 3.
         self.assertNotIn("3 passed", report["line"])
 
+    def test_a_known_red_unit_is_never_reported_as_a_pass(self):
+        self.saved_run("20261020T000000Z-x", {"checks": [
+            {"check": "a.js", "result": "passed"},
+            {"check": "engine u", "result": "passed", "known_red": True}]})
+        self.handed_in()
+        self.assertEqual(self.report()["line"], "4 planned, 1 passed (0 of them reused); NOT complete: "
+                                                "engine u (known-red, a declared exception)")
+
+    def test_a_deferred_end_attaches_no_report_and_the_real_end_does(self):
+        """PRD A8: the SubagentStop deferral as a controlled witness. While a command the agent
+        started still runs, the end is not recorded and no report is attached; the later real end
+        records both."""
+        self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
+        with patch.object(ws, "_running_calls", return_value=[("toolu_fixture", "sleep 600")]):
+            self.finish(self.aid)
+        record = self.rec("zach-opus-pr")
+        self.assertFalse(record.get("end"))
+        self.assertEqual(record["history"][-1]["fact"], ws.END_DEFERRED_FACT)
+        self.assertIsNone(self.report())
+        with patch.object(ws, "_running_calls", return_value=[]):
+            self.finish(self.aid)
+        self.assertTrue(self.rec("zach-opus-pr").get("end"))
+        self.assertEqual(self.report()["on"], "end")
+
     def test_a_run_of_an_older_head_is_not_this_handovers_report(self):
         self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
         self.commit(self.cc, "later.txt")
@@ -7120,6 +7144,71 @@ class ProofReport_TheHandoverPointsAtItsSavedRun(Base):
             self.finish(self.aid)
         self.assertTrue(self.rec("zach-opus-pr").get("end"))
         self.assertIsNone(before)
+
+    def test_a_read_that_spends_the_shared_budget_never_becomes_a_report(self):
+        """Review rv-20261020T044017Z-ebbb640b-fc3b #2: the deadline was asked only between saved
+        runs, so a plan read that took four seconds of a three-second budget still returned a
+        complete report. Every read is now followed by the question."""
+        self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
+        clock = [100.0]
+        real_open = open
+
+        def slow(path, *args, **kwargs):
+            if str(path).endswith("plan.json"):
+                clock[0] = 104.0
+            return real_open(path, *args, **kwargs)
+        with patch.object(ws.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch("builtins.open", side_effect=slow):
+            report = ws.proof_report(self.path, deadline=103.0)
+        self.assertIn("time budget", report.get("unavailable", ""), report)
+        self.assertNotIn("line", report)
+        # The HEAD read itself gets only what is left of the budget.
+        with patch.object(ws.time, "monotonic", side_effect=lambda: 200.0):
+            self.assertIn("time budget", ws.proof_report(self.path, deadline=199.0)["unavailable"])
+
+    def test_the_land_runs_its_gate_in_the_callers_locale(self):
+        """PRD step 3 (A10/R8): every UI suite binds LC_ALL, and the managed merge forced LC_ALL=C on
+        its pre-merge-commit gate while the author's run, a plain-Git land and the nightly kept the
+        caller's locale, so no author pass could match a managed land's identity."""
+        with patch.dict(os.environ, {"LC_ALL": "en_US.UTF-8"}):
+            self.assertEqual(ws._land_env("main")["LC_ALL"], "en_US.UTF-8")
+        without = {k: v for k, v in os.environ.items() if k != "LC_ALL"}
+        with patch.dict(os.environ, without, clear=True):
+            self.assertNotIn("LC_ALL", ws._land_env("v1.3.0", ["/a/run"]))
+            # This tool still reads git's own output in the C locale.
+            self.assertEqual(ws._git_env()["LC_ALL"], "C")
+
+    def test_the_report_says_whether_its_run_is_held_and_names_other_held_runs(self):
+        """PRD A11: an explicit abandonment or supersession names the run for Rich to release."""
+        older = self.saved_run("20261020T000000Z-old", {"checks": [{"check": "a.js", "result": "passed"}]},
+                               head="c" * 40)
+        with open(os.path.join(older, "retain"), "w") as f:
+            json.dump({"holder": "handover", "candidate": "c" * 40}, f)
+        newer = self.saved_run("20261020T000001Z-new", {"checks": [{"check": "a.js", "result": "passed"}]})
+        with open(os.path.join(newer, "retain"), "w") as f:
+            json.dump({"holder": "handover", "candidate": self.head()}, f)
+        report = ws.proof_report(self.path)
+        self.assertEqual(report["run"], newer)
+        self.assertTrue(report["held"])
+        self.assertEqual(report["also_held"], [older])
+        self.assertIn("1 earlier handover run(s) of this checkout still held", report["line"])
+
+    def test_the_held_run_scan_stays_inside_the_shared_budget(self):
+        """Review rv-20261020T073921Z-1e0461cc-0956 #3: the retain markers were read after the last
+        deadline check; a slow read past the budget still returned a complete report."""
+        self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
+        clock = [100.0]
+        real_exists = os.path.exists
+
+        def slow_exists(path):
+            if str(path).endswith("retain"):
+                clock[0] = 104.0
+            return real_exists(path)
+        with patch.object(ws.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(ws.os.path, "exists", side_effect=slow_exists):
+            report = ws.proof_report(self.path, deadline=103.0)
+        self.assertIn("time budget", report.get("unavailable", ""), report)
+        self.assertNotIn("line", report)
 
     def test_the_merge_offers_only_the_run_reported_for_the_tip_it_merges(self):
         run_dir = self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
