@@ -127,6 +127,13 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
     seen.clear()
     mod.step_run('no-such-vm', {'op': 'pointer', 'points': ['1,2', '1,2'], 'right': True}, Path(tmp))
     check('pointer with right adds --right', seen and seen[0][-1] == '--right', seen)
+    seen.clear()
+    mod.step_run('no-such-vm', {'op': 'pointer', 'points': ['407,359'], 'hover': True}, Path(tmp))
+    check('pointer with hover adds --hover, and one point is enough', seen and seen[0][-1] == '--hover' and seen[0][2] == '407,359', seen)
+    check('a one-point hover step is valid', mod.problems([{'op': 'pointer', 'points': ['1,2'], 'hover': True}]) == [],
+          mod.problems([{'op': 'pointer', 'points': ['1,2'], 'hover': True}]))
+    check('a one-point pointer step without hover is still refused', mod.problems([{'op': 'pointer', 'points': ['1,2']}]) != [],
+          mod.problems([{'op': 'pointer', 'points': ['1,2']}]))
     check('a two-point pointer step is valid', mod.problems([{'op': 'pointer', 'points': ['1,2', '1,2']}]) == [],
           mod.problems([{'op': 'pointer', 'points': ['1,2', '1,2']}]))
     for bad in ([], ['1,2'], ['12', '1,2'], [1, 2], '1,2'):
