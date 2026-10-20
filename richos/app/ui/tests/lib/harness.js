@@ -275,8 +275,222 @@ const SHOT_MIN_DISTINCT = 8;
 // `report()` carries one housekeeping check naming each of them. The reference is still never
 // rewritten by the failing run: a person accepts the change with `RICHOS_SHOTS_REGENERATE`
 // and commits it with the reason, and the next run is green.
+//
+// AND THE FAILING PICTURE OUTLIVES THE CHECKOUT THAT TOOK IT (verification reliability PRD,
+// T07, 2026-10-20). `.shots/changed/` is the checkout's own scratch, and a merge gate that
+// verifies in a temporary checkout deletes it with the checkout: on 2026-10-19 the corrections
+// picture failed at the gate under load and the picture that would have explained it was gone,
+// so the failure was filed as "load". Now every picture that differs from its reference (and
+// every one a regeneration writes) leaves the same set of files, `keepShotEvidence` below:
+//
+//     actual.png      what this run drew
+//     reference.png   the committed reference it was compared with (absent when there was none)
+//     diff.png        the reference, dimmed, with every differing pixel in magenta
+//     state.json      the measured difference and its bounding box, the declared bound if any,
+//                     and the page's state at the shutter (`pageState`): every scrolled or
+//                     scrollable box and its offsets, the focused element, the viewport, the
+//                     lighting, running animations
+//
+// in `.shots/evidence/<key>/` (`.shots/regenerated/<key>/` for a regeneration) AND, when the
+// runner names one, in this check's own results folder in the run's evidence
+// (`RICHOS_TEST_RESULTS_ROOT`, set by `proof-run.py` for every check it launches), which no
+// checkout cleanup reaches. Writing it can never change a verdict: a write that fails is said on
+// the line and the verdict stands.
+//
+// AND A PICTURE A RUN DREW IS NEVER APPROVED BY THAT RUN (PRD R7: "generating a picture does not
+// approve it"). Under `RICHOS_SHOTS_REGENERATE` the run used to pass, so the run that wrote a
+// reference was also the run that compared against it. Now `report()` fails a housekeeping check
+// naming every picture this run wrote: the approval is a person's look at the kept evidence,
+// recorded with the commit, and the evidence that the picture is stable is the NEXT run, without
+// the switch, matching it.
 const CHANGED_DIR = path.join(SHOT_DIR, "changed");
+const EVIDENCE_DIR = path.join(SHOT_DIR, "evidence");
+const REGENERATED_DIR = path.join(SHOT_DIR, "regenerated");
 const changedShots = [];
+const regeneratedShots = [];
+
+/// The page's state at the shutter, keyed by the picture's bytes so the publish that follows
+/// (`publishShot` or `publishShotFile`, possibly a moment later) can find it. Bounded: a suite
+/// that photographs more than this without publishing is a suite that is not comparing.
+const shotStates = new Map();
+const SHOT_STATES_MAX = 64;
+const bytesKey = (buf) => require("crypto").createHash("sha256").update(buf).digest("hex");
+
+function rememberShotState(buf, state) {
+  shotStates.set(bytesKey(buf), state);
+  while (shotStates.size > SHOT_STATES_MAX) shotStates.delete(shotStates.keys().next().value);
+}
+
+/// What the page looked like to the DOM at the instant a picture was taken. Read-only, and
+/// bounded: the scrollers are what decided the two capture-state failures on record (the splash
+/// Settings panel 200px short of its bottom, the corrections desk at 0 instead of 101), so each
+/// one is listed with its offsets; everything else is one line.
+async function pageState(page) {
+  try {
+    return await page.evaluate(() => {
+      const name = (n) => {
+        if (!n || n.nodeType !== 1) return null;
+        if (n.id) return "#" + n.id;
+        const cls = typeof n.className === "string" ? n.className.trim().split(/\s+/).filter(Boolean).slice(0, 3) : [];
+        return n.tagName.toLowerCase() + (cls.length ? "." + cls.join(".") : "");
+      };
+      const scrollers = [];
+      for (const n of document.querySelectorAll("*")) {
+        const moved = n.scrollTop || n.scrollLeft;
+        const room = n.scrollHeight > n.clientHeight + 1 || n.scrollWidth > n.clientWidth + 1;
+        if (!moved && !room) continue;
+        if (!moved) {
+          const cs = getComputedStyle(n);
+          if (!/(auto|scroll)/.test(cs.overflowY + " " + cs.overflowX)) continue;
+        }
+        if (!n.getClientRects().length) continue;
+        scrollers.push({
+          element: name(n),
+          scrollTop: Math.round(n.scrollTop),
+          scrollLeft: Math.round(n.scrollLeft),
+          scrollHeight: n.scrollHeight,
+          clientHeight: n.clientHeight,
+        });
+        if (scrollers.length >= 40) break;
+      }
+      const running = document.getAnimations ? document.getAnimations().filter((a) => a.playState === "running") : [];
+      return {
+        viewport: { width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio },
+        page: { scrollX: Math.round(window.scrollX), scrollY: Math.round(window.scrollY), readyState: document.readyState },
+        lighting: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark OS" : "light OS",
+        theme: document.documentElement.getAttribute("data-theme"),
+        focused: name(document.activeElement),
+        runningAnimations: running.length,
+        scrollers,
+      };
+    });
+  } catch (e) {
+    return { unavailable: String((e && e.message) || e).split("\n")[0] };
+  }
+}
+
+/// The reference, dimmed to grey, with every pixel that differs painted magenta: the picture a
+/// person looks at to see WHERE two pictures differ. Null when the two cannot be compared (a
+/// side that does not decode, or a change of size), which `state.json` then says.
+function diffPicture(existing, fresh) {
+  let a;
+  let b;
+  try {
+    a = png.decode(existing);
+    b = png.decode(fresh);
+  } catch (_e) {
+    return null;
+  }
+  if (a.width !== b.width || a.height !== b.height || a.channels !== b.channels) return null;
+  const { width, height, channels } = a;
+  const raw = Buffer.alloc(height * (width * 3 + 1));
+  let box = null;
+  let p = 0;
+  for (let y = 0; y < height; y++) {
+    raw[p++] = 0;
+    for (let x = 0; x < width; x++) {
+      const o = (y * width + x) * channels;
+      let differs = false;
+      for (let c = 0; c < channels; c++) if (a.data[o + c] !== b.data[o + c]) differs = true;
+      if (differs) {
+        raw[p++] = 255;
+        raw[p++] = 0;
+        raw[p++] = 255;
+        box = box ? [Math.min(box[0], x), Math.min(box[1], y), Math.max(box[2], x), Math.max(box[3], y)] : [x, y, x, y];
+      } else {
+        const grey = channels >= 3 ? (a.data[o] + a.data[o + 1] + a.data[o + 2]) / 3 : a.data[o];
+        const v = Math.round(24 + grey * 0.3);
+        raw[p++] = v;
+        raw[p++] = v;
+        raw[p++] = v;
+      }
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const zlib = require("zlib");
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body) >>> 0);
+    return Buffer.concat([len, body, crc]);
+  };
+  const file = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", zlib.deflateSync(raw)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+  return { file, box: box ? { x: box[0], y: box[1], width: box[2] - box[0] + 1, height: box[3] - box[1] + 1 } : null };
+}
+
+let CRC_TABLE = null;
+function crc32(buf) {
+  if (!CRC_TABLE) {
+    CRC_TABLE = new Int32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      CRC_TABLE[n] = c;
+    }
+  }
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return c ^ -1;
+}
+
+/// Keep a picture's evidence (see the section comment). `kind` is "changed" or "regenerated".
+/// Returns the directories written, and the reason for any that could not be.
+function keepShotEvidence(kind, key, existing, buf, facts) {
+  const dirs = [path.join(kind === "regenerated" ? REGENERATED_DIR : EVIDENCE_DIR, key)];
+  if (process.env.RICHOS_TEST_RESULTS_ROOT) {
+    dirs.push(path.join(process.env.RICHOS_TEST_RESULTS_ROOT, "shots", kind, key));
+  }
+  const diff = existing ? diffPicture(existing, buf) : null;
+  const measured = existing ? png.measureDifference(existing, buf) : { ok: false, reason: "no committed reference yet" };
+  const state = Object.assign(
+    {
+      picture: key,
+      suite: path.basename(process.argv[1] || "unknown"),
+      verdict: kind,
+      difference: measured,
+      differingBox: diff ? diff.box : null,
+      diffPicture: diff ? "diff.png" : "not drawn: " + (existing ? measured.reason || "the two pictures cannot be compared" : "no reference"),
+      pageAtShutter: shotStates.get(bytesKey(buf)) || { unavailable: "not taken through shot()/captureSettled" },
+    },
+    facts || {}
+  );
+  const written = [];
+  const failed = [];
+  for (const dir of dirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "actual.png"), buf);
+      if (existing) fs.writeFileSync(path.join(dir, "reference.png"), existing);
+      if (diff) fs.writeFileSync(path.join(dir, "diff.png"), diff.file);
+      fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(state, null, 2) + "\n");
+      written.push(dir);
+    } catch (e) {
+      failed.push(dir + " (" + String((e && e.message) || e).split("\n")[0] + ")");
+    }
+  }
+  return { written, failed };
+}
+
+function evidenceWords(kept) {
+  const here = path.resolve(__dirname, "..");
+  const shown = kept.written.map((d) => (d.startsWith(here + path.sep) ? path.relative(here, d) : d));
+  return (
+    (shown.length ? "actual, reference, diff and page state kept at " + shown.join(" and ") : "NO evidence was kept") +
+    (kept.failed.length ? " (could not write " + kept.failed.join(", ") + ")" : "")
+  );
+}
 
 function publishShot(buf, file) {
   file = path.resolve(file);
@@ -291,6 +505,12 @@ function publishShot(buf, file) {
     /* no previous shot */
   }
   if (existing && png.samePicture(existing, buf)) {
+    // The file keeps its own bytes, which can encode the same pixels differently: the page
+    // state taken with THESE pixels goes with the bytes that stay, so a later publish of this
+    // file (`publishShotFile`, reading those bytes) still finds it (mid-job review
+    // rv-20261020T073921Z-cb26c0d0-d6f0).
+    const state = shotStates.get(bytesKey(buf));
+    if (state && !existing.equals(buf)) rememberShotState(existing, state);
     return { file, written: false, bytes: existing.length };
   }
   if (!key) {
@@ -318,21 +538,40 @@ function publishShot(buf, file) {
     outside = " OUTSIDE ITS DECLARED BOUND (`" + rule.class + "` at " + verdict.bound + " in lib/shot-stability.js)";
   }
   if (regenerating) {
+    // A SWEEP DOES NOT KEEP A NOISE-ONLY REDRAW (`stability.regenerationWrites`): a directory or
+    // `all` leaves a picture inside its declared bound as it is; naming the file rewrites it.
+    const decision = stability.regenerationWrites(regenerating, rule, existing, buf);
+    if (!decision.write) {
+      console.log(
+        "  shot held under regeneration: " + key + " — " + rule.class + " — " + difference +
+          " — inside its declared bound (" + decision.bound + "), so a " + regenerating +
+          " regeneration does not rewrite it; name the file to rewrite it"
+      );
+      return { file, written: false, bytes: existing.length, held: true };
+    }
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, buf);
-    console.log("  shot regenerated: " + key + " — " + difference + " — RICHOS_SHOTS_REGENERATE, commit it with the reason");
-    return { file, written: true, bytes: buf.length };
+    const evidence = keepShotEvidence("regenerated", key, existing, buf, { regeneration: regenerating });
+    console.log(
+      "  shot regenerated: " + key + " — " + difference + " — NOT approved by this run: " + evidenceWords(evidence) +
+        "; look at them, commit the picture with what the look found, and run the suite again without RICHOS_SHOTS_REGENERATE"
+    );
+    regeneratedShots.push({ key, difference, evidence });
+    return { file, written: true, bytes: buf.length, regenerated: true };
   }
   const kept = path.join(CHANGED_DIR, key);
   fs.mkdirSync(path.dirname(kept), { recursive: true });
   fs.writeFileSync(kept, buf);
+  const evidence = keepShotEvidence("changed", key, existing, buf, {
+    bound: rule ? { class: rule.class, bound: stability.describeBound(rule.bound), outside: true } : null,
+  });
   console.log(
     "  shot changed" + outside + ": " + key + " — " + difference + " — the committed reference is NOT rewritten; " +
-      "this run's picture is at " + path.relative(path.resolve(__dirname, ".."), kept) +
+      "this run's picture is at " + path.relative(path.resolve(__dirname, ".."), kept) + "; " + evidenceWords(evidence) +
       ". To accept it: RICHOS_SHOTS_REGENERATE=" + key + " node " + path.basename(process.argv[1] || "<suite>.js") +
-      ", then commit it with one line saying why it changed"
+      ", then commit it with one line saying what a look at it found"
   );
-  changedShots.push({ key, difference, outside, kept, accept: "RICHOS_SHOTS_REGENERATE=" + key });
+  changedShots.push({ key, difference, outside, kept, evidence, accept: "RICHOS_SHOTS_REGENERATE=" + key });
   return { file, written: false, bytes: existing ? existing.length : 0, changed: true, kept };
 }
 
@@ -341,6 +580,7 @@ function publishShot(buf, file) {
 /// (`tracked-tree.js` check 1); a suite that took a real picture must never call this.
 function discardChangedShotsForSelfTest() {
   changedShots.length = 0;
+  regeneratedShots.length = 0;
 }
 
 /// The same rule for a shot that already exists as a file — the `.shots/` scratch copy a suite
@@ -707,6 +947,10 @@ async function captureSettled(page, opts) {
   try {
     const buf = await page.screenshot(opts.screenshot || {});
     if (opts.onShutter) await opts.onShutter();
+    // The page's state as the picture was taken, for the evidence a differing picture leaves
+    // (`keepShotEvidence`). Read after `onShutter`, which is the time-critical read, and before
+    // the loops are released.
+    rememberShotState(buf, await pageState(page));
     return buf;
   } finally {
     await releaseLoops(page);
@@ -825,6 +1069,7 @@ function skipSuite(label, reason) {
 
 const TREE_CHECK = "the tracked tree is exactly as this suite found it";
 const SHOT_CHECK = "every picture this suite took matches its committed reference";
+const REGEN_CHECK = "no picture was approved by the run that drew it";
 
 function createRun(label) {
   const results = [];
@@ -866,11 +1111,30 @@ function createRun(label) {
               .map(
                 (c) =>
                   c.key + " — " + c.difference + c.outside + " — this run's picture: " +
-                  path.relative(path.resolve(__dirname, ".."), c.kept) + " — to accept: " + c.accept
+                  path.relative(path.resolve(__dirname, ".."), c.kept) + " — " + evidenceWords(c.evidence) +
+                  " — to accept: " + c.accept
               )
               .join("\n            ") +
-            "\n          If the change is intended, regenerate with RICHOS_SHOTS_REGENERATE=<file|dir|all>, " +
-            "run in your own worktree, and commit the new picture with one line saying why it changed.",
+            "\n          First decide from the kept evidence whether each change is intended, an unsettled capture or a " +
+            "regression. To regenerate exactly the pictures that failed, in your own worktree: RICHOS_SHOTS_REGENERATE=" +
+            changedShots.map((c) => c.key).join(",") + " node " + path.basename(process.argv[1] || "<suite>.js") +
+            "; then commit each with one line saying what a look at it found.",
+        });
+      }
+      const seenRegen = results.findIndex((r) => r.name === REGEN_CHECK);
+      if (seenRegen >= 0) results.splice(seenRegen, 1);
+      if (regeneratedShots.length) {
+        results.push({
+          name: REGEN_CHECK,
+          ok: false,
+          housekeeping: true,
+          detail:
+            regeneratedShots.length + " picture(s) were drawn by this run and written as their own reference, so " +
+            "this run is not evidence that they are right:\n            " +
+            regeneratedShots.map((r) => r.key + " — " + r.difference + " — " + evidenceWords(r.evidence)).join("\n            ") +
+            "\n          Look at each (reference, new picture and difference are kept), commit it with one line per " +
+            "picture saying what the look found, then run " + path.basename(process.argv[1] || "<suite>.js") +
+            " again without RICHOS_SHOTS_REGENERATE: that run is the evidence.",
         });
       }
       if (tree.checked) {

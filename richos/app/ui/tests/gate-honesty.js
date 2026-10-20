@@ -10,10 +10,18 @@
 //   42. `appearance.js` copied each page's error array into its aggregate once, right after the
 //       page opened, so its "no page errors anywhere" check never saw an error raised later.
 //
+// And two the verification reliability PRD named (2026-10-20, T07 and R7):
+//
+//    7. a failing picture was kept only in the checkout's own scratch, which the merge gate's
+//       temporary checkout deletes, so the corrections failure of 2026-10-19 could not be read;
+//    8. a run under `RICHOS_SHOTS_REGENERATE` passed, so the run that drew a reference was also
+//       the run that approved it.
+//
 // The suite needs no browser: the picture comparison and the ledger are exercised through child
 // suites (`fixtures/changed-shot-suite.js`) that run the real harness, and `run.js`'s floor
-// through its real `--coverage` command over fabricated receipts. The reference picture is
-// never rewritten by any of it, and the check that would notice is check 1.
+// through its real `--coverage` command over fabricated receipts. The throwaway reference this
+// file makes is never rewritten by a test run (check 1 would notice); check 8 asks for it to be
+// regenerated on purpose and puts it back.
 
 "use strict";
 
@@ -23,6 +31,7 @@ const path = require("path");
 const { EventEmitter } = require("events");
 const { spawnSync } = require("child_process");
 const { createRun, assert, assertEqual } = require("./lib/harness");
+const png = require("./lib/png");
 const { collectPageErrors, createErrorTracker } = require("./lib/page-errors");
 const SOURCES = require("./lib/ui-sources");
 
@@ -39,12 +48,17 @@ const REFERENCE = path.join(__dirname, FIXTURE_KEY);
 const KEPT = path.join(__dirname, ".shots", "changed", FIXTURE_KEY);
 const REFERENCE_BYTES = tinyPng(24); // differs from the picture the `changed` child publishes
 const SHOT_CHECK = "every picture this suite took matches its committed reference";
+const REGEN_CHECK = "no picture was approved by the run that drew it";
+// The harness's own scratch copies of the evidence a differing picture leaves (checks 7 and 8).
+const EVIDENCE_SCRATCH = ["evidence", "regenerated"].map((d) => path.join(__dirname, ".shots", d, path.dirname(FIXTURE_KEY)));
 
-function runFixture(mode, ledger) {
+function runFixture(mode, ledger, extra) {
   const env = Object.assign({}, process.env, { RICHOS_GATE_HONESTY_REFERENCE: REFERENCE });
   delete env.RICHOS_SHOTS_REGENERATE; // a regeneration asked of THIS process is not asked of the child
   delete env.RICHOS_UI_TESTS_LEDGER;
+  delete env.RICHOS_TEST_RESULTS_ROOT; // the runner's folder for THIS check is not the child's
   if (ledger) env.RICHOS_UI_TESTS_LEDGER = ledger;
+  Object.assign(env, extra || {});
   const r = spawnSync(process.execPath, [FIXTURE, mode], { env, encoding: "utf8", timeout: 60000 });
   return { code: r.status, out: (r.stdout || "") + (r.stderr || "") };
 }
@@ -56,7 +70,7 @@ function fakePage() {
 }
 
 async function main() {
-  const run = createRun("the UI gates can fail — a changed picture, the coverage floor, page errors");
+  const run = createRun("the UI gates can fail — a changed picture, the coverage floor, page errors, kept evidence, a regeneration");
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "richos-gate-honesty-"));
   fs.mkdirSync(path.dirname(REFERENCE), { recursive: true });
   fs.writeFileSync(REFERENCE, REFERENCE_BYTES);
@@ -160,10 +174,67 @@ async function main() {
       assert(/tracker\.all|allErrors\s*\(\s*\)/.test(src), "check 18 does not read the live aggregate");
       return "createErrorTracker in use; no snapshot push";
     });
+
+    await run.check("7  a picture that differs leaves its actual, reference, diff and state in the run's own evidence", async () => {
+      // T07 (verification reliability PRD, 2026-10-20): the gate's failing picture lived only in
+      // the checkout's `.shots/changed/`, which a temporary land checkout deletes with itself.
+      const results = path.join(scratch, "results");
+      const r = runFixture("changed", null, { RICHOS_TEST_RESULTS_ROOT: results });
+      fs.rmSync(KEPT, { force: true });
+      assertEqual(r.code, 1, "the child suite's exit code");
+      const dir = path.join(results, "shots", "changed", FIXTURE_KEY);
+      const read = (f) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f)) : null);
+      const actual = read("actual.png");
+      assert(actual && actual.equals(tinyPng(40)), "the run's own evidence has no actual.png holding the picture it drew:\n" + r.out);
+      assert(read("reference.png") && read("reference.png").equals(REFERENCE_BYTES), "the evidence has no copy of the reference it was compared with");
+      const diff = read("diff.png");
+      assert(diff, "the evidence has no diff.png");
+      const drawn = png.decode(diff);
+      assertEqual([drawn.width, drawn.height], [4, 4], "the difference picture is the pictures' own size");
+      const state = JSON.parse(read("state.json").toString("utf8"));
+      assertEqual(state.picture, FIXTURE_KEY.split(path.sep).join("/"), "state.json names the picture");
+      assert(state.difference && state.difference.ok && state.difference.differing > 0, "state.json carries the measured difference: " + JSON.stringify(state.difference));
+      assert(r.out.includes(results), "the failure line does not say where the evidence is:\n" + r.out);
+      return "actual, reference, diff (4x4) and state kept under the runner's results folder, and the line names it";
+    });
+
+    await run.check("8  a picture a regeneration writes is not approved by the run that drew it", async () => {
+      // PRD R7: "generating a picture does not approve it". A regeneration used to pass, so the
+      // run that wrote a reference was also the one that compared against it.
+      const before = fs.readFileSync(REFERENCE);
+      const r = runFixture("changed", null, { RICHOS_SHOTS_REGENERATE: FIXTURE_KEY.split(path.sep).join("/") });
+      const after = fs.readFileSync(REFERENCE);
+      fs.writeFileSync(REFERENCE, before); // put it back so the checks after this start clean
+      assert(!after.equals(before), "the named regeneration did not write the reference, so this check proves nothing:\n" + r.out);
+      assert(new RegExp("FAIL\\s+" + REGEN_CHECK).test(r.out), "the regeneration run passed over the picture it drew:\n" + r.out);
+      assert(r.out.includes(FIXTURE_KEY.split(path.sep).join("/")), "the failure does not name the picture:\n" + r.out);
+      assertEqual(r.code, 1, "the child suite's exit code");
+      return "the reference was written, and the run that wrote it failed naming it";
+    });
+
+    await run.check("9  the page state at the shutter reaches the evidence however the scratch picture was encoded", async () => {
+      // Mid-job review rv-20261020T073921Z-cb26c0d0-d6f0: the state was keyed by the fresh
+      // picture's bytes, and a scratch file holding the same pixels in other bytes is kept as
+      // it is, so `publishShotFile` (corrections.js's path) read bytes the state was not under.
+      const seen = {};
+      for (const variant of ["none", "identical", "reencoded"]) {
+        const results = path.join(scratch, "state-" + variant);
+        const r = runFixture("state-" + variant, null, { RICHOS_TEST_RESULTS_ROOT: results });
+        fs.rmSync(KEPT, { force: true });
+        assertEqual(r.code, 1, "the child suite's exit code (" + variant + ")");
+        const file = path.join(results, "shots", "changed", FIXTURE_KEY, "state.json");
+        assert(fs.existsSync(file), "no state.json for the " + variant + " scratch file:\n" + r.out);
+        const at = JSON.parse(fs.readFileSync(file, "utf8")).pageAtShutter;
+        seen[variant] = at && at.scrollers ? at.scrollers[0].scrollTop : JSON.stringify(at);
+      }
+      assertEqual(seen, { none: 101, identical: 101, reencoded: 101 }, "the scrolled column recorded at the shutter");
+      return "a new, an identical and a re-encoded scratch file all carry the shutter's state (scrollTop 101)";
+    });
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
     fs.rmSync(path.dirname(REFERENCE), { recursive: true, force: true });
     fs.rmSync(path.dirname(KEPT), { recursive: true, force: true });
+    for (const d of EVIDENCE_SCRATCH) fs.rmSync(d, { recursive: true, force: true });
   }
 
   process.exit(run.report() ? 1 : 0);

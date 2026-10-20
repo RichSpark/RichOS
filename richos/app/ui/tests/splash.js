@@ -27,7 +27,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { leaveHome, loadPlaywright, shot, captureSettled, publishShot, publishShotFile, createRun, assert, assertEqual, SEED_THEME, UI_DIR } = require("./lib/harness");
+const { leaveHome, shellSettled, loadPlaywright, shot, captureSettled, publishShot, publishShotFile, createRun, assert, assertEqual, SEED_THEME, UI_DIR } = require("./lib/harness");
 const { contrastRatio, round2, hex } = require("./lib/contrast");
 
 const SOURCES = require("./lib/ui-sources");
@@ -1819,6 +1819,13 @@ async function main() {
     // CEO 2026-10-06, feedback item 7: away from the first things Settings shows, so it is
     // harder to turn off by accident). There is exactly one copy (Ray's candidate .11 defect 3.4).
     await leaveHome(page);
+    // BOTH PICTURES WAIT FOR THE APP TO HAVE FINISHED STARTING (2026-10-20, verification
+    // reliability PRD A6). Under `SLOW_BRIDGE(120)` this check photographed the rail before
+    // `init()`'s last read had put the Corrections badge up (splash-03, 343 px) and the relaunch
+    // before its conversation was painted (splash-04, 27797 px): the same race a loaded host
+    // runs. `shellSettled` waits for the two elements `init()` fills last. It also means no
+    // capability registers late and rebuilds the open panel under this check.
+    await shellSettled(page);
     await page.click("#set-btn");
     await page.waitForSelector("#set-menu:not([hidden])");
     const before = await page.isChecked("#splash-enabled");
@@ -1849,6 +1856,7 @@ async function main() {
     await page.goto(APP);
     await page.waitForSelector(".nav-thread", { state: "attached" });
     await leaveHome(page);
+    await shellSettled(page);
     const after = await page.evaluate(() => ({
       splashNodes: document.querySelectorAll("#splash, .splash").length,
       shown: window.RichSplash.state.shown,
