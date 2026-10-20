@@ -16,15 +16,15 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
   identity   the running app says it was built from --expect-sha
   first-run  adopt-walk.py's: company "Acme" and its first conversation, so a relaunch restores one
   return     relaunch; the home screen (recognized by OCR: its live canvas keeps accessibility reads
-             past their deadline) is left with Return, its own key; a real click in the composer,
-             the message typed with real keys, sent with the Return key
+             past their deadline) is left with Return, its own key, which puts the hand in the
+             composer; the message typed at once with real keys, sent with the Return key
   click      the same after a second relaunch, sent with a real mouse click on Send
 
 Each send is judged by the app's own durable record: a PromptReceived row in conversation-ledger.jsonl
-carrying the exact words, within --within seconds. Each records whether the launch had started
-opening his conversation when the words were typed (`thread_open`: the scope header is empty until
-it has, the window the escalation's walk typed in), the composer's value before and after the send,
-the guest-clock times and two screenshots. Evidence: <out>/<step>.json, <out>/<step>-typed.png and -sent.png.
+carrying the exact words, within --within seconds. Each records whether the launch had already
+opened his conversation when the words were typed (`opened_in`: the Output buttons on the frame
+taken right after typing; without them, the words were typed in the window the escalation's walk
+typed in), the composer's value before and after the send, the guest-clock times and two screenshots. Evidence: <out>/<step>.json, <out>/<step>-typed.png and -sent.png.
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
 """
@@ -94,20 +94,14 @@ class FirstSendWalk(adopt_walk.Walk):
             raise StepFailed('the composer is not on screen')
         return nodes[0]
 
-    def thread_open(self):
-        """What the launch has done about his conversation, read off the screen: `header` is the
-        company the scope header names, written the moment the restore starts opening a thread
-        (main.js `openThread` -> `renderScopeHeader`) and empty before; `output` is whether the
-        Output buttons are drawn, which happens only once its record is read, later. Words typed
-        while `header` is empty were typed before the launch had a conversation to give them to."""
-        try:
-            nodes = [n for n in self.ax('find', '--id', 'scope-entity', '--first') if not n.get('meta')]
-        except StepFailed as exc:
-            if 'notfound' not in str(exc) and 'nothing matched' not in str(exc):
-                raise
-            nodes = []
-        header = (nodes[0].get('value') or nodes[0].get('title') or '') if nodes else ''
-        return {'header': header, 'output': self.present('Output')}
+    def opened_in(self, frame):
+        """Whether the launch had already opened his conversation in FRAME: the Output buttons
+        are drawn only then (output-panel.js `paintButtons`), so "Output" is on the frame or not.
+        Read off the picture by OCR, because accessibility reads of this window miss their
+        deadline on a busy host and a probe that cannot answer is not evidence. None: unread."""
+        found = subprocess.run([str(HERE.parent / 'qa' / 'ocr-find.sh'), 'Output', str(self.out / frame), '--quiet'],
+                               capture_output=True, text=True, timeout=60)
+        return {0: True, 1: False}.get(found.returncode)
 
     def shown(self, words):
         """Whether his message is drawn in the conversation (a text node carrying its first words)."""
@@ -139,14 +133,13 @@ class FirstSendWalk(adopt_walk.Walk):
         launched = relaunch(self.vm)
         record['relaunched'] = launched
         record['home_left_after_s'] = self.through_home()
-        box = self.composer()
-        command([HERE / 'pointer-drag.sh', self.vm, center(box), center(box)], 60)
-        record['thread_open_before_typing'] = self.thread_open()
+        # Straight on, as a person does: leaving the home screen puts the hand in the composer
+        # (home.js focuses #input as it hides), and every read before the keys is time in which
+        # the launch can finish opening his conversation, the window under test.
         record['typed_at_ms'] = round(self.clock())
         command([HERE / 'guest.sh', self.vm, 'osascript', '-e', keystrokes(words)], 120)
-        record['typed'] = self.composer().get('value')
-        record['thread_open_after_typing'] = self.thread_open()
         self.shot(how + '-typed.png')
+        record['typed'] = self.composer().get('value')
         record['sent_at_ms'] = round(self.clock())
         if how == 'return':
             command([HERE / 'ax.sh', self.vm, '--key', RETURN_KEY])
@@ -157,6 +150,7 @@ class FirstSendWalk(adopt_walk.Walk):
             record['send_button'] = {k: send[0][k] for k in ('x', 'y', 'w', 'h')}
             command([HERE / 'pointer-drag.sh', self.vm, center(send[0]), center(send[0])], 60)
         record['shown_after_send'] = self.shown(words)
+        record['conversation_open_when_typed'] = self.opened_in(how + '-typed.png')
         end = time.monotonic() + self.a.within
         while time.monotonic() < end:
             rows = [r for r in self.ledger_rows() if r.get('event') == 'PromptReceived' and r.get('text', '').strip() == words]
@@ -174,8 +168,8 @@ class FirstSendWalk(adopt_walk.Walk):
         failure = verdict(record)
         if failure:
             raise StepFailed(failure + '; see %s.json' % how)
-        return {k: record[k] for k in ('thread_open_before_typing', 'thread_open_after_typing', 'shown_after_send',
-                                       'received', 'composer_after', 'home_left_after_s')}
+        return {k: record[k] for k in ('conversation_open_when_typed', 'shown_after_send', 'received',
+                                       'composer_after', 'home_left_after_s')}
 
     def return_(self):
         return self.first_send('return')
@@ -218,8 +212,13 @@ def main():
         report['steps'].append(row)
         (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
         print(f"{step}: {row['outcome']}" + (f" — {row.get('detail')}" if row['outcome'] != 'PASS' else ''), flush=True)
-        if row['outcome'] != 'PASS' and step not in ('return', 'click'):
-            break
+        if row['outcome'] != 'PASS':
+            try:
+                walk.shot('failed-%s.png' % step)
+            except (StepFailed, RuntimeError, subprocess.TimeoutExpired):
+                pass
+            if step not in ('return', 'click'):
+                break
     return 0 if ok else 1
 
 
