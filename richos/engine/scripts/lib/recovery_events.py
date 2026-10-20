@@ -61,6 +61,7 @@ MAX_BRIEF = 12 * 1024
 MAX_PRECEDING = 10
 MAX_ITEM = 1500
 MAX_CITED_LINES = 20
+MAX_MESSAGE = 4000
 CITATION = re.compile(r"§\s?\d+[a-z]?|\bruling\s+\d+\b", re.I)
 RECEIPT_MATCH = 300
 
@@ -183,11 +184,24 @@ def bounded_requests(messages, transcript):
                     % (len(messages) - len(kept), MAX_REQUESTS - 1, transcript))
     else:
         kept = list(messages)
-    kept = [m[-4000:] for m in kept]
+    kept = [bound_message(m, transcript, gaps) for m in kept]
     while len(json.dumps(kept).encode()) > MAX_REQUEST_BYTES and len(kept) > 2:
         kept.pop(1)
         gaps.append("an older user message was omitted by size bound; it remains in %s" % transcript)
     return kept, gaps
+
+
+def bound_message(text, transcript, gaps):
+    """A long request keeps its opening (where the outcome and its limits are
+    usually stated) and its end; the middle is omitted by reference, and the
+    omission is named in the gaps (PRD 2026-10-20 section 4)."""
+    if len(text) <= MAX_MESSAGE:
+        return text
+    half = MAX_MESSAGE // 2
+    omitted = len(text) - 2 * half
+    gaps.append("a user message of %d characters is shown as its first and last %d characters; the %d characters "
+                "between are omitted by bound and remain in %s" % (len(text), half, omitted, transcript))
+    return "%s\n[... %d characters omitted by bound ...]\n%s" % (text[:half], omitted, text[-half:])
 
 
 def cited_instructions(texts, sources):

@@ -320,6 +320,18 @@ class Mechanics(W.Base):
         self.assertIn("cannot be witnessed", record["repeat_signal"]["reason"])
         self.assertEqual(summary["alarms"][0]["event"], "fix")
 
+    def test_a_long_user_request_keeps_its_opening_authority_and_names_what_was_omitted(self):
+        # Handover review rv-20261020T163803Z-dfc01448-bfd1, finding 2: the
+        # outcome and scope limits of a long request are usually at its start.
+        request = "ORIGINAL_LIMIT: Fix only stale report passes.\n" + "Detailed context. " * 350 + "\nEnd of background."
+        self.lead_rows(dict(type="user", uuid="u1", timestamp=self.tick(), message=dict(content=request)))
+        self.dispatch("long-ask")
+        self.drain()
+        sent = next(c for c in self.fakes.calls if c["event"]["id"] == "tu-long-ask")
+        self.assertIn("ORIGINAL_LIMIT: Fix only stale report passes.", sent["original_requests"][-1])
+        self.assertIn("End of background.", sent["original_requests"][-1])
+        self.assertTrue(any("omitted by bound" in g and str(self.lead) in g for g in sent["gaps"]), sent["gaps"])
+
     def test_provider_failure_routes_to_one_inspection_and_never_storms(self):
         import recovery_triage as T
         provider = Path(self.env.root) / "failing-claude"
