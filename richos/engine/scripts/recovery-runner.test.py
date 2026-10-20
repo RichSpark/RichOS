@@ -136,6 +136,15 @@ with s.execution_claim(sys.argv[2],'a'*40,wait_seconds=10,say=lambda message:pri
             ws = SimpleNamespace(recovery_stop=lambda *a: self.fail('questions-only applied a control'))
             RR.apply_controls('job', ws)
 
+    def test_a_dismissing_advisor_sends_no_notice_and_the_schema_allows_no_question(self):
+        self.assertEqual(RR.QUESTIONS['properties']['questions']['minItems'], 0)
+        self.assertIn('dismissal', RR.QUESTIONS['required'])
+        self.assertIn('return no questions and a one-sentence dismissal', RR.REPEAT_PROMPT)
+        record = dict(id='job', mode='questions-only', status='investigating', owner='lead', work='w', acceptance='a',
+                      evidence_cursor='f', repeat_signal=dict(label='w'),
+                      repeat_questions=dict(axel=dict(frontier='f', questions=[], dismissal='no challenge', consultation='c')))
+        self.assertIsNone(RR.owner_notice(record))
+
     def test_observed_advice_cannot_steer_reviews_or_dispatch_replacements(self):
         import second_review as SR
         record=dict(mode='observe',status='recovering',plan=dict(accepted=True,id='plan'),wes=dict(verdict=dict(action='withdraw_finding',finding='r#1')))
@@ -265,6 +274,47 @@ class Async(unittest.TestCase):
         self.assertFalse(current.get('repeat_recovery'))
         self.assertEqual(current['controls'], [])
         self.assertIsNone(current['plan'])
+
+    def test_an_answer_for_a_superseded_frontier_is_set_aside_and_asked_again(self):
+        # Review finding 2: the concern that arrived mid-consultation is not absorbed.
+        self.ledger.write_text('')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='questions-only',
+                             signal=R.event_signal(['e1'], 'triage inspect', 'worker'))
+        def consult(identity, role, phase, prompt, shape, executable, account):
+            old = R.read(identity)['evidence_cursor']
+            with R.locked(identity):
+                current = R.read(identity)
+                current['consults'].append(dict(id='c', role=role, phase='questions', input='i', frontier=old, started_at=1, status='running'))
+                R.save(current, 'fixture-started')
+            R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='questions-only',
+                        signal=R.event_signal(['e2'], 'triage inspect: arrived while asking', 'worker'))
+            return dict(job=identity, acceptance='acceptance', frontier=old, dismissal='',
+                        questions=[dict(question='Why add this?', evidence='e1 only')]), 'c'
+        with patch.object(RR.SR, 'load_workspaces', return_value=object()), patch.object(RR.SR, 'find_claude', return_value='provider'), \
+                patch.object(RR, 'snapshot', return_value='{}'), patch.object(RR, 'consultation', side_effect=consult):
+            self.assertEqual(RR.run(record['id'], 'wes', str(HERE.parent)), 0)
+        current = R.read(record['id'])
+        self.assertTrue(R.repeat_pending(current, 'wes'))
+        self.assertEqual(current['repeat_signal']['events'], ['e1', 'e2'])
+        self.assertFalse(current.get('supervision_error'))
+        events = [r['event'] for r in R.rows(R.root() / 'events.jsonl') if r.get('job') == record['id']]
+        self.assertIn('repetition-questions-superseded', events)
+        # A concern that joins the pending alarm after the advisor read the job
+        # moves the frontier, so the answer that never saw it is set aside.
+        def late(identity, role, phase, prompt, shape, executable, account):
+            frontier = R.read(identity)['evidence_cursor']
+            R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='questions-only',
+                        signal=R.event_signal(['e3'], 'triage inspect: joined the pending alarm', 'worker'))
+            self.assertNotEqual(R.read(identity)['evidence_cursor'], frontier)
+            return dict(job=identity, acceptance='acceptance', frontier=frontier, dismissal='',
+                        questions=[dict(question='Why add this?', evidence='e1 and e2 only')]), 'c2'
+        with patch.object(RR.SR, 'load_workspaces', return_value=object()), patch.object(RR.SR, 'find_claude', return_value='provider'), \
+                patch.object(RR, 'snapshot', return_value='{}'), patch.object(RR, 'consultation', side_effect=late):
+            self.assertEqual(RR.run(record['id'], 'wes', str(HERE.parent)), 0)
+        current = R.read(record['id'])
+        self.assertTrue(R.repeat_pending(current, 'wes'))
+        self.assertEqual(current['repeat_signal']['events'], ['e1', 'e2', 'e3'])
+        self.assertTrue(current.get('update_needed'))
 
     def test_rich_self_correction_needs_no_advisor_control_or_recovery_plan(self):
         record = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(4, 'start-4', 'zach-opus-lease'))

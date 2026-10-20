@@ -107,10 +107,12 @@ class Recovery(unittest.TestCase):
                                signal=R.round_signal(number, 'start-%d' % number, 'numbered'), now=now)
         first = check(4, 100)
         self.assertEqual(first, check(4, 100))
-        # Round 5 starts before either advisor asked: it joins the pending alarm.
+        # Round 5 starts before either advisor asked: it joins the pending
+        # alarm (same identity and budget) and moves the evidence frontier.
         later = check(5, 200)
         self.assertEqual(later['deadline'], first['deadline'])
-        self.assertEqual(later['evidence_cursor'], first['evidence_cursor'])
+        self.assertEqual(later['repeat_signal']['id'], first['repeat_signal']['id'])
+        self.assertNotEqual(later['evidence_cursor'], first['evidence_cursor'])
         self.assertEqual(later['repeat_signal']['round'], 5)
         self.assertEqual(later['repeat_signal']['events'], ['start-4', 'start-5'])
         self.assertEqual(check(3, 201)['repeat_signal']['round'], 5)
@@ -124,16 +126,22 @@ class Recovery(unittest.TestCase):
                                mode='enforce', signal=R.event_signal(list(events), 'triage inspect: '+events[0], 'zach-opus-prd3c'))
         first = alarm('send-1')
         second = alarm('send-2')
-        self.assertEqual(second['evidence_cursor'], first['evidence_cursor'])
+        self.assertEqual(second['repeat_signal']['id'], first['repeat_signal']['id'])
+        self.assertNotEqual(second['evidence_cursor'], first['evidence_cursor'])
         self.assertEqual(second['repeat_signal']['events'], ['send-1', 'send-2'])
         self.assertIn('send-2', second['repeat_signal']['reason'])
-        answer = dict(job=first['id'], acceptance='acceptance', frontier=first['evidence_cursor'],
+        stale = dict(job=first['id'], acceptance='acceptance', frontier=first['evidence_cursor'],
+                     questions=[dict(question='Why add send-1?', evidence='send-1 only')])
+        with self.assertRaises(R.Unavailable):  # an answer that never saw send-2
+            R.repeat_questioned(first['id'], 'axel', stale, 'stale')
+        answer = dict(stale, frontier=second['evidence_cursor'],
                       questions=[dict(question='Which original requirement does each addition serve?', evidence='send-1, send-2')])
         for role in ('axel', 'wes'):
             R.repeat_questioned(first['id'], role, answer, role)
-        self.assertEqual(alarm('send-2')['evidence_cursor'], first['evidence_cursor'])  # duplicate delivery
+        self.assertEqual(alarm('send-2')['evidence_cursor'], second['evidence_cursor'])  # duplicate delivery
         reopened = alarm('send-3')
-        self.assertNotEqual(reopened['evidence_cursor'], first['evidence_cursor'])
+        self.assertNotEqual(reopened['repeat_signal']['id'], first['repeat_signal']['id'])
+        self.assertNotEqual(reopened['evidence_cursor'], second['evidence_cursor'])
         self.assertEqual(reopened['repeat_signal']['events'], ['send-1', 'send-2', 'send-3'])
         self.assertTrue(all(R.repeat_pending(reopened, role) for role in ('axel', 'wes')))
 
@@ -444,6 +452,45 @@ class Recovery(unittest.TestCase):
         replacement = R.admission(record, "replacement", plan["brief"], plan["id"], replaces="first", safe=lambda w: w=="first")
         self.assertEqual(first["number"], replacement["number"])
         self.assertEqual(len(R.read(record["id"])["attempts"]), 1)
+
+    def test_a_concern_arriving_after_an_advisor_started_reopens_instead_of_being_absorbed(self):
+        # Review finding 2: a coalesced concern must still reach the advisors.
+        self.ledger.write_text('')
+        def alarm(event):
+            return R.reconcile(str(self.repo), 'teammate:mid', {'teammate:mid'}, 'owner', 'acceptance', mode='questions-only',
+                               signal=R.event_signal([event], 'triage inspect: ' + event, 'worker'))
+        first = alarm('e1')
+        with R.locked(first['id']):
+            started = R.read(first['id'])
+            started['consults'].append(dict(id='c', role='wes', phase='questions', input='i', frontier=started['evidence_cursor'],
+                                            started_at=1, status='running'))
+            R.save(started, 'fixture-question-consultation-started')
+        second = alarm('e2')
+        self.assertNotEqual(second['evidence_cursor'], first['evidence_cursor'])
+        self.assertEqual(second['repeat_signal']['events'], ['e1', 'e2'])
+        self.assertTrue(all(R.repeat_pending(second, role) for role in ('axel', 'wes')))
+
+    def test_an_advisor_may_dismiss_without_a_question_and_two_dismissals_settle_the_alarm(self):
+        # Review finding 4 / PRD section 6: never fabricate a question.
+        self.ledger.write_text('')
+        record = R.reconcile(str(self.repo), 'teammate:healthy', {'teammate:healthy'}, 'owner', 'acceptance', mode='questions-only',
+                             signal=R.event_signal(['d1'], 'triage uncertain: dispatch', 'worker'))
+        base = dict(job=record['id'], acceptance='acceptance', frontier=record['evidence_cursor'])
+        for bad in (dict(base, questions=[]), dict(base, questions=[], dismissal=' '),
+                    dict(base, questions=[dict(question='Why?', evidence='e')], dismissal='nothing to challenge')):
+            with self.assertRaises(R.Unavailable):
+                R.repeat_questioned(record['id'], 'axel', bad, 'bad')
+        record = R.repeat_questioned(record['id'], 'axel', dict(base, questions=[], dismissal='The dispatch carries out the user request as written.'), 'a')
+        self.assertFalse(R.repeat_pending(record, 'axel'))
+        self.assertEqual(record['status'], 'investigating')
+        record = R.repeat_questioned(record['id'], 'wes', dict(base, questions=[], dismissal='No added scope; the brief matches the request.'), 'w')
+        self.assertTrue(R.repeat_ready(record))
+        self.assertEqual((record['status'], record['repeat_outcome']), ('resolved_findings', 'dismissed'))
+        self.assertEqual(record['controls'], [])
+        reopened = R.reconcile(str(self.repo), 'teammate:healthy', {'teammate:healthy'}, 'owner', 'acceptance', mode='questions-only',
+                               signal=R.event_signal(['d2'], 'triage inspect: a new addition', 'worker'))
+        self.assertEqual(reopened['status'], 'investigating')
+        self.assertNotIn('repeat_outcome', reopened)
 
     def test_questions_only_declaration_needs_no_qualification_and_never_controls(self):
         entity = self.base / "entity"

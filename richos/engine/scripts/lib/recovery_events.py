@@ -77,6 +77,25 @@ def quiet_projection(rec, mode):
     return rec.get("recovery_assignment") or {}
 
 
+def dispatch_relation(rec, mode):
+    """(relation, gap): the existing Pierce or app-issued relationship of a
+    dispatch. A recorded classification gap, an unavailable classification or
+    no attested relationship at all is uncertain, never a validated initial
+    attempt (PRD 2026-10-20 section 2: missing classification routes to
+    inspection)."""
+    assignment = quiet_projection(rec, mode)
+    authority = assignment.get("authority") or {}
+    gap = rec.get("recovery_observation_gap") or ((rec.get("recovery_assignment") or {}).get("authority") or {}).get("observation_gap")
+    classified = authority.get("classification") or {}
+    if gap:
+        return "uncertain", "dispatch relationship unavailable: %s" % gap
+    if classified.get("relation") == "unavailable":
+        return "uncertain", "dispatch relationship unavailable: %s" % classified.get("evidence", "")
+    if not classified and not authority.get("host"):
+        return "uncertain", "dispatch relationship unavailable: no attested classification was recorded"
+    return ("correction" if assignment.get("correction_of") else "initial"), ""
+
+
 def chain(ws, rec, mode):
     """Workers joined only by recorded correction relationships, oldest first.
     A similar name or a common Git ancestor never joins work."""
@@ -387,14 +406,17 @@ def process(ws, worker, events, context, declaration, engine, summary, triage, s
         if not entry:
             entry = dict(kind=event["kind"], at=event["at"], outcome=event["outcome"], witness=event.get("witness", ""))
             if event["kind"] == "dispatch":
-                entry["relation"] = "correction" if quiet_projection(worker, mode).get("correction_of") else "initial"
+                entry["relation"], gap = dispatch_relation(worker, mode)
+                if gap:
+                    entry.update(relation_gap=gap, alarm="pending")
             if event["outcome"] == "refused":
                 entry.update(decision="none", reason="refused before any work started; adds no round", alarm="none")
             else:
                 rounds = round_sequence(chain(ws, worker, mode))
                 requests, gaps = context["requests"](event)
                 value = triage_input(event, worker, entry.get("relation"), context["brief"], requests,
-                                     context["gaps"] + gaps, context["preceding"](event), context["cited"](event), rounds)
+                                     context["gaps"] + gaps + ([entry["relation_gap"]] if entry.get("relation_gap") else []),
+                                     context["preceding"](event), context["cited"](event), rounds)
                 try:
                     result = triage(value)
                 except Exception as error:  # noqa: BLE001 -- any fault routes to inspection
@@ -405,7 +427,7 @@ def process(ws, worker, events, context, declaration, engine, summary, triage, s
                              references=result.get("references", []), triage=result.get("input", ""),
                              model=result.get("model"), tokens=result.get("tokens"), cost_usd=result.get("cost_usd"),
                              elapsed_seconds=result.get("elapsed_seconds"),
-                             alarm="pending" if result["decision"] != "routine" else "none")
+                             alarm="pending" if result["decision"] != "routine" or entry.get("relation_gap") else "none")
                 if event["kind"] == "send":
                     entry["relation"] = result.get("relation") or ("uncertain" if result["decision"] == "unavailable" else None)
                     if entry["relation"] == "uncertain":
@@ -428,7 +450,9 @@ def process(ws, worker, events, context, declaration, engine, summary, triage, s
     label = str(worker.get("name") or worker["key"])
     for eid, entry in sorted(events_now.items(), key=lambda kv: (kv[1].get("at", ""), kv[0])):
         if entry.get("alarm") == "pending":
-            if entry.get("start_state") == "unavailable":
+            if entry.get("relation_gap") and entry.get("decision") == "routine":
+                reason = entry["relation_gap"]
+            elif entry.get("start_state") == "unavailable":
                 reason = "corrective start cannot be witnessed: " + entry.get("start_gap", "")
             elif entry.get("relation") == "uncertain" and entry.get("decision") == "routine":
                 reason = "round relation uncertain: " + entry.get("reason", "")

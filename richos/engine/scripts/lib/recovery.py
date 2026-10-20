@@ -211,11 +211,12 @@ def signal_label(signal):
 
 
 def merge_signal(previous, new, asked):
-    """One alarm per assignment frontier. Until both advisors have asked their
-    questions, a new concern joins the pending alarm and keeps its identity, so
-    an in-flight consultation is not invalidated. After questions exist, a new
-    material event or a later round reopens scrutiny under a new identity.
+    """One alarm per assignment. Until an advisor has asked, a new concern
+    joins the pending alarm and keeps its identity. After questions exist, a
+    new material event or a later round reopens scrutiny under a new identity.
     Nothing that raised a concern is discarded: its event stays listed.
+    `asked` is true once either advisor has asked. A joined concern keeps
+    the alarm and its budget but changes the evidence frontier (reconcile).
     Returns (signal, reopened)."""
     events = list(dict.fromkeys((previous or {}).get("events", []) + new.get("events", [])))
     if previous and set(new.get("events", [])) <= set(previous.get("events", [])) and (
@@ -252,14 +253,24 @@ def repeat_question_key(record, role):
 def repeat_ready(record):
     """Questions reach the lead before a later judgment can run."""
     return all(not repeat_pending(record, role) and
-               (not asks(record["mode"]) or repeat_question_key(record, role) in record.get("deliveries", {}))
+               (not asks(record["mode"]) or not (record.get("repeat_questions", {}).get(role) or {}).get("questions")
+                or repeat_question_key(record, role) in record.get("deliveries", {}))
                for role in ("axel", "wes"))
+
+
+def dismissed(record):
+    """Both advisors concluded, at this frontier, that no challenge is justified."""
+    return bool(record.get("repeat_signal")) and all(
+        (record.get("repeat_questions", {}).get(role) or {}).get("frontier") == record["evidence_cursor"] and
+        not record["repeat_questions"][role]["questions"] for role in ("axel", "wes"))
 
 
 def settle_questions(record):
     # Delivery is not an answer. A satisfactory reply lets Rich correct course;
     # it does not waive ordinary review, acceptance or any existing stop.
-    if (record.get("repeat_outcome") == "self_correction" and repeat_ready(record) and
+    if dismissed(record) and not record.get("repeat_outcome"):
+        record["repeat_outcome"] = "dismissed"  # recorded in cost; a new material event reopens it
+    if (record.get("repeat_outcome") in ("self_correction", "dismissed") and repeat_ready(record) and
             record["status"] not in ("accepted", "awaiting_alex", "unavailable") and
             not record["attempts"] and not record.get("repeat_recovery") and
             not any(c["action"] != "continue" for c in record["controls"])):
@@ -267,13 +278,18 @@ def settle_questions(record):
 
 
 def repeat_questioned(identity, role, answer, consultation, sources=()):
-    """Store probing questions without requiring or granting a verdict."""
+    """Store probing questions without requiring or granting a verdict. An
+    advisor that finds no challenge justified returns no question and a short
+    dismissal instead (PRD 2026-10-20 section 6: never fabricate a question)."""
     with locked(identity):
         record = read(identity)
-        if (role not in ("axel", "wes") or set(answer) != {"job", "acceptance", "frontier", "questions"} or
+        dismissal = answer.get("dismissal", "") if isinstance(answer, dict) else None
+        if (role not in ("axel", "wes") or not {"job", "acceptance", "frontier", "questions"} <= set(answer) or
+                not set(answer) <= {"job", "acceptance", "frontier", "questions", "dismissal"} or
                 answer["job"] != identity or answer["acceptance"] != record["acceptance"] or
-                answer["frontier"] != record["evidence_cursor"] or
-                not isinstance(answer["questions"], list) or not 1 <= len(answer["questions"]) <= 2 or
+                answer["frontier"] != record["evidence_cursor"] or not isinstance(dismissal, str) or
+                not isinstance(answer["questions"], list) or len(answer["questions"]) > 2 or
+                (not answer["questions"] and not dismissal.strip()) or (answer["questions"] and dismissal.strip()) or
                 any(not isinstance(q, dict) or set(q) != {"question", "evidence"} or
                     any(not isinstance(q[k], str) or not q[k].strip() for k in ("question", "evidence"))
                     for q in answer["questions"])):
@@ -282,6 +298,8 @@ def repeat_questioned(identity, role, answer, consultation, sources=()):
             raise Unavailable("late questions cannot reopen a resolved or escalated job")
         record.setdefault("repeat_questions", {})[role] = dict(frontier=answer["frontier"],
             questions=answer["questions"], consultation=consultation, sources=list(sources))
+        if dismissal.strip():
+            record["repeat_questions"][role]["dismissal"] = dismissal.strip()
         settle_questions(record)
         save(record, "repetition-questions-ready")
         return record
@@ -392,7 +410,11 @@ def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", 
         record["axel_required"] = record.get("axel_required", True) or len(failed)>=THRESHOLD or bool(record.get("repeat_signal"))
         if record["axel_required"] and record["status"] == "reviewing_premise":
             record["status"] = "investigating"
-        frontier = digest([failed, record["repeat_signal"]["id"]]) if record.get("repeat_signal") else digest(failed)
+        # The frontier follows every event of the alarm: an answer computed
+        # before a concern joined is stale, so the advisors always see it
+        # (PRD 2026-10-20 section 3: never discard the event that raised it).
+        frontier = digest([failed, record["repeat_signal"]["id"], record["repeat_signal"].get("events")]) \
+            if record.get("repeat_signal") else digest(failed)
         if record.get("repeat_signal") and frontier != record["evidence_cursor"] and record.get("repeat_outcome"):
             record.pop("repeat_outcome", None)
             if record["status"] == "resolved_findings":

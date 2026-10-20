@@ -5026,7 +5026,10 @@ def recovery_chain(rec, observation=False):
             continue
         seen.add(current["key"])
         out.append(current)
-        assignment = current.get("recovery_assignment") or {}
+        # Observation follows every predecessor's own observation projection,
+        # so a chain of replacements keeps one job identity, not only one hop.
+        assignment = (current is not rec and observation and current.get("recovery_observation_assignment")) or \
+            current.get("recovery_assignment") or {}
         refs = assignment.get("correction_of", []) if assignment else current.get("continues", [])
         if assignment and assignment.get("kind") != "implementation":
             refs = []
@@ -5034,7 +5037,8 @@ def recovery_chain(rec, observation=False):
             previous = load_agent(reference)
             if not previous:
                 raise SpecError("recovery predecessor %s is missing; reconcile its source record" % reference)
-            if assignment and not (observation and _recovery_unclassified(previous)) and (previous.get("recovery_assignment") or {}).get("outcome") not in (
+            projected = (observation and previous.get("recovery_observation_assignment")) or previous.get("recovery_assignment") or {}
+            if assignment and not (observation and _recovery_unclassified(previous)) and projected.get("outcome") not in (
                     None, assignment.get("outcome")):
                 raise SpecError("recovery relationship joins different authorized outcomes")
             todo.append(previous)
@@ -5182,14 +5186,16 @@ def _classified_recovery_assignment(payload, rec, continues, lands_pending, insp
     else:
         refs = []
     inherited = []
+    # An observing projection inherits from the predecessor's projection too.
+    projection = lambda r: (observing and r.get("recovery_observation_assignment")) or r.get("recovery_assignment") or {}
     for reference in refs:
         previous = lookup(reference)
         if not previous:
             raise SpecError("recovery predecessor %s is missing" % reference)
-        if (previous.get("recovery_assignment") or {}).get("kind", "implementation") != "implementation":
+        if projection(previous).get("kind", "implementation") != "implementation":
             raise SpecError("a recovery correction cannot inherit a helper or review budget")
-        inherited.append((previous.get("recovery_assignment") or {}).get("outcome") or
-                         "teammate:%s" % recovery_chain(previous)[0]["key"])
+        inherited.append(projection(previous).get("outcome") or
+                         "teammate:%s" % recovery_chain(previous, observation=observing)[0]["key"])
     if len(set(inherited)) > 1:
         raise SpecError("one correction cannot silently combine different jobs")
     source = {"session": str(payload.get("session_id") or ""),
@@ -5205,7 +5211,7 @@ def _classified_recovery_assignment(payload, rec, continues, lands_pending, insp
     return {"kind": kind,
             "outcome": inherited[0] if inherited else (host.get("outcome") or "teammate:%s" % rec["key"]),
             "correction_of": sorted(set(refs)), "authority": source,
-            "acceptance": host.get("acceptance") or (lookup(refs[0]).get("recovery_assignment", {}).get("acceptance")
+            "acceptance": host.get("acceptance") or (projection(lookup(refs[0])).get("acceptance")
                           if refs else None) or hashlib.sha256(prompt.encode()).hexdigest()}
 
 

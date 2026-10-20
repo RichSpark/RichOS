@@ -264,6 +264,25 @@ class Mechanics(W.Base):
         record = self.record_for("fresh-hands")
         self.assertEqual(record["repeat_signal"]["round"], 4)
         self.assertEqual(record["repeat_signal"]["events"], ["tu-fresh-hands"])
+        # Review finding 1: a third replacement keeps the same job, and the
+        # watcher's questions-only routing looks up that same job.
+        self.dispatch("third-hands", correction_of=[ws.named_key(self.sid, "fresh-hands")])
+        self.drain()
+        import recovery_controls as C
+        identities = {C.work(ws, dict(r, recovery_assignment=E.quiet_projection(r, "questions-only")))[0]
+                      for r in (ws.load_agent(ws.named_key(self.sid, n)) for n in ("first-try", "fresh-hands", "third-hands"))}
+        self.assertEqual(identities, {"teammate:" + ws.named_key(self.sid, "first-try")})
+        record = self.record_for("third-hands")
+        self.assertEqual(record["id"], self.record_for("fresh-hands")["id"])
+        R.repeat_questioned(record["id"], "wes", dict(job=record["id"], acceptance=record["acceptance"],
+            frontier=record["evidence_cursor"], questions=[dict(question="What will end this outcome?", evidence="round 4")]), "q")
+        third = ws.load_agent(ws.named_key(self.sid, "third-hands"))
+        from types import SimpleNamespace
+        item = SimpleNamespace(source="native", repo=self.other, ref=third["key"], session=self.sid, state="running",
+                               started=1, env={}, claude="", accounts="", tip="a" * 40)
+        with patch.object(RR, "launch"):
+            RR.tick([item], str(HERE.parent), self.entity, ws)
+        self.assertEqual([n["record"] for n in RR.NOTICES], [str(R.root() / (record["id"] + ".json"))])
         # A name ending in a large number with no recorded relation is round 1.
         self.dispatch("unrelated-job9")
         self.drain()
@@ -374,6 +393,15 @@ class Mechanics(W.Base):
                 patch.object(ws, "_classified_recovery_assignment", side_effect=ws.SpecError("job identity unavailable")):
             rec = ws.register_spawn(payload, self.entity)
         self.assertEqual(rec["recovery_assignment"]["authority"]["observation_gap"], "job identity unavailable")
+        # Review finding 3: the dispatch is permitted and its missing
+        # relationship routes to inspection, even when triage says routine.
+        self.call("Agent", "tu-identity-gap", payload["tool_input"], result_text="Async agent launched successfully.")
+        self.drain()
+        entry = self.events("identity-gap")["tu-identity-gap"]
+        self.assertEqual((entry["relation"], entry["decision"], entry["alarm"]), ("uncertain", "routine", "raised"))
+        self.assertIn("dispatch relationship unavailable", self.record_for("identity-gap")["repeat_signal"]["reason"])
+        sent = next(c for c in self.fakes.calls if c["event"]["id"] == "tu-identity-gap")
+        self.assertTrue(any("job identity unavailable" in g for g in sent["gaps"]))
         # Ordinary protections still refuse: Pierce findings, and a workspace never registered.
         blocked = dict(payload, tool_use_id="tu-blocked", tool_input=dict(payload["tool_input"], name="blocked-brief"))
         with patch.object(ws, "_pierce_before_registration", side_effect=ws.SpecError("Pierce FINDINGS: unrequested feature")):
