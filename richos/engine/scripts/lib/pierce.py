@@ -677,7 +677,10 @@ def read_response(out, output_format):
 
 def run_review(request, profile, model="opus", effort=None, output_format="json"):
     """(verdict, metrics) from one restricted inspection by the named model."""
-    cli = os.environ.get("RICHOS_CLAUDE_BIN") if os.environ.get("RICHOS_APP_STATE") else shutil.which("claude")
+    # The operator profile's order (operator_profile.rs, "HIS claude"): the
+    # stored PATH, then the installer's launcher in his home.
+    cli = (os.environ.get("RICHOS_CLAUDE_BIN") if os.environ.get("RICHOS_APP_STATE") else
+           shutil.which("claude") or next((str(p) for p in [Path.home() / ".local/bin/claude"] if p.is_file()), None))
     if not cli:
         raise ValueError("Claude Code executable was not found on PATH")
     command = claude_command(cli, profile, request["read_roots"], model, effort, output_format,

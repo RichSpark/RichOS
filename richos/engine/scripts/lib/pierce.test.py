@@ -674,6 +674,25 @@ class Pierce(unittest.TestCase):
         self.assertEqual(P.human_context(self.payload),
                          "Implement the requested feature.\n\nKeep the existing API.\n\n" + quoting)
 
+    def test_claude_is_found_in_the_installers_folder_when_not_on_path(self):
+        # The operator profile resolves claude from the stored PATH, then
+        # $HOME/.local/bin/claude (operator_profile.rs, "HIS claude"); Pierce
+        # follows the same order so an enable.sh run without claude on PATH
+        # still inspects every spawn.
+        env = self.fake_provider({"verdict": "PASS", "report": "PASS. Read fixture evidence."})
+        home = self.root / "home"
+        (home / ".local/bin").mkdir(parents=True)
+        (self.root / "bin/claude").rename(home / ".local/bin/claude")
+        env.update(PATH="/usr/bin:/bin", HOME=str(home))
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(P.inspect(self.payload)["verdict"], "PASS")
+            captured = json.loads((self.root / "captured.json").read_text())
+            self.assertEqual(captured["argv"][0], str(home / ".local/bin/claude"))
+            (home / ".local/bin/claude").unlink()
+            result = P.inspect({**self.payload, "tool_use_id": "call-2"})
+        self.assertEqual(result["verdict"], "UNAVAILABLE")
+        self.assertEqual(result["report"], "Claude Code executable was not found on PATH")
+
     def test_desktop_uses_only_host_attested_user_requests(self):
         self.rows[0]["evidenceSource"] = "richos-ledger-attested-hook-v1"
         self.transcript.write_text("\n".join(map(json.dumps, self.rows)))
