@@ -176,8 +176,11 @@ class TeamWatchWalk(command_walk.CommandWalk):
                   '    try: r=json.loads(l)\n'
                   '    except Exception: print("unparsed"); continue\n'
                   '    m=r.get("message") if isinstance(r.get("message"),dict) else {}\n'
-                  '    print(r.get("type"), r.get("subtype") or "-", m.get("stop_reason") or "-",\n'
-                  '          "side" if r.get("isSidechain") else "main", r.get("timestamp") or "-")\n')
+                  '    a=r.get("attachment") if isinstance(r.get("attachment"),dict) else {}\n'
+                  '    print(r.get("type"), r.get("subtype") or a.get("type") or r.get("operation") or "-",\n'
+                  '          m.get("stop_reason") or (type(a["prompt"]).__name__ if "prompt" in a else "-"),\n'
+                  '          "side" if r.get("isSidechain") else "main", r.get("timestamp") or "-",\n'
+                  '          (r.get("content") or "").split("\\n")[0][:80] if r.get("operation")=="enqueue" and isinstance(r.get("content"),str) else "")\n')
         return guest(self.vm, 'python3 -c %s %s 2>&1 || true' % (shlex.quote(script), shlex.quote(path)), 60)
 
     def notices(self):
@@ -241,8 +244,9 @@ class TeamWatchWalk(command_walk.CommandWalk):
                   '    if r.get("type")=="user":\n'
                   '        c=(r.get("message") or {}).get("content"); how="user row"\n'
                   '        t=c if isinstance(c,str) else " ".join(x.get("text","") for x in c or [] if isinstance(x,dict))\n'
-                  '    elif r.get("type")=="attachment" and a.get("type")=="queued_command" and isinstance(a.get("prompt"),str):\n'
-                  '        t=a["prompt"]; how="queued user message"\n'
+                  '    elif r.get("type")=="attachment" and a.get("type")=="queued_command":\n'
+                  '        p=a.get("prompt"); how="queued user message"\n'
+                  '        t=p if isinstance(p,str) else " ".join(x.get("text","") for x in p or [] if isinstance(x,dict))\n'
                   '    else: continue\n'
                   '    for k,m in json.loads(sys.argv[2]).items():\n'
                   '        if m in t and k not in out:\n'
@@ -255,7 +259,8 @@ class TeamWatchWalk(command_walk.CommandWalk):
     def observe(self):
         # One quota-watch poll past --within: the teammate registered in `notices` is seen at
         # its next poll, up to QUOTA_POLL_SECONDS later (its log: "polling every 300 s").
-        end = time.monotonic() + max(self.a.within, QUOTA_POLL_SECONDS + 60)
+        waited = max(self.a.within, QUOTA_POLL_SECONDS + 60)
+        end = time.monotonic() + waited
         got, path = {}, ''
         while time.monotonic() < end:
             path = path or self.transcript()
@@ -272,8 +277,10 @@ class TeamWatchWalk(command_walk.CommandWalk):
         (self.out / 'observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
         missing = [name for name in WATCHERS if name not in got]
         if missing:
-            raise StepFailed('not in his lead\'s transcript within %g s: %s; see observed.json and the logs'
-                             % (self.a.within, ', '.join(missing)))
+            said = {name: [l for l in (self.out / ('%s.log' % name)).read_text().splitlines() if l.strip()][-1:]
+                    for name in missing}
+            raise StepFailed('not in his lead\'s transcript within %.0f s: %s; each one\'s last log line: %s'
+                             % (waited, ', '.join(missing), json.dumps(said)))
         return got
 
 
