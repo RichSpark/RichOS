@@ -20,8 +20,8 @@ engineer in a worktree, Codex, Rich in the main checkout.
   of the check and put back after it (StagedOnly). The repository enforces no formatter, so
   none is run. A failure refuses the commit with the reason.
 
-  LAND, anything that moves main (pre-merge-commit on main, pre-commit on main, and
-  pre-push of main as the backstop): the suites that own the changed files
+  LAND, anything that moves main or a recorded release branch (pre-merge-commit and pre-commit
+  there, and pre-push of it as the backstop): the suites that own the changed files
   (`proof-for.sh --gate`), run by `proof-run.py`, plus `lint.sh --changed` when the land
   changes something under richos/app and the selection does not already include
   `lint.test.sh` (the push backstop: `--all`), and first the engine's publication-completeness
@@ -1997,8 +1997,9 @@ def current_fence(launcher_text, folder, env):
     return Path(folder) / "operator_fences.py", conf.get("REPO") or ""
 
 
-def review_before_checks(repo, what, landed):
-    """0 when the fence would let this land through its second review, else 1 after printing why."""
+def review_before_checks(repo, what, landed, old=None):
+    """0 when the fence would let this land (the move from `old`, HEAD by default, to `landed`)
+    through its second review, else 1 after printing why."""
     launcher = repo.common / "hooks" / "reference-transaction"
     try:
         text = launcher.read_text(errors="replace")[:65536]
@@ -2009,7 +2010,7 @@ def review_before_checks(repo, what, landed):
         return 0
     program = found.group(1)
     env = {k: v for k, v in repo.env.items() if not k.startswith("GIT_")}
-    head = git("rev-parse", "HEAD", cwd=repo.top)
+    head = old or git("rev-parse", "HEAD", cwd=repo.top)
     said, rc = [""], 0
     with tempfile.TemporaryDirectory(prefix="autocheck-fence-") as folder:
         try:
@@ -2082,21 +2083,35 @@ def pre_push(repo, stdin_text):
         if remote_ref.startswith("refs/heads/") and root_entries_gate(
                 repo, "push", tree, remote_ref.removeprefix("refs/heads/")):
             return 1
-        if remote_ref != f"refs/heads/{LAND_BRANCH}":
+        branch = remote_ref.removeprefix("refs/heads/") if remote_ref.startswith("refs/heads/") else ""
+        if branch != LAND_BRANCH and (not branch or branch not in integration_branches(repo)):
             continue
+        base = remote_sha if remote_sha != ZERO else None
+        if branch != LAND_BRANCH:
+            # A RELEASE BRANCH IS PUSHED AS MAIN IS (second review rv-20261020T083937Z-e0e46785-97bf):
+            # a default fast-forward onto it writes no merge commit, so no pre-merge-commit asked
+            # its review or ran its land check, and the fence guards main's ref only. Its push asks
+            # the review of the move it publishes (from where the remote has it, or from where it
+            # left main), then needs a land receipt for its tree or runs the land check, as main's.
+            if base is None:
+                cut = git("merge-base", local_sha, f"refs/heads/{LAND_BRANCH}", check=False, cwd=repo.top)
+                base = cut.stdout.strip() if cut.returncode == 0 and cut.stdout.strip() else None
+            if review_before_checks(repo, f"push of {branch}", local_sha, old=base or local_sha):
+                return 1
         if repo.land_receipt(tree).exists():
             continue
-        say(f"autocheck: push: {LAND_BRANCH} at {local_sha[:12]} has no land receipt "
+        say(f"autocheck: push: {branch} at {local_sha[:12]} has no land receipt "
             "(a fast-forward, a cherry-pick or a --no-verify merge); running the land checks now")
         head = git("rev-parse", "HEAD", cwd=repo.top)
         status = git("status", "--porcelain", "--untracked-files=no", env=repo.env, cwd=repo.top)
-        if repo.branch != LAND_BRANCH or head != local_sha or status:
-            banner("PUSH REFUSED: main's tip was never checked", [
+        if repo.branch != branch or head != local_sha or status:
+            banner(f"PUSH REFUSED: {branch}'s tip was never checked", [
                 f"{local_sha[:12]} has no land receipt, and this checkout is not at that commit",
-                "with a clean tree, so the checks cannot run here. Push from the main checkout.",
+                f"with a clean tree, so the checks cannot run here. Push from a checkout of {branch}.",
             ])
             return 1
-        base = remote_sha if remote_sha != ZERO else git("rev-list", "--max-parents=0", local_sha, cwd=repo.top).split()[0]
+        if base is None:
+            base = git("rev-list", "--max-parents=0", local_sha, cwd=repo.top).split()[0]
         if land_check(repo, "push", [], [f"{base}..{local_sha}"], changed_lint=False):
             return 1
     return 0
@@ -2274,11 +2289,15 @@ def post_merge(repo, squash):
         return 0
     target = land_target(repo)
     if target:
-        # The lander's merge tree: the land check ran at pre-merge-commit and left its receipt.
-        # The phone watch and the hook sidecars belong to the main checkout, not to this tree.
-        if merged and not repo.land_receipt(tree).exists():
-            record_skip(repo, f"{target} moved to {head[:12]} without the land checks (git merge --no-verify)",
-                        f"Was landing {head[:12]} on {target} without its suites deliberate?")
+        # The lander's merge tree, or a checkout of a recorded release branch: the land check ran
+        # at pre-merge-commit and left its receipt. A fast-forward ran nothing, as on main, and is
+        # recorded as main's is; its push asks the review and runs the land check (pre_push). The
+        # phone watch and the hook sidecars belong to the main checkout, not to this tree.
+        if not repo.land_receipt(tree).exists():
+            how = "git merge --no-verify" if merged else "a fast-forward"
+            record_skip(repo, f"{target} moved to {head[:12]} without the land checks ({how})",
+                        f"Was landing {head[:12]} on {target} without its review and suites deliberate? "
+                        f"Its push asks the review and runs them.")
         return 0
     marker = repo.marker()
     verified = marker.read_text().strip() if marker.exists() else ""
@@ -2502,7 +2521,8 @@ def main(argv):
         decided = land_target(repo)
     except (RuntimeError, OSError):
         decided = ""
-    own = None if decided else branch_copy(repo)
+    # pre-push judges what is pushed, not the checked-out branch, so main's copy always judges it.
+    own = None if decided or hook == "pre-push" else branch_copy(repo)
     if own:
         os.environ[FROM_MAIN] = NOT_A_LAND
         os.execv(sys.executable, [sys.executable, str(own), *argv])

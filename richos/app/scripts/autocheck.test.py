@@ -2289,6 +2289,41 @@ class ActiveGate(Fixture):
         self.assertNotIn("second review", out.stderr)
         self.assertNotIn(self.SUITE_RAN, self.tools())
 
+    def remote_tip(self, remote, branch):
+        out = self.run_(["git", "--git-dir", str(remote), "rev-parse", "-q", "--verify", "refs/heads/" + branch])
+        return out.stdout.strip()
+
+    def test_a_fast_forward_onto_a_recorded_release_branch_is_recorded_and_its_push_meets_mains_policy(self):
+        # Second review rv-20261020T083937Z-e0e46785-97bf: a default fast-forward writes no merge
+        # commit, so no pre-merge-commit runs; the fence guards main's ref only, post-merge recorded
+        # only release merge commits and pre-push skipped release branches.
+        self.make()
+        self.fence()
+        self.git("branch", "v1.2.1")
+        self.record_integration("v1.2.1")
+        remote = self.base / "remote.git"
+        self.git("init", "-q", "--bare", str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main", "v1.2.1")
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, fast-forwarded\n")
+        tip = self.head("feature")
+        tree = self.base / "release-tree"
+        self.git("worktree", "add", "-q", str(tree), "v1.2.1")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        self.git("merge", "-q", "feature", cwd=tree)                    # git's default: a fast-forward
+        self.assertEqual(self.head("v1.2.1"), tip)
+        self.assertIn("v1.2.1 moved to %s without the land checks (a fast-forward)" % tip[:12], self.recorded())
+        before = self.remote_tip(remote, "v1.2.1")
+        out = self.git("push", "origin", "v1.2.1", cwd=tree, expect=1)
+        self.assertIn("PUSH OF V1.2.1 REFUSED: what this lands has no passing second review", out.stderr)
+        self.assertNotIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.remote_tip(remote, "v1.2.1"), before)
+        self.verdict(tip)
+        out = self.git("push", "origin", "v1.2.1", cwd=tree)
+        self.assertIn("has no land receipt", out.stderr)               # the land check runs, as main's push runs it
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.remote_tip(remote, "v1.2.1"), tip)
+
     def test_a_branch_commit_is_checked_by_its_own_copy_and_a_land_by_mains(self):
         # Main's copy runs first and decides; what is no land runs the branch's own copy, as it
         # always did.

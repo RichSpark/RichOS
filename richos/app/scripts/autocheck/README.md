@@ -157,7 +157,10 @@ copy; each of these is now settled by the policy in force before any check runs
   integrating on (`workspaces.py integration --all`, its own answer) is a land, judged by main's
   copy; anything else is handed to HEAD's copy when that differs, so a branch's commits are still
   checked by its own version. A failed registry answer is said and the commit is checked as a
-  branch commit.
+  branch commit. A fast-forward onto a release branch writes no merge commit, so no hook can
+  refuse it where it happens (the fence guards main's ref only): it is recorded as one onto main
+  is and its push asks the review of the move it publishes and then needs a land receipt or runs
+  the land check, as a push of main does.
 - **The installed shim.** `install.sh` copied the shim once and the copy was older than the file
   for ten days. An installed copy that differs from the shim committed on main runs that one.
   This needs the one reinstall that puts this shim in place (`install.sh`) and never another.
