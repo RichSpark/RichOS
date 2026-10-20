@@ -22,6 +22,10 @@
 #        is told
 #   C07  monitors.json starts `codex-watch.sh --monitor` always
 #   C08  a repository that never adopted the engine: silent, exit 0
+#   C09  --monitor --host-json, the RichOS app host's own child (host_child.py):
+#        an appended entry is ONE JSON line carrying every line of it, and the
+#        watcher ends once its host (the parent whose pid RICHOS_WATCH_HOST
+#        names) is gone
 #
 # Exit 0 = every case passed; exit 1 = at least one failed.
 
@@ -152,6 +156,41 @@ mkdir -p "$SB/not-adopted"
 OUT="$(RICHOS_ENTITY_ROOT="$SB/not-adopted" bash "$CW" --monitor 2>&1)"; RC=$?
 check "C08  a repository that never adopted the engine: the monitor is silent and exits 0" \
     "$( [ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ -f "$CW" ]; echo $?)" "rc=$RC out=$OUT"
+
+# --- C09: the app host's child -----------------------------------------------
+# A stand-in host: a process that starts the watcher as its child, names itself in
+# RICHOS_WATCH_HOST, and waits. Ending it is the app ending without a quit.
+python3 - "$CW" "$SB" <<'PY' &
+import os, subprocess, sys, time
+cw, sb = sys.argv[1:3]
+env = dict(os.environ, RICHOS_WATCH_HOST=str(os.getpid()), CODEX_WATCH_POLL_SECONDS="0.3",
+           CODEX_WATCH_STATE_DIR=os.path.join(sb, "state-host"))
+child = subprocess.Popen(["bash", cw, "--monitor", "--host-json"], env=env,
+                         stdout=open(os.path.join(sb, "host.out"), "w"), stderr=open(os.path.join(sb, "host.err"), "w"))
+with open(os.path.join(sb, "host.child.tmp"), "w") as fh:
+    fh.write(str(child.pid))
+os.replace(os.path.join(sb, "host.child.tmp"), os.path.join(sb, "host.child"))
+time.sleep(900)
+PY
+HOST=$!; PIDS+=("$HOST")
+wait_for 10 test -s "$SB/host.child"
+CHILD="$(cat "$SB/host.child")"; PIDS+=("$CHILD")
+sleep 1.5                                   # its first looks: where the channels end
+printf '## 2026-10-05 12:00Z — READY TO LAND: codex/host-child\nhost-line-two\n' >>"$CH1"
+wait_for 15 grep -q 'host-line-two' "$SB/host.out"
+kill "$HOST" 2>/dev/null                    # the app is gone: so is its watcher
+wait "$HOST" 2>/dev/null
+wait_for 15 sh -c "! kill -0 $CHILD 2>/dev/null"; ENDED=$?
+python3 - "$SB/host.out" <<'PY'; RC=$?
+import json, sys
+lines = [l for l in open(sys.argv[1]).read().splitlines() if l.strip()]
+text = json.loads(lines[0])["text"] if len(lines) == 1 else ""
+sys.exit(0 if text.startswith("CODEX-WATCH") and "## 2026-10-05 12:00Z — READY TO LAND: codex/host-child" in text
+         and text.rstrip().endswith("host-line-two") else 1)
+PY
+check "C09  --host-json: ONE JSON line with every line of the entry; the watcher ends once its host is gone" \
+    "$( [ "$RC" -eq 0 ] && [ "$ENDED" -eq 0 ]; echo $?)" \
+    "out=$(cat "$SB/host.out") err=$(cat "$SB/host.err") ended=$ENDED"
 
 if [ "$FAIL" -gt 0 ]; then
     echo "=== codex-watch tests: $FAIL FAILED, $PASS passed ==="

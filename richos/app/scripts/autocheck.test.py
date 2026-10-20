@@ -2616,6 +2616,19 @@ class Install(Fixture):
         self.git("config", "--get", "merge.richos-verification-pins.driver", expect=1)
         self.assertEqual(self.run_(["bash", str(AUTOCHECK / "install.sh"), "--check", str(self.repo)]).returncode, 1)
 
+    def test_a_reinstall_replaces_the_hook_whole_so_a_running_commit_never_reads_half_of_it(self):
+        # 2026-10-20 10:04Z: a commit read a half-written pre-commit while install.sh rewrote it in
+        # place. The new hook must be a different file renamed over the old one, never a rewrite.
+        self.make()
+        hook = self.repo / ".git/hooks/pre-commit"
+        hook.write_text(hook.read_text() + "# stale\n")
+        before = hook.stat().st_ino
+        self.install()
+        self.assertNotEqual(hook.stat().st_ino, before, "the hook was rewritten in place")
+        self.assertEqual(hook.read_text(), (AUTOCHECK / "shim.sh").read_text())
+        self.assertTrue(os.access(hook, os.X_OK))
+        self.assertEqual([p.name for p in hook.parent.glob("*.new.*")], [], "a temporary file was left behind")
+
     def test_a_hooks_path_that_never_calls_the_hook_is_reported(self):
         self.make()
         empty = self.base / "empty-hooks"

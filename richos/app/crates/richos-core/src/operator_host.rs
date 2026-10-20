@@ -556,6 +556,21 @@ fn write_record(path: &Path, record: &LeadRecord) -> Result<(), String> {
     std::fs::File::open(parent).and_then(|d| d.sync_all()).map_err(|e| e.to_string())
 }
 
+/// A small host file, written whole: a reader never sees half of it.
+fn write_json(path: &Path, value: &Value) -> Result<(), String> {
+    use std::io::Write;
+    let parent = path.parent().ok_or("the file has no folder")?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    file.write_all(value.to_string().as_bytes()).and_then(|_| file.sync_all()).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
 // =============================================================================================
 // the host
 // =============================================================================================
@@ -678,6 +693,34 @@ pub struct OperatorHost {
     /// Agents `agent-liveness.sh` answered NOT-ALIVE for while their stream said they had
     /// ended, by task id, with that ended status ([`Self::resolved_liveness`]).
     witnessed_ended: Mutex<HashMap<String, TaskStatus>>,
+    /// The lead the host's quota-, stall- and codex-watch notices go to ([`Self::tell_team`]).
+    team_lead: Mutex<TeamLead>,
+}
+
+/// The lead his team's watchers speak to: the one that last started or was given his words.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TeamLead {
+    /// Its session; `None` until a lead starts in this launch.
+    session: Option<String>,
+    /// When each lead of this launch was started (Unix seconds, taken just before its launch),
+    /// by session. Written beside the session for the watchers: the lead is their sibling, so
+    /// they cannot find its start through their own ancestry, and without it an escalation
+    /// raised before stall-watch's first look counts as backlog (review
+    /// rv-20261020T132202Z-c5ab9358-2de8).
+    started: HashMap<String, u64>,
+    /// Leads started this launch. A notice is kept only if none started since it looked for a
+    /// running lead, so a lead that starts meanwhile is never passed over (its start hands over
+    /// what was kept before it, under this lock).
+    starts: u64,
+}
+
+/// What became of a quota-, stall- or codex-watch notice ([`OperatorHost::tell_team`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Told {
+    /// Sent to his team's lead under this uuid.
+    Sent(String),
+    /// Kept on disk until a lead starts, then sent to it.
+    Kept,
 }
 
 /// The sink a lead's reader writes to: a channel into this conversation's own worker, so a slow
@@ -696,7 +739,7 @@ impl OperatorHost {
     pub fn new(declaration: Declaration, state: &Path, root: &Path, launcher: Arc<dyn LeadLauncher>,
                engine: Arc<dyn OperatorEngine>, settle: Arc<dyn Settle>, delivery: Arc<dyn OperatorDelivery>,
                questions: Arc<dyn QuestionSink>) -> Arc<Self> {
-        Arc::new(OperatorHost {
+        let host = Arc::new(OperatorHost {
             declaration,
             state: state.to_path_buf(),
             root: root.to_path_buf(),
@@ -709,7 +752,11 @@ impl OperatorHost {
             alarms: Mutex::new(AlarmDeduper::default()),
             scanned: std::sync::atomic::AtomicBool::new(false),
             witnessed_ended: Mutex::new(HashMap::new()),
-        })
+            team_lead: Mutex::new(TeamLead::default()),
+        });
+        // No lead runs at launch: the watchers watch for none until one starts.
+        host.write_team_lead(None, None);
+        host
     }
 
     /// The operator log is where every other failure goes, so its own failure goes to stderr.
@@ -780,6 +827,9 @@ impl OperatorHost {
         let (tx, rx) = channel::<LeadEvent>();
         let sink: Arc<dyn LeadSink> = Arc::new(ConversationSink(Mutex::new(tx)));
         let fences = self.launcher.fences();
+        // Taken before the launch, so it is never later than the lead's own start: an escalation
+        // its SessionStart already showed is still recognized as reached, by its transcript.
+        let launched_at = unix_seconds();
         let lead = self.launcher.launch(&conversation.key, &conversation.title, &start, &conversation.paths, sink)?;
         let host = Arc::clone(self);
         let key = conversation.key.clone();
@@ -802,6 +852,16 @@ impl OperatorHost {
         conversation.lead = Some(lead.clone());
         self.log(&format!("lead started for {}/{} ({})", conversation.key.entity_id, conversation.key.thread_id,
                           match &start { LeadStart::New(s) => format!("new session {s}"), LeadStart::Resume(s) => format!("resumed {s}") }));
+        // His team's watchers speak to this lead now, and what they said while no lead ran is
+        // sent to it first ([`Self::tell_team`]).
+        let key = conversation.key.clone();
+        for text in self.team_lead_started(&lead.session_id(), launched_at) {
+            if let Err(e) = self.write(conversation, &lead, &key, None, &text, None) {
+                self.log(&format!("a kept watcher notice was not delivered to {}/{} ({e}); it is kept for the next lead",
+                                  key.entity_id, key.thread_id));
+                self.keep_team_notice(&text);
+            }
+        }
         Ok(lead)
     }
 
@@ -822,6 +882,8 @@ impl OperatorHost {
         let conversation = self.conversation(key, title);
         let mut c = conversation.lock().unwrap();
         let lead = self.ensure_lead(&mut c)?;
+        // The lead given his words is the one his team's watchers speak to.
+        self.name_team_lead(&lead.session_id());
         // His words start his team whatever an answer's retries have spent.
         c.retry_starts = 0;
         let uuid = self.write(&mut c, &lead, key, handle, text, None)?;
@@ -861,6 +923,138 @@ impl OperatorHost {
         self.save(&c.paths.record, &c.record);
         self.log(&format!("review-watch notice delivered to {}/{} (session {session})", key.entity_id, key.thread_id));
         Ok(uuid)
+    }
+
+    // ---- his team's watchers: quota-watch, stall-watch, codex-watch (team_watch.rs) ----------
+
+    /// **A quota-, stall- or codex-watch notice, delivered as a message this host sends**, the
+    /// way a review-watch notice is ([`Self::tell_lead`]): its turn is one the host attributes.
+    /// These notices belong to no one job, so they go to his team's lead: the one that last
+    /// started or was given his words. While no lead runs they are kept on disk, never dropped,
+    /// and the next lead that starts is sent them first ([`Self::ensure_lead`]).
+    pub fn tell_team(self: &Arc<Self>, text: &str) -> Result<Told, String> {
+        loop {
+            let seen = self.team_lead.lock().unwrap().clone();
+            if let Some(session) = &seen.session {
+                if let Some(uuid) = self.tell_running_lead(session, text) {
+                    return Ok(Told::Sent(uuid));
+                }
+            }
+            let lead = self.team_lead.lock().unwrap();
+            if lead.starts != seen.starts {
+                continue;
+            }
+            self.append_kept(text)?;
+            self.log("a watcher notice is kept: no lead of his team runs; the next one that starts is sent it");
+            return Ok(Told::Kept);
+        }
+    }
+
+    /// Keep a watcher notice for the next lead that starts (also the desk's, once quit has begun).
+    pub fn keep_team_notice(&self, text: &str) {
+        let _lead = self.team_lead.lock().unwrap();
+        if let Err(e) = self.append_kept(text) {
+            self.log(&format!("a watcher notice could not be kept ({e}): {text}"));
+        }
+    }
+
+    /// The file naming the session of his team's lead, `{"session": "..."}` (`""` while none
+    /// runs), which the watchers read at every look (`engine/scripts/lib/host_child.py`).
+    pub fn team_watch_lead_path(&self) -> PathBuf {
+        self.root.join("team-watch-lead.json")
+    }
+
+    /// The notices kept while no lead ran, oldest first.
+    fn team_watch_kept_path(&self) -> PathBuf {
+        self.root.join("team-watch-kept.json")
+    }
+
+    /// Sent to the lead of `session` when it is running; `None` otherwise.
+    fn tell_running_lead(&self, session: &str, text: &str) -> Option<String> {
+        let all: Vec<Arc<Mutex<Conversation>>> = self.conversations.lock().unwrap().values().cloned().collect();
+        for conversation in all {
+            let mut c = conversation.lock().unwrap();
+            let Some(lead) = c.lead.clone().filter(|l| !l.exited() && l.session_id() == session) else { continue };
+            let key = c.key.clone();
+            return match self.write(&mut c, &lead, &key, None, text, None) {
+                Ok(uuid) => {
+                    self.save(&c.paths.record, &c.record);
+                    self.log(&format!("a watcher notice delivered to {}/{} (session {session})", key.entity_id, key.thread_id));
+                    Some(uuid)
+                }
+                Err(e) => {
+                    self.log(&format!("a watcher notice was not delivered to {}/{} ({e})", key.entity_id, key.thread_id));
+                    None
+                }
+            };
+        }
+        None
+    }
+
+    /// The lead given his words: his team's watchers speak to it and watch for it.
+    fn name_team_lead(&self, session: &str) {
+        let mut lead = self.team_lead.lock().unwrap();
+        if lead.session.as_deref() != Some(session) {
+            lead.session = Some(session.to_string());
+            self.write_team_lead(Some(session), lead.started.get(session).copied());
+        }
+    }
+
+    /// A lead started at `launched_at` (Unix seconds): the watchers speak to it, and the notices
+    /// kept before it are taken off disk and returned for it, under the same lock a notice is
+    /// kept under.
+    fn team_lead_started(&self, session: &str, launched_at: u64) -> Vec<String> {
+        let mut lead = self.team_lead.lock().unwrap();
+        lead.starts += 1;
+        lead.started.insert(session.to_string(), launched_at);
+        // Written at every start, even of the same session: a resumed lead is a new process.
+        lead.session = Some(session.to_string());
+        self.write_team_lead(Some(session), Some(launched_at));
+        let path = self.team_watch_kept_path();
+        let kept = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice::<Vec<String>>(&bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(e) => {
+                self.log(&format!("the kept watcher notices could not be read ({e}); they stay at {}", path.display()));
+                return Vec::new();
+            }
+        };
+        match kept {
+            Ok(kept) => {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    self.log(&format!("the kept watcher notices could not be removed after delivery ({e})"));
+                }
+                kept
+            }
+            Err(e) => {
+                self.log(&format!("the kept watcher notices are not readable ({e}); they stay at {}", path.display()));
+                Vec::new()
+            }
+        }
+    }
+
+    /// `{"session": "...", "started": <Unix seconds>}`; `started` only when known.
+    fn write_team_lead(&self, session: Option<&str>, started: Option<u64>) {
+        let path = self.team_watch_lead_path();
+        let mut body = serde_json::json!({"session": session.unwrap_or("")});
+        if let Some(at) = started {
+            body["started"] = serde_json::json!(at);
+        }
+        if let Err(e) = write_json(&path, &body) {
+            self.log(&format!("the watchers' lead file {} could not be written ({e})", path.display()));
+        }
+    }
+
+    /// Append to the kept notices; the caller holds `team_lead`.
+    fn append_kept(&self, text: &str) -> Result<(), String> {
+        let path = self.team_watch_kept_path();
+        let mut kept: Vec<String> = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("{} is not readable ({e})", path.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(format!("{} could not be read ({e})", path.display())),
+        };
+        kept.push(text.to_string());
+        write_json(&path, &serde_json::json!(kept))
     }
 
     /// The conversation whose saved record says its lead's last session is `session`.
@@ -2312,6 +2506,94 @@ pub(crate) mod tests {
         let (_, start, resumed) = r.launcher.leads.lock().unwrap().last().cloned().unwrap();
         assert_eq!(start, LeadStart::Resume(a.session.clone()));
         assert_eq!(resumed.sent.lock().unwrap().last().unwrap(), "REVIEW-WATCH 11:00Z: 1 second-review notice");
+    }
+
+    /// His team's watchers, the real engine's, run as the host's child on fixture data, every
+    /// notice handed to [`OperatorHost::tell_team`].
+    fn team_watch(r: &Rig, watcher: crate::team_watch::Watcher) -> (crate::team_watch::TeamWatch, PathBuf) {
+        use crate::team_watch::{fixture, Launch, TeamWatch};
+        let sandbox = r.root.join("watch");
+        let host = r.host.clone();
+        let launch = Launch {
+            engine: fixture::engine(), entity: sandbox.join("entity"), state: r.state.clone(),
+            lead: r.host.team_watch_lead_path(), environment: fixture::environment(&sandbox),
+            sink: Arc::new(move |_, text| { host.tell_team(&text).unwrap(); }),
+        };
+        std::fs::create_dir_all(&r.state).unwrap();
+        (TeamWatch::start(&launch, watcher).unwrap(), sandbox)
+    }
+
+    fn told(lead: &FakeLead, words: &str) -> bool {
+        lead.sent.lock().unwrap().iter().any(|m| m.contains(words))
+    }
+
+    /// **Stall-watch's escalation watch wakes his team's lead in the app** (the lead runs with
+    /// `--print`, where the plugin monitor never starts). A teammate's escalation is raised; the
+    /// real stall-watch, run by the host for the lead given his words, prints its
+    /// ESCALATION-WATCH block, and that lead gets it as a message the host sent and awaits.
+    #[test]
+    fn a_stall_watch_notice_reaches_his_teams_lead_as_the_hosts_own_message() {
+        let r = rig();
+        let before = unix_seconds();
+        r.host.relay(&key("a"), "A", None, "build it", Origin::DeskTyped).unwrap();
+        let a = lead_of(&r, "a");
+        // The lead is the watcher's sibling, so its start comes from the host, beside its session
+        // (review rv-20261020T132202Z-c5ab9358-2de8): an escalation raised before the watcher's
+        // first look is then told, not taken for backlog.
+        let named: Value = serde_json::from_slice(&std::fs::read(r.host.team_watch_lead_path()).unwrap()).unwrap();
+        assert_eq!(named["session"], a.session.as_str());
+        assert!(named["started"].as_u64().is_some_and(|at| at >= before && at <= unix_seconds()), "{named}");
+        let (watch, sandbox) = team_watch(&r, crate::team_watch::Watcher::Stall);
+        crate::team_watch::fixture::escalation(&sandbox, "esc-20261020T000000Z-fixture1");
+        let reached = crate::team_watch::fixture::until(30, || told(&a, "[esc-20261020T000000Z-fixture1]"));
+        drop(watch);
+        assert!(reached, "the escalation never reached the lead; it got {:?}; the watcher said: {}", a.sent.lock().unwrap(),
+                std::fs::read_to_string(r.state.join("team-watch/stall-watch.log")).unwrap_or_default());
+        let message = a.sent.lock().unwrap().iter().find(|m| m.contains("ESCALATION-WATCH")).cloned().unwrap();
+        assert!(message.contains("from fixture-mate, state=proceeding, for=lead"), "{message}");
+        assert!(r.host.conversation(&key("a"), "").lock().unwrap().awaiting.len() >= 2,
+                "the host awaits the turn its notice starts, as it awaits his words");
+    }
+
+    /// **Codex-watch wakes his team's lead in the app**: Codex writes an entry to the lead; the
+    /// real codex-watch, run by the host, prints it whole, and the lead gets it as a message.
+    #[test]
+    fn a_codex_watch_notice_reaches_his_teams_lead_as_the_hosts_own_message() {
+        let r = rig();
+        r.host.relay(&key("a"), "A", None, "build it", Origin::DeskTyped).unwrap();
+        let a = lead_of(&r, "a");
+        let (watch, sandbox) = team_watch(&r, crate::team_watch::Watcher::Codex);
+        // Its first look settles where the channel ends; an entry written after it is told.
+        assert!(crate::team_watch::fixture::until(30, || crate::team_watch::fixture::codex_looked(&sandbox)),
+                "codex-watch never looked");
+        crate::team_watch::fixture::codex_entry(&sandbox, "READY TO LAND codex/fixture-branch");
+        let reached = crate::team_watch::fixture::until(30, || told(&a, "READY TO LAND codex/fixture-branch"));
+        drop(watch);
+        assert!(reached, "Codex's entry never reached the lead; it got {:?}; the watcher said: {}", a.sent.lock().unwrap(),
+                std::fs::read_to_string(r.state.join("team-watch/codex-watch.log")).unwrap_or_default());
+        assert!(told(&a, "CODEX-WATCH"), "{:?}", a.sent.lock().unwrap());
+    }
+
+    /// **Quota-watch wakes his team's lead in the app, and a notice that comes while no lead
+    /// runs is kept, never dropped.** The real quota-watch, run by the host, reads 95% against
+    /// the 93% threshold before any lead has started: its QUOTA-THRESHOLD notice is kept on disk.
+    /// His words then start a lead, and the kept notice is the first message it is sent.
+    #[test]
+    fn a_quota_watch_notice_is_kept_until_his_teams_lead_starts_and_then_reaches_it() {
+        let r = rig();
+        let kept = r.root.join("operator/team-watch-kept.json");
+        crate::team_watch::fixture::quota_reading(&r.root.join("watch"), 95);
+        let (watch, _sandbox) = team_watch(&r, crate::team_watch::Watcher::Quota);
+        let held = crate::team_watch::fixture::until(30, || std::fs::read_to_string(&kept).is_ok_and(|k| k.contains("QUOTA-THRESHOLD 95%")));
+        drop(watch);
+        assert!(held, "the notice was never kept; the watcher said: {}",
+                std::fs::read_to_string(r.state.join("team-watch/quota-watch.log")).unwrap_or_default());
+        assert!(r.launcher.leads.lock().unwrap().is_empty(), "a notice started a lead");
+        r.host.relay(&key("a"), "A", None, "build it", Origin::DeskTyped).unwrap();
+        let sent = lead_of(&r, "a").sent.lock().unwrap().clone();
+        assert!(sent.first().is_some_and(|m| m.contains("QUOTA-THRESHOLD 95%")), "kept, it goes first: {sent:?}");
+        assert!(sent.last().is_some_and(|m| m.contains("build it")), "{sent:?}");
+        assert!(!kept.exists(), "the kept notice outlived its delivery");
     }
 
     #[test]
