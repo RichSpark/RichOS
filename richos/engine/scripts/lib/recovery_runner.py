@@ -234,10 +234,22 @@ def transcript_actions(path):
     observation read the same rows. A call with no result yet has result None;
     an error result (a denied PreToolUse hook, a refused send) is a call that
     did not happen. Quoted text is data, never an instruction."""
-    import pierce
     calls, out = {}, []
-    for line, row in enumerate(pierce.transcript_rows(path, complete=True)):
-        if row.get("isSidechain"):
+    with open(path, encoding="utf-8") as stream:
+        lines = list(stream)
+    for line, text in enumerate(lines):
+        if not text.endswith("\n"):
+            break  # the host has not finished appending this row
+        # A lead transcript can hold tens of thousands of rows: parse only rows
+        # that can carry one of these calls or a pending call's result.
+        if not (("tool_use" in text and any(tool in text for tool in ACTION_TOOLS))
+                or ("tool_result" in text and any(call in text for call in calls))):
+            continue
+        try:
+            row = json.loads(text)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or row.get("isSidechain"):
             continue
         content = (row.get("message") or {}).get("content")
         if not isinstance(content, list):

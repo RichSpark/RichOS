@@ -1364,6 +1364,17 @@ class Watcher(object):
         entity = os.path.dirname(self.config) if self.config else os.environ.get("RICHOS_ENTITY_ROOT", "")
         recovery_requests = recovery_runner.tick(items, self.engine_root, entity,
                             getattr(self.world, "ws", None)) if entity else []
+        if entity and not isinstance(self.world, AppWorld) and getattr(self.world, "ws", None) is not None:
+            # Axel/Wes event triage drains recorded dispatches, lead sends and
+            # results in its own process, only when one of those records
+            # changed. It never waits here and never depends on a commit.
+            try:
+                import recovery_events
+                started = recovery_events.launch(self.engine_root, entity, self.world.ws)
+                if started and started.get("gap"):
+                    sys.stderr.write("review-watch: %s\n" % started["gap"])
+            except (OSError, ValueError) as error:
+                sys.stderr.write("review-watch: recovery event drain unavailable: %s\n" % error)
         attempts = read_jsonl(_p("attempts.jsonl"))
         book = Book(rows, running, attempts)
         import recovery

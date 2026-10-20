@@ -54,7 +54,7 @@ def report(job=None):
         scope='Durable host records only. Empty or incomplete data does not prove successful native cancellation or semantic efficacy.')
 
 
-CONTRACT_PATHS = ['recovery-profiles/axel.md','recovery-profiles/wes.md','recovery-profiles/triage.md','scripts/lib/recovery.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py','scripts/lib/recovery_triage.py',
+CONTRACT_PATHS = ['recovery-profiles/axel.md','recovery-profiles/wes.md','recovery-profiles/triage.md','scripts/lib/recovery.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py','scripts/lib/recovery_triage.py','scripts/lib/recovery_events.py',
     'scripts/lib/pierce.py','mega-lander/workspaces.py','scripts/app-engine-hook.py']
 
 
