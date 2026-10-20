@@ -76,6 +76,13 @@ ACTIVE = "RICHOS_AUTOCHECK_ACTIVE"
 # finding 1; 2026-10-18: two app suites broken on v1.2.1 were found only at its merge into
 # main). It can only add the land check, never take one away (land_target).
 LAND_TARGET = "RICHOS_AUTOCHECK_LAND_TARGET"
+# The author's saved proof runs, offered to the merge gate (2026-10-20, verification reliability
+# PRD step 2): the run directories an agent's handover report points at (workspaces.sh merge sets
+# it from the workspace record), or any run a lander names by hand. Each is passed to the
+# runner as `--reuse`, so it is EVIDENCE TO VALIDATE, never a verdict: proof-run.py reuses a
+# check only when its saved input identity equals the one read on the tree being landed now,
+# and its log and receipt are intact (proof_evidence.reuse). Nothing is ever skipped on its say.
+AUTHOR_RUNS = "RICHOS_AUTOCHECK_AUTHOR_RUNS"
 ZERO = "0" * 40
 
 
@@ -239,8 +246,10 @@ def clean_env(common):
     # A land runs every suite it selected: a caller's opt-in to skip unchanged suites would
     # turn them into NOT RUN, which the land refuses (accepted_not_run).
     env.pop("RUN_TESTS_SKIP_UNCHANGED", None)
-    # The land's own target is not a suite's: a suite's fixture merge is no land.
+    # The land's own target is not a suite's: a suite's fixture merge is no land. Nor are the
+    # author runs offered to it (AUTHOR_RUNS), which no suite reads.
     env.pop(LAND_TARGET, None)
+    env.pop(AUTHOR_RUNS, None)
     cargo = str(Path.home() / ".cargo/bin")
     if cargo not in env.get("PATH", "").split(":"):
         env["PATH"] = env.get("PATH", "") + ":" + cargo
@@ -1387,6 +1396,20 @@ def root_entries_gate(repo, what, tree, where=LAND_BRANCH):
     return 1
 
 
+def offered_author_runs(what):
+    """`--reuse <run>` for each saved author run offered in AUTHOR_RUNS (above) that has a plan.
+
+    A run with no saved plan is named and left out; the runner validates every one it is given."""
+    argv = []
+    for run in [r for r in os.environ.get(AUTHOR_RUNS, "").split(os.pathsep) if r]:
+        if (Path(run) / "plan.json").is_file():
+            say(f"autocheck: {what}: offered the author's saved run for validation: {run}")
+            argv += ["--reuse", run]
+        else:
+            say(f"autocheck: {what}: an offered author run has no saved plan, so it is not offered: {run}")
+    return argv
+
+
 def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
     """Run the suites proof-for.sh assigns plus the lint on the working tree, which the
     caller has established IS the tree being landed. Returns 0 and writes the receipt when
@@ -1478,7 +1501,8 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
     directory = Path(tempfile.mkdtemp(prefix="attempt-", dir=root))
     summary_path = str(root / (directory.name + "-summary.json"))
     argv = (["--resume", str(previous)] if previous and saved_identity == identity
-            else ["--commands", plan, *(["--reuse", str(previous)] if previous else [])])
+            else ["--commands", plan, *(["--reuse", str(previous)] if previous else []),
+                  *offered_author_runs(what)])
     reason = os.environ.get("RICHOS_AUTOCHECK_RETRY_REASON")
     if reason:
         argv += ["--retry-reason", reason]

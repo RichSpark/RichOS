@@ -10,8 +10,11 @@ The adjacent `verification-input-qualifications.json` records the reviewed input
 floor for these units. Recipe validation checks that every required path, tool,
 environment value and external input is covered before accepting an identity.
 A declared directory covers its descendants. A similarly named sibling does not.
-The JSON contract and this review are both fingerprinted. This checks known reads;
-it does not claim to discover arbitrary new reads automatically.
+This review is fingerprinted whole. The JSON contract is fingerprinted as the
+slice a recipe is qualified by: its schema, the common floor it is held to and
+its own unit, pins included, so renewing one unit's pin leaves every other unit's
+evidence standing. This checks known reads; it does not claim to discover
+arbitrary new reads automatically.
 
 The common tool list deliberately covers the shared shard and the reviewed
 units. In particular, acknowledgement fixtures invoke `seq` and the copied real
@@ -160,7 +163,7 @@ or fixture. Units without this explicit review retain whole-root comparison.
 
 The regression runs the actual runner and coverage verifier across a commit that
 changes an unread file inside the engine root. It requires original receipt bytes
-and SHA retention, only the previously unrun unit executing, and rejection after
+and SHA retention, only the previously unrun unit executing and rejection after
 a declared outside input changes. Separate fixtures require helper/data changes,
 new inventory members, symlink target changes and deliberate known omissions to
 invalidate reuse or refuse qualification.
@@ -173,13 +176,70 @@ under the earlier incomplete record subset declarations.
 
 Every check runs behind the host shield (`richos/engine/scripts/lib/host_shield.py`), which
 reads its analyzer out of `richos/engine/scripts/hooks/guard-host-display-power.sh` at run
-time: that analyzer decides whether a suite starts at all, and what each stand-in hands on.
+time: that analyzer decides whether a suite starts at all and what each stand-in hands on.
 The shield itself and its stand-ins sit inside `richos/engine/scripts/lib`, already in the
 shared subset floor; the guard did not, so a guard change that would refuse a suite now left
 seven subset identities unchanged and an old pass reusable (review
 rv-20261011T164443Z-e08ee8a2-7cdb). The guard is in `subset_requires` and in every subset
-declaration, and `proof-qualification.test.py` requires every subset identity to change when
-that file, and only it, changes.
+declaration. `proof-qualification.test.py` requires every subset identity to change when
+that file changes, with every other input held still.
+
+## The UI suite family
+
+The browser suites in `richos/app/ui/tests` have no row each in `checks`. One
+`families.ui-suite` entry in `proof-inputs.json` and one `ui-suite family` unit
+here qualify them all; `proof_evidence.contract_for` derives each suite's recipe
+from the declarations that already exist. A suite run directly
+(`cd richos/app/ui/tests && node <suite>.js`, the only invocation qualified; the
+runner checks the item's own command and directory) reads:
+
+- all shipped UI: `ui-sources.js` `manifest().order` through the Node runtime,
+  `@allui` as `proof-for.sh` computes it and the shipped `assets` and `fonts`.
+  Product code is never sliced feature by feature, so any shipped change, a
+  startup source included, runs every suite again;
+- its own row in `proof-for.ui-inputs` (audited suite by suite on 2026-10-11 and
+  reconciled against the tree by `proof-for.sh` on every invocation), a
+  `<dir>/` token as the whole directory;
+- its own file and every file it or any script its row names (the fixture suites and tools
+  it runs as child processes), reaches by relative `require`, all the way down;
+- every `shots-*` folder its file names;
+- the harness, `ui-sources.js` and the package manifests of the tests folder.
+
+Every other load in that closure is judged before a suite qualifies. The closure covers the
+suite, its libraries and the scripts its children run. A child node process is followed. A
+literal child program in `child_tools` (`git`, `ps`) is bound by content. A Node builtin is
+allowed. Anything else leaves the suite keyed by the whole checkout, with the file and line
+in its reason: a Python, Cargo or shell child whose imports the family does not follow, a
+computed program or `require`, an installed package, a dynamic `import(`. The only exception
+is an exact call the family entry declares in `dynamic`, with its reason (today
+`harness.js`'s Playwright candidates and the navigation library's `sysctl` and `ps`
+diagnostics). This is how `thread-switch.js` (a Python child importing `qa/lib/qaimg.py` and
+optionally Pillow), `realbytes.js` (Cargo), `phone.js` and `dialect.js` (computed requires)
+and `gate-honesty.js` (`run.js` launches a computed program) stay unqualified.
+
+These are the same rules `proof-for.sh` selects a suite by, so an identity binds
+every path whose change would select the suite. Reuse is never less safe than the
+selection it stands in for and another suite's file, row or pictures are not an
+input. Paths are bound by the content Git would land (tracked bytes, modes and
+untracked files Git does not ignore), never by the checkout's path, so the same
+bytes in another worktree are the same input.
+
+Outside the repository the identity binds the tools the suites run (`node`,
+`git`, `ps`, `python3`, `cargo`, `rustc`, each by content), every environment name
+a suite, library or fixture reads (`proof-qualification.test.py` fails when a new
+one is neither bound nor declared operational), the Playwright browser installs,
+the Rust toolchain and the Playwright package by what loads: every present
+candidate in `harness.js` `loadPlaywright` order, by the content of the module
+folder it loads from, so a worktree loading the main checkout's install and the
+main checkout loading its own agree. `harness.js` is pinned: a change to its
+loader or to what it reads needs this review renewed.
+
+The family runs with the nightly UI gate's conditions, never in the private
+profile, so the unit carries its own common floor and only a recipe of its own
+family may use it. `splash.js` (reads private `richos-hq` studies) and
+`vouch-template.js` (downloads from the network) stay unqualified with their
+reasons in `proof-inputs.json`: keyed by the whole checkout, they run in every
+checkout.
 
 ## Renewals
 
@@ -189,3 +249,11 @@ that file, and only it, changes.
   `PROCESS_KILL_WAIT`. It reads no new file, environment variable, tool or outside path, so
   every contract's input floor is unchanged. Without the renewal every one of those
   contracts refused qualification and `proof-run.test.sh` was red on main at `6ef73abf`.
+- 2026-10-20, `richos/engine/mega-lander/workspaces.py`, pinned by 22 unit contracts,
+  `5185e546…` to `f32296f7…`. The change attaches a proof-run report pointer to a workspace
+  record on TaskCompleted and a normal SubagentStop (reads the checkout's HEAD and saved
+  `plan.json`/`summary.json` files under the proof-run directory machine settings name) and
+  offers the reported runs to the merge gate in `workspaces.sh merge`. None of the 22 units
+  reaches those paths: their fixtures exercise worktree guards, hook registration and Git
+  jurisdiction. Module import gains only constants, so every contract's input floor is
+  unchanged.

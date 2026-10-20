@@ -141,13 +141,14 @@ if have_commit e7facc99; then
   # ONE browser suite (the land's subject, B1) plus every suite whose row in
   # proof-for.ui-inputs DECLARES that it reads a path the land changed — the Rust file
   # work_host.rs (affordances.js, dialect.js, realbytes.js, ...) or the tests folder
-  # (docs-claims.js) — and nothing else. Not the 19-minute run.
+  # (docs-claims.js, gate-honesty.js) — and nothing else. Not the 19-minute run.
   #
   # The readers are DERIVED from the declarations, not typed here. This list was typed until
-  # 2026-10-20 and every new suite that reads crates/ had to be added by hand: on 2026-10-19
-  # richscribe.js was missing and B4 went red on a correct selection (1efbab003; verification
-  # reliability PRD T04). A declaration is the requirement and proof-for.sh is the code that
-  # honors it, so this still fails when proof-for.sh drops a declared reader or adds a suite
+  # 2026-10-20 and every suite newly declared as a reader had to be added by hand: richscribe.js
+  # on 2026-10-19 (1efbab003) and gate-honesty.js on 2026-10-20 (27a6a46ff), each after B4 went
+  # red on a correct selection (verification reliability PRD T04). A declaration is the
+  # requirement and proof-for.sh is the code that honors it, so this still fails when
+  # proof-for.sh drops a declared reader or adds a suite
   # nobody declared. It does not judge whether a row is RIGHT: R48 and docs-claims.js's last
   # check do that. Premise: the land changed no shipped UI file, so `@allui` (computed by
   # proof-for.sh, not declared) cannot select anything here; if that ever stops being true
