@@ -76,6 +76,10 @@ WHAT IS A STALL (every threshold, and why)
 5. UNRESOLVED FINISHED WORK: about every twelve hours, at an idle opportunity,
    the canonical pending-work list is read without changing it. Recorded waits
    are included for reassessment. An empty list produces no notification.
+   Idle is the lead's recorded turn end; under the app host (--host-json),
+   whose lead's --print transcript never records one, it is the host's word
+   that the lead's turn ended (host_child.idle). STALL_WATCH_PENDING_WORK_SECONDS
+   shortens the interval for a test guest only.
 
 ===========================================================================
 HOW OFTEN IT SPEAKS (nothing spams)
@@ -1394,7 +1398,14 @@ def lead_is_idle(src, sid):
 
     Read only a bounded tail. An unreadable or incomplete transcript leaves
     the reminder due until a later look can establish that the lead is idle.
+
+    Under the app host (--host-json) the host's word is used instead
+    (host_child.idle): its lead runs with --print, whose transcript never
+    records a turn's end, and the host sees every turn end and begin.
     """
+    hosted = host_child.idle(sid)
+    if hosted is not None:
+        return hosted
     path = lead_transcript(src, sid)
     try:
         with open(path, "rb") as fh:
@@ -1443,7 +1454,8 @@ def pending_work_reminder(src, now, sid, prev):
     if prev.get("problem"):
         state["problem"] = prev["problem"]
     problems = [state["problem"]] if state.get("problem") else []
-    if now - checked < PENDING_WORK_SECONDS or not lead_is_idle(src, sid):
+    every = _env_float("STALL_WATCH_PENDING_WORK_SECONDS", PENDING_WORK_SECONDS)
+    if now - checked < every or not lead_is_idle(src, sid):
         return [], state, problems
     try:
         if src.ws.damaged_records():
