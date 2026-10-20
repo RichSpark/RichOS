@@ -674,6 +674,21 @@ class Pierce(unittest.TestCase):
         self.assertEqual(P.human_context(self.payload),
                          "Implement the requested feature.\n\nKeep the existing API.\n\n" + quoting)
 
+    def test_a_request_ending_in_a_colon_before_a_quoted_report_keeps_its_authority(self):
+        # Review rv-20261020T195712Z-c739c699-c864: only the host's own header
+        # line is dropped; any other line ending in a colon is the user's words.
+        for tag, attrs in (("agent-message", 'from="fixture-worker"'),
+                           ("teammate-message", 'teammate_id="fixture-worker"')):
+            request = ("Fix only the stale-pass bug described in this worker report:\n"
+                       f"<{tag} {attrs}>The report shows stale passes.</{tag}>")
+            self.assertFalse(P.delivered_envelope(request))
+            hosted = ("Another Claude session sent a message while you were working:\n"
+                      f"<{tag} {attrs}>x</{tag}>")
+            self.assertTrue(P.delivered_envelope(hosted))
+        self.rows = self.rows[:2] + [{"type": "user", "message": {"content": request}}]
+        self.transcript.write_text("\n".join(map(json.dumps, self.rows)))
+        self.assertTrue(P.human_context(self.payload).endswith(request))
+
     def test_claude_is_found_in_the_installers_folder_when_not_on_path(self):
         # The operator profile resolves claude from the stored PATH, then
         # $HOME/.local/bin/claude (operator_profile.rs, "HIS claude"); Pierce

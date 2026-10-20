@@ -213,12 +213,16 @@ def state_dir():
 WORKER_ENVELOPE = re.compile(r"<(teammate-message|agent-message)\b[^>]*>.*?(?:</\1>|\Z)", re.S)
 
 
+# The two exact header lines the host writes (seen in real lead transcripts).
+HOST_HEADER = re.compile(r"Another Claude session sent a message(?: while you were working)?:")
+
+
 def delivered_envelope(text):
     """A worker's message as the host delivers it: teammate envelopes behind at
-    most one header line ("Another Claude session sent a message:"), nothing a
-    person wrote. A person's message that quotes one keeps its authority."""
+    most one host header line, nothing a person wrote. A person's message that
+    quotes one keeps its authority, including a request that ends in a colon."""
     rest = WORKER_ENVELOPE.sub("", text).strip()
-    return bool(WORKER_ENVELOPE.search(text)) and (not rest or ("\n" not in rest and rest.endswith(":")))
+    return bool(WORKER_ENVELOPE.search(text)) and (not rest or bool(HOST_HEADER.fullmatch(rest)))
 
 
 def human_messages(rows, desktop=False):
