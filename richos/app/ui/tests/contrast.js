@@ -3699,6 +3699,16 @@ main().catch((e) => {
 //        -> the shell measures 66 nodes against a floor of 80. The surface still renders and
 //           has nothing wrong with what is left, which is precisely the run that would
 //           otherwise read as an improvement
+//  9z  index.html: one line of text in the always-present Settings panel (`<p class="md-note">`
+//      with a `<b>` and an `<i>` after `#md-note`; 3 text nodes per theme). 2026-10-19:
+//        on main 811d8af57 (whole-page floors) -> the bare shell went 742 -> 748 and 9z
+//           went RED on five surfaces nobody touched: phone-tailscale-ready,
+//           phone-connect-setup, feedback, search, unbound
+//        with floors over the shell -> every check green; the shell moved, no floor did, and
+//           only the four surfaces that open the Settings panel measured more (+6 each)
+// 9z+ the `search` driver returns before pressing anything (a driver that never opened its
+//      surface) -> 9.search: "added only 0 text node(s) to the bare shell ... its floor is
+//      88"; 9z stays green and 10c names `search-overlay` as unwalked
 //  10  style.css gains a real `@media (prefers-color-scheme: dark)` block AND the suite
 // 10b  drop three entries from SURFACES -> check 10b. A short inventory that still reported
 //      its findings is a clean bill of health over whatever it happened to reach; run.js's
