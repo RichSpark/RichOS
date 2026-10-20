@@ -386,12 +386,15 @@ else
   notrun "K4 docs-claims.js checks its own row against its reads" "node is not on PATH"
 fi
 
-# K6 (2026-10-20). No ui test script reports its result through process.exit(EXPRESSION): set
+# K6 (2026-10-20). No ui test script reports its result through process.exit(): set
 # process.exitCode and let Node exit (the reason is the comment at the end of docs-claims.js).
-# Literal exits (process.exit(1), process.exit(2)) stay allowed: they are error and usage paths
-# where a browser may still be open and exiting at once is the point. run.js is a runner that
-# exits with its children's codes.
-K6_HITS="$(cd "$APP/ui/tests" && grep -nE 'process\.exit\([^0-9)]' ./*.js | grep -v '^\./run\.js:' | grep -v '^\./docs-claims\.js:[0-9]*: *//' || true)"
+# Only a literal exit (process.exit(1), process.exit(2)) stays allowed: those are error and usage
+# paths where a browser may still be open and exiting at once is the point. run.js is a runner
+# that exits with its children's codes, and tests/fixtures holds child scripts that the gate
+# suites run on purpose to see a hang or an exit code, so neither is scanned.
+K6_HITS="$(cd "$APP/ui/tests" && grep -rnE 'process\.exit\(' --include='*.js' . \
+  | grep -v -E -e '^(\./)?run\.js:' -e '^(\./)?fixtures/' -e '^(\./)?node_modules/' \
+  | grep -v -E -e 'process\.exit\([0-9]\)' -e '^[^:]*:[0-9]+:[[:space:]]*//' || true)"
 if [ -z "$K6_HITS" ]; then
   ok "K6 no ui test script ends with process.exit(expression); results go through process.exitCode"
 else
