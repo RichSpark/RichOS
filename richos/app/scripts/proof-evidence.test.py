@@ -721,6 +721,79 @@ class Evidence(unittest.TestCase):
         (engine / "VERSION").write_text("1.0.0-test\n")
         return app, engine
 
+    def test_an_authors_pass_with_mutation_passes_on_stands_in_for_the_gates_run_with_them_off(self):
+        # Held cc/zach-opus-reuse58c 032729f16, ported: the merge gate runs with
+        # RICHOS_MUTATION_PASSES=0 and RICHOS_FOURTEEN_MUTANTS=0 (autocheck MUTATION_SWITCH); the
+        # author's handover run leaves them unset, so it ran every assertion the gate's run does,
+        # and more. A qualified recipe that binds them (the engine hook suites) was never reused
+        # from the offered author run. Real runner, ci-shard.sh and coverage verifier: two
+        # qualified units pass in a linked worktree, then the main checkout's gate run is offered
+        # that run. Decided by the lead (esc-20261015T175325Z-3b86bfa5): never the other way round.
+        app, engine = self.copy_runner_fixture()
+        counter = Path(self.tmp.name) / "executions"
+        for name in ("alpha", "beta"):
+            path = engine / "scripts" / (name + ".test.sh")
+            path.write_text('#!/bin/bash\nprintf "' + name + '\\n" >> "$FIXTURE_COUNTER"\n')
+            path.chmod(0o755)
+        (self.root / "LICENSE").write_text("fixture license\n")
+        switches = ["RICHOS_MUTATION_PASSES", "RICHOS_FOURTEEN_MUTANTS"]
+        self.qualification("Fixture units append a label; they read the two mutation switches.",
+            paths=["richos/engine", "richos/app/scripts", "LICENSE"], tools=["bash", "python3", "git"],
+            environment=["FIXTURE_COUNTER", *switches])
+        recipe = {"paths": ["richos/engine", "richos/app/scripts", "LICENSE"], "tools": ["bash", "python3", "git"],
+            "environment": ["FIXTURE_COUNTER", *switches], "external": [], "qualification": "qualification.json",
+            "isolation": evidence.PRIVATE_PROFILE}
+        evidence.atomic(app / "proof-inputs.json", {"schema": 1,
+            "checks": {"engine scripts/" + name + ".test.sh": dict(recipe) for name in ("alpha", "beta")}})
+        # The modes a Git checkout writes, so the worktree's identical bytes are identical inputs
+        # (test_actual_worktrees_join_one_execution_and_run_independent_work says why).
+        umask = os.umask(0)
+        os.umask(umask)
+        for written in self.root.rglob("*"):
+            if written.is_file() and not written.is_symlink():
+                written.chmod((0o777 if written.stat().st_mode & 0o100 else 0o666) & ~umask)
+        def git(*args):
+            return subprocess.check_output(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture",
+                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *args],
+                cwd=self.root, text=True, stderr=subprocess.PIPE).strip()
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "fixture")
+        worktree = Path(self.tmp.name) / "author-checkout"
+        git("worktree", "add", "-q", "-b", "cc/author", str(worktree))
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("RICHOS_", "GIT_"))}
+        env.update(RICHOS_MACHINE_WORKERS=str(Path(self.tmp.name) / "machine"),
+            RICHOS_ENGINE_PASS_DIR=str(Path(self.tmp.name) / "slot"),
+            RICHOS_PROOF_RUN_DIR=str(Path(self.tmp.name) / "history"),
+            RICHOS_PROOF_RUN_SLOTS_DIR=str(Path(self.tmp.name) / "proof-slots"),
+            CLAUDE_CONFIG_DIR=str(Path(self.tmp.name) / "config"),
+            FIXTURE_COUNTER=str(counter), PYTHONDONTWRITEBYTECODE="1")
+        commands = Path(self.tmp.name) / "commands"
+        both = ",".join("scripts/%s.test.sh" % name for name in ("alpha", "beta"))
+        commands.write_text("cd richos/engine && " + " ".join(["bash", "scripts/ci-shard.sh", "--only-units", both]) + "\n")
+        def invoke(checkout, name, *options, **variables):
+            directory = Path(self.tmp.name) / name
+            result = subprocess.run([*idle_proof_run(checkout / "richos/app/scripts/proof-run.py"),
+                "--commands", str(commands), "--log-dir", str(directory), *options], cwd=checkout,
+                env=dict(env, **variables), text=True, capture_output=True, timeout=120)
+            detail = result.stdout + result.stderr + "\n" + "\n".join(p.read_text() for p in directory.glob("*.log"))
+            self.assertEqual(result.returncode, 0, detail)
+            rows = {row["check"]: row for row in json.loads((directory / "summary.json").read_text())["checks"]}
+            self.assertEqual(rows["engine receipts"]["result"], "passed", detail)
+            return directory, rows, detail
+        units = ("engine scripts/alpha.test.sh", "engine scripts/beta.test.sh")
+        off = dict.fromkeys(switches, "0")
+        author, rows, detail = invoke(worktree, "author")
+        self.assertEqual(sorted(counter.read_text().splitlines()), ["alpha", "beta"], detail)
+        gate, rows, detail = invoke(self.root, "gate", "--reuse", str(author), **off)
+        self.assertEqual(sorted(counter.read_text().splitlines()), ["alpha", "beta"],
+                         "the gate ran again what the author passed with more mutation passes on\n" + detail)
+        for unit in units:
+            self.assertEqual(rows[unit]["reused_from"], str(author), rows[unit])
+        # Never the other way round: the gate's pass with them off proves nothing with them on.
+        _on, rows, detail = invoke(self.root, "passes-on", "--reuse", str(gate), RICHOS_MUTATION_PASSES="1")
+        self.assertEqual(sorted(counter.read_text().splitlines()[2:]), ["alpha", "beta"], detail)
+
     def test_actual_cross_commit_coverage_rechecks_inputs_and_keeps_original_sha(self):
         self.cross_commit_coverage()
 
