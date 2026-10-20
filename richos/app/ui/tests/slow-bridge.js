@@ -95,6 +95,11 @@ const INSTRUMENTED_BRIDGE = (ms) => {
   window.__bridgeReturned = [];
   // The words of every `send_message`, in the order the page issued them (check 9).
   window.__sentTexts = [];
+  // ...and in the order they REACHED the backend (check 11). Tauri runs each command as its own
+  // task on a multi-threaded runtime, so two calls issued together can arrive in either order.
+  window.__sentArrived = [];
+  // A latency for each `send_message` in turn, overriding `ms` for that call (check 11).
+  window.__sendLags = [];
   let real;
   Object.defineProperty(window, "RichBridge", {
     configurable: true,
@@ -104,8 +109,13 @@ const INSTRUMENTED_BRIDGE = (ms) => {
       const invoke = v.invoke.bind(v);
       v.invoke = async (name, args) => {
         window.__bridgeIssued.push(name);
-        if (name === "send_message") window.__sentTexts.push(args && args.text);
-        if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+        let lag = ms;
+        if (name === "send_message") {
+          window.__sentTexts.push(args && args.text);
+          if (window.__sendLags.length) lag = window.__sendLags.shift();
+        }
+        if (lag > 0) await new Promise((r) => setTimeout(r, lag));
+        if (name === "send_message") window.__sentArrived.push(args && args.text);
         try {
           return await invoke(name, args);
         } finally {
@@ -871,6 +881,46 @@ async function main() {
       assertEqual(page.__errors, [], "the shell logged errors while the two held sends went out");
       await page.close();
       return `both pressed before the restore began, both on screen at once; send_message issued "${FIRST}" then "${SECOND}", once each, to "general"`;
+    });
+  }
+
+  // ---- 11. ...and they REACH Rich in that order even when the first call is the slower one --
+  //
+  // Nightly 69, Ray's walk (esc-20261020T225934Z-0d59dda7): the two held sends were ISSUED in his
+  // order, which is all checks 9 and 10 assert, and the backend received them reversed — intake 1
+  // was "Correction: do not send it until I approve.", intake 2 the proposal, 47 ms apart. Tauri
+  // spawns every command as its own task on a multi-threaded runtime (the measurement is in
+  // `crates/richos-command/src/lib.rs`), so two `send_message` calls issued in the same tick race
+  // each other to the intake log. Here the first call is made four call-times slower than the
+  // second, which is that race lost on demand.
+  for (const lag of LATENCIES.filter((l) => l > 0)) {
+    await run.check(`two held Sends reach Rich in his order when the first call is slower (${lag}ms bridge)`, async () => {
+      const page = await open(browser, lag);
+      await page.waitForSelector("#input", { state: "visible" });
+      const FIRST = "Please send the proposal today.";
+      const SECOND = "Correction: do not send it until I approve.";
+      await page.evaluate((l) => { window.__sendLags = [4 * l, 0]; }, lag);
+      await page.click("#input");
+      await page.keyboard.type(FIRST);
+      await page.keyboard.press("Enter");
+      await page.keyboard.type(SECOND);
+      await page.keyboard.press("Enter");
+      const held = await page.evaluate(() => (window.__bridgeIssued || []).indexOf("switch_thread") < 0);
+      assert(held, "the launch had already started opening the thread, so nothing was held");
+      await bootDone(page);
+      await page.waitForFunction(() => window.__sentArrived.length >= 2, null, {
+        timeout: 60000, // a hang guard: both sends arrive or one was lost
+      });
+      await observe(page, 6 * lag + 400, "a third, duplicate send would arrive within a few call-times");
+      const after = await page.evaluate((texts) => ({
+        arrived: window.__sentArrived.slice(),
+        copies: texts.map((t) => Array.from(document.querySelectorAll(".tl-user-text")).filter((n) => n.textContent.trim() === t).length),
+      }), [FIRST, SECOND]);
+      assertEqual(after.arrived, [FIRST, SECOND], "his two messages reached Rich in a different order from the one he sent them in");
+      assertEqual(after.copies, [1, 1], "each of his messages should be on screen once");
+      assertEqual(page.__errors, [], "the shell logged errors while the two held sends went out");
+      await page.close();
+      return `first send_message ${4 * lag}ms, second 0ms: Rich received "${FIRST}" then "${SECOND}", once each`;
     });
   }
 
