@@ -137,6 +137,22 @@ class Declarations(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("UNCOVERED", result.stderr)
 
+    def test_gate_inputs_name_a_directory_among_the_inputs(self):
+        try:
+            from proof_declarations import suite_gate_inputs
+        except ImportError:
+            self.fail("proof_declarations has no gate-inputs row")
+        suite = self.suites / "fixture.test.sh"
+        self.write("# run-tests: inputs src\n# run-tests: covers -\n# run-tests: gate-inputs src\n")
+        self.assertEqual(suite_gate_inputs(self.root, suite, ["src"]), ["src"])
+        (self.root / "other").mkdir()
+        for row, reason in [("src/tool.py", "not a directory"), ("other", "not among"),
+                            ("src/../src", "literal"), ("", "at most one")]:
+            with self.subTest(row=row):
+                self.write(f"# run-tests: inputs src\n# run-tests: covers -\n# run-tests: gate-inputs {row}\n")
+                with self.assertRaisesRegex(InvalidDeclaration, reason):
+                    suite_gate_inputs(self.root, suite, ["src"])
+
     def test_narrower_directories_cannot_replace_a_blanket_claim(self):
         for directory in ["src", "src/nested"]:
             with self.subTest(directory=directory):
