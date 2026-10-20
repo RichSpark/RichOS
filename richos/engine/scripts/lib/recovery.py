@@ -20,7 +20,7 @@ import operator_fences as F
 import machine_settings as M
 
 THRESHOLD = 3
-REPEAT_ITERATION = 4
+ALARM_ROUND = 4  # the start of the fourth actual round of one unresolved outcome
 MAX_RECOVERIES = 3
 EXECUTION_SECONDS = 3 * 3600
 LOCK_SECONDS = 4
@@ -182,22 +182,54 @@ def failed_attempts(ledger, repo, aliases):
     return failed
 
 
-def repeat_signal(name):
-    """A visible fourth iteration is enough to ask for intervention.
+def round_signal(number, start, label, reason=""):
+    """The witnessed start of actual round 4 or later summons both advisors.
 
-    This is an alarm, not proof of a failed attempt or an identity join.
-    No review outcome, predecessor record or manually declared dispute is needed.
+    Round 1 is the initial actual attempt at one unresolved outcome and each
+    corrective pass is the next round (PRD 2026-10-20 section 5). A visible
+    name suffix is not a round. This is an alarm, not proof of a defect: it
+    bypasses only the routine/inspect decision, never the need for a witnessed
+    start. `start` is the event identity that witnessed the round beginning.
     """
-    match = re.fullmatch(r"[^-\s/]+-[^-\s/]+-([A-Za-z][A-Za-z0-9_-]*?)([0-9]{1,9})", name or "")
-    if not match:
+    if not isinstance(number, int) or number < ALARM_ROUND:
         return None
-    number = int(match[2])
-    return dict(name=name, job=match[1], iteration=number) if number >= REPEAT_ITERATION else None
+    return dict(kind="round", round=number, events=[start], label=label,
+                reason=reason or "actual round %d of one unresolved outcome started" % number)
+
+
+def event_signal(events, reason, label, round_number=None):
+    """Triage judged these work events to warrant both advisors (inspect,
+    uncertain or unavailable). The reason cites the evidence, never a verdict."""
+    return dict(kind="event", round=round_number, events=list(events), label=label, reason=reason)
 
 
 def signal_label(signal):
     """A short human label for an alarm, for owner notices."""
-    return str((signal or {}).get("label") or (signal or {}).get("name") or "work")
+    signal = signal or {}
+    label = str(signal.get("label") or "work")
+    return label + (" (round %d)" % signal["round"] if signal.get("kind") == "round" else "")
+
+
+def merge_signal(previous, new, asked):
+    """One alarm per assignment frontier. Until both advisors have asked their
+    questions, a new concern joins the pending alarm and keeps its identity, so
+    an in-flight consultation is not invalidated. After questions exist, a new
+    material event or a later round reopens scrutiny under a new identity.
+    Nothing that raised a concern is discarded: its event stays listed.
+    Returns (signal, reopened)."""
+    events = list(dict.fromkeys((previous or {}).get("events", []) + new.get("events", [])))
+    if previous and set(new.get("events", [])) <= set(previous.get("events", [])) and (
+            new.get("round") or 0) <= (previous.get("round") or 0):
+        return previous, False  # duplicate delivery of a known concern
+    if previous and not asked:
+        merged = dict(previous, events=events, round=max(previous.get("round") or 0, new.get("round") or 0) or None,
+                      reason=previous["reason"] if new["reason"] in previous["reason"] else previous["reason"] + "; " + new["reason"])
+        if new.get("kind") == "round":
+            merged.update(kind="round", label=new["label"])
+        return merged, False
+    signal = dict(new, events=events if previous else new.get("events", []))
+    signal["id"] = digest([signal["kind"], signal.get("round"), signal["events"]])
+    return signal, True
 
 
 def repeat_pending(record, role):
@@ -295,12 +327,14 @@ def repeat_response(identity, role, answer, consultation, replies):
         return record
 
 
-def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", dry=False, premises=False, name=""):
+def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", dry=False, premises=False, signal=None):
     """Level-triggered, including when no watcher has polled. The original
-    deadline survives source movement and worker replacement.
+    deadline survives source movement and worker replacement. `signal` is an
+    actual-round or triage-event alarm from the event adapter; without one an
+    existing alarm is kept unchanged.
     """
     now = time.time() if now is None else now
-    repetition = repeat_signal(name)
+    repetition = signal
     ledger = rows(F.review_ledger_default())
     failed = failed_attempts(ledger, repo, aliases)
     relevant = [r for r in ledger if r.get("work") in aliases and F.review_row_belongs(r, F.review_repo_identity(repo))]
@@ -336,14 +370,19 @@ def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", 
         previous_count = record.get("recovery_failures", 0)
         record.update(failed=failed, aliases=sorted(aliases), owner=owner, mode=mode, wes_candidates=candidates)
         previous = record.get("repeat_signal")
-        if repetition and (not previous or repetition["iteration"] > previous["iteration"]):
-            record["repeat_signal"] = repetition
-            record["repeat_questions"] = {}
-            record.pop("repeat_outcome", None)
-            if record["status"] in ("accepted", "resolved_findings", "reviewing_premise"):
-                record.update(status="investigating", plan=None, deadline=now + EXECUTION_SECONDS,
-                              wes_deadline=now + EXECUTION_SECONDS)
-                record["budgets"].append(dict(start=now, deadline=record["deadline"], reason="fourth or later named iteration"))
+        if repetition:
+            asked = any((record.get("repeat_questions", {}).get(role) or {}).get("frontier") == record["evidence_cursor"]
+                        for role in ("axel", "wes"))
+            merged, reopened = merge_signal(previous, repetition, asked)
+            record["repeat_signal"] = merged
+            if reopened:
+                record["repeat_questions"] = {}
+                record.pop("repeat_outcome", None)
+                if record["status"] in ("accepted", "resolved_findings", "reviewing_premise"):
+                    record.update(status="investigating", plan=None, deadline=now + EXECUTION_SECONDS,
+                                  wes_deadline=now + EXECUTION_SECONDS)
+                    record["budgets"].append(dict(start=now, deadline=record["deadline"],
+                                                  reason="new material work event or later actual round"))
         if len(failed)>=THRESHOLD and (not record.get("axel_required", True) or
                 (record["status"]=="resolved_findings" and record.get("repeat_outcome") != "self_correction")):
             record["deadline"] = now + EXECUTION_SECONDS
@@ -353,7 +392,7 @@ def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", 
         record["axel_required"] = record.get("axel_required", True) or len(failed)>=THRESHOLD or bool(record.get("repeat_signal"))
         if record["axel_required"] and record["status"] == "reviewing_premise":
             record["status"] = "investigating"
-        frontier = digest([failed, record["repeat_signal"]]) if record.get("repeat_signal") else digest(failed)
+        frontier = digest([failed, record["repeat_signal"]["id"]]) if record.get("repeat_signal") else digest(failed)
         if record.get("repeat_signal") and frontier != record["evidence_cursor"] and record.get("repeat_outcome"):
             record.pop("repeat_outcome", None)
             if record["status"] == "resolved_findings":

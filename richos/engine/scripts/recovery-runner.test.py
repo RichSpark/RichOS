@@ -194,33 +194,41 @@ class Async(unittest.TestCase):
             prompt_lines=lambda prompt, field: [])
         return rec, ws
 
-    def test_dispatch_and_watcher_schedule_both_on_four_without_a_review_or_assignment(self):
+    def test_a_name_suffix_alone_schedules_nothing_on_dispatch_or_watcher(self):
+        # PRD 2026-10-20 section 5: the visible suffix is no longer a round count.
         import recovery_controls as C
         self.ledger.write_text('')
         declaration = dict(mode='enforce', repositories=[str(self.repo)], wes_policy='carried')
-        for number in (3, 4):
+        for number in (3, 4, 9):
             rec, ws = self.numbered(number)
             item = SimpleNamespace(source='native', repo=str(self.repo), ref=rec['key'], session='owner',
                 state='running', started=1, env={}, claude='', accounts='', tip='a'*40)
             with patch.object(R, 'mode', return_value=declaration), patch.object(RR.SR, 'find_teammate', return_value=rec), \
                     patch.object(RR, 'launch') as launch:
                 RR.tick([item], str(HERE.parent), 'entity', ws)
-                self.assertEqual([c.args[1] for c in launch.call_args_list], [] if number == 3 else ['axel', 'wes'])
-            # The dispatch path records the same alarm before the watcher polls.
+                launch.assert_not_called()
             with patch.object(R, 'mode', return_value=declaration), patch.object(RR, 'consultation') as model:
-                jobs = C.admitted(ws, {}, rec, dict(kind='implementation'), [str(self.repo)], 'entity')
-                self.assertEqual(len(jobs), 0 if number == 3 else 1)
+                self.assertEqual(C.admitted(ws, {}, rec, dict(kind='review'), [str(self.repo)], 'entity'), [])
                 model.assert_not_called()
-        with patch.object(R, 'mode', return_value=dict(mode='off')), patch.object(RR, 'launch') as launch:
+        # A recorded actual-round alarm on the job is what schedules both.
+        rec, ws = self.numbered(2)
+        rec['recovery_assignment'] = dict(kind='implementation')
+        work = 'teammate:' + rec['key']
+        R.reconcile(str(self.repo), work, {work}, 'owner', 'acceptance', mode='enforce',
+                    signal=R.round_signal(4, 'witnessed-start', rec['name']))
+        item = SimpleNamespace(source='native', repo=str(self.repo), ref=rec['key'], session='owner',
+            state='running', started=1, env={}, claude='', accounts='', tip='a'*40)
+        with patch.object(R, 'mode', return_value=declaration), patch.object(RR.SR, 'find_teammate', return_value=rec), \
+                patch.object(C, 'work', return_value=(work, {work}, 'acceptance')), \
+                patch.object(RR, 'launch') as launch:
             RR.tick([item], str(HERE.parent), 'entity', ws)
-            self.assertEqual(C.admitted(ws, {}, rec, dict(kind='implementation'), [str(self.repo)], 'entity'), [])
-            launch.assert_not_called()
+            self.assertEqual([c.args[1] for c in launch.call_args_list], ['axel', 'wes'])
 
     def test_probing_questions_reach_rich_before_any_verdict_or_other_advisor(self):
         import recovery_controls as C
         import review_watch as RW
         self.ledger.write_text('')
-        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-hostshim4')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(4, 'start-4', 'zach-opus-hostshim'))
         calls = []
         def consult(identity, role, phase, prompt, shape, executable, account):
             calls.append((role, phase))
@@ -259,7 +267,7 @@ class Async(unittest.TestCase):
         self.assertIsNone(current['plan'])
 
     def test_rich_self_correction_needs_no_advisor_control_or_recovery_plan(self):
-        record = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', mode='enforce', name='zach-opus-lease4')
+        record = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(4, 'start-4', 'zach-opus-lease'))
         phases = []
         def consult(identity, role, phase, prompt, shape, executable, account):
             phases.append(phase)
@@ -289,12 +297,12 @@ class Async(unittest.TestCase):
         self.assertIsNone(current['plan'])
         # Old failed handovers must not instantly undo the recognized correction.
         self.assertEqual(R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance',
-            mode='enforce', name='zach-opus-lease4')['status'], 'resolved_findings')
+            mode='enforce', signal=R.round_signal(4, 'start-4', 'zach-opus-lease'))['status'], 'resolved_findings')
 
     def test_only_new_lead_text_after_question_delivery_is_a_response_candidate(self):
         import datetime
         self.ledger.write_text('')
-        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-lease4')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(4, 'start-4', 'zach-opus-lease'))
         transcript = self.base/'lead.jsonl'
         stamp = lambda n: datetime.datetime.fromtimestamp(n, datetime.timezone.utc).isoformat()
         def row(uid, role, at, **extra):

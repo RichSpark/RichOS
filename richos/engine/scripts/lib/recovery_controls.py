@@ -61,7 +61,7 @@ def _admitted(ws, payload, rec, assignment, repos, declaration, dry):
         if repo not in {os.path.realpath(p) for p in declaration["repositories"]}:
             continue
         record = R.reconcile(repo, identity, aliases, rec["session_id"], acceptance,
-                             mode=declaration["mode"], dry=dry, premises=declaration.get("wes_policy", "carried"), name=rec.get("name", ""))
+                             mode=declaration["mode"], dry=dry, premises=declaration.get("wes_policy", "carried"))
         if not record:
             continue
         R.admission(record, rec["key"], body, disposition[0] if disposition else "", dry=dry,

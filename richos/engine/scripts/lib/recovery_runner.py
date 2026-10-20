@@ -29,12 +29,13 @@ MAX_INPUT = 512 * 1024
 CHILDREN = {}
 NOTICES = []
 
-REPEAT_PROMPT = """The same named job has reached fix number four or later; fix three was its last ordinary chance.
-Your first intervention is one or two HARD, probing questions to Rich, before any judgment, diagnosis or proposed fix.
-Use the actual conversation and work to expose the assumption keeping this job going, even when all reviews passed.
-Wes: challenge practical necessity and the intent of the original instruction; Axel: challenge the repeated approach and what is preventing completion.
-Ask the shortest direct question that could make Rich reconsider; do not hide a verdict in a question, invent facts or produce a generic checklist.
-Return only the questions and the specific evidence that prompted them; Rich may turn the job around by answering, without needing a later advisor verdict.
+REPEAT_PROMPT = """You were summoned because the fourth actual round of one unresolved outcome started, or because triage judged a recorded work event (a dispatch, an instruction Rich sent a worker, or a handover or review result) to warrant independent scrutiny. The alarm and its reason are in repeat_signal; they are not a verdict.
+Your first intervention is one or two HARD, probing questions to the current owner, before any judgment, diagnosis or proposed fix.
+Use the actual conversation and work, including Rich's own instructions and handoffs, to expose the assumption keeping the work going or growing, even when all reviews passed.
+Wes: challenge necessity, applicability, proportionality and the intent of the original instruction; Axel: challenge the repeated approach and whether it can complete the job.
+Ask the shortest direct question that could make the owner reconsider; do not hide a verdict in a question, invent facts or produce a generic checklist or a complaint about elapsed time.
+If the evidence shows no challenge is justified, ask the one question whose answer would confirm the work is necessary; never fabricate a defect, a plan or extra work to justify being summoned.
+Return only the questions and the specific evidence that prompted them; the owner may turn the work around by answering, without needing a later advisor verdict.
 """
 
 
@@ -267,7 +268,6 @@ def snapshot(record, ws, role):
     evidence["current_plan"] = record.get("plan")
     evidence["repeat_signal"] = record.get("repeat_signal")
     evidence["repeat_questions"] = record.get("repeat_questions", {})
-    evidence["related_iterations"] = []
     evidence["recent_conversations"] = []
     conversations = set()
     evidence["assessments"] = [c["result"] for c in record["consults"] if c["phase"]=="assessment" and c.get("result")]
@@ -294,23 +294,10 @@ def snapshot(record, ws, role):
             work = ws.recovery_work_key(worker)
         except (ValueError, ws.SpecError):
             continue
-        same_work = work == record["work"]
+        # Only recorded identity joins work. A similar name is not evidence.
+        if work != record["work"]:
+            continue
         signal = record.get("repeat_signal") or {}
-        name = worker.get("name", "")
-        # Nearby numbered workers supply context only. They never acquire
-        # this job's aliases, recovery budget or control authority by name.
-        related = (signal and worker.get("session_id") == record["owner"] and
-                   name.rsplit("-", 1)[-1].rstrip("0123456789") == signal["job"] and
-                   any(s.get("repo") and R.F.review_repo_identity(s["repo"]) == record["repo_id"]
-                       for s in worker.get("workspaces", [])))
-        if not same_work and not related:
-            continue
-        if not same_work:
-            transcript = ws.platform_agent_transcript(worker)
-            words, _model, report = SR.transcript_facts(transcript) if transcript else ("", "", "")
-            evidence["related_iterations"].append(dict(name=name, brief=words[:8000], report=report[:8000],
-                reference=transcript, authority="Context only; name similarity grants no control or shared recovery budget."))
-            continue
         evidence["manifest"].append(dict(worker=worker["key"], assignment=worker.get("recovery_assignment"),
                                          disposed=worker.get("disposition")))
         authority = (worker.get("recovery_assignment") or {}).get("authority") or {}
@@ -650,13 +637,13 @@ def tick(items, engine, entity, ws):
         os.environ.update(item.env or {})
         try:
             rec = SR.find_teammate(ws, item.ref)
-            if not rec.get("recovery_assignment") and not R.repeat_signal(rec.get("name")):
+            if not rec.get("recovery_assignment"):
                 continue  # native dispatch inspection must first reconcile legacy identity
             projected = dict(rec, recovery_assignment=rec["recovery_observation_assignment"]) if declaration["mode"]=="observe" and rec.get("recovery_observation_assignment") else rec
             work, aliases, acceptance = C.work(ws, projected)
             routes = R.pending_routes(item.repo, aliases)
             record = R.reconcile(item.repo, work, aliases, item.session, acceptance,
-                                 mode=declaration["mode"], premises="all" if routes else declaration.get("wes_policy", "carried"), name=rec.get("name", ""))
+                                 mode=declaration["mode"], premises="all" if routes else declaration.get("wes_policy", "carried"))
             if not record:
                 continue
             if item.state == "ended":
