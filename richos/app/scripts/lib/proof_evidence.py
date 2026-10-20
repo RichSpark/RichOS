@@ -1507,13 +1507,22 @@ class Record:
         self.checkpoint(items)
 
     def checkpoint(self, items):
+        # ONE SOURCE READING PER PASS (verification reliability PRD step 3, T14). The source is
+        # the whole checkout (`git diff --binary HEAD` and every untracked file), and it was read
+        # once per changed check: on the round 32 land replay one reading took 5.5 s, and the
+        # first pass saves every planned check, so 88 checks waited about 8 minutes before the
+        # first one started, in every round. Every check this pass saves is saved at one instant;
+        # the reading is taken only when a pass has something to save.
+        source = None
         for item in items:
             if item.label not in self.identities:
                 continue  # Synthetic run findings never become reusable obligations.
             old = self.results.get(item.label, {})
             if old.get("state") == item.state and old.get("exit") == item.rc:
                 continue
-            self.save(item, self.current_source())
+            if source is None:
+                source = self.current_source()
+            self.save(item, source)
 
     def save(self, item, source):
         """Called before launch and after completion, independently of the summary."""

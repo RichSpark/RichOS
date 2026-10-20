@@ -467,6 +467,25 @@ class Evidence(unittest.TestCase):
         record.finalize(verifier)
         self.assertEqual(verifier[0].state, "passed", verifier[0].notes)
 
+    def test_a_checkpoint_pass_reads_the_source_once_however_many_checks_it_saves(self):
+        # PRD step 3, T14: one `git diff --binary HEAD` reading took 5.5 s on the round 32 land,
+        # and every changed check took one, so 88 checks waited 8 minutes before the first ran.
+        path = Path(self.tmp.name) / "many"
+        path.mkdir()
+        items = [runner.Item("check-%d" % n, str(self.root), ["true"]) for n in range(12)]
+        record = evidence.Record(str(self.root), path, items, dict(self.source),
+                                 {item.label: self.inputs for item in items})
+        self.addCleanup(record.close)
+        reads = []
+        record.current_source = lambda: reads.append(1) or dict(self.source)
+        for item in items:
+            item.state, item.rc = "running", None
+        record.checkpoint(items)
+        self.assertEqual(len(reads), 1, "one reading for a pass that saves twelve checks")
+        record.checkpoint(items)
+        self.assertEqual(len(reads), 1, "a pass with nothing to save reads nothing")
+        self.assertEqual({row["state"] for row in record.results.values()}, {"running"})
+
     def test_an_untracked_file_that_vanishes_while_it_is_read_is_a_changed_identity_not_a_crash(self):
         # 2026-09-30: a land crashed with FileNotFoundError in source_identity() on
         # richos/app/.updater-key-under-test.key, listed by `git ls-files --others` and removed
