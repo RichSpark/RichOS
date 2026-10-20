@@ -1611,8 +1611,16 @@ class Runner:
             if prior.get("request_sha256") == digest:
                 return prior["escalation"]
         title = f"Prepare {info['tag']} changelog before publication"
-        question = (f"Start a worker from {CHANGELOG_WORKER_BRIEF}, replacing {BRIEF_TAG} with "
-                    f"{info['tag']} and <REQUEST> with {request}. The candidate's run is "
+        brief = request.with_name("brief.md")
+        brief.write_text((ROOT / CHANGELOG_WORKER_BRIEF).read_text()
+                         .replace(BRIEF_TAG, info["tag"]).replace("<REQUEST>", shlex.quote(str(request))))
+        model = "opus" if info.get("channel") == "stable" else "sonnet"
+        slug = re.sub(r"[^a-z0-9]+", "-", info["tag"].lower()).strip("-")[:40].rstrip("-")
+        start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
+                            f"newt-{model}-{slug}-{digest[:8]}", "--repo", "richos",
+                            "--type", "newt", "--model", model, "--brief", str(brief)])
+        question = (f"Start Newt, the Release Notes Writer, with this exact command: `{start}`. "
+                    f"The brief already names the tag and request. The candidate's run is "
                     f"{info['run_id']}. Draft now while QA walks it. Keep rejected drafts off main. "
                     "After QA acceptance, second-review and land the matching notes and record, "
                     f"then run nightly-local.py publish --run {info['run_id']} yourself. "

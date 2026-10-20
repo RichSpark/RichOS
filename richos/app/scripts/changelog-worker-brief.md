@@ -11,6 +11,8 @@ Prepare the notes for candidate <TAG> from the request at `<REQUEST>`. The candi
 
 ## Lead: finish this job without involving the CEO
 
+Use the exact dispatch command: it selects `--type newt`, with Sonnet for a nightly and Opus for a consolidated stable entry and points at this brief with its tag and request already filled in. Do not substitute a generic engineer or leave the writer choice to memory.
+
 Start this worker as soon as the build completes, while QA walks it. Track the job through writing, independent second review, landing and publication. A usage hold delays this work and publication; it must never leave a public release without its notes. A dispatch error is unresolved work, not a successful release. The request and dispatch receipt survive in the nightly state directory outside the sealed candidate.
 
 Keep the draft on its branch until QA accepts this exact candidate. If QA rejects it, discard that draft and close its escalation. Never land a rejected candidate's entry. The replacement gets a new request from the last successfully published release, so rejected changes are not lost or marked announced.

@@ -3426,15 +3426,17 @@ class PublishedReportTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.tip)
         self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
 
-    def prepare(self):
+    def prepare(self, channel="nightly"):
         self.runner.prepare_changelog = types.MethodType(PREPARE_CHANGELOG, self.runner)
+        tag = "v1.2.1" if channel == "stable" else self.TAG
         def command(*args, **kwargs):
             self.assertEqual(args[2], "notes-request")
             request = Path(args[args.index("--output") + 1])
             request.parent.mkdir(parents=True, exist_ok=True)
-            request.write_text(json.dumps({"candidate": self.TAG}))
+            request.write_text(json.dumps({"candidate": tag}))
         self.runner.command = Mock(side_effect=command)
-        return self.runner.prepare_changelog({"tag": self.TAG, "build_commit": "b" * 40,
+        return self.runner.prepare_changelog({"tag": tag, "channel": channel,
+                                              "build_commit": ("c" if channel == "stable" else "b") * 40,
                                               "run_id": "fixture-run"}, self.root / "candidate")
 
     def test_notes_dispatch_precedes_publication_and_survives_repeat_requests(self):
@@ -3449,7 +3451,26 @@ class PublishedReportTests(unittest.TestCase):
         self.assertIn("second-review and land", row["question"])
         self.assertIn("publish --run fixture-run", row["question"])
         self.assertIn("No CEO", row["question"])
+        self.assertIn("--type newt --model sonnet --brief", row["question"])
         self.assertEqual([args[0] for args in self.started], [str(m.ESCALATE)])
+        self.main_untouched()
+
+    def test_dispatch_names_newt_and_materializes_the_brief_for_both_release_kinds(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.prepare()
+            self.prepare(channel="stable")
+        nightly, stable = self.rows()
+        self.assertIn("newt-sonnet-", nightly["question"])
+        self.assertIn("--type newt --model sonnet", nightly["question"])
+        self.assertIn("newt-opus-", stable["question"])
+        self.assertIn("--type newt --model opus", stable["question"])
+        for identity, tag in (("b", self.TAG), ("c", "v1.2.1")):
+            brief = self.root / "state/changelogs" / (identity * 40) / "brief.md"
+            text = brief.read_text()
+            self.assertIn(tag, text)
+            self.assertNotIn("<TAG>", text)
+            self.assertNotIn("<REQUEST>", text)
+            self.assertIn(str(brief.with_name("request.json")), text)
         self.main_untouched()
 
     def test_failed_dispatch_refuses_and_leaves_no_false_receipt(self):
