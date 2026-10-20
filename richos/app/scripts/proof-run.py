@@ -1092,6 +1092,12 @@ def launch(item, n, logdir, tokens_dir, reserved):
         if os.path.exists(item.ui_ledger):
             os.unlink(item.ui_ledger)    # an earlier attempt's records are not this attempt's
         env["RICHOS_UI_TESTS_LEDGER"] = item.ui_ledger
+        # And its navigation-failure bundles go to the check's own results folder in this run's
+        # evidence (PRD step 3, T07/R9): left to lib/navigation-evidence.js's default, they went
+        # to the checkout's `.shots/`, which a land in a temporary checkout removes with it. The
+        # same folder takes the suite's failing pictures (RICHOS_TEST_RESULTS_ROOT, group B).
+        # Per run, so here and never in item.env: no part of any input identity.
+        env["RICHOS_UI_NAV_EVIDENCE_DIR"] = os.path.join(item.results, "navigation-failures")
     # Python bytecode is never a check's output into the checkout (2026-09-30): a hook test that
     # ran guard-idle-land.py wrote hooks/__pycache__/guard-idle-land.cpython-314.pyc inside six
     # other checks' declared inputs, and all six became "invalid: execution inputs changed

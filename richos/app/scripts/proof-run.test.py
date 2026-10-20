@@ -406,6 +406,23 @@ try:
     check(hk_full.state == "passed" and hk_none.state == "invalid" and any("cannot fail" in n for n in hk_none.notes),
           "P38h own checks meeting the declared count pass; a source declaring none is INVALID",
           (hk_full.state, hk_none.state, hk_none.notes))
+    # P38i — a UI suite's navigation-failure bundle lands in the check's own results folder in the
+    # run's evidence, never in the checkout's .shots/ (PRD step 3, T07/R9), and is no input.
+    nav = os.path.join(d38, "nav.js")
+    with open(nav, "w") as fh:
+        fh.write("const fs = require('fs'), path = require('path');\n"
+                 "const d = process.env.RICHOS_UI_NAV_EVIDENCE_DIR || '';\n"
+                 "if (d) { fs.mkdirSync(d, {recursive: true}); fs.writeFileSync(path.join(d, 'bundle.txt'), 'evidence'); }\n"
+                 "fs.appendFileSync(process.env.RICHOS_UI_TESTS_LEDGER, JSON.stringify("
+                 "{suite: 'nav.js', label: 'x', checks: 1, failed: 1}) + '\\n');\nprocess.exit(1);\n")
+    navigated = pr.Item("nav", os.path.join(pr.ROOT, "richos/app/ui/tests"), ["node", nav], None, 1)
+    with contextlib.redirect_stdout(io.StringIO()):
+        pr.run([navigated], Args(), os.path.join(d38, "nav"), sampler=idle)
+    bundle = os.path.join(navigated.results or "", "navigation-failures", "bundle.txt")
+    check(os.path.isfile(bundle) and os.path.realpath(bundle).startswith(os.path.realpath(os.path.join(d38, "nav")))
+          and "RICHOS_UI_NAV_EVIDENCE_DIR" not in navigated.env,
+          "P38i a UI suite's navigation-failure bundle is kept in the run's evidence, not the checkout, and is no input",
+          (navigated.results, navigated.state, sorted(navigated.env)))
     real = items_from(["cd richos/app/ui/tests && node realbytes.js",
                        "cd richos/web/web-app && node --test test/api.test.js"], d38)
     check([bool(pr.ui_suite_file(i)) for i in real] == [True, False],
