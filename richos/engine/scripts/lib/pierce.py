@@ -210,6 +210,21 @@ def state_dir():
     return config / "state/pierce"
 
 
+WORKER_ENVELOPE = re.compile(r"<(teammate-message|agent-message)\b[^>]*>.*?(?:</\1>|\Z)", re.S)
+
+
+# The two exact header lines the host writes (seen in real lead transcripts).
+HOST_HEADER = re.compile(r"Another Claude session sent a message(?: while you were working)?:")
+
+
+def delivered_envelope(text):
+    """A worker's message as the host delivers it: teammate envelopes behind at
+    most one host header line, nothing a person wrote. A person's message that
+    quotes one keeps its authority, including a request that ends in a colon."""
+    rest = WORKER_ENVELOPE.sub("", text).strip()
+    return bool(WORKER_ENVELOPE.search(text)) and (not rest or bool(HOST_HEADER.fullmatch(rest)))
+
+
 def human_messages(rows, desktop=False):
     """Read original user messages, not the planner's paraphrase or tool results."""
     messages = []
@@ -235,7 +250,7 @@ def human_messages(rows, desktop=False):
         if not isinstance(content, str) or not content.strip():
             continue
         if content.lstrip().startswith(("<task-notification>", "<local-command-", "<command-name>",
-                                       "<teammate-message", "<system-reminder>")):
+                                       "<teammate-message", "<system-reminder>")) or delivered_envelope(content):
             continue
         messages.append(content)
     return messages
@@ -666,7 +681,10 @@ def read_response(out, output_format):
 
 def run_review(request, profile, model="opus", effort=None, output_format="json"):
     """(verdict, metrics) from one restricted inspection by the named model."""
-    cli = os.environ.get("RICHOS_CLAUDE_BIN") if os.environ.get("RICHOS_APP_STATE") else shutil.which("claude")
+    # The operator profile's order (operator_profile.rs, "HIS claude"): the
+    # stored PATH, then the installer's launcher in his home.
+    cli = (os.environ.get("RICHOS_CLAUDE_BIN") if os.environ.get("RICHOS_APP_STATE") else
+           shutil.which("claude") or next((str(p) for p in [Path.home() / ".local/bin/claude"] if p.is_file()), None))
     if not cli:
         raise ValueError("Claude Code executable was not found on PATH")
     command = claude_command(cli, profile, request["read_roots"], model, effort, output_format,
