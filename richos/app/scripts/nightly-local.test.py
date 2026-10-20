@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 import uuid
 from unittest.mock import Mock, patch
@@ -22,6 +23,22 @@ from unittest.mock import Mock, patch
 spec = importlib.util.spec_from_file_location("local_nightly", Path(__file__).with_name("nightly-local.py"))
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
+
+# Every publish, release and stable ends by writing its changelog entry, which reads GitHub,
+# runs `claude` and pushes main. No test reaches any of those by accident: each Runner records
+# the tags it was asked to write instead. ChangelogTests runs the real step, against a real
+# main and remote of its own, with GitHub's answers given and a stub in place of `claude`.
+WRITE_CHANGELOG = m.Runner.write_changelog
+
+
+def setUpModule():
+    def record(runner, tag):
+        runner.__dict__.setdefault("changelogs_written", []).append(tag)
+    m.Runner.write_changelog = record
+
+
+def tearDownModule():
+    m.Runner.write_changelog = WRITE_CHANGELOG
 
 
 class LocalTests(unittest.TestCase):
@@ -1121,6 +1138,8 @@ while True: time.sleep(.02)
         # The publisher is the step that signs, notarizes and signs the updater manifest.
         self.assertIs(r.command.call_args.kwargs["credentials"], True)
         self.assertEqual(r.plan.call_count, 2)
+        # Published, so its changelog entry is the last step.
+        self.assertEqual(r.changelogs_written, ["v1.2.0-nightly.20260916.1"])
 
     def test_only_the_build_step_is_registered_with_the_cpu_guard_as_a_release_build(self):
         # Run 20260928T190111Z-40a16163: every gate passed, then the CPU guard's 10-second
@@ -1336,13 +1355,16 @@ while True: time.sleep(.02)
         with contextlib.redirect_stdout(io.StringIO()):
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
         r.bump_next_version.assert_called_once_with("1.2.0")
-        # A bump that fails after the upload never hides that the release is out.
+        self.assertEqual(r.changelogs_written, ["v1.2.0"])
+        # A bump that fails after the upload never hides that the release is out, and the
+        # release's changelog entry is still written.
         r = self.stable_runner()
         r.bump_next_version = Mock(side_effect=ValueError("main has uncommitted changes"))
         with self.assertRaisesRegex(RuntimeError, "v1.2.0 IS PUBLISHED, but main's next release "
                                     "version was not bumped: main has uncommitted changes"), \
                 contextlib.redirect_stdout(io.StringIO()):
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        self.assertEqual(r.changelogs_written, ["v1.2.0"])
         # A dry run publishes nothing, so it bumps nothing.
         r = self.stable_runner()
         r.describe_stable = Mock()
@@ -1350,6 +1372,7 @@ while True: time.sleep(.02)
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED,
                       dry_run=True)
         r.bump_next_version.assert_not_called()
+        self.assertNotIn("changelogs_written", r.__dict__)
 
     def test_stable_reuses_the_gates_of_the_run_that_built_the_promoted_nightly(self):
         # CEO, 2026-10-19: "what fucking checks are there needed if ALL OF THE FUCKING CHECKS
@@ -1696,6 +1719,7 @@ while True: time.sleep(.02)
         self.assertEqual(args[2], "finish")
         self.assertEqual(Path(args[args.index("--out") + 1]), out)
         self.assertNotIn("credentials", kwargs)
+        self.assertEqual(r.changelogs_written, [self.CANDIDATE_INFO["tag"]])
 
     def moved_worktree(self):
         """A real repository whose dedicated worktree built a release commit, then moved.
@@ -2932,6 +2956,13 @@ class GatesAtOnceTests(unittest.TestCase):
             m.main()
         return stop.exception.code, err.getvalue()
 
+    def test_changelog_needs_a_tag_and_no_other_command_takes_one(self):
+        for argv in (("changelog",), ("check", "--tag", "v1.2.0")):
+            with self.subTest(argv=argv):
+                code, err = self.main_refusal(*argv)
+                self.assertEqual(code, 2)
+                self.assertIn("changelog requires --tag <published release tag>", err)
+
     def test_a_build_that_does_not_name_the_gates_at_once_does_not_start(self):
         # `stable` is not in this list: without --gates-at-once it reuses the gates of the run
         # that built the nightly (test_stable_is_one_command_with_his_words).
@@ -3343,6 +3374,208 @@ class NextVersionTests(unittest.TestCase):
             changed = [(a, b) for a, b in zip(before.splitlines(), files[path].splitlines()) if a != b]
             self.assertEqual(changed, [(f'version = "{version}"', f'version = "{following}"')], path)
         self.assertIsNone(m.next_patch_version_files(files[m.APP_MANIFEST], files[m.APP_LOCK], version))
+
+
+class ChangelogTests(unittest.TestCase):
+    """After a release is published, its changelog entry is on main: a real main and remote.
+
+    The CEO, 2026-10-20: "Can I assume that both changelog files will ALWAYS be automatically
+    handled correctly from now on and I'll never have to worry about that?" and "why do I
+    think that a changelog can't always be written before the job is done and probably can't
+    be written MOST OF THE TIME before the job is done?" So the entry is written after the
+    publish, from the range the published releases name. GitHub's answers are given here and
+    `claude` is a stub on PATH that records what it was asked.
+    """
+
+    NIGHTLY_INTRO = ("# Nightly changelog\n\nWhat changed in each RichOS nightly build, newest "
+                     "first.\n\n")
+    STABLE_INTRO = "# Changelog\n\nWhat changed in each stable version of RichOS, newest first.\n\n"
+    NIGHTLY_67 = "## 1.2.1-nightly.20261019.67\n\n- Fixed Escape not closing the panels\n"
+    STABLE_120 = "## 1.2.0\n\n- Added working voice\n\n## 1.0.2\n\n- Fixed the setup sheet\n"
+    TAG = "v1.2.1-nightly.20261020.68"
+    DRAFT = "- Added the Output panel\n- Fixed the window opening larger than the screen\n"
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(["git", *args], cwd=cwd or self.main, check=True, text=True,
+                              capture_output=True).stdout.strip()
+
+    def land(self, subject):
+        """A land into the branch checked out: a merge commit named `subject`."""
+        into = self.git("rev-parse", "--abbrev-ref", "HEAD")
+        self.lands += 1
+        self.git("checkout", "-q", "-b", f"work{self.lands}")
+        self.git("commit", "-q", "--allow-empty", "-m", f"work commit {self.lands}")
+        self.git("checkout", "-q", into)
+        self.git("merge", "-q", "--no-ff", "-m", subject, f"work{self.lands}")
+        return self.git("rev-parse", "HEAD")
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        environment = patch.dict(os.environ, {})
+        environment.start()
+        self.addCleanup(environment.stop)
+        for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
+                     "GIT_COMMITTER_EMAIL", "EMAIL", "GIT_DIR", "GIT_INDEX_FILE"):
+            os.environ.pop(name, None)
+        self.root = Path(temp.name).resolve()
+        self.remote, self.main = self.root / "remote.git", self.root / "main"
+        self.git("init", "--bare", "-q", str(self.remote), cwd=self.root)
+        self.git("init", "-q", "-b", "main", str(self.main), cwd=self.root)
+        for key, value in (("user.name", "Fixture"), ("user.email", "fixture@example.invalid"),
+                           ("core.hooksPath", "/dev/null")):
+            self.git("config", key, value)
+        self.git("remote", "add", "origin", str(self.remote))
+        for path, text in ((m.CHANGELOGS["nightly"], self.NIGHTLY_INTRO + self.NIGHTLY_67),
+                           (m.CHANGELOGS["stable"], self.STABLE_INTRO + self.STABLE_120)):
+            (self.main / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.main / path).write_text(text)
+        self.git("add", ".")
+        self.git("commit", "-qm", "the two changelogs")
+        self.lands = 0
+        self.land("Merge before-67: in the previous build already")
+        self.since = self.land("Merge last-of-67: the previous build's source")
+        # Lands onto a release branch reach main in one merge of that branch.
+        self.git("checkout", "-q", "-b", "v1.2.1")
+        self.land("Merge output1 onto v1.2.1: Added the Output panel")
+        self.land("Merge branch 'v1.2.1' into cc/sync1")
+        self.git("checkout", "-q", "main")
+        self.git("merge", "-q", "--no-ff", "-m", "Merge v1.2.1: the follow-ups", "v1.2.1")
+        self.source = self.land("Merge window1: the window opens no larger than its screen")
+        self.land("Merge after1: landed after this build's source")
+        self.git("push", "-q", "origin", "main")
+        self.tip = self.git("rev-parse", "HEAD")
+        # GitHub, as it answers once TAG is published: 67 before it, a draft and a stable beside.
+        self.published = {self.TAG: True, "v1.2.1-nightly.20261019.67": True,
+                          "v1.2.0-nightly.20261018.65": True, "v1.2.1": False, "v1.2.0": False,
+                          "v1.0.2": False, "nightly": True}
+        self.sources = {self.TAG: self.source, "v1.2.1-nightly.20261019.67": self.since,
+                        "v1.2.1": self.source, "v1.2.0": self.since}
+        for name, value in (("published_releases", lambda: dict(self.published)),
+                            ("release_source", lambda tag: self.sources[tag])):
+            patcher = patch.object(m, name, side_effect=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        # The stub `claude`: what it was run with and given, then the draft or a failure.
+        stub = self.root / "bin" / "claude"
+        stub.parent.mkdir()
+        stub.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$STUB_DIR/argv"\n'
+                        'cat > "$STUB_DIR/stdin"\npwd > "$STUB_DIR/cwd"\n'
+                        'if [ -n "$STUB_FAIL" ]; then echo "$STUB_FAIL" >&2; exit 1; fi\n'
+                        'cat "$STUB_DIR/reply"\n')
+        stub.chmod(0o755)
+        (self.root / "reply").write_text(self.DRAFT)
+        os.environ.update({"PATH": f"{stub.parent}:{os.environ['PATH']}",
+                           "STUB_DIR": str(self.root), "STUB_FAIL": ""})
+        self.runner = m.Runner(self.main, self.root / "state", {}, io.StringIO())
+        self.runner.write_changelog = types.MethodType(WRITE_CHANGELOG, self.runner)
+
+    def on_remote(self, path):
+        return self.git("show", f"refs/heads/main:{path}", cwd=self.remote) + "\n"
+
+    def asked(self):
+        return (self.root / "argv").read_text().splitlines(), (self.root / "stdin").read_text()
+
+    def test_a_published_nightly_gets_its_entry_at_the_top_from_exactly_its_range(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.runner.write_changelog(self.TAG)
+        self.assertEqual(self.on_remote(m.CHANGELOGS["nightly"]),
+                         self.NIGHTLY_INTRO + "## 1.2.1-nightly.20261020.68\n\n" + self.DRAFT
+                         + "\n" + self.NIGHTLY_67)
+        # The stable changelog is not touched by a nightly.
+        self.assertEqual(self.on_remote(m.CHANGELOGS["stable"]), self.STABLE_INTRO + self.STABLE_120)
+        # From 67's source to 68's: what landed before or after is not in the draft's input.
+        argv, given = self.asked()
+        self.assertIn("Version: 1.2.1-nightly.20261020.68", given)
+        self.assertIn("Merge output1 onto v1.2.1: Added the Output panel", given)
+        self.assertIn("Merge v1.2.1: the follow-ups", given)
+        self.assertIn("Merge window1: the window opens no larger", given)
+        # Not what landed before or after, not a merge that only took a branch in, not the
+        # branches' own commits: the merges say what landed.
+        for outside in ("before-67", "last-of-67", "after1", "cc/sync1", "work commit"):
+            self.assertNotIn(outside, given)
+        self.assertLess(given.index("output1"), given.index("window1"))
+        # Sonnet, no tools, the instructions file beside the script, in no repository.
+        self.assertEqual(argv[:3], ["-p", "--model", "sonnet"])
+        self.assertEqual(argv[argv.index("--tools") + 1], "")
+        self.assertEqual(argv[argv.index("--system-prompt-file") + 1],
+                         str(Path(__file__).resolve().with_name("changelog-instructions.md")))
+        self.assertTrue(m.CHANGELOG_INSTRUCTIONS.is_file())
+        self.assertNotEqual(Path((self.root / "cwd").read_text().strip()).resolve(), self.main)
+        # One commit on main, pushed, with main left clean.
+        head = self.git("rev-parse", "refs/heads/main", cwd=self.remote)
+        self.assertEqual(self.git("rev-parse", f"{head}^"), self.tip)
+        self.assertEqual(self.git("diff", "--name-only", self.tip, head), str(m.CHANGELOGS["nightly"]))
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertIn("## 1.2.1-nightly.20261020.68 added", out.getvalue())
+        self.assertNotIn("CHANGELOG ENTRY MISSING", out.getvalue())
+        # Asked again (the subcommand after a publish that did write it): nothing is drafted.
+        (self.root / "stdin").unlink()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(self.runner.changelog_entry(self.TAG))
+        self.assertFalse((self.root / "stdin").exists())
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), head)
+
+    def test_a_published_stable_gets_its_entry_from_the_previous_stables_source(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.runner.write_changelog("v1.2.1")
+        self.assertEqual(self.on_remote(m.CHANGELOGS["stable"]),
+                         self.STABLE_INTRO + "## 1.2.1\n\n" + self.DRAFT + "\n" + self.STABLE_120)
+        self.assertEqual(self.on_remote(m.CHANGELOGS["nightly"]), self.NIGHTLY_INTRO + self.NIGHTLY_67)
+        _, given = self.asked()
+        self.assertIn("output1", given)
+        self.assertNotIn("last-of-67", given)
+        # The previous stable is the previous STABLE: never a nightly, never a prerelease.
+        self.assertEqual(m.previous_release("v1.2.1", self.published), "v1.2.0")
+        self.assertEqual(m.previous_release("v1.2.1", {**self.published, "v1.2.0": True}), "v1.0.2")
+        self.assertEqual(m.previous_release(self.TAG, self.published), "v1.2.1-nightly.20261019.67")
+
+    def test_an_entry_written_late_goes_in_its_own_place(self):
+        text = self.NIGHTLY_INTRO + "## 1.2.1-nightly.20261021.70\n\n- Fixed b\n\n" + self.NIGHTLY_67
+        self.assertEqual(m.changelog_with_entry(text, "1.2.1-nightly.20261020.68", ["- Fixed a"]),
+                         self.NIGHTLY_INTRO + "## 1.2.1-nightly.20261021.70\n\n- Fixed b\n\n"
+                         "## 1.2.1-nightly.20261020.68\n\n- Fixed a\n\n" + self.NIGHTLY_67)
+
+    def test_a_failing_draft_leaves_the_release_published_and_says_so_in_one_line(self):
+        os.environ["STUB_FAIL"] = "Claude usage limit reached"
+        r = self.runner
+        r.checkout = Mock(return_value=self.source)
+        r.plan = Mock(return_value=(self.root / "plan.json", {
+            "build": True, "tag": self.TAG, "version": self.TAG[1:]}))
+        for name in ("preflight", "runtime", "gates", "command", "summary"):
+            setattr(r, name, Mock())
+        r.installed_dependencies_digest = Mock(return_value="")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            r.perform("release")  # no exception: the release stands
+        printed = out.getvalue().splitlines()
+        self.assertIn(f"Published https://github.com/{m.REPO}/releases/tag/{self.TAG}", printed)
+        missing = [line for line in printed if "CHANGELOG" in line]
+        self.assertEqual(missing, [
+            "CHANGELOG ENTRY MISSING: docs/CHANGELOG-NIGHTLY.md has no entry for "
+            "1.2.1-nightly.20261020.68 (the draft (claude -p) exited 1: Claude usage limit "
+            "reached). The release itself is published. Write it: python3 "
+            f"richos/app/scripts/nightly-local.py changelog --tag {self.TAG}"])
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.tip)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        # The command that line names is that same step, and with the draft back it writes it.
+        os.environ["STUB_FAIL"] = ""
+        with patch.object(sys, "argv", ["nightly-local.py", "changelog", "--tag", self.TAG,
+                                        "--repo", str(self.main)]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            m.main()
+        self.assertIn("## 1.2.1-nightly.20261020.68\n\n" + self.DRAFT,
+                      self.on_remote(m.CHANGELOGS["nightly"]))
+
+    def test_a_draft_that_is_not_a_list_never_reaches_the_changelog(self):
+        (self.root / "reply").write_text("I could not find any user-facing changes.\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.runner.write_changelog(self.TAG)
+        self.assertIn("CHANGELOG ENTRY MISSING", out.getvalue())
+        self.assertIn("the draft is not a list of `- ` lines", out.getvalue())
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.tip)
 
 
 class WalkRecipeTests(unittest.TestCase):
