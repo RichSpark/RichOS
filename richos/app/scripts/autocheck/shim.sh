@@ -6,11 +6,11 @@
 # post-merge and pre-push. Do not edit the installed copy: install.sh rewrites it.
 #
 # It runs the COMMITTED autocheck.py, read from git's object store, never a working copy:
-# the one at HEAD (a branch is checked by its own version), else the one on main (a branch
-# older than the check), else the one being merged (the land that introduces it). A land the
-# lander names (RICHOS_AUTOCHECK_LAND_TARGET) is checked by main's first. When none of them
-# has it, the check does not exist in this repository yet and this exits 0. An installed copy
-# that differs from the shim on main runs that one (below).
+# the one on main, which decides whether this is a land and hands anything else to the one at
+# HEAD when that differs (a branch is checked by its own version); else the one at HEAD (main
+# older than the check), else the one being merged (the land that introduces it). When none of
+# them has it, the check does not exist in this repository yet and this exits 0. An installed
+# copy that differs from the shim on main runs that one (below).
 # Every linked worktree shares this one hooks directory, so one install covers them all.
 
 REL=richos/app/scripts/autocheck/autocheck.py
@@ -40,16 +40,15 @@ INCOMING=
 case "${GIT_REFLOG_ACTION:-}" in
     "merge "*) INCOMING=$(printf '%s\n' "${GIT_REFLOG_ACTION#merge }" | awk 'NF == 1 { print $1 }') ;;
 esac
-# A LAND IS JUDGED BY THE GATE ON MAIN, WHATEVER BRANCH IT LANDS ONTO (PRD R8, T10). The lander
-# names a land onto a release branch in RICHOS_AUTOCHECK_LAND_TARGET (workspaces.sh merge), and
-# the merge runs in a checkout of that branch, so HEAD's copy was the release branch's own: v1.3.0
-# was cut on 2026-10-14, before a land onto a release branch ran the land check (d2c2c28dc), and
-# its copy runs only the commit check for every land onto it. Main's copy is the gate in force,
-# as the engine that names the target is main's. A commit that is no land is still checked by its
-# own branch's copy.
-FIRST=HEAD
-[ -n "${RICHOS_AUTOCHECK_LAND_TARGET:-}" ] && FIRST=refs/heads/main
-for rev in "$FIRST" HEAD refs/heads/main MERGE_HEAD "${INCOMING:-HEAD}"; do
+# A LAND IS JUDGED BY THE GATE ON MAIN, WHATEVER BRANCH IT LANDS ONTO (PRD R8, T10). A land onto
+# a release branch runs in a checkout of that branch, so HEAD's copy was the release branch's own:
+# v1.3.0 was cut on 2026-10-14, before a land onto a release branch ran the land check (d2c2c28dc),
+# and its copy runs only the commit check for every land onto it. And whether a plain `git merge`
+# there is a land at all is known only from the recorded integration branches, which main's copy
+# asks (second review rv-20261020T073921Z-acb97f5e-ec07, finding 2). So main's copy runs first
+# for every hook and decides: a land it judges itself; anything else it hands, unchanged, to the
+# copy at HEAD when that differs, so a branch's commits are still checked by its own version.
+for rev in refs/heads/main HEAD MERGE_HEAD "${INCOMING:-HEAD}"; do
     if git cat-file -e "$rev:$REL" 2>/dev/null </dev/null; then
         SRC=$rev
         break

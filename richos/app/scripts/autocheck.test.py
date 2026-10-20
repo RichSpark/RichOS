@@ -313,9 +313,11 @@ class Fixture(unittest.TestCase):
         (self.base / "gitconfig").write_text("[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n"
                                               "[init]\n\tdefaultBranch = main\n")
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "RICHOS_AUTOCHECK"))}
+        # The workspace registry the gate asks for recorded integration branches is this fixture's own.
         self.env.update(GIT_CONFIG_GLOBAL=str(self.base / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",
                         AUTOCHECK_FIXTURE_LOG=str(self.log), RICHOS_ESCALATION_LEDGER=str(self.ledger),
-                        RICHOS_AUTOCHECK_PROOF_ROOT=str(self.base / "proof-runs"))
+                        RICHOS_AUTOCHECK_PROOF_ROOT=str(self.base / "proof-runs"),
+                        RICHOS_WORKSPACES_DIR=str(self.base / "workspaces"))
         self.repo = self.base / "repo"
 
     def tearDown(self):
@@ -2246,6 +2248,67 @@ class ActiveGate(Fixture):
                 self.assertIn("the second review of what this lands passes (asked before the checks)", out.stderr)
                 self.assertEqual(self.head(target + "^2"), tip)
                 self.assertEqual(program.read_text(), text)
+
+    def record_integration(self, branch):
+        """The registry records that a body of work integrates on `branch` (workspaces.sh integration)."""
+        out = self.run_([sys.executable, str(ENGINE / "mega-lander/workspaces.py"), "--session", "fixture",
+                         "integration", "--repo", str(self.repo), "--branch", branch, "--why", "a release"])
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    def test_a_plain_git_merge_onto_a_recorded_release_branch_is_a_land_without_the_variable(self):
+        # Finding 2 of the same review: only the lander named its target, so a plain `git merge`
+        # in a checkout of the release branch ran the commit check and asked no review.
+        self.make()
+        self.fence()
+        self.git("branch", "v1.2.1")
+        self.record_integration("v1.2.1")
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, for the release\n")
+        tip, before = self.head("feature"), self.head("v1.2.1")
+        tree = self.base / "release-tree"
+        self.git("worktree", "add", "-q", str(tree), "v1.2.1")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        self.assertNotIn("RICHOS_AUTOCHECK_LAND_TARGET", self.env)
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree, expect=1)
+        self.assertIn("MERGE INTO V1.2.1 REFUSED: what this lands has no passing second review",
+                      out.stdout + out.stderr)
+        self.assertNotIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("v1.2.1"), before)
+        self.git("merge", "--abort", cwd=tree)
+        self.verdict(tip)
+        self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree)
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("v1.2.1^2"), tip)
+        # A branch nothing records stays a branch: its merge is checked as one, and asked nothing.
+        self.git("branch", "topic", "main")
+        self.branch_with("more", "richos/app/src/thing.txt", "fine, on a topic\n")
+        topic = self.base / "topic-tree"
+        self.git("worktree", "add", "-q", str(topic), "topic")
+        (topic / "richos/engine").symlink_to(ENGINE)
+        out = self.git("merge", "--no-ff", "-m", "merge more", "more", cwd=topic)
+        self.assertNotIn("MERGE INTO", out.stderr)
+        self.assertNotIn("second review", out.stderr)
+        self.assertNotIn(self.SUITE_RAN, self.tools())
+
+    def test_a_branch_commit_is_checked_by_its_own_copy_and_a_land_by_mains(self):
+        # Main's copy runs first and decides; what is no land runs the branch's own copy, as it
+        # always did.
+        self.make()
+        self.git("checkout", "-q", "-b", "own")
+        checker = self.repo / "richos/app/scripts/autocheck/autocheck.py"
+        current = checker.read_text()
+        marked = current.replace("def main(argv):\n", "def main(argv):\n    say('fixture: the branch copy ran')\n", 1)
+        self.assertNotEqual(marked, current)
+        checker.write_text(marked)
+        self.git("commit", "-q", "-am", "the branch's own copy")
+        self.write("richos/app/src/thing.txt", "fine, on own\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-q", "-m", "a branch commit")
+        self.assertIn("fixture: the branch copy ran", out.stderr)
+        self.git("checkout", "-q", "main")
+        out = self.git("merge", "--no-ff", "-m", "land own", "own")
+        before, receipt, _after = out.stderr.partition("receipt for tree")
+        self.assertTrue(receipt, out.stderr)
+        self.assertNotIn("fixture: the branch copy ran", before)
 
     def test_a_land_onto_a_release_branch_cut_before_a_gate_fix_runs_the_gate_on_main(self):
         # v1.3.0 was cut on 2026-10-14, before d2c2c28dc: its own autocheck.py ignores the target

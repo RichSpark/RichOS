@@ -41,9 +41,11 @@ engineer in a worktree, Codex, Rich in the main checkout.
   session reads at every session start and turn end (`escalate.sh`), and is appended to
   `<git-common-dir>/richos-autocheck/bypass.log`.
 
-Which copy of this file runs is chosen by the hook shim: the one committed at HEAD, else the
-one on main, else (the land that introduces it) the one being merged. A branch's commits are
-checked by its own version; a land into main is checked by main's.
+Which copy of this file runs is chosen by the hook shim: the one committed on main, else the
+one at HEAD, else (the land that introduces it) the one being merged. Main's copy decides whether
+a hook is a land (land_target) and hands anything else to HEAD's copy when that differs
+(branch_copy): a branch's commits are checked by its own version; a land, onto main or onto a
+release branch, is checked by main's.
 """
 import json
 import hashlib
@@ -250,6 +252,7 @@ def clean_env(common):
     # author runs offered to it (AUTHOR_RUNS), which no suite reads.
     env.pop(LAND_TARGET, None)
     env.pop(AUTHOR_RUNS, None)
+    env.pop("RICHOS_AUTOCHECK_FROM_MAIN", None)    # FROM_MAIN: main's copy's answer for this hook only
     cargo = str(Path.home() / ".cargo/bin")
     if cargo not in env.get("PATH", "").split(":"):
         env["PATH"] = env.get("PATH", "") + ":" + cargo
@@ -318,13 +321,84 @@ class Repo:
 
 def land_target(repo):
     """The branch this commit or merge lands onto, or "" when it is no land: a checked-out main,
-    or the branch the lander names in LAND_TARGET when this checkout is detached (its merge tree)
-    or on that same branch. A land onto a release branch runs the check a land onto main runs.
-    A name that disagrees with the checked-out branch is ignored, so it never removes a check."""
+    the branch the lander names in LAND_TARGET when this checkout is detached (its merge tree)
+    or on that same branch, or a checked-out branch a recorded body of work integrates on (a
+    release branch). A land onto a release branch runs the check a land onto main runs. A name
+    that disagrees with the checked-out branch is ignored, so it never removes a check."""
     named = os.environ.get(LAND_TARGET, "").strip()
     if named and repo.branch in ("", named):
         return named
-    return LAND_BRANCH if repo.branch == LAND_BRANCH else ""
+    if repo.branch == LAND_BRANCH:
+        return LAND_BRANCH
+    if not repo.branch or os.environ.get(FROM_MAIN) == NOT_A_LAND:
+        return ""
+    return repo.branch if repo.branch in integration_branches(repo) else ""
+
+
+# A PLAIN `git merge` ONTO A RELEASE BRANCH IS A LAND TOO (verification reliability PRD R8; second
+# review rv-20261020T073921Z-acb97f5e-ec07, finding 2). Only the lander named its target, so a
+# plain merge in a checkout of v1.3.0 ran the commit check and asked no review. The branches a
+# land goes onto are recorded, once, in the workspace registry (workspaces.sh integration; the
+# registry holds richos-002 on v1.3.0), and this asks the registry's own answer for this
+# repository, `workspaces.py integration --all`, never its files. The engine of this checkout
+# answers, else the installed one. No engine, no answer: nothing records a release branch there,
+# and the commit is checked as a branch commit, as before, with a note when the answer failed.
+WORKSPACES = "richos/engine/mega-lander/workspaces.py"
+INTEGRATION_SECONDS = 20
+FROM_MAIN = "RICHOS_AUTOCHECK_FROM_MAIN"
+NOT_A_LAND = "not-a-land"
+
+
+def integration_branches(repo):
+    """Every branch a recorded body of work integrates on in this repository (set), cached."""
+    if getattr(repo, "_integration", None) is not None:
+        return repo._integration
+    repo._integration = set()
+    main_checkout = repo.common.parent if repo.common.name == ".git" else None
+    tool = repo.top / WORKSPACES
+    if not tool.is_file():
+        tool = Path.home() / ".claude/richos-engine/mega-lander/workspaces.py"
+    if main_checkout is None or not tool.is_file():
+        return repo._integration
+    try:
+        answer = run_bounded([sys.executable, str(tool), "integration", "--all"], timeout=INTEGRATION_SECONDS,
+                             cwd=repo.top, env=repo.env, text=True, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        say(f"autocheck: the recorded integration branches could not be read ({exc}); checked as a branch")
+        return repo._integration
+    if answer.returncode:
+        say(f"autocheck: the recorded integration branches could not be read ({tool} exited "
+            f"{answer.returncode}); checked as a branch")
+        return repo._integration
+    mine = os.path.realpath(main_checkout)
+    for line in answer.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 4 and parts[0] and os.path.realpath(parts[2]) == mine and parts[3]:
+            repo._integration.add(parts[3])
+    return repo._integration
+
+
+# THE GATE ON MAIN DECIDES WHETHER A HOOK IS A LAND (verification reliability PRD R8, T10). The
+# shim runs main's copy first. A land is judged by it; anything else is handed, exactly as before,
+# to the copy committed at HEAD when that differs (a branch's commits are checked by its own
+# version), told the answer so it does not ask the registry again.
+def branch_copy(repo):
+    """HEAD's committed autocheck.py, written beside this one, when this is main's copy deciding
+    and HEAD's differs; else None."""
+    if os.environ.get(FROM_MAIN):
+        return None
+    own = subprocess.run(["git", "cat-file", "-p", f"HEAD:{SELF}"], cwd=repo.top, capture_output=True,
+                         stdin=subprocess.DEVNULL)
+    if own.returncode or not own.stdout or own.stdout == Path(__file__).read_bytes():
+        return None
+    folder = Path(__file__).parent / "branch"
+    folder.mkdir(exist_ok=True)
+    (folder / "autocheck.py").write_bytes(own.stdout)
+    helper = subprocess.run(["git", "cat-file", "-p", "HEAD:richos/app/scripts/lib/owned_command.py"],
+                            cwd=repo.top, capture_output=True, stdin=subprocess.DEVNULL)
+    if helper.returncode == 0 and helper.stdout:
+        (folder / "owned_command.py").write_bytes(helper.stdout)
+    return folder / "autocheck.py"
 
 
 # ---------------------------------------------------------------------------------------
@@ -2365,11 +2439,22 @@ def main(argv):
             return 1
     if hook not in ("pre-commit", "pre-merge-commit", "commit-msg", "post-commit", "post-merge", "pre-push"):
         return 0
-    stdin_text = sys.stdin.read() if hook == "pre-push" else ""
     repo = Repo()
     if inside_own_check(str(repo.common)):
         say(f"autocheck: {hook}: inside an automatic check of this repository (a suite's own commit); not re-entered")
         return 0
+    # Main's copy decides whether this is a land; anything else runs the branch's own copy when it
+    # differs, as it did before main's copy ran first (branch_copy). Before stdin is read: the
+    # branch's copy reads pre-push's lines itself.
+    try:
+        decided = land_target(repo)
+    except (RuntimeError, OSError):
+        decided = ""
+    own = None if decided else branch_copy(repo)
+    if own:
+        os.environ[FROM_MAIN] = NOT_A_LAND
+        os.execv(sys.executable, [sys.executable, str(own), *argv])
+    stdin_text = sys.stdin.read() if hook == "pre-push" else ""
     if hook in ("pre-commit", "pre-merge-commit", "commit-msg"):
         # A terminated check unwinds like an interrupted one, so StagedOnly puts set-aside work
         # back (a KeyboardInterrupt already does). Only SIGKILL leaves it in ASIDE, and the next
