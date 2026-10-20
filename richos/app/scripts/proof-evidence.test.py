@@ -1980,6 +1980,28 @@ class UiFamily(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "belongs to the ui-suite family only"):
             evidence.qualify_recipe(self.root, named)
 
+    def test_a_script_the_row_runs_as_a_child_binds_what_that_script_requires(self):
+        """Review rv-20261020T044017Z-ebbb640b-fc3b, P2: a pass must not survive a change to a file
+        a child process of the suite reads. A fixture suite named on the row requires a library the
+        suite itself never requires (in the path.join form the real fixture suites use)."""
+        child = "richos/app/ui/tests/fixtures/child-suite.js"
+        only = "richos/app/ui/tests/lib/child-only.js"
+        (self.root / child).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / child).write_text('const path = require("path");\n'
+                                       'require(path.join(__dirname, "..", "lib", "child-only"));\n')
+        (self.root / only).write_text("// read only by the child\n")
+        (self.root / "richos/app/ui/tests/d.js").write_text('require("./lib/harness"); // runs the child\n')
+        declaration = self.root / "richos/app/scripts/proof-for.ui-inputs"
+        declaration.write_text(declaration.read_text() + "d.js @shell " + child + "\n")
+        recipe = evidence.contract_for(self.root, "d.js")
+        self.assertIn(child, recipe["paths"])
+        self.assertIn(only, recipe["paths"])
+        before = self.identity(self.root, "d.js")
+        (self.root / only).write_text("// read only by the child, changed\n")
+        self.assertNotEqual(self.identity(self.root, "d.js"), before)
+        # A suite that names no such child is not bound to that library.
+        self.assertNotIn(only, evidence.contract_for(self.root, "b.js")["paths"])
+
     def test_a_changed_harness_needs_its_review_renewed(self):
         self.edit("richos/app/ui/tests/lib/harness.js", 'require("./ui-sources"); require("fs");\n')
         self.assertIn("changed unit reader", self.identity(self.worktree)["fresh"])

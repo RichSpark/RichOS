@@ -77,6 +77,22 @@ class ProductionQualification(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "qualification omits " + field):
                         evidence.qualify_recipe(root, broken)
 
+    def test_a_suite_that_runs_the_coverage_reconciler_binds_every_suite_it_lists(self):
+        """gate-honesty.js runs `run.js --coverage`, which lists every suite in ui/tests and reads
+        each one's declared check count: a changed suite must change its identity (review
+        rv-20261020T044017Z-ebbb640b-fc3b, P2), and a script it names binds what that requires."""
+        root = HERE.parents[2]
+        tests = root / "richos/app/ui/tests"
+        for suite in sorted(tests.glob("*.js")):
+            text = suite.read_text(errors="replace")
+            if 'path.join(__dirname, "run.js")' not in text or suite.name == "run.js":
+                continue
+            with self.subTest(suite=suite.name):
+                recipe = evidence.contract_for(root, suite.name)
+                self.assertIn("richos/app/ui/tests", recipe["paths"])
+        self.assertIn("richos/app/ui/tests/lib/overlays.js", evidence.contract_for(root, "gate-honesty.js")["paths"])
+        self.assertIn("richos/tools/phone-probe/lib/png.js", evidence.contract_for(root, "phone.js")["paths"])
+
     def test_every_environment_name_a_ui_suite_reads_is_bound_or_operational(self):
         """The family binds the environment names its review lists; a suite that starts reading
         a new one must add it there (or say why it is operational) before reuse can skip it."""

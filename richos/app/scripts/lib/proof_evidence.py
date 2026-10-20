@@ -1112,6 +1112,8 @@ def recipe_identity(root, recipe, environment, snapshot=None):
 # cwd) stay keyed by the whole checkout.
 UI_FAMILY = "ui-suite"
 _REQUIRE = re.compile(r"""require\(\s*(["'])(\.{1,2}/[^"']+)\1\s*\)""")
+# require(path.join(__dirname, "..", "lib", "harness")): the fixture suites' form.
+_REQUIRE_JOINED = re.compile(r"""require\(\s*path\.(?:join|resolve)\(\s*__dirname((?:\s*,\s*["'][^"']+["'])+)\s*\)\s*\)""")
 _UI_MANIFESTS = {}
 
 
@@ -1183,10 +1185,11 @@ def all_ui(root, family):
     return found
 
 
-def require_closure(root, start):
-    """`start` and every file it reaches by a relative `require`, repository-relative."""
+def require_closure(root, *starts):
+    """Every start and every file it reaches by a relative `require` (a literal `./`/`../` path or
+    `path.join(__dirname, ...)` of literals), repository-relative."""
     root = Path(root).resolve()
-    seen, todo = set(), [Path(os.path.normpath(start))]
+    seen, todo = set(), [Path(os.path.normpath(start)) for start in starts]
     while todo:
         current = todo.pop()
         if current in seen or not (current == root or root in current.parents):
@@ -1198,8 +1201,11 @@ def require_closure(root, start):
             text = current.read_text(errors="replace")
         except OSError:
             continue
-        for match in _REQUIRE.finditer(text):
-            base = current.parent / match.group(2)
+        targets = [match.group(2) for match in _REQUIRE.finditer(text)]
+        targets += [os.path.join(*re.findall(r"""["']([^"']+)["']""", match.group(1)))
+                    for match in _REQUIRE_JOINED.finditer(text)]
+        for target in targets:
+            base = current.parent / target
             for candidate in (base, Path(str(base) + ".js"), Path(str(base) + ".json"), base / "index.js"):
                 if candidate.is_file():
                     todo.append(Path(os.path.normpath(candidate)))
@@ -1233,7 +1239,12 @@ def ui_family_recipe(root, label, family):
                 paths.add(token.rstrip("/"))
 
     expand(rows[label])
-    paths.update(require_closure(root, suites / label))
+    # From the suite AND every script its row names: a fixture suite or tool it runs as a child
+    # process reads what that script requires, which the suite's own requires never reach
+    # (review rv-20261020T044017Z-ebbb640b-fc3b, P2: a child's reads must be bound before its
+    # parent's pass is reused). A folder a child lists is the row's to declare (`<dir>/`).
+    scripts = [root / rel for rel in sorted(paths) if rel.endswith((".js", ".cjs", ".mjs"))]
+    paths.update(require_closure(root, suites / label, *[path for path in scripts if path.is_file()]))
     text = (suites / label).read_text(errors="replace")
     for folder in sorted(suites.iterdir()):
         if folder.is_dir() and folder.name.startswith("shots-") and re.search(
