@@ -2243,6 +2243,31 @@ class Install(Fixture):
         self.assertIn("UNREACHABLE", out.stdout)
 
 
+class AuthorRuns(unittest.TestCase):
+    """The author's saved runs reach the merge gate's runner as `--reuse`, evidence it validates,
+    never a verdict, and never a suite's input (verification reliability PRD 2026-10-20)."""
+
+    def test_an_offered_run_is_passed_to_the_runner_and_hidden_from_the_suites(self):
+        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as top:
+            saved, empty = Path(top) / "saved", Path(top) / "empty"
+            saved.mkdir()
+            empty.mkdir()
+            (saved / "plan.json").write_text("{}")
+            before = os.environ.get(module.AUTHOR_RUNS)
+            os.environ[module.AUTHOR_RUNS] = os.pathsep.join([str(saved), str(empty)])
+            try:
+                self.assertEqual(module.offered_author_runs("measure"), ["--reuse", str(saved)])
+                self.assertNotIn(module.AUTHOR_RUNS, module.clean_env("common"))
+            finally:
+                if before is None:
+                    os.environ.pop(module.AUTHOR_RUNS, None)
+                else:
+                    os.environ[module.AUTHOR_RUNS] = before
+
+
 class TimeLimit(unittest.TestCase):
     """A check that runs out of time ends gracefully and leaves no process (2026-10-09: the
     test browser of a UI suite killed by subprocess.run's SIGKILL aborted at launch, parent

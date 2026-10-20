@@ -194,4 +194,6 @@ tracked-tree.js         richos/app/ui/tests/fixtures/tracked-tree-suite.js
 # The gates that must be able to fail (part-2 hunt sections 25, 26 and 42): the harness's report
 # and `publishShot` (library rule), `lib/page-errors.js` (library rule), `run.js`'s coverage floor
 # and `appearance.js`'s error aggregate, which it reads as source. It opens no shipped screen.
-gate-honesty.js         richos/app/ui/tests/run.js richos/app/ui/tests/appearance.js richos/app/ui/tests/fixtures/changed-shot-suite.js richos/app/ui/tests/fixtures/tiny-png.js
+# `run.js --coverage`, which it runs as a child, lists every suite here and reads each one's
+# declared check count, so the whole folder is its input (review rv-20261020T044017Z-ebbb640b-fc3b).
+gate-honesty.js        richos/app/ui/tests/ richos/app/ui/tests/run.js richos/app/ui/tests/appearance.js richos/app/ui/tests/fixtures/changed-shot-suite.js richos/app/ui/tests/fixtures/tiny-png.js

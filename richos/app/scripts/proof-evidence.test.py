@@ -1811,5 +1811,238 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         self.assertNotEqual(identity(), before)
 
 
+class UiFamily(unittest.TestCase):
+    """The UI suite family (proof_evidence.UI_FAMILY): a suite's identity is the same in every
+    checkout holding the same bytes, and changes exactly when something it reads changes
+    (verification reliability PRD 2026-10-20, acceptance A10, on isolated identity fixtures)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="proof-ui-family.",
+                                               dir=os.path.realpath(tempfile.gettempdir()))
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.root = base / "repo"
+        self.home = base / "home"
+        self.browsers = base / "browsers"
+        (self.browsers / "chromium-1").mkdir(parents=True)
+        (self.browsers / "chromium-1/INSTALLATION_COMPLETE").write_text("")
+        self.home.mkdir()
+        files = {
+            ".gitignore": "node_modules/\n.DS_Store\n",
+            "richos/app/ui/index.html": '<script src="theme-boot.js"></script><script src="main.js"></script>\n',
+            "richos/app/ui/theme-boot.js": "// startup\n",
+            "richos/app/ui/main.js": "// shell\n",
+            "richos/app/ui/style.css": "body{}\n",
+            "richos/app/ui/unloaded.js": "// on disk, not in index.html\n",
+            "richos/app/ui/assets/logo.svg": "<svg/>\n",
+            "richos/app/x.rs": "fn main() {}\n",
+            "richos/app/ui/tests/a.js": 'require("./lib/harness"); // reads shots-a\n',
+            "richos/app/ui/tests/b.js": 'require("./lib/harness");\n',
+            "richos/app/ui/tests/lib/harness.js": 'require("./ui-sources");\n',
+            "richos/app/ui/tests/lib/ui-sources.js": (
+                'module.exports = { manifest() { return { order: '
+                '["index.html", "theme-boot.js", "main.js", "style.css"] }; } };\n'),
+            "richos/app/ui/tests/package.json": "{}\n",
+            "richos/app/ui/tests/shots-a/one.png": "picture a\n",
+            "richos/app/ui/tests/shots-b/one.png": "picture b\n",
+            "richos/app/scripts/proof-for.ui-inputs": "@shell richos/app/ui/index.html richos/app/ui/main.js\n"
+                                                      "a.js @shell richos/app/x.rs\nb.js @shell\nc.js @allui\n",
+            "richos/app/ui/tests/c.js": 'require("./lib/harness");\n',
+            "qualification.md": "Fixture review.\n",
+        }
+        for rel, text in files.items():
+            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / rel).write_text(text)
+        self.family = {"suites": "richos/app/ui/tests", "shipped": "richos/app/ui",
+            "manifest": "richos/app/ui/tests/lib/ui-sources.js",
+            "declaration": "richos/app/scripts/proof-for.ui-inputs",
+            "paths": ["richos/app/ui/assets", "richos/app/ui/tests/lib/harness.js",
+                      "richos/app/ui/tests/lib/ui-sources.js", "richos/app/ui/tests/package.json"],
+            "tools": ["node", "git"], "environment": ["HOME", "PATH", "LANG", "PLAYWRIGHT_BROWSERS_PATH"],
+            "external": [], "qualification": "qualification.json", "qualification_unit": "ui family",
+            "unqualified": {"c.js": "reads something no declaration binds"}}
+        evidence.atomic(self.root / "richos/app/scripts/proof-inputs.json",
+                        {"schema": 1, "checks": {}, "families": {"ui-suite": self.family}})
+        self.write_qualification()
+        self.git("init", "-q", "-b", "main")
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture")
+        self.worktree = base / "author"
+        self.git("worktree", "add", "-q", "--detach", str(self.worktree))
+        # The main checkout has the one install; the worktree loads it through harness.js's last
+        # candidate (playwright_package_candidates), exactly as a real worktree does.
+        self.package(self.root / "richos/app/ui/tests/node_modules")
+        node = shutil.which("node", path=os.environ.get("PATH", "") + os.pathsep + "/opt/homebrew/bin")
+        self.environment = {"HOME": str(self.home), "LANG": "en_US.UTF-8",
+                            "PATH": os.pathsep.join([str(Path(node).parent), "/usr/bin", "/bin"]),
+                            "PLAYWRIGHT_BROWSERS_PATH": str(self.browsers)}
+
+    def git(self, *args, cwd=None):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        return subprocess.check_output(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture",
+            "-c", "user.email=fixture@example.invalid", *args], cwd=cwd or self.root, env=env,
+            text=True, stderr=subprocess.PIPE).strip()
+
+    def write_qualification(self, other_pin="0" * 64):
+        harness = self.root / "richos/app/ui/tests/lib/harness.js"
+        evidence.atomic(self.root / "qualification.json", {"schema": 1, "review": "qualification.md",
+            "requires": {"paths": ["richos/engine"], "tools": ["bash"], "environment": [], "external": []},
+            "isolation": evidence.PRIVATE_PROFILE,
+            "units": {
+                "ui family": {"family": "ui-suite", "review": "Reads what its family recipe binds.",
+                    "sources": {"richos/app/ui/tests/lib/harness.js": evidence.file_digest(harness)},
+                    "common": {"requires": {"paths": ["richos/app/ui/index.html",
+                                                      "richos/app/ui/tests/lib/harness.js"],
+                                            "tools": ["node"], "environment": ["HOME", "PATH"], "external": []}},
+                    "requires": {"paths": [], "tools": ["git"], "environment": [], "external": []}},
+                "another unit": {"review": "An unrelated engine reader.", "sources": {"x": other_pin},
+                    "requires": {"paths": [], "tools": [], "environment": [], "external": []}}}})
+
+    def package(self, directory, version="1"):
+        for name in ("playwright", "playwright-core"):
+            (directory / name).mkdir(parents=True, exist_ok=True)
+            (directory / name / "package.json").write_text('{"version": "%s"}\n' % version)
+
+    def identity(self, root, label="a.js", environment=None):
+        recipe = evidence.contract_for(root, label)
+        if recipe.get("family"):
+            recipe = evidence.family_invocation(root, recipe, Path(root) / "richos/app/ui/tests", ["node", label])
+        return evidence.recipe_identity(root, recipe, environment or self.environment)
+
+    def edit(self, rel, text, commit=True):
+        for root in (self.root, self.worktree):
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text)
+
+    def test_the_same_bytes_in_another_worktree_are_the_same_identity(self):
+        first, second = self.identity(self.root), self.identity(self.worktree)
+        self.assertNotIn("fresh", first)
+        self.assertEqual(first, second)
+        # Ignored junk beside a bound file is not content git would land.
+        (self.worktree / "richos/app/ui/assets/.DS_Store").write_text("finder\n")
+        self.assertEqual(self.identity(self.worktree), first)
+
+    def test_the_recipe_binds_the_manifest_the_row_the_closure_and_named_pictures(self):
+        recipe = evidence.contract_for(self.root, "a.js")
+        for rel in ("richos/app/ui/theme-boot.js", "richos/app/ui/style.css", "richos/app/x.rs",
+                    "richos/app/ui/tests/a.js", "richos/app/ui/tests/lib/harness.js",
+                    "richos/app/ui/tests/lib/ui-sources.js", "richos/app/ui/tests/shots-a",
+                    "richos/app/ui/assets"):
+            self.assertIn(rel, recipe["paths"])
+        for rel in ("richos/app/ui/tests/b.js", "richos/app/ui/tests/shots-b", "richos/app/ui/unloaded.js"):
+            self.assertNotIn(rel, recipe["paths"])
+        self.assertEqual(recipe["invocation"], {"cwd": "richos/app/ui/tests", "argv": ["node", "a.js"]})
+
+    def test_every_shipped_startup_source_change_invalidates_every_suite(self):
+        before = {label: self.identity(self.worktree, label) for label in ("a.js", "b.js")}
+        self.edit("richos/app/ui/theme-boot.js", "// startup, changed\n")
+        for label in before:
+            self.assertNotEqual(self.identity(self.worktree, label), before[label], label)
+
+    def test_another_suites_file_row_or_pictures_are_not_an_input(self):
+        before = self.identity(self.worktree)
+        self.edit("richos/app/ui/tests/b.js", 'require("./lib/harness"); // changed\n')
+        self.edit("richos/app/ui/tests/shots-b/one.png", "picture b, regenerated\n")
+        self.edit("richos/app/scripts/proof-for.ui-inputs", "@shell richos/app/ui/index.html richos/app/ui/main.js\n"
+                  "a.js @shell richos/app/x.rs\nb.js @shell richos/app/x.rs\nc.js @allui\n")
+        self.assertEqual(self.identity(self.worktree), before)
+        # Its own pictures, its own row and its own declared input are.
+        self.edit("richos/app/ui/tests/shots-a/one.png", "picture a, regenerated\n")
+        self.assertNotEqual(self.identity(self.worktree), before)
+
+    def test_another_units_pin_renewal_does_not_invalidate_but_the_review_does(self):
+        before = self.identity(self.root)
+        self.write_qualification(other_pin="1" * 64)
+        self.assertEqual(self.identity(self.root), before)
+        (self.root / "qualification.md").write_text("Fixture review, revised.\n")
+        self.assertNotEqual(self.identity(self.root), before)
+
+    def test_installs_environment_and_browsers_are_inputs(self):
+        before = self.identity(self.worktree)
+        self.package(self.root / "richos/app/ui/tests/node_modules", version="2")
+        self.assertNotEqual(self.identity(self.worktree), before)
+        self.package(self.root / "richos/app/ui/tests/node_modules")
+        self.assertEqual(self.identity(self.worktree), before)
+        self.assertNotEqual(self.identity(self.worktree, environment={**self.environment, "LANG": "C"}), before)
+        (self.browsers / "chromium-1/new-file").write_text("patched\n")
+        self.assertNotEqual(self.identity(self.worktree), before)
+
+    def test_unknown_unqualified_or_differently_invoked_suites_stay_unqualified(self):
+        self.assertIn("not yet declared", evidence.contract_for(self.root, "missing.js")["fresh"])
+        self.assertIn("reads something no declaration binds", evidence.contract_for(self.root, "c.js")["fresh"])
+        recipe = evidence.contract_for(self.root, "a.js")
+        for cwd, argv in ((self.root / "richos/app/ui/tests", ["node", "--inspect", "a.js"]),
+                          (self.root / "richos/app/ui/tests", ["node", "b.js"]),
+                          (self.root, ["node", "a.js"])):
+            self.assertIn("qualifies only", evidence.family_invocation(self.root, recipe, cwd, argv)["fresh"])
+        # A named recipe cannot borrow the family's floor to drop the shared one.
+        named = {k: v for k, v in recipe.items() if k not in ("family", "invocation")}
+        with self.assertRaisesRegex(ValueError, "belongs to the ui-suite family only"):
+            evidence.qualify_recipe(self.root, named)
+
+    def test_a_script_the_row_runs_as_a_child_binds_what_that_script_requires(self):
+        """Review rv-20261020T044017Z-ebbb640b-fc3b, P2: a pass must not survive a change to a file
+        a child process of the suite reads. A fixture suite named on the row requires a library the
+        suite itself never requires (in the path.join form the real fixture suites use)."""
+        child = "richos/app/ui/tests/fixtures/child-suite.js"
+        only = "richos/app/ui/tests/lib/child-only.js"
+        (self.root / child).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / child).write_text('const path = require("path");\n'
+                                       'require(path.join(__dirname, "..", "lib", "child-only"));\n')
+        (self.root / only).write_text("// read only by the child\n")
+        (self.root / "richos/app/ui/tests/d.js").write_text('require("./lib/harness"); // runs the child\n')
+        declaration = self.root / "richos/app/scripts/proof-for.ui-inputs"
+        declaration.write_text(declaration.read_text() + "d.js @shell " + child + "\n")
+        recipe = evidence.contract_for(self.root, "d.js")
+        self.assertIn(child, recipe["paths"])
+        self.assertIn(only, recipe["paths"])
+        before = self.identity(self.root, "d.js")
+        (self.root / only).write_text("// read only by the child, changed\n")
+        self.assertNotEqual(self.identity(self.root, "d.js"), before)
+        # A suite that names no such child is not bound to that library.
+        self.assertNotIn(only, evidence.contract_for(self.root, "b.js")["paths"])
+
+    def test_a_load_the_family_cannot_follow_leaves_the_suite_unqualified(self):
+        """Review rv-20261020T054118Z-26a24a78-1851: thread-switch.js runs contrast.py, whose
+        import of qa/lib/qaimg.py the identity did not bind. A suite is qualified only when every
+        load in its closure is followed or declared; anything else names the file and line."""
+        declaration = self.root / "richos/app/scripts/proof-for.ui-inputs"
+        cases = {
+            "py.js": 'require("./lib/harness");\nconst cp = require("child_process");\n'
+                     'cp.spawnSync("python3", ["helper.py"]);\n',
+            "cargo.js": 'require("./lib/harness");\nrequire("child_process").spawnSync("cargo", ["run"]);\n',
+            "computed.js": 'require("./lib/harness");\nconst path = require("path");\nconst DIR = __dirname;\n'
+                           'require(path.join(DIR, "x.js"));\n',
+            "package.js": 'require("./lib/harness");\nrequire("left-pad");\n',
+            "program.js": 'require("./lib/harness");\nconst { spawnSync } = require("child_process");\n'
+                          'spawnSync(process.env.TOOL, []);\n',
+            "esm.js": 'require("./lib/harness");\nimport("./lib/harness.js");\n',
+        }
+        for name, text in cases.items():
+            (self.root / "richos/app/ui/tests" / name).write_text(text)
+            declaration.write_text(declaration.read_text() + name + " @shell\n")
+        for name in cases:
+            with self.subTest(suite=name):
+                reason = evidence.contract_for(self.root, name).get("fresh", "")
+                self.assertIn("cannot follow everything %s loads" % name, reason)
+                self.assertIn("richos/app/ui/tests/%s:" % name, reason)
+        # A builtin, a node child, a bound tool and a declared call stay qualified.
+        (self.root / "richos/app/ui/tests/fine.js").write_text(
+            'require("./lib/harness");\nconst cp = require("node:child_process");\nrequire("fs");\n'
+            'cp.spawnSync(process.execPath, ["x"]);\ncp.execFileSync("git", ["status"]);\nconst c = "y";\nrequire(c);\n')
+        declaration.write_text(declaration.read_text() + "fine.js @shell\n")
+        self.assertIn("cannot follow", evidence.contract_for(self.root, "fine.js").get("fresh", ""))
+        family = {**self.family, "child_tools": ["git"],
+                  "dynamic": {"richos/app/ui/tests/fine.js": {"require(c)": "fixture"}}}
+        evidence.atomic(self.root / "richos/app/scripts/proof-inputs.json",
+                        {"schema": 1, "checks": {}, "families": {"ui-suite": family}})
+        self.assertEqual(evidence.contract_for(self.root, "fine.js").get("family"), "ui-suite")
+        self.assertEqual(evidence.contract_for(self.root, "py.js").get("family"), None)
+
+    def test_a_changed_harness_needs_its_review_renewed(self):
+        self.edit("richos/app/ui/tests/lib/harness.js", 'require("./ui-sources"); require("fs");\n')
+        self.assertIn("changed unit reader", self.identity(self.worktree)["fresh"])
+
+
 if __name__ == "__main__":
     unittest.main()

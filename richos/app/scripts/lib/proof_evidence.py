@@ -377,8 +377,10 @@ def _worktree_entry(path):
         return None
 
 
-def checkout_content(root):
-    """sha256 over the content git would land from the checkout at `root` (see above)."""
+def checkout_rows(root):
+    """Every (name, stage, mode, blob) git would land from the checkout at `root`, sorted.
+
+    Repository-relative names only: the same content in two checkouts gives the same rows."""
     root = Path(root)
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     def listing(*args):
@@ -397,11 +399,38 @@ def checkout_content(root):
     for name in differing:
         entry = _worktree_entry(root / os.fsdecode(name))
         entries[name] = {b"0": entry} if entry else {}
+    return [(name, stage, mode, blob) for name in sorted(entries)
+            for stage, (mode, blob) in sorted(entries[name].items())]
+
+
+def _rows_digest(rows):
     digest = hashlib.sha256()
-    for name in sorted(entries):
-        for stage, (mode, blob) in sorted(entries[name].items()):
-            digest.update(b"%s\0%s\0%s\0%s\n" % (name, stage, mode.encode(), blob.encode()))
+    for name, stage, mode, blob in rows:
+        digest.update(b"%s\0%s\0%s\0%s\n" % (name, stage, mode.encode(), blob.encode()))
     return digest.hexdigest()
+
+
+def checkout_content(root):
+    """sha256 over the content git would land from the checkout at `root` (see above)."""
+    return _rows_digest(checkout_rows(root))
+
+
+def rows_under(rows, names, rel):
+    """The rows of `rel` and everything under it (`names` is the sorted name column of `rows`)."""
+    import bisect
+    prefix = os.fsencode(rel.rstrip("/"))
+    start = bisect.bisect_left(names, prefix)
+    found = []
+    for index in range(start, len(rows)):
+        name = names[index]
+        if name != prefix and not name.startswith(prefix + b"/"):
+            # Names sort byte-wise, so `rel.x` and `rel-x` come between `rel` and `rel/`: skip
+            # them, and stop only once past every name that could still be under `rel/`.
+            if name > prefix + b"/\xff":
+                break
+            continue
+        found.append(rows[index])
+    return found
 
 
 # What an install is, by the name of the directory it lives in. A directory of this name that
@@ -611,6 +640,37 @@ def installed_dependencies(root, environment):
             "rust": rust_toolchain(root, environment)}
 
 
+def portable_dependencies(root, environment):
+    """installed_dependencies() bound by WHAT a UI suite loads, never by WHERE the checkout is.
+
+    installed_dependencies() keys the Playwright package by each absolute candidate path and binds
+    the checkout's own installs by name, so a worktree (which loads the main checkout's install
+    through harness.js's last candidate) and the main checkout (which loads its own) can never
+    agree, even running the same bytes. Here every present candidate, in the order harness.js
+    tries them, is bound by the content of the module directory it would load from; absent
+    candidates add nothing, so an install that appears where the harness looks first is a new
+    entry and changes the identity. A checkout install that is one of those module directories is
+    not bound twice; any other one still is, by name. Browser installs and the Rust toolchain are
+    read exactly as installed_dependencies() reads them: neither depends on the checkout path."""
+    root = Path(root).resolve()
+    chain, loaded = [], []
+    for candidate, folder in playwright_package_candidates(root, environment):
+        real = Path(os.path.realpath(candidate))
+        target = next((path for path in (Path(str(real) + suffix) for suffix in ("", ".js", ".json", ".node"))
+                       if path.exists()), None)
+        if target is None:
+            continue
+        module_root = Path(os.path.realpath(folder)) if folder is not None else _node_module_root(target)
+        if module_root in loaded:
+            continue
+        loaded.append(module_root)
+        chain.append(digest(path_identity(module_root)))
+    checkout = {name: value for name, value in checkout_installs(root).items()
+                if Path(os.path.realpath(root / name)) not in loaded}
+    return {"checkout": checkout, "playwright": playwright_installs(environment),
+            "playwright_package": chain, "rust": rust_toolchain(root, environment)}
+
+
 def _tool_digest(path):
     """A resolved tool's content digest, read again whenever its file changes."""
     real = os.path.realpath(path)
@@ -656,18 +716,44 @@ class InputSnapshot:
         self.inventories = {}
         self.checkouts = {}
         self.installs = {}
+        self.rows = {}
+        self.contents = {}
+        self.portables = {}
 
     def checkout(self, root):
         key = str(root)
         if key not in self.checkouts:
-            self.checkouts[key] = checkout_content(root)
+            if key in self.rows:
+                self.checkouts[key] = _rows_digest(self.rows[key][0])
+            else:
+                self.checkouts[key] = checkout_content(root)
         return self.checkouts[key]
+
+    def content(self, root, rel):
+        """The content git would land under `rel` (one file or a directory), without the
+        checkout's path: one listing per checkout per pass, shared by every path."""
+        root = str(root)
+        if root not in self.rows:
+            rows = checkout_rows(root)
+            self.rows[root] = (rows, [row[0] for row in rows])
+        key = (root, rel)
+        if key not in self.contents:
+            rows, names = self.rows[root]
+            found = rows_under(rows, names, rel)
+            self.contents[key] = _rows_digest(found) if found else {"absent": True}
+        return self.contents[key]
 
     def installed(self, root, environment):
         key = (str(root), *(environment.get(name) for name in INSTALL_ENVIRONMENT_NAMES))
         if key not in self.installs:
             self.installs[key] = installed_dependencies(root, environment)
         return self.installs[key]
+
+    def portable(self, root, environment):
+        key = (str(root), *(environment.get(name) for name in INSTALL_ENVIRONMENT_NAMES))
+        if key not in self.portables:
+            self.portables[key] = portable_dependencies(root, environment)
+        return self.portables[key]
 
     def path(self, path):
         key = str(Path(path).absolute())
@@ -731,6 +817,32 @@ class UnqualifiedReader(ValueError):
     """Changed reviewed code must execute fresh until its input review is renewed."""
 
 
+SHARED_FLOOR_KEYS = ("requires", "isolation", "subset_requires", "external_paths", "git_inputs")
+
+
+def shared_floor(contract, extra):
+    """The common requirements a recipe of this unit is held to: the unit's own `common` when it
+    declares one (a family unit, qualify_recipe), otherwise the qualification's shared floor."""
+    if isinstance(extra, dict) and "common" in extra:
+        return extra["common"] if isinstance(extra["common"], dict) else {}
+    return {key: contract[key] for key in SHARED_FLOOR_KEYS if key in contract}
+
+
+def qualification_slice(root, recipe):
+    """What of the shared qualification JSON a recipe is qualified by: its schema and review
+    pointer, the floor it is held to (shared_floor) and its own unit, pins included.
+
+    The whole file used to be one of every recipe's input paths, so renewing ANY unit's pin (a
+    reader of an unrelated engine test) changed every qualified identity and threw away every
+    reusable pass (PRD 2026-10-20: another unit's pin renewal must not). The prose review stays
+    a whole-file input (recipe_identity)."""
+    contract = json.loads((Path(root) / recipe["qualification"]).read_text())
+    unit = recipe.get("qualification_unit")
+    extra = contract.get("units", {}).get(unit) if unit is not None else None
+    return digest({"schema": contract.get("schema"), "review": contract.get("review"),
+                   "floor": shared_floor(contract, extra), "unit": unit, "qualified": extra})
+
+
 def qualify_recipe(root, recipe):
     """Check the execution recipe against its independently reviewed read contract.
 
@@ -751,15 +863,28 @@ def qualify_recipe(root, recipe):
             or not isinstance(contract.get("requires"), dict)
             or set(contract["requires"]) != fields):
         raise ValueError("invalid reviewed input qualification: " + qualification)
-    if contract.get("isolation") and recipe.get("isolation") != contract["isolation"]:
-        raise ValueError("input qualification requires isolation: " + contract["isolation"])
+    unit = recipe.get("qualification_unit")
+    extra = contract.get("units", {}).get(unit) if unit is not None else None
+    # A FAMILY UNIT CARRIES ITS OWN COMMON FLOOR (2026-10-20). The shared floor is the engine
+    # tier's: the private profile and the whole engine and runner scripts as inputs. A browser
+    # suite neither runs in that profile (it would lose the nightly's conditions and its browser
+    # installs) nor reads the engine. So a reviewed unit may replace the floor with its own
+    # `common`, and only a recipe of that unit's own family (contract_for derives those, from the
+    # authoritative declarations) may use it: a named recipe cannot borrow it to drop a floor.
+    floor = shared_floor(contract, extra)
+    if extra is not None and "common" in extra and (not extra.get("family")
+                                                    or recipe.get("family") != extra["family"]):
+        raise ValueError("unit qualification belongs to the %s family only: %s" % (extra.get("family"), unit))
+    if (not isinstance(floor.get("requires"), dict) or set(floor["requires"]) != fields):
+        raise ValueError("invalid common input floor for unit: " + str(unit))
+    if floor.get("isolation") and recipe.get("isolation") != floor["isolation"]:
+        raise ValueError("input qualification requires isolation: " + floor["isolation"])
+    if recipe.get("isolation") and not floor.get("isolation") and extra is not None and "common" in extra:
+        raise ValueError("unsupported execution profile for this family: " + recipe["isolation"])
     review = relative(contract.get("review"))
     if not (root / review).is_file():
         raise ValueError("input review is missing: " + review)
-    unit = recipe.get("qualification_unit")
-    extra = None
     if unit is not None:
-        extra = contract.get("units", {}).get(unit)
         if (not isinstance(extra, dict) or not extra.get("review")
                 or not extra.get("sources") or set(extra.get("requires", {})) != fields):
             raise ValueError("missing reviewed unit qualification: " + str(unit))
@@ -768,10 +893,10 @@ def qualify_recipe(root, recipe):
             if not (root / source).is_file() or file_digest(root / source) != expected:
                 raise UnqualifiedReader("changed unit reader requires qualification: " + source)
     for field in sorted(fields):
-        for values in (recipe[field], contract["requires"][field]):
+        for values in (recipe[field], floor["requires"][field]):
             if not isinstance(values, list) or any(not isinstance(v, str) or not v for v in values):
                 raise ValueError("invalid input list: " + field)
-        required = list(contract["requires"][field])
+        required = list(floor["requires"][field])
         if extra is not None:
             values = extra["requires"][field]
             if not isinstance(values, list) or any(not isinstance(v, str) or not v for v in values):
@@ -790,7 +915,7 @@ def qualify_recipe(root, recipe):
         if missing:
             raise ValueError("input qualification omits " + field + ": " + ", ".join(missing))
     external_paths = recipe.get("external_paths", [])
-    required_external = contract.get("external_paths", [])
+    required_external = floor.get("external_paths", [])
     if extra is not None:
         required_external = [*required_external, *extra.get("external_paths", [])]
     for values in (external_paths, required_external):
@@ -801,7 +926,7 @@ def qualify_recipe(root, recipe):
     if missing:
         raise ValueError("input qualification omits external_paths: " + ", ".join(missing))
     git_inputs = recipe.get("git_inputs", {})
-    git_required = [contract.get("git_inputs", {})]
+    git_required = [floor.get("git_inputs", {})]
     if extra is not None:
         git_required.append(extra.get("git_inputs", {}))
     for declaration in [git_inputs, *git_required]:
@@ -822,7 +947,7 @@ def qualify_recipe(root, recipe):
     if "subset" in recipe:
         subset = recipe["subset"]
         reviewed = extra.get("subset") if extra else None
-        common = contract.get("subset_requires")
+        common = floor.get("subset_requires")
         if (not isinstance(reviewed, dict) or not reviewed.get("review")
                 or not isinstance(common, dict)):
             raise ValueError("missing reviewed subset qualification")
@@ -835,11 +960,11 @@ def qualify_recipe(root, recipe):
                 for value in values:
                     relative(value)
         for field in ("paths", "inventories"):
-            floor = [*common[field], *reviewed["requires"][field]]
+            minimum = [*common[field], *reviewed["requires"][field]]
             if field == "paths":
-                floor.extend(extra["sources"])
-                floor.extend(extra["requires"]["paths"])
-            missing = [p for p in floor if not any(
+                minimum.extend(extra["sources"])
+                minimum.extend(extra["requires"]["paths"])
+            missing = [p for p in minimum if not any(
                 Path(p).is_relative_to(parent) for parent in subset[field])]
             if missing:
                 raise ValueError("subset qualification omits " + field + ": " + ", ".join(missing))
@@ -891,25 +1016,37 @@ def recipe_identity(root, recipe, environment, snapshot=None):
     if recipe.get("fresh"):
         return {"fresh": recipe["fresh"]}
     required = {"paths", "tools", "environment", "external", "qualification"}
-    if set(recipe) - {"isolation", "qualification_unit", "external_paths", "git_inputs", "subset"} != required or not recipe["qualification"]:
+    optional = {"isolation", "qualification_unit", "external_paths", "git_inputs", "subset", "family", "invocation"}
+    if set(recipe) - optional != required or not recipe["qualification"]:
         raise ValueError("incomplete verification input contract")
     root = Path(root).resolve()
     environment = identity_environment(environment)
     snapshot = snapshot or InputSnapshot()
     try:
-        qualification_paths = qualify_recipe(root, recipe)
+        qualification, review = qualify_recipe(root, recipe)
     except UnqualifiedReader as exc:
         return {"fresh": str(exc)}
+    # A family recipe (UI_FAMILY below) binds its paths by the content git would land, which
+    # carries no checkout path, so the same bytes in another worktree are the same input. Every
+    # other recipe keeps path_identity, which also binds ignored files under its roots.
+    family = recipe.get("family")
     paths = {}
     selected_paths = recipe.get("subset", {}).get("paths", recipe["paths"])
-    for rel in [*selected_paths, *qualification_paths]:
-        path = root / rel
+    for rel in selected_paths:
         if Path(rel).is_absolute() or ".." in Path(rel).parts:
             raise ValueError(f"input must be repository-relative: {rel}")
-        paths[rel] = digest(snapshot.path(path))
+        paths[rel] = digest(snapshot.content(root, rel) if family else snapshot.path(root / rel))
+    # The prose review is a whole-file authority; the JSON only as the slice this recipe is
+    # qualified by (qualification_slice).
+    paths[review] = digest(snapshot.path(root / review))
     tools = {}
     for name in recipe["tools"]:
         resolved = shutil.which(name, path=environment.get("RICHOS_VERIFICATION_TOOL_PATH", environment.get("PATH")))
+        if family:
+            # The interpreter itself is large (node is ~100 MB): read again only when its file
+            # changes (_tool_digest, the whole-checkout identity's reader), never once per pass.
+            tools[name] = {"path": resolved, "sha256": _tool_digest(resolved)} if resolved else {"absent": True}
+            continue
         tools[name] = ({"path": resolved, "input": snapshot.path(resolved)}
                        if resolved else {"absent": True})
         if name == "python3" and resolved and recipe.get("isolation"):
@@ -937,13 +1074,311 @@ def recipe_identity(root, recipe, environment, snapshot=None):
         profile = {"name": PRIVATE_PROFILE, "git_fixture": digest(GIT_FIXTURE),
                    "scratch_ledger_seed": digest("")}
     literal_external = {path: digest(snapshot.path(path)) for path in recipe.get("external_paths", [])}
-    return {"contract": digest(recipe), "paths": paths, "tools": tools, "profile": profile,
-            "inventories": {path: digest(snapshot.inventory(root / path))
-                            for path in recipe.get("subset", {}).get("inventories", [])},
-            "external_paths": literal_external,
-            "git_inputs": git_input_identity(root, recipe.get("git_inputs"), environment),
-            "environment": values, "external": external,
-            "platform": [platform.system(), platform.release(), platform.machine(), platform.mac_ver()[0], os.cpu_count()]}
+    identity = {"contract": digest(recipe), "paths": paths, "tools": tools, "profile": profile,
+                "qualification": qualification_slice(root, recipe),
+                "inventories": {path: digest(snapshot.inventory(root / path))
+                                for path in recipe.get("subset", {}).get("inventories", [])},
+                "external_paths": literal_external,
+                "git_inputs": git_input_identity(root, recipe.get("git_inputs"), environment),
+                "environment": values, "external": external,
+                "platform": [platform.system(), platform.release(), platform.machine(), platform.mac_ver()[0], os.cpu_count()]}
+    if family:
+        # What the suite executes that git does not track, bound by what loads rather than by
+        # where this checkout is (portable_dependencies).
+        identity["installed"] = snapshot.portable(root, environment)
+    return identity
+
+
+# ONE UI FAMILY ENTRY, RESOLVED FROM THE AUTHORITATIVE UI DECLARATIONS (2026-10-20).
+#
+# Every browser suite was keyed by the whole checkout, its path included, so a suite that passed
+# in the engineer's worktree ran again at the land (79 of 79 in nightly 68 and in the round 32
+# sidebar land, whose two stale checks the engineer never ran: verification reliability PRD,
+# richos-hq docs/prds/2026-10-20-verification-reliability.md). A suite has no row of its own in
+# `checks`; proof-inputs.json carries ONE `families.ui-suite` entry, and contract_for() derives a
+# suite's recipe from what already declares it:
+#   * ALL shipped UI, through ui-sources.js manifest().order (and `@allui` exactly as
+#     proof-for.sh computes it), plus the family's shipped resources: product code is never
+#     sliced feature by feature, so any shipped change, a startup source included, reruns it;
+#   * its own row in proof-for.ui-inputs, aliases expanded, `<dir>/` as the whole directory;
+#   * the suite file and every file it reaches by a relative `require` (the libraries, and the
+#     suites that are also modules of another), proof-for.sh's library rule;
+#   * every `shots-*` folder the suite file names, proof-for.sh's reference rule;
+#   * the family's common files and the tools, environment names and installs its review names.
+# So the identity binds at least every path whose change would SELECT the suite: a reuse is never
+# less safe than the selection it stands in for, and another suite's row, file or pictures are not
+# an input. A label with no row, a suite the family leaves unqualified (with its reason) and any
+# invocation other than `cd <suites> && node <suite>` (proof-run.py checks that, holding argv and
+# cwd) stay keyed by the whole checkout.
+UI_FAMILY = "ui-suite"
+_REQUIRE = re.compile(r"""require\(\s*(["'])(\.{1,2}/[^"']+)\1\s*\)""")
+# require(path.join(__dirname, "..", "lib", "harness")): the fixture suites' form.
+_REQUIRE_JOINED = re.compile(r"""require\(\s*path\.(?:join|resolve)\(\s*__dirname((?:\s*,\s*["'][^"']+["'])+)\s*\)\s*\)""")
+_UI_MANIFESTS = {}
+
+
+def ui_declaration(path):
+    """(rows, aliases) of proof-for.ui-inputs, read the way proof-for.sh reads it."""
+    rows, aliases = {}, {}
+    for line in Path(path).read_text().splitlines():
+        words = line.split("#", 1)[0].split()
+        if not words:
+            continue
+        if words[0].startswith("@"):
+            aliases[words[0][1:]] = words[1:]
+        elif words[0] in rows:
+            raise ValueError("proof-for.ui-inputs has two rows for " + words[0])
+        else:
+            rows[words[0]] = words[1:]
+    return rows, aliases
+
+
+def _shipped_stat(directory):
+    """(name, size, mtime) of every file under the shipped UI, tests and installs aside."""
+    found = []
+    for base, dirs, files in os.walk(directory):
+        dirs[:] = sorted(d for d in dirs if d != "node_modules" and not (d == "tests" and base == str(directory)))
+        for name in sorted(files):
+            try:
+                info = os.stat(os.path.join(base, name))
+            except OSError:
+                continue
+            found.append((os.path.join(base, name), info.st_size, info.st_mtime_ns))
+    return tuple(found)
+
+
+def ui_manifest(root, family):
+    """Repository-relative paths of ui-sources.js manifest().order, through the Node runtime.
+
+    Derived once per state of the shipped tree in a process: the derivation follows the shipped
+    files themselves, all of which every family identity binds by content."""
+    root = Path(root).resolve()
+    shipped = root / family["shipped"]
+    key = (str(root), _shipped_stat(shipped))
+    if key not in _UI_MANIFESTS:
+        search = os.pathsep.join([os.environ.get("PATH", ""), "/opt/homebrew/bin", "/usr/local/bin"])
+        node = shutil.which("node", path=search)
+        if not node:
+            raise ValueError("node is needed to read the shipped UI manifest")
+        library = root / family["manifest"]
+        result = subprocess.run(
+            [node, "-e", "process.stdout.write(JSON.stringify(require(process.argv[1]).manifest().order))",
+             str(library)], cwd=str(library.parent), capture_output=True, text=True, timeout=60,
+            stdin=subprocess.DEVNULL)
+        if result.returncode != 0:
+            raise ValueError("the shipped UI manifest refused: " + result.stderr.strip()[-300:])
+        order = json.loads(result.stdout)
+        if not isinstance(order, list) or not order or not all(isinstance(rel, str) for rel in order):
+            raise ValueError("the shipped UI manifest is not a list of files")
+        _UI_MANIFESTS[key] = [family["shipped"] + "/" + rel for rel in order]
+    return list(_UI_MANIFESTS[key])
+
+
+def all_ui(root, family):
+    """`@allui` exactly as proof-for.sh computes it: every .js, .css and .html under the shipped
+    UI, tests and node_modules aside."""
+    root = Path(root)
+    found = []
+    for path, _size, _mtime in _shipped_stat(root / family["shipped"]):
+        if path.endswith((".js", ".css", ".html")):
+            found.append(os.path.relpath(path, root))
+    return found
+
+
+def require_closure(root, *starts):
+    """Every start and every file it reaches by a relative `require` (a literal `./`/`../` path or
+    `path.join(__dirname, ...)` of literals), repository-relative."""
+    root = Path(root).resolve()
+    seen, todo = set(), [Path(os.path.normpath(start)) for start in starts]
+    while todo:
+        current = todo.pop()
+        if current in seen or not (current == root or root in current.parents):
+            continue
+        seen.add(current)
+        if current.suffix not in (".js", ".cjs", ".mjs"):
+            continue
+        try:
+            text = current.read_text(errors="replace")
+        except OSError:
+            continue
+        targets = [match.group(2) for match in _REQUIRE.finditer(text)]
+        targets += [os.path.join(*re.findall(r"""["']([^"']+)["']""", match.group(1)))
+                    for match in _REQUIRE_JOINED.finditer(text)]
+        for target in targets:
+            base = current.parent / target
+            for candidate in (base, Path(str(base) + ".js"), Path(str(base) + ".json"), base / "index.js"):
+                if candidate.is_file():
+                    todo.append(Path(os.path.normpath(candidate)))
+                    break
+    return sorted(os.path.relpath(path, root) for path in seen)
+
+
+# WHAT A SUITE'S CLOSURE LOADS MUST BE FOLLOWED TO THE BOTTOM, OR THE SUITE IS NOT QUALIFIED
+# (review rv-20261020T054118Z-26a24a78-1851: thread-switch.js runs contrast.py, which imports
+# qa/lib/qaimg.py, and a changed qaimg.py flipped its verdict while the identity stood still).
+# require_closure follows the loads it can read exactly: a literal relative `require` and
+# `require(path.join(__dirname, ...literals))`. Every other load in the closure is judged here:
+#   * a child node process (process.execPath): allowed; the scripts it runs are on the suite's
+#     row, and their own requires are followed like the suite's;
+#   * a literal child program the family binds by content (`child_tools`): allowed;
+#   * a Node builtin module: allowed;
+#   * anything else (a Python, Cargo or shell child, a computed program, a computed `require`,
+#     an installed package, a dynamic `import(`): the suite is NOT qualified, with the file and
+#     line, unless the family entry declares that exact call in `dynamic` with its reason.
+_CHILD_CALL = re.compile(r"""(?:\b(spawnSync|spawn|execFileSync|execFile|execSync|fork)|(?<![.\w$])(exec))\(\s*([^,)]*)""")
+_ANY_REQUIRE = re.compile(r"""(?<![.\w$])require\(\s*([^)]*)\)""")
+_DYNAMIC_IMPORT = re.compile(r"""(?<![.\w$])import\(""")
+_LITERAL = re.compile(r"""^(["'])([^"']*)\1$""")
+_JOINED_ARG = re.compile(r"""^path\.(?:join|resolve)\(\s*__dirname(?:\s*,\s*["'][^"']+["'])+\s*$""")
+_BUILTINS = {}
+
+
+def node_builtins():
+    """Node's own module names, from the Node runtime, once per process."""
+    search = os.pathsep.join([os.environ.get("PATH", ""), "/opt/homebrew/bin", "/usr/local/bin"])
+    node = shutil.which("node", path=search)
+    if not node:
+        raise ValueError("node is needed to read its builtin module list")
+    if node not in _BUILTINS:
+        result = subprocess.run([node, "-p", "JSON.stringify(require('module').builtinModules)"],
+                                capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+        if result.returncode != 0:
+            raise ValueError("cannot read Node's builtin modules")
+        _BUILTINS[node] = frozenset(json.loads(result.stdout))
+    return _BUILTINS[node]
+
+
+_LOAD_SCANS = {}
+
+
+def _file_loads(path):
+    """[(line, kind, call, arg)] for every child launch, `require` and `import(` in a file outside
+    comment lines. Read again whenever the file's stat identity changes, as _tool_digest is."""
+    info = os.stat(path)
+    key = (str(path), info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino)
+    if key not in _LOAD_SCANS:
+        text = Path(path).read_text(errors="replace")
+        found = []
+        if "require(" in text or "import(" in text or "spawn" in text or "exec" in text or "fork(" in text:
+            def line_of(offset):
+                start = text.rfind("\n", 0, offset) + 1
+                end = text.find("\n", offset)
+                line = text[start:end if end >= 0 else len(text)].strip()
+                return text.count("\n", 0, offset) + 1, line.startswith(("//", "*", "/*"))
+            for pattern, kind in ((_CHILD_CALL, "child"), (_ANY_REQUIRE, "require"), (_DYNAMIC_IMPORT, "import")):
+                for match in pattern.finditer(text):
+                    number, comment = line_of(match.start())
+                    if comment:
+                        continue
+                    if kind == "child":
+                        arg = match.group(3).strip()
+                        found.append((number, kind, "%s(%s" % (match.group(1) or match.group(2), arg), arg))
+                    elif kind == "require":
+                        arg = match.group(1).strip()
+                        found.append((number, kind, "require(%s)" % arg, arg))
+                    else:
+                        found.append((number, kind, "import(", ""))
+        _LOAD_SCANS[key] = sorted(found)
+    return _LOAD_SCANS[key]
+
+
+def unfollowed_loads(root, closure, family):
+    """['<file>:<line> <call>'] for every load in the closure the family cannot follow (above)."""
+    root = Path(root)
+    declared = family.get("dynamic", {})
+    tools = set(family.get("child_tools", []))
+    builtins = None
+    found = []
+    for rel in closure:
+        if not rel.endswith((".js", ".cjs", ".mjs")):
+            continue
+        allowed = declared.get(rel, {})
+        try:
+            loads = _file_loads(root / rel)
+        except OSError:
+            continue
+        for number, kind, call, arg in loads:
+            if call in allowed:
+                continue
+            literal = _LITERAL.match(arg)
+            if kind == "child" and (arg == "process.execPath" or (literal and literal.group(2) in tools)):
+                continue
+            if kind == "require":
+                if literal and literal.group(2).startswith(("./", "../")):
+                    continue  # require_closure follows it
+                if _JOINED_ARG.match(arg):
+                    continue
+                if literal:
+                    builtins = builtins if builtins is not None else node_builtins()
+                    if literal.group(2).removeprefix("node:") in builtins:
+                        continue
+            found.append("%s:%d %s" % (rel, number, call))
+    return found
+
+
+def ui_family_recipe(root, label, family):
+    """The recipe of UI suite `label` (UI_FAMILY above), or {"fresh": reason}."""
+    root = Path(root).resolve()
+    unqualified = family.get("unqualified", {})
+    if label in unqualified:
+        return {"fresh": "the %s family leaves %s unqualified: %s" % (UI_FAMILY, label, unqualified[label])}
+    suites = root / family["suites"]
+    rows, aliases = ui_declaration(root / family["declaration"])
+    if label not in rows or not (suites / label).is_file():
+        return {"fresh": "input qualification not yet declared for " + label}
+    paths = set(family["paths"]) | set(ui_manifest(root, family))
+
+    def expand(tokens, depth=0):
+        if depth > 8:
+            raise ValueError("proof-for.ui-inputs aliases nest too deeply")
+        for token in tokens:
+            if token == "@allui":
+                paths.update(all_ui(root, family))
+            elif token.startswith("@"):
+                if token[1:] not in aliases:
+                    raise ValueError("proof-for.ui-inputs: no alias " + token)
+                expand(aliases[token[1:]], depth + 1)
+            else:
+                paths.add(token.rstrip("/"))
+
+    expand(rows[label])
+    # From the suite AND every script its row names: a fixture suite or tool it runs as a child
+    # process reads what that script requires, which the suite's own requires never reach
+    # (review rv-20261020T044017Z-ebbb640b-fc3b, P2: a child's reads must be bound before its
+    # parent's pass is reused). A folder a child lists is the row's to declare (`<dir>/`).
+    scripts = [root / rel for rel in sorted(paths) if rel.endswith((".js", ".cjs", ".mjs"))]
+    closure = require_closure(root, suites / label, *[path for path in scripts if path.is_file()])
+    paths.update(closure)
+    unfollowed = unfollowed_loads(root, closure, family)
+    if unfollowed:
+        return {"fresh": "the %s family cannot follow everything %s loads, so it stays unqualified: %s%s" % (
+            UI_FAMILY, label, "; ".join(unfollowed[:4]),
+            " (and %d more)" % (len(unfollowed) - 4) if len(unfollowed) > 4 else "")}
+    text = (suites / label).read_text(errors="replace")
+    for folder in sorted(suites.iterdir()):
+        if folder.is_dir() and folder.name.startswith("shots-") and re.search(
+                re.escape(folder.name) + r"(?![A-Za-z0-9_-])", text):
+            paths.add(os.path.relpath(folder, root))
+    for rel in paths:
+        if Path(rel).is_absolute() or ".." in Path(rel).parts:
+            raise ValueError("a UI input must be repository-relative: " + rel)
+    return {"family": UI_FAMILY, "invocation": {"cwd": family["suites"], "argv": ["node", label]},
+            "paths": sorted(paths), "tools": list(family["tools"]),
+            "environment": list(family["environment"]), "external": list(family.get("external", [])),
+            "qualification": family["qualification"], "qualification_unit": family["qualification_unit"]}
+
+
+def family_invocation(root, recipe, cwd, argv):
+    """`recipe` when the runner item runs exactly the invocation its family qualifies, else fresh.
+
+    Asked by the callers that hold the item's argv and cwd (proof-run.py input_identity): a known
+    label is not enough, so a new or different command never inherits the family's review."""
+    expected = recipe.get("invocation") or {}
+    if (os.path.realpath(cwd) == os.path.realpath(Path(root) / expected.get("cwd", "\0"))
+            and list(argv) == expected.get("argv")):
+        return recipe
+    return {"fresh": "the %s family qualifies only `cd %s && %s`, not this invocation" % (
+        recipe.get("family"), expected.get("cwd"), " ".join(expected.get("argv") or []))}
 
 
 def contract_for(root, label):
@@ -954,7 +1389,15 @@ def contract_for(root, label):
         return {"fresh": "no committed input contract"}
     if data.get("schema") != 1 or not isinstance(data.get("checks"), dict):
         raise ValueError("invalid proof-inputs.json")
-    return data["checks"].get(label, {"fresh": "input qualification not yet declared for " + label})
+    if label in data["checks"]:
+        return data["checks"][label]
+    family = (data.get("families") or {}).get(UI_FAMILY)
+    if family and label.endswith(".js") and "/" not in label and " " not in label:
+        try:
+            return ui_family_recipe(root, label, family)
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+            return {"fresh": "the %s family could not resolve %s: %s" % (UI_FAMILY, label, exc)}
+    return {"fresh": "input qualification not yet declared for " + label}
 
 
 def encode_item(item, root, logdir):
@@ -1034,7 +1477,7 @@ VERIFIES_OWN_INPUTS = frozenset(("engine receipts", "engine scripts/verification
 class Record:
     def __init__(self, root, logdir, items, source, identities, previous=None,
                  current_source=None, current_identity=None, current_identities=None, explain=None,
-                 current_commit=None):
+                 current_commit=None, selection=None):
         refuse_duplicates(items)  # before anything is written: a saved plan never holds one
         self.root, self.logdir = str(root), Path(logdir)
         # What changed and who could have changed it, appended to an invalidation note, so a
@@ -1053,6 +1496,10 @@ class Record:
         self.plan = {"schema": 1, "root": self.root, "source": source,
                      "items": [encode_item(item, root, logdir) for item in items],
                      "identities": identities, "previous": str(previous) if previous else None}
+        if selection is not None:
+            # What the plan was selected from (proof-run.py selected_by): not an input of any
+            # check, so exact resume (reuse) compares items, never this.
+            self.plan["selection"] = selection
         atomic(self.logdir / "plan.json", self.plan)
         self.results = {}
         for item in items:

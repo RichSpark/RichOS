@@ -267,12 +267,34 @@ def _git_env():
 # found only when v1.2.1 was merged into main). A land onto a release branch runs the check a
 # land onto main runs.
 LAND_TARGET_ENV = "RICHOS_AUTOCHECK_LAND_TARGET"
+# The author's saved proof runs, offered to the merge gate as evidence to validate, never as a
+# verdict (richos autocheck.py AUTHOR_RUNS; the runs come from the handover reports,
+# attach_proof_reports).
+AUTHOR_RUNS_ENV = "RICHOS_AUTOCHECK_AUTHOR_RUNS"
 
 
-def _land_env(target):
+def _land_env(target, author_runs=()):
     env = _git_env()
     env[LAND_TARGET_ENV] = target
+    if author_runs:
+        env[AUTHOR_RUNS_ENV] = os.pathsep.join(author_runs)
+    else:
+        env.pop(AUTHOR_RUNS_ENV, None)
     return env
+
+
+def _author_runs(chain, tip):
+    """The saved proof runs this work's handover reports point at for exactly commit `tip`.
+
+    Only pointers: the gate hands them to the runner, which re-reads every input identity on the
+    tree being landed and reuses only what still matches (proof_evidence.reuse)."""
+    runs = []
+    for rec in chain:
+        for w in live_workspaces(rec):
+            report = w.get("proof_report") or {}
+            if report.get("run") and report.get("head") == tip and report["run"] not in runs:
+                runs.append(report["run"])
+    return runs
 
 
 def git(repo, *args, **kw):
@@ -2265,6 +2287,9 @@ def record_end(session_id, agent_id, signal_name, detail=""):
     # after the run has ended is ever compared against them.
     observe_created_refs(rec, all_open=True)
     event("end", key=rec["key"], signal=signal_name, detail=detail)
+    if signal_name == "SubagentStop":
+        # A normal end the deferral above permitted: the same pointer a handover gets.
+        attach_proof_reports(rec["key"], "end")
     return rec
 
 
@@ -2602,7 +2627,124 @@ def record_handed_in(session_id, agent_id="", name=""):
         rec["handed_in"] = now()
         save_agent(rec)
     event("handed-in", key=rec["key"])
+    attach_proof_reports(rec["key"], "handed-in")
     return rec
+
+
+# THE HANDOVER'S PROOF REPORT (verification reliability PRD 2026-10-20, step 2).
+#
+# Nothing an agent handed over said which of its selected checks had run: the round 32 sidebar
+# was handed over after its authors ran four suites of 78, and the land found the two stale
+# checks one at a time. The runner already keeps every run's plan, outcomes and summary in this
+# checkout's proof-run history, and the plan names the range it was selected from. So when the
+# platform records a handover (TaskCompleted) or a normal end (SubagentStop), each workspace
+# record gets a POINTER to the newest saved run of that checkout's current HEAD, with the
+# runner's own counts and every check that did not pass, by name and state. It is a report,
+# never proof: whoever integrates validates the saved evidence afresh (the runner's input
+# identities, reuse()). Reading it is bounded (at most PROOF_REPORT_RUNS saved runs, no
+# hashing, no history scan) and comes after the lifecycle fact is saved, so a missing,
+# unreadable or slow report can never delay or prevent that fact.
+PROOF_REPORT_RUNS = 5
+PROOF_REPORT_SECONDS = 3.0
+PROOF_RUN_NAME = re.compile(r"\d{8}T\d{6}Z(-[A-Za-z0-9_]+)?")
+
+
+def _proof_history(path):
+    """This checkout's proof-run history directory, as proof-run.py default_logdir names it."""
+    here = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "lib")
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import machine_settings
+    base = str(machine_settings.state("proof-runs", "RICHOS_PROOF_RUN_DIR"))
+    return os.path.join(base, hashlib.sha256(path.encode()).hexdigest()[:12])
+
+
+def proof_report(path, deadline=None):
+    """The pointer for the checkout at `path` (above), or {"unavailable": why}."""
+    deadline = deadline or (time.monotonic() + PROOF_REPORT_SECONDS)
+    try:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        head = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True,
+                              timeout=5, stdin=subprocess.DEVNULL, env=env)
+        if head.returncode != 0:
+            return {"unavailable": "cannot read the workspace's HEAD"}
+        head = head.stdout.strip()
+        history = _proof_history(path)
+        try:
+            names = sorted((n for n in os.listdir(history) if PROOF_RUN_NAME.fullmatch(n)), reverse=True)
+        except FileNotFoundError:
+            return {"unavailable": "no saved proof run for this checkout", "head": head}
+        for name in names[:PROOF_REPORT_RUNS]:
+            if time.monotonic() > deadline:
+                return {"unavailable": "the report's time budget ran out", "head": head}
+            run = os.path.join(history, name)
+            try:
+                with open(os.path.join(run, "plan.json")) as stream:
+                    plan = json.load(stream)
+            except (OSError, ValueError):
+                continue
+            source = plan.get("source") or {}
+            if plan.get("root") != path or source.get("commit") != head:
+                continue
+            selection = plan.get("selection") or {}
+            report = {"run": run, "head": head, "candidate": selection.get("candidate"),
+                      "base": selection.get("base"), "mode": selection.get("mode"),
+                      "arguments": selection.get("arguments") or selection.get("commands"),
+                      "planned": len(plan.get("items") or [])}
+            try:
+                with open(os.path.join(run, "summary.json")) as stream:
+                    summary = json.load(stream)
+            except (OSError, ValueError):
+                report["unavailable"] = "the run has no readable summary (still running, or ended without one)"
+                return report
+            rows = summary.get("checks") or []
+            counts = {}
+            for row in rows:
+                counts[row.get("result")] = counts.get(row.get("result"), 0) + 1
+            reused = sum(1 for row in rows if row.get("reused_from"))
+            unresolved = [{"check": row.get("check"), "result": row.get("result"),
+                           "why": (row.get("not_run") or {}).get("why")}
+                          for row in rows if row.get("result") != "passed"]
+            report.update(outcomes=counts, reused=reused, unresolved=unresolved,
+                          crashed=summary.get("crashed"))
+            report["line"] = ("%d planned, %d passed (%d of them reused)%s" % (
+                report["planned"], counts.get("passed", 0), reused,
+                "; NOT complete: " + ", ".join("%s (%s)" % (u["check"], u["why"] or u["result"])
+                                               for u in unresolved[:20])
+                + (" and %d more" % (len(unresolved) - 20) if len(unresolved) > 20 else "")
+                if unresolved else "; every planned check passed"))
+            if selection.get("candidate") and selection["candidate"] != head:
+                report["line"] += "; the plan's candidate %s is not HEAD" % selection["candidate"][:12]
+            return report
+        return {"unavailable": "no saved proof run of HEAD %s" % head[:12], "head": head}
+    except Exception as exc:  # noqa: BLE001  (a report never breaks the lifecycle fact it follows)
+        return {"unavailable": "%s: %s" % (type(exc).__name__, exc)}
+
+
+def attach_proof_reports(key, why):
+    """Attach proof_report() to each live workspace of record `key`; never raises."""
+    try:
+        rec = load_agent(key)
+        if not rec:
+            return
+        deadline = time.monotonic() + PROOF_REPORT_SECONDS
+        reports = {w["path"]: dict(proof_report(w["path"], deadline), at=iso(), on=why)
+                   for w in live_workspaces(rec) if w.get("path")}
+        if not reports:
+            return
+        with Lock():
+            rec = load_agent(key)
+            if not rec:
+                return
+            for w in rec.get("workspaces") or []:
+                if w.get("path") in reports:
+                    w["proof_report"] = reports[w["path"]]
+            save_agent(rec)
+        event("proof-report", key=key, on=why,
+              detail="; ".join("%s: %s" % (os.path.basename(p), r.get("line") or r.get("unavailable"))
+                               for p, r in sorted(reports.items()))[:600])
+    except Exception:  # noqa: BLE001
+        return
 
 
 def _resolve(ref, session_id=""):
@@ -5339,17 +5481,19 @@ def merge_and_land(ref, me="", message=""):
             # a background script were refused after the lead's turn end released
             # the lease between their steps; operator_fences.land_process).
             _fence_program().register_land(main)
+            # The author's own saved runs of exactly this tip, offered to the gate for validation.
+            offered = _author_runs(chain, t)
             if in_main:
                 before = git(main, "rev-parse", "HEAD")[1].strip()
                 # git's own checks (pre-merge-commit) run here and may take minutes.
                 r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True,
-                                   env=_land_env(target))
+                                   env=_land_env(target, offered))
                 if r.returncode != 0:
                     raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed:\n%s\n%s"
                                     % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
                                        _abort_own_merge(main, before, t)))
             else:
-                _merge_in_temporary_checkout(main, target, args, b)
+                _merge_in_temporary_checkout(main, target, args, b, offered)
             merged.append((repo, b))
             event("merged", key=rec["key"], repo=repo, branch=b, into=target)
         return merged, land(rec["key"], me, keep_ignored=True)
@@ -5385,11 +5529,12 @@ def _merges_in_main_checkout(main, target, b):
     return False
 
 
-def _merge_in_temporary_checkout(main, target, args, b):
+def _merge_in_temporary_checkout(main, target, args, b, author_runs=()):
     """Runs `git merge` (with git's own hooks and checks) in a temporary
     checkout of `target` under this tool's state directory, then removes that
     checkout. A refused merge commits nothing, so `target` has not moved; the
-    checkout is removed either way."""
+    checkout is removed either way. `author_runs` are offered to the gate
+    (_land_env)."""
     _ensure_dirs()
     parent = _p("merge-checkouts")
     os.makedirs(parent, exist_ok=True)
@@ -5402,7 +5547,8 @@ def _merge_in_temporary_checkout(main, target, args, b):
                         "landed:\n%s" % (b, target, rc, (out + err).strip()[-2000:]))
     try:
         # git's own checks (pre-merge-commit) run here and may take minutes.
-        r = subprocess.run(["git", "-C", path] + args, capture_output=True, text=True, env=_land_env(target))
+        r = subprocess.run(["git", "-C", path] + args, capture_output=True, text=True,
+                           env=_land_env(target, author_runs))
     finally:
         left = _remove_temporary_checkout(main, path)
     if r.returncode != 0:
