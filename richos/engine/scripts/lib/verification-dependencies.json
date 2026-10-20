@@ -14060,7 +14060,7 @@
     },
     "scripts/lib/stall_watch.py#review-watch-helpers": {
       "source": "scripts/lib/stall_watch.py",
-      "sha256": "823207b2f47a6c991f5407fc4acb4237cc48a0eb7865a6816c579aa59682812f",
+      "sha256": "6b83f89a619c40089f14b535eb4b52b7d89618c3cf5ac8bc1432e99530f51fc5",
       "evidence": "Added 2026-10-09 (second review slice 4) for review_watch.py, which imports this module and uses its helpers; the --notice path stays bound by scripts/lib/stall_watch.py#notice. Module load: standard-library imports, the sibling imports resource_waits and escalations (neither reads configuration at import), constants. Helpers review_watch.py calls: hhmm, _env_float, _read_json/_write_json (JSON state files it names), _load (a module by fixed path, None when absent), Sources(engine_root) (loads mega-lander/workspaces.py by fixed path, loads richos/app/scripts/lib/proof_slots.py beside the engine without calling it, imports sibling agent_hold.py without calling it; reserve.py is loaded only by cpu_busy, which review_watch never calls), thresholds (environment STALL_WATCH_SILENT_MINUTES, STALL_WATCH_SELF_WAIT_MINUTES, STALL_WATCH_REPEAT_MINUTES and, through resource_waits.wait_minutes, RICHOS_RESOURCE_WAIT_MINUTES), _git_last_commit (git log -1 in the workspace), _transcript (workspaces.platform_agent_transcript), _try_lock/lock_held (flock on a named file), and in the monitor loop only session_alive_check (ps) and _nap. No orchestration.config read and no engine execution. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names).",
       "keys": [],
       "edges": [
@@ -15806,7 +15806,7 @@
     },
     "scripts/lib/stall_watch.py#notice": {
       "source": "scripts/lib/stall_watch.py",
-      "sha256": "823207b2f47a6c991f5407fc4acb4237cc48a0eb7865a6816c579aa59682812f",
+      "sha256": "6b83f89a619c40089f14b535eb4b52b7d89618c3cf5ac8bc1432e99530f51fc5",
       "evidence": "--notice parses arguments and prints fixed text; its numbers are this file's constants or the STALL_WATCH_* and RICHOS_RESOURCE_WAIT_MINUTES environment overrides. It returns before the registry, the slot line or the CPU sampler is loaded. The module imports resource_waits.py, which reads no configuration at import. Renewed 2026-10-01: the module also imports escalations.py (the ESCALATION watch), which reads no configuration at import; --notice prints fixed text about it and reads neither the ledger nor any transcript. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names).",
       "keys": [],
       "edges": [
@@ -16337,8 +16337,8 @@
     },
     "scripts/lib/host_child.py": {
       "source": "scripts/lib/host_child.py",
-      "sha256": "ea30263162725cc1a26a441e9df2437312bee76de51e97e1c9f39630c3208788",
-      "evidence": "Added 2026-10-20 for the RichOS app host's watcher children (--monitor --host-json of quota-watch, stall-watch and codex-watch). Standard-library imports and constants at load; no configuration read. start() reads and removes RICHOS_WATCH_HOST and compares os.getppid(); session() reads the JSON file RICHOS_WATCH_LEAD names and sets or removes RICHOS_SESSION_ID; line() is a JSON render. No orchestration.config read, no subprocess.",
+      "sha256": "fd3850480a309689361e3006e57808300f0cd63fe359b22f7dafa0b5ae41df25",
+      "evidence": "Added 2026-10-20 for the RichOS app host's watcher children (--monitor --host-json of quota-watch, stall-watch and codex-watch). Standard-library imports and constants at load; no configuration read. start() reads and removes RICHOS_WATCH_HOST and compares os.getppid(); session() reads the JSON file RICHOS_WATCH_LEAD names and sets or removes RICHOS_SESSION_ID; line() is a JSON render. No orchestration.config read, no subprocess. Renewed 2026-10-20 (review rv-20261020T132202Z-c5ab9358-2de8): started(sid) reads the same file's numeric started field when its session is sid, and nothing when RICHOS_WATCH_LEAD is unset; still no configuration and no subprocess.",
       "keys": [],
       "edges": []
     }
@@ -16719,7 +16719,7 @@
         "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
         "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
-        "scripts/lib/host_child.py": "ea30263162725cc1a26a441e9df2437312bee76de51e97e1c9f39630c3208788"
+        "scripts/lib/host_child.py": "fd3850480a309689361e3006e57808300f0cd63fe359b22f7dafa0b5ae41df25"
       }
     },
     "scripts/hooks/root-contract.test.sh": {
@@ -16794,7 +16794,7 @@
         "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
         "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
-        "scripts/lib/host_child.py": "ea30263162725cc1a26a441e9df2437312bee76de51e97e1c9f39630c3208788"
+        "scripts/lib/host_child.py": "fd3850480a309689361e3006e57808300f0cd63fe359b22f7dafa0b5ae41df25"
       }
     },
     "scripts/hooks/contract-integrity.test.sh": {
@@ -17050,7 +17050,7 @@
         "scripts/lib/shared_scratchpad.py": "3f246169938d8471e79b09b272118401d836fcd55f485397c8ba142bdd23adf3",
         "ass-kicker/tests/record-claims.replay.py": "094a016f81b059134abe4293ceef446032f0ddafe433042a49f53ac4d6f5b0cd",
         "scripts/hooks/guard-no-shell-c.sh": "dbd0dfb97e292c47b04cfce97b09e3fb18c642b7fd88de21850a4d255069094e",
-        "scripts/lib/host_child.py": "ea30263162725cc1a26a441e9df2437312bee76de51e97e1c9f39630c3208788"
+        "scripts/lib/host_child.py": "fd3850480a309689361e3006e57808300f0cd63fe359b22f7dafa0b5ae41df25"
       }
     },
     "scripts/hooks/mechanical-findings.test.sh": {

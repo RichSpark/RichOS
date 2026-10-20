@@ -238,7 +238,6 @@ pub(crate) mod fixture {
         std::fs::write(sandbox.join("slots/limit"), "1\n").unwrap();
         std::fs::write(sandbox.join("lead.jsonl"), "").unwrap();
         let path = |p: &str| sandbox.join(p).display().to_string();
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
         let mut env = BTreeMap::new();
         env.insert("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into());
         env.insert("HOME".into(), path("home"));
@@ -248,7 +247,9 @@ pub(crate) mod fixture {
             ("RICHOS_PROOF_RUN_SLOTS_DIR", path("slots")), ("TESTVM_ROOT", path("testvm")),
             ("RICHOS_AGENT_HOLD_DIR", path("hold")), ("RICHOS_TEST_DEVICES_DIR", path("devices")),
             ("RICHOS_ESCALATION_LEDGER", path("escalations.jsonl")), ("STALL_WATCH_LEAD_TRANSCRIPT", path("lead.jsonl")),
-            ("STALL_WATCH_SESSION_START", (now - 120).to_string()), ("STALL_WATCH_CPU_BUSY", "30".into()),
+            // No STALL_WATCH_SESSION_START: the lead's start is the one the host writes beside its
+            // session (review rv-20261020T132202Z-c5ab9358-2de8), as in the app.
+            ("STALL_WATCH_CPU_BUSY", "30".into()),
             ("STALL_WATCH_STATE_DIR", path("stall-state")), ("STALL_WATCH_POLL_SECONDS", "0.2".into()),
             ("CODEX_WATCH_STATE_DIR", path("codex-state")), ("CODEX_WATCH_POLL_SECONDS", "0.2".into()),
             ("CODEX_WATCH_CHANNELS", path("to-rich.md")),
@@ -271,10 +272,11 @@ pub(crate) mod fixture {
             {"rate_limits": {"five_hour": {"used_percentage": used, "resets_at": resets}}}).to_string()).unwrap();
     }
 
-    /// A teammate's `proceeding` escalation for the lead, raised a minute ago (after the lead's
-    /// session started), in the fixture ledger.
+    /// A teammate's `proceeding` escalation for the lead, raised now (after the lead started,
+    /// and before stall-watch's first look when written right after it starts), in the fixture
+    /// ledger.
     pub fn escalation(sandbox: &Path, id: &str) {
-        let raised = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 60;
+        let raised = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
         let raised = crate::operator_claim::iso_utc(raised);
         let row = serde_json::json!({"event": "Escalation", "id": id, "raised": raised, "teammate": "fixture-mate",
             "worktree": sandbox.join("no-such-worktree"), "branch": "cc/fixture-mate", "repo": "fixture", "head": "",

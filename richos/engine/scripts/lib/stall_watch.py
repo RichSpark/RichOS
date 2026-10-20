@@ -1172,8 +1172,11 @@ def lead_transcript(src, sid):
 def session_started(src, sid):
     """Epoch seconds this session's claude process started, or None.
 
-    STALL_WATCH_SESSION_START pins it for the test suite. Else the platform's
-    own record of the process (<config>/sessions/<pid>.json, startedAt in ms),
+    STALL_WATCH_SESSION_START pins it for the test suite. Under the app host
+    (--host-json), the time the host started that lead (host_child.started):
+    the lead is this watcher's sibling there, so the lookup below, which goes
+    through this process's ancestry, finds nothing. Else the platform's own
+    record of the process (<config>/sessions/<pid>.json, startedAt in ms),
     else the OS's start time for that pid. A resumed session is a new process,
     so its backlog stays the SessionStart block's and the Stop hook's."""
     pinned = (os.environ.get("STALL_WATCH_SESSION_START") or "").strip()
@@ -1182,6 +1185,9 @@ def session_started(src, sid):
             return float(pinned)
         except ValueError:
             pass
+    hosted = host_child.started(sid)
+    if hosted is not None:
+        return hosted
     if src.ws is None:
         return None
     try:

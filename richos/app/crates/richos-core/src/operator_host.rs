@@ -567,6 +567,10 @@ fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
+fn unix_seconds() -> u64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
 // =============================================================================================
 // the host
 // =============================================================================================
@@ -698,6 +702,12 @@ pub struct OperatorHost {
 struct TeamLead {
     /// Its session; `None` until a lead starts in this launch.
     session: Option<String>,
+    /// When each lead of this launch was started (Unix seconds, taken just before its launch),
+    /// by session. Written beside the session for the watchers: the lead is their sibling, so
+    /// they cannot find its start through their own ancestry, and without it an escalation
+    /// raised before stall-watch's first look counts as backlog (review
+    /// rv-20261020T132202Z-c5ab9358-2de8).
+    started: HashMap<String, u64>,
     /// Leads started this launch. A notice is kept only if none started since it looked for a
     /// running lead, so a lead that starts meanwhile is never passed over (its start hands over
     /// what was kept before it, under this lock).
@@ -745,7 +755,7 @@ impl OperatorHost {
             team_lead: Mutex::new(TeamLead::default()),
         });
         // No lead runs at launch: the watchers watch for none until one starts.
-        host.write_team_lead(None);
+        host.write_team_lead(None, None);
         host
     }
 
@@ -817,6 +827,9 @@ impl OperatorHost {
         let (tx, rx) = channel::<LeadEvent>();
         let sink: Arc<dyn LeadSink> = Arc::new(ConversationSink(Mutex::new(tx)));
         let fences = self.launcher.fences();
+        // Taken before the launch, so it is never later than the lead's own start: an escalation
+        // its SessionStart already showed is still recognized as reached, by its transcript.
+        let launched_at = unix_seconds();
         let lead = self.launcher.launch(&conversation.key, &conversation.title, &start, &conversation.paths, sink)?;
         let host = Arc::clone(self);
         let key = conversation.key.clone();
@@ -842,7 +855,7 @@ impl OperatorHost {
         // His team's watchers speak to this lead now, and what they said while no lead ran is
         // sent to it first ([`Self::tell_team`]).
         let key = conversation.key.clone();
-        for text in self.team_lead_started(&lead.session_id()) {
+        for text in self.team_lead_started(&lead.session_id(), launched_at) {
             if let Err(e) = self.write(conversation, &lead, &key, None, &text, None) {
                 self.log(&format!("a kept watcher notice was not delivered to {}/{} ({e}); it is kept for the next lead",
                                   key.entity_id, key.thread_id));
@@ -983,19 +996,20 @@ impl OperatorHost {
         let mut lead = self.team_lead.lock().unwrap();
         if lead.session.as_deref() != Some(session) {
             lead.session = Some(session.to_string());
-            self.write_team_lead(Some(session));
+            self.write_team_lead(Some(session), lead.started.get(session).copied());
         }
     }
 
-    /// A lead started: the watchers speak to it, and the notices kept before it are taken off
-    /// disk and returned for it, under the same lock a notice is kept under.
-    fn team_lead_started(&self, session: &str) -> Vec<String> {
+    /// A lead started at `launched_at` (Unix seconds): the watchers speak to it, and the notices
+    /// kept before it are taken off disk and returned for it, under the same lock a notice is
+    /// kept under.
+    fn team_lead_started(&self, session: &str, launched_at: u64) -> Vec<String> {
         let mut lead = self.team_lead.lock().unwrap();
         lead.starts += 1;
-        if lead.session.as_deref() != Some(session) {
-            lead.session = Some(session.to_string());
-            self.write_team_lead(Some(session));
-        }
+        lead.started.insert(session.to_string(), launched_at);
+        // Written at every start, even of the same session: a resumed lead is a new process.
+        lead.session = Some(session.to_string());
+        self.write_team_lead(Some(session), Some(launched_at));
         let path = self.team_watch_kept_path();
         let kept = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice::<Vec<String>>(&bytes),
@@ -1019,9 +1033,14 @@ impl OperatorHost {
         }
     }
 
-    fn write_team_lead(&self, session: Option<&str>) {
+    /// `{"session": "...", "started": <Unix seconds>}`; `started` only when known.
+    fn write_team_lead(&self, session: Option<&str>, started: Option<u64>) {
         let path = self.team_watch_lead_path();
-        if let Err(e) = write_json(&path, &serde_json::json!({"session": session.unwrap_or("")})) {
+        let mut body = serde_json::json!({"session": session.unwrap_or("")});
+        if let Some(at) = started {
+            body["started"] = serde_json::json!(at);
+        }
+        if let Err(e) = write_json(&path, &body) {
             self.log(&format!("the watchers' lead file {} could not be written ({e})", path.display()));
         }
     }
@@ -2515,8 +2534,15 @@ pub(crate) mod tests {
     #[test]
     fn a_stall_watch_notice_reaches_his_teams_lead_as_the_hosts_own_message() {
         let r = rig();
+        let before = unix_seconds();
         r.host.relay(&key("a"), "A", None, "build it", Origin::DeskTyped).unwrap();
         let a = lead_of(&r, "a");
+        // The lead is the watcher's sibling, so its start comes from the host, beside its session
+        // (review rv-20261020T132202Z-c5ab9358-2de8): an escalation raised before the watcher's
+        // first look is then told, not taken for backlog.
+        let named: Value = serde_json::from_slice(&std::fs::read(r.host.team_watch_lead_path()).unwrap()).unwrap();
+        assert_eq!(named["session"], a.session.as_str());
+        assert!(named["started"].as_u64().is_some_and(|at| at >= before && at <= unix_seconds()), "{named}");
         let (watch, sandbox) = team_watch(&r, crate::team_watch::Watcher::Stall);
         crate::team_watch::fixture::escalation(&sandbox, "esc-20261020T000000Z-fixture1");
         let reached = crate::team_watch::fixture::until(30, || told(&a, "[esc-20261020T000000Z-fixture1]"));
