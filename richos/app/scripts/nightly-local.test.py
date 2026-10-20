@@ -3509,6 +3509,13 @@ class PublishedReportTests(unittest.TestCase):
         self.assertEqual(row["title"], "v1.2.1 published; bump main's next release version.")
         self.assertIn("next-version-worker-brief.md", row["question"])
         self.assertIn("already published", row["question"])
+        self.assertIn("zach-sonnet-next-version-v1-2-1", row["question"])
+        self.assertIn("--repo richos --type zach --model sonnet --brief", row["question"])
+        brief = self.runner.state / "next-versions/v1-2-1/next-version-worker-brief.md"
+        self.assertIn(shlex.quote(str(brief)), row["question"])
+        self.assertIn("v1.2.1 is a published stable release", brief.read_text())
+        self.assertNotIn("<TAG>", brief.read_text())
+        self.assertEqual([args[0] for args in self.started], [str(m.ESCALATE)])
         self.main_untouched()
 
     def test_a_failed_version_bump_dispatch_does_not_claim_publication_failed(self):
@@ -3518,6 +3525,18 @@ class PublishedReportTests(unittest.TestCase):
             self.runner.report_published("v1.2.1", stable=True)
         self.assertIn("The release itself is published", output.getvalue())
         self.assertEqual(self.rows(), [])
+
+    def test_unwritable_next_version_brief_does_not_claim_publication_failed(self):
+        self.runner.state.mkdir(parents=True, exist_ok=True)
+        (self.runner.state / "next-versions").write_text("not a directory")
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.runner.report_published("v1.2.1", stable=True)
+        self.assertIn("The release itself is published", output.getvalue())
+        self.assertIn("--type zach --model sonnet", output.getvalue())
+        self.assertIn("If its brief is missing", output.getvalue())
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.started, [])
+        self.main_untouched()
 
     def test_the_brief_keeps_rejected_notes_off_main_and_requires_editorial_review(self):
         brief = (m.ROOT / m.CHANGELOG_WORKER_BRIEF).read_text()
