@@ -4,7 +4,7 @@ The changelog worker (`changelog-worker-brief.md`, beside this file) follows the
 
 ## What the entry is
 
-The worker writes only the entry's bullet lines. `nightly.py notes-draft` adds the version heading and GitHub release link and saves the candidate identity beside the changelog. The link confirms publication; preparing notes does not publish a version. No introduction, closing remark or code fence belongs in the entry.
+The worker writes only the entry's bullet lines. `nightly.py notes-draft` adds the version heading and an availability link to the published releases list and saves the candidate identity beside the changelog. Preparing notes does not publish a version or claim that it is installable. No introduction, closing remark or code fence belongs in the entry.
 
 Each line is `- ` followed by one of these words, then what changed as the user sees it:
 

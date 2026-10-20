@@ -131,7 +131,7 @@ can delay publication, but cannot leave a public release waiting for its notes.
 If the baseline changes before the release body is public, regenerate the request
 and review replacement notes. The draft command updates the recognized unpublished
 entry and registry together. Once a release body is public, its notes are retained
-on upload retries. A prepared entry’s GitHub release link confirms availability.
+on upload retries. Each entry explicitly says it is prepared notes and links to the published releases list for availability. It never links to a version URL before that release exists or claims that landing notes makes the version installable.
 
 ### A build opens nothing on this Mac and proves the boot in the test VM itself
 

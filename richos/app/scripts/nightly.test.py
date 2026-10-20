@@ -1086,6 +1086,13 @@ class ChangelogTests(GitFixture):
 
 
 class CommittedChangelogTests(unittest.TestCase):
+    def test_prepared_notes_do_not_claim_availability_or_link_to_an_unpublished_tag(self):
+        section = n.changelog_section({"version": "9.9.9", "tag": "v9.9.9", "entry": "- Fixed a lost message"})
+        self.assertIn("Prepared release notes", section)
+        self.assertIn("/releases)", section)
+        self.assertNotIn("/releases/tag/", section)
+        self.assertIn("for availability", section)
+
     def test_every_approved_record_matches_its_public_user_facing_entry(self):
         records = json.loads((n.ROOT / n.CHANGELOG_RECORDS).read_text())
         self.assertIsInstance(records, dict)

@@ -1272,7 +1272,8 @@ def changelog_request(info):
 @release_step
 def changelog_section(record):
     return (f"## {record['version']}\n\n"
-            f"[GitHub release](https://github.com/{REPO}/releases/tag/{record['tag']})\n\n"
+            f"Prepared release notes. Check [published releases](https://github.com/{REPO}/releases) "
+            "for availability.\n\n"
             f"{record['entry']}\n")
 
 
@@ -1750,7 +1751,7 @@ def _release_smoke(work):
                    "previous_source": None, "entry": "- Fixed a lost message"}
     validate_changelog_entry(note_record["entry"])
     section = changelog_section(note_record)
-    if note_record["tag"] not in section or note_record["entry"] not in section:
+    if f"## {note_record['version']}" not in section or note_record["entry"] not in section:
         raise ValueError("release-smoke: changelog section lost its version or approved prose")
     refuses("notes for an invalid candidate", lambda: changelog_identity(
         {**note_info, "build_commit": "wrong"}))
