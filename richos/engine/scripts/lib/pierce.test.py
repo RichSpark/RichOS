@@ -462,6 +462,17 @@ class Pierce(unittest.TestCase):
         self.assertNotIn(str(alias), roots)
         self.assertNotIn(str(self.root), roots)
 
+    def test_repository_paths_inside_quoted_commands_are_readable_without_execution(self):
+        private = self.root / "connected project"
+        (private / ".git").mkdir(parents=True)
+        marker = self.root / "must-not-exist"
+        prompt = (f"Read with `git -C '{private}' show HEAD:docs/plan.md`. "
+                  f"Never execute `touch {marker}`.")
+        roots = P.read_roots(self.project, prompt)
+        self.assertIn(str(private.resolve()), roots)
+        self.assertNotIn(str(self.root.resolve()), roots)
+        self.assertFalse(marker.exists())
+
     def test_missing_cited_paths_do_not_grant_an_ancestor_or_whole_home(self):
         roots = P.read_roots(self.project, f"Read `/etc/missing-pierce-file` and `{Path.home()}`.")
         self.assertEqual(roots, [str(self.project.resolve()), str(P.ENGINE.resolve())])

@@ -518,8 +518,18 @@ def read_roots(project, assignment, payload=None):
         if target.is_absolute() and target.is_dir():
             roots.append(target.resolve())
     paths = re.findall(r"`([^`\n]+)`|(?<![\w/])((?:~/|/)[^\s`\"'<>()]+)", assignment)
+    candidates = []
     for quoted, bare in paths:
-        raw = (quoted or bare).rstrip(".,;")
+        candidates.append(quoted or bare)
+        if quoted:
+            # A backtick may contain a command rather than one literal path.
+            # Tokenize it for cited paths, including quoted spaces; never run it.
+            try:
+                candidates.extend(shlex.split(quoted))
+            except ValueError:
+                pass
+    for candidate in dict.fromkeys(candidates):
+        raw = candidate.rstrip(".,;")
         raw = re.sub(r":\d+(?:-\d+)?$", "", raw)
         if not raw.startswith(("/", "~/")):
             continue
