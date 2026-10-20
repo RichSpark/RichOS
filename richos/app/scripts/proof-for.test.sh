@@ -357,8 +357,11 @@ awk '$1 == "docs-claims.js" { o = $1; for (i = 2; i <= NF; i++) if ($i !~ /\/$/)
 if command -v node >/dev/null 2>&1; then
   OUT="$(cd "$APP/ui/tests" && PROOF_FOR_UI_INPUTS="$WORK/decl-narrow" node docs-claims.js 2>&1)"
   REAL="$(cd "$APP/ui/tests" && node docs-claims.js 2>&1)"
+  # The refusal must name a read the narrowed row no longer reaches. Until 2026-10-20 that was
+  # correction_forward_compat_tests.rs, read for its #[test] count; the counts are gone
+  # (6e3c33002), so the witness is the crates directory every test file is listed from.
   if printf '%s' "$OUT" | grep -q 'FAIL  proof-for.ui-inputs selects this suite' \
-     && printf '%s' "$OUT" | grep -q 'correction_forward_compat_tests.rs' \
+     && printf '%s' "$OUT" | grep -q '"richos/app/crates/"' \
      && printf '%s' "$REAL" | grep -q 'PASS  proof-for.ui-inputs selects this suite'; then
     ok "K4 docs-claims.js refuses a row that does not reach what it reads, and accepts the real one"
   else
