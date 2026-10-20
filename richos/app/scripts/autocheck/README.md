@@ -139,12 +139,15 @@ copy; each of these is now settled by the policy in force before any check runs
 - **The second review.** A plain `git merge` of v1.2.1 into main ran its whole land check on
   2026-10-19 and was then refused by the operator fence: its exact tip had no review.
   `workspaces.sh merge` already asked first. Every land whose checkout is on the branch it lands
-  onto (main or a release branch the lander names) now asks the fence the same question before
-  its checks: the installed fence copy is brought current by its own `fence prepared` entry, then
-  `operator_fences.py review-check` judges the move from HEAD to the commit being landed exactly
-  as the fence judges a move of main, follow-up rulings and recovery included. A land onto a
-  release branch is asked it too, which the fence itself never sees. A commit made in a detached
-  checkout (`nightly-local.py` commit_on_main) moves no branch and is reviewed once it exists.
+  onto (main or a release branch) now asks the fence the same question before its checks: the
+  installed fence copy is brought current by the land command's own refresh
+  (`operator-fences.sh refresh`, `bring_current`) run from the fence the engine has now (main's
+  committed files when the engine lives in this repository), because a copy as old as the one of
+  2026-10-18 cannot bring itself current; then `operator_fences.py review-check` judges the move
+  from HEAD to the commit being landed exactly as the fence judges a move of main, follow-up
+  rulings and recovery included. A land onto a release branch is asked it too, which the fence
+  itself never sees. A commit made in a detached checkout (`nightly-local.py` commit_on_main)
+  moves no branch and is reviewed once it exists.
 - **The gate a release-branch land runs.** The shim ran HEAD's `autocheck.py`, which for a land
   onto a release branch is that branch's own copy: v1.3.0 was cut before the land check learned
   its target (d2c2c28dc), so every land onto it ran the commit check. A land the lander names

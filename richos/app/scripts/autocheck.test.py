@@ -2202,41 +2202,50 @@ class ActiveGate(Fixture):
         self.assertIn(self.SUITE_RAN, self.tools())
         self.git("worktree", "remove", "--force", str(tree))
 
-    def stale_installed_fence(self):
-        """The hook's copy of the fence made as old as one installed before this check existed: it
-        has no review-check and reads no follow-up ruling. Returns (its path, the engine's text)."""
-        program = self.repo / ".git/hooks/operator-fences/operator_fences.py"
-        text = (ENGINE / "scripts/lib/operator_fences.py").read_text()
-        older = text.replace("def read_deferrals(ledger):",
-                             "def read_deferrals(ledger):\n    return {}\n\n\ndef _newer_read_deferrals(ledger):", 1)
-        older = older.replace('    if cmd == "review-check":\n', '    if cmd == "not-yet-review-check":\n', 1)
-        self.assertNotEqual(older.count("not-yet-review-check"), 0)
-        self.assertNotEqual(older, text)
-        program.write_text(older)
-        return program, text
+    # The fence installed on the operator's Mac on 2026-10-18: the real committed program, which
+    # has no review-check and cannot bring itself current (it predates 49be7aa25).
+    OLD_FENCE = "6b920e274b027db4670061ee53db8a882a15f740"
 
-    def test_a_stale_installed_fence_is_brought_current_before_it_answers(self):
-        # 2026-10-19 05:29Z: the hook's copy of the fence, installed on 18 October, could not see
-        # a follow-up ruling and refused a land whose checks had all passed. In the main checkout
-        # git's own ORIG_HEAD update runs the fence, which brings itself current, before this
-        # hook; a land onto a release branch runs in a checkout of its own, where nothing does.
-        self.make()
-        self.fence()
-        self.git("branch", "v1.2.1")
-        self.branch_with("feature", "richos/app/src/thing.txt", "fine, ruled\n")
-        tip = self.head("feature")
-        rid = self.verdict(tip, "changes-requested", findings=["a finding the lead ruled a follow-up"])
-        self.follow_up(rid + "#1", tip)
-        tree = self.base / "release-tree"
-        self.git("worktree", "add", "-q", str(tree), "v1.2.1")
-        (tree / "richos/engine").symlink_to(ENGINE)
-        program, text = self.stale_installed_fence()
-        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree,
-                       env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.2.1"))
-        self.assertIn("the second review of what this lands passes (asked before the checks)", out.stderr)
-        self.assertEqual(self.head("v1.2.1^2"), tip)
-        self.assertEqual(program.read_text(), text)
-        self.git("worktree", "remove", "--force", str(tree))
+    def installed_old_fence(self):
+        """Put the real 2026-10-18 fence where the hook runs it. Returns (its path, the engine's text)."""
+        old = subprocess.run(["git", "-C", str(ENGINE), "show",
+                              self.OLD_FENCE + ":richos/engine/scripts/lib/operator_fences.py"],
+                             capture_output=True, text=True)
+        if old.returncode:
+            self.skipTest("the fence of %s is not in this clone's history" % self.OLD_FENCE[:9])
+        self.assertNotIn("def bring_self_current", old.stdout)
+        self.assertNotIn('"review-check"', old.stdout)
+        program = self.repo / ".git/hooks/operator-fences/operator_fences.py"
+        program.write_text(old.stdout)
+        return program, (ENGINE / "scripts/lib/operator_fences.py").read_text()
+
+    def test_an_installed_fence_older_than_self_refresh_is_brought_current_before_it_answers(self):
+        # 2026-10-19 05:29Z: the hook's copy of the fence, installed on 18 October, refused a land
+        # whose checks had all passed. That copy cannot refresh itself, so the land's refresh runs
+        # from the engine's fence (second review rv-20261020T073921Z-acb97f5e-ec07, finding 1).
+        for where in ("the main checkout", "a release-branch checkout"):
+            with self.subTest(where):
+                if self.repo.exists():
+                    self.tearDown()
+                    self.setUp()
+                self.make()
+                self.fence()
+                self.git("branch", "v1.2.1")
+                self.branch_with("feature", "richos/app/src/thing.txt", "fine, ruled\n")
+                tip = self.head("feature")
+                rid = self.verdict(tip, "changes-requested", findings=["a finding the lead ruled a follow-up"])
+                self.follow_up(rid + "#1", tip)
+                tree, env, target = self.repo, self.env, "main"
+                if where != "the main checkout":
+                    tree, target = self.base / "release-tree", "v1.2.1"
+                    self.git("worktree", "add", "-q", str(tree), "v1.2.1")
+                    (tree / "richos/engine").symlink_to(ENGINE)
+                    env = dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.2.1")
+                program, text = self.installed_old_fence()
+                out = self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree, env=env)
+                self.assertIn("the second review of what this lands passes (asked before the checks)", out.stderr)
+                self.assertEqual(self.head(target + "^2"), tip)
+                self.assertEqual(program.read_text(), text)
 
     def test_a_land_onto_a_release_branch_cut_before_a_gate_fix_runs_the_gate_on_main(self):
         # v1.3.0 was cut on 2026-10-14, before d2c2c28dc: its own autocheck.py ignores the target

@@ -1860,14 +1860,20 @@ def land_from_index(repo, what, receipt=True, target=""):
 # passed, and the operator fence then refused the move of main: the branch's exact final commit
 # had no second review. `workspaces.sh merge` asks that question before it merges anything
 # (workspaces.py _review_check); a plain git land asked it only at the end. So every land this
-# hook runs asks the fence the same question first, through the fence's own program: the
-# installed copy is brought current by its existing `fence prepared` entry (given no ref lines,
-# it decides nothing and records nothing), then `review-check` judges the move from HEAD to the
-# commit being landed exactly as it judges a move of main, deferrals and recovery included. It is
-# asked when this checkout is on the branch landed onto, so this commit or merge is that move. A
-# land onto a release branch named by the lander asks it too, which the fence itself never sees
-# (it runs for refs/heads/main only). A repository whose launcher carries no review ledger asks
-# nothing, as the fence asks nothing; a fence that cannot answer refuses, as the fence would.
+# hook runs asks the fence the same question first, through the fence's own program:
+#   1. the installed copy is brought current by the land command's own refresh
+#      (operator_fences_admin.bring_current, `operator-fences.sh refresh`), run from the fence
+#      the engine has NOW: when the engine lives in this repository, its files as committed on
+#      main (as the fence's current_program reads them: in the main checkout a plain merge has
+#      already written the incoming work's files), else the engine's own files. An installed copy
+#      cannot be trusted to bring itself current: the copy of 2026-10-18 (6b920e274) has no such
+#      step (second review rv-20261020T073921Z-acb97f5e-ec07, finding 1);
+#   2. `review-check` judges the move from HEAD to the commit being landed exactly as the fence
+#      judges a move of main, deferrals and recovery included.
+# It is asked when this checkout is on the branch landed onto, so this commit or merge is that
+# move. A land onto a release branch asks it too, which the fence itself never sees (it runs for
+# refs/heads/main only). A repository whose launcher carries no review ledger asks nothing, as
+# the fence asks nothing; a fence that cannot answer refuses, as the fence would.
 FENCE_LAUNCHER_MARKER = "richos-operator-fence-launcher"
 
 
@@ -1880,6 +1886,36 @@ def landed_commit(repo, heads, range_argv):
     return git("-c", "user.name=autocheck", "-c", "user.email=autocheck@invalid", "commit-tree",
                git("write-tree", cwd=repo.top), *parents, "-m", "autocheck: the commit being landed",
                cwd=repo.top)
+
+
+FENCE_FILES = ("operator_fences.py", "operator_fences_admin.py", "recovery.py", "machine_settings.py")
+
+
+def current_fence(launcher_text, folder, env):
+    """Write the fence the engine has now into `folder`: each of FENCE_FILES from the launcher's
+    engine, read from main's committed files when that engine lies inside the repository (the
+    rule of the fence's own current_program). Returns (its operator_fences.py, the main checkout
+    the launcher names). Raises RuntimeError when a file cannot be read."""
+    conf = dict(re.findall(r'(?m)^OPERATOR_FENCES_([A-Z_]+)="([^"]*)"\s*$', launcher_text))
+    engine, top = conf.get("ENGINE", ""), os.path.realpath(conf.get("REPO") or "/nonexistent")
+    if not engine:
+        raise RuntimeError("the fence's launcher names no engine")
+    for name in FENCE_FILES:
+        path = os.path.realpath(os.path.join(engine, "scripts", "lib", name))
+        if path.startswith(top + os.sep):
+            rel = os.path.relpath(path, top)
+            read = subprocess.run(["git", "-C", top, "cat-file", "blob", f"refs/heads/main:{rel}"], env=env,
+                                  capture_output=True, stdin=subprocess.DEVNULL)
+            if read.returncode:
+                raise RuntimeError(f"main's {rel} cannot be read: {read.stderr.decode(errors='replace').strip()}")
+            data = read.stdout
+        else:
+            try:
+                data = Path(path).read_bytes()
+            except OSError as exc:
+                raise RuntimeError(f"the engine's {path} cannot be read ({exc})") from exc
+        (Path(folder) / name).write_bytes(data)
+    return Path(folder) / "operator_fences.py", conf.get("REPO") or ""
 
 
 def review_before_checks(repo, what, landed):
@@ -1895,20 +1931,25 @@ def review_before_checks(repo, what, landed):
     program = found.group(1)
     env = {k: v for k, v in repo.env.items() if not k.startswith("GIT_")}
     head = git("rev-parse", "HEAD", cwd=repo.top)
-    said = []
-    # An empty stdin is no ref lines: `fence prepared` brings the copy current and decides nothing.
-    for argv in ([program, "fence", str(launcher), "prepared"],
-                 [program, "review-check", str(launcher), head, landed]):
+    said, rc = [""], 0
+    with tempfile.TemporaryDirectory(prefix="autocheck-fence-") as folder:
         try:
-            result = run_bounded([sys.executable, *argv], timeout=120, cwd=repo.top, env=env, text=True,
-                                 stdin=subprocess.DEVNULL)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            said, rc = [f"The fence program {program} could not be asked ({exc})."], 2
-            break
-        rc = result.returncode
-        said = [(result.stdout + result.stderr).strip()]
-        if rc:
-            break
+            current, main_checkout = current_fence(text, folder, env)
+        except RuntimeError as exc:
+            said, rc = [f"The fence the engine has now could not be read: {exc}."], 2
+        else:
+            for argv in ([str(current), "admin", "refresh", "--repo", main_checkout or str(repo.top)],
+                         [program, "review-check", str(launcher), head, landed]):
+                try:
+                    result = run_bounded([sys.executable, *argv], timeout=120, cwd=repo.top, env=env,
+                                         text=True, stdin=subprocess.DEVNULL)
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    said, rc = [f"The fence program {argv[0]} could not be asked ({exc})."], 2
+                    break
+                rc = result.returncode
+                said = [(result.stdout + result.stderr).strip()]
+                if rc:
+                    break
     if rc == 0:
         say(f"autocheck: {what}: the second review of what this lands passes (asked before the checks)")
         return 0
