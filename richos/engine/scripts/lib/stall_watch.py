@@ -1428,16 +1428,20 @@ def pending_work_reminder(src, now, sid, prev):
     if checked > now:
         checked = now
     state = {"checked_at": checked}
+    if prev.get("problem"):
+        state["problem"] = prev["problem"]
+    problems = [state["problem"]] if state.get("problem") else []
     if now - checked < PENDING_WORK_SECONDS or not lead_is_idle(src, sid):
-        return [], state, []
+        return [], state, problems
     try:
         if src.ws.damaged_records():
             raise ValueError("the workspace registry contains unreadable records")
         items = src.ws.pending(sid, auto=False, dry=True)
     except Exception as exc:  # noqa: BLE001: a failed read leaves the reminder due
-        return [], state, ["unfinished work could not be read (%s: %s)" % (
-            exc.__class__.__name__, str(exc)[:160])]
-    state["checked_at"] = now
+        state["problem"] = "unfinished work could not be read (%s: %s)" % (
+            exc.__class__.__name__, str(exc)[:160])
+        return [], state, [state["problem"]]
+    state = {"checked_at": now}
     if not items:
         return [], state, []
     lines = ["UNFINISHED-WORK %s: %d finished-work item(s) remain unresolved. Review their recorded waits "

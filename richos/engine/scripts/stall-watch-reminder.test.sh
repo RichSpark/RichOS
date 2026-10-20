@@ -128,6 +128,28 @@ class ReminderTests(unittest.TestCase):
             sw.tick(self.src, str(self.root), "session", now=self.due + 43200, out=later)
             self.assertIn("UNFINISHED-WORK", later.getvalue())
 
+    def test_persistent_read_failure_does_not_clear_during_busy_turns(self):
+        self.src.ws.pending.side_effect = OSError("fixture persistent read failure")
+        output = io.StringIO()
+        with patch.object(sw, "idle_end", return_value=([], {})), \
+                patch.object(sw, "escalation_watch", return_value=([], {}, [])), \
+                patch.object(sw, "look", return_value=([], [])):
+            for minute in range(121):
+                if minute % 4 == 0:
+                    self.write_rows({"type": "system", "subtype": "turn_duration"})
+                else:
+                    self.write_rows({"type": "user", "message": {"content": "working"}})
+                sw.tick(self.src, str(self.root), "session", now=self.due + minute * 60, out=output)
+            self.assertNotIn("STALL-CLEARED", output.getvalue())
+            self.assertEqual(output.getvalue().count("STALL-WATCH "), 5)
+            self.src.ws.pending.side_effect = None
+            self.src.ws.pending.return_value = []
+            self.write_rows({"type": "system", "subtype": "turn_duration"})
+            recovered = io.StringIO()
+            sw.tick(self.src, str(self.root), "session", now=self.due + 7260, out=recovered)
+            sw.tick(self.src, str(self.root), "session", now=self.due + 7320, out=recovered)
+            self.assertEqual(recovered.getvalue().count("STALL-CLEARED"), 1)
+
     def test_output_failure_does_not_record_successful_delivery(self):
         with patch.object(sw, "idle_end", return_value=([], {})), \
                 patch.object(sw, "escalation_watch", return_value=([], {}, [])), \
