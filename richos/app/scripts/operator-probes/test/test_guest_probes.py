@@ -123,6 +123,22 @@ class KernelEnvironment(unittest.TestCase):
         self.assertIsNone(self.read(['/bin/sleep', '30'], {'PROBE_NAME_ONE': 'x', 'PATH': '/usr/bin:/bin'}))
 
 
+class StoredEnvironment(unittest.TestCase):
+    """His terminal runs `claude` by name, so the PATH enable.sh stores from it finds claude, and
+    his engine's hooks (Pierce's `shutil.which('claude')`) rely on that. The guest's login shell
+    does not put the installer's folder on PATH; on 2026-10-20 every probe that starts a teammate
+    was refused by Pierce with "Claude Code executable was not found on PATH" for that reason."""
+
+    def test_the_stored_path_finds_the_guest_claude_first_and_keeps_the_rest(self):
+        stored = gp.stored_environment({'PATH': '/opt/homebrew/bin:/usr/bin:/bin', 'USER': 'admin', 'SECRET': 'x'})
+        self.assertEqual(stored['PATH'], '/Users/admin/.local/bin:/opt/homebrew/bin:/usr/bin:/bin')
+        self.assertEqual(sorted(stored), ['LANG', 'PATH', 'USER'])
+
+    def test_a_path_that_already_finds_it_is_stored_unchanged(self):
+        path = '/opt/homebrew/bin:/Users/admin/.local/bin:/usr/bin:/bin'
+        self.assertEqual(gp.stored_environment({'PATH': path})['PATH'], path)
+
+
 class Record(unittest.TestCase):
     def test_the_record_step_refuses_the_public_repository_and_bounds_long_strings(self):
         rspec = importlib.util.spec_from_file_location('record', HERE.parent / 'record.py')
@@ -344,6 +360,28 @@ class GradeP15Premise(unittest.TestCase):
         self.assertEqual(gp.grade_p15(r, False)[0], 'NOT-RUN')
         r['reap-lead-crash'] = self.survived()
         self.assertEqual(gp.grade_p15(r, True)[0], 'FAIL')
+
+
+class P15Trigger(unittest.TestCase):
+    """The supervisor snapshots once a second; a crash sooner than that after the foreground
+    command starts measures the snapshot phase, not the reap (2026-10-20, FAIL on HEAD twice)."""
+
+    def test_both_triggers_wait_past_two_snapshots_before_the_kill(self):
+        from unittest import mock
+
+        class Proc(object):
+            pid = 4001
+
+        class Lead(object):
+            proc = Proc()
+
+        for trigger, target in (('owner', 4001), ('lead', 4002)):
+            calls = []
+            with mock.patch.object(gp.time, 'sleep', side_effect=lambda s: calls.append(('sleep', s))), \
+                    mock.patch.object(gp.os, 'kill', side_effect=lambda pid, sig: calls.append(('kill', pid))):
+                gp.p15_trigger(Lead(), {'claude_pid': 4002}, trigger)
+            self.assertEqual(calls[-1], ('kill', target), trigger)
+            self.assertGreaterEqual(sum(s for kind, s in calls[:-1] if kind == 'sleep'), 2.0, trigger)
 
 
 class P15Processes(unittest.TestCase):
