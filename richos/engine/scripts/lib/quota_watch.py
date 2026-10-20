@@ -150,6 +150,12 @@ separate processes:
                for the next --watch to print it.
   With no session process to tie a poller to (a plain terminal), --watch polls
   in the foreground and prints everything, never stopping.
+    --monitor --host-json  the RichOS app host's own child (richos-core
+               team_watch.rs), from the app's launch to its quit: his team's
+               lead there runs with --print, where plugin monitors never
+               start. It polls in the foreground while its parent is the host,
+               and prints each wake-up as one JSON line, which the host sends
+               to that lead (host_child.py).
 
   A get_usage failure (timeout, refusal) is retried every 60 s instead of
   every 300 s, and it wakes nobody by itself. Once get_usage has answered in
@@ -245,6 +251,10 @@ import time
 # Shared with the terminal and desktop SendMessage delivery guards.
 import pause_protocol
 import quota_weekly
+import host_child  # the RichOS app host's child (--monitor --host-json)
+
+# --monitor --host-json: this poller is the app host's own child, for the lead the host names.
+HOST = {"on": False}
 
 HIS_WORDS = ('"quota polling: every 5 minutes from now. And once it crosses the 93% '
              'threshold: PAUSE subagents. Then resume after quota rest."')
@@ -725,6 +735,9 @@ def workers(engine_root):
     registry's own pending() reconciles that, and this watcher never writes."""
     out = {"known": False, "why": "", "session": "", "working": [], "quota_paused": [], "weekly_paused": [], "other_paused": [],
            "registered": []}
+    if HOST["on"] and not host_child.session():
+        out["why"] = "his team has no lead running in RichOS yet"
+        return out
     ws, why = _load_registry(engine_root)
     if ws is None:
         out["why"] = why
@@ -1789,6 +1802,41 @@ def mode_monitor(a):
     return 0
 
 
+class HostEvents:
+    """--host-json's wake-up stream: each wake-up, whole, as one JSON line on stdout."""
+
+    def __init__(self, stream):
+        self.stream = stream
+
+    def write(self, text):
+        self.stream.write(host_child.line(text) + "\n")
+
+    def flush(self):
+        self.stream.flush()
+
+
+def mode_host(a):
+    """--monitor --host-json: the RichOS app host's own child (richos-core team_watch.rs), from
+    the app's launch to its quit. It polls right here, as a monitor with no session process to
+    hand a poller to does, for as long as its parent is the host; each wake-up is one JSON line
+    the host sends to his team's lead, and each poll line goes to its log (stderr). The live
+    workers it names are those of the lead the host names (host_child.session)."""
+    if not a.config:
+        return 0  # a repository that never adopted the engine: nothing to watch, and nothing said
+    alive = host_child.start()
+    if not alive():
+        return 0  # its host is gone already
+    sd = session_dir("operator-host")
+    fd = _try_lock(os.path.join(sd, "monitor.lock"), patience=1.0)
+    if fd is None:
+        return 0  # another copy of the app already watches
+    HOST["on"] = True
+    try:
+        return poll_loop(a, Out(lines=sys.stderr, events=HostEvents(sys.stdout)), alive)
+    finally:
+        os.close(fd)
+
+
 def mode_watch(a):
     """The fallback doorbell, run as a background command: it prints the poll
     lines as they come and EXITS on the next wake-up, which is what wakes the
@@ -1981,6 +2029,8 @@ def main(argv):
                    help="the plugin monitor's body: runs for the whole session and prints each wake-up")
     g.add_argument("--alive", action="store_true", help="what polls for this session, and what delivers")
     g.add_argument("--poll", dest="poller", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--host-json", action="store_true",
+                    help="with --monitor: the app host's child; each wake-up as one JSON line")
     ap.add_argument("--until-reset", action="store_true",
                     help="with --watch: wake only at the hold's release and the reset (the lead has decided this window)")
     ap.add_argument("--session-dir", default="", help=argparse.SUPPRESS)
@@ -2014,6 +2064,8 @@ def main(argv):
         return mode_status(a, now)
     if a.notice:
         return mode_notice(a, now)
+    if a.monitor and a.host_json:
+        return mode_host(a)
     if a.monitor:
         return mode_monitor(a)
     if a.alive:
