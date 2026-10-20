@@ -44,6 +44,10 @@ COMMANDS (codex-watch.sh passes --engine-root and --config)
              session, and ends with its session
   --tick     one look against the session's state, printing what the monitor
              would print (codex-watch.test.sh drives it)
+  --host-json  with --monitor: the RichOS app host's own child (richos-core
+             team_watch.rs), from the app's launch to its quit: each block as
+             one JSON line, which the host sends to his team's lead
+             (host_child.py)
 
 Settings (tests only): CODEX_WATCH_CHANNELS (colon-separated files),
 CODEX_WATCH_STATE_DIR, CODEX_WATCH_POLL_SECONDS.
@@ -59,6 +63,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+import host_child  # noqa: E402  (sibling in scripts/lib: the app host's child)
 import stall_watch  # noqa: E402  (sibling in scripts/lib: session, lock and JSON helpers)
 
 POLL_SECONDS = 15
@@ -167,8 +172,9 @@ def session_dir(sid):
     return d
 
 
-def tick(sd, now=None, out=None):
-    """One look: prints each due entry as its own block. Returns blocks printed."""
+def tick(sd, now=None, out=None, json_lines=False):
+    """One look: prints each due entry as its own block (as one JSON line with
+    json_lines). Returns blocks printed."""
     out = out or sys.stdout
     now = time.time() if now is None else now
     path = os.path.join(sd, "offsets.json")
@@ -179,7 +185,7 @@ def tick(sd, now=None, out=None):
     for ch in channels():
         blocks, new, told_to = look_one(ch, state.get(ch), told, now)
         for b in blocks:
-            out.write("\n".join(b) + "\n")
+            out.write((host_child.line("\n".join(b)) if json_lines else "\n".join(b)) + "\n")
             out.flush()
             printed += 1
         state[ch] = new
@@ -243,6 +249,28 @@ def run_loop(engine_root):
     return 0
 
 
+def run_host_loop():
+    """--monitor --host-json: the app host's child. Codex's channels are the same whichever lead
+    is told, so its state is the host's own, beside the sessions' (one shared last-told.json, so
+    nothing the terminal's watcher told is told again here, and the reverse)."""
+    alive = host_child.start()
+    if not alive():
+        return 0                           # its host is gone already
+    sd = session_dir("operator-host")
+    fd = stall_watch._try_lock(os.path.join(sd, "monitor.lock"))
+    if fd is None:
+        return 0                           # another copy of the app already watches
+    prune_state(sd)
+    poll = stall_watch._env_float("CODEX_WATCH_POLL_SECONDS", POLL_SECONDS)
+    try:
+        while alive():
+            tick(sd, json_lines=True)
+            stall_watch._nap(poll, alive)
+    finally:
+        os.close(fd)
+    return 0
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="codex-watch.sh")
     g = ap.add_mutually_exclusive_group(required=True)
@@ -250,10 +278,14 @@ def main(argv):
     g.add_argument("--tick", action="store_true")
     ap.add_argument("--config", default="")
     ap.add_argument("--engine-root", default="")
+    ap.add_argument("--host-json", action="store_true",
+                    help="with --monitor: the app host's child; each block as one JSON line")
     a = ap.parse_args(argv)
     if not a.config:
         return 0  # a repository that never adopted the engine: nothing to watch, and nothing said
     engine_root = a.engine_root or os.path.dirname(os.path.dirname(HERE))
+    if a.host_json and a.monitor:
+        return run_host_loop()
     if a.tick:
         sid, _pid = session(engine_root)
         tick(session_dir(sid))

@@ -223,6 +223,10 @@ pub mod work_host;
 /// review, slice 4): mid-job reviews of the app's workers, and on an operator install the
 /// notices for his team's leads, sent as messages of the host's own.
 pub mod review_watch;
+/// `team_watch` — the engine's quota-watch, stall-watch and codex-watch run as the HOST's own
+/// children on his team's install, their notices sent to his team's lead as messages of the
+/// host's own (his team's lead runs with `--print`, where plugin monitors never start).
+pub mod team_watch;
 /// `codex_reviews` — the Settings switch "Let Codex review your team's work" (round 20.2, ruling
 /// §114): the user's choice, saved where the app's review-watch reads it, and what the Mac reports
 /// about Codex (installed, signed in), from Codex's own `login status`.

@@ -116,6 +116,11 @@ COMMANDS (stall-watch.sh passes --engine-root, --config and --command)
   --notice   the SessionStart notice body (session-start-stall.sh wraps it)
   --tick     one look against the session's state, printing what the monitor
              would print (the test suite's clock is STALL_WATCH_NOW)
+  --host-json  with --monitor: the RichOS app host's own child (richos-core
+             team_watch.rs), from the app's launch to its quit. Each look is
+             for the session of his team's lead, which the host names
+             (host_child.py), and nothing is looked at while no lead runs;
+             each block is one JSON line the host sends to that lead
 """
 
 import argparse
@@ -135,6 +140,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+import host_child  # noqa: E402  (sibling in scripts/lib: the app host's child)
 import resource_waits  # noqa: E402  (sibling in scripts/lib)
 import escalations  # noqa: E402  (sibling in scripts/lib)
 
@@ -1644,6 +1650,31 @@ def run_loop(a, src, exit_on_notice=False):
     return 0
 
 
+def run_host_loop(src):
+    """--monitor --host-json: the app host's child. Every look is for the lead the host names, in
+    that session's own state directory, exactly as a terminal session's monitor looks for its
+    own; with no lead running there is no session of whose teammates to speak, so it waits.
+    One child per app: it holds the host's own directory's lock for its life."""
+    alive = host_child.start()
+    if not alive():
+        return 0                           # its host is gone already
+    hd = session_dir("operator-host")
+    fd = _try_lock(os.path.join(hd, "monitor.lock"))
+    if fd is None:
+        return 0                           # another copy of the app already watches
+    prune_state(hd)
+    poll = _env_float("STALL_WATCH_POLL_SECONDS", POLL_SECONDS)
+    try:
+        while alive():
+            sid = host_child.session()
+            if sid:
+                tick(src, session_dir(sid), sid, json_lines=True)
+            _nap(poll, alive)
+    finally:
+        os.close(fd)
+    return 0
+
+
 def mode_alive(a, src):
     sid, spid = src.session()
     if not spid and not sid:
@@ -1725,6 +1756,8 @@ def main(argv):
     for flag in ("--monitor", "--watch", "--alive", "--once", "--notice", "--tick"):
         g.add_argument(flag, action="store_true")
     ap.add_argument("--jsonl", action="store_true", help="frame monitor/watch/tick output as one JSON line per complete block")
+    ap.add_argument("--host-json", action="store_true",
+                    help="with --monitor: the app host's child, for the lead it names; JSON lines")
     ap.add_argument("--config", default="")
     ap.add_argument("--engine-root", default="")
     ap.add_argument("--command", default="stall-watch.sh")
@@ -1742,6 +1775,8 @@ def main(argv):
         sid, _spid = src.session()
         tick(src, session_dir(sid), sid, json_lines=a.jsonl)
         return 0
+    if a.monitor and a.host_json:
+        return run_host_loop(src)
     return run_loop(a, src, exit_on_notice=a.watch)
 
 
