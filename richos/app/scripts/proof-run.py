@@ -2544,9 +2544,11 @@ def run_main(argv, run_state):
     # shim on PATH) before its command starts; a land hook or a shell launching this runner directly
     # did not, and those values are part of check identities, so a valid author run made through
     # reserve.py read as changed inputs at every land and preflight. The runner applies the same
-    # rule itself (cargo_identity.enable_environment, idempotent), so both launches agree.
-    import cargo_identity
-    os.environ.update(cargo_identity.enable_environment(os.environ))
+    # rule itself (cargo_identity.enable_environment, idempotent), so both launches agree. Like
+    # reserve.py, only where the tree holds the Cargo helpers (a test fixture's runner may not).
+    if all(os.path.isfile(os.path.join(HERE, "lib", name)) for name in ("cargo_identity.py", "machine_storage.py")):
+        import cargo_identity
+        os.environ.update(cargo_identity.enable_environment(os.environ))
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
                                 usage="proof-run.py [options] [proof-for arguments]")
     p.add_argument("--commands")
