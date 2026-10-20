@@ -287,6 +287,14 @@ let viewEntityMode = null;
 /// the elapsed time forward as a negative delay instead of replaying it from the start.
 let arrivedCompany = null;
 let arrivedDraft = null;
+/// A chat just renamed by hand (round 35), `{ id, at }`: its row catches the same kind of light.
+let renamedThread = null;
+const RENAME_ARRIVAL_MS = 1600;
+/// The rename open in a chat's row, `{ row, wrap, li, box, input, note, before }`, or null.
+let renaming = null;
+/// Whether a rebuild of the rail or the overview's rows was held back while that rename was open
+/// (`renderRail`, `renderEntityRows`).
+let railStaleWhileRenaming = false;
 /// The rail control `#rail-tip` is showing its words for (round 32), or null.
 let railTipFor = null;
 let sendBlockedReason = null; // §21: non-null means send is refused, with this reason
@@ -594,6 +602,8 @@ function buildThreadRow(row, opts) {
   const onScreen = row.id === activeThreadId && mainView !== "entity";
   const wrap = document.createElement("div");
   wrap.className = "nav-thread-row" + (onScreen ? " is-active" : "");
+  // A chat just renamed by hand catches the gold light once (round 35), across rebuilds.
+  carryArrival(wrap, renamedThread, row.id, RENAME_ARRIVAL_MS, "is-renamed");
 
   const btn = document.createElement("button");
   btn.type = "button";
@@ -652,6 +662,8 @@ function buildThreadRow(row, opts) {
   // A right-click anywhere on the row opens the same menu as ⋯, at the pointer, instead of
   // WebKit's own "Reload" / "Look Up" menu (CEO, nightly 54, right-click-in-left-bar.mov).
   wrap.addEventListener("contextmenu", (e) => {
+    // While the row is a rename field, a right-click in it keeps the field's editing menu.
+    if (wrap.classList.contains("is-renaming")) return;
     e.preventDefault();
     const fromKeyboard = e.clientX === 0 && e.clientY === 0;
     openThreadMenu(row, more, fromKeyboard ? null : { x: e.clientX, y: e.clientY });
@@ -659,6 +671,7 @@ function buildThreadRow(row, opts) {
 
   // Keyboard parity with the pointer affordance (§18: all functions work by keyboard).
   wrap.addEventListener("keydown", (e) => {
+    if (wrap.classList.contains("is-renaming")) return;
     if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
       e.preventDefault();
       openThreadMenu(row, more);
@@ -752,11 +765,11 @@ function icon(name, className) {
 
 /// A one-time light, kept running across rail rebuilds: the element is new each time, so the
 /// animation is started where it would be by now rather than from its first frame.
-function carryArrival(node, arrival, id, ms) {
+function carryArrival(node, arrival, id, ms, cls = "is-new") {
   if (!arrival || arrival.id !== id) return;
   const elapsed = Date.now() - arrival.at;
   if (elapsed >= ms) return;
-  node.classList.add("is-new");
+  node.classList.add(cls);
   node.style.setProperty("--arrival-delay", -elapsed + "ms");
 }
 const COMPANY_ARRIVAL_MS = 1900;
@@ -943,6 +956,12 @@ function buildArchivedGroup(rows) {
 }
 
 function renderRail() {
+  // A rename open in the rail is not torn down under his typing by a turn event's rebuild; the
+  // rebuild runs the moment the rename closes (`finishRename`).
+  if (renaming && railNavEl.contains(renaming.wrap)) {
+    railStaleWhileRenaming = true;
+    return;
+  }
   railNavEl.innerHTML = "";
 
   const pinned = allRows().filter((t) => t.pinned && !t.archived);
@@ -1079,20 +1098,7 @@ function showEntityView(entityId, mode) {
   addFact("Chats", String(threads.length));
   if (entity.roots && entity.roots.length) addFact("Source root", entity.roots.join(", "));
 
-  // "Threads needing attention" — ONLY rows that carry a real mark. If nothing has a
-  // signal, the block is absent rather than reassuringly empty.
-  const attention = threads.filter((t) => statusFor(t));
-  const attentionBlock = el("entity-view-attention");
-  const attentionList = el("entity-view-attention-list");
-  attentionList.innerHTML = "";
-  attentionBlock.hidden = attention.length === 0;
-  for (const row of attention) attentionList.appendChild(buildThreadRow(row));
-
-  const threadBlock = el("entity-view-threads");
-  const threadList = el("entity-view-thread-list");
-  threadList.innerHTML = "";
-  threadBlock.hidden = threads.length === 0 || mode === "new";
-  for (const row of threads.slice(0, 8)) threadList.appendChild(buildThreadRow(row));
+  renderEntityRows();
 
   // §3.5 also lists "current priorities from ECS" and §3.1's entity overflow lists
   // "Edit entity". Neither is rendered: there is no ECS priorities source wired into this
@@ -1130,6 +1136,30 @@ function showEntityView(entityId, mode) {
   renderScopeHeader();
   renderRail();
   inputEl.focus();
+}
+
+/// The overview's chat rows, drawn from `navTree` as it is now. A rename open in one of them
+/// is not torn down under his typing; the rows are drawn again when it closes (`finishRename`).
+function renderEntityRows() {
+  const attentionList = el("entity-view-attention-list");
+  const threadList = el("entity-view-thread-list");
+  if (renaming && (attentionList.contains(renaming.wrap) || threadList.contains(renaming.wrap))) {
+    railStaleWhileRenaming = true;
+    return;
+  }
+  const group = navTree.groups.find((g) => g.entity.id === viewEntityId);
+  const threads = group ? group.threads.filter((t) => !t.archived) : [];
+
+  // "Threads needing attention" — ONLY rows that carry a real mark. If nothing has a
+  // signal, the block is absent rather than reassuringly empty.
+  const attention = threads.filter((t) => statusFor(t));
+  attentionList.innerHTML = "";
+  el("entity-view-attention").hidden = attention.length === 0;
+  for (const row of attention) attentionList.appendChild(buildThreadRow(row));
+
+  threadList.innerHTML = "";
+  el("entity-view-threads").hidden = threads.length === 0 || viewEntityMode === "new";
+  for (const row of threads.slice(0, 8)) threadList.appendChild(buildThreadRow(row));
 }
 
 /// The sticky scope header (§4): the entity and thread every subsequent send runs under.
@@ -5715,15 +5745,9 @@ function openThreadMenu(row, anchor, at) {
     threadMenuEl.appendChild(b);
   };
 
-  add("Rename…", async () => {
-    // The ORIGINAL ledger title is offered as the starting value when no override exists,
-    // so "rename back to what Rich called it" is always one step away.
-    const next = window.prompt("Rename this thread", row.display_title);
-    if (next === null) return;
-    await saveNavChange("rename_thread", { threadId: row.id, title: next });
-    await refreshNavigation();
-    renderScopeHeader();
-  });
+  // In place, in the chat's own row (round 35). `window.prompt` was here, and the app's
+  // WebView answers it with nothing, so Rename did nothing (nightly 68 walk).
+  add("Rename…", () => startRename(row, anchor.closest(".nav-thread-row")));
   add(row.pinned ? "Unpin" : "Pin", async () => {
     await saveNavChange("set_thread_pinned", { threadId: row.id, pinned: !row.pinned });
     await refreshNavigation();
@@ -5759,20 +5783,187 @@ document.addEventListener("contextmenu", (e) => {
 
 // A pin, archive or rename that could not be saved is SAID, in the rail where he made it
 // (nav.rs `persist` refuses over an unreadable navigation file). A success clears the note.
+// Returns whether the change was saved.
 async function saveNavChange(cmd, args) {
   const note = document.getElementById("nav-save-note");
   try {
-    const out = await Bridge.invoke(cmd, args);
+    await Bridge.invoke(cmd, args);
     note.hidden = true;
     note.textContent = "";
-    return out;
+    return true;
   } catch (e) {
     const text = typeof e === "string" ? e : e && e.message;
     if (text) {
       note.textContent = text.charAt(0).toUpperCase() + text.slice(1) + ".";
       note.hidden = false;
     }
-    return null;
+    return false;
+  }
+}
+
+// ---- renaming a chat, in place (round 35) ----------------------------------------------
+//
+// CEO, 2026-10-19: "And of course, the user is free to manually change that thread title any
+// time they want." Round 35 (approved 2026-10-20) is the design: the row becomes a field with
+// the title selected and a hint under it; Enter or clicking away saves, Escape cancels, an
+// empty title is never saved. nav.rs `rename_thread` would take an empty title as "remove the
+// override", so this field never sends one. At most `TITLE_MAX_LEN` (nav.rs, 200) characters.
+const RENAME_MAX_LEN = 200;
+const RENAME_HINT = "<kbd>Enter</kbd> to save · <kbd>Esc</kbd> to cancel";
+const RENAME_REFUSAL =
+  'A chat needs a name.<span class="nav-rename-sub"><kbd>Esc</kbd> keeps the old one.</span>';
+
+function startRename(row, wrap) {
+  if (!wrap || !wrap.isConnected) return;
+  // The title as it is now, by thread ID: a row on screen may have been built from an older
+  // navigation tree (the company overview is not redrawn by every refresh).
+  row = threadRow(row.id) || row;
+  if (renaming) finishRename("save", false);
+  if (renaming) return; // the open one was empty and was refused; it stays the one being named
+  const li = wrap.parentElement;
+  // Where the title's first letter sits now, so the field's text starts on the same pixel.
+  const titleLeft = wrap.querySelector(".nav-thread-title").getBoundingClientRect().left;
+  wrap.classList.add("is-renaming");
+  wrap.classList.remove("is-renamed", "is-refused");
+
+  const box = document.createElement("div");
+  box.className = "nav-rename";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "nav-rename-input";
+  input.value = row.display_title;
+  input.maxLength = RENAME_MAX_LEN;
+  input.spellcheck = false;
+  input.autocomplete = "off";
+  input.setAttribute("aria-label", "Chat name");
+  const noteId = "rename-note-" + row.id;
+  input.setAttribute("aria-describedby", noteId);
+  box.appendChild(input);
+  wrap.insertBefore(box, wrap.firstChild);
+
+  const note = document.createElement("p");
+  note.className = "nav-rename-note";
+  note.id = noteId;
+  note.setAttribute("aria-live", "polite");
+  note.innerHTML = RENAME_HINT;
+  li.appendChild(note);
+
+  renaming = { row, wrap, li, box, input, note, before: row.display_title };
+
+  const cs = getComputedStyle(input);
+  const textLeft = input.getBoundingClientRect().left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
+  input.style.paddingLeft = Math.max(2, parseFloat(cs.paddingLeft) + (titleLeft - textLeft)) + "px";
+  note.style.marginLeft = Math.max(0, titleLeft - li.getBoundingClientRect().left) + "px";
+
+  input.addEventListener("keydown", (e) => {
+    if (e.isComposing) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finishRename("save", true);
+    } else if (e.key === "Escape") {
+      // Stopped here so the window's Escape does not also close something else.
+      e.preventDefault();
+      e.stopPropagation();
+      finishRename("cancel", true);
+    } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      // The rail moves focus between rows on these; in the field they stay the field's.
+      e.stopPropagation();
+    }
+  });
+  input.addEventListener("input", () => {
+    if (input.getAttribute("aria-invalid") === "true") showRenameHint();
+  });
+  input.addEventListener("blur", () => {
+    // Clicking away saves; clicking away from an empty field puts the old title back. A window
+    // that merely lost focus to another app keeps the field open for when he comes back.
+    if (!renaming || renaming.input !== input || !document.hasFocus()) return;
+    finishRename(input.value.trim() ? "save" : "cancel", false);
+  });
+
+  input.focus();
+  input.select();
+}
+
+function showRenameHint() {
+  renaming.input.removeAttribute("aria-invalid");
+  renaming.note.classList.remove("is-refusal");
+  renaming.note.removeAttribute("role");
+  renaming.note.innerHTML = RENAME_HINT;
+}
+
+function refuseRename() {
+  const r = renaming;
+  r.input.setAttribute("aria-invalid", "true");
+  r.note.classList.add("is-refusal");
+  r.note.setAttribute("role", "alert");
+  r.note.innerHTML = RENAME_REFUSAL;
+  r.wrap.classList.remove("is-refused");
+  void r.wrap.offsetWidth;
+  r.wrap.classList.add("is-refused");
+  r.input.focus();
+}
+
+async function finishRename(how, refocus) {
+  const r = renaming;
+  if (!r) return;
+  const next = r.input.value.trim();
+  if (how === "save" && !next) {
+    refuseRename();
+    return;
+  }
+  renaming = null;
+  r.box.remove();
+  r.note.remove();
+  r.wrap.classList.remove("is-renaming", "is-refused");
+  const id = r.row.id;
+  // The list the field was in: the rail, or one of the company overview's two lists.
+  const home = r.wrap.closest("#entity-view-attention-list, #entity-view-thread-list") || railNavEl;
+  const changed = how === "save" && next !== r.before;
+  if (changed) showRenamed(r, next);
+  if (refocus) r.wrap.querySelector(".nav-thread").focus();
+  const stale = railStaleWhileRenaming;
+  railStaleWhileRenaming = false;
+  if (changed) {
+    if (!(await saveNavChange("rename_thread", { threadId: id, title: next }))) renamedThread = null;
+    await refreshNavigation();
+  } else if (stale) {
+    renderRail();
+  } else {
+    return;
+  }
+  // Every copy of the chat's row carries the title the store now has: the rail was rebuilt
+  // above, and an open company overview lists the same chat again.
+  if (mainView === "entity") renderEntityRows();
+  // A rebuilt list drew a new row; the keyboard comes back to it, unless he has moved on.
+  if (refocus && (!document.activeElement || document.activeElement === document.body)) {
+    const btn = home.querySelector(`.nav-thread[data-thread-id="${CSS.escape(id)}"]`);
+    if (btn) btn.focus();
+  }
+}
+
+/// The new title, on screen at once: in the row with its gold light, and in the header above
+/// the chat when it is the chat on screen. The save and the rebuild that follow redraw it from
+/// the store, so a save that fails puts the old title back and says why (`saveNavChange`).
+function showRenamed(r, title) {
+  const before = r.row.display_title;
+  r.row.display_title = title;
+  const btn = r.wrap.querySelector(".nav-thread");
+  r.wrap.querySelector(".nav-thread-title").textContent = title;
+  btn.title = title;
+  const label = btn.getAttribute("aria-label") || "";
+  if (label.startsWith(before)) btn.setAttribute("aria-label", title + label.slice(before.length));
+  r.wrap.querySelector(".nav-thread-more").setAttribute("aria-label", "Actions for " + title);
+  renamedThread = { id: r.row.id, at: Date.now() };
+  r.wrap.style.removeProperty("--arrival-delay");
+  r.wrap.classList.remove("is-renamed");
+  void r.wrap.offsetWidth;
+  r.wrap.classList.add("is-renamed");
+  const shown = scopeThreadEl.textContent;
+  renderScopeHeader();
+  if (scopeThreadEl.textContent !== shown) {
+    scopeThreadEl.classList.remove("is-renamed");
+    void scopeThreadEl.offsetWidth;
+    scopeThreadEl.classList.add("is-renamed");
   }
 }
 
