@@ -292,7 +292,8 @@ let renamedThread = null;
 const RENAME_ARRIVAL_MS = 1600;
 /// The rename open in a chat's row, `{ row, wrap, li, box, input, note, before }`, or null.
 let renaming = null;
-/// Whether a rail rebuild was held back while that rename was open (`renderRail`).
+/// Whether a rebuild of the rail or the overview's rows was held back while that rename was open
+/// (`renderRail`, `renderEntityRows`).
 let railStaleWhileRenaming = false;
 /// The rail control `#rail-tip` is showing its words for (round 32), or null.
 let railTipFor = null;
@@ -1097,20 +1098,7 @@ function showEntityView(entityId, mode) {
   addFact("Chats", String(threads.length));
   if (entity.roots && entity.roots.length) addFact("Source root", entity.roots.join(", "));
 
-  // "Threads needing attention" — ONLY rows that carry a real mark. If nothing has a
-  // signal, the block is absent rather than reassuringly empty.
-  const attention = threads.filter((t) => statusFor(t));
-  const attentionBlock = el("entity-view-attention");
-  const attentionList = el("entity-view-attention-list");
-  attentionList.innerHTML = "";
-  attentionBlock.hidden = attention.length === 0;
-  for (const row of attention) attentionList.appendChild(buildThreadRow(row));
-
-  const threadBlock = el("entity-view-threads");
-  const threadList = el("entity-view-thread-list");
-  threadList.innerHTML = "";
-  threadBlock.hidden = threads.length === 0 || mode === "new";
-  for (const row of threads.slice(0, 8)) threadList.appendChild(buildThreadRow(row));
+  renderEntityRows();
 
   // §3.5 also lists "current priorities from ECS" and §3.1's entity overflow lists
   // "Edit entity". Neither is rendered: there is no ECS priorities source wired into this
@@ -1148,6 +1136,30 @@ function showEntityView(entityId, mode) {
   renderScopeHeader();
   renderRail();
   inputEl.focus();
+}
+
+/// The overview's chat rows, drawn from `navTree` as it is now. A rename open in one of them
+/// is not torn down under his typing; the rows are drawn again when it closes (`finishRename`).
+function renderEntityRows() {
+  const attentionList = el("entity-view-attention-list");
+  const threadList = el("entity-view-thread-list");
+  if (renaming && (attentionList.contains(renaming.wrap) || threadList.contains(renaming.wrap))) {
+    railStaleWhileRenaming = true;
+    return;
+  }
+  const group = navTree.groups.find((g) => g.entity.id === viewEntityId);
+  const threads = group ? group.threads.filter((t) => !t.archived) : [];
+
+  // "Threads needing attention" — ONLY rows that carry a real mark. If nothing has a
+  // signal, the block is absent rather than reassuringly empty.
+  const attention = threads.filter((t) => statusFor(t));
+  attentionList.innerHTML = "";
+  el("entity-view-attention").hidden = attention.length === 0;
+  for (const row of attention) attentionList.appendChild(buildThreadRow(row));
+
+  threadList.innerHTML = "";
+  el("entity-view-threads").hidden = threads.length === 0 || viewEntityMode === "new";
+  for (const row of threads.slice(0, 8)) threadList.appendChild(buildThreadRow(row));
 }
 
 /// The sticky scope header (§4): the entity and thread every subsequent send runs under.
@@ -5803,6 +5815,9 @@ const RENAME_REFUSAL =
 
 function startRename(row, wrap) {
   if (!wrap || !wrap.isConnected) return;
+  // The title as it is now, by thread ID: a row on screen may have been built from an older
+  // navigation tree (the company overview is not redrawn by every refresh).
+  row = threadRow(row.id) || row;
   if (renaming) finishRename("save", false);
   if (renaming) return; // the open one was empty and was refused; it stays the one being named
   const li = wrap.parentElement;
@@ -5901,6 +5916,8 @@ async function finishRename(how, refocus) {
   r.note.remove();
   r.wrap.classList.remove("is-renaming", "is-refused");
   const id = r.row.id;
+  // The list the field was in: the rail, or one of the company overview's two lists.
+  const home = r.wrap.closest("#entity-view-attention-list, #entity-view-thread-list") || railNavEl;
   const changed = how === "save" && next !== r.before;
   if (changed) showRenamed(r, next);
   if (refocus) r.wrap.querySelector(".nav-thread").focus();
@@ -5914,9 +5931,12 @@ async function finishRename(how, refocus) {
   } else {
     return;
   }
-  // A rebuilt rail drew a new row; the keyboard comes back to it, unless he has moved on.
+  // Every copy of the chat's row carries the title the store now has: the rail was rebuilt
+  // above, and an open company overview lists the same chat again.
+  if (mainView === "entity") renderEntityRows();
+  // A rebuilt list drew a new row; the keyboard comes back to it, unless he has moved on.
   if (refocus && (!document.activeElement || document.activeElement === document.body)) {
-    const btn = railNavEl.querySelector(`.nav-thread[data-thread-id="${CSS.escape(id)}"]`);
+    const btn = home.querySelector(`.nav-thread[data-thread-id="${CSS.escape(id)}"]`);
     if (btn) btn.focus();
   }
 }

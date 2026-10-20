@@ -407,6 +407,42 @@ async function main() {
       assertEqual(await page.evaluate(() => window.renames[1]), { threadId: "acme", title: "Acme deal, closed" });
       await page.waitForFunction(() => document.querySelector("#scope-thread").textContent === "Acme deal, closed");
     });
+    // Handover review rv-20261020T104343Z-914364e4-3d43: with the company overview open, a rename
+    // from the sidebar left the overview's row on the old title, and after a routine navigation
+    // refresh the overview's own Rename… offered the old title too.
+    await run.check("renamed from the sidebar with the company overview open: the overview's row shows it and its Rename… offers it", async () => {
+      await page.locator('.nav-group:has(.nav-thread[data-thread-id="acme"]) .nav-group-label').click();
+      const inOverview = '#entity-view-thread-list .nav-thread[data-thread-id="acme"]';
+      await page.waitForSelector(inOverview);
+      assertEqual(await page.locator(inOverview + " .nav-thread-title").innerText(), "Acme deal, closed", "precondition");
+      // A routine refresh (a turn event does this) replaces the rows the overview was built from.
+      await page.evaluate(() => refreshNavigation());
+      const inRail = '#rail-nav .nav-thread[data-thread-id="acme"]';
+      await page.hover(inRail);
+      await page.click(inRail + " + .nav-thread-more");
+      await page.locator("#thread-menu button", { hasText: /^Rename…$/ }).click();
+      await field.waitFor();
+      await page.evaluate(sel => { window.__railRowBeforeSave = document.querySelector(sel); }, inRail);
+      await page.keyboard.type("Acme counteroffer, signed");
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => window.renames.length === 3);
+      // The save is over once the rail has been rebuilt from the store (a new row element).
+      await page.waitForFunction(sel => {
+        const n = document.querySelector(sel);
+        return n && n !== window.__railRowBeforeSave && n.textContent.includes("Acme counteroffer, signed");
+      }, inRail);
+      const overviewTitle = await page.locator(inOverview + " .nav-thread-title").innerText();
+      assertEqual(overviewTitle, "Acme counteroffer, signed", "the overview's row carries the new title");
+      await page.hover(inOverview);
+      await page.click(inOverview + " + .nav-thread-more");
+      await page.locator("#thread-menu button", { hasText: /^Rename…$/ }).click();
+      await field.waitFor();
+      const offered = (await fieldView()).value;
+      await page.keyboard.press("Escape");
+      assertEqual(offered, "Acme counteroffer, signed", "Rename… from the overview offers the current title");
+      assertEqual(await page.evaluate(() => window.renames.length), 3, "Escape saved nothing");
+      return `overview row: "${overviewTitle}"; its Rename… offered "${offered}"`;
+    });
     await page.goto(APP);
     await leaveHome(page);
     await open(page, "acme");
