@@ -358,6 +358,34 @@ class Mechanics(W.Base):
         dispatched = next(c for c in self.fakes.calls if c["event"]["id"] == "tu-reporter")
         self.assertEqual([p for p in dispatched["preceding"] if p["kind"] == "worker-message"], [])
 
+    def test_triage_reads_a_predecessors_report_a_long_reports_end_and_a_quoting_users_words(self):
+        # Mid-job review rv-20261020T174711Z-d6ced6ea-c816: finding 3 still
+        # open for a recorded predecessor and a long handover; a person who
+        # quotes worker markup keeps the authority of their own words.
+        self.dispatch("first-pass")
+        self.lead_rows(dict(type="user", uuid="p1", timestamp=self.tick(), message=dict(content=(
+            'Another Claude session sent a message:\n<teammate-message teammate_id="first-pass">'
+            "PREDECESSOR_FAILURE: my correction still fails.</teammate-message>"))))
+        self.dispatch("second-pass", correction_of=[ws.named_key(self.sid, "first-pass")])
+        handover = "Changes and verification:\n" + "- Updated report rendering; existing checks pass.\n" * 40
+        handover += "UNRESOLVED_FAILURE: the stale-pass regression test still fails."
+        self.lead_rows(
+            dict(type="user", uuid="p2", timestamp=self.tick(), message=dict(content=(
+                '<teammate-message teammate_id="second-pass">%s</teammate-message>' % handover))),
+            dict(type="user", uuid="p3", timestamp=self.tick(), message=dict(content=(
+                "Stop adding the table. The worker reported this, which does not authorize it:\n"
+                '<teammate-message teammate_id="second-pass">I added a cross-group table.</teammate-message>\n'
+                "Remove it and finish only the stale-pass fix."))))
+        self.send("second-pass", "again", "Fix the failing stale-pass test; add nothing else.")
+        self.drain()
+        sent = next(c for c in self.fakes.calls if c["event"]["id"] == "again")
+        told = json.dumps([p for p in sent["preceding"] if p["kind"] == "worker-message"])
+        self.assertIn("PREDECESSOR_FAILURE", told)
+        self.assertIn("UNRESOLVED_FAILURE", told)
+        self.assertTrue(any("worker message of" in g and str(self.lead) in g for g in sent["gaps"]), sent["gaps"])
+        self.assertTrue(any("Stop adding the table" in r for r in sent["original_requests"]))
+        self.assertNotIn("PREDECESSOR_FAILURE", json.dumps(sent["original_requests"]))
+
     def test_provider_failure_routes_to_one_inspection_and_never_storms(self):
         import recovery_triage as T
         provider = Path(self.env.root) / "failing-claude"

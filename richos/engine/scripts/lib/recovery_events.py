@@ -167,11 +167,16 @@ def human_requests(path):
             except ValueError:
                 continue
             if isinstance(row, dict):
-                # A worker's message arrives behind a host line ("Another Claude
-                # session sent a message:"), so it is excluded wherever its tag is.
-                out += [(str(row.get("timestamp") or ""), m) for m in pierce.human_messages([row])
-                        if not TEAMMATE_MESSAGE.search(m)]
+                out += [(str(row.get("timestamp") or ""), m) for m in pierce.human_messages([row]) if not delivered_envelope(m)]
     return out
+
+
+def delivered_envelope(text):
+    """A worker's message as the host delivers it: teammate envelopes behind at
+    most one header line ("Another Claude session sent a message:"), nothing a
+    person wrote. A person's message that quotes one keeps its authority."""
+    rest = TEAMMATE_MESSAGE.sub("", text).strip()
+    return bool(TEAMMATE_MESSAGE.search(text)) and (not rest or ("\n" not in rest and rest.endswith(":")))
 
 
 def requests_until(messages, at, transcript):
@@ -626,7 +631,8 @@ def drain(engine, entity, ws, triage=None, schedule=None):
                 events += [e for e in result_events(worker, work, aliases, repo_ids, review_rows) if e["id"] not in taken]
             if not events:
                 continue
-            context = event_context(ws, transcript, messages, worker, dispatch, events, actions, entity, reports)
+            context = event_context(ws, transcript, messages, worker, dispatch, events, actions, entity, reports,
+                                    declaration["mode"])
             try:
                 process(ws, worker, events, context, declaration, engine, summary, triage, schedule)
             except Exception as error:  # noqa: BLE001 -- one worker's fault never stops the drain
@@ -634,7 +640,7 @@ def drain(engine, entity, ws, triage=None, schedule=None):
     return summary
 
 
-def event_context(ws, transcript, messages, worker, dispatch, events, actions, entity, reports=None):
+def event_context(ws, transcript, messages, worker, dispatch, events, actions, entity, reports=None, mode=None):
     """What triage reads for this worker's events, each bounded by reference.
     Preceding activity is the lead's sends, this worker's own messages to the
     lead and review results (PRD 2026-10-20 section 4)."""
@@ -645,8 +651,21 @@ def event_context(ws, transcript, messages, worker, dispatch, events, actions, e
         except (OSError, ValueError) as error:
             reports = []
             gaps.append("the worker's messages to the lead could not be read from %s: %s" % (transcript, error))
-    senders = {s for s in (worker.get("name"), worker.get("agent_id"), worker.get("tool_use_id")) if s}
-    told = [(stamp, body) for stamp, sender, body in reports if sender in senders]
+    # The worker's own messages and those of its recorded predecessors on the
+    # same outcome. A long one keeps its opening and its end (where a handover
+    # states what still fails), and the omission is named.
+    senders = {s for member in chain(ws, worker, mode)
+               for s in (member.get("name"), member.get("agent_id"), member.get("tool_use_id")) if s}
+    told = []
+    for stamp, sender, body in reports:
+        if sender not in senders:
+            continue
+        if len(body) > MAX_ITEM:
+            half = MAX_ITEM // 2
+            gaps.append("a worker message of %d characters at %s is shown as its first and last %d characters; "
+                        "the whole message remains in %s" % (len(body), stamp, half, transcript))
+            body = "%s\n[... %d characters omitted by bound ...]\n%s" % (body[:half], len(body) - 2 * half, body[-half:])
+        told.append((stamp, body))
     try:
         sources = standing_sources(worker, dispatch["input"], entity)
     except (OSError, ValueError, KeyError) as error:
@@ -665,7 +684,7 @@ def event_context(ws, transcript, messages, worker, dispatch, events, actions, e
     def preceding(event):
         items = [dict(at=a["timestamp"] or "", kind="lead-send", text=RR.action_text(a)[:MAX_ITEM])
                  for a in history if (a["timestamp"] or "") < event["at"]]
-        items += [dict(at=stamp, kind="worker-message", text=body[:MAX_ITEM]) for stamp, body in told if stamp < event["at"]]
+        items += [dict(at=stamp, kind="worker-message", text=body) for stamp, body in told if stamp < event["at"]]
         items += [dict(at=e["at"], kind="review-result", text=(e["head"] + ": " + e["body"])[:MAX_ITEM])
                   for e in events if e["kind"] == "result" and e["at"] < event["at"]]
         return sorted(items, key=lambda i: i["at"])
