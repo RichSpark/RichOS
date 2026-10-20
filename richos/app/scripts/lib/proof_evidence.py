@@ -1969,8 +1969,10 @@ def coverage(previous, items, identities, source):
     saved run cover its candidate's whole selected plan? Asked in the author's own checkout, so
     a check keyed by that checkout (cargo, packaging) is judged on the bytes it ran on, exactly as
     reuse() would judge it there. It never says proven where reuse() would refuse: a `fresh`
-    check and `engine receipts` are never reused, so they are named apart (FRESH_GAP), neither
-    proven nor missing: they execute at every seat, and a recovery job could not prove them."""
+    check and `engine receipts` are never reused, so one the run PASSED is named apart
+    (FRESH_GAP), neither proven nor missing: it executes at every seat. One the run failed, timed
+    out or never finished is unresolved like any other check, so it stays missing and goes into
+    the recovery job (review rv-20261020T163601Z-4b96c956-ed75 #1: a failed one was hidden)."""
     previous = Path(previous)
     plan = read_plan(previous)
     try:
@@ -1982,7 +1984,10 @@ def coverage(previous, items, identities, source):
         old = outcomes.get(item.label, {})
         identity = identities[item.label]
         if item.label == "engine receipts" or identity.get("fresh"):
-            found[item.label] = "%s %s" % (FRESH_GAP, evidence_gap(item.label, old, identity, plan))
+            if old.get("state") == "passed" and old.get("exit") == 0 and not old.get("invalid"):
+                found[item.label] = "%s %s" % (FRESH_GAP, evidence_gap(item.label, old, identity, plan))
+            else:
+                found[item.label] = "no validated passing execution"
             continue
         found[item.label] = (evidence_gap(item.label, old, identity, plan) or _saved_artifacts_hold(old)
                              or _receipt_proves(item, old))

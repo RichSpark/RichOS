@@ -1327,6 +1327,54 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         # Nothing was written: coverage reads only.
         self.assertFalse((previous.logdir / "reused").exists())
 
+    def test_the_preflight_keeps_a_failed_fresh_check_unresolved(self):
+        """Review rv-20261020T163601Z-4b96c956-ed75 #1, the reviewer's fixture through the real
+        preflight: a `fresh` check went into the fresh bucket before its saved outcome was read, so
+        one the author's run failed or timed out left the preflight at exit 0, nothing missing and
+        no recovery job. A passed one is still only "fresh at every seat"; none is ever proven."""
+        source = {"commit": "a" * 40, "tracked_diff_sha256": "clean", "untracked_sha256": "clean"}
+        identity = {"fresh": "external pin validator must run every time"}
+        label = "engine scripts/verification-pins.test.sh"
+        for state, rc, unresolved in [("passed", 0, False), ("failed", 1, True), ("timed-out", 124, True)]:
+            saved = Path(self.tmp.name) / ("fresh-" + state)
+            saved.mkdir()
+            item = runner.Item(label, str(self.root), ["bash", "pins"])
+            record = evidence.Record(str(self.root), saved, [item], source, {label: identity},
+                                     selection={"base": "b" * 40, "candidate": source["commit"], "mode": "normal"})
+            self.addCleanup(record.close)
+            item.state, item.rc, item.log = state, rc, str(saved / "execution.log")
+            Path(item.log).write_text("fixture execution: " + state + "\n")
+            record.checkpoint([item])
+            args = SimpleNamespace(coverage=str(saved), summary_out=str(saved / "coverage.json"))
+            with patch.object(runner, "ROOT", str(self.root)), \
+                    patch.object(runner, "head_commit", return_value=source["commit"]), \
+                    patch.object(runner, "source_identity", return_value=source), \
+                    patch.object(runner, "selection", return_value=[]), \
+                    patch.object(runner, "plan", return_value=[item]), \
+                    patch.object(runner, "default_logdir", return_value=str(Path(self.tmp.name) / "history")), \
+                    patch.object(runner, "history_weights", return_value={}), \
+                    patch.object(runner, "supply_runtime"), \
+                    patch.object(runner, "supply_speech_models"), \
+                    patch.object(evidence, "prepare_environment"), \
+                    patch.object(runner, "execution_environment", return_value={}), \
+                    patch.object(runner, "input_identity", return_value=identity), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                status = runner.author_coverage(args)
+            summary = json.loads(Path(args.summary_out).read_text())
+            self.assertEqual(summary["proven"], [], state)
+            if unresolved:
+                self.assertEqual(status, 1, output.getvalue())
+                self.assertEqual(list(summary["missing"]), [label], state)
+                self.assertTrue(summary["missing"][label].startswith(state + ":"), summary["missing"])
+                self.assertEqual(summary["fresh"], {}, state)
+                self.assertIn("--reuse", summary["recovery"] or "")
+                self.assertTrue((summary["recovery"] or "").endswith(Path(saved).name), summary["recovery"])
+            else:
+                self.assertEqual(status, 0, output.getvalue())
+                self.assertEqual(summary["missing"], {}, state)
+                self.assertTrue(summary["fresh"][label].startswith(evidence.FRESH_GAP), summary["fresh"])
+                self.assertIsNone(summary["recovery"])
+
     def test_the_summary_carries_its_own_coverage_line_and_never_counts_known_red_as_passed(self):
         """PRD A11/A14: the line is counted from the summary's own rows, a KNOWN-RED unit is named
         beside the passes (an established exception, never a pass) and NOT RUN is never a pass."""
