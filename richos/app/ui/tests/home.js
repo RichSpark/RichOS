@@ -3351,7 +3351,7 @@ async function main() {
 }
 
 main().then(
-  (failed) => process.exit(failed ? 1 : 0),
+  (failed) => { process.exitCode = failed ? 1 : 0; },
   (e) => {
     console.error(e);
     process.exit(1);

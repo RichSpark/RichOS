@@ -249,7 +249,7 @@ async function main() {
     for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
   }
 
-  process.exit(run.report() ? 1 : 0);
+  process.exitCode = run.report() ? 1 : 0;
 }
 
 main().catch((e) => {

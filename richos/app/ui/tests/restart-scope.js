@@ -898,4 +898,4 @@ async function main() {
   return failed;
 }
 
-main().then((f) => process.exit(f ? 1 : 0));
+main().then((f) => { process.exitCode = f ? 1 : 0; });

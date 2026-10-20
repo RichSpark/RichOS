@@ -233,6 +233,6 @@ async function main(){
   }
   return "the line reads only that Rich no longer needs it; "+measurements.join("; ");
  });
- assertEqual(errors,[],"renderer errors");await browser.close();process.exit(run.report()?1:0);
+ assertEqual(errors,[],"renderer errors");await browser.close();process.exitCode = run.report()?1:0;
 }
 main().catch(e=>{console.error(e);process.exit(1);});

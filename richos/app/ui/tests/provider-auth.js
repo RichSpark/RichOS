@@ -75,6 +75,6 @@ async function main() {
     return "no first-run interruption and a working settings entry";
   });
   await browser.close();
-  process.exit(run.report() ? 1 : 0);
+  process.exitCode = run.report() ? 1 : 0;
 }
 main().catch(error => { console.error(error); process.exit(1); });

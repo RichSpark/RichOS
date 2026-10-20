@@ -3643,7 +3643,7 @@ async function main() {
   const failed = run.report();
   const pageErrors = 0;
   await browser.close();
-  process.exit(failed || pageErrors ? 1 : 0);
+  process.exitCode = failed || pageErrors ? 1 : 0;
 }
 
 main().catch((e) => {

@@ -324,7 +324,7 @@ async function main() {
       : "\nthe front door: one named control, nothing announced that is not there, and a window " +
           "coming back lands where he left it."
   );
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main().catch((e) => {

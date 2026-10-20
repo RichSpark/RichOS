@@ -438,7 +438,7 @@ async function main() {
 
   await page.close();
   await browser.close();
-  process.exit(run.report() > 0 ? 1 : 0);
+  process.exitCode = run.report() > 0 ? 1 : 0;
 }
 
 main().catch((e) => {

@@ -696,7 +696,7 @@ async function main() {
       ? "\n" + failed + " check(s) FAILED"
       : "\nevery popup in the window closes on Escape, and the next one will too."
   );
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main().catch((e) => {
