@@ -2660,12 +2660,23 @@ def _proof_history(path):
 
 
 def proof_report(path, deadline=None):
-    """The pointer for the checkout at `path` (above), or {"unavailable": why}."""
+    """The pointer for the checkout at `path` (above), or {"unavailable": why}.
+
+    EVERY READ IS BOUNDED BY WHAT IS LEFT OF THE SHARED DEADLINE (review
+    rv-20261020T044017Z-ebbb640b-fc3b #2): the HEAD read gets only the time left, and the time is
+    asked again after each file read, so a slow read can spend the budget but never turn an
+    overrun into a report. A report that ran out says so; the lifecycle fact was saved before."""
     deadline = deadline or (time.monotonic() + PROOF_REPORT_SECONDS)
+    spent = "the report's time budget ran out"
     try:
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-        head = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True,
-                              timeout=5, stdin=subprocess.DEVNULL, env=env)
+        if time.monotonic() >= deadline:
+            return {"unavailable": spent}
+        try:
+            head = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True,
+                                  timeout=max(0.05, deadline - time.monotonic()), stdin=subprocess.DEVNULL, env=env)
+        except subprocess.TimeoutExpired:
+            return {"unavailable": spent}
         if head.returncode != 0:
             return {"unavailable": "cannot read the workspace's HEAD"}
         head = head.stdout.strip()
@@ -2674,15 +2685,19 @@ def proof_report(path, deadline=None):
             names = sorted((n for n in os.listdir(history) if PROOF_RUN_NAME.fullmatch(n)), reverse=True)
         except FileNotFoundError:
             return {"unavailable": "no saved proof run for this checkout", "head": head}
+        if time.monotonic() > deadline:
+            return {"unavailable": spent, "head": head}
         for name in names[:PROOF_REPORT_RUNS]:
             if time.monotonic() > deadline:
-                return {"unavailable": "the report's time budget ran out", "head": head}
+                return {"unavailable": spent, "head": head}
             run = os.path.join(history, name)
             try:
                 with open(os.path.join(run, "plan.json")) as stream:
                     plan = json.load(stream)
             except (OSError, ValueError):
                 continue
+            if time.monotonic() > deadline:
+                return {"unavailable": spent, "head": head}
             source = plan.get("source") or {}
             if plan.get("root") != path or source.get("commit") != head:
                 continue
@@ -2696,6 +2711,9 @@ def proof_report(path, deadline=None):
                     summary = json.load(stream)
             except (OSError, ValueError):
                 report["unavailable"] = "the run has no readable summary (still running, or ended without one)"
+                return report
+            if time.monotonic() > deadline:
+                report["unavailable"] = spent
                 return report
             rows = summary.get("checks") or []
             counts = {}

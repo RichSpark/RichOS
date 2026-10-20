@@ -7008,6 +7008,27 @@ class ProofReport_TheHandoverPointsAtItsSavedRun(Base):
         self.assertTrue(self.rec("zach-opus-pr").get("end"))
         self.assertIsNone(before)
 
+    def test_a_read_that_spends_the_shared_budget_never_becomes_a_report(self):
+        """Review rv-20261020T044017Z-ebbb640b-fc3b #2: the deadline was asked only between saved
+        runs, so a plan read that took four seconds of a three-second budget still returned a
+        complete report. Every read is now followed by the question."""
+        self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
+        clock = [100.0]
+        real_open = open
+
+        def slow(path, *args, **kwargs):
+            if str(path).endswith("plan.json"):
+                clock[0] = 104.0
+            return real_open(path, *args, **kwargs)
+        with patch.object(ws.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch("builtins.open", side_effect=slow):
+            report = ws.proof_report(self.path, deadline=103.0)
+        self.assertIn("time budget", report.get("unavailable", ""), report)
+        self.assertNotIn("line", report)
+        # The HEAD read itself gets only what is left of the budget.
+        with patch.object(ws.time, "monotonic", side_effect=lambda: 200.0):
+            self.assertIn("time budget", ws.proof_report(self.path, deadline=199.0)["unavailable"])
+
     def test_the_merge_offers_only_the_run_reported_for_the_tip_it_merges(self):
         run_dir = self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
         self.handed_in()
