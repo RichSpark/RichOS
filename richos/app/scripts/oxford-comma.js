@@ -109,4 +109,6 @@ function main(argv) {
 
 module.exports = { isDoc, fixed, uiKind, uiFiles, uiCommas };
 
-if (require.main === module) process.exit(main(process.argv.slice(2)));
+// exitCode, never process.exit(): exit() drops whatever a pipe has not taken yet, and the --json
+// answer for a large file (app/README.md is over 150 KB) came back cut short (2026-10-20).
+if (require.main === module) process.exitCode = main(process.argv.slice(2));
