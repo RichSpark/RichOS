@@ -200,9 +200,22 @@ runner checks the item's own command and directory) reads:
 - its own row in `proof-for.ui-inputs` (audited suite by suite on 2026-10-11 and
   reconciled against the tree by `proof-for.sh` on every invocation), a
   `<dir>/` token as the whole directory;
-- its own file and every file it reaches by relative `require`;
+- its own file and every file it or any script its row names (the fixture suites and tools
+  it runs as child processes), reaches by relative `require`, all the way down;
 - every `shots-*` folder its file names;
 - the harness, `ui-sources.js` and the package manifests of the tests folder.
+
+Every other load in that closure is judged before a suite qualifies. The closure covers the
+suite, its libraries and the scripts its children run. A child node process is followed. A
+literal child program in `child_tools` (`git`, `ps`) is bound by content. A Node builtin is
+allowed. Anything else leaves the suite keyed by the whole checkout, with the file and line
+in its reason: a Python, Cargo or shell child whose imports the family does not follow, a
+computed program or `require`, an installed package, a dynamic `import(`. The only exception
+is an exact call the family entry declares in `dynamic`, with its reason (today
+`harness.js`'s Playwright candidates and the navigation library's `sysctl` and `ps`
+diagnostics). This is how `thread-switch.js` (a Python child importing `qa/lib/qaimg.py` and
+optionally Pillow), `realbytes.js` (Cargo), `phone.js` and `dialect.js` (computed requires)
+and `gate-honesty.js` (`run.js` launches a computed program) stay unqualified.
 
 These are the same rules `proof-for.sh` selects a suite by, so an identity binds
 every path whose change would select the suite. Reuse is never less safe than the

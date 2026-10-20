@@ -3712,6 +3712,18 @@
         "RICHOS_WORKER_SLOT_HELD": "the caller's held worker slot (admission)"
       },
       "external": [],
+      "child_tools": [
+        "git",
+        "ps"
+      ],
+      "dynamic": {
+        "richos/app/ui/tests/lib/harness.js": {
+          "require(c)": "loadPlaywright tries each Playwright candidate path in turn; whatever loads is bound as an install by content (portable_dependencies), in the same order"
+        },
+        "richos/app/ui/tests/lib/navigation-evidence.js": {
+          "spawnSync(file": "helper() is called only with /usr/sbin/sysctl and /bin/ps, to record host pressure in a navigation-failure bundle; system programs, no repository code, never a verdict input"
+        }
+      },
       "qualification": "docs/development/verification-input-qualifications.json",
       "qualification_unit": "ui-suite family",
       "unqualified": {

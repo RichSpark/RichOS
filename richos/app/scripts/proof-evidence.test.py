@@ -2002,6 +2002,43 @@ class UiFamily(unittest.TestCase):
         # A suite that names no such child is not bound to that library.
         self.assertNotIn(only, evidence.contract_for(self.root, "b.js")["paths"])
 
+    def test_a_load_the_family_cannot_follow_leaves_the_suite_unqualified(self):
+        """Review rv-20261020T054118Z-26a24a78-1851: thread-switch.js runs contrast.py, whose
+        import of qa/lib/qaimg.py the identity did not bind. A suite is qualified only when every
+        load in its closure is followed or declared; anything else names the file and line."""
+        declaration = self.root / "richos/app/scripts/proof-for.ui-inputs"
+        cases = {
+            "py.js": 'require("./lib/harness");\nconst cp = require("child_process");\n'
+                     'cp.spawnSync("python3", ["helper.py"]);\n',
+            "cargo.js": 'require("./lib/harness");\nrequire("child_process").spawnSync("cargo", ["run"]);\n',
+            "computed.js": 'require("./lib/harness");\nconst path = require("path");\nconst DIR = __dirname;\n'
+                           'require(path.join(DIR, "x.js"));\n',
+            "package.js": 'require("./lib/harness");\nrequire("left-pad");\n',
+            "program.js": 'require("./lib/harness");\nconst { spawnSync } = require("child_process");\n'
+                          'spawnSync(process.env.TOOL, []);\n',
+            "esm.js": 'require("./lib/harness");\nimport("./lib/harness.js");\n',
+        }
+        for name, text in cases.items():
+            (self.root / "richos/app/ui/tests" / name).write_text(text)
+            declaration.write_text(declaration.read_text() + name + " @shell\n")
+        for name in cases:
+            with self.subTest(suite=name):
+                reason = evidence.contract_for(self.root, name).get("fresh", "")
+                self.assertIn("cannot follow everything %s loads" % name, reason)
+                self.assertIn("richos/app/ui/tests/%s:" % name, reason)
+        # A builtin, a node child, a bound tool and a declared call stay qualified.
+        (self.root / "richos/app/ui/tests/fine.js").write_text(
+            'require("./lib/harness");\nconst cp = require("node:child_process");\nrequire("fs");\n'
+            'cp.spawnSync(process.execPath, ["x"]);\ncp.execFileSync("git", ["status"]);\nconst c = "y";\nrequire(c);\n')
+        declaration.write_text(declaration.read_text() + "fine.js @shell\n")
+        self.assertIn("cannot follow", evidence.contract_for(self.root, "fine.js").get("fresh", ""))
+        family = {**self.family, "child_tools": ["git"],
+                  "dynamic": {"richos/app/ui/tests/fine.js": {"require(c)": "fixture"}}}
+        evidence.atomic(self.root / "richos/app/scripts/proof-inputs.json",
+                        {"schema": 1, "checks": {}, "families": {"ui-suite": family}})
+        self.assertEqual(evidence.contract_for(self.root, "fine.js").get("family"), "ui-suite")
+        self.assertEqual(evidence.contract_for(self.root, "py.js").get("family"), None)
+
     def test_a_changed_harness_needs_its_review_renewed(self):
         self.edit("richos/app/ui/tests/lib/harness.js", 'require("./ui-sources"); require("fs");\n')
         self.assertIn("changed unit reader", self.identity(self.worktree)["fresh"])

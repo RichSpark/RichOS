@@ -1213,6 +1213,109 @@ def require_closure(root, *starts):
     return sorted(os.path.relpath(path, root) for path in seen)
 
 
+# WHAT A SUITE'S CLOSURE LOADS MUST BE FOLLOWED TO THE BOTTOM, OR THE SUITE IS NOT QUALIFIED
+# (review rv-20261020T054118Z-26a24a78-1851: thread-switch.js runs contrast.py, which imports
+# qa/lib/qaimg.py, and a changed qaimg.py flipped its verdict while the identity stood still).
+# require_closure follows the loads it can read exactly: a literal relative `require` and
+# `require(path.join(__dirname, ...literals))`. Every other load in the closure is judged here:
+#   * a child node process (process.execPath): allowed; the scripts it runs are on the suite's
+#     row, and their own requires are followed like the suite's;
+#   * a literal child program the family binds by content (`child_tools`): allowed;
+#   * a Node builtin module: allowed;
+#   * anything else (a Python, Cargo or shell child, a computed program, a computed `require`,
+#     an installed package, a dynamic `import(`): the suite is NOT qualified, with the file and
+#     line, unless the family entry declares that exact call in `dynamic` with its reason.
+_CHILD_CALL = re.compile(r"""(?:\b(spawnSync|spawn|execFileSync|execFile|execSync|fork)|(?<![.\w$])(exec))\(\s*([^,)]*)""")
+_ANY_REQUIRE = re.compile(r"""(?<![.\w$])require\(\s*([^)]*)\)""")
+_DYNAMIC_IMPORT = re.compile(r"""(?<![.\w$])import\(""")
+_LITERAL = re.compile(r"""^(["'])([^"']*)\1$""")
+_JOINED_ARG = re.compile(r"""^path\.(?:join|resolve)\(\s*__dirname(?:\s*,\s*["'][^"']+["'])+\s*$""")
+_BUILTINS = {}
+
+
+def node_builtins():
+    """Node's own module names, from the Node runtime, once per process."""
+    search = os.pathsep.join([os.environ.get("PATH", ""), "/opt/homebrew/bin", "/usr/local/bin"])
+    node = shutil.which("node", path=search)
+    if not node:
+        raise ValueError("node is needed to read its builtin module list")
+    if node not in _BUILTINS:
+        result = subprocess.run([node, "-p", "JSON.stringify(require('module').builtinModules)"],
+                                capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+        if result.returncode != 0:
+            raise ValueError("cannot read Node's builtin modules")
+        _BUILTINS[node] = frozenset(json.loads(result.stdout))
+    return _BUILTINS[node]
+
+
+_LOAD_SCANS = {}
+
+
+def _file_loads(path):
+    """[(line, kind, call, arg)] for every child launch, `require` and `import(` in a file outside
+    comment lines. Read again whenever the file's stat identity changes, as _tool_digest is."""
+    info = os.stat(path)
+    key = (str(path), info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino)
+    if key not in _LOAD_SCANS:
+        text = Path(path).read_text(errors="replace")
+        found = []
+        if "require(" in text or "import(" in text or "spawn" in text or "exec" in text or "fork(" in text:
+            def line_of(offset):
+                start = text.rfind("\n", 0, offset) + 1
+                end = text.find("\n", offset)
+                line = text[start:end if end >= 0 else len(text)].strip()
+                return text.count("\n", 0, offset) + 1, line.startswith(("//", "*", "/*"))
+            for pattern, kind in ((_CHILD_CALL, "child"), (_ANY_REQUIRE, "require"), (_DYNAMIC_IMPORT, "import")):
+                for match in pattern.finditer(text):
+                    number, comment = line_of(match.start())
+                    if comment:
+                        continue
+                    if kind == "child":
+                        arg = match.group(3).strip()
+                        found.append((number, kind, "%s(%s" % (match.group(1) or match.group(2), arg), arg))
+                    elif kind == "require":
+                        arg = match.group(1).strip()
+                        found.append((number, kind, "require(%s)" % arg, arg))
+                    else:
+                        found.append((number, kind, "import(", ""))
+        _LOAD_SCANS[key] = sorted(found)
+    return _LOAD_SCANS[key]
+
+
+def unfollowed_loads(root, closure, family):
+    """['<file>:<line> <call>'] for every load in the closure the family cannot follow (above)."""
+    root = Path(root)
+    declared = family.get("dynamic", {})
+    tools = set(family.get("child_tools", []))
+    builtins = None
+    found = []
+    for rel in closure:
+        if not rel.endswith((".js", ".cjs", ".mjs")):
+            continue
+        allowed = declared.get(rel, {})
+        try:
+            loads = _file_loads(root / rel)
+        except OSError:
+            continue
+        for number, kind, call, arg in loads:
+            if call in allowed:
+                continue
+            literal = _LITERAL.match(arg)
+            if kind == "child" and (arg == "process.execPath" or (literal and literal.group(2) in tools)):
+                continue
+            if kind == "require":
+                if literal and literal.group(2).startswith(("./", "../")):
+                    continue  # require_closure follows it
+                if _JOINED_ARG.match(arg):
+                    continue
+                if literal:
+                    builtins = builtins if builtins is not None else node_builtins()
+                    if literal.group(2).removeprefix("node:") in builtins:
+                        continue
+            found.append("%s:%d %s" % (rel, number, call))
+    return found
+
+
 def ui_family_recipe(root, label, family):
     """The recipe of UI suite `label` (UI_FAMILY above), or {"fresh": reason}."""
     root = Path(root).resolve()
@@ -1244,7 +1347,13 @@ def ui_family_recipe(root, label, family):
     # (review rv-20261020T044017Z-ebbb640b-fc3b, P2: a child's reads must be bound before its
     # parent's pass is reused). A folder a child lists is the row's to declare (`<dir>/`).
     scripts = [root / rel for rel in sorted(paths) if rel.endswith((".js", ".cjs", ".mjs"))]
-    paths.update(require_closure(root, suites / label, *[path for path in scripts if path.is_file()]))
+    closure = require_closure(root, suites / label, *[path for path in scripts if path.is_file()])
+    paths.update(closure)
+    unfollowed = unfollowed_loads(root, closure, family)
+    if unfollowed:
+        return {"fresh": "the %s family cannot follow everything %s loads, so it stays unqualified: %s%s" % (
+            UI_FAMILY, label, "; ".join(unfollowed[:4]),
+            " (and %d more)" % (len(unfollowed) - 4) if len(unfollowed) > 4 else "")}
     text = (suites / label).read_text(errors="replace")
     for folder in sorted(suites.iterdir()):
         if folder.is_dir() and folder.name.startswith("shots-") and re.search(

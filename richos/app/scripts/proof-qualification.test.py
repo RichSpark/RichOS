@@ -58,16 +58,23 @@ class ProductionQualification(unittest.TestCase):
         rows, _aliases = evidence.ui_declaration(root / family["declaration"])
         self.assertGreater(len(rows), 50)
         self.assertFalse(set(family["unqualified"]) - set(rows), "an unqualified suite with no row")
+        qualified = 0
         for label in rows:
             with self.subTest(label=label):
                 recipe = evidence.contract_for(root, label)
                 if label in family["unqualified"]:
                     self.assertIn("leaves %s unqualified" % label, recipe["fresh"])
                     continue
+                if recipe.get("fresh"):
+                    # Only for a load it cannot follow, named by file and line.
+                    self.assertRegex(recipe["fresh"], r"cannot follow everything .* loads.*: richos/\S+:\d+ ")
+                    continue
+                qualified += 1
                 self.assertEqual(recipe.get("family"), evidence.UI_FAMILY, recipe.get("fresh"))
                 evidence.qualify_recipe(root, recipe)
                 self.assertIn("richos/app/ui/tests/" + label, recipe["paths"])
                 self.assertIn("richos/app/ui/theme-boot.js", recipe["paths"])
+        self.assertGreater(qualified, 60, "the family qualifies almost nothing: a resolver regression?")
         contract = json.loads((root / family["qualification"]).read_text())["units"][family["qualification_unit"]]
         recipe = evidence.contract_for(root, "setup.js")
         for field in ("paths", "tools", "environment"):
@@ -89,9 +96,22 @@ class ProductionQualification(unittest.TestCase):
                 continue
             with self.subTest(suite=suite.name):
                 recipe = evidence.contract_for(root, suite.name)
-                self.assertIn("richos/app/ui/tests", recipe["paths"])
-        self.assertIn("richos/app/ui/tests/lib/overlays.js", evidence.contract_for(root, "gate-honesty.js")["paths"])
-        self.assertIn("richos/tools/phone-probe/lib/png.js", evidence.contract_for(root, "phone.js")["paths"])
+                # Either bound to the folder the reconciler lists, or not qualified at all.
+                self.assertTrue(recipe.get("fresh") or "richos/app/ui/tests" in recipe["paths"], recipe)
+        rows, _aliases = evidence.ui_declaration(root / "richos/app/scripts/proof-for.ui-inputs")
+        self.assertIn("richos/app/ui/tests/", rows["gate-honesty.js"])
+
+    def test_a_suite_with_a_child_the_family_cannot_follow_is_not_qualified(self):
+        """Review rv-20261020T054118Z-26a24a78-1851: thread-switch.js runs contrast.py, which
+        imports qa/lib/qaimg.py (and optionally Pillow from the interpreter). The family follows no
+        Python imports, so the suite must stay keyed by the whole checkout, where any change to
+        qaimg.py is a changed identity."""
+        root = HERE.parents[2]
+        for label, call in (("thread-switch.js", 'spawnSync("python3"'), ("realbytes.js", 'spawnSync("cargo"')):
+            with self.subTest(suite=label):
+                reason = evidence.contract_for(root, label).get("fresh", "")
+                self.assertIn("cannot follow everything", reason)
+                self.assertIn(call, reason)
 
     def test_every_environment_name_a_ui_suite_reads_is_bound_or_operational(self):
         """The family binds the environment names its review lists; a suite that starts reading
