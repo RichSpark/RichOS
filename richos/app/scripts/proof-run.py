@@ -1108,7 +1108,7 @@ def launch(item, n, logdir, tokens_dir, reserved):
     item.state, item.started = "running", time.monotonic()
     evidence = getattr(item, "evidence", None)
     if evidence:
-        evidence.save(item, evidence.current_source())
+        evidence.launched(item)  # HEAD only (Record.launched says why)
     try:
         # Without a shield the check is REFUSED and never started (a failed check, named), as
         # run-tests.sh refuses (zach-opus-hostshim3, d645b9a77): never run without the stand-ins.
