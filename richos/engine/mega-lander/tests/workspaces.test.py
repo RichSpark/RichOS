@@ -6922,6 +6922,104 @@ class ReleaseBranches_TheMergeGateIsToldWhichBranchItLandsOn(unittest.TestCase):
         self.assertEqual(run("git", "-C", repo, "symbolic-ref", "--short", "HEAD").stdout.strip(), "main")
 
 
+class ProofReport_TheHandoverPointsAtItsSavedRun(Base):
+    """Verification reliability PRD 2026-10-20, R3/A8: a handover (TaskCompleted) and a normal
+    end (SubagentStop) attach a pointer to the workspace's newest saved proof run of its HEAD,
+    with the runner's own counts and every check that did not pass. It is a report, never
+    proof; a missing, stale, unreadable or slow one never delays or prevents the fact."""
+
+    def setUp(self):
+        super().setUp()
+        self.history_root = os.path.join(self.env.root, "proof-runs")
+        os.environ["RICHOS_PROOF_RUN_DIR"] = self.history_root
+        self.addCleanup(os.environ.pop, "RICHOS_PROOF_RUN_DIR", None)
+        self.cc = self.make_cc("zach-opus-pr")
+        self.aid, _n = self.spawn("zach-opus-pr", cc=self.cc)
+        self.commit(self.cc)
+        self.path = os.path.realpath(self.cc)
+
+    def head(self):
+        return run("git", "-C", self.cc, "rev-parse", "HEAD").stdout.strip()
+
+    def saved_run(self, name, summary, head=None):
+        run_dir = os.path.join(ws._proof_history(self.path), name)
+        os.makedirs(run_dir)
+        head = head or self.head()
+        with open(os.path.join(run_dir, "plan.json"), "w") as f:
+            json.dump({"schema": 1, "root": self.path, "source": {"commit": head},
+                       "items": [{"check": c} for c in ("a.js", "b.js", "c.js", "d")],
+                       "selection": {"arguments": ["base..cand"], "mode": "normal",
+                                     "base": "b" * 40, "candidate": head}}, f)
+        with open(os.path.join(run_dir, "summary.json"), "w") as f:
+            f.write(summary if isinstance(summary, str) else json.dumps(summary))
+        return run_dir
+
+    def report(self):
+        return [w for w in self.rec("zach-opus-pr")["workspaces"] if w.get("path") == self.path][0].get("proof_report")
+
+    def handed_in(self):
+        ws.lifecycle({"hook_event_name": "TaskCompleted", "session_id": self.sid,
+                      "teammate_name": "zach-opus-pr"}, self.entity)
+
+    def test_an_incomplete_run_is_reported_by_the_runners_own_outcomes(self):
+        run_dir = self.saved_run("20261020T000000Z-x", {"checks": [
+            {"check": "a.js", "result": "passed"}, {"check": "b.js", "result": "passed", "reused_from": "/r"},
+            {"check": "c.js", "result": "failed"},
+            {"check": "d", "result": "not-run", "not_run": {"why": "no-screen"}}]})
+        self.handed_in()
+        report = self.report()
+        self.assertTrue(self.rec("zach-opus-pr").get("handed_in"))
+        self.assertEqual(report["run"], run_dir)
+        self.assertEqual(report["candidate"], self.head())
+        self.assertEqual(report["outcomes"], {"passed": 2, "failed": 1, "not-run": 1})
+        self.assertEqual(report["line"], "4 planned, 2 passed (1 of them reused); NOT complete: "
+                                         "c.js (failed), d (no-screen)")
+        # Never counted as passes: total minus failed would say 3.
+        self.assertNotIn("3 passed", report["line"])
+
+    def test_a_run_of_an_older_head_is_not_this_handovers_report(self):
+        self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
+        self.commit(self.cc, "later.txt")
+        self.finish(self.aid)
+        self.assertTrue(self.rec("zach-opus-pr").get("end"))
+        self.assertIn("no saved proof run of HEAD", self.report()["unavailable"])
+        self.assertEqual(self.report()["on"], "end")
+
+    def test_missing_or_unreadable_reports_never_prevent_the_fact(self):
+        self.handed_in()
+        self.assertTrue(self.rec("zach-opus-pr").get("handed_in"))
+        self.assertIn("no saved proof run", self.report()["unavailable"])
+        run_dir = self.saved_run("20261020T000001Z-y", "{ not json")
+        self.finish(self.aid)
+        self.assertTrue(self.rec("zach-opus-pr").get("end"))
+        self.assertEqual(self.report()["run"], run_dir)
+        self.assertIn("no readable summary", self.report()["unavailable"])
+
+    def test_a_slow_or_failing_report_stays_inside_the_hooks_budget(self):
+        self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
+        # The budget is the report's own deadline: spent, it stops reading and says so.
+        with patch.object(ws, "PROOF_REPORT_SECONDS", 0):
+            self.handed_in()
+        self.assertTrue(self.rec("zach-opus-pr").get("handed_in"))
+        self.assertIn("time budget", self.report()["unavailable"])
+        before = self.rec("zach-opus-pr")["end"] if self.rec("zach-opus-pr").get("end") else None
+        with patch.object(ws, "proof_report", side_effect=RuntimeError("broken reader")):
+            self.finish(self.aid)
+        self.assertTrue(self.rec("zach-opus-pr").get("end"))
+        self.assertIsNone(before)
+
+    def test_the_merge_offers_only_the_run_reported_for_the_tip_it_merges(self):
+        run_dir = self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
+        self.handed_in()
+        chain = ws._chain(self.rec("zach-opus-pr"))
+        self.assertEqual(ws._author_runs(chain, self.head()), [run_dir])
+        self.assertEqual(ws._land_env("main", ws._author_runs(chain, self.head()))[ws.AUTHOR_RUNS_ENV], run_dir)
+        # Another tip (the branch moved after the report) is offered nothing.
+        self.assertEqual(ws._author_runs(chain, "c" * 40), [])
+        with patch.dict(os.environ, {ws.AUTHOR_RUNS_ENV: "/an/inherited/run"}):
+            self.assertNotIn(ws.AUTHOR_RUNS_ENV, ws._land_env("main", []))
+
+
 class HuntV3_07_NoTestIsCollectedTwice(unittest.TestCase):
     """Hunt part 4 v3, V3-07: SeverityThreeGroupJ subclassed the concrete
     Point09_NeverWritesAgain for one helper and so ran its six tests twice.

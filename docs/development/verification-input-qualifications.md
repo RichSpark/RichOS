@@ -236,3 +236,11 @@ checkout.
   `PROCESS_KILL_WAIT`. It reads no new file, environment variable, tool or outside path, so
   every contract's input floor is unchanged. Without the renewal every one of those
   contracts refused qualification and `proof-run.test.sh` was red on main at `6ef73abf`.
+- 2026-10-20, `richos/engine/mega-lander/workspaces.py`, pinned by 22 unit contracts,
+  `5185e546…` to `f32296f7…`. The change attaches a proof-run report pointer to a workspace
+  record on TaskCompleted and a normal SubagentStop (reads the checkout's HEAD and saved
+  `plan.json`/`summary.json` files under the proof-run directory machine settings name) and
+  offers the reported runs to the merge gate in `workspaces.sh merge`. None of the 22 units
+  reaches those paths: their fixtures exercise worktree guards, hook registration and Git
+  jurisdiction. Module import gains only constants, so every contract's input floor is
+  unchanged.
