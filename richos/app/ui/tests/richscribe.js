@@ -180,4 +180,4 @@ async function main() {
   return run.report();
 }
 
-main().then((f) => process.exit(f ? 1 : 0));
+main().then((f) => { process.exitCode = f ? 1 : 0; });

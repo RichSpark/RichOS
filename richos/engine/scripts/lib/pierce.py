@@ -136,13 +136,15 @@ def classification_context(payload, project):
 
 
 def recovery_context(payload, project):
-    """Recovery observation failures cannot turn baseline Pierce into refusal."""
+    """Recovery observation failures cannot turn baseline Pierce into refusal.
+    questions-only follows observe here: the gap is recorded and the dispatch
+    is judged by Pierce's ordinary inspection alone."""
     import recovery
     declaration = recovery.mode(os.environ.get("RICHOS_ENTITY_ROOT") or str(project))
     try:
         return classification_context(payload, project), []
     except Exception as error:
-        if declaration["mode"] != "observe":
+        if not recovery.quiet(declaration["mode"]):
             raise ValueError("recovery classification unavailable: "+str(error)) from error
         return None, [str(error)]
 
@@ -151,10 +153,15 @@ def checked_classification(request, verdict):
     try:
         validate_classification(request, verdict)
     except (OSError, ValueError) as error:
-        if (request.get("recovery_assignment_context") or {}).get("mode") != "observe":
+        if not quiet_recovery(request):
             raise
         verdict.pop("assignment_classification", None)
         verdict["recovery_observation_gaps"] = [str(error)]
+
+
+def quiet_recovery(request):
+    """observe and questions-only never refuse a dispatch over recovery identity."""
+    return (request.get("recovery_assignment_context") or {}).get("mode") in ("observe", "questions-only")
 
 
 def classification_schema(observe=False):
@@ -663,7 +670,7 @@ def run_review(request, profile, model="opus", effort=None, output_format="json"
     if not cli:
         raise ValueError("Claude Code executable was not found on PATH")
     command = claude_command(cli, profile, request["read_roots"], model, effort, output_format,
-        classification_schema((request.get("recovery_assignment_context") or {}).get("mode")=="observe") if request.get("recovery_assignment_context") else SCHEMA)
+        classification_schema(quiet_recovery(request)) if request.get("recovery_assignment_context") else SCHEMA)
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
     env["CLAUDE_CODE_SAFE_MODE"] = "1"

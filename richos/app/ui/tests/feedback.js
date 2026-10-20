@@ -857,7 +857,7 @@ async function main() {
       ? "\n" + failed + " check(s) FAILED"
       : "\nhe can ask, rate, read exactly what would be said, refuse it, and find his own answers on his own machine."
   );
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main().catch((e) => {

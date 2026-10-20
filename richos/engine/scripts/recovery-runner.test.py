@@ -118,6 +118,33 @@ with s.execution_claim(sys.argv[2],'a'*40,wait_seconds=10,say=lambda message:pri
             self.assertEqual(len(launches),2)
             self.assertEqual(len(set([first_log]+launches)),3)
 
+    def test_questions_only_delivers_questions_and_coverage_gaps_never_control_notices(self):
+        questions = dict(questions=[dict(question='What does the addition protect?', evidence='send')], frontier='f', consultation='c')
+        base = dict(id='job', mode='questions-only', status='investigating', owner='lead', work='teammate:w', acceptance='a',
+                    evidence_cursor='f', repeat_signal=dict(label='zach-opus-prd3c'), repeat_questions=dict(axel=questions))
+        notice = RR.owner_notice(base)
+        self.assertIn('AXEL QUESTIONS', notice['lines'][0])
+        self.assertEqual(notice['mode'], 'questions-only')
+        quiet = dict(base, repeat_signal=None, repeat_questions={})
+        for change in (dict(status='recovering', plan=dict(accepted=True, id='plan')), dict(status='awaiting_alex'),
+                       dict(wes=dict(verdict=dict(action='withdraw_finding', finding='r#1')))):
+            self.assertIsNone(RR.owner_notice(dict(quiet, **change)), change)
+        gap = RR.owner_notice(dict(quiet, status='unavailable'))
+        self.assertIn('unavailable', gap['lines'][0])
+        self.assertIsNone(RR.owner_notice(dict(base, mode='observe')))
+        with patch.object(R, 'read', return_value=dict(base, controls=[dict(action='stop', workers={'w': 'source'})])):
+            ws = SimpleNamespace(recovery_stop=lambda *a: self.fail('questions-only applied a control'))
+            RR.apply_controls('job', ws)
+
+    def test_a_dismissing_advisor_sends_no_notice_and_the_schema_allows_no_question(self):
+        self.assertEqual(RR.QUESTIONS['properties']['questions']['minItems'], 0)
+        self.assertIn('dismissal', RR.QUESTIONS['required'])
+        self.assertIn('return no questions and a one-sentence dismissal', RR.REPEAT_PROMPT)
+        record = dict(id='job', mode='questions-only', status='investigating', owner='lead', work='w', acceptance='a',
+                      evidence_cursor='f', repeat_signal=dict(label='w'),
+                      repeat_questions=dict(axel=dict(frontier='f', questions=[], dismissal='no challenge', consultation='c')))
+        self.assertIsNone(RR.owner_notice(record))
+
     def test_observed_advice_cannot_steer_reviews_or_dispatch_replacements(self):
         import second_review as SR
         record=dict(mode='observe',status='recovering',plan=dict(accepted=True,id='plan'),wes=dict(verdict=dict(action='withdraw_finding',finding='r#1')))
@@ -173,36 +200,44 @@ class Async(unittest.TestCase):
         ws = SimpleNamespace(recovery_chain=lambda r, observation=False: [r],
             recovery_work_key=lambda r, observation=False: 'teammate:'+r['key'],
             load_agent=lambda key: rec, save_agent=lambda r: None, Lock=lambda: R.contextlib.nullcontext(),
-            prompt_lines=lambda prompt, field: [])
+            prompt_lines=lambda prompt, field: [], all_agents=lambda include_done=False: [rec])
         return rec, ws
 
-    def test_dispatch_and_watcher_schedule_both_on_four_without_a_review_or_assignment(self):
+    def test_a_name_suffix_alone_schedules_nothing_on_dispatch_or_watcher(self):
+        # PRD 2026-10-20 section 5: the visible suffix is no longer a round count.
         import recovery_controls as C
         self.ledger.write_text('')
         declaration = dict(mode='enforce', repositories=[str(self.repo)], wes_policy='carried')
-        for number in (3, 4):
+        for number in (3, 4, 9):
             rec, ws = self.numbered(number)
             item = SimpleNamespace(source='native', repo=str(self.repo), ref=rec['key'], session='owner',
                 state='running', started=1, env={}, claude='', accounts='', tip='a'*40)
             with patch.object(R, 'mode', return_value=declaration), patch.object(RR.SR, 'find_teammate', return_value=rec), \
                     patch.object(RR, 'launch') as launch:
                 RR.tick([item], str(HERE.parent), 'entity', ws)
-                self.assertEqual([c.args[1] for c in launch.call_args_list], [] if number == 3 else ['axel', 'wes'])
-            # The dispatch path records the same alarm before the watcher polls.
+                launch.assert_not_called()
             with patch.object(R, 'mode', return_value=declaration), patch.object(RR, 'consultation') as model:
-                jobs = C.admitted(ws, {}, rec, dict(kind='implementation'), [str(self.repo)], 'entity')
-                self.assertEqual(len(jobs), 0 if number == 3 else 1)
+                self.assertEqual(C.admitted(ws, {}, rec, dict(kind='review'), [str(self.repo)], 'entity'), [])
                 model.assert_not_called()
-        with patch.object(R, 'mode', return_value=dict(mode='off')), patch.object(RR, 'launch') as launch:
+        # A recorded actual-round alarm on the job is what schedules both.
+        rec, ws = self.numbered(2)
+        rec['recovery_assignment'] = dict(kind='implementation')
+        work = 'teammate:' + rec['key']
+        R.reconcile(str(self.repo), work, {work}, 'owner', 'acceptance', mode='enforce',
+                    signal=R.round_signal(4, 'witnessed-start', rec['name']))
+        item = SimpleNamespace(source='native', repo=str(self.repo), ref=rec['key'], session='owner',
+            state='running', started=1, env={}, claude='', accounts='', tip='a'*40)
+        with patch.object(R, 'mode', return_value=declaration), patch.object(RR.SR, 'find_teammate', return_value=rec), \
+                patch.object(C, 'work', return_value=(work, {work}, 'acceptance')), \
+                patch.object(RR, 'launch') as launch:
             RR.tick([item], str(HERE.parent), 'entity', ws)
-            self.assertEqual(C.admitted(ws, {}, rec, dict(kind='implementation'), [str(self.repo)], 'entity'), [])
-            launch.assert_not_called()
+            self.assertEqual([c.args[1] for c in launch.call_args_list], ['axel', 'wes'])
 
     def test_probing_questions_reach_rich_before_any_verdict_or_other_advisor(self):
         import recovery_controls as C
         import review_watch as RW
         self.ledger.write_text('')
-        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-hostshim4')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(4, 'start-4', 'zach-opus-hostshim'))
         calls = []
         def consult(identity, role, phase, prompt, shape, executable, account):
             calls.append((role, phase))
@@ -240,8 +275,49 @@ class Async(unittest.TestCase):
         self.assertEqual(current['controls'], [])
         self.assertIsNone(current['plan'])
 
+    def test_an_answer_for_a_superseded_frontier_is_set_aside_and_asked_again(self):
+        # Review finding 2: the concern that arrived mid-consultation is not absorbed.
+        self.ledger.write_text('')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='questions-only',
+                             signal=R.event_signal(['e1'], 'triage inspect', 'worker'))
+        def consult(identity, role, phase, prompt, shape, executable, account):
+            old = R.read(identity)['evidence_cursor']
+            with R.locked(identity):
+                current = R.read(identity)
+                current['consults'].append(dict(id='c', role=role, phase='questions', input='i', frontier=old, started_at=1, status='running'))
+                R.save(current, 'fixture-started')
+            R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='questions-only',
+                        signal=R.event_signal(['e2'], 'triage inspect: arrived while asking', 'worker'))
+            return dict(job=identity, acceptance='acceptance', frontier=old, dismissal='',
+                        questions=[dict(question='Why add this?', evidence='e1 only')]), 'c'
+        with patch.object(RR.SR, 'load_workspaces', return_value=object()), patch.object(RR.SR, 'find_claude', return_value='provider'), \
+                patch.object(RR, 'snapshot', return_value='{}'), patch.object(RR, 'consultation', side_effect=consult):
+            self.assertEqual(RR.run(record['id'], 'wes', str(HERE.parent)), 0)
+        current = R.read(record['id'])
+        self.assertTrue(R.repeat_pending(current, 'wes'))
+        self.assertEqual(current['repeat_signal']['events'], ['e1', 'e2'])
+        self.assertFalse(current.get('supervision_error'))
+        events = [r['event'] for r in R.rows(R.root() / 'events.jsonl') if r.get('job') == record['id']]
+        self.assertIn('repetition-questions-superseded', events)
+        # A concern that joins the pending alarm after the advisor read the job
+        # moves the frontier, so the answer that never saw it is set aside.
+        def late(identity, role, phase, prompt, shape, executable, account):
+            frontier = R.read(identity)['evidence_cursor']
+            R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='questions-only',
+                        signal=R.event_signal(['e3'], 'triage inspect: joined the pending alarm', 'worker'))
+            self.assertNotEqual(R.read(identity)['evidence_cursor'], frontier)
+            return dict(job=identity, acceptance='acceptance', frontier=frontier, dismissal='',
+                        questions=[dict(question='Why add this?', evidence='e1 and e2 only')]), 'c2'
+        with patch.object(RR.SR, 'load_workspaces', return_value=object()), patch.object(RR.SR, 'find_claude', return_value='provider'), \
+                patch.object(RR, 'snapshot', return_value='{}'), patch.object(RR, 'consultation', side_effect=late):
+            self.assertEqual(RR.run(record['id'], 'wes', str(HERE.parent)), 0)
+        current = R.read(record['id'])
+        self.assertTrue(R.repeat_pending(current, 'wes'))
+        self.assertEqual(current['repeat_signal']['events'], ['e1', 'e2', 'e3'])
+        self.assertTrue(current.get('update_needed'))
+
     def test_rich_self_correction_needs_no_advisor_control_or_recovery_plan(self):
-        record = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', mode='enforce', name='zach-opus-lease4')
+        record = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(4, 'start-4', 'zach-opus-lease'))
         phases = []
         def consult(identity, role, phase, prompt, shape, executable, account):
             phases.append(phase)
@@ -271,12 +347,12 @@ class Async(unittest.TestCase):
         self.assertIsNone(current['plan'])
         # Old failed handovers must not instantly undo the recognized correction.
         self.assertEqual(R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance',
-            mode='enforce', name='zach-opus-lease4')['status'], 'resolved_findings')
+            mode='enforce', signal=R.round_signal(4, 'start-4', 'zach-opus-lease'))['status'], 'resolved_findings')
 
     def test_only_new_lead_text_after_question_delivery_is_a_response_candidate(self):
         import datetime
         self.ledger.write_text('')
-        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-lease4')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', signal=R.round_signal(4, 'start-4', 'zach-opus-lease'))
         transcript = self.base/'lead.jsonl'
         stamp = lambda n: datetime.datetime.fromtimestamp(n, datetime.timezone.utc).isoformat()
         def row(uid, role, at, **extra):
@@ -290,6 +366,43 @@ class Async(unittest.TestCase):
         self.assertEqual([r['uuid'] for r in RR.repeat_replies(record, 'axel')], ['new'])
         record['repeat_responses'] = {'axel': [dict(answer_ids=['new'])]}
         self.assertEqual(RR.repeat_replies(record, 'axel'), [])
+
+    def test_shared_reader_sees_lead_dispatches_and_sends_with_their_results(self):
+        import datetime
+        stamp = lambda n: datetime.datetime.fromtimestamp(n, datetime.timezone.utc).isoformat()
+        def use(uid, at, tool, call, data, text=None):
+            content = ([dict(type='text', text=text)] if text else []) + [dict(type='tool_use', id=call, name=tool, input=data)]
+            return dict(uuid=uid, type='assistant', timestamp=stamp(at), message=dict(content=content))
+        def result(uid, at, call, error=False, text='ok'):
+            return dict(uuid=uid, type='user', timestamp=stamp(at), message=dict(content=[dict(type='tool_result', tool_use_id=call, is_error=error, content=text)]))
+        rows = [use('d', 1, 'Agent', 'call-agent', dict(name='zach-opus-fix1', prompt='Fix the bug')),
+                result('dr', 2, 'call-agent', text='Async agent launched successfully.'),
+                use('s1', 3, 'SendMessage', 'call-refused', dict(to='zach-opus-fix1', message='Also add hardening')),
+                result('s1r', 4, 'call-refused', error=True, text='PreToolUse:SendMessage hook error: REFUSED'),
+                use('s2', 5, 'SendMessage', 'call-sent', dict(to='zach-opus-fix1', message='Also add hardening'), text='Sending the addition.'),
+                result('s2r', 6, 'call-sent'),
+                use('w', 7, 'Read', 'call-read', dict(file_path='/x')),
+                dict(uuid='side', type='assistant', isSidechain=True, timestamp=stamp(8), message=dict(content=[dict(type='tool_use', id='call-side', name='SendMessage', input=dict(to='main', message='worker'))]))]
+        transcript = self.base / 'lead-actions.jsonl'
+        transcript.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+        actions = RR.transcript_actions(str(transcript))
+        self.assertEqual([(a['id'], a['result']['is_error']) for a in actions],
+                         [('call-agent', False), ('call-refused', True), ('call-sent', False)])
+        conversation = RR.recent_conversation(str(transcript))
+        kinds = [(m.get('kind', 'text'), m['uuid']) for m in conversation]
+        self.assertIn(('action', 's2#call-sent'), kinds)
+        self.assertIn(('text', 's2'), kinds)
+        refused = next(m for m in conversation if m['uuid'] == 's1#call-refused')
+        self.assertIn('refused', refused['text'])
+        self.assertNotIn('call-read', json.dumps(conversation))
+        self.assertNotIn('call-side', json.dumps(conversation))
+        # The owner's later actions, not just prose, are witnessed answers.
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce',
+                             signal=R.round_signal(4, 'start-4', 'zach-opus-fix'))
+        record = R.repeat_questioned(record['id'], 'axel', dict(job=record['id'], acceptance='acceptance',
+            frontier=record['evidence_cursor'], questions=[dict(question='Why another addition?', evidence='send')]), 'q', [str(transcript)])
+        record['deliveries'] = {R.repeat_question_key(record, 'axel'): dict(at=4.5, owner='owner')}
+        self.assertEqual(sorted(r['uuid'] for r in RR.repeat_replies(record, 'axel')), ['s2', 's2#call-sent'])
 
     def test_actual_background_pipeline_and_exact_profile_capabilities(self):
         provider = self.base / "fake-claude"

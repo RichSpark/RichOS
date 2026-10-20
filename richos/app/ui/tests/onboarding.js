@@ -692,7 +692,7 @@ async function main() {
       : "\nthe offer is on screen without a word typed, both answers reach disk, and nothing " +
           "on it promises what the chain cannot do (" + assertions + " assertions)."
   );
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 module.exports = { openApp, noticeText };

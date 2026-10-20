@@ -2263,7 +2263,7 @@ async function main() {
       ? "\n" + failed + " check(s) FAILED"
       : "\na customer's Mac is asked once, in his language, and told the truth when it fails."
   );
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main().catch((e) => {

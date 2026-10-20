@@ -341,6 +341,19 @@ def login_environment():
     return env
 
 
+def stored_environment(login):
+    """What enable.sh stores from his terminal: the allowlist, with `claude` findable on PATH.
+    His terminal runs `claude` by name, so its PATH has the installer's folder, and his engine's
+    hooks rely on that (Pierce runs `shutil.which('claude')`). The guest's login shell does not
+    add it, so the harness does, first, unless it is already there."""
+    stored = {k: login[k] for k in ALLOWLIST if k in login}
+    stored.setdefault('LANG', 'en_US.UTF-8')
+    folder = os.path.dirname(GUEST_CLAUDE)
+    path = stored.get('PATH', '/usr/bin:/bin')
+    stored['PATH'] = path if folder in path.split(':') else folder + ':' + path
+    return stored
+
+
 def git(cwd, *args):
     code, out, err = run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false',
                           '-c', 'user.name=Probe', '-c', 'user.email=probe@example.invalid'] + list(args),
@@ -466,8 +479,7 @@ class Context(object):
         self.p = p
         self.timeout = timeout
         self.login = login_environment()
-        self.stored = {k: self.login[k] for k in ALLOWLIST if k in self.login}
-        self.stored.setdefault('LANG', 'en_US.UTF-8')
+        self.stored = stored_environment(self.login)
         self.ssh_auth_sock, self.ssh_method = derive_ssh_auth_sock()
         code, out, _ = run(['getconf', 'DARWIN_USER_TEMP_DIR'])
         self.tmpdir = out.strip()
@@ -1974,10 +1986,7 @@ def p15(ctx, r):
             rec['own_group'] = {label: bool(rec[label]) and all(m['pgid'] != rec['lead_pgid'] for m in rec[label])
                                 for label in ('fg', 'bg')}
             rec['trigger'] = trigger
-            if trigger == 'owner':
-                os.kill(lead.proc.pid, signal.SIGKILL)  # owned: the app stand-in this harness started
-            elif rec['claude_pid']:
-                os.kill(rec['claude_pid'], signal.SIGKILL)  # owned: the lead, our supervisor's own child
+            p15_trigger(lead, rec, trigger)
             grace = 5  # OPERATOR_REAP_GRACE's default (r3 (q) item 2)
             time.sleep(grace + 1)
             rec['alive_after_grace_plus_one'] = {name: alive(pid) for name, pid in recorded}
@@ -1997,6 +2006,26 @@ def p15(ctx, r):
                     except ProcessLookupError:
                         pass
     return grade_p15(r, reaps)
+
+
+# The supervisor records the lead's descendants once a second (provider-supervisor.py, "THE
+# LIMIT, STATED"), so a command younger than one snapshot when the lead crashes is reparented
+# to launchd unrecorded, on every engine. Measured 2026-10-20 on the host with the 40a01e7f and
+# the HEAD supervisor alike: a child whose provider was killed 0.3 s after the child started
+# survived 5 of 5 times, at 1.5 s 0 of 5. Found within a second of starting, the foreground command fell inside that
+# window, so the probe measured the poll, not the reap (FAIL on HEAD twice, PASS on 40a01e7f
+# twice, by phase). Two snapshots' worth of settling puts both commands past it.
+P15_SETTLE_SECONDS = 2.0
+
+
+def p15_trigger(lead, rec, trigger):
+    """End the run: once both commands are older than the supervisor's snapshot interval, kill
+    the app stand-in (owner) or the lead (lead crash)."""
+    time.sleep(P15_SETTLE_SECONDS)
+    if trigger == 'owner':
+        os.kill(lead.proc.pid, signal.SIGKILL)  # owned: the app stand-in this harness started
+    elif rec['claude_pid']:
+        os.kill(rec['claude_pid'], signal.SIGKILL)  # owned: the lead, our supervisor's own child
 
 
 # P15's context, said plainly: why the two commands run together, and that they are scratch.
@@ -2733,9 +2762,8 @@ def w2_fixture(ctx, r):
     lc.write_text('#!/bin/sh\n[ "$1 $2" = "getenv SSH_AUTH_SOCK" ] || exit 9\necho %s\n' % (sock or ''))
     os.chmod(str(lc), 0o755)
     # The stored environment enable.sh would write: the allowlist, plus the harness's pin, with
-    # the guest's claude first on PATH.
+    # the guest's claude on PATH (stored_environment).
     stored = dict(ctx.stored, **HARNESS_PIN)
-    stored['PATH'] = '/Users/admin/.local/bin:' + stored.get('PATH', '/usr/bin:/bin')
     import hashlib
     decl = {'schema': 1, 'entity_root': str(p.entity), 'engine_root': str(p.engine), 'home': str(p.home),
             'claim': {'file': str(p.claude_dir / 'state' / 'operator-lead.json'),

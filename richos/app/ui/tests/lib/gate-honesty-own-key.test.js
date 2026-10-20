@@ -59,4 +59,4 @@ try {
   if (prior) fs.writeFileSync(candidate, prior);
   else fs.rmSync(candidate, { force: true });
 }
-process.exit(verdict);
+process.exitCode = verdict;

@@ -449,6 +449,6 @@ async function main() {
     }
     return seen.join(", ");
   });
-  await browser.close(); process.exit(run.report()?1:0);
+  await browser.close(); process.exitCode = run.report()?1:0;
 }
 main().catch(e=>{console.error(e);process.exit(1);});

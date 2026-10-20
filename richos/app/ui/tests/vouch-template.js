@@ -621,7 +621,7 @@ function expectedTarballDigest(evidenceText) {
   return m[1];
 }
 
-main().then((f) => process.exit(f ? 1 : 0));
+main().then((f) => { process.exitCode = f ? 1 : 0; });
 
 // ---------------------------------------------------------------------------------------
 // EVERY CHECK ABOVE WAS RUN RED, on 2026-09-05, before it was believed
