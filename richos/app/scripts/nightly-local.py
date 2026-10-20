@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """Manually check, build, publish or release a nightly using this Mac's own signing keys.
 
-Nothing installs a job, watches main or runs on a schedule. `release` builds and
-publishes a nightly in one motion. `build` stops at a signed, notarized,
+Nothing installs a job, watches main or runs on a schedule. `release` builds a
+nightly and queues its notes; the lead publishes after their review. `build` stops at a signed, notarized,
 engine-pinned candidate for QA to walk; only an explicit later `publish --run
 <run-id>` makes that candidate's release installable and moves the update
 channel. `candidate --run <run-id>` prints what a walker needs to open it.
 Only `release` and `publish` may publish. Keys remain in the local
-Keychain/private files. Every publish (and `stable`) ends by raising ONE escalation for
-the lead: a worker, started from changelog-worker-brief.md, writes the release's changelog
-entry (and after a stable, main's next release version) on its own branch. This command
-never commits to or pushes main.
+Keychain/private files. A completed build automatically requests its changelog worker
+before publication. QA accepts the candidate and Rich reviews and lands its notes;
+the publisher refuses until remote main contains those exact notes. After stable,
+only the next-version bump remains. This command never commits to or pushes main.
 """
 import argparse
 import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -262,10 +263,10 @@ LAND_RECEIPTS = Path("richos-autocheck") / "land"
 # a guest, with nothing on this screen). A mode that quietly published an unproven boot
 # would be worse than the interruption it saves.
 #
-# IT IS ACCEPTED FOR `build` AND NOT FOR `release`. `release` is build-and-publish in one
-# motion with no `publish` step to refuse anything, so the one command that can make a
-# build installable always runs the whole gate. The screenless path is build -> walk ->
-# publish --gui-proof, which is the documented flow anyway.
+# `build` retains its screenless policy and `release` retains its full-gate policy.
+# Both now prepare notes before the lead resumes publication; this does not change
+# which screen suites either command must prove. The normal path is build -> walk ->
+# notes review -> publish --gui-proof.
 NO_HOST_SCREEN_COMMANDS = ("build",)
 
 # AND IT IS THE DEFAULT FOR `build`, WITH THE PROOF TAKEN BY THE BUILD ITSELF (2026-09-29).
@@ -1571,24 +1572,10 @@ class Runner:
                      "--output", path, timeout=300)
         return path, json.loads(path.read_text())
 
-    def report_published(self, tag, stable=False):
-        """After `tag` is published: ONE escalation for the lead, or ONE line saying it is missing.
-
-        The CEO, 2026-10-20: "why do I think that automatically writing a changelog is a
-        retarded idea? (as opposed to automatically triggering a worker for the job of
-        writing)". So this command writes no changelog and commits nothing to main: it raises
-        one escalation through the engine's ledger, whose watch wakes the lead, repeats until
-        it is acknowledged and survives a restart. The lead starts a worker from
-        CHANGELOG_WORKER_BRIEF with the tag filled in; the worker writes the entry (and, after
-        a stable, main's next release version) on its own branch, and it lands like any job.
-
-        Never raises. The release is out whatever happens here, and saying otherwise would
-        be false; an escalation that could not be raised leaves one line naming what to do.
-        """
-        title, question = published_escalation(tag, stable)
+    def raise_release_job(self, title, question, meanwhile):
         argv = [str(ESCALATE), "raise", "--title", title, "--state", "work-complete",
                 "--for", "lead", "--question", question,
-                "--meanwhile", f"{tag} is published and installable; nothing waits on this.",
+                "--meanwhile", meanwhile,
                 "--teammate", ESCALATION_TEAMMATE, "--worktree", str(self.repo), "--no-record"]
         try:
             result = subprocess.run(argv, cwd=self.repo, stdin=subprocess.DEVNULL,
@@ -1599,12 +1586,76 @@ class Runner:
             if result.returncode or not raised:
                 raise RuntimeError(f"escalate.sh raise exit {result.returncode}: "
                                    f"{(said.splitlines() or [''])[0]}")
-        except Exception as error:  # noqa: BLE001 -- the publish stands, whatever failed
-            self.log.write(f"the escalation for {tag} failed: {type(error).__name__}: {error}\n")
-            self.announce(escalation_missing_line(tag, stable, error))
-            return None
+        except Exception as error:
+            raise RuntimeError(f"release job could not be dispatched: {error}; {question}") from error
         self.announce(f"Raised {raised[1]} for the lead: {title}")
         return raised[1]
+
+    def prepare_changelog(self, info, out):
+        """Durable request outside the sealed candidate; never mutate its tested bytes.
+
+        Repeated publish attempts reuse the dispatch for an unchanged request. A changed
+        published baseline creates a fresh request and therefore another review.
+        """
+        request = self.state / "changelogs" / info["build_commit"] / "request.json"
+        self.command(sys.executable, ROOT / SCRIPTS / "nightly.py", "notes-request",
+                     "--source", self.source, "--out", out, "--output", request)
+        digest = hashlib.sha256(request.read_bytes()).hexdigest()
+        sent = request.with_name("dispatched.json")
+        if sent.exists():
+            try:
+                prior = json.loads(sent.read_text())
+            except (OSError, ValueError):
+                prior = {}
+                self.announce("Saved changelog dispatch receipt is unreadable; dispatching recovery.")
+            if prior.get("request_sha256") == digest:
+                return prior["escalation"]
+        title = f"Prepare {info['tag']} changelog before publication"
+        brief = request.with_name("brief.md")
+        brief.write_text((ROOT / CHANGELOG_WORKER_BRIEF).read_text()
+                         .replace(BRIEF_TAG, info["tag"]).replace("<REQUEST>", shlex.quote(str(request))))
+        model = "opus" if info.get("channel") == "stable" else "sonnet"
+        slug = re.sub(r"[^a-z0-9]+", "-", info["tag"].lower()).strip("-")[:40].rstrip("-")
+        start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
+                            f"newt-{model}-{slug}-{digest[:8]}", "--repo", "richos",
+                            "--type", "newt", "--model", model, "--brief", str(brief)])
+        question = (f"Start Newt, the Release Notes Writer, with this exact command: `{start}`. "
+                    f"The brief already names the tag and request. The candidate's run is "
+                    f"{info['run_id']}. Draft now while QA walks it. Keep rejected drafts off main. "
+                    "After QA acceptance, second-review and land the matching notes and record, "
+                    f"then immediately run nightly-local.py publish --run {info['run_id']} yourself. "
+                    "Keep this job open until the release body and installable channel are verified. "
+                    "Retry a failed upload with the same candidate and notes; if deliberately "
+                    "abandoned after landing, remove its entry and record through the normal gate "
+                    "before closing this job. No CEO changelog decision or intervention is needed.")
+        raised = self.raise_release_job(title, question,
+                                       "QA may continue. Publication requires these reviewed notes.")
+        temporary = sent.with_suffix(".json.part")
+        try:
+            temporary.write_text(json.dumps({"request_sha256": digest, "escalation": raised}) + "\n")
+            os.replace(temporary, sent)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return raised
+
+    def finish_candidate(self, info, out):
+        # Use today's controller with the immutable candidate checkout for its source
+        # scripts. A candidate built with older tooling must not bypass today's gate.
+        self.command(sys.executable, ROOT / SCRIPTS / "nightly.py", "finish",
+                     "--source", self.source, "--out", out)
+
+    def report_published(self, tag, stable=False):
+        """Notes were a precondition. Only stable's next-version bump remains."""
+        if not stable:
+            return None
+        title, question = published_escalation(tag, stable)
+        try:
+            return self.raise_release_job(title, question, f"{tag} is published with its changelog.")
+        except RuntimeError as error:
+            # Do not report a published release as failed because its later version bump
+            # needs recovery. The next build's version collision guard remains in force.
+            self.announce(escalation_missing_line(tag, stable, error))
+            return None
 
     def describe_stable(self, info):
         """Exactly what `stable` would build and publish, and nothing it would not.
@@ -2477,6 +2528,12 @@ class Runner:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"out": str(out)}, indent=2) + "\n")
 
+    def completed_build(self, out):
+        info = json.loads((out / "candidate.json").read_text())["info"]
+        self.record_run(info["run_id"], out)
+        self.announce(f"Candidate built: {info['tag']} at {info['build_commit']}")
+        return info
+
     def load_candidate(self, run_id):
         path = self.run_pointer(run_id)
         if not path.exists():
@@ -2570,7 +2627,7 @@ class Runner:
     def needs_gui_proof(cls, info):
         """Whether the candidate still needs its guest proof, including both screen suites
         for new builds. This is the same requirement publication enforces."""
-        if info.get("screen_suites_required"):
+        if info.get("screen_suites_required") or info.get("channel") == "stable":
             return True
         state = cls.gui_boot_state(info)
         if state == "passed":
@@ -2653,7 +2710,9 @@ class Runner:
                 print(f"Using the build's own VM boot proof: {own}", flush=True)
                 gui_proof = own
         state = self.gui_boot_state(info)
-        if state is None and not info.get("no_host_screen") and not info.get("screen_suites_required"):
+        stable = info.get("channel") == "stable"
+        if (state is None and not info.get("no_host_screen")
+                and not info.get("screen_suites_required") and not stable):
             # A candidate from before this field existed. `build` had no way to hold the
             # suite back, so it ran. See gui_boot_state.
             if gui_proof:
@@ -2661,7 +2720,7 @@ class Runner:
                     "this candidate predates the gui-boot record and was built with the suite "
                     "running, so --gui-proof names evidence nothing is waiting for.")
             return None
-        if state == "passed" and not info.get("screen_suites_required"):
+        if state == "passed" and not info.get("screen_suites_required") and not stable:
             if gui_proof:
                 raise ValueError(
                     "this candidate ran gui-boot.test.sh during its build and it passed, so "
@@ -2697,6 +2756,10 @@ class Runner:
         if fields.get("result") != "pass":
             raise ValueError(f"--gui-proof records {fields.get('result')!r}, not a pass. "
                              "A failed boot is not evidence of a working one.")
+        if stable and (fields.get("suite") != "shipped-bundle-boot"
+                       or fields.get("commit") != info.get("build_commit")):
+            raise ValueError("stable publication requires the rebuilt bundle's own boot proof, "
+                             "naming its exact build commit; the nightly's proof cannot substitute")
         if info.get("screen_suites_required"):
             for suite in ("front-door", "gui-boot"):
                 if fields.get(f"{suite}_exit") != "0":
@@ -2827,8 +2890,9 @@ class Runner:
 
         That line is written before the publisher reserves the version, so an attempt that
         failed there leaves the tag free and its retry announces it again. Of several, the
-        one that finished building is the builder: only a finished build or release writes
-        its `phase timings for run` summary after the announcement.
+        one that finished building is the builder: a completed candidate writes its exact
+        `Candidate built:` marker before notes dispatch or VM follow-up. Older runs
+        are recognized by their `phase timings for run` summary.
 
         ONLY A RUN THAT FINISHED IS EVER THE BUILDER, ALONE AS WELL (verification reliability
         PRD A13, 2026-10-20). One run that announced the tag was taken as its builder whether
@@ -2848,7 +2912,8 @@ class Runner:
             at = next((i for i, line in enumerate(outer) if line in said), None)
             if at is not None:
                 found.append(path.stem)
-                if any(line.startswith("phase timings for run ") for line in outer[at:]):
+                if any(line.startswith(("phase timings for run ", f"Candidate built: {tag} at "))
+                       for line in outer[at:]):
                     finished.append(path.stem)
         if not found:
             raise ValueError(f"no run log in {logs} says it built {tag}, so there are no passed "
@@ -3031,19 +3096,14 @@ class Runner:
             # THE REBUILT BUNDLE IS A NEW ARTIFACT: another version, signed again. The
             # nightly's boot proof saw the nightly's bundle, so the bundle every stable user
             # installs is booted in the test VM before it is published, never after.
-            run = self.env["RICHOS_NIGHTLY_RUN_ID"]
-            self.record_run(run, out)
+            info = self.completed_build(out)
+            self.prepare_changelog(info, out)
+            run = info["run_id"]
             proof_error = self.vm_boot_proof(run)
             if proof_error:
                 raise RuntimeError(f"{info['tag']} IS NOT PUBLISHED. {proof_error}")
-            with self.phase("publish"):
-                self.command(sys.executable, self.source / SCRIPTS / "nightly.py", "finish",
-                             "--out", out)
-            print(f"Published https://github.com/{REPO}/releases/tag/{info['tag']}",
-                  flush=True)
-            # Its changelog entry and main's next release version are a worker's job.
-            with self.phase("report"):
-                self.report_published(info["tag"], stable=True)
+            self.announce(f"{info['tag']} built, not published. The lead will publish run {run} "
+                          "after reviewing and landing its changelog.")
             self.summary()
             return
         if command == "candidate":
@@ -3055,7 +3115,10 @@ class Runner:
             if not self.source.exists():
                 raise ValueError(f"{self.source} no longer exists; the dedicated worktree that "
                                  f"built run {run_id} is gone, so it cannot be published from here")
-            # BEFORE the network, the upload and the channel move: this is a refusal about
+            # Recover a crash between completing the build and dispatching its notes job.
+            # The immutable request's dispatch is reused, including after a completed publish.
+            self.prepare_changelog(info, out)
+            # BEFORE the upload and the channel move: this is a refusal about
             # what was never checked, and it costs nothing to make it first.
             proof = self.require_gui_proof(info, gui_proof, run_id=run_id)
             if proof:
@@ -3067,10 +3130,10 @@ class Runner:
             print(f"Publishing {info['tag']} from run {run_id}...", flush=True)
             # finish() only uploads, verifies and promotes -- no signing identity or
             # notarization credential is needed here, unlike the build step below.
-            self.command(sys.executable, self.source / SCRIPTS / "nightly.py", "finish", "--out", out)
+            self.finish_candidate(info, out)
             print(f"Published https://github.com/{REPO}/releases/tag/{info['tag']}", flush=True)
             with self.phase("report"):
-                self.report_published(info["tag"])
+                self.report_published(info["tag"], stable=info.get("channel") == "stable")
             return
 
         with self.phase("fetch"):
@@ -3168,21 +3231,8 @@ class Runner:
                     "checks_skipped": sorted(self.skipped)}
             plan_path.write_text(json.dumps(info, indent=2) + "\n")
         out = self.state / "releases" / info["tag"]
-        if command == "release":
-            self.announce(f"Building and publishing {info['tag']}...")
-            # The publisher builds, signs, notarizes and signs the updater manifest; it is
-            # the one step that reads these variables out of its environment
-            # (make-release.sh:359 and its notarize_env at :410).
-            with self.phase("build"):
-                self.command(sys.executable, self.source / SCRIPTS / "nightly.py", "run",
-                             "--plan", plan_path, "--out", out, credentials=True,
-                             release_build=True)
-            print(f"Published https://github.com/{REPO}/releases/tag/{info['tag']}", flush=True)
-            with self.phase("report"):
-                self.report_published(info["tag"])
-            self.summary()
-            return
-        # command == "build": stop at the signed, notarized, engine-pinned candidate.
+        # Both entry points build first. Publication is resumed by the lead after the
+        # worker's reviewed notes land; never hold the release lock waiting for a model.
         self.announce(f"Building {info['tag']}...")
         with self.phase("build"):
             # The engine asset's reproducibility re-build (~25 s, measured 2026-09-19) may
@@ -3193,11 +3243,12 @@ class Runner:
             # a build installable. See make-engine-asset.sh's CHECK_PROOF_DIR note.
             self.command(sys.executable, self.source / SCRIPTS / "nightly.py", "build",
                          "--plan", plan_path, "--out", out, credentials=True,
-                         env_extra={"RICHOS_ENGINE_CHECK_PROOF_DIR":
-                                    str(self.state / "engine-repro-proofs")},
+                         env_extra=({"RICHOS_ENGINE_CHECK_PROOF_DIR":
+                                     str(self.state / "engine-repro-proofs")}
+                                    if command == "build" else None),
                          release_build=True)
-        candidate_info = json.loads((out / "candidate.json").read_text())["info"]
-        self.record_run(self.env["RICHOS_NIGHTLY_RUN_ID"], out)
+        candidate_info = self.completed_build(out)
+        self.prepare_changelog(candidate_info, out)
         # THE SCREEN SUITES' PROOF, TAKEN HERE AND NOT LEFT FOR SOMEBODY TO REMEMBER: a
         # candidate whose boot nobody watched is booted in the test VM now (see VM_PROOF_PHASE).
         proof_error = None
@@ -3226,10 +3277,8 @@ def simulated_phones_value(text):
     raise argparse.ArgumentTypeError(f"{text!r} is not a whole number of at least 1")
 
 
-# AFTER A PUBLISH, ONE ESCALATION FOR THE LEAD (Runner.report_published). The changelog entry
-# and, after a stable, main's next release version are written by a worker the lead starts
-# from the fixed brief beside this script, never by this command. How an entry reads lives in
-# changelog-instructions.md, which that brief points the worker to.
+# Changelog preparation is dispatched after build. Only stable's next-version bump
+# happens after publish. Both jobs are owned by the lead, never the CEO.
 ESCALATE = Path(__file__).resolve().parents[2] / "engine/scripts/escalate.sh"
 ESCALATE_TIMEOUT = 60
 ESCALATION_TEAMMATE = "nightly-local"
@@ -3239,18 +3288,11 @@ BRIEF_TAG = "<TAG>"
 
 
 def published_escalation(tag, stable):
-    """(title, question) of the escalation a publish of `tag` raises. A stable also moves
-    main's next release version; a nightly does not, so it is not asked to."""
-    if stable:
-        title = f"{tag} published; write its changelog entry and bump main's next release version."
-        does = "writes its changelog entry and bumps main's next release version"
-    else:
-        title = f"{tag} published; write its changelog entry."
-        does = "writes its changelog entry"
-    return title, (f"Start the changelog worker: spawn.sh with --brief {CHANGELOG_WORKER_BRIEF}, "
-                   f"its {BRIEF_TAG} replaced by {tag} and nothing else changed. It reads what "
-                   f"went into {tag}, {does} as commits on its own branch, and hands over; "
-                   "second review, then you land it.")
+    title = f"{tag} published; bump main's next release version."
+    return title, (f"The changelog is already published with {tag}. Start the next-version "
+                   "worker from richos/app/scripts/next-version-worker-brief.md, replacing "
+                   f"<TAG> with {tag}. Review and land its version-only commit. No changelog "
+                   "writing or CEO intervention is needed.")
 
 
 def escalation_missing_line(tag, stable, error):
@@ -3258,10 +3300,9 @@ def escalation_missing_line(tag, stable, error):
     reason = " ".join(str(error).split())
     if len(reason) > 300:
         reason = reason[:297] + "..."
-    title, _ = published_escalation(tag, stable)
+    title, question = published_escalation(tag, stable)
     return (f"ESCALATION NOT RAISED ({reason}). The release itself is published. {title} "
-            f"Start the worker by hand: spawn.sh --brief {CHANGELOG_WORKER_BRIEF} with "
-            f"{BRIEF_TAG} replaced by {tag}.")
+            f"{question}")
 
 
 def chosen_by():
@@ -3355,9 +3396,8 @@ def main():
     if args.checks_done_at_land and args.command not in ("build", "release"):
         parser.error("--checks-done-at-land only means anything for build or release")
     if args.no_host_screen and args.command not in NO_HOST_SCREEN_COMMANDS:
-        parser.error("--no-host-screen is for `build`. `release` publishes in one motion with "
-                     "no publish step to refuse an unproven boot, so it always runs the whole "
-                     "gate; the screenless path is build -> walk -> publish --gui-proof.")
+        parser.error("--no-host-screen is for `build`. `release` runs the whole gate; "
+                     "the screenless path is build -> walk -> publish --gui-proof.")
     if args.host_screen and (args.command != "build" or args.no_host_screen):
         parser.error("--host-screen is for `build` alone, and it contradicts --no-host-screen: "
                      "say which screen the suites may use")

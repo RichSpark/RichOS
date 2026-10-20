@@ -12,8 +12,8 @@ From the repository root, check readiness without building or publishing:
 python3 richos/app/scripts/nightly-local.py check
 ```
 
-When you actively want to release a nightly in one motion, with no QA pause
-between the candidate being built and it becoming installable:
+To build a nightly with the full release gates and have the lead finish publication
+after QA and changelog review:
 
 ```sh
 python3 richos/app/scripts/nightly-local.py release --gates-at-once all --simulated-phones 2
@@ -48,17 +48,19 @@ python3 richos/app/scripts/nightly-local.py release --force --gates-at-once all 
 
 The command runs in the foreground. Logs and release artifacts are under
 `~/.richos-nightly/logs` and `~/.richos-nightly/releases`. One local command can run
-at a time. A failure leaves the previous published nightly available. Fix the
-reported problem and explicitly invoke the command again to retry. Nothing
-retries or publishes in the background.
+at a time. A failure leaves the previous published nightly available. Rich owns
+recovery and publication from the recorded candidate run. A failed upload is retried
+with `publish --run`, preserving the tested build and its approved notes. No release
+scheduler is installed.
 
 ## QA before publication: `build`, `candidate`, `publish`
 
 CEO ruling, 2026-09-17 (`ceo-decisions.md` §45 addendum 2): QA walks the
 nightly's own candidate before it is published; publication happens only on a
-READY verdict. `release` above still exists as the pre-authorized one-motion
-path and is unchanged by this: it is `build` immediately followed by
-`publish`, byte-for-byte. For everything else, split the two halves:
+READY verdict. Both `build` and `release` stop at the signed candidate and
+automatically request its changelog worker. `release` retains its full-gate policy;
+`build` can reuse qualified gates. Rich publishes after the accepted candidate’s
+notes have been independently reviewed, landed and pushed to main:
 
 ```sh
 python3 richos/app/scripts/nightly-local.py build --gates-at-once all --simulated-phones 2
@@ -73,7 +75,7 @@ inputs and damaged evidence require execution. Earlier failures remain failures.
 The candidate records the original passing runs in `gate_evidence`; `REUSED` does
 not claim a new passing invocation. UI reuse runs the existing coverage verifier
 on a frozen copy of every receipt. The release smoke runs on every attempt and
-`release` and `stable` retain fresh gates. Older runs without these input records
+`release` retains fresh gates; stable follows its promotion gate policy below. Older runs without these input records
 cannot be retroactively qualified from their logs.
 
 Builds the signed, notarized app against a verified engine pin, then stops for QA.
@@ -110,6 +112,31 @@ python3 richos/app/scripts/nightly-local.py candidate --run <run-id>
 
 `candidate` reads only the recorded build; it never runs any command and never
 touches the network.
+
+### Changelogs are ready before publication
+
+A completed build saves its exact-candidate notes request under
+`~/.richos-nightly/changelogs/<build-commit>/request.json`, outside the sealed
+candidate. A durable escalation starts Rich’s dedicated release-notes writer while
+QA walks the build. The writer follows `scripts/changelog-instructions.md`, writes
+on its own branch and hands over. Rejected drafts never land. A replacement still
+compares with the last successfully published release of its channel.
+
+After acceptance and independent review, Rich lands the corresponding Markdown
+entry and its record in `docs/release-notes.json` together. `publish` reads remote
+main and requires the matching version, source commit, build commit, baseline and
+prose. The same prose appears in the GitHub release body at creation. A usage hold
+can delay publication, but cannot leave a public release waiting for its notes.
+
+If the baseline changes before the release body is public, regenerate the request
+and review replacement notes. The draft command updates the recognized unpublished
+entry and registry together. Once a release body is public, its notes are retained
+on upload retries. Each entry carries its own GitHub release link. Rich publishes
+as the very next step after landing and keeps the same release job open until the
+body and installable channel are verified. The link can briefly precede the release
+because these are separate operations. Retry upload failures with the same candidate
+and notes. If the candidate is deliberately abandoned after landing, remove its
+entry and record through the normal gate before closing that job.
 
 ### A build opens nothing on this Mac and proves the boot in the test VM itself
 
@@ -281,17 +308,20 @@ of the **commit**, never of the bytes.
    run that built the nightly, against the dependencies installed now, so none runs
    again (CEO, 2026-10-19); `--gates-at-once` runs every one of them anyway.
 5. Builds, signs and notarizes with the **stable** endpoint compiled in.
-6. Uploads every asset while the release is still a **prerelease** — so nothing
-   installed can see a partial release, however long the upload takes or however badly
-   it fails — then flips it to `--latest --prerelease=false`. That flip *is* the
-   channel move, which is why stable needs no rolling tag.
-7. Bumps main's next release version to the next patch (`1.2.0` → `1.2.1` in
-   `src-tauri/Cargo.toml` and the app's `Cargo.lock` entry), as an ordinary commit in
-   the worktree where main is checked out, with its usual land checks and push, so the
-   next nightly is `1.2.1-nightly.N` without anyone remembering. It touches nothing
-   unless that checkout is clean and at `origin/main`; otherwise or if the commit or
-   push is refused, the command says the release IS published and names the bump to
-   make by hand. A main already past the released version is left alone.
+6. Records the completed candidate, requests its changelog worker and boots that
+   rebuilt bundle in the test VM. A failed boot leaves it unpublished. The notes
+   cover everything since the previous stable, including intervening nightlies.
+7. After acceptance and independent notes review, Rich lands and pushes the entry
+   and approval record, then runs `publish --run <stable-run-id>`. Publication requires
+   the rebuilt bundle’s own passing proof at its exact build commit. A nightly or
+   debug-build proof cannot substitute. It uploads assets while the release is still
+   a prerelease, verifies them and flips `--latest --prerelease=false` only afterward.
+8. A separate next-version worker advances the next patch (`1.2.0` to `1.2.1`) in
+   `src-tauri/Cargo.toml` and the app’s `Cargo.lock` entry on its own branch. Rich
+   reviews and lands it through the ordinary gate. The release command never writes
+   main. A main already past the released version is left alone; the existing
+   collision guard prevents another nightly from using a published stable version
+   until this job completes. Rich owns completion, with no CEO reminder required.
 
 A commit whose release tooling predates the stable channel is refused at step 1, because
 it cannot build a stable release of itself.
@@ -310,7 +340,7 @@ The base is the next release version in `src-tauri/Cargo.toml`:
 The final number is one continuous candidate/build counter across **all dates and
 base versions**. It never resets, is never padded and can grow beyond four digits.
 The UTC date is captured at allocation after checks finish. Publishing stable `v1.2.0`
-bumps the base to `1.2.1` on main by itself (step 7 above); the counter continues.
+starts the next-version worker for `1.2.1` on main (step 8 above); the counter continues.
 
 The number is reserved before building the candidate. Candidate 43 and published
 nightly build 43 are the same build: `publish --run <run-id>` uploads the staged,
@@ -441,8 +471,11 @@ candidate in between:
 
 7. Refuses if any of the files `build` recorded no longer match what is on
    disk or if the built source commit is no longer an ancestor of the
-   current `main`. Checks that the remote reservation still names this build.
-   Creates the public version tag and prerelease, then uploads immutable artifacts,
+   current `main`. Checks that the remote reservation still names this build and
+   that remote main contains its exact approved changelog entry and candidate record.
+   Missing, mismatched or stale notes refuse before any public version tag or app upload.
+   Creates the public version tag and prerelease with those approved notes already
+   in its body, then uploads immutable artifacts,
    provenance and checksums with the manifest last. Downloads them again to verify
    bytes and signatures. The engine URL compiled into the tested app is unchanged;
    an additional engine copy is included on the versioned release for its checksums.
@@ -686,7 +719,7 @@ Tests cover version ordering, reservations, source isolation, private credential
 parsing, concurrent commands, explicit-only publication, failed checks leaving
 the existing channel intact and the signing credentials never reaching a gate
 subprocess. Local preflight is distinct from a complete signed release. Only an
-explicit `release` or `publish` invocation exercises actual publication.
+explicit `publish` invocation makes the accepted, documented candidate installable.
 
 Specifically for the `build`/`publish`/`candidate` split: `nightly.test.py`
 asserts `build` stops before any app upload or channel move; that `finish`
@@ -694,11 +727,12 @@ refuses a candidate whose recorded files were tampered with, with a
 positive-control test that the same untouched candidate publishes under the
 same mocked harness; that `finish` refuses when the built source is no longer
 an ancestor of `main` (a real force-push-to-orphan-history fixture); and that
-`release` (`build` immediately followed by `finish`, fused) reaches the same
-call sequence and channel state as an explicit `build` followed by a separate
-`finish`. `nightly-local.test.py` asserts the Runner-level wiring: `build`
-records a run id and never calls the publishing subcommand; `publish` loads
-the recorded candidate and calls only `finish`, without a signing credential;
+the internal `nightly.py publish` helper reaches the same build/finish sequence
+and channel state as separate calls. The controller does not use that fused helper:
+`build`, `release` and `stable` record the candidate and queue notes before publication.
+`nightly-local.test.py` asserts that wiring: `publish` recovers the notes request,
+validates the recorded proof and invokes the current controller’s `finish` against
+the immutable candidate checkout, without a signing credential;
 `candidate` prints without running any command; and both `publish` and
 `candidate` refuse a missing or unrecorded `--run <run-id>`.
 

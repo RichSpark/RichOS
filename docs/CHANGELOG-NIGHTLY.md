@@ -4,6 +4,8 @@ What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, new
 
 ## 1.2.1-nightly.20261020.68
 
+[GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.1-nightly.20261020.68)
+
 - Added See what's new in Settings, Updates, which opens the changelog in your default browser
 - Added a Show email option so you can tell your Claude accounts apart
 - Added Haiku naming each new conversation

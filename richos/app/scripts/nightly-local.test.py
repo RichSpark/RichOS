@@ -30,6 +30,8 @@ spec.loader.exec_module(m)
 # PublishedReportTests runs the real step, with the real escalate.sh, against a ledger and a
 # real main and remote of its own.
 REPORT_PUBLISHED = m.Runner.report_published
+PREPARE_CHANGELOG = m.Runner.prepare_changelog
+COMPLETED_BUILD = m.Runner.completed_build
 LEDGER = tempfile.TemporaryDirectory(prefix="nightly-local-ledger-")
 LEDGER_ENV = "RICHOS_ESCALATION_LEDGER"
 LEDGER_BEFORE = os.environ.get(LEDGER_ENV)
@@ -39,11 +41,15 @@ def setUpModule():
     def record(runner, tag, stable=False):
         runner.__dict__.setdefault("published_reported", []).append((tag, stable))
     m.Runner.report_published = record
+    def prepare(runner, info, out):
+        runner.__dict__.setdefault("changelog_prepared", []).append((info["tag"], str(out)))
+    m.Runner.prepare_changelog = prepare
     os.environ[LEDGER_ENV] = str(Path(LEDGER.name) / "escalations.jsonl")
 
 
 def tearDownModule():
     m.Runner.report_published = REPORT_PUBLISHED
+    m.Runner.prepare_changelog = PREPARE_CHANGELOG
     if LEDGER_BEFORE is None:
         os.environ.pop(LEDGER_ENV, None)
     else:
@@ -453,7 +459,13 @@ class LocalTests(unittest.TestCase):
             "build": build, "reason": "already published", "tag": "v1.2.0-nightly.20260916.1"}))
         for name in ("preflight", "runtime", "gates", "command"):
             setattr(r, name, Mock())
+        r.restore_build_commit = Mock()
         r.installed_dependencies_digest = Mock(return_value=self.DEPENDENCIES)
+        def completed(out):
+            if not (out / "candidate.json").exists():
+                self.write_candidate(out)
+            return COMPLETED_BUILD(r, out)
+        r.completed_build = completed
         return r
 
     def test_check_never_builds_or_publishes(self):
@@ -1144,12 +1156,12 @@ while True: time.sleep(.02)
         r.runtime.assert_called_once()
         r.gates.assert_called_once()
         args = r.command.call_args.args
-        self.assertEqual(args[2], "run")
+        self.assertEqual(args[2], "build")
         # The publisher is the step that signs, notarizes and signs the updater manifest.
         self.assertIs(r.command.call_args.kwargs["credentials"], True)
         self.assertEqual(r.plan.call_count, 2)
-        # Published, so asking the lead for its changelog entry is the last step.
-        self.assertEqual(r.published_reported, [("v1.2.0-nightly.20260916.1", False)])
+        self.assertEqual(r.changelog_prepared[0][0], "v1.2.0-nightly.20260916.1")
+        self.assertNotIn("published_reported", r.__dict__)
 
     def test_only_the_build_step_is_registered_with_the_cpu_guard_as_a_release_build(self):
         # Run 20260928T190111Z-40a16163: every gate passed, then the CPU guard's 10-second
@@ -1239,7 +1251,7 @@ while True: time.sleep(.02)
         r.checkout.assert_called_once_with(self.SOURCE)       # that run's commit, not main's tip
         ancestry, build = r.command.call_args_list
         self.assertEqual(ancestry.args[:4], ("git", "merge-base", "--is-ancestor", self.SOURCE))
-        self.assertEqual(build.args[2], "run")
+        self.assertEqual(build.args[2], "build")
         self.assertIs(build.kwargs["release_build"], True)
         plan = json.loads((self.root / "plan.json").read_text())
         self.assertEqual(plan["gates_passed_in"], {"run_id": self.RESUMED, "source_commit": self.SOURCE})
@@ -1331,7 +1343,7 @@ while True: time.sleep(.02)
         (self.root / "plan.json").write_text("{}")
         (self.root / "state" / "releases" / "v1.2.0-nightly.20260916.1").mkdir(parents=True)
         (self.root / "state" / "releases" / "v1.2.0-nightly.20260916.1" / "candidate.json").write_text(
-            json.dumps({"info": {}}))
+            json.dumps({"info": self.CANDIDATE_INFO}))
         r.record_run, r.needs_gui_proof, r.print_candidate = Mock(), Mock(return_value=False), Mock()
         r.env["RICHOS_NIGHTLY_RUN_ID"] = "20261014T160000Z-00000000"
         with contextlib.redirect_stdout(io.StringIO()):
@@ -1357,6 +1369,13 @@ while True: time.sleep(.02)
             "tag": "v1.2.0", "version": "1.2.0", "source_commit": source_commit or self.SOURCE}))
         r.env["RICHOS_NIGHTLY_RUN_ID"] = "20261019T120000Z-0000000f"
         r.vm_boot_proof = Mock(return_value=None)
+        def completed(out):
+            info = {**self.CANDIDATE_INFO, **r.stable_plan.return_value[1],
+                    "run_id": r.env["RICHOS_NIGHTLY_RUN_ID"], "channel": "stable"}
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "candidate.json").write_text(json.dumps({"info": info}))
+            return COMPLETED_BUILD(r, out)
+        r.completed_build = completed
         return r
 
     def test_a_published_stable_ends_by_asking_for_its_changelog_entry_and_mains_bump(self):
@@ -1368,7 +1387,8 @@ while True: time.sleep(.02)
         r = self.stable_runner()
         with contextlib.redirect_stdout(io.StringIO()):
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
-        self.assertEqual(r.published_reported, [("v1.2.0", True)])
+        self.assertEqual(r.changelog_prepared[0][0], "v1.2.0")
+        self.assertNotIn("published_reported", r.__dict__)
         # A dry run publishes nothing, so it asks for nothing.
         r = self.stable_runner()
         r.describe_stable = Mock()
@@ -1391,8 +1411,9 @@ while True: time.sleep(.02)
                 self.assertEqual(r.checkout.call_args_list[-1].args, (self.SOURCE,))
                 r.preflight.assert_called_once()
                 r.runtime.assert_called_once()
-                build, publish = r.command.call_args_list[-2:]
-                self.assertEqual((build.args[2], publish.args[2]), ("build", "finish"))
+                build = r.command.call_args_list[-1]
+                self.assertEqual(build.args[2], "build")
+                self.assertNotIn("finish", [c.args[2] for c in r.command.call_args_list])
                 self.assertIs(build.kwargs["release_build"], True)
                 self.assertEqual(sorted(r.skipped), sorted(m.GATE_NAMES))
         # A later run replacing the suite record is no reason to refuse: stable never reads it.
@@ -1414,7 +1435,7 @@ while True: time.sleep(.02)
         r.vm_boot_proof.side_effect = lambda run: order.append(f"boot {run}")
         with contextlib.redirect_stdout(io.StringIO()):
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
-        self.assertEqual(order, ["build", "boot 20261019T120000Z-0000000f", "finish"])
+        self.assertEqual(order, ["build", "boot 20261019T120000Z-0000000f"])
         pointer = json.loads(r.run_pointer("20261019T120000Z-0000000f").read_text())
         self.assertEqual(pointer["out"], str(r.state / "releases" / "v1.2.0"))
         # A boot that was not proven publishes nothing and asks for nothing.
@@ -1499,11 +1520,18 @@ while True: time.sleep(.02)
         self.write_log("20261018T000000Z-0000000b", ["Building v1.2.0-nightly.20260928.27..."])
         with self.assertRaisesRegex(ValueError, "no run log .* says it built v1\\.2\\.0-nightly\\.20260928\\.28,"):
             self.runner().run_that_built(self.NIGHTLY)
+
         self.recorded_run(grade="build")
         self.write_log("20261018T000000Z-0000000c", [f"Building and publishing {self.NIGHTLY}...",
                                                      "phase timings for run 20261018T000000Z-0000000c:"])
         with self.assertRaisesRegex(ValueError, "2 runs say they built"):
             self.runner().run_that_built(self.NIGHTLY)
+
+    def test_completed_build_is_reusable_when_its_later_notes_dispatch_failed(self):
+        self.write_log(self.RESUMED, [f"Building {self.NIGHTLY}...",
+                       f"Candidate built: {self.NIGHTLY} at {'b' * 40}",
+                       "release job could not be dispatched"])
+        self.assertEqual(self.runner().run_that_built(self.NIGHTLY), self.RESUMED)
 
     def test_a_failed_stopped_or_merely_announced_build_never_supplies_the_builder(self):
         # Verification reliability PRD A13: one run that announced the tag was taken as its
@@ -1643,7 +1671,7 @@ while True: time.sleep(.02)
     CANDIDATE_INFO = {"tag": "v1.2.0-nightly.20260916.1", "version": "1.2.0-nightly.20260916.1",
                       "candidate_ref": "refs/candidates/1",
                       "source_commit": "deadbeefcafe0123456789", "run_id": "fixture-run-id",
-                      "run_attempt": "1"}
+                      "run_attempt": "1", "build_commit": "b" * 40}
 
     def write_candidate(self, out):
         out.mkdir(parents=True, exist_ok=True)
@@ -1787,6 +1815,7 @@ while True: time.sleep(.02)
         run("worktree", "add", "-q", "--detach", str(source), "main", cwd=repo)
         info = {**self.CANDIDATE_INFO, "build_commit": build_commit}
         r = self.runner()
+        r.restore_build_commit = types.MethodType(m.Runner.restore_build_commit, r)
         r.repo = repo
         at_finish = []
         def command(*args, cwd=None, capture=False, **kwargs):
@@ -2471,6 +2500,20 @@ while True: time.sleep(.02)
                 self.assertTrue(r.needs_gui_proof(info))
                 with self.assertRaisesRegex(ValueError, "front-door exit 0"):
                     r.require_gui_proof(info, self.proof(suite="shipped-bundle-boot"))
+
+    def test_resumed_stable_still_requires_its_own_rebuilt_bundle_boot(self):
+        r, info = self.gui_candidate()
+        info["channel"] = "stable"
+        self.assertTrue(r.needs_gui_proof(info))
+        with self.assertRaisesRegex(ValueError, "seen the app"):
+            r.require_gui_proof(info, None)
+        for suite, commit in (("gui-boot.test.sh", info["build_commit"]),
+                              ("shipped-bundle-boot", info["source_commit"])):
+            with self.subTest(suite=suite, commit=commit), self.assertRaisesRegex(ValueError, "rebuilt bundle"):
+                r.require_gui_proof(info, self.proof(suite=suite, commit=commit))
+        accepted = r.require_gui_proof(info, self.proof(suite="shipped-bundle-boot",
+                                                     commit=info["build_commit"]))
+        self.assertEqual(accepted["result"], "pass")
 
     def test_screen_proof_keeps_failure_refusal_missing_result_and_source_mismatch_red(self):
         r, info = self.gui_candidate(gui_state="not-run", no_host_screen=True)
@@ -3374,98 +3417,113 @@ class PublishedReportTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def published(self, command="release"):
-        """`command` run to its end with every build and publish step stood in for: what it printed."""
-        r = self.runner
-        r.checkout = Mock(return_value=self.tip)
-        r.plan = Mock(return_value=(self.root / "plan.json", {
-            "build": True, "tag": self.TAG, "version": self.TAG[1:]}))
-        for name in ("preflight", "runtime", "gates", "command", "summary"):
-            setattr(r, name, Mock())
-        r.installed_dependencies_digest = Mock(return_value="")
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            r.perform(command)  # no exception, whatever the report does: the release stands
-        return out.getvalue().splitlines()
-
     def rows(self):
         return ([json.loads(line) for line in self.ledger.read_text().splitlines()]
                 if self.ledger.exists() else [])
 
     def main_untouched(self):
-        """No commit and no push: main and the remote where they were, nothing staged or left."""
-        # Taken first: this test's own git below runs through the same recorded subprocess.run.
-        started = [argv[0] for argv in self.started]
-        # This command runs no git and no model: the escalation is the one program it starts.
-        self.assertEqual(started, [str(m.ESCALATE)])
         self.assertEqual(self.git("rev-parse", "refs/heads/main"), self.tip)
         self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.tip)
-        self.assertEqual(self.git("for-each-ref", "--format=%(refname)", cwd=self.remote),
-                         "refs/heads/main")
         self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
-        self.assertEqual(len(self.git("worktree", "list", "--porcelain").split("\n\n")), 1)
 
-    def test_a_published_nightly_raises_exactly_that_escalation_and_moves_nothing_on_main(self):
-        printed = self.published()
-        self.assertIn(f"Published https://github.com/{m.REPO}/releases/tag/{self.TAG}", printed)
-        rows = self.rows()
-        self.assertEqual(len(rows), 1, rows)
-        row = rows[0]
-        self.assertEqual(row["title"], f"{self.TAG} published; write its changelog entry.")
-        self.assertEqual((row["state"], row["for"], row["teammate"], row["worktree"], row["record"]),
-                         ("work-complete", "lead", "nightly-local", str(self.main), ""))
-        self.assertEqual(row["question"], (
-            "Start the changelog worker: spawn.sh with --brief "
-            "richos/app/scripts/changelog-worker-brief.md, its <TAG> replaced by "
-            f"{self.TAG} and nothing else changed. It reads what went into {self.TAG}, writes "
-            "its changelog entry as commits on its own branch, and hands over; second review, "
-            "then you land it."))
-        self.assertEqual([line for line in printed if row["id"] in line],
-                         [f"Raised {row['id']} for the lead: {row['title']}"])
-        self.assertFalse(any("NOT RAISED" in line for line in printed), printed)
-        # No record file in main's checkout: the ledger row is the delivery.
-        self.assertFalse((self.main / "docs" / "verification").exists())
+    def prepare(self, channel="nightly"):
+        self.runner.prepare_changelog = types.MethodType(PREPARE_CHANGELOG, self.runner)
+        tag = "v1.2.1" if channel == "stable" else self.TAG
+        def command(*args, **kwargs):
+            self.assertEqual(args[2], "notes-request")
+            request = Path(args[args.index("--output") + 1])
+            request.parent.mkdir(parents=True, exist_ok=True)
+            request.write_text(json.dumps({"candidate": tag}))
+        self.runner.command = Mock(side_effect=command)
+        return self.runner.prepare_changelog({"tag": tag, "channel": channel,
+                                              "build_commit": ("c" if channel == "stable" else "b") * 40,
+                                              "run_id": "fixture-run"}, self.root / "candidate")
+
+    def test_notes_dispatch_precedes_publication_and_survives_repeat_requests(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            first = self.prepare()
+            second = self.prepare()
+        self.assertEqual(first, second)
+        (row,) = self.rows()
+        self.assertEqual(row["id"], first)
+        self.assertIn("before publication", row["title"])
+        self.assertIn("Keep rejected drafts off main", row["question"])
+        self.assertIn("second-review and land", row["question"])
+        self.assertIn("publish --run fixture-run", row["question"])
+        self.assertIn("No CEO", row["question"])
+        self.assertIn("then immediately run nightly-local.py publish --run", row["question"])
+        self.assertIn("Keep this job open", row["question"])
+        self.assertIn("remove its entry and record through the normal gate", row["question"])
+        self.assertIn("--type newt --model sonnet --brief", row["question"])
+        self.assertEqual([args[0] for args in self.started], [str(m.ESCALATE)])
         self.main_untouched()
 
-    def test_a_published_stable_asks_for_main_s_bump_as_well(self):
+    def test_dispatch_names_newt_and_materializes_the_brief_for_both_release_kinds(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.prepare()
+            self.prepare(channel="stable")
+        nightly, stable = self.rows()
+        self.assertIn("newt-sonnet-", nightly["question"])
+        self.assertIn("--type newt --model sonnet", nightly["question"])
+        self.assertIn("newt-opus-", stable["question"])
+        self.assertIn("--type newt --model opus", stable["question"])
+        for identity, tag in (("b", self.TAG), ("c", "v1.2.1")):
+            brief = self.root / "state/changelogs" / (identity * 40) / "brief.md"
+            text = brief.read_text()
+            self.assertIn(tag, text)
+            self.assertNotIn("<TAG>", text)
+            self.assertNotIn("<REQUEST>", text)
+            self.assertIn(str(brief.with_name("request.json")), text)
+        self.main_untouched()
+
+    def test_failed_dispatch_refuses_and_leaves_no_false_receipt(self):
+        (self.root / "not-a-folder").write_text("")
+        os.environ[LEDGER_ENV] = str(self.root / "not-a-folder" / "ledger")
+        with self.assertRaisesRegex(RuntimeError, "could not be dispatched"):
+            self.prepare()
+        self.assertEqual(list((self.root / "state").rglob("dispatched.json")), [])
+        self.main_untouched()
+
+    def test_a_damaged_dispatch_receipt_cannot_suppress_the_notes_job(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.prepare()
+            sent = next((self.root / "state").rglob("dispatched.json"))
+            sent.write_text("{")
+            self.prepare()
+        self.assertEqual(len(self.rows()), 2)
+        self.assertIn("escalation", json.loads(sent.read_text()))
+        self.assertEqual(list((self.root / "state").rglob("*.part")), [])
+        self.main_untouched()
+
+    def test_nightly_publishes_without_an_after_publish_writing_job(self):
+        self.assertIsNone(self.runner.report_published(self.TAG))
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.started, [])
+        self.main_untouched()
+
+    def test_stable_after_publish_job_only_bumps_the_next_version(self):
         with contextlib.redirect_stdout(io.StringIO()):
             raised = self.runner.report_published("v1.2.1", stable=True)
         (row,) = self.rows()
         self.assertEqual(row["id"], raised)
-        self.assertEqual(row["title"], "v1.2.1 published; write its changelog entry and bump "
-                                       "main's next release version.")
-        self.assertIn("writes its changelog entry and bumps main's next release version as "
-                      "commits on its own branch", row["question"])
+        self.assertEqual(row["title"], "v1.2.1 published; bump main's next release version.")
+        self.assertIn("next-version-worker-brief.md", row["question"])
+        self.assertIn("already published", row["question"])
         self.main_untouched()
 
-    def test_an_escalation_that_cannot_be_raised_leaves_the_release_published_and_one_line(self):
-        # The ledger's folder is a file: the real escalate.sh cannot write the row.
+    def test_a_failed_version_bump_dispatch_does_not_claim_publication_failed(self):
         (self.root / "not-a-folder").write_text("")
-        os.environ[LEDGER_ENV] = str(self.root / "not-a-folder" / "escalations.jsonl")
-        printed = self.published()
-        self.assertIn(f"Published https://github.com/{m.REPO}/releases/tag/{self.TAG}", printed)
-        (line,) = [line for line in printed if "ESCALATION" in line]
-        self.assertTrue(line.startswith("ESCALATION NOT RAISED (escalate.sh raise exit 2: "), line)
-        self.assertTrue(line.endswith(
-            f"The release itself is published. {self.TAG} published; write its changelog "
-            "entry. Start the worker by hand: spawn.sh --brief "
-            f"richos/app/scripts/changelog-worker-brief.md with <TAG> replaced by {self.TAG}."),
-            line)
-        self.main_untouched()
+        os.environ[LEDGER_ENV] = str(self.root / "not-a-folder" / "ledger")
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.runner.report_published("v1.2.1", stable=True)
+        self.assertIn("The release itself is published", output.getvalue())
+        self.assertEqual(self.rows(), [])
 
-    def test_the_worker_brief_is_handed_over_with_only_its_tag_replaced(self):
+    def test_the_brief_keeps_rejected_notes_off_main_and_requires_editorial_review(self):
         brief = (m.ROOT / m.CHANGELOG_WORKER_BRIEF).read_text()
-        self.assertEqual(m.CHANGELOG_WORKER_BRIEF.parent, m.SCRIPTS)
-        self.assertIn(m.BRIEF_TAG, brief)
-        handed = brief.replace(m.BRIEF_TAG, self.TAG)
-        self.assertNotIn("<TAG>", handed)
-        # It points at the instructions beside it, which exist, and at both changelogs and the
-        # two files a stable's bump moves.
-        for named in ("richos/app/scripts/changelog-instructions.md", "docs/CHANGELOG-NIGHTLY.md",
-                      "docs/CHANGELOG.md", "richos/app/src-tauri/Cargo.toml",
-                      "richos/app/src-tauri/Cargo.lock"):
-            self.assertIn(named, handed)
-        self.assertTrue((m.ROOT / "richos/app/scripts/changelog-instructions.md").is_file())
+        for text in ("<TAG>", "<REQUEST>", "QA accepts", "independently review",
+                     "Never land a rejected", "changelog-instructions.md", "notes-draft"):
+            self.assertIn(text, brief)
 
 
 class WalkRecipeTests(unittest.TestCase):

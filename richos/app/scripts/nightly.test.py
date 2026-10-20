@@ -147,6 +147,11 @@ class GitFixture(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.stub_execute.side_effect = self.fake_external
+        # Existing asset/race tests isolate the editorial gate. ChangelogTests below
+        # restores it and uses real Git approval records and public changelog files.
+        self.notes_gate = patch.object(n, "approved_changelog", return_value="- Fixed a lost message")
+        self.notes_gate.start()
+        self.addCleanup(self.notes_gate.stop)
 
     def fake_release_assets(self, release_id):
         tag = next(tag for tag, release in self.releases.items() if release["id"] == release_id)
@@ -173,7 +178,9 @@ class GitFixture(unittest.TestCase):
             tag = args[3]
             self.assertTrue(n.git("ls-remote", "origin", f"refs/tags/{tag}"))
             self.releases[tag] = {"id": len(self.releases) + 1, "tag_name": tag,
-                                  "prerelease": True, "draft": False}
+                                  "prerelease": True, "draft": False,
+                                  "body": args[args.index("--notes") + 1]
+                                  if "--notes" in args else Path(args[args.index("--notes-file") + 1]).read_text()}
         elif args[:3] == ("gh", "release", "upload"):
             tag = args[3]
             paths = args[args.index("--repo") + 2:]
@@ -182,6 +189,8 @@ class GitFixture(unittest.TestCase):
                     continue
                 path = Path(item)
                 self.asset_bytes[tag, path.name] = path.read_bytes()
+        elif args[:3] == ("gh", "release", "edit") and "--prerelease=false" in args:
+            self.releases[args[3]]["prerelease"] = False
         elif args[0] == "bash" and args[2] == "engine":
             out = Path(args[args.index("--out") + 1])
             self.write_engine(out / "richos-engine-1.2.0.tar.gz")
@@ -871,6 +880,235 @@ class GitTests(GitFixture):
                          self.manifest(split_info))
 
 
+class ChangelogTests(GitFixture):
+    def setUp(self):
+        super().setUp()
+        self.notes_gate.stop()
+        for document in n.CHANGELOG_FILES.values():
+            path = self.repo / document
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("# Changelog\n\n")
+        n.git("add", "docs")
+        n.git("commit", "-qm", "changelog documents")
+        n.git("push", "-q", "origin", "main")
+        self.source = n.git("rev-parse", "HEAD")
+
+    def candidate(self):
+        info = self.reserve()
+        out = Path(self.temp.name) / info["tag"]
+        n.build(info, out)
+        return info, out
+
+    def approve(self, info, request=None, land=True):
+        request = request or n.changelog_request(info)
+        n.git("checkout", "-qb", "notes-" + info["build_commit"][:8], "origin/main")
+        path = n.write_changelog_draft(request, "- Fixed a lost message")
+        n.git("add", "docs")
+        n.git("commit", "-qm", "reviewed candidate notes")
+        if land:
+            n.git("push", "-q", "origin", "HEAD:main")
+        n.git("checkout", "-q", "--detach", info["build_commit"])
+        return path
+
+    def test_missing_and_unlanded_notes_refuse_before_any_public_version(self):
+        info, out = self.candidate()
+        with self.assertRaisesRegex(ValueError, "reviewed changelog is not on main"):
+            n.finish(info, out)
+        self.approve(info, land=False)
+        with self.assertRaisesRegex(ValueError, "reviewed changelog is not on main"):
+            n.finish(info, out)
+        self.assertEqual(n.remote_tags(), set())
+        self.assertEqual(set(self.releases), {n.CHANNEL_TAG})
+
+    def test_approved_notes_are_in_the_release_at_its_first_public_appearance(self):
+        info, out = self.candidate()
+        before = n._candidate_files(out)
+        self.approve(info)
+        n.finish(info, out)
+        body = self.releases[info["tag"]]["body"]
+        self.assertTrue(body.startswith("- Fixed a lost message\n\n"), body)
+        self.assertIn("Source: " + info["source_commit"], body)
+        self.assertEqual(n._candidate_files(out), before)
+
+    def test_wrong_build_record_and_edited_public_entry_refuse(self):
+        info, out = self.candidate()
+        self.approve(info)
+        n.git("checkout", "-qB", "approval-edit", "origin/main")
+        path = self.repo / n.CHANGELOG_RECORDS
+        records = json.loads(path.read_text())
+        record = records[info["tag"]]
+        original = dict(record)
+        record["build_commit"] = "f" * 40
+        path.write_text(n.json_text(records))
+        n.git("add", "docs"); n.git("commit", "-qm", "wrong candidate")
+        n.git("push", "-q", "origin", "HEAD:main")
+        with self.assertRaisesRegex(ValueError, "different candidate"):
+            n.approved_changelog(info)
+        records[info["tag"]] = original
+        path.write_text(n.json_text(records))
+        document = self.repo / n.CHANGELOG_FILES["nightly"]
+        document.write_text(document.read_text().replace("lost message", "different change"))
+        n.git("add", "docs"); n.git("commit", "-qm", "different public prose")
+        n.git("push", "-q", "origin", "HEAD:main")
+        with self.assertRaisesRegex(ValueError, "public changelog disagree"):
+            n.approved_changelog(info)
+        self.assertEqual(n.remote_tags(), set())
+
+    def test_failed_upload_retains_approved_notes_for_the_same_candidate(self):
+        info, out = self.candidate()
+        self.approve(info)
+        original = self.fake_external
+        def fail(*args, **kwargs):
+            if args[:4] == ("gh", "release", "upload", info["tag"]):
+                raise subprocess.CalledProcessError(1, args)
+            return original(*args, **kwargs)
+        with patch.object(n, "execute", side_effect=fail), self.assertRaises(subprocess.CalledProcessError):
+            n.finish(info, out)
+        self.assertEqual(n.channel(), (None, None))
+        body = self.releases[info["tag"]]["body"]
+        n.finish(info, out)
+        self.assertEqual(self.releases[info["tag"]]["body"], body)
+        self.assertEqual(n.channel()[1], info)
+
+    def test_rejected_candidates_do_not_advance_the_notes_baseline(self):
+        rejected, _ = self.candidate()
+        request = n.changelog_request(rejected)
+        self.assertIsNone(request["previous_tag"])
+        n.git("checkout", "-q", "main")
+        n.git("commit", "--allow-empty", "-qm", "Fixed another user-visible problem")
+        n.git("push", "-q", "origin", "main")
+        accepted = self.reserve()
+        replacement = n.changelog_request(accepted)
+        self.assertIsNone(replacement["previous_tag"])
+        self.assertIn("changelog documents", replacement["changes"])
+        self.assertIn("Fixed another user-visible problem", replacement["changes"])
+        self.assertNotEqual(replacement["build_commit"], request["build_commit"])
+        self.assertEqual(n.remote_tags(), set())
+
+    def test_stale_baseline_refuses_and_empty_ranges_are_valid(self):
+        info, out = self.candidate()
+        self.approve(info)
+        # An independently published nightly moves the baseline after drafting.
+        other = {**info, "tag": "v5.1.0-nightly.20260911.2", "version": "5.1.0-nightly.20260911.2"}
+        with patch.object(n, "published_changelog_base", return_value=(other["tag"], self.source)):
+            with self.assertRaisesRegex(ValueError, "baseline changed"):
+                n.finish(info, out)
+            request = n.changelog_request(info)
+            self.assertEqual(request["changes"], "")
+        self.assertNotIn(info["tag"], self.releases)
+
+    def test_stable_uses_previous_stable_not_the_promoted_nightly(self):
+        info, _ = self.candidate()
+        stable = {**info, "channel": "stable", "version": "5.1.0", "tag": "v5.1.0"}
+        previous = {"tag_name": "v5.0.0", "body": "Source: " + self.source,
+                    "prerelease": False, "draft": False}
+        with patch.object(n, "github_json", return_value=previous) as read:
+            request = n.changelog_request(stable)
+        self.assertTrue(read.call_args.args[0].endswith("/releases/latest"))
+        self.assertEqual(request["previous_tag"], "v5.0.0")
+        self.assertEqual(request["changes"], "")
+
+    def test_stable_publishes_approved_notes_and_completed_publish_is_retryable(self):
+        (self.repo / n.CONFIG).write_text(n.json_text(
+            {"plugins": {"updater": {"endpoints": [n.STABLE_ENDPOINT]}}}))
+        n.git("add", str(n.CONFIG))
+        n.git("commit", "-qm", "stable-capable fixture endpoint")
+        n.git("push", "-q", "origin", "main")
+        nightly, out = self.candidate()
+        self.approve(nightly)
+        n.finish(nightly, out)
+        decision = n.json_text([{"tag": nightly["tag"], "decided_on": "2026-09-11",
+                                 "words": "Fixture promotion decision"}])
+        stable = n.stable_plan(nightly["tag"], decision, now=NOW)
+        n.git("checkout", "-q", "--detach", stable["source_commit"])
+        stable = n.prepare(stable)
+        out = Path(self.temp.name) / "stable"
+        n.build(stable, out)
+        def latest(*args, **kwargs):
+            return next((r for r in self.releases.values() if not r["prerelease"]), None)
+        with patch.object(n, "github_json", side_effect=latest):
+            self.approve(stable)
+            n.finish(stable, out)
+            before = n._candidate_files(out)
+            n.finish(stable, out)
+        self.assertFalse(self.releases[stable["tag"]]["prerelease"])
+        self.assertTrue(self.releases[stable["tag"]]["body"].startswith("- Fixed a lost message"))
+        self.assertEqual(n._candidate_files(out), before)
+
+    def test_draft_refuses_main_and_malformed_prose(self):
+        info, _ = self.candidate()
+        request = n.changelog_request(info)
+        n.git("checkout", "-q", "main")
+        with self.assertRaisesRegex(ValueError, "work branch"):
+            n.write_changelog_draft(request, "- Fixed a lost message")
+        for entry in ("", "Introduction\n- Fixed something", "- Internal details", "- Fixed good\n\n- Added bad"):
+            with self.subTest(entry=entry), self.assertRaises(ValueError):
+                n.validate_changelog_entry(entry)
+
+    def test_draft_uses_the_commit_hooks_comma_rule_for_both_copies(self):
+        info, _ = self.candidate()
+        request = n.changelog_request(info)
+        n.git("checkout", "-qb", "notes-comma", "origin/main")
+        path = n.write_changelog_draft(request, "- Added Cut, Copy, and Paste")
+        record = json.loads(path.read_text())[info["tag"]]
+        self.assertEqual(record["entry"], "- Added Cut, Copy and Paste")
+        document = (self.repo / n.CHANGELOG_FILES["nightly"]).read_text()
+        self.assertIn(n.changelog_section(record).strip(), document)
+
+    def test_changed_baseline_can_replace_unpublished_approved_notes_after_review(self):
+        for _ in range(2):
+            earlier, _ = self.candidate()
+            n.git("checkout", "-q", "main")
+        info, _ = self.candidate()
+        self.approve(info)
+        with patch.object(n, "published_changelog_base",
+                          return_value=(earlier["tag"], earlier["source_commit"])):
+            request = n.changelog_request(info)
+            n.git("checkout", "-qb", "revised-notes", "origin/main")
+            n.write_changelog_draft(request, "- Fixed another lost message")
+            n.git("add", "docs")
+            n.git("commit", "-qm", "reviewed revised notes")
+            n.git("push", "-q", "origin", "HEAD:main")
+            self.assertEqual(n.approved_changelog(info), "- Fixed another lost message")
+        self.assertEqual(n.remote_tags(), set())
+
+    def test_draft_cannot_rewrite_notes_after_the_release_body_appears(self):
+        info, out = self.candidate()
+        self.approve(info)
+        n.finish(info, out)
+        request = n.changelog_request(info)
+        original = self.releases[info["tag"]]["body"]
+        n.git("checkout", "-qb", "attempted-rewrite", "origin/main")
+        with self.assertRaisesRegex(ValueError, "never rewrite"):
+            n.write_changelog_draft(request, "- Changed the published notes")
+        self.assertEqual(self.releases[info["tag"]]["body"], original)
+        self.assertEqual(n.git("status", "--porcelain"), "")
+
+
+class CommittedChangelogTests(unittest.TestCase):
+    def test_entry_has_its_own_release_link_without_a_permanent_prepared_label(self):
+        section = n.changelog_section({"version": "9.9.9", "tag": "v9.9.9", "entry": "- Fixed a lost message"})
+        self.assertNotIn("Prepared", section)
+        self.assertIn("https://github.com/WebDevBooster/richos/releases/tag/v9.9.9)", section)
+
+    def test_every_approved_record_matches_its_public_user_facing_entry(self):
+        records = json.loads((n.ROOT / n.CHANGELOG_RECORDS).read_text())
+        self.assertIsInstance(records, dict)
+        self.assertTrue(records)
+        for tag, record in records.items():
+            with self.subTest(tag=tag):
+                self.assertEqual(record["tag"], tag)
+                n.changelog_identity(record)
+                n.validate_changelog_entry(record["entry"])
+                document = (n.ROOT / n.CHANGELOG_FILES[record["channel"]]).read_text()
+                self.assertIn(n.changelog_section(record).strip(), document)
+                if record["previous_tag"] is not None:
+                    self.assertRegex(record["previous_source"], r"^[0-9a-f]{40}$")
+                    pattern = ("v" + n.BASE_RE + r"-nightly\.[0-9]{8}\.[1-9][0-9]*"
+                               if record["channel"] == "nightly" else "v" + n.BASE_RE)
+                    self.assertRegex(record["previous_tag"], "^" + pattern + "$")
+
+
 class EngineStorageTests(GitFixture):
     def archive(self, contents=b"candidate engine"):
         path = Path(self.temp.name) / "engine.tar.gz"
@@ -1037,7 +1275,8 @@ class OneCodePathTests(unittest.TestCase):
         A step no real release entry point mentions is a step the smoke is alone with.
         """
         real = "".join(inspect.getsource(f) for f in
-                       (n.plan, n.prepare, n.promote, n.build, n.finish, n.stable_plan))
+                       (n.plan, n.prepare, n.promote, n.build, n.finish, n.stable_plan,
+                        n.read_changelog_record))
         for name in n.RELEASE_STEPS:
             with self.subTest(step=name):
                 self.assertIn(name, real,
