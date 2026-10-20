@@ -774,7 +774,9 @@ class InputSnapshot:
 
 
 def prepare_environment(item, root, logdir, environment, create=True):
-    recipe = contract_for(root, item.label)
+    # Only a declared contract names an isolation profile; a UI family recipe (contract_for)
+    # never does, so its whole derivation is not repeated here just to learn that (03-E).
+    recipe = declared_contract(root, item.label)
     if not recipe.get("isolation"):
         return
     if recipe["isolation"] != PRIVATE_PROFILE:
@@ -1209,12 +1211,9 @@ def require_closure(root, *starts):
         if current.suffix not in (".js", ".cjs", ".mjs"):
             continue
         try:
-            text = current.read_text(errors="replace")
+            targets = _file_scan(current)["requires"]
         except OSError:
             continue
-        targets = [match.group(2) for match in _REQUIRE.finditer(text)]
-        targets += [os.path.join(*re.findall(r"""["']([^"']+)["']""", match.group(1)))
-                    for match in _REQUIRE_JOINED.finditer(text)]
         for target in targets:
             base = current.parent / target
             for candidate in (base, Path(str(base) + ".js"), Path(str(base) + ".json"), base / "index.js"):
@@ -1260,6 +1259,30 @@ def node_builtins():
 
 
 _LOAD_SCANS = {}
+_FILE_SCANS = {}
+
+
+def _file_scan(path):
+    """{"requires": the relative targets require_closure follows, "shots": every literal
+    `shots-<folder>/<file>` outside comment lines (library_shot_names)} of one file. Read again
+    whenever the file's stat identity changes, as _file_loads and _tool_digest are: every UI suite's
+    closure holds the same shipped files, and reading each of them again for every suite, twice a
+    pass, was most of the family identity's cost (03-E, PRD line 139's no-execution budget)."""
+    info = os.stat(path)
+    key = (str(path), info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino)
+    if key not in _FILE_SCANS:
+        text = Path(path).read_text(errors="replace")
+        requires = [match.group(2) for match in _REQUIRE.finditer(text)]
+        requires += [os.path.join(*re.findall(r"""["']([^"']+)["']""", match.group(1)))
+                     for match in _REQUIRE_JOINED.finditer(text)]
+        shots = []
+        if "shots-" in text:
+            for line in text.splitlines():
+                if line.lstrip().startswith(("//", "*", "/*")):
+                    continue  # a comment's example name is no read
+                shots += [match.group(1) for match in _SHOT_FILE.finditer(line)]
+        _FILE_SCANS[key] = {"requires": requires, "shots": shots}
+    return _FILE_SCANS[key]
 
 
 def _file_loads(path):
@@ -1405,16 +1428,13 @@ def library_shot_names(root, family, label, closure, bound):
         if rel == suite or not rel.endswith((".js", ".cjs", ".mjs")):
             continue
         try:
-            text = (Path(root) / rel).read_text(errors="replace")
+            shots = _file_scan(Path(root) / rel)["shots"]
         except OSError:
             continue
-        for line in text.splitlines():
-            if line.lstrip().startswith(("//", "*", "/*")):
-                continue  # a comment's example name is no read
-            for match in _SHOT_FILE.finditer(line):
-                name = family["suites"] + "/" + match.group(1)
-                if not any(name == path or name.startswith(path + "/") for path in bound):
-                    found.add(name)
+        for shot in shots:
+            name = family["suites"] + "/" + shot
+            if not any(name == path or name.startswith(path + "/") for path in bound):
+                found.add(name)
     return sorted(found)
 
 
@@ -1471,6 +1491,17 @@ def family_invocation(root, recipe, cwd, argv):
         return recipe
     return {"fresh": "the %s family qualifies only `cd %s && %s`, not this invocation" % (
         recipe.get("family"), expected.get("cwd"), " ".join(expected.get("argv") or []))}
+
+
+def declared_contract(root, label):
+    """The contract proof-inputs.json declares for `label` by name, or {} (none, or a family's)."""
+    try:
+        data = json.loads((Path(root) / "richos/app/scripts/proof-inputs.json").read_text())
+    except FileNotFoundError:
+        return {}
+    if data.get("schema") != 1 or not isinstance(data.get("checks"), dict):
+        raise ValueError("invalid proof-inputs.json")
+    return data["checks"].get(label) or {}
 
 
 def contract_for(root, label):

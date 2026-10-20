@@ -2302,6 +2302,35 @@ class UiFamily(unittest.TestCase):
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             (root / rel).write_text(text)
 
+    def test_a_shared_library_is_read_once_for_every_suite_and_again_once_it_changes(self):
+        """03-E, PRD line 139's no-execution budget: every UI suite's closure holds the same
+        library files, and reading each again for every suite (twice for the closure, once for
+        its loads) was most of the family identity's cost. Each file's requires and picture names
+        are now read once per stat identity, as its loads are; a change is read at once, so a
+        library that gains a require or names a picture changes the recipe of every suite that
+        loads it. prepare_environment no longer derives a family recipe at all."""
+        harness = self.root / "richos/app/ui/tests/lib/harness.js"
+        reads = []
+        original = Path.read_text
+
+        def counting(path, *args, **kwargs):
+            if Path(path) == harness:
+                reads.append(path)
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", autospec=True, side_effect=counting):
+            first = evidence.contract_for(self.root, "a.js")
+            evidence.contract_for(self.root, "b.js")
+            evidence.prepare_environment(SimpleNamespace(label="a.js"), self.root, self.tmp.name, self.environment)
+        self.assertLessEqual(len(reads), 2, "the library was read %d times for two suites" % len(reads))
+        self.assertNotIn("richos/app/ui/tests/lib/extra.js", first["paths"])
+        self.edit("richos/app/ui/tests/lib/extra.js", "// a new library\n")
+        self.edit("richos/app/ui/tests/lib/harness.js",
+                  'require("./ui-sources");\nrequire("./extra");\nconst bound = "shots-b/one.png";\n')
+        again = evidence.contract_for(self.root, "a.js")
+        self.assertIn("richos/app/ui/tests/lib/extra.js", again["paths"])
+        self.assertEqual(again.get("exists"), ["richos/app/ui/tests/shots-b/one.png"])
+
     def test_the_same_bytes_in_another_worktree_are_the_same_identity(self):
         first, second = self.identity(self.root), self.identity(self.worktree)
         self.assertNotIn("fresh", first)
