@@ -175,11 +175,19 @@ async function main() {
   // the number. Once nothing checked them, the ones left behind drifted (the voice crate's
   // "327 library tests" stood while the crate had 432). So the rule is the absence: a count
   // written back fails here, and cargo's own output is where a count is read.
+  //
+  // Three forms, because a count comes back in whichever wording the next author reaches for:
+  // beside a test file ("tests/spine_tests.rs  12 spine tests"), on a `cargo test` line
+  // ("# 1840 tests"), and in prose ("# The 327 library tests ...", "spine_tests.rs has 12
+  // tests"). The prose form is a number followed within two words by "test(s)" or "doc-tests";
+  // a number glued to `=`, a word, `.`, `/` or `-` is not one (`RICHOS_..._AUDIO=1 cargo test`).
+  // Measured against the whole README on 2026-10-20: that was its only other hit.
+  const PROSE_COUNT = /(?<![=\w./-])\d+\s+(?:[A-Za-z][\w-]*\s+){0,2}(?:tests?|doc-tests)\b/;
 
-  await run.check("app/README.md states no test count beside a test file or a cargo test line", async () => {
+  await run.check("app/README.md states no test count beside a test file, on a cargo test line or in prose", async () => {
     const counts = [];
     readme.split("\n").forEach((line, i) => {
-      if (/tests\/[a-z0-9_]+\.rs\s+\d+\s/.test(line) || /cargo test -p richos-[a-z]+.*#.*\b\d+ (?:[a-z-]+ )?tests?\b/.test(line)) {
+      if (/tests\/[a-z0-9_]+\.rs\s+\d+\s/.test(line) || /cargo test -p richos-[a-z]+.*#.*\b\d+ (?:[a-z-]+ )?tests?\b/.test(line) || PROSE_COUNT.test(line)) {
         counts.push(`README.md:${i + 1}: ${line.trim()}`);
       }
     });

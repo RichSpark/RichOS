@@ -516,7 +516,7 @@ richos/app/
                               instruction, the spoken form carries the document's name and date
                               and no URL, and the memory lanes' characters are byte-identical
                               with and without a block
-    tests/loro_gui_launch_tests.rs for the launch nobody tests on (13 plus the two
+    tests/loro_gui_launch_tests.rs for the launch nobody tests on (including the two
                               subprocess children they drive): a double-click
                               carries HOME, USER and PATH and nothing else, and until
                               2026-09-01 the WRITE half of loro read three environment
