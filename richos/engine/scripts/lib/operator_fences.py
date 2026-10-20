@@ -1622,12 +1622,7 @@ def fence_decide(lines, common, gitdir, files, chain, argv_of_writer=None, enfor
             # exists, so the move is judged from the main there really is
             # (review rv-20261009T025426Z-15dae5ca-3cc1, finding 1).
             moved_from = current if is_zero(old) and current is not None else old
-            try:
-                gaps = review_gaps(files.reviews, landed_tips(os.getcwd(), moved_from, new, keep_git_env=True),
-                                   files.repo)
-            except Exception as error:  # noqa: BLE001: a check that cannot decide refuses, and says so
-                gaps = {new: ["the second review of this move could not be checked (%s: %s), so it is refused"
-                              % (error.__class__.__name__, error)]}
+            gaps = move_review_gaps(files, moved_from, new, keep_git_env=True)
             if gaps:
                 refused.append(((old, new, ref), REVIEW_WHY,
                                 review_refusal_text(files.repo, gaps, files.engine, in_git=True)))
@@ -1635,6 +1630,62 @@ def fence_decide(lines, common, gitdir, files, chain, argv_of_writer=None, enfor
 
 
 REVIEW_WHY = "a move of main that lands work with no passing second review of its tip"
+
+
+def move_review_gaps(files, old, new, keep_git_env=False):
+    """{tip: why} for the move of a land target from `old` to `new`: the one
+    question the fence asks of a move of main and review-check asks before a
+    land's checks. A check that cannot decide refuses, and says so."""
+    try:
+        return review_gaps(files.reviews, landed_tips(os.getcwd(), old, new, keep_git_env=keep_git_env),
+                           files.repo)
+    except Exception as error:  # noqa: BLE001: a check that cannot decide refuses, and says so
+        return {new: ["the second review of this move could not be checked (%s: %s), so it is refused"
+                      % (error.__class__.__name__, error)]}
+
+
+# THE REVIEW IS ASKED BEFORE THE LAND'S CHECKS, ON EVERY ENTRANCE (verification
+# reliability PRD, R8 and A9, 2026-10-20). On 2026-10-19 a plain `git merge` of
+# v1.2.1 into main ran its whole land check and was then refused here, at the
+# move of main, because its exact tip had no review; `workspaces.sh merge`
+# already asked first (_review_check). autocheck's LAND path now asks this
+# command before it runs a check: the installed copy is brought current first,
+# exactly as `fence prepared` does, so the answer is the one the fence will
+# give. It asks it of any land target autocheck lands onto, a release branch
+# named by the lander included, which this hook never sees (the launcher runs
+# the fence for refs/heads/main only), so main and a release branch are held to
+# the same review. It decides nothing about the lease, and writes no refusal
+# record: nothing has moved and no writer was refused.
+def cmd_review_check(argv):
+    """`review-check <launcher> <old> <new>`, run in the checkout being landed
+    into: exit 0 when every tip the move from `old` to `new` lands has a
+    passing second review, or when this repository's launcher carries no
+    review ledger; exit 1, with the refusal, otherwise."""
+    if len(argv) != 3:
+        sys.stderr.write("usage: operator_fences.py review-check <launcher> <old> <new>\n")
+        return 2
+    conf = read_launcher(argv[0])
+    if not conf or not conf.get("REVIEWS"):
+        return 0
+    try:
+        stale = bring_self_current(conf)
+    except OSError as error:
+        stale = []
+        sys.stderr.write("operator fence: the installed fence differs from the engine's and could not be "
+                         "brought current (%s); it decides as installed. Run operator-fences.sh install "
+                         "--repo %s.\n" % (error, conf.get("REPO") or ""))
+    if stale:
+        os.execv(sys.executable, [sys.executable, conf["PROGRAM"], "review-check"] + list(argv))
+    files = Files(conf)
+    gaps = move_review_gaps(files, argv[1], argv[2])
+    if not gaps:
+        return 0
+    try:
+        route_refused_review(files.reviews, list(gaps), files.repo)
+    except (OSError, ValueError):
+        pass  # Refusal is still real; routing availability is reported by the watcher.
+    sys.stderr.write(review_refusal_text(files.repo, gaps, files.engine) + "\n")
+    return 1
 
 
 def _holder_refusal(files, gitdir, lease, new):
@@ -2647,7 +2698,7 @@ def cmd_early_check(argv):
 
 def main(argv):
     if not argv:
-        sys.stderr.write("usage: operator_fences.py fence|lease|merge-owner|turn-end|early-check|admin ...\n")
+        sys.stderr.write("usage: operator_fences.py fence|lease|merge-owner|turn-end|early-check|review-check|admin ...\n")
         return 2
     cmd, rest = argv[0], argv[1:]
     if cmd == "fence":
@@ -2664,6 +2715,8 @@ def main(argv):
             return 3
     if cmd == "early-check":
         return cmd_early_check(rest)
+    if cmd == "review-check":
+        return cmd_review_check(rest)
     if cmd == "admin":
         sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
         import operator_fences_admin as admin   # noqa: E402  (engine-only)

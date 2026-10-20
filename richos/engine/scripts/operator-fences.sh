@@ -9,6 +9,7 @@
 #   operator-fences.sh status    [--repo <path>]... [--entity <path>] [--declaration-check]
 #   operator-fences.sh uninstall [--repo <path>]...
 #   operator-fences.sh holders-notice [--repo <path>]...
+#   operator-fences.sh refresh   --repo <path>...
 #
 # install    writes the launcher as each repository's reference-transaction hook,
 #            moves the hook that was there into its chain, and records the
@@ -28,6 +29,9 @@
 #            silent when none is. Reads launchers only, never the declaration.
 #            engine-status.sh prints it at session start, so a holder an app
 #            update moved is heard before its land is refused.
+# refresh    copies the fence this command runs from over each installed copy that
+#            differs (bring_current, the land command's own refresh), whatever the
+#            installed copy's age; the state, holders and review ledger stay as installed.
 #
 # This command never edits ~/.codex/AGENTS.md. See the as-built record,
 # richos-hq docs/verification/2026-09-24-operator-fences/README.md.
