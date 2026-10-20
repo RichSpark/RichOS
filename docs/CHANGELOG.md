@@ -2,6 +2,38 @@
 
 What changed in each stable version of RichOS, newest first; nightly builds are in the [nightly changelog](CHANGELOG-NIGHTLY.md).
 
+## 1.2.1
+
+- Added a "See what's new" link in Settings, Updates that opens the changelog in your default browser
+- Added Haiku naming a new conversation for you
+- Added the Oxford comma setting, which is off by default
+- Added a Settings row and email display so you can tell which Claude account is which (Show email on Claude accounts)
+- Added "+ New chat or company" and companies as sidebar section headings, with an open folder and an instant "+ New chat" tooltip
+- Added the phone page listing a new conversation as soon as it starts
+- Changed dictation's name to RichScribe
+- Changed the account switch so it really moves Rich and Stu and the panel says where each one is
+- Changed Rich's status line to say "Rich is thinking"
+- Changed the "Under the hood" rows to say what is true now
+- Changed the right-click menu so no browser items show anywhere and text fields offer only Cut, Copy, Paste and Select All
+- Improved the phone page so it picks up where the stream left off and keeps its conversation list after a reconnect
+- Improved the phone page to draw Rich's answers as formatted text, with code shown exactly as written
+- Improved Rich's spoken turns so they keep every word over silence and room noise and always end
+- Improved Rich's spoken times on the hour so they are said whole
+- Improved the loading screen so Stop works there too
+- Improved the Oxford comma rule, the Rich instructions and the overload handling so overloads are shown and workers share one overload clock
+- Fixed tables and quotations not showing in every answer and a quotation now ends a table
+- Fixed a phone question's answer landing in the wrong conversation, so it stays in the one it was sent from
+- Fixed Stop not covering answers given on question cards and the card now shows the truth after Stop
+- Fixed Stop not being remembered after a restart
+- Fixed Escape not closing the open dialog, including the report over Connected folders
+- Fixed Rich dropping "do it yourself" requests
+- Fixed a PDF highlight appearing on right-click
+- Fixed Rich's sentences being split by a queued notice
+- Fixed a withdrawn question card showing an id
+- Fixed Restore showing for words that were not Rich's own
+- Fixed the "Voice is ready" line staying after the round button is learned
+- Fixed Rich's spoken "On it!" so it is spoken right away
+
 ## 1.2.0
 
 - Added working voice: setup downloads and checks the speech models, so Talk to Rich works on a fresh install
