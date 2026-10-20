@@ -738,10 +738,18 @@ def execution_environment(item):
     return env
 
 
+def recipe_of(item):
+    """The item's reviewed recipe. A family recipe (the UI suites, proof_evidence.UI_FAMILY) holds
+    only for the exact invocation its family qualifies, which only this caller can see."""
+    recipe = proof_evidence.contract_for(ROOT, item.label)
+    if recipe.get("family"):
+        recipe = proof_evidence.family_invocation(ROOT, recipe, item.cwd, item.argv)
+    return recipe
+
+
 def input_identity(item, args, logdir, snapshot=None):
     environment = execution_environment(item)
-    result = proof_evidence.recipe_identity(ROOT, proof_evidence.contract_for(ROOT, item.label),
-                                            environment, snapshot)
+    result = proof_evidence.recipe_identity(ROOT, recipe_of(item), environment, snapshot)
     if result.get("fresh") and item.label not in proof_evidence.VERIFIES_OWN_INPUTS and item.argv:
         # No reviewed contract: keyed by the whole checkout's content, so a retry of the same
         # tree (--resume, a refused land tried again, the push after it) keeps what passed
@@ -775,12 +783,17 @@ def describe_input_change(item, baseline, items, limit=5):
     run that had started, the check itself included, because any of them could be the writer.
     Diagnosis only: it never changes a verdict, and a failure to explain explains nothing."""
     try:
-        recipe = proof_evidence.contract_for(ROOT, item.label)
+        recipe = recipe_of(item)
         if recipe.get("fresh"):
             return ""
         root = Path(ROOT).resolve()
         changed = []
-        for rel in recipe.get("subset", {}).get("paths", recipe["paths"]):
+        if recipe.get("family"):
+            # A family binds content, not disk state: compare that, one fresh listing.
+            now = proof_evidence.InputSnapshot()
+            changed = [rel for rel in recipe["paths"] if (str(root), rel) in baseline.contents
+                       and baseline.contents[(str(root), rel)] != now.content(root, rel)]
+        for rel in ([] if recipe.get("family") else recipe.get("subset", {}).get("paths", recipe["paths"])):
             before = baseline.paths.get(str((root / rel).absolute()))
             if before is not None:
                 changed += proof_evidence.identity_differences(before, proof_evidence.path_identity(root / rel), rel)
@@ -2086,6 +2099,27 @@ def head_commit():
     return subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
 
 
+def selected_by(args):
+    """What the plan was selected from, saved in plan.json beside it (2026-10-20).
+
+    An author's handover run names its range, `<recorded base>..<candidate>`; both ends are
+    resolved to commits here, at proof time, so whoever reads the saved run later (the
+    workspace registry's handover report, a land) knows which base and which candidate the
+    plan covers without re-deriving it from a branch that has moved since. The mode says
+    which selection it was (`--gate` is the merge gate's). A `--commands` plan names its file."""
+    if args.commands:
+        return {"commands": os.path.abspath(args.commands), "sha256": proof_evidence.file_digest(args.commands)}
+    record = {"arguments": list(args.proof_for_args), "mode": "gate" if "--gate" in args.proof_for_args else "normal"}
+    refs = [a for a in args.proof_for_args if not a.startswith("-")]
+    if len(refs) == 1 and ".." in refs[0] and "..." not in refs[0]:
+        base, candidate = refs[0].split("..", 1)
+        for name, ref in (("base", base or "HEAD"), ("candidate", candidate or "HEAD")):
+            found = subprocess.run(["git", "-C", ROOT, "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
+                                   capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            record[name] = found.stdout.strip() if found.returncode == 0 else None
+    return record
+
+
 def source_identity():
     """The whole checkout: HEAD, the tracked diff and every untracked file git does not ignore.
 
@@ -2352,9 +2386,11 @@ def run_main(argv, run_state):
             with open(os.path.join(logdir, "engine-units.txt"), "w") as stream:
                 stream.write("\n".join(units) + "\n")
         lines = saved["items"]
+        selected = saved.get("selection")
     else:
         lines = selection(args)
         items = as_printed(lines) if args.as_printed else plan(lines, args, logdir, history_weights(hist_dir))
+        selected = selected_by(args)
     run_state["items"] = items
     if not items:
         print("proof-run: the selection is empty — nothing to run. (For a documentation-only change that is"
@@ -2409,7 +2445,8 @@ def run_main(argv, run_state):
         baseline = proof_evidence.InputSnapshot()
         args.evidence = proof_evidence.Record(ROOT, logdir, items, before,
             identities(items, baseline), args.resume, source_identity, identity, identities,
-            explain=lambda item: describe_input_change(item, baseline, items), current_commit=head_commit)
+            explain=lambda item: describe_input_change(item, baseline, items), current_commit=head_commit,
+            selection=selected)
         args.pool = proof_evidence.Pool(proof_evidence.pool_directory(ROOT, hist_dir), args.evidence,
                                         args.retry_reason)
         started = time.monotonic()

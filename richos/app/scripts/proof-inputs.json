@@ -3628,5 +3628,108 @@
       "qualification_unit": "make-release",
       "isolation": "private-home-v1"
     }
+  },
+  "families": {
+    "ui-suite": {
+      "suites": "richos/app/ui/tests",
+      "shipped": "richos/app/ui",
+      "manifest": "richos/app/ui/tests/lib/ui-sources.js",
+      "declaration": "richos/app/scripts/proof-for.ui-inputs",
+      "paths": [
+        "richos/app/ui/assets",
+        "richos/app/ui/fonts",
+        "richos/app/ui/tests/lib/harness.js",
+        "richos/app/ui/tests/lib/ui-sources.js",
+        "richos/app/ui/tests/package.json",
+        "richos/app/ui/tests/package-lock.json"
+      ],
+      "tools": [
+        "node",
+        "git",
+        "ps",
+        "python3",
+        "cargo",
+        "rustc"
+      ],
+      "environment": [
+        "HOME",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "PLAYWRIGHT_BROWSERS_PATH",
+        "RICHOS_PLAYWRIGHT",
+        "PW_TEST_SCREENSHOT_NO_FONTS_READY",
+        "RUSTUP_HOME",
+        "RUSTUP_TOOLCHAIN",
+        "CARGO_HOME",
+        "PROOF_FOR_UI_INPUTS",
+        "GITHUB_SHA",
+        "BROWSER_REAPER_LIB",
+        "GATE_HONESTY_TESTS_DIR",
+        "SUITE_RACES_TESTS_DIR",
+        "RICHOS_HQ",
+        "RICHOS_APPEARANCE_LAG_MS",
+        "RICHOS_BUG_SHOTS",
+        "RICHOS_COMPACTION_FRAMES",
+        "RICHOS_CONTRAST_LAG_MS",
+        "RICHOS_FIRST_PAINT_BUDGET_MS",
+        "RICHOS_FRAME_BUDGET_MS",
+        "RICHOS_GATE_HONESTY_MODE",
+        "RICHOS_GATE_HONESTY_REFERENCE",
+        "RICHOS_PACE_FRAMES",
+        "RICHOS_QUESTION_SHOTS",
+        "RICHOS_QUOTA_TEST_TICK_MS",
+        "RICHOS_SHOTS_REGENERATE",
+        "RICHOS_SLIDE_ABS_PX",
+        "RICHOS_SPLASH_BUDGET_MS",
+        "RICHOS_SPLASH_LAG_MS",
+        "RICHOS_SPLASH_SHUTTER_LAG_MS",
+        "RICHOS_SPLASH_TRACE_MS",
+        "RICHOS_STRUCT_BUDGET_MS",
+        "RICHOS_TECHY_LAG_MS",
+        "RICHOS_UI_FREEZE_AFTER_GOTO_MS",
+        "RICHOS_UI_NAV_EVIDENCE",
+        "RICHOS_UI_PAGE_BUSY_MS",
+        "RICHOS_UI_ROUND_TRIP_LAG_MS",
+        "RICHOS_UI_ROUND_TRIP_LAG_ONLY",
+        "RICHOS_UI_SPAWN_LAG_MS",
+        "RICHOS_UI_STALLED_HOST_ONLY",
+        "RICHOS_UI_TRACKED_TREE_ROOT",
+        "RICHOS_UI_TRACKED_TREE_SCOPE",
+        "RICHOS_UPDATES_LAG_MS"
+      ],
+      "operational": {
+        "TMPDIR": "where a suite writes its scratch; the nightly's conditions set it",
+        "RICHOS_UI_TESTS_LEDGER": "the runner's per-run evidence ledger",
+        "RICHOS_UI_NAV_EVIDENCE_DIR": "where a navigation failure writes its evidence",
+        "RICHOS_WORKER_TOKENS": "the run's worker budget (admission)",
+        "RICHOS_WORKER_TOKENS_TOOL": "the worker-token helper's path (admission)",
+        "RICHOS_WORKER_BORROW_LOCK": "the caller's held worker slot (admission)",
+        "RICHOS_WORKER_SLOT_HELD": "the caller's held worker slot (admission)"
+      },
+      "external": [],
+      "child_tools": [
+        "git",
+        "ps"
+      ],
+      "dynamic": {
+        "richos/app/ui/tests/lib/harness.js": {
+          "require(c)": "loadPlaywright tries each Playwright candidate path in turn; whatever loads is bound as an install by content (portable_dependencies), in the same order"
+        },
+        "richos/app/ui/tests/lib/navigation-evidence.js": {
+          "spawnSync(file": "helper() is called only with /usr/sbin/sysctl and /bin/ps, to record host pressure in a navigation-failure bundle; system programs, no repository code, never a verdict input"
+        }
+      },
+      "qualification": "docs/development/verification-input-qualifications.json",
+      "qualification_unit": "ui-suite family",
+      "unqualified": {
+        "splash.js": "check 18 reads the private richos-hq studies each splash-library.js entry names, outside this repository; no declaration binds them",
+        "vouch-template.js": "downloads the vouch release with curl from the network; its digest-verified cache is test output, not a bound input"
+      }
+    }
   }
 }
