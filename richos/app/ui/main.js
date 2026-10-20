@@ -426,10 +426,10 @@ const liveStatus = new Map();
 // snapshot, with `sessionLiveTurns` carrying what is running in threads that are not on
 // screen.
 let activeThreadId = null;
-/// A Send pressed while `init()` had not yet opened any conversation — `{ text, at, id }`, `id`
-/// its bubble — sent by `openThread` as it starts opening one (`send()`'s launch hold). `null`
-/// when none waits.
-let launchSendHeld = null;
+/// Every Send pressed while `init()` had not yet opened any conversation, in the order he pressed
+/// them — `{ text, at, id }`, `id` its bubble — sent in that order by `openThread` as it starts
+/// opening one (`send()`'s launch hold). Empty when none waits.
+let launchSendsHeld = [];
 /// `init()` has made its landing decision; from here no Send is held (`send()`).
 let launchLanded = false;
 let voiceMode = false;
@@ -1395,17 +1395,18 @@ async function openThread(threadId, opts) {
   renderRail();
   startOrStopWaitTimer();
   announce("Opening conversation.");
-  // THE SEND HE PRESSED BEFORE THE LAUNCH HAD A CONVERSATION OPEN goes now, the moment there is
-  // one to send it to, and BEFORE this function awaits anything: from the line that set
-  // `activeThreadId` above, a later Send goes straight out, so the held one must be issued first
-  // or his messages reach Rich out of order (second review rv-20261020T181204Z-11d18147-df79).
-  // It is an ordinary send in the opening window, which is honored (slow-bridge check 3): exactly
-  // the words at the press; whatever he has typed since stays in the box as his next draft.
-  if (launchSendHeld) {
-    const held = launchSendHeld;
-    launchSendHeld = null;
-    send(held.text);
-  }
+  // THE SENDS HE PRESSED BEFORE THE LAUNCH HAD A CONVERSATION OPEN go now, the moment there is
+  // one to send them to, in the order he pressed them, and BEFORE this function awaits anything:
+  // from the line that set `activeThreadId` above, a later Send goes straight out, so the held
+  // ones must be issued first or his messages reach Rich out of order (second review
+  // rv-20261020T181204Z-11d18147-df79). Each is an ordinary send in the opening window, which is
+  // honored (slow-bridge check 3), and each `send()` issues its `send_message` before its first
+  // await, so the bridge sees them in this loop's order (handover review
+  // rv-20261020T191206Z-fa2ee4a4-778c: a correction pressed second must never be dropped).
+  // Exactly the words at each press; whatever he has typed since stays in the box.
+  const heldSends = launchSendsHeld;
+  launchSendsHeld = [];
+  for (const held of heldSends) send(held.text);
   try {
     await switchThreadInOrder(threadId);
   } catch (e) {
@@ -2647,9 +2648,11 @@ async function send(explicitText, opts) {
   // refused with an argument error over a box the restore then emptied: the swallowed first send
   // after a relaunch (esc-20261020T171021Z-8fd0fca7, measured in the test guest with real keys).
   if (!launchLanded && !preserveDraft && !files && !activeThreadId && !draftEntityId && mainView === "conversation") {
-    if (launchSendHeld) return; // one is already waiting; these words stay in the box
+    // EVERY Send in this window is held, in order: a second one ("Correction: do not send it
+    // until I approve.") is as much his instruction as the first (handover review
+    // rv-20261020T191206Z-fa2ee4a4-778c), and it goes up on screen at once like the first.
     const at = Date.now();
-    launchSendHeld = { text, at, id: window.RichTimeline.addPendingUserMessage(timelineModel, text, at) };
+    launchSendsHeld.push({ text, at, id: window.RichTimeline.addPendingUserMessage(timelineModel, text, at) });
     inputEl.value = "";
     autoGrow();
     followBottom = true;
@@ -10237,11 +10240,11 @@ async function init() {
   // the box for whatever he chooses next, and are never sent there unasked. A conversation he
   // pressed himself that is still opening takes them instead.
   launchLanded = true;
-  if (launchSendHeld && mainView !== "opening") {
-    const held = launchSendHeld;
-    launchSendHeld = null;
-    window.RichTimeline.dropPendingUserMessage(timelineModel, held.id);
-    inputEl.value = held.text + (inputEl.value.trim() ? "\n\n" + inputEl.value : "");
+  if (launchSendsHeld.length && mainView !== "opening") {
+    const held = launchSendsHeld;
+    launchSendsHeld = [];
+    for (const h of held) window.RichTimeline.dropPendingUserMessage(timelineModel, h.id);
+    inputEl.value = held.map((h) => h.text).join("\n\n") + (inputEl.value.trim() ? "\n\n" + inputEl.value : "");
     autoGrow();
     scheduleRender();
   }
