@@ -2058,6 +2058,57 @@ class UiFamily(unittest.TestCase):
         self.assertEqual(evidence.contract_for(self.root, "fine.js").get("family"), "ui-suite")
         self.assertEqual(evidence.contract_for(self.root, "py.js").get("family"), None)
 
+    def test_a_picture_a_library_checks_for_is_bound_by_existence_not_content(self):
+        """Review rv-20261020T063426Z-03441b27-e3dd #1: lib/shot-stability.js proves at require
+        time that every picture it declares exists, so deleting one fails every suite that loads
+        it; the suite's identity bound neither the picture nor its folder."""
+        (self.root / "richos/app/ui/tests/lib/bounds.js").write_text(
+            '// an example in a comment: "shots-b/example.png"\n'
+            'const DECLARED = [{ file: "shots-b/one.png" }];\n')
+        self.edit("richos/app/ui/tests/a.js", 'require("./lib/harness"); require("./lib/bounds"); // reads shots-a\n')
+        recipe = evidence.contract_for(self.root, "a.js")
+        self.assertEqual(recipe.get("exists"), ["richos/app/ui/tests/shots-b/one.png"])
+        before = self.identity(self.root)
+        # Another suite's picture, regenerated: its bytes are no input of this suite.
+        (self.root / "richos/app/ui/tests/shots-b/one.png").write_text("picture b, regenerated\n")
+        self.assertEqual(self.identity(self.root), before)
+        # Deleted: the library would refuse, so the identity differs.
+        (self.root / "richos/app/ui/tests/shots-b/one.png").unlink()
+        self.assertNotEqual(self.identity(self.root), before)
+        # A suite whose closure has no such library binds nothing of shots-b.
+        self.assertNotIn("exists", evidence.contract_for(self.root, "b.js"))
+
+    def test_private_study_reads_are_bound_by_content_and_must_stay_in_their_folder(self):
+        """PRD 2026-10-20: bind private reads such as splash's studies. A suite opens the study a
+        shipped library entry names, under $RICHOS_HQ, when that repository exists."""
+        hq = Path(self.tmp.name) / "hq"
+        (self.root / "richos/app/ui/library.js").write_text(
+            '{"source": "richos-hq studies/one/index.html"}\n')
+        family = {**self.family, "private_reads": {"a.js": {
+            "why": "fixture", "env": "RICHOS_HQ", "home": "ab/hq",
+            "named_in": "richos/app/ui/library.js", "pattern": '"source"\\s*:\\s*"richos-hq (\\S+)"'}}}
+        evidence.atomic(self.root / "richos/app/scripts/proof-inputs.json",
+                        {"schema": 1, "checks": {}, "families": {"ui-suite": family}})
+        self.assertEqual(evidence.contract_for(self.root, "a.js")["external_reads"]["paths"], ["studies/one"])
+        environment = {**self.environment, "RICHOS_HQ": str(hq)}
+        absent = self.identity(self.root, environment=environment)
+        self.assertEqual(absent["external_reads"], {"root": {"absent": True}})
+        (hq / "studies/one/fonts").mkdir(parents=True)
+        (hq / "studies/one/index.html").write_text('<link href="fonts/fonts.css">\n')
+        (hq / "studies/one/fonts/fonts.css").write_text('@font-face { src: url("Inter.woff2"); }\n')
+        (hq / "studies/two").mkdir()
+        (hq / "studies/two/index.html").write_text("an unnamed study\n")
+        present = self.identity(self.root, environment=environment)
+        self.assertNotEqual(present, absent)
+        (hq / "studies/two/index.html").write_text("an unnamed study, changed\n")
+        self.assertEqual(self.identity(self.root, environment=environment), present)
+        (hq / "studies/one/fonts/fonts.css").write_text('@font-face { src: url("Inter-2.woff2"); }\n')
+        changed = self.identity(self.root, environment=environment)
+        self.assertNotEqual(changed, present)
+        # A study that loads a file outside its folder reaches what nothing binds.
+        (hq / "studies/one/index.html").write_text('<link href="../shared/engine.css">\n')
+        self.assertIn("outside the study folder", self.identity(self.root, environment=environment)["fresh"])
+
     def test_a_changed_harness_needs_its_review_renewed(self):
         self.edit("richos/app/ui/tests/lib/harness.js", 'require("./ui-sources"); require("fs");\n')
         self.assertIn("changed unit reader", self.identity(self.worktree)["fresh"])

@@ -1016,7 +1016,8 @@ def recipe_identity(root, recipe, environment, snapshot=None):
     if recipe.get("fresh"):
         return {"fresh": recipe["fresh"]}
     required = {"paths", "tools", "environment", "external", "qualification"}
-    optional = {"isolation", "qualification_unit", "external_paths", "git_inputs", "subset", "family", "invocation"}
+    optional = {"isolation", "qualification_unit", "external_paths", "git_inputs", "subset", "family", "invocation",
+                "exists", "external_reads"}
     if set(recipe) - optional != required or not recipe["qualification"]:
         raise ValueError("incomplete verification input contract")
     root = Path(root).resolve()
@@ -1086,6 +1087,16 @@ def recipe_identity(root, recipe, environment, snapshot=None):
         # What the suite executes that git does not track, bound by what loads rather than by
         # where this checkout is (portable_dependencies).
         identity["installed"] = snapshot.portable(root, environment)
+        # Which pictures a library checks for (library_shot_names), by existence alone, as the
+        # content git would land has them (the same listing every family path is read from).
+        if recipe.get("exists"):
+            identity["exists"] = {rel: snapshot.content(root, rel) != {"absent": True}
+                                  for rel in recipe["exists"]}
+        if recipe.get("external_reads"):
+            reads = private_read_identity(recipe["external_reads"], environment, snapshot)
+            if reads.get("fresh"):
+                return {"fresh": reads["fresh"]}
+            identity["external_reads"] = reads
     return identity
 
 
@@ -1362,10 +1373,91 @@ def ui_family_recipe(root, label, family):
     for rel in paths:
         if Path(rel).is_absolute() or ".." in Path(rel).parts:
             raise ValueError("a UI input must be repository-relative: " + rel)
-    return {"family": UI_FAMILY, "invocation": {"cwd": family["suites"], "argv": ["node", label]},
-            "paths": sorted(paths), "tools": list(family["tools"]),
-            "environment": list(family["environment"]), "external": list(family.get("external", [])),
-            "qualification": family["qualification"], "qualification_unit": family["qualification_unit"]}
+    recipe = {"family": UI_FAMILY, "invocation": {"cwd": family["suites"], "argv": ["node", label]},
+              "paths": sorted(paths), "tools": list(family["tools"]),
+              "environment": list(family["environment"]), "external": list(family.get("external", [])),
+              "qualification": family["qualification"], "qualification_unit": family["qualification_unit"]}
+    exists = library_shot_names(root, family, label, closure, recipe["paths"])
+    if exists:
+        recipe["exists"] = exists
+    if label in family.get("private_reads", {}):
+        recipe["external_reads"] = private_reads(root, family["private_reads"][label])
+    return recipe
+
+
+# A LIBRARY THAT CHECKS WHICH PICTURES EXIST BINDS THEIR EXISTENCE, NEVER THEIR BYTES (review
+# rv-20261020T063426Z-03441b27-e3dd #1). lib/shot-stability.js proves at require time that every
+# picture it declares a bound for exists (`shots-home/home-named.png`, ...), so deleting one turns
+# every suite that loads it from a pass into a failure; the suite's identity bound neither the
+# picture nor the folder (it names no `shots-home`), so the old pass stood. A literal
+# `shots-<folder>/<file>` in any library of the suite's closure (the suites folder is the only
+# place pictures live) is therefore bound by whether it exists. Its content is not: binding it
+# would make every suite that loads the library run again whenever an unrelated suite's picture
+# is regenerated, which is the 87-check restart the family exists to end. The suite's own named
+# folders are bound by content above, so they are left out here.
+_SHOT_FILE = re.compile(r"""["'`](shots-[A-Za-z0-9_.-]+/[^"'`\s]+)["'`]""")
+
+
+def library_shot_names(root, family, label, closure, bound):
+    suite = family["suites"] + "/" + label
+    found = set()
+    for rel in closure:
+        if rel == suite or not rel.endswith((".js", ".cjs", ".mjs")):
+            continue
+        try:
+            text = (Path(root) / rel).read_text(errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.lstrip().startswith(("//", "*", "/*")):
+                continue  # a comment's example name is no read
+            for match in _SHOT_FILE.finditer(line):
+                name = family["suites"] + "/" + match.group(1)
+                if not any(name == path or name.startswith(path + "/") for path in bound):
+                    found.add(name)
+    return sorted(found)
+
+
+# A PRIVATE READ IS BOUND BY CONTENT, AND A STUDY THAT REACHES OUTSIDE ITS FOLDER IS NOT
+# QUALIFIED (PRD 2026-10-20, "private reads such as splash's studies"). splash.js check 18 opens,
+# beside each splash-library.js entry, the round study its `source` names in the private
+# richos-hq repository ($RICHOS_HQ, else ~/ab/richos-hq), and only when that repository exists.
+# The family entry declares where the names are (a shipped file, bound by content already) and
+# how the root is found; the recipe names each study's folder, and its identity binds whether the
+# root exists and every file in each folder. A study page loads its fonts and styles from its
+# own folder (round folders are self-contained and frozen); recipe_identity refuses one that
+# names a file outside it, so a reach the declaration does not bind leaves the suite unqualified.
+def private_reads(root, declaration):
+    text = (Path(root) / declaration["named_in"]).read_text(errors="replace")
+    folders = sorted({os.path.dirname(name) for name in re.findall(declaration["pattern"], text)})
+    for folder in folders:
+        if not folder or Path(folder).is_absolute() or ".." in Path(folder).parts:
+            raise ValueError("a private read must be relative to its root: " + folder)
+    return {"env": declaration["env"], "home": declaration["home"], "paths": folders}
+
+
+_ESCAPING_REFERENCE = re.compile(r"""(?:src|href)\s*=\s*["'](?!data:|https?:|#|mailto:)([^"']+)["']|url\(\s*["']?(?!data:|https?:|#)([^"')]+)""")
+
+
+def private_read_identity(declaration, environment, snapshot):
+    """{"fresh": why} or what the declared private reads hold (private_reads above)."""
+    home = environment.get("HOME") or os.path.expanduser("~")
+    base = Path(environment.get(declaration["env"]) or os.path.join(home, declaration["home"]))
+    if not base.is_dir():
+        return {"root": {"absent": True}}
+    folders = {}
+    for rel in declaration["paths"]:
+        folder = (base / rel).resolve()
+        for page in sorted(folder.rglob("*")) if folder.is_dir() else []:
+            if page.suffix not in (".html", ".css", ".js"):
+                continue
+            for match in _ESCAPING_REFERENCE.finditer(page.read_text(errors="replace")):
+                target = (page.parent / (match.group(1) or match.group(2)).split("?")[0].split("#")[0]).resolve()
+                if target != folder and folder not in target.parents:
+                    return {"fresh": "%s names %s, outside the study folder its declaration binds" % (
+                        os.path.relpath(page, base), match.group(1) or match.group(2))}
+        folders[rel] = digest(snapshot.path(folder))
+    return {"root": {"present": True}, "paths": folders}
 
 
 def family_invocation(root, recipe, cwd, argv):

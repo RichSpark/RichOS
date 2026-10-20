@@ -203,6 +203,10 @@ runner checks the item's own command and directory) reads:
 - its own file and every file it or any script its row names (the fixture suites and tools
   it runs as child processes), reaches by relative `require`, all the way down;
 - every `shots-*` folder its file names;
+- whether each picture exists that a library in its closure names as
+  `shots-<folder>/<file>` (`lib/shot-stability.js` refuses to load when a picture it
+  declares a bound for is gone), never that picture's bytes, so regenerating another
+  suite's picture changes nothing;
 - the harness, `ui-sources.js` and the package manifests of the tests folder.
 
 Every other load in that closure is judged before a suite qualifies. The closure covers the
@@ -236,10 +240,14 @@ loader or to what it reads needs this review renewed.
 
 The family runs with the nightly UI gate's conditions, never in the private
 profile, so the unit carries its own common floor and only a recipe of its own
-family may use it. `splash.js` (reads private `richos-hq` studies) and
-`vouch-template.js` (downloads from the network) stay unqualified with their
-reasons in `proof-inputs.json`: keyed by the whole checkout, they run in every
-checkout.
+family may use it. `splash.js` reads private `richos-hq` studies: check 18
+opens, beside each `splash-library.js` entry, the study its `source` names under
+`$RICHOS_HQ` (else `~/ab/richos-hq`) and only when that repository exists. Its
+`private_reads` declaration binds whether the root exists and every file in each
+named study's folder; a study page or stylesheet that names a file outside its
+folder leaves the suite unqualified. `vouch-template.js` downloads from the
+network and stays unqualified with its reason in `proof-inputs.json`: keyed by
+the whole checkout, it runs in every checkout.
 
 ## Renewals
 
