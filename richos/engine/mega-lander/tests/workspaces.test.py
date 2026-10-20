@@ -7029,6 +7029,18 @@ class ProofReport_TheHandoverPointsAtItsSavedRun(Base):
         with patch.object(ws.time, "monotonic", side_effect=lambda: 200.0):
             self.assertIn("time budget", ws.proof_report(self.path, deadline=199.0)["unavailable"])
 
+    def test_the_land_runs_its_gate_in_the_callers_locale(self):
+        """PRD step 3 (A10/R8): every UI suite binds LC_ALL, and the managed merge forced LC_ALL=C on
+        its pre-merge-commit gate while the author's run, a plain-Git land and the nightly kept the
+        caller's locale, so no author pass could match a managed land's identity."""
+        with patch.dict(os.environ, {"LC_ALL": "en_US.UTF-8"}):
+            self.assertEqual(ws._land_env("main")["LC_ALL"], "en_US.UTF-8")
+        without = {k: v for k, v in os.environ.items() if k != "LC_ALL"}
+        with patch.dict(os.environ, without, clear=True):
+            self.assertNotIn("LC_ALL", ws._land_env("v1.3.0", ["/a/run"]))
+            # This tool still reads git's own output in the C locale.
+            self.assertEqual(ws._git_env()["LC_ALL"], "C")
+
     def test_the_merge_offers_only_the_run_reported_for_the_tip_it_merges(self):
         run_dir = self.saved_run("20261020T000000Z-x", {"checks": [{"check": "a.js", "result": "passed"}]})
         self.handed_in()

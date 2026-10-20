@@ -1543,7 +1543,7 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
             *([why_not] if why_not else []),
             *(line for row in blocking or [] for line in
               [row.get("message") or f"FAILED: {row['check']} ({row['result']})", *alone_lines(alone.get(row["check"]))]),
-            # The gate's environment is not a shell's (LC_ALL=C from the merge, TZ, the nightly's
+            # The gate's environment is not a shell's (the merge's locale, TZ, the nightly's
             # conditions): this file reruns the check exactly as it ran here (proof-run.py write_rerun).
             *(f"  rerun {row['check']} as the gate ran it: sh {shlex.quote(row['rerun'])}"
               for row in blocking or [] if row.get("rerun")),

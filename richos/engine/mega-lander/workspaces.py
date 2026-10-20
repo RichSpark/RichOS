@@ -275,6 +275,17 @@ AUTHOR_RUNS_ENV = "RICHOS_AUTOCHECK_AUTHOR_RUNS"
 
 def _land_env(target, author_runs=()):
     env = _git_env()
+    # THE GATE RUNS IN THE CALLER'S LOCALE (verification reliability PRD step 3, A10/R8).
+    # _git_env's LC_ALL=C is for reading git's own output in this tool; this merge's output is
+    # only shown, never parsed, and its pre-merge-commit hook runs every check of the gate in
+    # the environment it gets. So a managed land ran its checks under LC_ALL=C while a plain-Git
+    # land, the nightly (which passes the operator's locale through) and the author's handover
+    # run did not: every UI suite binds LC_ALL, and no author pass could ever match the managed
+    # land's identity. The merge passes the caller's locale on, as `git merge` from a shell does.
+    if "LC_ALL" in os.environ:
+        env["LC_ALL"] = os.environ["LC_ALL"]
+    else:
+        env.pop("LC_ALL", None)
     env[LAND_TARGET_ENV] = target
     if author_runs:
         env[AUTHOR_RUNS_ENV] = os.pathsep.join(author_runs)

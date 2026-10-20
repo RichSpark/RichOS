@@ -912,8 +912,8 @@ def finish_attempt(item):
 
 
 # A REFUSED CHECK CARRIES THE COMMAND THAT RERUNS IT AS THE GATE RAN IT (2026-10-05).
-# The merge gate runs `git merge` with LC_ALL=C (workspaces.py _git_env), its hooks inherit it, and
-# so does every check; a shell has en_GB.UTF-8. land-completeness.test.sh failed only in the gate
+# The merge gate ran `git merge` with LC_ALL=C (workspaces.py _git_env, until _land_env passed the
+# caller's locale on, 2026-10-20), its hooks inherited it, and so did every check; a shell has en_GB.UTF-8. land-completeness.test.sh failed only in the gate
 # and passed every hand rerun by silently skipping its check (fixed in 3c0383fba), because nobody
 # could rerun it the way the gate had. So each check's exact environment, directory and command
 # are written to <run>/rerun/<nn>-<check>.sh when it starts (`env -i`, every variable it got), and
