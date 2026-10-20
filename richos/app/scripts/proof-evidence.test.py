@@ -1375,6 +1375,59 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
                 self.assertTrue(summary["fresh"][label].startswith(evidence.FRESH_GAP), summary["fresh"])
                 self.assertIsNone(summary["recovery"])
 
+    def test_the_preflight_reads_the_saved_plan_when_the_checkout_reads_as_the_run_started(self):
+        """PRD line 139, the no-execution budget (03-E): selecting again cost about 45 s of the
+        preflight's 49, for a plan that is a function of the range, the mode and the checkout's
+        bytes. With the bytes as the run started, the saved plan is that selection and nothing is
+        selected; with any change it selects again, so a suite a final edit adds is still missing.
+        The inputs are read now either way."""
+        source = dict(self.source)
+        saved = Path(self.tmp.name) / "saved-plan"
+        saved.mkdir()
+        lines = ["cd . && bash fixture.sh"]
+        args = SimpleNamespace(coverage=str(saved), summary_out=str(saved / "coverage.json"), capacity=2,
+                               engine_shards=1, fail_fast=False, as_printed=False)
+        with patch.object(runner, "ROOT", str(self.root)):
+            items = runner.plan(lines, args, str(saved), {})
+        label = items[0].label
+        record = evidence.Record(str(self.root), saved, items, source, {label: dict(self.inputs)},
+                                 selection={"base": "b" * 40, "candidate": source["commit"], "mode": "normal"})
+        self.addCleanup(record.close)
+        items[0].state, items[0].rc, items[0].log = "passed", 0, str(saved / "execution.log")
+        Path(items[0].log).write_text("passed\n")
+        record.checkpoint(items)
+        selected = []
+
+        def select(_args):
+            selected.append(True)
+            return lines + ["cd . && bash added-by-a-final-edit.sh"]
+
+        def preflight(now):
+            with patch.object(runner, "ROOT", str(self.root)), \
+                    patch.object(runner, "head_commit", return_value=source["commit"]), \
+                    patch.object(runner, "source_identity", return_value=now), \
+                    patch.object(runner, "selection", side_effect=select), \
+                    patch.object(runner, "default_logdir", return_value=str(Path(self.tmp.name) / "history")), \
+                    patch.object(runner, "history_weights", return_value={}), \
+                    patch.object(runner, "supply_runtime"), \
+                    patch.object(runner, "supply_speech_models"), \
+                    patch.object(evidence, "prepare_environment"), \
+                    patch.object(runner, "execution_environment", return_value={}), \
+                    patch.object(runner, "input_identity", side_effect=lambda item, *_a, **_k: dict(self.inputs)), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                rc = runner.author_coverage(args)
+            return rc, json.loads(Path(args.summary_out).read_text()), output.getvalue()
+
+        rc, summary, out = preflight(dict(source))
+        self.assertEqual((rc, selected), (0, []), out)
+        self.assertEqual(summary["proven"], [label])
+        self.assertIn("the run's saved plan", out)
+        rc, summary, out = preflight(dict(source, untracked_sha256="a final edit"))
+        self.assertEqual((rc, selected), (1, [True]), out)
+        self.assertEqual(summary["proven"], [label])
+        self.assertEqual(list(summary["missing"].values()), ["selected now, never in the run's plan"])
+        self.assertIn("selected again", out)
+
     def test_the_summary_carries_its_own_coverage_line_and_never_counts_known_red_as_passed(self):
         """PRD A11/A14: the line is counted from the summary's own rows, a KNOWN-RED unit is named
         beside the passes (an established exception, never a pass) and NOT RUN is never a pass."""

@@ -610,6 +610,12 @@ def plan(lines, args, logdir, hist):
         items.append(Item("engine receipts", engine,
                           ["bash", "scripts/ci-shard.sh", "--verify-receipts", receipts, "--units-file", ufile],
                           None, 1.0, after=shard_labels))
+    return place(items, args)
+
+
+def place(items, args):
+    """What plan() sets on an item beyond its saved row (encode_item), so an item decoded from a
+    saved plan (author_coverage) carries what the run's own item carried."""
     for item in items:
         if item.label in {"native-ios-app", "native-ios-share", "native-ios-ui"}:
             item.lane = "ios-simulator"
@@ -2416,10 +2422,20 @@ def author_coverage(args):
     args.commands = None
     args.proof_for_args = [*(["--gate"] if chosen.get("mode") == "gate" else []),
                            "%s..%s" % (chosen["base"], chosen["candidate"])]
-    lines = selection(args)
+    # THE SAVED PLAN IS THE SELECTION WHEN THE BYTES ARE THE SAME (rollout, PRD line 139's
+    # no-execution budget). The selection is a function of the range, the mode and the checkout's
+    # bytes; at the run's candidate, with the tracked diff and every untracked file reading exactly
+    # as when the run started (its saved source), selecting again gives the plan the run saved,
+    # and cost about 45 s of the preflight's 49 (03-E). Any difference selects again, so a suite a
+    # final edit adds is still missing. The inputs of every check are read now either way.
+    now = source_identity()
+    same_bytes = saved.get("source") == now
     scratch = tempfile.mkdtemp(prefix="coverage-")
     try:
-        items = plan(lines, args, scratch, history_weights(default_logdir()))
+        if same_bytes:
+            items = place([proof_evidence.decode_item(row, Item, ROOT, scratch) for row in saved["items"]], args)
+        else:
+            items = plan(selection(args), args, scratch, history_weights(default_logdir()))
         # The same runtime setup a run gives its checks before their inputs are read (review
         # rv-20261020T073921Z-1e0461cc-0956 #1): without it, every check that binds the runtime's
         # environment read differently here than it ran, and valid proof was called missing.
@@ -2429,7 +2445,7 @@ def author_coverage(args):
             proof_evidence.prepare_environment(item, ROOT, scratch, execution_environment(item))
         snapshot = proof_evidence.InputSnapshot()
         identities = {item.label: input_identity(item, args, scratch, snapshot) for item in items}
-        gaps = proof_evidence.coverage(run, items, identities, source_identity())
+        gaps = proof_evidence.coverage(run, items, identities, now)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     planned_before = {row["check"] for row in saved["items"]}
@@ -2463,7 +2479,9 @@ def author_coverage(args):
             shlex.quote(ROOT), " ".join(args.proof_for_args), shlex.quote(run))
         print("  recovery, ONE runner job over the whole missing plan in this checkout (every proven check "
               "is reused, only the missing ones run): %s" % recovery)
-    print("  derived in %.1f s, nothing run" % (time.monotonic() - started))
+    print("  derived in %.1f s, nothing run (%s)" % (
+        time.monotonic() - started, "the run's saved plan: the checkout reads as when it started"
+        if same_bytes else "selected again: the checkout changed since the run started"))
     if args.summary_out:
         proof_evidence.atomic(args.summary_out, {"run": run, "line": line, "planned": len(items),
             "proven": proven, "not_run": dict(eligible), "fresh": dict(fresh), "missing": dict(missing),
