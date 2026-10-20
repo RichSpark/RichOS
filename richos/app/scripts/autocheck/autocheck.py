@@ -1582,6 +1582,22 @@ def coverage_of(run):
     return result.returncode, summary, (result.stdout + result.stderr).strip().splitlines(), root
 
 
+def range_gap(repo, summary):
+    """Why an author run whose candidate is the incoming head still does not stand for that whole
+    branch, or None (review rv-20261020T174711Z-042986a6-bafe #1: a run of only the branch's last
+    commit was accepted). Its range must start on the branch landed onto (HEAD here), so it holds
+    every commit the branch brings (PRD line 53: "the base is an ancestor of that candidate on the
+    recorded target history"), and its selection must be the author's normal one, never the
+    gate's smaller one (PRD line 33)."""
+    base, mode = summary.get("base") or "", summary.get("mode") or "normal"
+    if mode != "normal":
+        return f"its selection was the {mode} one, not the author's normal selection"
+    if not base or git("merge-base", "--is-ancestor", base, "HEAD", check=False, cwd=repo.top).returncode:
+        return (f"its range starts at {base[:12] or 'no base'}, which is not on the branch this lands on, so it "
+                "covers only part of what the branch brings")
+    return None
+
+
 def author_preflight(repo, what, heads, runs):
     """0 when each incoming head's author run proves its candidate's whole selected plan, or its
     range selects nothing; else 1, after naming what is unresolved and the one job per head."""
@@ -1598,16 +1614,17 @@ def author_preflight(repo, what, heads, runs):
             rc, summary, out, root = asked[run]
             if summary and summary.get("candidate") != head:
                 continue  # a run of another commit proves nothing about this one
-            answers.append((run, rc, summary, out, root))
-            if rc == 0 and summary:
+            gap = range_gap(repo, summary) if summary else None
+            answers.append((run, rc, summary, out + ([f"but {gap}"] if gap else []), root, gap))
+            if rc == 0 and summary and not gap:
                 break
-        if answers and answers[-1][1] == 0 and answers[-1][2]:
-            run, _rc, summary, _out, _root = answers[-1]
+        if answers and answers[-1][1] == 0 and answers[-1][2] and not answers[-1][5]:
+            run, _rc, summary, _out, _root, _gap = answers[-1]
             say(f"autocheck: {what}: author proof of {head[:12]}: {summary.get('line', '')} ({run})")
             continue
         base = git("merge-base", "HEAD", head, check=False, cwd=repo.top).stdout.strip()
         lines = [f"{head[:12]}, the branch this land merges:"]
-        if not any(summary for _run, _rc, summary, _out, _root in answers):
+        if not any(summary for _run, _rc, summary, _out, _root, _gap in answers):
             found, _rc = select(repo, [f"{base}..{head}"]) if base else (None, 1)
             if found == []:
                 say(f"autocheck: {what}: author proof of {head[:12]}: its range {base[:12]}..{head[:12]} selects no "
@@ -1615,14 +1632,17 @@ def author_preflight(repo, what, heads, runs):
                 continue
             lines.append("  no author run of it was offered or is held for it, so its whole plan is unproven:")
             lines += ["    " + c for c in found or ["(the selector refused the range; its output is above)"]]
-        for run, rc, summary, out, _root in answers:
+        for run, rc, summary, out, _root, _gap in answers:
             lines.append(f"  {run}:")
             lines += ["    " + line for line in out[-40:]]
-        recovery = next((summary.get("recovery") for _run, _rc, summary, _out, _root in answers
-                         if summary and summary.get("recovery")), None)
+        # The coverage's own job reruns the run's own range: right only when that range is whole.
+        recovery = next((summary.get("recovery") for _run, _rc, summary, _out, _root, gap in answers
+                         if summary and summary.get("recovery") and not gap), None)
         if not recovery:
-            # Only a checkout AT the head: the runner checks the bytes of the checkout it runs in.
-            seats = author_checkouts(repo, head)
+            # Only a checkout AT the head: the runner checks the bytes of the checkout it runs in
+            # (a run that answered with its summary was asked in one: --coverage checks that).
+            seats = [root for _run, _rc, summary, _out, root, _gap in answers if summary and root] + \
+                author_checkouts(repo, head)
             seat = seats[0] if seats else f"<a checkout of {head[:12]}>"
             # Every author run made in that checkout, an earlier candidate's included: the runner
             # reuses what still matches and executes only the rest.

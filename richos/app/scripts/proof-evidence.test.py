@@ -1428,6 +1428,107 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         self.assertEqual(list(summary["missing"].values()), ["selected now, never in the run's plan"])
         self.assertIn("selected again", out)
 
+    def review_range_probe(self, fail_fast):
+        """Review rv-20261020T174711Z-042986a6-bafe's probe: three real commits (main, an alpha fix,
+        then a beta fix), a saved run of the author's checks with real passing executions, and the
+        real author_coverage. Returns (exit, summary, output, root, main, narrow base, tip, run)."""
+        base = Path(self.tmp.name) / ("range-probe-%s" % fail_fast)
+        root = base / "repo"
+        scripts = root / "richos/app/scripts"
+        scripts.mkdir(parents=True)
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+        def git(*args):
+            return subprocess.check_output([
+                "git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture",
+                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *args],
+                cwd=root, env=clean_env, stderr=subprocess.PIPE, text=True).strip()
+
+        (root / "alpha.sh").write_text("exit 0\n")
+        (root / "beta.sh").write_text("exit 0\n")
+        (root / "review.md").write_text("Each fixture script reads only itself.\n")
+        (root / "qualification.json").write_text(json.dumps({"schema": 1, "review": "review.md", "requires": {
+            "paths": [], "tools": [], "environment": [], "external": []}}))
+        recipes = {label: {"paths": [label + ".sh"], "tools": ["bash"], "environment": [], "external": [],
+                           "qualification": "qualification.json"} for label in ("alpha", "beta")}
+        (scripts / "proof-inputs.json").write_text(json.dumps({"schema": 1, "checks": recipes}))
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "base")
+        main = git("rev-parse", "HEAD")
+        git("checkout", "-qb", "author")
+        (root / "alpha.sh").write_text("# alpha fix\nexit 0\n")
+        git("add", ".")
+        git("commit", "-qm", "alpha fix")
+        narrow = git("rev-parse", "HEAD")
+        (root / "beta.sh").write_text("# beta fix\nexit 0\n")
+        git("add", ".")
+        git("commit", "-qm", "beta fix")
+        tip = git("rev-parse", "HEAD")
+        run = base / "saved"
+        run.mkdir()
+        with patch.object(runner, "author_coverage", side_effect=lambda args: args):
+            args = runner.run_main(["--coverage", str(run), "--summary-out", str(base / "coverage.json")], {})
+        planned = SimpleNamespace(**vars(args))
+        planned.fail_fast, planned.commands = fail_fast, None
+        output = io.StringIO()
+        with patch.object(runner, "ROOT", str(root)), \
+                patch.object(runner, "supply_runtime"), patch.object(runner, "supply_speech_models"), \
+                patch.object(runner, "execution_environment", return_value=clean_env):
+            # With --fail-fast: the whole branch, beta's run failed. Without: only beta, the last commit.
+            lines = ["cd . && bash alpha.sh", "cd . && bash beta.sh"] if fail_fast else ["cd . && bash beta.sh"]
+            items = runner.plan(lines, planned, str(run), {})
+            identities = {i.label: runner.input_identity(i, planned, str(run)) for i in items}
+            record = evidence.Record(root, run, items, runner.source_identity(), identities,
+                selection={"base": main if fail_fast else narrow, "candidate": tip, "mode": "normal"})
+            try:
+                for item in items:
+                    done = subprocess.run(item.argv, cwd=root, env=clean_env, capture_output=True, text=True)
+                    failed = fail_fast and item.label == "beta"
+                    item.state, item.rc = ("failed", 1) if failed else ("passed", done.returncode)
+                    item.log = str(run / (item.label + ".log"))
+                    Path(item.log).write_text(done.stdout + done.stderr)
+                record.checkpoint(items)
+            finally:
+                record.close()
+            with contextlib.redirect_stdout(output):
+                rc = runner.author_coverage(args)
+        return rc, json.loads(Path(args.summary_out).read_text()), output.getvalue(), root, main, narrow, tip, run
+
+    def test_the_preflight_reads_a_run_under_the_settings_it_ran_with(self):
+        """Review rv-20261020T174711Z-042986a6-bafe #2, its fixture: a pass made with --fail-fast was
+        "declared execution inputs changed" under this process's default settings, and the recovery
+        job dropped --fail-fast, so it could reuse nothing. The run's own settings are read back."""
+        rc, summary, out, *_rest = self.review_range_probe(fail_fast=True)
+        self.assertEqual(summary["proven"], ["alpha"], out)
+        self.assertEqual(list(summary["missing"]), ["beta"], out)
+        self.assertTrue(summary["missing"]["beta"].startswith("failed:"), summary["missing"])
+        self.assertEqual(rc, 1)
+        self.assertIn(" --fail-fast ", summary["recovery"])
+
+    def test_the_land_refuses_a_run_of_only_the_branchs_last_commit(self):
+        """Review rv-20261020T174711Z-042986a6-bafe #1, its fixture: the land checked the run's
+        candidate and never its range, so a run of the last of two commits was accepted (preflight
+        exit 0, the selector never asked). The range must start on the branch landed onto."""
+        autocheck_spec = importlib.util.spec_from_file_location("autocheck_range", HERE / "autocheck/autocheck.py")
+        autocheck = importlib.util.module_from_spec(autocheck_spec)
+        autocheck_spec.loader.exec_module(autocheck)
+        rc, summary, out, root, main, narrow, tip, run = self.review_range_probe(fail_fast=False)
+        self.assertEqual((rc, summary["proven"], summary["missing"]), (0, ["beta"], {}), out)
+        subprocess.run(["git", "checkout", "-q", "main"], cwd=root, check=True,
+                       env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
+        repo = SimpleNamespace(top=root, env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
+        selected, said = [], []
+        with patch.object(autocheck, "coverage_of", return_value=(rc, summary, out.splitlines(), str(root))), \
+                patch.object(autocheck, "select", side_effect=lambda *_a, **_k: selected.append(True)), \
+                patch.object(autocheck, "say", side_effect=said.append):
+            refused = autocheck.author_preflight(repo, "land", [tip], [str(run)])
+        text = "\n".join(said)
+        self.assertEqual(refused, 1, text)
+        self.assertIn("covers only part of what the branch brings", text)
+        self.assertIn("%s..%s --reuse %s" % (main, tip, run), text)
+        self.assertEqual(selected, [])
+
     def test_the_summary_carries_its_own_coverage_line_and_never_counts_known_red_as_passed(self):
         """PRD A11/A14: the line is counted from the summary's own rows, a KNOWN-RED unit is named
         beside the passes (an established exception, never a pass) and NOT RUN is never a pass."""

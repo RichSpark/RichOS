@@ -199,12 +199,14 @@ import sys
 from pathlib import Path
 if "--coverage" in sys.argv:
     # The readiness preflight (proof-run.py --coverage RUN --summary-out F): the fixture's author
-    # run names the commit it proved in RUN/candidate and the checks it did not in RUN/missing.json.
+    # run names the commit it proved in RUN/candidate, its range's base in RUN/base and the checks
+    # it did not prove in RUN/missing.json.
     run = Path(sys.argv[sys.argv.index("--coverage") + 1])
     with open(os.environ["AUTOCHECK_FIXTURE_LOG"] + ".coverage", "a") as log:
         log.write(str(run) + "\\n")
     missing = json.loads((run / "missing.json").read_text()) if (run / "missing.json").exists() else {}
-    summary = {"candidate": (run / "candidate").read_text().strip(), "missing": missing,
+    summary = {"candidate": (run / "candidate").read_text().strip(), "missing": missing, "mode": "normal",
+               "base": (run / "base").read_text().strip() if (run / "base").exists() else None,
                "line": "fixture author coverage: %d missing" % len(missing),
                "recovery": "cd %s && python3 richos/app/scripts/proof-run.py base..candidate --reuse %s" % (
                    os.getcwd(), run) if missing else None}
@@ -408,6 +410,8 @@ class Fixture(unittest.TestCase):
             tip = self.run_(["git", "rev-parse", "--verify", "-q", args[-1] + "^{commit}"], cwd=cwd, env=env)
             if tip.returncode == 0:
                 (self.author_run / "candidate").write_text(tip.stdout.strip() + "\n")
+                base = self.run_(["git", "merge-base", "HEAD", tip.stdout.strip()], cwd=cwd, env=env)
+                (self.author_run / "base").write_text(base.stdout.strip() + "\n")
         result = self.run_(["git", *args], cwd=cwd, env=env)
         if expect is not None:
             self.assertEqual(result.returncode, expect, f"git {' '.join(args)}\n{result.stdout}{result.stderr}")
@@ -2478,6 +2482,33 @@ class AuthorProof(Fixture):
         self.assertIn(f"--reuse {self.author_run}", self.side_log(".runner"))   # offered to the gate
         self.assertEqual(self.head("main^2"), self.head("feature"))
 
+    def test_a_run_of_only_the_last_commit_does_not_prove_the_branch(self):
+        """Review rv-20261020T174711Z-042986a6-bafe #1: the candidate was checked, its range was not,
+        so a run of the branch's last commit alone was accepted for a branch of two."""
+        self.make()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, first\n")
+        self.git("checkout", "-q", "feature")
+        self.write("richos/app/src/thing.txt", "fine, second\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "second", "--no-verify")
+        self.git("checkout", "-q", "main")
+        self.log.unlink(missing_ok=True)
+        self.author_proves = False
+        (self.author_run / "candidate").write_text(self.head("feature") + "\n")
+        (self.author_run / "base").write_text(self.head("feature^") + "\n")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("REFUSED: the author's proof does not cover what this land brings", text)
+        self.assertIn("covers only part of what the branch brings", text)
+        self.assertIn(f"{self.head('main')}..{self.head('feature')}", text)    # the whole range
+        self.assertIn(f"--reuse {self.author_run}", text)
+        self.assertEqual(self.side_log(".runner"), "")
+        self.git("merge", "--abort")
+        # The same run over the whole range proves it.
+        (self.author_run / "base").write_text(self.head("main") + "\n")
+        self.git("merge", "--no-ff", "-m", "land feature", "feature")
+        self.assertEqual(self.head("main^2"), self.head("feature"))
+
     def test_a_run_of_another_commit_proves_nothing_about_this_one(self):
         self.make()
         self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
@@ -2522,6 +2553,7 @@ class AuthorProof(Fixture):
         (held / "plan.json").write_text(json.dumps({"root": str(self.repo)}))
         (held / "outcomes.json").write_text("{}")
         (held / "candidate").write_text(tip + "\n")
+        (held / "base").write_text(self.head("main") + "\n")
         (held / "retain").write_text(json.dumps({"holder": "handover", "candidate": tip, "checkout": root}))
         stale = logs / "20261020T170000Z-other"
         stale.mkdir()

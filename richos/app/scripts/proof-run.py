@@ -2422,6 +2422,21 @@ def author_coverage(args):
     args.commands = None
     args.proof_for_args = [*(["--gate"] if chosen.get("mode") == "gate" else []),
                            "%s..%s" % (chosen["base"], chosen["candidate"])]
+    # THE RUN'S OWN SETTINGS (review rv-20261020T174711Z-042986a6-bafe #2). IDENTITY_SETTINGS are
+    # part of every check's identity, so reading the inputs under this process's defaults called
+    # an unchanged pass made with --fail-fast (or another capacity) missing. The run's saved
+    # identities name the settings it ran under; they are read back, and the recovery job keeps
+    # the ones that differ from this runner's defaults, so it can reuse those passes.
+    ran_with = next((row.get("settings") for row in (saved.get("identities") or {}).values()
+                     if isinstance(row, dict) and isinstance(row.get("settings"), dict)), {})
+    setting_flags = []
+    for key in IDENTITY_SETTINGS:
+        if key in ran_with and ran_with[key] != getattr(args, key, None):
+            setattr(args, key, ran_with[key])
+            if key == "fail_fast":
+                setting_flags += ["--fail-fast"] if ran_with[key] else []
+            else:
+                setting_flags += ["--" + key.replace("_", "-"), str(ran_with[key])]
     # THE SAVED PLAN IS THE SELECTION WHEN THE BYTES ARE THE SAME (rollout, PRD line 139's
     # no-execution budget). The selection is a function of the range, the mode and the checkout's
     # bytes; at the run's candidate, with the tracked diff and every untracked file reading exactly
@@ -2476,7 +2491,7 @@ def author_coverage(args):
     recovery = None
     if missing:
         recovery = "cd %s && python3 richos/app/scripts/proof-run.py %s --reuse %s" % (
-            shlex.quote(ROOT), " ".join(args.proof_for_args), shlex.quote(run))
+            shlex.quote(ROOT), " ".join(setting_flags + args.proof_for_args), shlex.quote(run))
         print("  recovery, ONE runner job over the whole missing plan in this checkout (every proven check "
               "is reused, only the missing ones run): %s" % recovery)
     print("  derived in %.1f s, nothing run (%s)" % (
