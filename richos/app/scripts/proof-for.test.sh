@@ -386,6 +386,19 @@ else
   notrun "K4 docs-claims.js checks its own row against its reads" "node is not on PATH"
 fi
 
+# K6 (2026-10-20). No ui test script reports its result through process.exit(EXPRESSION): set
+# process.exitCode and let Node exit (the reason is the comment at the end of docs-claims.js).
+# Literal exits (process.exit(1), process.exit(2)) stay allowed: they are error and usage paths
+# where a browser may still be open and exiting at once is the point. run.js is a runner that
+# exits with its children's codes.
+K6_HITS="$(cd "$APP/ui/tests" && grep -nE 'process\.exit\([^0-9)]' ./*.js | grep -v '^\./run\.js:' | grep -v '^\./docs-claims\.js:[0-9]*: *//' || true)"
+if [ -z "$K6_HITS" ]; then
+  ok "K6 no ui test script ends with process.exit(expression); results go through process.exitCode"
+else
+  bad "K6 ui test scripts must set process.exitCode, not call process.exit(expression) (see the comment at the end of docs-claims.js)" \
+      "$(printf '%s' "$K6_HITS" | head -3 | tr '\n' ' ')"
+fi
+
 # -----------------------------------------------------------------------------------------
 # L. A PATH THE CHANGE DELETED IS NEVER UNCOVERED (hunt 2026-09-29, part 2, section 03).
 #    Deleting a script no suite covers refused the commit and the land as UNCOVERED, though
