@@ -20,8 +20,8 @@ engineer in a worktree, Codex, Rich in the main checkout.
   of the check and put back after it (StagedOnly). The repository enforces no formatter, so
   none is run. A failure refuses the commit with the reason.
 
-  LAND, anything that moves main (pre-merge-commit on main, pre-commit on main, and
-  pre-push of main as the backstop): the suites that own the changed files
+  LAND, anything that moves main or a recorded release branch (pre-merge-commit and pre-commit
+  there, and pre-push of it as the backstop): the suites that own the changed files
   (`proof-for.sh --gate`), run by `proof-run.py`, plus `lint.sh --changed` when the land
   changes something under richos/app and the selection does not already include
   `lint.test.sh` (the push backstop: `--all`), and first the engine's publication-completeness
@@ -41,9 +41,11 @@ engineer in a worktree, Codex, Rich in the main checkout.
   session reads at every session start and turn end (`escalate.sh`), and is appended to
   `<git-common-dir>/richos-autocheck/bypass.log`.
 
-Which copy of this file runs is chosen by the hook shim: the one committed at HEAD, else the
-one on main, else (the land that introduces it) the one being merged. A branch's commits are
-checked by its own version; a land into main is checked by main's.
+Which copy of this file runs is chosen by the hook shim: the one committed on main, else the
+one at HEAD, else (the land that introduces it) the one being merged. Main's copy decides whether
+a hook is a land (land_target) and hands anything else to HEAD's copy when that differs
+(branch_copy): a branch's commits are checked by its own version; a land, onto main or onto a
+release branch, is checked by main's.
 """
 import json
 import hashlib
@@ -250,6 +252,7 @@ def clean_env(common):
     # author runs offered to it (AUTHOR_RUNS), which no suite reads.
     env.pop(LAND_TARGET, None)
     env.pop(AUTHOR_RUNS, None)
+    env.pop("RICHOS_AUTOCHECK_FROM_MAIN", None)    # FROM_MAIN: main's copy's answer for this hook only
     cargo = str(Path.home() / ".cargo/bin")
     if cargo not in env.get("PATH", "").split(":"):
         env["PATH"] = env.get("PATH", "") + ":" + cargo
@@ -318,13 +321,84 @@ class Repo:
 
 def land_target(repo):
     """The branch this commit or merge lands onto, or "" when it is no land: a checked-out main,
-    or the branch the lander names in LAND_TARGET when this checkout is detached (its merge tree)
-    or on that same branch. A land onto a release branch runs the check a land onto main runs.
-    A name that disagrees with the checked-out branch is ignored, so it never removes a check."""
+    the branch the lander names in LAND_TARGET when this checkout is detached (its merge tree)
+    or on that same branch, or a checked-out branch a recorded body of work integrates on (a
+    release branch). A land onto a release branch runs the check a land onto main runs. A name
+    that disagrees with the checked-out branch is ignored, so it never removes a check."""
     named = os.environ.get(LAND_TARGET, "").strip()
     if named and repo.branch in ("", named):
         return named
-    return LAND_BRANCH if repo.branch == LAND_BRANCH else ""
+    if repo.branch == LAND_BRANCH:
+        return LAND_BRANCH
+    if not repo.branch or os.environ.get(FROM_MAIN) == NOT_A_LAND:
+        return ""
+    return repo.branch if repo.branch in integration_branches(repo) else ""
+
+
+# A PLAIN `git merge` ONTO A RELEASE BRANCH IS A LAND TOO (verification reliability PRD R8; second
+# review rv-20261020T073921Z-acb97f5e-ec07, finding 2). Only the lander named its target, so a
+# plain merge in a checkout of v1.3.0 ran the commit check and asked no review. The branches a
+# land goes onto are recorded, once, in the workspace registry (workspaces.sh integration; the
+# registry holds richos-002 on v1.3.0), and this asks the registry's own answer for this
+# repository, `workspaces.py integration --all`, never its files. The engine of this checkout
+# answers, else the installed one. No engine, no answer: nothing records a release branch there,
+# and the commit is checked as a branch commit, as before, with a note when the answer failed.
+WORKSPACES = "richos/engine/mega-lander/workspaces.py"
+INTEGRATION_SECONDS = 20
+FROM_MAIN = "RICHOS_AUTOCHECK_FROM_MAIN"
+NOT_A_LAND = "not-a-land"
+
+
+def integration_branches(repo):
+    """Every branch a recorded body of work integrates on in this repository (set), cached."""
+    if getattr(repo, "_integration", None) is not None:
+        return repo._integration
+    repo._integration = set()
+    main_checkout = repo.common.parent if repo.common.name == ".git" else None
+    tool = repo.top / WORKSPACES
+    if not tool.is_file():
+        tool = Path.home() / ".claude/richos-engine/mega-lander/workspaces.py"
+    if main_checkout is None or not tool.is_file():
+        return repo._integration
+    try:
+        answer = run_bounded([sys.executable, str(tool), "integration", "--all"], timeout=INTEGRATION_SECONDS,
+                             cwd=repo.top, env=repo.env, text=True, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        say(f"autocheck: the recorded integration branches could not be read ({exc}); checked as a branch")
+        return repo._integration
+    if answer.returncode:
+        say(f"autocheck: the recorded integration branches could not be read ({tool} exited "
+            f"{answer.returncode}); checked as a branch")
+        return repo._integration
+    mine = os.path.realpath(main_checkout)
+    for line in answer.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 4 and parts[0] and os.path.realpath(parts[2]) == mine and parts[3]:
+            repo._integration.add(parts[3])
+    return repo._integration
+
+
+# THE GATE ON MAIN DECIDES WHETHER A HOOK IS A LAND (verification reliability PRD R8, T10). The
+# shim runs main's copy first. A land is judged by it; anything else is handed, exactly as before,
+# to the copy committed at HEAD when that differs (a branch's commits are checked by its own
+# version), told the answer so it does not ask the registry again.
+def branch_copy(repo):
+    """HEAD's committed autocheck.py, written beside this one, when this is main's copy deciding
+    and HEAD's differs; else None."""
+    if os.environ.get(FROM_MAIN):
+        return None
+    own = subprocess.run(["git", "cat-file", "-p", f"HEAD:{SELF}"], cwd=repo.top, capture_output=True,
+                         stdin=subprocess.DEVNULL)
+    if own.returncode or not own.stdout or own.stdout == Path(__file__).read_bytes():
+        return None
+    folder = Path(__file__).parent / "branch"
+    folder.mkdir(exist_ok=True)
+    (folder / "autocheck.py").write_bytes(own.stdout)
+    helper = subprocess.run(["git", "cat-file", "-p", "HEAD:richos/app/scripts/lib/owned_command.py"],
+                            cwd=repo.top, capture_output=True, stdin=subprocess.DEVNULL)
+    if helper.returncode == 0 and helper.stdout:
+        (folder / "owned_command.py").write_bytes(helper.stdout)
+    return folder / "autocheck.py"
 
 
 # ---------------------------------------------------------------------------------------
@@ -1901,9 +1975,13 @@ def refuse_selection(what, rc):
     return 1
 
 
-def land_from_index(repo, what, receipt=True):
+def land_from_index(repo, what, receipt=True, target=""):
     """pre-commit or pre-merge-commit on main: the index is the tree being landed. `measure`
-    runs the same check, written nowhere (receipt=False)."""
+    runs the same check, written nowhere (receipt=False), and asks no review: it moves nothing.
+    `target`: the branch landed onto (land_target). The second review is asked first only when
+    this checkout is on it, so this commit or merge is itself the move of it; a commit made in a
+    detached checkout of it (nightly-local.py commit_on_main) moves no branch, is reviewed once
+    it exists, and the fence judges the later move of main."""
     dirty = git("diff", "--quiet", check=False)
     if dirty.returncode:
         banner(f"{what.upper()} REFUSED: the working tree differs from what is being committed", [
@@ -1914,7 +1992,127 @@ def land_from_index(repo, what, receipt=True):
     if root_entries_gate(repo, what, git("write-tree", cwd=repo.top)):
         return 1
     staged = [p for p in git("diff", "--cached", "--name-only", "--no-renames").splitlines() if p]
-    return land_check(repo, what, staged, land_range(repo, merge_heads(repo)), receipt=receipt)
+    heads = merge_heads(repo)
+    if receipt and heads:
+        incoming = "\n".join(git("log", "--format=%B", f"HEAD..{head}", cwd=repo.top) for head in heads)
+        missing = unlooked(changed_pictures(repo, ["--cached", "HEAD"]), incoming)
+        if missing:
+            return refuse_unlooked(what, missing, "a commit this land brings (an empty commit on the branch will do)")
+    range_argv = land_range(repo, heads)
+    if receipt and target and repo.branch == target and \
+            review_before_checks(repo, what, landed_commit(repo, heads, range_argv)):
+        return 1
+    return land_check(repo, what, staged, range_argv, receipt=receipt)
+
+
+# THE SECOND REVIEW IS ASKED BEFORE THE LAND'S CHECKS (verification reliability PRD R8, A9;
+# 2026-10-19). A plain `git merge` of v1.2.1 into main ran its whole land check, every suite
+# passed, and the operator fence then refused the move of main: the branch's exact final commit
+# had no second review. `workspaces.sh merge` asks that question before it merges anything
+# (workspaces.py _review_check); a plain git land asked it only at the end. So every land this
+# hook runs asks the fence the same question first, through the fence's own program:
+#   1. the installed copy is brought current by the land command's own refresh
+#      (operator_fences_admin.bring_current, `operator-fences.sh refresh`), run from the fence
+#      the engine has NOW: when the engine lives in this repository, its files as committed on
+#      main (as the fence's current_program reads them: in the main checkout a plain merge has
+#      already written the incoming work's files), else the engine's own files. An installed copy
+#      cannot be trusted to bring itself current: the copy of 2026-10-18 (6b920e274) has no such
+#      step (second review rv-20261020T073921Z-acb97f5e-ec07, finding 1);
+#   2. `review-check` judges the move from HEAD to the commit being landed exactly as the fence
+#      judges a move of main, deferrals and recovery included.
+# It is asked when this checkout is on the branch landed onto, so this commit or merge is that
+# move. A land onto a release branch asks it too, which the fence itself never sees (it runs for
+# refs/heads/main only). A repository whose launcher carries no review ledger asks nothing, as
+# the fence asks nothing; a fence that cannot answer refuses, as the fence would.
+FENCE_LAUNCHER_MARKER = "richos-operator-fence-launcher"
+
+
+def landed_commit(repo, heads, range_argv):
+    """The commit main (or the named release branch) would point at: the merge land_range wrote
+    for one incoming head, else the index written as a commit on HEAD and every incoming head."""
+    if range_argv:
+        return range_argv[0].split("..", 1)[1]
+    parents = [arg for head in ["HEAD", *heads] for arg in ("-p", head)]
+    return git("-c", "user.name=autocheck", "-c", "user.email=autocheck@invalid", "commit-tree",
+               git("write-tree", cwd=repo.top), *parents, "-m", "autocheck: the commit being landed",
+               cwd=repo.top)
+
+
+FENCE_FILES = ("operator_fences.py", "operator_fences_admin.py", "recovery.py", "machine_settings.py")
+
+
+def current_fence(launcher_text, folder, env):
+    """Write the fence the engine has now into `folder`: each of FENCE_FILES from the launcher's
+    engine, read from main's committed files when that engine lies inside the repository (the
+    rule of the fence's own current_program). Returns (its operator_fences.py, the main checkout
+    the launcher names). Raises RuntimeError when a file cannot be read."""
+    conf = dict(re.findall(r'(?m)^OPERATOR_FENCES_([A-Z_]+)="([^"]*)"\s*$', launcher_text))
+    engine, top = conf.get("ENGINE", ""), os.path.realpath(conf.get("REPO") or "/nonexistent")
+    if not engine:
+        raise RuntimeError("the fence's launcher names no engine")
+    for name in FENCE_FILES:
+        path = os.path.realpath(os.path.join(engine, "scripts", "lib", name))
+        if path.startswith(top + os.sep):
+            rel = os.path.relpath(path, top)
+            read = subprocess.run(["git", "-C", top, "cat-file", "blob", f"refs/heads/main:{rel}"], env=env,
+                                  capture_output=True, stdin=subprocess.DEVNULL)
+            if read.returncode:
+                raise RuntimeError(f"main's {rel} cannot be read: {read.stderr.decode(errors='replace').strip()}")
+            data = read.stdout
+        else:
+            try:
+                data = Path(path).read_bytes()
+            except OSError as exc:
+                raise RuntimeError(f"the engine's {path} cannot be read ({exc})") from exc
+        (Path(folder) / name).write_bytes(data)
+    return Path(folder) / "operator_fences.py", conf.get("REPO") or ""
+
+
+def review_before_checks(repo, what, landed, old=None):
+    """0 when the fence would let this land (the move from `old`, HEAD by default, to `landed`)
+    through its second review, else 1 after printing why."""
+    launcher = repo.common / "hooks" / "reference-transaction"
+    try:
+        text = launcher.read_text(errors="replace")[:65536]
+    except OSError:
+        return 0
+    found = re.search(r'(?m)^OPERATOR_FENCES_PROGRAM="([^"]*)"\s*$', text)
+    if FENCE_LAUNCHER_MARKER not in text or not found:
+        return 0
+    program = found.group(1)
+    env = {k: v for k, v in repo.env.items() if not k.startswith("GIT_")}
+    head = old or git("rev-parse", "HEAD", cwd=repo.top)
+    said, rc = [""], 0
+    with tempfile.TemporaryDirectory(prefix="autocheck-fence-") as folder:
+        try:
+            current, main_checkout = current_fence(text, folder, env)
+        except RuntimeError as exc:
+            said, rc = [f"The fence the engine has now could not be read: {exc}."], 2
+        else:
+            for argv in ([str(current), "admin", "refresh", "--repo", main_checkout or str(repo.top)],
+                         [program, "review-check", str(launcher), head, landed]):
+                try:
+                    result = run_bounded([sys.executable, *argv], timeout=120, cwd=repo.top, env=env,
+                                         text=True, stdin=subprocess.DEVNULL)
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    said, rc = [f"The fence program {argv[0]} could not be asked ({exc})."], 2
+                    break
+                rc = result.returncode
+                said = [(result.stdout + result.stderr).strip()]
+                if rc:
+                    break
+    if rc == 0:
+        say(f"autocheck: {what}: the second review of what this lands passes (asked before the checks)")
+        return 0
+    if said[0]:
+        sys.stderr.write(said[0][-6000:] + "\n")
+    banner(f"{what.upper()} REFUSED: what this lands has no passing second review", [
+        "The fence refuses this same move when main moves; it is asked first, so no check runs",
+        "for a land it would refuse. Nothing was committed, and no check ran. The fence's own words",
+        "are just above: what it found, and the way through.",
+        *([] if rc == 1 else [f"The fence program exited {rc}, which is not a verdict, so this refuses."]),
+    ])
+    return 1
 
 
 def land_range(repo, heads):
@@ -1956,21 +2154,35 @@ def pre_push(repo, stdin_text):
         if remote_ref.startswith("refs/heads/") and root_entries_gate(
                 repo, "push", tree, remote_ref.removeprefix("refs/heads/")):
             return 1
-        if remote_ref != f"refs/heads/{LAND_BRANCH}":
+        branch = remote_ref.removeprefix("refs/heads/") if remote_ref.startswith("refs/heads/") else ""
+        if branch != LAND_BRANCH and (not branch or branch not in integration_branches(repo)):
             continue
+        base = remote_sha if remote_sha != ZERO else None
+        if branch != LAND_BRANCH:
+            # A RELEASE BRANCH IS PUSHED AS MAIN IS (second review rv-20261020T083937Z-e0e46785-97bf):
+            # a default fast-forward onto it writes no merge commit, so no pre-merge-commit asked
+            # its review or ran its land check, and the fence guards main's ref only. Its push asks
+            # the review of the move it publishes (from where the remote has it, or from where it
+            # left main), then needs a land receipt for its tree or runs the land check, as main's.
+            if base is None:
+                cut = git("merge-base", local_sha, f"refs/heads/{LAND_BRANCH}", check=False, cwd=repo.top)
+                base = cut.stdout.strip() if cut.returncode == 0 and cut.stdout.strip() else None
+            if review_before_checks(repo, f"push of {branch}", local_sha, old=base or local_sha):
+                return 1
         if repo.land_receipt(tree).exists():
             continue
-        say(f"autocheck: push: {LAND_BRANCH} at {local_sha[:12]} has no land receipt "
+        say(f"autocheck: push: {branch} at {local_sha[:12]} has no land receipt "
             "(a fast-forward, a cherry-pick or a --no-verify merge); running the land checks now")
         head = git("rev-parse", "HEAD", cwd=repo.top)
         status = git("status", "--porcelain", "--untracked-files=no", env=repo.env, cwd=repo.top)
-        if repo.branch != LAND_BRANCH or head != local_sha or status:
-            banner("PUSH REFUSED: main's tip was never checked", [
+        if repo.branch != branch or head != local_sha or status:
+            banner(f"PUSH REFUSED: {branch}'s tip was never checked", [
                 f"{local_sha[:12]} has no land receipt, and this checkout is not at that commit",
-                "with a clean tree, so the checks cannot run here. Push from the main checkout.",
+                f"with a clean tree, so the checks cannot run here. Push from a checkout of {branch}.",
             ])
             return 1
-        base = remote_sha if remote_sha != ZERO else git("rev-list", "--max-parents=0", local_sha, cwd=repo.top).split()[0]
+        if base is None:
+            base = git("rev-list", "--max-parents=0", local_sha, cwd=repo.top).split()[0]
         if land_check(repo, "push", [], [f"{base}..{local_sha}"], changed_lint=False):
             return 1
     return 0
@@ -2150,13 +2362,17 @@ def post_merge(repo, squash):
         return 0
     target = land_target(repo)
     if target:
-        # The lander's merge tree: the land check ran at pre-merge-commit and left its receipt.
-        # The phone watch and the hook sidecars belong to the main checkout, not to this tree.
+        # The lander's merge tree, or a checkout of a recorded release branch: the land check ran
+        # at pre-merge-commit and left its receipt. A fast-forward ran nothing, as on main, and is
+        # recorded as main's is; its push asks the review and runs the land check (pre_push). The
+        # phone watch and the hook sidecars belong to the main checkout, not to this tree.
         if repo.land_receipt(tree).exists():
             release_author_runs(repo, head)
-        elif merged:
-            record_skip(repo, f"{target} moved to {head[:12]} without the land checks (git merge --no-verify)",
-                        f"Was landing {head[:12]} on {target} without its suites deliberate?")
+        else:
+            how = "git merge --no-verify" if merged else "a fast-forward"
+            record_skip(repo, f"{target} moved to {head[:12]} without the land checks ({how})",
+                        f"Was landing {head[:12]} on {target} without its review and suites deliberate? "
+                        f"Its push asks the review and runs them.")
         return 0
     marker = repo.marker()
     verified = marker.read_text().strip() if marker.exists() else ""
@@ -2166,6 +2382,48 @@ def post_merge(repo, squash):
         record_skip(repo, f"merge {head[:12]} on {repo.branch or 'a detached HEAD'} skipped the automatic checks (--no-verify)",
                     f"Was skipping the lint on {head[:12]} deliberate? Its land will run the full checks.")
     return 0
+
+
+# A CHANGED REFERENCE PICTURE CARRIES A RECORDED LOOK (verification reliability PRD R7 and A5,
+# 2026-10-20). A picture in ui/tests/shots-* is the expected answer of a check, and the run that
+# drew a new one is no evidence that it is right ("generating a picture does not approve it"). The
+# harness keeps each regenerated picture's reference, new picture, difference and page state
+# (.shots/regenerated/<picture>/) and asks for one line per picture saying what a look at them
+# found, in the commit that keeps it (group B, step 3). Nothing refused a commit or a land
+# without it. Now every reference picture a commit adds or changes needs, in that commit's
+# message, the line
+#     Look shots-<dir>/<name>.png: <what the look found, three words or more>
+# and a land checks every picture it brings against its incoming commits' messages, so a commit
+# made with --no-verify, or before this rule, is still caught where it lands (an empty commit
+# carrying the line answers it). A deleted picture needs no look.
+SHOTS_ROOT = "richos/app/ui/tests/"
+LOOK_LINE = re.compile(r"^[ \t]*Look[ \t]+(?:richos/app/ui/tests/)?(shots-[^\s:]+?)(?:\.png)?:[ \t]*(\S.*?)[ \t]*$",
+                       re.M)
+
+
+def changed_pictures(repo, diff_args):
+    """The reference pictures `git diff <diff_args>` adds or changes."""
+    out = git("diff", "--name-only", "--no-renames", "--diff-filter=AM", *diff_args, "--",
+              SHOTS_ROOT + "shots-*", cwd=repo.top)
+    return sorted(p for p in out.splitlines() if p.endswith(".png"))
+
+
+def unlooked(pictures, text):
+    """The pictures `text` holds no look line for."""
+    seen = {m.group(1) for m in LOOK_LINE.finditer(text) if len(m.group(2).split()) >= 3}
+    return [p for p in pictures if p[len(SHOTS_ROOT):-len(".png")] not in seen]
+
+
+def refuse_unlooked(what, missing, where):
+    banner(f"{what.upper()} REFUSED: a changed reference picture has no recorded look", [
+        *missing,
+        "",
+        f"Each needs one line in {where} saying what a look at it found:",
+        f"    Look {missing[0][len(SHOTS_ROOT):]}: <what the look found>",
+        "The harness keeps the reference, the new picture, their difference and the page's state in",
+        ".shots/regenerated/<picture>/ (ui/tests/README.md). A picture nobody looked at is not approved.",
+    ])
+    return 1
 
 
 def commit_msg(repo, message_file):
@@ -2185,6 +2443,11 @@ def commit_msg(repo, message_file):
         for pid in ancestors())
     against = ["HEAD^"] if amend and git("rev-parse", "-q", "--verify", "HEAD^", check=False,
                                           cwd=repo.top).returncode == 0 else []
+    message = Path(message_file).read_text(errors="replace")
+    message = "\n".join(line for line in message.splitlines() if not line.startswith("#"))
+    missing = unlooked(changed_pictures(repo, ["--cached", *against]), message)
+    if missing:
+        return refuse_unlooked("commit", missing, "this commit's message")
     paths = git("diff", "--cached", "--name-only", "--no-renames", *against, cwd=repo.top).splitlines()
     if not any(p.startswith(MOBILE) for p in paths):
         return 0
@@ -2322,11 +2585,23 @@ def main(argv):
             return 1
     if hook not in ("pre-commit", "pre-merge-commit", "commit-msg", "post-commit", "post-merge", "pre-push"):
         return 0
-    stdin_text = sys.stdin.read() if hook == "pre-push" else ""
     repo = Repo()
     if inside_own_check(str(repo.common)):
         say(f"autocheck: {hook}: inside an automatic check of this repository (a suite's own commit); not re-entered")
         return 0
+    # Main's copy decides whether this is a land; anything else runs the branch's own copy when it
+    # differs, as it did before main's copy ran first (branch_copy). Before stdin is read: the
+    # branch's copy reads pre-push's lines itself.
+    try:
+        decided = land_target(repo)
+    except (RuntimeError, OSError):
+        decided = ""
+    # pre-push judges what is pushed, not the checked-out branch, so main's copy always judges it.
+    own = None if decided or hook == "pre-push" else branch_copy(repo)
+    if own:
+        os.environ[FROM_MAIN] = NOT_A_LAND
+        os.execv(sys.executable, [sys.executable, str(own), *argv])
+    stdin_text = sys.stdin.read() if hook == "pre-push" else ""
     if hook in ("pre-commit", "pre-merge-commit", "commit-msg"):
         # A terminated check unwinds like an interrupted one, so StagedOnly puts set-aside work
         # back (a KeyboardInterrupt already does). Only SIGKILL leaves it in ASIDE, and the next
@@ -2341,11 +2616,11 @@ def main(argv):
             if oxford_fix(repo):
                 return 1
             if target:
-                return land_from_index(repo, f"commit to {target}")
+                return land_from_index(repo, f"commit to {target}", target=target)
             rc = commit_check(repo, "commit")
         elif hook == "pre-merge-commit":
             if target:
-                return land_from_index(repo, f"merge into {target}")
+                return land_from_index(repo, f"merge into {target}", target=target)
             rc = commit_check(repo, "merge")
         elif hook == "post-commit":
             return post_commit(repo)

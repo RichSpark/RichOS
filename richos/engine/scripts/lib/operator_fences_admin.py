@@ -586,7 +586,7 @@ def cmd_uninstall(opts, repos):
 
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
-        say("usage: operator-fences.sh install|on|off|status|uninstall|holders-notice [--repo <path>]... "
+        say("usage: operator-fences.sh install|on|off|status|uninstall|holders-notice|refresh [--repo <path>]... "
             "[--entity <path>] [--declaration-check] [--reason <off reason>]")
         return 0 if argv else 2
     sub, rest = argv[0], argv[1:]
@@ -620,4 +620,25 @@ def main(argv):
         return cmd_uninstall(opts, repos)
     if sub == "holders-notice":
         return cmd_holders_notice(opts, repos)
+    if sub == "refresh":
+        return cmd_refresh(opts, repos)
     raise SystemExit("operator-fences: unknown command %r" % sub)
+
+
+def cmd_refresh(opts, repos):
+    """`refresh --repo <path>`: bring_current, the land command's own refresh, for a caller that is
+    not the land command (autocheck's LAND path, verification reliability PRD A9). Run from the
+    fence the engine has now, it copies that fence over an installed copy of ANY age: an installed
+    copy older than bring_self_current cannot bring itself current (the copy of 2026-10-18,
+    6b920e274, has no such step). Exit 1 when a copy cannot be written."""
+    if not repos:
+        raise SystemExit("operator-fences: refresh needs --repo <path>")
+    for repo in repos:
+        try:
+            replaced = bring_current(repo)
+        except OSError as exc:
+            say("operator-fences: the installed fence of %s could not be brought current (%s); run "
+                "operator-fences.sh install --repo %s" % (repo, exc, repo))
+            return 1
+        say("refreshed  %s  %s" % (repo, ", ".join(replaced) if replaced else "already current"))
+    return 0

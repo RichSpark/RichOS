@@ -313,9 +313,11 @@ class Fixture(unittest.TestCase):
         (self.base / "gitconfig").write_text("[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n"
                                               "[init]\n\tdefaultBranch = main\n")
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "RICHOS_AUTOCHECK"))}
+        # The workspace registry the gate asks for recorded integration branches is this fixture's own.
         self.env.update(GIT_CONFIG_GLOBAL=str(self.base / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",
                         AUTOCHECK_FIXTURE_LOG=str(self.log), RICHOS_ESCALATION_LEDGER=str(self.ledger),
-                        RICHOS_AUTOCHECK_PROOF_ROOT=str(self.base / "proof-runs"))
+                        RICHOS_AUTOCHECK_PROOF_ROOT=str(self.base / "proof-runs"),
+                        RICHOS_WORKSPACES_DIR=str(self.base / "workspaces"))
         self.repo = self.base / "repo"
 
     def tearDown(self):
@@ -2070,6 +2072,387 @@ class Land(Fixture):
         self.git("checkout", "-q", "main")
         out = self.git("merge", "--no-ff", "-m", "land intro", "intro", expect=1)
         self.assertIn("MERGE INTO MAIN REFUSED", out.stderr)
+
+
+class ActiveGate(Fixture):
+    """Verification reliability PRD A9 (T10, T11): every entrance of a land asks the policy in
+    force, before any check runs. The operator fence is installed as `operator-fences.sh install`
+    installs it, with the second review on for this repository and the lease switch off (no
+    Claude session runs here, so the lease is not this class's question). The review ledger and
+    the fence's home are this fixture's own."""
+
+    SUITE_RAN = "run cd richos/app && bash scripts/suite.sh"
+
+    def fence(self):
+        entity = self.base / "entity"
+        entity.mkdir()
+        (entity / "orchestration.config").write_text(
+            'OPERATOR_FENCES="on"\nLAND_LEASE_HOLDERS=""\nOPERATOR_FENCES_REPOS=""\nSECOND_REVIEW_REPOS="repo"\n')
+        self.env.update(CLAUDE_CONFIG_DIR=str(self.base / "claude"),
+                        SECOND_REVIEW_STATE_DIR=str(self.base / "review-state"))
+        out = self.run_(["bash", str(ENGINE / "scripts/operator-fences.sh"), "install", "--repo", str(self.repo),
+                         "--entity", str(entity)])
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        launcher = (self.repo / ".git/hooks/reference-transaction").read_text()
+        self.assertIn('OPERATOR_FENCES_REVIEWS="%s"' % (self.base / "review-state/reviews.jsonl"), launcher)
+        self.ledger_dir = self.base / "review-state"
+        self.ledger_dir.mkdir(exist_ok=True)
+        self.log.unlink(missing_ok=True)
+
+    def identity(self):
+        common = self.git("rev-parse", "--git-common-dir").stdout.strip()
+        return os.path.realpath(self.repo / common)
+
+    def verdict(self, tip, verdict="passed", findings=()):
+        """A handover verdict on exactly `tip`, as second-review.sh writes it. Returns its id."""
+        rid = "rv-fixture-%s-%d" % (tip[:8], len(list(self.ledger_dir.glob("rv-*"))))
+        record = self.ledger_dir / rid
+        record.mkdir()
+        found = [{"priority": 2, "title": title, "files": ["src/thing.txt:1"], "evidence": "seen", "fixture": ""}
+                 for title in findings]
+        (record / "verdict.json").write_text(json.dumps({"answer": {"verdict": verdict, "findings": found}}))
+        with open(self.ledger_dir / "reviews.jsonl", "a") as f:
+            f.write(json.dumps({"id": rid, "repo": str(self.repo), "repo_id": self.identity(), "tip": tip,
+                                "verdict": verdict, "trigger": "handover", "reviewer": "codex",
+                                "reviewer_model": "fixture", "findings": len(found), "p1": 0,
+                                "record": str(record)}) + "\n")
+        return rid
+
+    def follow_up(self, finding, tip):
+        """The lead's ruling that a blocking finding is a follow-up (second-review.sh --follow-up)."""
+        with open(self.ledger_dir / "review-deferrals.jsonl", "a") as f:
+            f.write(json.dumps({"action": "follow-up", "finding": finding, "repo": str(self.repo),
+                                "repo_id": self.identity(), "tip": tip, "why": "the lead's ruling"}) + "\n")
+
+    def test_a_plain_git_merge_with_no_review_of_its_tip_is_refused_before_any_check_runs(self):
+        # 2026-10-19 02:44Z: a plain `git merge` of v1.2.1 into main ran its whole land check and
+        # was then refused by the fence: its exact tip had never had a second review.
+        self.make()
+        self.fence()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
+        tip, before = self.head("feature"), self.head("main")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("MERGE INTO MAIN REFUSED: what this lands has no passing second review", text)
+        self.assertIn("no second review of %s" % tip[:12], text)
+        self.assertNotIn(self.SUITE_RAN, self.tools())          # no check ran for a land the fence refuses
+        self.assertEqual(self.head("main"), before)
+        self.git("merge", "--abort")
+        # A passing review of exactly that tip: the land's checks run and main moves.
+        self.verdict(tip)
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature")
+        self.assertIn("the second review of what this lands passes (asked before the checks)", out.stderr)
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("main^2"), tip)
+
+    def test_a_follow_up_ruling_is_accepted_and_an_unresolved_finding_still_refuses_first(self):
+        self.make()
+        self.fence()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, with a finding\n")
+        tip, before = self.head("feature"), self.head("main")
+        rid = self.verdict(tip, "changes-requested", findings=["an answer lands in another conversation"])
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("Blocking finding id(s): %s#1" % rid, text)
+        self.assertIn("an answer lands in another conversation", text)
+        self.assertNotIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("main"), before)
+        self.git("merge", "--abort")
+        self.follow_up(rid + "#1", tip)
+        self.git("merge", "--no-ff", "-m", "land feature", "feature")
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("main^2"), tip)
+
+    def test_a_land_onto_a_release_branch_asks_the_same_review_first(self):
+        # workspaces.sh merge asks it of every target (_review_check); a plain git land onto a
+        # release branch was never asked it, because the fence runs only when main moves.
+        self.make()
+        self.fence()
+        self.git("branch", "v1.2.1")
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, for the release\n")
+        tip, before = self.head("feature"), self.head("v1.2.1")
+        tree = self.base / "release-tree"
+        self.git("worktree", "add", "-q", str(tree), "v1.2.1")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        land = dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.2.1")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree, env=land, expect=1)
+        self.assertIn("MERGE INTO V1.2.1 REFUSED: what this lands has no passing second review",
+                      out.stdout + out.stderr)
+        self.assertNotIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("v1.2.1"), before)
+        self.git("merge", "--abort", cwd=tree)
+        self.verdict(tip)
+        self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree, env=land)
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("v1.2.1^2"), tip)
+        self.git("worktree", "remove", "--force", str(tree))
+
+    def test_a_detached_commit_named_onto_main_is_checked_and_reviewed_after_it_exists(self):
+        # nightly-local.py commit_on_main: the commit is made in a detached checkout with the land
+        # target named, so main does not move before that new commit is reviewed. No review of a
+        # commit can exist before it, so the early question is not asked there.
+        self.make()
+        self.fence()
+        tree = self.base / "detached"
+        self.git("worktree", "add", "-q", "--detach", str(tree), "main")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        self.write("richos/app/src/thing.txt", "the changelog entry\n", cwd=tree)
+        self.git("add", "-A", cwd=tree)
+        out = self.git("commit", "-q", "-m", "changelog", cwd=tree,
+                       env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="main"))
+        self.assertNotIn("second review", out.stderr)
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.git("worktree", "remove", "--force", str(tree))
+
+    # The fence installed on the operator's Mac on 2026-10-18: the real committed program, which
+    # has no review-check and cannot bring itself current (it predates 49be7aa25).
+    OLD_FENCE = "6b920e274b027db4670061ee53db8a882a15f740"
+
+    def installed_old_fence(self):
+        """Put the real 2026-10-18 fence where the hook runs it. Returns (its path, the engine's text)."""
+        old = subprocess.run(["git", "-C", str(ENGINE), "show",
+                              self.OLD_FENCE + ":richos/engine/scripts/lib/operator_fences.py"],
+                             capture_output=True, text=True)
+        if old.returncode:
+            self.skipTest("the fence of %s is not in this clone's history" % self.OLD_FENCE[:9])
+        self.assertNotIn("def bring_self_current", old.stdout)
+        self.assertNotIn('"review-check"', old.stdout)
+        program = self.repo / ".git/hooks/operator-fences/operator_fences.py"
+        program.write_text(old.stdout)
+        return program, (ENGINE / "scripts/lib/operator_fences.py").read_text()
+
+    def test_an_installed_fence_older_than_self_refresh_is_brought_current_before_it_answers(self):
+        # 2026-10-19 05:29Z: the hook's copy of the fence, installed on 18 October, refused a land
+        # whose checks had all passed. That copy cannot refresh itself, so the land's refresh runs
+        # from the engine's fence (second review rv-20261020T073921Z-acb97f5e-ec07, finding 1).
+        for where in ("the main checkout", "a release-branch checkout"):
+            with self.subTest(where):
+                if self.repo.exists():
+                    self.tearDown()
+                    self.setUp()
+                self.make()
+                self.fence()
+                self.git("branch", "v1.2.1")
+                self.branch_with("feature", "richos/app/src/thing.txt", "fine, ruled\n")
+                tip = self.head("feature")
+                rid = self.verdict(tip, "changes-requested", findings=["a finding the lead ruled a follow-up"])
+                self.follow_up(rid + "#1", tip)
+                tree, env, target = self.repo, self.env, "main"
+                if where != "the main checkout":
+                    tree, target = self.base / "release-tree", "v1.2.1"
+                    self.git("worktree", "add", "-q", str(tree), "v1.2.1")
+                    (tree / "richos/engine").symlink_to(ENGINE)
+                    env = dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.2.1")
+                program, text = self.installed_old_fence()
+                out = self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree, env=env)
+                self.assertIn("the second review of what this lands passes (asked before the checks)", out.stderr)
+                self.assertEqual(self.head(target + "^2"), tip)
+                self.assertEqual(program.read_text(), text)
+
+    def record_integration(self, branch):
+        """The registry records that a body of work integrates on `branch` (workspaces.sh integration)."""
+        out = self.run_([sys.executable, str(ENGINE / "mega-lander/workspaces.py"), "--session", "fixture",
+                         "integration", "--repo", str(self.repo), "--branch", branch, "--why", "a release"])
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    def test_a_plain_git_merge_onto_a_recorded_release_branch_is_a_land_without_the_variable(self):
+        # Finding 2 of the same review: only the lander named its target, so a plain `git merge`
+        # in a checkout of the release branch ran the commit check and asked no review.
+        self.make()
+        self.fence()
+        self.git("branch", "v1.2.1")
+        self.record_integration("v1.2.1")
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, for the release\n")
+        tip, before = self.head("feature"), self.head("v1.2.1")
+        tree = self.base / "release-tree"
+        self.git("worktree", "add", "-q", str(tree), "v1.2.1")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        self.assertNotIn("RICHOS_AUTOCHECK_LAND_TARGET", self.env)
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree, expect=1)
+        self.assertIn("MERGE INTO V1.2.1 REFUSED: what this lands has no passing second review",
+                      out.stdout + out.stderr)
+        self.assertNotIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("v1.2.1"), before)
+        self.git("merge", "--abort", cwd=tree)
+        self.verdict(tip)
+        self.git("merge", "--no-ff", "-m", "land feature", "feature", cwd=tree)
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.head("v1.2.1^2"), tip)
+        # A branch nothing records stays a branch: its merge is checked as one, and asked nothing.
+        self.git("branch", "topic", "main")
+        self.branch_with("more", "richos/app/src/thing.txt", "fine, on a topic\n")
+        topic = self.base / "topic-tree"
+        self.git("worktree", "add", "-q", str(topic), "topic")
+        (topic / "richos/engine").symlink_to(ENGINE)
+        out = self.git("merge", "--no-ff", "-m", "merge more", "more", cwd=topic)
+        self.assertNotIn("MERGE INTO", out.stderr)
+        self.assertNotIn("second review", out.stderr)
+        self.assertNotIn(self.SUITE_RAN, self.tools())
+
+    def remote_tip(self, remote, branch):
+        out = self.run_(["git", "--git-dir", str(remote), "rev-parse", "-q", "--verify", "refs/heads/" + branch])
+        return out.stdout.strip()
+
+    def test_a_fast_forward_onto_a_recorded_release_branch_is_recorded_and_its_push_meets_mains_policy(self):
+        # Second review rv-20261020T083937Z-e0e46785-97bf: a default fast-forward writes no merge
+        # commit, so no pre-merge-commit runs; the fence guards main's ref only, post-merge recorded
+        # only release merge commits and pre-push skipped release branches.
+        self.make()
+        self.fence()
+        self.git("branch", "v1.2.1")
+        self.record_integration("v1.2.1")
+        remote = self.base / "remote.git"
+        self.git("init", "-q", "--bare", str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main", "v1.2.1")
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, fast-forwarded\n")
+        tip = self.head("feature")
+        tree = self.base / "release-tree"
+        self.git("worktree", "add", "-q", str(tree), "v1.2.1")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        self.git("merge", "-q", "feature", cwd=tree)                    # git's default: a fast-forward
+        self.assertEqual(self.head("v1.2.1"), tip)
+        self.assertIn("v1.2.1 moved to %s without the land checks (a fast-forward)" % tip[:12], self.recorded())
+        before = self.remote_tip(remote, "v1.2.1")
+        out = self.git("push", "origin", "v1.2.1", cwd=tree, expect=1)
+        self.assertIn("PUSH OF V1.2.1 REFUSED: what this lands has no passing second review", out.stderr)
+        self.assertNotIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.remote_tip(remote, "v1.2.1"), before)
+        self.verdict(tip)
+        out = self.git("push", "origin", "v1.2.1", cwd=tree)
+        self.assertIn("has no land receipt", out.stderr)               # the land check runs, as main's push runs it
+        self.assertIn(self.SUITE_RAN, self.tools())
+        self.assertEqual(self.remote_tip(remote, "v1.2.1"), tip)
+
+    def test_a_branch_commit_is_checked_by_its_own_copy_and_a_land_by_mains(self):
+        # Main's copy runs first and decides; what is no land runs the branch's own copy, as it
+        # always did.
+        self.make()
+        self.git("checkout", "-q", "-b", "own")
+        checker = self.repo / "richos/app/scripts/autocheck/autocheck.py"
+        current = checker.read_text()
+        marked = current.replace("def main(argv):\n", "def main(argv):\n    say('fixture: the branch copy ran')\n", 1)
+        self.assertNotEqual(marked, current)
+        checker.write_text(marked)
+        self.git("commit", "-q", "-am", "the branch's own copy")
+        self.write("richos/app/src/thing.txt", "fine, on own\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-q", "-m", "a branch commit")
+        self.assertIn("fixture: the branch copy ran", out.stderr)
+        self.git("checkout", "-q", "main")
+        out = self.git("merge", "--no-ff", "-m", "land own", "own")
+        before, receipt, _after = out.stderr.partition("receipt for tree")
+        self.assertTrue(receipt, out.stderr)
+        self.assertNotIn("fixture: the branch copy ran", before)
+
+    def test_a_land_onto_a_release_branch_cut_before_a_gate_fix_runs_the_gate_on_main(self):
+        # v1.3.0 was cut on 2026-10-14, before d2c2c28dc: its own autocheck.py ignores the target
+        # the lander names, so a land onto it ran only the commit check. Main's gate is in force.
+        self.make()
+        self.git("checkout", "-q", "-b", "v1.3.0")
+        checker = self.repo / "richos/app/scripts/autocheck/autocheck.py"
+        current = checker.read_text()
+        older = current.replace('named = os.environ.get(LAND_TARGET, "").strip()', 'named = ""', 1)
+        self.assertNotEqual(older, current)
+        checker.write_text(older)
+        self.git("commit", "-q", "-am", "a release branch cut before the gate learned its target")
+        self.git("checkout", "-q", "main")
+        self.branch_with("broken", "richos/app/src/thing.txt", "BROKEN\n")
+        before = self.head("v1.3.0")
+        tree = self.base / "release-tree"
+        self.git("worktree", "add", "-q", str(tree), "v1.3.0")
+        (tree / "richos/engine").symlink_to(ENGINE)
+        out = self.git("merge", "--no-ff", "-m", "land broken", "broken", cwd=tree, expect=1,
+                       env=dict(self.env, RICHOS_AUTOCHECK_LAND_TARGET="v1.3.0"))
+        text = out.stdout + out.stderr
+        self.assertIn("MERGE INTO V1.3.0 REFUSED", text)
+        self.assertIn("suite: FAIL src/thing.txt is broken", text)
+        self.assertEqual(self.head("v1.3.0"), before)
+        self.git("merge", "--abort", cwd=tree)
+        # A commit that is no land is still checked by its own branch's copy.
+        self.write("richos/app/src/other.txt", "on the release branch\n", cwd=tree)
+        self.git("add", "-A", cwd=tree)
+        out = self.git("commit", "-q", "-m", "a branch commit", cwd=tree)
+        self.assertNotIn("COMMIT TO", out.stderr)
+        self.git("worktree", "remove", "--force", str(tree))
+
+    def test_an_installed_shim_older_than_main_runs_the_shim_on_main(self):
+        # install.sh copied the shim once; the copy on the operator's Mac was ten days older than
+        # the committed file. Main's shim is the one in force, as main's autocheck.py is.
+        self.make()
+        shim = self.repo / "richos/app/scripts/autocheck/shim.sh"
+        lines = shim.read_text().split("\n")
+        marked = "\n".join(lines[:1] + ['echo "fixture: the shim on main ran" >&2'] + lines[1:])
+        self.branch_with("newshim", "richos/app/scripts/autocheck/shim.sh", marked)
+        out = self.git("merge", "--no-ff", "-m", "land newshim", "newshim")
+        # The land's own check ran while main still held the installed shim; once main moved, its
+        # post-merge hook ran the new one. The installed copy itself was never rewritten.
+        before, receipt, after = out.stderr.partition("receipt for tree")
+        self.assertTrue(receipt, out.stderr)
+        self.assertNotIn("the shim on main ran", before)
+        self.assertIn("fixture: the shim on main ran", after)
+        self.assertNotEqual((self.repo / ".git/hooks/pre-commit").read_text(), marked)
+        self.git("checkout", "-q", "-b", "feature")
+        self.write("richos/app/src/thing.txt", "fine, later\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-q", "-m", "a later commit")
+        self.assertIn("fixture: the shim on main ran", out.stderr)
+        self.assertIn("autocheck: commit: passed", out.stderr)
+
+
+class ReferenceLooks(Fixture):
+    """Verification reliability PRD R7 and A5 (group B's T06, group D's gate): a reference picture
+    in ui/tests/shots-* is kept only with a recorded look at it, one line per picture."""
+
+    PICTURE = "richos/app/ui/tests/shots-x/button-dark.png"
+    LOOK = "Look shots-x/button-dark.png: the button sits 2px left, nothing else in the picture differs"
+
+    def picture_commit(self, message, expect=0, no_verify=False, picture=None, data=b"\x89PNG fixture v2"):
+        path = self.repo / (picture or self.PICTURE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self.git("add", "-A")
+        return self.git("commit", "-q", "-m", message, *(["--no-verify"] if no_verify else []), expect=expect)
+
+    def test_a_changed_picture_is_committed_only_with_its_look(self):
+        self.make()
+        self.git("checkout", "-q", "-b", "feature")
+        before = self.head()
+        out = self.picture_commit("redraw the button", expect=1)
+        self.assertIn("COMMIT REFUSED: a changed reference picture has no recorded look", out.stderr)
+        self.assertIn(self.PICTURE, out.stderr)
+        self.assertEqual(self.head(), before)
+        # A line too thin to say what was seen is no look.
+        out = self.picture_commit("redraw the button\n\nLook shots-x/button-dark.png: ok", expect=1)
+        self.assertIn("has no recorded look", out.stderr)
+        self.picture_commit("redraw the button\n\n" + self.LOOK)
+        self.assertNotEqual(self.head(), before)
+        # Deleting a picture, or a picture outside shots-*, needs no look.
+        (self.repo / self.PICTURE).unlink()
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "drop the picture")
+        self.picture_commit("an icon", picture="richos/app/ui/icons/plus.png")
+
+    def test_a_land_refuses_a_picture_no_incoming_commit_looked_at(self):
+        self.make()
+        self.git("checkout", "-q", "-b", "unlooked")
+        self.picture_commit("redraw the button", no_verify=True)
+        self.git("checkout", "-q", "main")
+        self.log.unlink(missing_ok=True)
+        before = self.head("main")
+        out = self.git("merge", "--no-ff", "-m", "land unlooked", "unlooked", expect=1)
+        self.assertIn("MERGE INTO MAIN REFUSED: a changed reference picture has no recorded look", out.stderr)
+        self.assertIn(self.PICTURE, out.stderr)
+        self.assertNotIn("run cd richos/app && bash scripts/suite.sh", self.tools())   # before any check
+        self.assertEqual(self.head("main"), before)
+        self.git("merge", "--abort")
+        # The look added afterwards, as an empty commit on the branch, answers it.
+        self.git("checkout", "-q", "unlooked")
+        self.git("commit", "-q", "--allow-empty", "-m", "the look\n\n" + self.LOOK)
+        self.git("checkout", "-q", "main")
+        self.git("merge", "--no-ff", "-m", "land unlooked", "unlooked")
+        self.assertIn("run cd richos/app && bash scripts/suite.sh", self.tools())
+        self.assertEqual(self.head("main^2"), self.head("unlooked"))
 
 
 class Tables(unittest.TestCase):
