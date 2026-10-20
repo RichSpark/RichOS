@@ -772,7 +772,7 @@ def tick(items, engine, entity, ws):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
-    if R.asks(declaration["mode"]):
+    if R.asks(declaration["mode"]) and ws is not None:  # the watcher's registry can fail to load
         uncommitted_questions(ws, engine, declaration, done)
     return requests
 

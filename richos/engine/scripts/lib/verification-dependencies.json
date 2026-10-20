@@ -16249,7 +16249,7 @@
     },
     "scripts/lib/recovery_runner.py": {
       "source": "scripts/lib/recovery_runner.py",
-      "sha256": "81d5461465bf756a853595bee2e9b98c0a05d2c79d4b1d73c44c4b0a22543f0c",
+      "sha256": "9b08f12f2ad8e0094010f9b93419b54913db8b5ce7385fc2783258491c1b24a2",
       "evidence": "Asynchronous fixture executes a literal fake provider with a private registry/ledger, explicit fake quota command and explicit CPU test seam. Other fixture closures import this module with recovery disabled and launch no model. Production model consultations use existing quota/CPU admission, fixed tools and indexed evidence. The source remains in the complete engine input floor. Repetition context reads the existing native registry, worker transcripts and lead authority transcript through the declared workspace, second_review and pierce edges; recent messages and the lead's own Agent/SendMessage calls with their tool results are evidence only, not additional authority; no name-stem context join remains. Question-first follow-up reads only the registered lead transcript paths through pierce, with UUIDs and timestamps after acknowledged question delivery. Worker chatter and pre-delivery text are excluded. No new config or environment readers.",
       "keys": [],
       "edges": [

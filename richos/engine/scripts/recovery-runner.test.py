@@ -200,7 +200,7 @@ class Async(unittest.TestCase):
         ws = SimpleNamespace(recovery_chain=lambda r, observation=False: [r],
             recovery_work_key=lambda r, observation=False: 'teammate:'+r['key'],
             load_agent=lambda key: rec, save_agent=lambda r: None, Lock=lambda: R.contextlib.nullcontext(),
-            prompt_lines=lambda prompt, field: [])
+            prompt_lines=lambda prompt, field: [], all_agents=lambda include_done=False: [rec])
         return rec, ws
 
     def test_a_name_suffix_alone_schedules_nothing_on_dispatch_or_watcher(self):

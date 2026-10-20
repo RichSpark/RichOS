@@ -446,6 +446,9 @@ class Mechanics(W.Base):
         with patch.object(RR, "launch"):
             RR.tick([item], str(HERE.parent), self.entity, ws)
         self.assertEqual(len(RR.NOTICES), 1)
+        # A watcher whose registry failed to load still ticks.
+        RR.tick([], str(HERE.parent), self.entity, None)
+        self.assertEqual(RR.NOTICES, [])
         # Observe stays silent.
         (Path(self.entity) / ".claude/recovery.json").write_text(json.dumps(dict(schema=1, mode="observe", repositories=[self.other])))
         with patch.object(RR, "launch"):
