@@ -2331,6 +2331,38 @@ class UiFamily(unittest.TestCase):
         self.assertIn("richos/app/ui/tests/lib/extra.js", again["paths"])
         self.assertEqual(again.get("exists"), ["richos/app/ui/tests/shots-b/one.png"])
 
+    def test_one_pass_reads_the_browser_installs_once_for_both_kinds_of_identity(self):
+        """03-E, PRD line 139's no-execution budget: a whole-checkout identity and a UI family
+        identity each walked every browser install, so a pass holding both kinds walked them
+        twice (three times with two environments: 10 of the preflight's 27 profiled seconds).
+        One reading per pass now, shared by both; the next pass reads again, so a changed install
+        still changes both identities."""
+        walks = []
+        real = evidence.playwright_installs
+
+        def counting(environment):
+            walks.append(environment.get("PLAYWRIGHT_BROWSERS_PATH"))
+            return real(environment)
+
+        recipe = evidence.family_invocation(self.root, evidence.contract_for(self.root, "a.js"),
+                                            self.root / "richos/app/ui/tests", ["node", "a.js"])
+
+        def one_pass():
+            snapshot = evidence.InputSnapshot()
+            ui = evidence.recipe_identity(self.root, recipe, self.environment, snapshot)
+            whole = evidence.checkout_identity(self.root, ["node", "b.js"], self.environment, snapshot)
+            return ui["installed"]["playwright"], whole["installed"]["playwright"]
+
+        with patch.object(evidence, "playwright_installs", side_effect=counting):
+            first = one_pass()
+            self.assertEqual(len(walks), 1, walks)
+            (self.browsers / "chromium-1/updated").write_text("a changed install\n")
+            second = one_pass()
+        self.assertEqual(len(walks), 2, walks)
+        self.assertEqual(first[0], first[1])
+        self.assertNotEqual(second[0], first[0])
+        self.assertNotEqual(second[1], first[1])
+
     def test_the_same_bytes_in_another_worktree_are_the_same_identity(self):
         first, second = self.identity(self.root), self.identity(self.worktree)
         self.assertNotIn("fresh", first)

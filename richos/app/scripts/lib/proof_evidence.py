@@ -633,14 +633,16 @@ INSTALL_ENVIRONMENT_NAMES = ("PATH", "HOME", "PLAYWRIGHT_BROWSERS_PATH", "RUSTUP
                              "CARGO_HOME", "RICHOS_PLAYWRIGHT", "NODE_PATH")
 
 
-def installed_dependencies(root, environment):
-    """What a check executes that git does not track (WHOLE_CHECKOUT above)."""
-    return {"checkout": checkout_installs(root), "playwright": playwright_installs(environment),
+def installed_dependencies(root, environment, browsers=None):
+    """What a check executes that git does not track (WHOLE_CHECKOUT above). `browsers`: the
+    playwright_installs(environment) reading this pass already took (InputSnapshot.browsers)."""
+    return {"checkout": checkout_installs(root),
+            "playwright": browsers if browsers is not None else playwright_installs(environment),
             "playwright_package": external_playwright(root, environment),
             "rust": rust_toolchain(root, environment)}
 
 
-def portable_dependencies(root, environment):
+def portable_dependencies(root, environment, browsers=None):
     """installed_dependencies() bound by WHAT a UI suite loads, never by WHERE the checkout is.
 
     installed_dependencies() keys the Playwright package by each absolute candidate path and binds
@@ -667,7 +669,8 @@ def portable_dependencies(root, environment):
         chain.append(digest(path_identity(module_root)))
     checkout = {name: value for name, value in checkout_installs(root).items()
                 if Path(os.path.realpath(root / name)) not in loaded}
-    return {"checkout": checkout, "playwright": playwright_installs(environment),
+    return {"checkout": checkout,
+            "playwright": browsers if browsers is not None else playwright_installs(environment),
             "playwright_package": chain, "rust": rust_toolchain(root, environment)}
 
 
@@ -719,6 +722,7 @@ class InputSnapshot:
         self.rows = {}
         self.contents = {}
         self.portables = {}
+        self.browser_installs = {}
 
     def checkout(self, root):
         key = str(root)
@@ -746,14 +750,23 @@ class InputSnapshot:
     def installed(self, root, environment):
         key = (str(root), *(environment.get(name) for name in INSTALL_ENVIRONMENT_NAMES))
         if key not in self.installs:
-            self.installs[key] = installed_dependencies(root, environment)
+            self.installs[key] = installed_dependencies(root, environment, self.browsers(environment))
         return self.installs[key]
 
     def portable(self, root, environment):
         key = (str(root), *(environment.get(name) for name in INSTALL_ENVIRONMENT_NAMES))
         if key not in self.portables:
-            self.portables[key] = portable_dependencies(root, environment)
+            self.portables[key] = portable_dependencies(root, environment, self.browsers(environment))
         return self.portables[key]
+
+    def browsers(self, environment):
+        """playwright_installs once per pass for what it reads (the browsers path and HOME): a
+        whole-checkout identity and a UI family identity each walked every browser install, so a
+        pass holding both kinds walked them twice (03-E, PRD line 139's no-execution budget)."""
+        key = (environment.get("PLAYWRIGHT_BROWSERS_PATH"), environment.get("HOME"))
+        if key not in self.browser_installs:
+            self.browser_installs[key] = playwright_installs(environment)
+        return self.browser_installs[key]
 
     def path(self, path):
         key = str(Path(path).absolute())
