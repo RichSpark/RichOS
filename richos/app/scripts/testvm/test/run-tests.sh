@@ -1830,6 +1830,10 @@ t "command-walk: a settled task carrying the command's result passes; the 2026-0
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/command-walk.test.py" >"$TMP/command-walk.log" 2>&1; ok $? "$(cat "$TMP/command-walk.log")"
 t_done
 
+t "first-send-walk: a first send after a relaunch that the ledger received passes; an emptied composer with no PromptReceived row is named swallowed"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/first-send-walk.test.py" >"$TMP/first-send-walk.log" 2>&1; ok $? "$(cat "$TMP/first-send-walk.log")"
+t_done
+
 t "hire-walk: the CEO's end-of-interview team message with a list passes; the old 'cannot hire' ending, a proposed teammate not saved, or a saved one he was not told about fails"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/hire-walk.test.py" >"$TMP/hire-walk.log" 2>&1; ok $? "$(cat "$TMP/hire-walk.log")"
 t_done

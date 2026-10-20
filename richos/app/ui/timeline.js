@@ -639,6 +639,11 @@
   /// The synthetic turn id an optimistic CEO bubble carries between "the CEO pressed Enter"
   /// and "the spine told us the turn id". It is re-keyed onto the real turn the moment
   /// `rich://turn-status` names one, so the bubble is never drawn twice.
+  ///
+  /// It is the PREFIX of each bubble's own pending turn (`addPendingUserMessage`): a turn draws
+  /// one CEO message, so two bubbles sharing one pending turn drew only the first. Two Sends
+  /// pressed before the launch had opened his conversation then showed one message for as long
+  /// as the launch took (handover review rv-20261020T191206Z-fa2ee4a4-778c).
   const PENDING_TURN = "\u0000pending";
 
   const SLOT_RANK = { opening: 0, stream: 1, terminal: 2 };
@@ -989,7 +994,7 @@
       id,
       entityId: model.entityId,
       threadId: model.threadId,
-      turnId: PENDING_TURN,
+      turnId: PENDING_TURN + ":" + id,
       createdAt: at,
       slot: "opening",
       sequence: null,

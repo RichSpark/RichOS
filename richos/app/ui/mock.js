@@ -3807,6 +3807,14 @@
             return (messagesByThread[id] || []).map((m) => ({ ...m }));
           }
         case "send_message": {
+          // `thread_id: String` in main.rs: Tauri refuses a send with no thread before the command
+          // runs, and so does this, rather than quietly sending to the active thread (the swallowed
+          // first send after a relaunch, esc-20261020T171021Z-8fd0fca7, was invisible here).
+          if (typeof args.threadId !== "string") {
+            return Promise.reject(
+              "invalid args `threadId` for command `send_message`: invalid type: null, expected a string"
+            );
+          }
           // THE SETTING UP WAS NEVER DONE — main.rs's `send_message` asks the disk before it
           // reaches for `LEASE_UNAVAILABLE_MESSAGE`, because the two no-lease causes need
           // opposite things from the CEO. Missing pieces are the arm where a restart cannot

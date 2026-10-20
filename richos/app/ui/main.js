@@ -426,6 +426,12 @@ const liveStatus = new Map();
 // snapshot, with `sessionLiveTurns` carrying what is running in threads that are not on
 // screen.
 let activeThreadId = null;
+/// Every Send pressed while `init()` had not yet opened any conversation, in the order he pressed
+/// them — `{ text, at, id }`, `id` its bubble — sent in that order by `openThread` as it starts
+/// opening one (`send()`'s launch hold). Empty when none waits.
+let launchSendsHeld = [];
+/// `init()` has made its landing decision; from here no Send is held (`send()`).
+let launchLanded = false;
 let voiceMode = false;
 /// **CAN THIS MACHINE TURN SPEECH INTO WORDS?** Read once at launch from `voice_readiness`.
 ///
@@ -1061,7 +1067,7 @@ function showUnboundView(row, rawError) {
 function showEntityView(entityId, mode) {
   const entity = entityOf(entityId);
   if (!entity) return;
-  stashThreadViewState();
+  stashThreadViewState(ENTITY_DRAFT_PREFIX + entityId);
   viewEntityId = entityId;
   viewEntityMode = mode;
   // A draft thread bound to this entity, with NO record persisted (§3.3). The record is
@@ -1222,12 +1228,22 @@ window.RichCompanyOnScreen = companyOnScreen;
 /// half-written sentence from one entity's thread sitting in another entity's composer
 /// means one Enter files it in the wrong company. So the composer is emptied on every
 /// move and only ever re-filled from the draft belonging to what is now on screen.
-function stashThreadViewState() {
+///
+/// `destination` is the draft key of what is about to be on screen. WORDS TYPED BEFORE ANYTHING
+/// WAS ON SCREEN TO OWN THEM go there (esc-20261020T171021Z-8fd0fca7). After a relaunch the
+/// composer is typable while `init()` is still reading what to open (in the test guest, still
+/// so 44 s after a relaunch), and no thread is active yet, so nothing above parked them: the
+/// restore emptied the box and his first sentence was gone before he pressed Send. They were
+/// addressed to no company, so they go to the first thing he lands on, after any draft it kept.
+function stashThreadViewState(destination) {
   if ((mainView === "conversation" || mainView === "opening") && activeThreadId) {
     drafts.set(activeThreadId, inputEl.value);
     if (mainView === "conversation") scrollTops.set(activeThreadId, conversationEl.scrollTop);
   } else if (mainView === "entity" && viewEntityId) {
     drafts.set(ENTITY_DRAFT_PREFIX + viewEntityId, inputEl.value);
+  } else if (destination && inputEl.value.trim()) {
+    const kept = drafts.get(destination);
+    drafts.set(destination, kept && kept.trim() ? kept + "\n\n" + inputEl.value : inputEl.value);
   }
   inputEl.value = "";
   autoGrow();
@@ -1296,7 +1312,7 @@ async function openThread(threadId, opts) {
   if (mainView === "conversation") rememberThreadView();
   const cached = threadViews.get(threadViewKey(row.entity_id, threadId));
   const previousModel = openingThread ? openingThread.previousModel : timelineModel;
-  stashThreadViewState();
+  stashThreadViewState(threadId);
   clearLiveMark(threadId);
   activeThreadId = threadId;
   savedWork = {items: [], omitted: 0};
@@ -1379,6 +1395,18 @@ async function openThread(threadId, opts) {
   renderRail();
   startOrStopWaitTimer();
   announce("Opening conversation.");
+  // THE SENDS HE PRESSED BEFORE THE LAUNCH HAD A CONVERSATION OPEN go now, the moment there is
+  // one to send them to, in the order he pressed them, and BEFORE this function awaits anything:
+  // from the line that set `activeThreadId` above, a later Send goes straight out, so the held
+  // ones must be issued first or his messages reach Rich out of order (second review
+  // rv-20261020T181204Z-11d18147-df79). Each is an ordinary send in the opening window, which is
+  // honored (slow-bridge check 3), and each `send()` issues its `send_message` before its first
+  // await, so the bridge sees them in this loop's order (handover review
+  // rv-20261020T191206Z-fa2ee4a4-778c: a correction pressed second must never be dropped).
+  // Exactly the words at each press; whatever he has typed since stays in the box.
+  const heldSends = launchSendsHeld;
+  launchSendsHeld = [];
+  for (const held of heldSends) send(held.text);
   try {
     await switchThreadInOrder(threadId);
   } catch (e) {
@@ -2612,6 +2640,23 @@ async function send(explicitText, opts) {
   if (sendBlockedReason) {
     composerBlockedEl.textContent = sendBlockedReason;
     composerBlockedEl.hidden = false;
+    return;
+  }
+  // A SEND PRESSED BEFORE THE LAUNCH HAS OPENED ANY CONVERSATION is held: his message goes up at
+  // once, as any send does, and `openThread` sends it as soon as it has a thread to send it to.
+  // There is no thread to send it to yet (`send_message` takes one), and sending anyway was
+  // refused with an argument error over a box the restore then emptied: the swallowed first send
+  // after a relaunch (esc-20261020T171021Z-8fd0fca7, measured in the test guest with real keys).
+  if (!launchLanded && !preserveDraft && !files && !activeThreadId && !draftEntityId && mainView === "conversation") {
+    // EVERY Send in this window is held, in order: a second one ("Correction: do not send it
+    // until I approve.") is as much his instruction as the first (handover review
+    // rv-20261020T191206Z-fa2ee4a4-778c), and it goes up on screen at once like the first.
+    const at = Date.now();
+    launchSendsHeld.push({ text, at, id: window.RichTimeline.addPendingUserMessage(timelineModel, text, at) });
+    inputEl.value = "";
+    autoGrow();
+    followBottom = true;
+    scheduleRender();
     return;
   }
   // THE FILES GO INTO THE CONVERSATION'S FOLDER BEFORE THE WORDS LEAVE THE BOX, so a refusal
@@ -10191,6 +10236,18 @@ async function init() {
     startNewThreadFlow();
   }
   if (startupWaits) askStartupQuestionsOffHome();
+  // A LAUNCH THAT OPENED NO CONVERSATION sends nothing he pressed before it: his words go back in
+  // the box for whatever he chooses next, and are never sent there unasked. A conversation he
+  // pressed himself that is still opening takes them instead.
+  launchLanded = true;
+  if (launchSendsHeld.length && mainView !== "opening") {
+    const held = launchSendsHeld;
+    launchSendsHeld = [];
+    for (const h of held) window.RichTimeline.dropPendingUserMessage(timelineModel, h.id);
+    inputEl.value = held.map((h) => h.text).join("\n\n") + (inputEl.value.trim() ? "\n\n" + inputEl.value : "");
+    autoGrow();
+    scheduleRender();
+  }
   // WHAT IS RUNNING RIGHT NOW, read from the backend rather than assumed from the absence
   // of events. A webview reload does not restart the Rust side, so a turn can be mid-flight
   // with this script one second old; without this the row renders "Status unavailable" and
