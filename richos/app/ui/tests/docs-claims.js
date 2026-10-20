@@ -22,12 +22,12 @@
 // `engine/scripts/publication-completeness.sh` names as beyond its own reach: "SEMANTIC
 // honesty. Every path in a document can resolve while the sentence around it is false."
 //
-// So this suite joins the four kinds of claim in `app/`'s documents to the tree:
+// So this suite joins the kinds of claim in `app/`'s documents to the tree:
 //
-//   1. per-file test counts        `#[test]` counted in the file the README names
-//   2. crate totals                the sum of those, plus doc-tests counted from the fences
-//   3. the browser-suite table     against the inventory `run.js` discovers from disk
-//   4. `rich://` event names       against the constants the Rust source declares
+//   1. test files named            against the test files on disk, with no count beside them (a stated count
+//                                  made every branch that adds a test conflict on the README)
+//   2. the browser-suite table     against the inventory `run.js` discovers from disk
+//   3. `rich://` event names       against the constants the Rust source declares
 //
 // and, last, holds the land's selector to this suite's own reads: every file and directory
 // read above must select this suite through its row in scripts/proof-for.ui-inputs, or a
@@ -77,43 +77,6 @@ const list = (dir) => {
 // ---------------------------------------------------------------------------------------
 // Derivations
 // ---------------------------------------------------------------------------------------
-
-/// `#[test]` occurrences in one Rust file. Deliberately the crudest possible measure, and
-/// verified against the real thing rather than trusted: `cargo test -p richos-core` reports
-/// 151 unit + 153 integration, and this count reproduces both exactly. `#[ignore]` would
-/// break that agreement, and there is none in this workspace — if one lands, this count and
-/// cargo's stop agreeing and the number in the README has to say which it means.
-function testCount(file) {
-  return (read(file).match(/#\[test\]/g) || []).length;
-}
-
-/// Doc-tests: fenced blocks inside `///` or `//!` doc comments whose info string is not a
-/// non-Rust language. rustdoc runs an unlabelled block, and runs `compile_fail` /
-/// `should_panic` / `no_run` as tests too; ```` ```text ```` is prose and is not one.
-// `js` earned its place here on 2026-09-05, and it is a correction rather than an addition.
-// `upstream.rs` quotes four lines of the Claude Code bundle's own JavaScript in a ```js fence
-// to show where the vendor's error-kind vocabulary was read from. rustdoc does NOT run a fence
-// with a non-Rust info string, so `cargo test -p richos-core --doc` still reported 5 — and this
-// list, which is supposed to PREDICT that number, said 6. A checker whose count disagrees with
-// the command it models is the same defect as a test that reports `ok` without running: a
-// number that looks like evidence and is not. Verified against `cargo test -p richos-core --doc`,
-// which prints 5 both before and after this line changed.
-const NON_TEST_FENCE = /^(text|json|jsonc|sh|bash|console|ignore|md|markdown|toml|yaml|diff|js|javascript)$/;
-function docTestCount(file) {
-  let inFence = false;
-  let n = 0;
-  for (const raw of read(file).split("\n")) {
-    const m = raw.match(/^\s*(?:\/\/\/|\/\/!)\s*```(.*)$/);
-    if (!m) continue;
-    if (inFence) {
-      inFence = false;
-      continue;
-    }
-    inFence = true;
-    if (!NON_TEST_FENCE.test(m[1].trim())) n++;
-  }
-  return n;
-}
 
 function rustFiles(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -204,79 +167,36 @@ async function main() {
   });
 
   // =====================================================================================
-  // 2. Every per-file COUNT the README states is the count in that file
+  // 2. ...and states no test COUNT beside a test file or a `cargo test` line
   // =====================================================================================
+  //
+  // The counts were removed on purpose (2026-10-19, CLAUDE.md §136): every branch that added
+  // a test had to edit the same README line, and two such branches conflicted on nothing but
+  // the number. Once nothing checked them, the ones left behind drifted (the voice crate's
+  // "327 library tests" stood while the crate had 432). So the rule is the absence: a count
+  // written back fails here, and cargo's own output is where a count is read.
+  //
+  // Three forms, because a count comes back in whichever wording the next author reaches for:
+  // beside a test file ("tests/spine_tests.rs  12 spine tests"), on a `cargo test` line
+  // ("# 1840 tests"), and in prose ("# The 327 library tests ...", "spine_tests.rs has 12
+  // tests"). The prose form is a number followed within two words by "test(s)" or "doc-tests";
+  // a number glued to `=`, a word, `.`, `/` or `-` is not one (`RICHOS_..._AUDIO=1 cargo test`).
+  // Measured against the whole README on 2026-10-20: that was its only other hit.
+  const PROSE_COUNT = /(?<![=\w./-])\d+\s+(?:[A-Za-z][\w-]*\s+){0,2}(?:tests?|doc-tests)\b/;
 
-  await run.check("every per-file test count in app/README.md is the count in that file", async () => {
-    const claims = [];
-    for (const line of readme.split("\n")) {
-      const m = line.match(/tests\/([a-z0-9_]+\.rs)\s+(\d+)\b/);
-      if (m) claims.push({ file: m[1], claimed: Number(m[2]) });
-    }
-    assert(claims.length > 0, "EMPTY INVENTORY: the README states no per-file count to check");
-
-    const wrong = [];
-    for (const c of claims) {
-      let found = null;
-      for (const crate of crateNames()) {
-        const p = path.join(CRATES, crate, "tests", c.file);
-        if (fs.existsSync(p)) found = p;
+  await run.check("app/README.md states no test count beside a test file, on a cargo test line or in prose", async () => {
+    const counts = [];
+    readme.split("\n").forEach((line, i) => {
+      if (/tests\/[a-z0-9_]+\.rs\s+\d+\s/.test(line) || /cargo test -p richos-[a-z]+.*#.*\b\d+ (?:[a-z-]+ )?tests?\b/.test(line) || PROSE_COUNT.test(line)) {
+        counts.push(`README.md:${i + 1}: ${line.trim()}`);
       }
-      if (!found) {
-        wrong.push(`${c.file}: claimed ${c.claimed}, but the file does not exist`);
-        continue;
-      }
-      const actual = testCount(found);
-      if (actual !== c.claimed) wrong.push(`${c.file}: README says ${c.claimed}, the file has ${actual}`);
-    }
-    assertEqual(wrong, [], "stale test counts in app/README.md");
-    return `${claims.length} per-file counts, all matching: ` + claims.map((c) => `${c.file.replace("_tests.rs", "")}=${c.claimed}`).join(" ");
+    });
+    assertEqual(counts, [], "test counts in app/README.md (a count goes stale and makes branches conflict; name the file, not the number)");
+    return "no stated count";
   });
 
   // =====================================================================================
-  // 3. The crate TOTALS in the Build & test block
-  // =====================================================================================
-
-  await run.check("every `cargo test -p <crate>` total in app/README.md is the tree's own total", async () => {
-    const claims = [];
-    for (const line of readme.split("\n")) {
-      const m = line.match(/cargo test -p (richos-[a-z]+).*?#\s*(\d+) tests(?:\s*\+\s*(\d+) doc-tests)?/);
-      if (m) claims.push({ line, crate: m[1], tests: Number(m[2]), docTests: m[3] === undefined ? null : Number(m[3]) });
-    }
-    assert(claims.length > 0, "EMPTY INVENTORY: the README states no crate total in the form `# <N> tests`");
-
-    const wrong = [];
-    const detail = [];
-    for (const c of claims) {
-      const crateDir = path.join(CRATES, c.crate);
-      if (!fs.existsSync(crateDir)) {
-        wrong.push(`${c.crate}: no such crate`);
-        continue;
-      }
-      const files = [...rustFiles(path.join(crateDir, "src")), ...rustFiles(path.join(crateDir, "tests"))];
-      assert(files.length > 0, `EMPTY INVENTORY: no .rs files under ${crateDir}`);
-      const total = files.reduce((n, f) => n + testCount(f), 0);
-      const ignored = files.reduce((n, f) => n + (read(f).match(/^\s*#\[ignore(?:\s*=.*?)?\]/gm) || []).length, 0);
-      if (ignored) {
-        const line = c.line;
-        assert(line.includes(`${total - ignored} direct, ${ignored} ignored`), "README must distinguish direct tests from ignored checks");
-      }
-      const docs = rustFiles(path.join(crateDir, "src")).reduce((n, f) => n + docTestCount(f), 0);
-      if (total !== c.tests) wrong.push(`${c.crate}: README says ${c.tests} tests, the tree has ${total}`);
-      if (c.docTests !== null && docs !== c.docTests) {
-        wrong.push(`${c.crate}: README says ${c.docTests} doc-tests, the tree has ${docs}`);
-      }
-      if (c.docTests === null && docs > 0) {
-        wrong.push(`${c.crate}: the tree has ${docs} doc-test(s) the README does not mention`);
-      }
-      detail.push(`${c.crate}=${total}+${docs}`);
-    }
-    assertEqual(wrong, [], "stale crate totals in app/README.md");
-    return detail.join(" ");
-  });
-
-  // =====================================================================================
-  // 4. The browser-suite table vs the inventory run.js discovers
+  // 3. The browser-suite table vs the inventory run.js discovers
   // =====================================================================================
 
   await run.check("app/ui/tests/README.md's table is exactly the inventory run.js discovers", async () => {
@@ -301,7 +221,7 @@ async function main() {
   });
 
   // =====================================================================================
-  // 5. Event names: the contract document vs the constants the app declares
+  // 4. Event names: the contract document vs the constants the app declares
   // =====================================================================================
 
   await run.check("app/STREAMING.md documents every `rich://` event the app declares", async () => {
@@ -351,7 +271,7 @@ async function main() {
   });
 
   // =====================================================================================
-  // 7. LAST, because it checks the reads of everything above: the land selects this suite
+  // 5. LAST, because it checks the reads of everything above: the land selects this suite
   //    for every file it read. `proof-for.sh` picks the suites a land runs from this suite's
   //    row in proof-for.ui-inputs; a place this suite reads that the row does not reach is a
   //    change that can make a claim here false with nothing running it.

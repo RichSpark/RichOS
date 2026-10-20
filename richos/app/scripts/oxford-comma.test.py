@@ -42,6 +42,15 @@ class Docs(unittest.TestCase):
         doc = "1. ```text\n   apples, and pears\n   ```\n\nNormal prose, and more.\n"
         self.assertEqual(fix("docs/a.md", doc), doc.replace("prose, and", "prose and"))
 
+    def test_a_large_changed_file_comes_back_whole(self):
+        # 2026-10-20: the fixer wrote its JSON and then called process.exit(), which drops what a
+        # pipe has not taken yet. Any changed file larger than the pipe's buffer came back cut
+        # short and git refused the commit ("the Oxford comma fixer could not run"); app/README.md
+        # alone is over 150 KB.
+        doc = "Red, green, and blue.\n" + "Plain prose that the fixer leaves alone.\n" * 5000
+        self.assertGreater(len(doc), 150_000)
+        self.assertEqual(fix("docs/a.md", doc), doc.replace("green, and", "green and"))
+
     def test_fixtures_and_non_docs_are_left_alone(self):
         for path in ("richos/app/crates/richos-core/tests/fixtures/ledgers/README.md",
                      "docs/research/raw/call.md", "docs/notes.txt", "richos/app/scripts/thing.py"):

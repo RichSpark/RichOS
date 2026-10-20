@@ -138,20 +138,63 @@ if have_commit e7facc99; then
     && ok "B3 the NESTED testvm runner is named, which run-tests.sh's maxdepth 1 cannot reach" \
     || bad "B3 the NESTED testvm runner is named"
 
-  # ONE browser suite, plus docs-claims.js: the land also changed a Rust source whose #[test]
-  # count feeds app/README.md's crate total, and that document check weighs 0 s
-  # (ui/tests/suite-weights.tsv). Still not the 19-minute run (K1 below says why it is here).
-  # affordances.js is here too since the land changed a Rust source its state inventory scrapes
-  # (R47 below): a Rust message nobody classified is what the nightly refused on 2026-10-03.
-  # dialect.js, interruption.js and outage.js scan every Rust file under crates/ too, and
-  # realbytes.js compiles it (R48 below), so the land's work_host.rs selects them as well.
-  # richscribe.js reads all UI text, like dialect.js, so any UI change selects it too.
-  # gate-honesty.js runs `run.js --coverage`, which lists every suite and reads each one's declared
-  # check count, so the changed no-home-network.js selects it (review rv-20261020T044017Z-ebbb640b-fc3b).
+  # ONE browser suite (the land's subject, B1) plus every suite whose row in
+  # proof-for.ui-inputs DECLARES that it reads a path the land changed — the Rust file
+  # work_host.rs (affordances.js, dialect.js, realbytes.js, ...) or the tests folder
+  # (docs-claims.js, gate-honesty.js) — and nothing else. Not the 19-minute run.
+  #
+  # The readers are DERIVED from the declarations, not typed here. This list was typed until
+  # 2026-10-20 and every suite newly declared as a reader had to be added by hand: richscribe.js
+  # on 2026-10-19 (1efbab003) and gate-honesty.js on 2026-10-20 (27a6a46ff), each after B4 went
+  # red on a correct selection (verification reliability PRD T04). A declaration is the
+  # requirement and proof-for.sh is the code that honors it, so this still fails when
+  # proof-for.sh drops a declared reader or adds a suite
+  # nobody declared. It does not judge whether a row is RIGHT: R48 and docs-claims.js's last
+  # check do that. Premise: the land changed no shipped UI file, so `@allui` (computed by
+  # proof-for.sh, not declared) cannot select anything here; if that ever stops being true
+  # this case says so rather than guessing.
   UI_B="$(sed -n 's/^  cd richos\/app\/ui\/tests && node \(.*\.js\)$/\1/p' "$WORK/b.out" | LC_ALL=C sort | tr '\n' ' ')"
-  [ "$UI_B" = "affordances.js dialect.js docs-claims.js gate-honesty.js interruption.js no-home-network.js outage.js realbytes.js richscribe.js " ] \
-    && ok "B4 a one-check UI change costs ONE suite plus the suites that read its Rust file (and the sub-second document check), not the 19-minute run" \
-    || bad "B4 a one-check UI change costs ONE suite" "got ${UI_B:-none}"
+  B_PATHS="$(git -C "$ROOT" diff --name-only e7facc99^1 e7facc99)"
+  B_EXPECT="$(B_PATHS="$B_PATHS" python3 - "$DIR/proof-for.ui-inputs" <<'PY'
+import os, sys
+paths = os.environ["B_PATHS"].split()
+shipped_ui = [p for p in paths if p.startswith("richos/app/ui/") and not p.startswith("richos/app/ui/tests/")]
+if shipped_ui:
+    print("PREMISE: the land changed shipped UI " + " ".join(shipped_ui))
+    sys.exit(0)
+aliases, rows = {}, {}
+for line in open(sys.argv[1]):
+    words = line.split("#", 1)[0].split()
+    if not words:
+        continue
+    if words[0].startswith("@"):
+        aliases[words[0][1:]] = words[1:]
+    else:
+        rows[words[0]] = words[1:]
+def expand(tokens, seen=()):
+    for t in tokens:
+        if t == "@allui":
+            continue
+        if t.startswith("@"):
+            if t not in seen:
+                yield from expand(aliases.get(t[1:], []), seen + (t,))
+        else:
+            yield t
+expect = {p.rsplit("/", 1)[1] for p in paths if p.startswith("richos/app/ui/tests/") and p.count("/") == 4 and p.endswith(".js")}
+for suite, tokens in rows.items():
+    for t in expand(tokens):
+        if any(p == t or (t.endswith("/") and p.startswith(t)) for p in paths):
+            expect.add(suite)
+            break
+print(" ".join(sorted(expect)) + " ")
+PY
+)"
+  case "$B_EXPECT" in
+    PREMISE:*) bad "B4 a one-check UI change costs ONE suite plus its declared readers" "$B_EXPECT" ;;
+    *) [ "$UI_B" = "$B_EXPECT" ] \
+         && ok "B4 a one-check UI change costs ONE suite plus the suites declared to read what it changed, not the 19-minute run ($(printf '%s' "$UI_B" | wc -w | tr -d ' ') suites)" \
+         || bad "B4 a one-check UI change costs ONE suite plus its declared readers" "selected: ${UI_B:-none}; declared: $B_EXPECT" ;;
+  esac
 else
   bad "B  e7facc99 is not in this clone — the testvm fixture could not run"
 fi
@@ -314,8 +357,11 @@ awk '$1 == "docs-claims.js" { o = $1; for (i = 2; i <= NF; i++) if ($i !~ /\/$/)
 if command -v node >/dev/null 2>&1; then
   OUT="$(cd "$APP/ui/tests" && PROOF_FOR_UI_INPUTS="$WORK/decl-narrow" node docs-claims.js 2>&1)"
   REAL="$(cd "$APP/ui/tests" && node docs-claims.js 2>&1)"
+  # The refusal must name a read the narrowed row no longer reaches. Until 2026-10-20 that was
+  # correction_forward_compat_tests.rs, read for its #[test] count; the counts are gone
+  # (6e3c33002), so the witness is the crates directory every test file is listed from.
   if printf '%s' "$OUT" | grep -q 'FAIL  proof-for.ui-inputs selects this suite' \
-     && printf '%s' "$OUT" | grep -q 'correction_forward_compat_tests.rs' \
+     && printf '%s' "$OUT" | grep -q '"richos/app/crates/"' \
      && printf '%s' "$REAL" | grep -q 'PASS  proof-for.ui-inputs selects this suite'; then
     ok "K4 docs-claims.js refuses a row that does not reach what it reads, and accepts the real one"
   else
