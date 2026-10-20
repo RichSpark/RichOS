@@ -1214,7 +1214,7 @@ def release_notes(info):
     return notes
 
 
-CHANGELOG_RECORDS = Path("docs/release-notes")
+CHANGELOG_RECORDS = Path("docs/release-notes.json")
 CHANGELOG_FILES = {"nightly": Path("docs/CHANGELOG-NIGHTLY.md"),
                    "stable": Path("docs/CHANGELOG.md")}
 CHANGELOG_IDENTITY = ("schema", "tag", "version", "channel", "source_commit", "build_commit",
@@ -1303,8 +1303,11 @@ def write_changelog_draft(request, entry):
         entry = cleaned[0]["content"]
     record = {**identity, **{key: request[key] for key in ("previous_tag", "previous_source")},
               "entry": validate_changelog_entry(entry)}
-    path = ROOT / CHANGELOG_RECORDS / (record["tag"] + ".json")
-    if path.exists() and json.loads(path.read_text()) != record:
+    path = ROOT / CHANGELOG_RECORDS
+    records = json.loads(path.read_text()) if path.exists() else {}
+    if not isinstance(records, dict):
+        raise ValueError("changelog approval registry is not an object")
+    if record["tag"] in records and records[record["tag"]] != record:
         raise ValueError("this version already has different notes; reconcile them before replacing")
     document = ROOT / CHANGELOG_FILES[record["channel"]]
     text = document.read_text()
@@ -1320,7 +1323,8 @@ def write_changelog_draft(request, entry):
         text = text.rstrip() + "\n\n" if not at else text
         document.write_text(text[:offset] + section + "\n" + text[offset:])
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json_text(record))
+    records[record["tag"]] = record
+    path.write_text(json_text(records))
     return path
 
 
@@ -1329,9 +1333,10 @@ def read_changelog_record(info):
     identity = changelog_identity(info)
     git("fetch", "--no-tags", "origin", "main")
     main = git("rev-parse", "FETCH_HEAD")
-    path = CHANGELOG_RECORDS / (info["tag"] + ".json")
+    path = CHANGELOG_RECORDS
     try:
-        record = json.loads(git("show", f"{main}:{path}"))
+        records = json.loads(git("show", f"{main}:{path}"))
+        record = records.get(info["tag"]) if isinstance(records, dict) else None
         document = git("show", f"{main}:{CHANGELOG_FILES[info['channel']]}")
     except (subprocess.CalledProcessError, ValueError) as error:
         raise ValueError(f"publication refused for {info['tag']}: reviewed changelog is not on main; "

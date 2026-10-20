@@ -934,16 +934,18 @@ class ChangelogTests(GitFixture):
         info, out = self.candidate()
         self.approve(info)
         n.git("checkout", "-qB", "approval-edit", "origin/main")
-        path = self.repo / n.CHANGELOG_RECORDS / (info["tag"] + ".json")
-        record = json.loads(path.read_text())
+        path = self.repo / n.CHANGELOG_RECORDS
+        records = json.loads(path.read_text())
+        record = records[info["tag"]]
         original = dict(record)
         record["build_commit"] = "f" * 40
-        path.write_text(n.json_text(record))
+        path.write_text(n.json_text(records))
         n.git("add", "docs"); n.git("commit", "-qm", "wrong candidate")
         n.git("push", "-q", "origin", "HEAD:main")
         with self.assertRaisesRegex(ValueError, "different candidate"):
             n.approved_changelog(info)
-        path.write_text(n.json_text(original))
+        records[info["tag"]] = original
+        path.write_text(n.json_text(records))
         document = self.repo / n.CHANGELOG_FILES["nightly"]
         document.write_text(document.read_text().replace("lost message", "different change"))
         n.git("add", "docs"); n.git("commit", "-qm", "different public prose")
@@ -1048,10 +1050,29 @@ class ChangelogTests(GitFixture):
         request = n.changelog_request(info)
         n.git("checkout", "-qb", "notes-comma", "origin/main")
         path = n.write_changelog_draft(request, "- Added Cut, Copy, and Paste")
-        record = json.loads(path.read_text())
+        record = json.loads(path.read_text())[info["tag"]]
         self.assertEqual(record["entry"], "- Added Cut, Copy and Paste")
         document = (self.repo / n.CHANGELOG_FILES["nightly"]).read_text()
         self.assertIn(n.changelog_section(record).strip(), document)
+
+
+class CommittedChangelogTests(unittest.TestCase):
+    def test_every_approved_record_matches_its_public_user_facing_entry(self):
+        records = json.loads((n.ROOT / n.CHANGELOG_RECORDS).read_text())
+        self.assertIsInstance(records, dict)
+        self.assertTrue(records)
+        for tag, record in records.items():
+            with self.subTest(tag=tag):
+                self.assertEqual(record["tag"], tag)
+                n.changelog_identity(record)
+                n.validate_changelog_entry(record["entry"])
+                document = (n.ROOT / n.CHANGELOG_FILES[record["channel"]]).read_text()
+                self.assertIn(n.changelog_section(record).strip(), document)
+                if record["previous_tag"] is not None:
+                    self.assertRegex(record["previous_source"], r"^[0-9a-f]{40}$")
+                    pattern = ("v" + n.BASE_RE + r"-nightly\.[0-9]{8}\.[1-9][0-9]*"
+                               if record["channel"] == "nightly" else "v" + n.BASE_RE)
+                    self.assertRegex(record["previous_tag"], "^" + pattern + "$")
 
 
 class EngineStorageTests(GitFixture):

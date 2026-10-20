@@ -6,6 +6,8 @@ Release notes may be prepared before publication. A version’s GitHub release l
 
 ## 1.2.1
 
+[GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.1)
+
 - Added a "See what's new" link in Settings, Updates that opens the changelog in your default browser
 - Added Haiku naming a new conversation for you
 - Added the Oxford comma setting, which is off by default

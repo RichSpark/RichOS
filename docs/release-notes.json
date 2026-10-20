@@ -1,0 +1,24 @@
+{
+  "v1.2.1": {
+    "build_commit": "361da6d1646d1cc582ba9e0befd3490b92dec075",
+    "channel": "stable",
+    "entry": "- Added a \"See what's new\" link in Settings, Updates that opens the changelog in your default browser\n- Added Haiku naming a new conversation for you\n- Added the Oxford comma setting, which is off by default\n- Added a Settings row and email display so you can tell which Claude account is which (Show email on Claude accounts)\n- Added \"+ New chat or company\" and companies as sidebar section headings, with an open folder and an instant \"+ New chat\" tooltip\n- Added the phone page listing a new conversation as soon as it starts\n- Changed dictation's name to RichScribe\n- Changed the account switch so it really moves Rich and Stu and the panel says where each one is\n- Changed Rich's status line to say \"Rich is thinking\"\n- Changed the \"Under the hood\" rows to say what is true now\n- Changed the right-click menu so no browser items show anywhere and text fields offer only Cut, Copy, Paste and Select All\n- Improved the phone page so it picks up where the stream left off and keeps its conversation list after a reconnect\n- Improved the phone page to draw Rich's answers as formatted text, with code shown exactly as written\n- Improved Rich's spoken turns so they keep every word over silence and room noise and always end\n- Improved Rich's spoken times on the hour so they are said whole\n- Improved the loading screen so Stop works there too\n- Improved the Oxford comma rule, the Rich instructions and the overload handling so overloads are shown and workers share one overload clock\n- Fixed tables and quotations not showing in every answer and a quotation now ends a table\n- Fixed a phone question's answer landing in the wrong conversation, so it stays in the one it was sent from\n- Fixed Stop not covering answers given on question cards and the card now shows the truth after Stop\n- Fixed Stop not being remembered after a restart\n- Fixed Escape not closing the open dialog, including the report over Connected folders\n- Fixed Rich dropping \"do it yourself\" requests\n- Fixed a PDF highlight appearing on right-click\n- Fixed Rich's sentences being split by a queued notice\n- Fixed a withdrawn question card showing an id\n- Fixed Restore showing for words that were not Rich's own\n- Fixed the \"Voice is ready\" line staying after the round button is learned\n- Fixed Rich's spoken \"On it!\" so it is spoken right away",
+    "previous_source": "ae1cc433d850c153ff42be84fe02821d476a9d36",
+    "previous_tag": "v1.2.0",
+    "schema": 1,
+    "source_commit": "03e09f43c87ed346920b621f6035fa4e074375d8",
+    "tag": "v1.2.1",
+    "version": "1.2.1"
+  },
+  "v1.2.1-nightly.20261020.68": {
+    "build_commit": "17972c57e7ef0dc449013464efd75e0a06445efc",
+    "channel": "nightly",
+    "entry": "- Added See what's new in Settings, Updates, which opens the changelog in your default browser\n- Added a Show email option so you can tell your Claude accounts apart\n- Added Haiku naming each new conversation\n- Added a setting for the Oxford comma, which is off by default\n- Added + New chat or company in the sidebar, with companies as section headings, an open folder and an instant + New chat tooltip\n- Changed dictation's name to RichScribe\n- Improved the phone page: it picks up where the stream left off, keeps the conversation list after a reconnect and shows Rich's answers as formatted text, with code exactly as written\n- Improved your spoken turn so it keeps every word over silence and room noise and always ends\n- Improved Rich's spoken times on the hour so they are said whole\n- Fixed Rich dropping \"do it yourself\" requests\n- Fixed Escape not closing the report over Connected folders\n- Fixed right-clicking in a PDF highlighting text\n- Fixed Rich's sentences being split by a queued notice\n- Fixed a withdrawn card showing an id\n- Fixed Restore appearing on words that were not his own\n- Fixed a quotation not ending a table\n- Fixed a card showing the wrong state after Stop and Stop not being remembered across a restart\n- Fixed the \"Voice is ready\" line staying after you have learned the round button\n- Fixed the wording under Under the hood so it is accurate",
+    "previous_source": "a5f98f7055a2377a9bd94f24fa14451a7b5827e7",
+    "previous_tag": "v1.2.1-nightly.20261019.67",
+    "schema": 1,
+    "source_commit": "03e09f43c87ed346920b621f6035fa4e074375d8",
+    "tag": "v1.2.1-nightly.20261020.68",
+    "version": "1.2.1-nightly.20261020.68"
+  }
+}

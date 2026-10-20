@@ -6,6 +6,8 @@ Release notes may be prepared before publication. A version’s GitHub release l
 
 ## 1.2.1-nightly.20261020.68
 
+[GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.1-nightly.20261020.68)
+
 - Added See what's new in Settings, Updates, which opens the changelog in your default browser
 - Added a Show email option so you can tell your Claude accounts apart
 - Added Haiku naming each new conversation
