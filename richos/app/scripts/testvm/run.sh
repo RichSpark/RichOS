@@ -140,6 +140,17 @@ clean_up_this_runs_clone() {
   fi
 }
 
+# --- 2-. the screen-capture consent -------------------------------------------
+# BEFORE anything captures: macOS 15 asks again every 30 days whether the ssh client may
+# capture the screen, and the base image's approval came due on 2026-10-19, so a clone's first
+# frame raised an alert that took the keyboard focus from the app (capture-consent.py says what
+# was measured). Each clone's record is renewed; a failure is said, and the run goes on.
+if CONSENT="$(guest_ssh "$VM" /usr/bin/python3 - < "$HERE/capture-consent.py" 2>&1)"; then
+  log "$CONSENT"
+else
+  log "WARNING: the screen-capture consent could not be renewed (${CONSENT:-no output}); a frame may raise macOS's alert"
+fi
+
 # --- 2a. the claude binary ----------------------------------------------------
 # FIRST, because it is the cheapest refusal in the file when it fires and the
 # most expensive defect when it does not. The binary was copied into the base

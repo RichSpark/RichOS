@@ -42,7 +42,7 @@ use crate::ledger::Source;
 use crate::operator_declaration::{Declaration, Gate};
 use crate::operator_host::{AnswerOutcome, ConversationKey, ConversationRead, Lane, LeadLauncher, OperatorDelivery,
                            OperatorEngine, OperatorHost, Origin, Relayed, Say, SayQuestions, Settle, StopResult,
-                           TeamReading};
+                           TeamReading, Told};
 use crate::operator_lead::Quit;
 use crate::operator_runtime::{DurableDelivery, NoticePush, OperatorNotice};
 use std::collections::{HashSet, VecDeque};
@@ -356,6 +356,26 @@ impl OperatorDesk {
         let told = self.host.tell_lead(session, text);
         drop(quitting);
         told
+    }
+
+    /// **A quota-, stall- or codex-watch notice for his team's lead** ([`OperatorHost::tell_team`]),
+    /// sent the way [`Self::tell_lead`] sends a review-watch notice. The host's team-watch
+    /// children call it. Once quit has begun nothing wakes a lead, so the notice is kept for the
+    /// next lead that starts, after the next launch, never dropped.
+    pub fn tell_team(&self, text: &str) -> Result<Told, String> {
+        let quitting = self.quit.lock().unwrap();
+        if *quitting {
+            self.host.keep_team_notice(text);
+            return Ok(Told::Kept);
+        }
+        let told = self.host.tell_team(text);
+        drop(quitting);
+        told
+    }
+
+    /// The file naming his team's lead to the host's team-watch children.
+    pub fn team_watch_lead(&self) -> PathBuf {
+        self.host.team_watch_lead_path()
     }
 
     /// The declaration this desk runs under: where the host's review-watch child finds the
