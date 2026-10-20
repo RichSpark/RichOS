@@ -54,6 +54,13 @@ class SpawnPreparation(unittest.TestCase):
                 self.assertTrue(prepared["prompt"].startswith(task))
                 self.assertIn("run `git merge main` inside your own worktree", prepared["prompt"])
                 self.assertIn("Merge only once", prepared["prompt"])
+                # The rollout (verification reliability PRD line 49): the explicit-range runner
+                # step the land reuses, in place of repeating the proof after any merge.
+                self.assertIn("run `git merge-base main HEAD` in your worktree", prepared["prompt"])
+                self.assertIn("`python3 richos/app/scripts/proof-run.py <the commit it printed>..HEAD`",
+                              prepared["prompt"])
+                self.assertIn("the land reuses that run instead of repeating it", prepared["prompt"])
+                self.assertNotIn("once more on the merged tree", prepared["prompt"])
                 self.assertNotIn("inflight-ack", prepared["prompt"])
                 self.assertEqual(module.prepare(prepared), prepared)
                 good = verify(prepared)
@@ -64,9 +71,11 @@ class SpawnPreparation(unittest.TestCase):
             # last, never main (the lead cut the merge-main line out of five
             # v1.3.0 briefs by hand), and the spawn guard accepts it.
             original = dict(name="dev-opus-t2", subagent_type="dev", prompt="Build the worktree change")
-            for targets, lines in (([("/r/richos", "v1.3.0")], ["run `git merge v1.3.0` inside your own worktree"]),
+            for targets, lines in (([("/r/richos", "v1.3.0")], ["run `git merge v1.3.0` inside your own worktree",
+                                                               "run `git merge-base v1.3.0 HEAD` in your worktree"]),
                                    ([("/r/femcboost", "main"), ("/r/richos", "v1.3.0")],
-                                    ["`git merge main` in /r/femcboost", "`git merge v1.3.0` in /r/richos"])):
+                                    ["`git merge main` in /r/femcboost", "`git merge v1.3.0` in /r/richos",
+                                     "run `git merge-base <the branch you merged there> HEAD`"])):
                 prepared = module.prepare(original, targets)
                 for line in lines:
                     self.assertIn(line, prepared["prompt"])

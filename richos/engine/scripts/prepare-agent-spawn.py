@@ -14,13 +14,31 @@ import re
 import sys
 
 
+def author_run(branch):
+    """The explicit-range runner step that ends a handover (see last_step)."""
+    return ("Then, in each of those repositories that has `richos/app/scripts/proof-run.py`, run "
+            "`git merge-base %s HEAD` in your worktree and, from its root, `python3 richos/app/scripts/proof-run.py "
+            "<the commit it printed>..HEAD`, adding `--reuse <logs directory>` for each earlier run of it in this "
+            "worktree so a check whose inputs did not change is reused, not executed. It executes, once, every check "
+            "your range selects, and the land reuses that run instead of repeating it. If a check fails, fix it on "
+            "your branch and run that command again with `--reuse` of this run. Name the `logs:` directory of your "
+            "final run in your report. Then hand over." % branch)
+
+
 def last_step(targets=None):
     """The handover's last step: merge the branch the work lands on into the
     teammate's own worktree. `targets`: [(repository, branch)] for every
     repository it works in. With none, or all of them on main, it is the
     merge-main line, word for word. A teammate bound to a release branch merges
     THAT branch (2026-10-14: the lead cut the merge-main line out of five v1.3.0
-    briefs by hand, because it would have pulled main into the release)."""
+    briefs by hand, because it would have pulled main into the release).
+
+    After the merge, THE AUTHOR'S RUN (verification reliability PRD, line 49): where the
+    repository has the proof runner, the teammate runs it once over its whole range, from the
+    commit the merge brought in, so every check the range selects has a saved pass the land
+    reuses instead of repeating, and a land whose author run does not cover the candidate is
+    refused with the one job that completes it (autocheck.py author_preflight). This replaces
+    the sentence that told every teammate to repeat its own tests after any merge."""
     branches = []
     for _repo, branch in targets or []:
         if branch and branch not in branches:
@@ -31,10 +49,10 @@ def last_step(targets=None):
                 "Never rebase. If git reports a conflict, resolve it and commit the merge. If the conflict is in a screenshot "
                 "baseline picture (a `.png` under `ui/tests/shots-*`), regenerate that picture from the merged tree and look at it: "
                 "if it shows anything besides your change and main's change together, do not commit it; say what it shows in your "
-                "report. Merge only once; if main moves again after your merge, do not merge again. "
-                "If the merge brought in any change, run the tests you ran for your proof once more on the merged tree, and fix on your branch anything that fails. Then hand over.")
+                "report. Merge only once; if main moves again after your merge, do not merge again. " + author_run("main"))
     if len(branches) == 1:
         b = branches[0]
+        base = b
         which = ("run `git merge %s` inside your own worktree. `%s` here is the local branch named `%s`, not "
                  "`origin/%s`; it is the branch your work lands on, and no other branch is merged into your work."
                  % (b, b, b, b))
@@ -44,12 +62,13 @@ def last_step(targets=None):
         which = ("merge the branch your work lands on there, inside your own worktree: %s. Each is the local branch "
                  "of that name, not its `origin/` copy, and no other branch is merged into your work." % each)
         theirs, moves = "that branch's change", "that branch moves"
+        base = "<the branch you merged there>"
     return ("Your last step before you hand over, and only if you committed anything: in each repository you "
             "committed to, %s Never rebase. If git reports a conflict, resolve it and commit the merge. If the "
             "conflict is in a screenshot baseline picture (a `.png` under `ui/tests/shots-*`), regenerate that "
             "picture from the merged tree and look at it: if it shows anything besides your change and %s "
             "together, do not commit it; say what it shows in your report. Merge only once; if %s again after "
-            "your merge, do not merge again. If the merge brought in any change, run the tests you ran for your proof once more on the merged tree, and fix on your branch anything that fails. Then hand over." % (which, theirs, moves))
+            "your merge, do not merge again. %s" % (which, theirs, moves, author_run(base)))
 
 
 def prepare(value, targets=None, *, native_isolation=True):
