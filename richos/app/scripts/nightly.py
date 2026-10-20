@@ -1272,8 +1272,7 @@ def changelog_request(info):
 @release_step
 def changelog_section(record):
     return (f"## {record['version']}\n\n"
-            f"Prepared release notes. Check [published releases](https://github.com/{REPO}/releases) "
-            "for availability.\n\n"
+            f"[GitHub release](https://github.com/{REPO}/releases/tag/{record['tag']})\n\n"
             f"{record['entry']}\n")
 
 

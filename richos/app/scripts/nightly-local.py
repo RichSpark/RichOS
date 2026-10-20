@@ -1623,8 +1623,11 @@ class Runner:
                     f"The brief already names the tag and request. The candidate's run is "
                     f"{info['run_id']}. Draft now while QA walks it. Keep rejected drafts off main. "
                     "After QA acceptance, second-review and land the matching notes and record, "
-                    f"then run nightly-local.py publish --run {info['run_id']} yourself. "
-                    "No CEO changelog decision or intervention is needed.")
+                    f"then immediately run nightly-local.py publish --run {info['run_id']} yourself. "
+                    "Keep this job open until the release body and installable channel are verified. "
+                    "Retry a failed upload with the same candidate and notes; if deliberately "
+                    "abandoned after landing, remove its entry and record through the normal gate "
+                    "before closing this job. No CEO changelog decision or intervention is needed.")
         raised = self.raise_release_job(title, question,
                                        "QA may continue. Publication requires these reviewed notes.")
         temporary = sent.with_suffix(".json.part")
