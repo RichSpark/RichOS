@@ -210,6 +210,17 @@ def state_dir():
     return config / "state/pierce"
 
 
+WORKER_ENVELOPE = re.compile(r"<(teammate-message|agent-message)\b[^>]*>.*?(?:</\1>|\Z)", re.S)
+
+
+def delivered_envelope(text):
+    """A worker's message as the host delivers it: teammate envelopes behind at
+    most one header line ("Another Claude session sent a message:"), nothing a
+    person wrote. A person's message that quotes one keeps its authority."""
+    rest = WORKER_ENVELOPE.sub("", text).strip()
+    return bool(WORKER_ENVELOPE.search(text)) and (not rest or ("\n" not in rest and rest.endswith(":")))
+
+
 def human_messages(rows, desktop=False):
     """Read original user messages, not the planner's paraphrase or tool results."""
     messages = []
@@ -235,7 +246,7 @@ def human_messages(rows, desktop=False):
         if not isinstance(content, str) or not content.strip():
             continue
         if content.lstrip().startswith(("<task-notification>", "<local-command-", "<command-name>",
-                                       "<teammate-message", "<system-reminder>")):
+                                       "<teammate-message", "<system-reminder>")) or delivered_envelope(content):
             continue
         messages.append(content)
     return messages

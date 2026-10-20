@@ -167,16 +167,9 @@ def human_requests(path):
             except ValueError:
                 continue
             if isinstance(row, dict):
-                out += [(str(row.get("timestamp") or ""), m) for m in pierce.human_messages([row]) if not delivered_envelope(m)]
+                # pierce.human_messages drops a worker's host-delivered envelope.
+                out += [(str(row.get("timestamp") or ""), m) for m in pierce.human_messages([row])]
     return out
-
-
-def delivered_envelope(text):
-    """A worker's message as the host delivers it: teammate envelopes behind at
-    most one header line ("Another Claude session sent a message:"), nothing a
-    person wrote. A person's message that quotes one keeps its authority."""
-    rest = TEAMMATE_MESSAGE.sub("", text).strip()
-    return bool(TEAMMATE_MESSAGE.search(text)) and (not rest or ("\n" not in rest and rest.endswith(":")))
 
 
 def requests_until(messages, at, transcript):
