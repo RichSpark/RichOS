@@ -239,7 +239,8 @@ impl Drop for ReviewWatch {
     }
 }
 
-fn write_record(path: &Path, value: &serde_json::Value) -> io::Result<()> {
+/// A child's record, written whole (also [`crate::team_watch`]'s).
+pub(crate) fn write_record(path: &Path, value: &serde_json::Value) -> io::Result<()> {
     let temporary = path.with_extension(format!("{}.incoming", uuid::Uuid::new_v4()));
     let written = (|| {
         let mut file = std::fs::File::create(&temporary)?;
@@ -248,7 +249,7 @@ fn write_record(path: &Path, value: &serde_json::Value) -> io::Result<()> {
         std::fs::rename(&temporary, path)
     })();
     if written.is_err() && std::fs::remove_file(&temporary).is_err() {
-        eprintln!("[richos] second review: {} was left behind", temporary.display());
+        eprintln!("[richos] a watcher's record: {} was left behind", temporary.display());
     }
     written
 }

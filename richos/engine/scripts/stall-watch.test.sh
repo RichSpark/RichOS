@@ -71,6 +71,8 @@
 #   E12  an unreadable ledger: NOT READ, and nothing re-announced after
 #   E13  one the Stop hook already delivered this session is not told
 #   E14  the lead's transcript is found by session id (the real locator)
+#   E15  under the app host (--host-json) the lead is a sibling: the start the host
+#        writes beside its session is used, so an early escalation is told
 #   M01  END TO END: --monitor (the plugin monitor's command) on the fixture
 #        prints the stall once over several looks, --alive says watching,
 #        a second --monitor for the same session stands down, nothing it
@@ -983,6 +985,58 @@ check "E14  the lead's transcript is found by session id under the projects dire
     "$( escs | grep -qF '[esc-20261001T120017Z-000e14b0]' && ! escs | grep -qF '000e14a0'; echo $?)" "out=$OUT"
 unset STALL_WATCH_LEAD_TRANSCRIPT STALL_WATCH_SESSION_START
 export RICHOS_ESCALATION_LEDGER="$SB/escalations.jsonl"
+
+# E15: the app host's lead is this watcher's SIBLING, so its start cannot be found through the
+# watcher's ancestry; the host writes it beside the session. Review rv-20261020T132202Z-c5ab9358-2de8:
+# without it an escalation raised before the first look counted as backlog and was never told.
+# The case runs detached (its parent's parent is launchd), as the host's child has no claude
+# ancestor: run under a teammate, the ancestry walk would find that teammate's own session.
+E15LEAD="$(spawn_sleeper)"; PIDS+=("$E15LEAD")
+new_state e15
+cat >"$SB/e15.py" <<'PY'
+import datetime, json, os, sys, time
+engine, root, lead_pid = sys.argv[1], sys.argv[2], int(sys.argv[3])
+sys.path.insert(0, os.path.join(engine, "scripts", "lib"))
+import host_child, stall_watch
+sid = "beadfeed-0000-4000-8000-0000000e1500"
+now = int(time.time())
+iso = lambda n: datetime.datetime.fromtimestamp(n, datetime.timezone.utc).isoformat()
+for d in ("ws/agents", "ws/sessions", "platform", "projects/fixture"):
+    os.makedirs(os.path.join(root, d), exist_ok=True)
+with open(os.path.join(root, "lead.json"), "w") as fh:          # what the host writes
+    json.dump({"session": sid, "started": now - 30}, fh)
+with open(os.path.join(root, "projects/fixture", sid + ".jsonl"), "w") as fh:  # an idle lead
+    for row in ({"type": "user", "timestamp": iso(now - 25), "message": {"content": "Check on my team."}},
+                {"type": "assistant", "timestamp": iso(now - 20), "message": {"content": "Your team is working."}},
+                {"type": "system", "subtype": "turn_duration", "timestamp": iso(now - 20)}):
+        fh.write(json.dumps(row) + "\n")
+with open(os.path.join(root, "platform", "%d.json" % lead_pid), "w") as fh:
+    json.dump({"sessionId": sid, "startedAt": (now - 30) * 1000}, fh)
+with open(os.path.join(root, "escalations.jsonl"), "w") as fh:  # raised after the lead, before the first look
+    fh.write(json.dumps({"event": "Escalation", "id": "esc-20261020T000000Z-000e15a0", "raised": iso(now - 10),
+                         "teammate": "fixture-mate", "worktree": os.path.join(root, "worktree"), "branch": "cc/fixture",
+                         "repo": "fixture", "head": "", "state": "stopped", "for": "lead", "title": "Need an answer",
+                         "question": "Which option should I use?", "tried": "", "meanwhile": "", "record": "",
+                         "session_id": sid, "actor": "fixture"}) + "\n")
+for k in ("RICHOS_SESSION_PID", "RICHOS_SESSION_ID", "STALL_WATCH_SESSION_START", "STALL_WATCH_LEAD_TRANSCRIPT"):
+    os.environ.pop(k, None)
+os.environ.update({"RICHOS_WATCH_LEAD": os.path.join(root, "lead.json"),
+                   "RICHOS_WORKSPACES_DIR": os.path.join(root, "ws"),
+                   "RICHOS_SESSIONS_DIR": os.path.join(root, "platform"),
+                   "RICHOS_PROJECTS_DIR": os.path.join(root, "projects"),
+                   "RICHOS_ESCALATION_LEDGER": os.path.join(root, "escalations.jsonl")})
+assert host_child.session() == sid
+src = stall_watch.Sources(engine)
+start = stall_watch.session_started(src, sid)
+lines, _state, problems = stall_watch.escalation_watch(src, now, sid, {}, stall_watch.thresholds())
+told = any("esc-20261020T000000Z-000e15a0" in l for l in lines)
+print("session_started=%r told=%r problems=%r" % (start, told, problems))
+sys.exit(0 if start == now - 30 and told and not problems else 1)
+PY
+( ( python3 "$SB/e15.py" "$ENGINE" "$SB/e15" "$E15LEAD" >"$SB/e15.out" 2>&1; echo $? >"$SB/e15.rc" ) & )
+wait_for 30 test -s "$SB/e15.rc"
+check "E15  under the app host (lead a sibling), an escalation raised after the lead started and before the first look is told" \
+    "$( [ "$(cat "$SB/e15.rc" 2>/dev/null)" = 0 ]; echo $?)" "out=$(cat "$SB/e15.out" 2>/dev/null)"
 
 # --- M: the monitor end to end --------------------------------------------------
 SESS2="$(spawn_sleeper)"; PIDS+=("$SESS2")
