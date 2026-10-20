@@ -105,7 +105,11 @@ for name in $HOOKS; do
                 continue
             fi
             if [ ! -f "$target" ] || ! cmp -s "$SHIM" "$target"; then
-                if ! { mkdir -p "$DEST" && cp "$SHIM" "$target" && chmod +x "$target"; }; then
+                # Written beside the target, made executable, then renamed over it: a commit running
+                # now reads the old hook or the new one, never half of one (Codex, 2026-10-20 10:04Z).
+                if ! { mkdir -p "$DEST" && tmp="$(mktemp "$target.new.XXXXXX")" && cp "$SHIM" "$tmp" \
+                        && chmod +x "$tmp" && mv -f "$tmp" "$target"; }; then
+                    [ -n "${tmp:-}" ] && rm -f "$tmp"
                     printf 'FAILED     %s\n' "$target"
                     rc=1
                     continue
