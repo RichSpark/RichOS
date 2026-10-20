@@ -486,6 +486,50 @@ class Evidence(unittest.TestCase):
         self.assertEqual(len(reads), 1, "a pass with nothing to save reads nothing")
         self.assertEqual({row["state"] for row in record.results.values()}, {"running"})
 
+    def test_a_check_starting_reads_head_only_never_the_whole_source(self):
+        # The other place a reading was taken per check (held cc/zach-opus-reuse58c 2985b8af5,
+        # ported): every launch saved its running row with a whole-source reading, one started
+        # check after another (5.5 s each on the round 32 land replay). Real runner, six plain
+        # checks, a git on PATH counting `git diff --binary`: the plan, the first save, at most
+        # one per completion pass and the final validation's two; never one per launch.
+        app, _engine = self.copy_runner_fixture()
+        names = ["check%d" % n for n in range(6)]
+        for name in names:
+            (self.root / (name + ".sh")).write_text("exit 0\n")
+        def git(*args):
+            return subprocess.check_output(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture",
+                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *args],
+                cwd=self.root, text=True, stderr=subprocess.PIPE).strip()
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "fixture")
+        (self.root / "check0.sh").write_text("exit 0  # an uncommitted change: the tracked diff is not empty\n")
+        tools, reads = Path(self.tmp.name) / "tools", Path(self.tmp.name) / "diff-reads"
+        tools.mkdir()
+        wrapper = tools / "git"
+        wrapper.write_text('#!/bin/sh\ncase " $* " in *" diff --binary "*) echo diff >> "%s" ;; esac\n'
+                           'exec %s "$@"\n' % (reads, shutil.which("git")))
+        wrapper.chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("RICHOS_", "GIT_"))}
+        env.update(PATH=str(tools) + os.pathsep + env.get("PATH", ""),
+            RICHOS_MACHINE_WORKERS=str(Path(self.tmp.name) / "machine"),
+            RICHOS_ENGINE_PASS_DIR=str(Path(self.tmp.name) / "slot"),
+            RICHOS_PROOF_RUN_DIR=str(Path(self.tmp.name) / "history"),
+            RICHOS_PROOF_RUN_SLOTS_DIR=str(Path(self.tmp.name) / "proof-slots"),
+            CLAUDE_CONFIG_DIR=str(Path(self.tmp.name) / "config"))
+        commands = Path(self.tmp.name) / "commands"
+        commands.write_text("".join("cd . && bash %s.sh\n" % name for name in names))
+        directory = Path(self.tmp.name) / "run"
+        result = subprocess.run([*idle_proof_run(app / "proof-run.py"), "--commands", str(commands),
+            "--log-dir", str(directory)], cwd=self.root, env=env, text=True, capture_output=True, timeout=120)
+        detail = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, detail)
+        rows = json.loads((directory / "summary.json").read_text())["checks"]
+        self.assertEqual([row["result"] for row in rows], ["passed"] * len(names), detail)
+        count = reads.read_text().splitlines().count("diff")
+        self.assertLessEqual(count, 2 + len(names) + 2,
+                             "the whole source was read %d times for %d checks" % (count, len(names)))
+
     def test_an_untracked_file_that_vanishes_while_it_is_read_is_a_changed_identity_not_a_crash(self):
         # 2026-09-30: a land crashed with FileNotFoundError in source_identity() on
         # richos/app/.updater-key-under-test.key, listed by `git ls-files --others` and removed

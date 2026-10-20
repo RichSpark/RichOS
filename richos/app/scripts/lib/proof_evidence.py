@@ -1604,6 +1604,15 @@ class Record:
             item.evidence = self
         self.checkpoint(items)
 
+    def launched(self, item):
+        """Save a check as it starts. Its row records only that it is running: no pass is judged
+        on it (the completion's checkpoint reads the source for that), so it needs HEAD alone,
+        which is cheap, and never the whole source. Reading the whole source here (`git diff
+        --binary HEAD` and every untracked file, 5.5 s each on step 2's 124-path land replay) cost
+        one reading per started check, one after another, before each check could start."""
+        commit = self.current_commit()
+        self.save(item, self.source if commit == self.source["commit"] else dict(self.source, commit=commit))
+
     def checkpoint(self, items):
         # ONE SOURCE READING PER PASS (verification reliability PRD step 3, T14). The source is
         # the whole checkout (`git diff --binary HEAD` and every untracked file), and it was read
