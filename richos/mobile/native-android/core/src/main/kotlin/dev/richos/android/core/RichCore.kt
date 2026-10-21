@@ -63,6 +63,15 @@ class RichCore private constructor(
     private var lastSend: SendReport? = null
     private var connection = ConnectionState()
     private var unsupported = false
+    /**
+     * The files Rich attached that were tapped on this phone and where each stands (round 36
+     * screen 3); not saved: a kept copy is found again on disk. Declared before [flow], whose first
+     * snapshot reads it: Kotlin initializes properties in the order written.
+     */
+    private val fetches = LinkedHashMap<String, FileFetch>()
+
+    /** The tap whose file is coming over, so × can stop it. */
+    private val fetchJobs = HashMap<String, Job>()
     private val flow = MutableStateFlow(snapshot())
     private val api = MacApi(ports.http, ports.keys)
     private var freshChallenge: String? = null
@@ -763,12 +772,7 @@ class RichCore private constructor(
     }
 
     // --- a file Rich put in front of the user (round 36 screen 3) ---------------------------------
-
-    /** The files tapped on this phone and where each stands; not saved: a kept copy is found again on disk. */
-    private val fetches = LinkedHashMap<String, FileFetch>()
-
-    /** The tap whose file is coming over, so × can stop it. */
-    private val fetchJobs = HashMap<String, Job>()
+    // (`fetches` and `fetchJobs` are declared at the top of the class: `flow` reads `fetches`.)
 
     private fun fileRow(id: String): Row? = session.cache.values.asSequence().flatten().lastOrNull { it.file?.id == id }
 
