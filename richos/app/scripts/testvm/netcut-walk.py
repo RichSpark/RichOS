@@ -106,9 +106,14 @@ class NetcutWalk(adopt_walk.Walk):
         gateway = guest(self.vm, "route -n get default 2>/dev/null | awk '/gateway:/{print $2}'", 30).strip()
         if not gateway:
             raise StepFailed('the guest has no default route to remove')
-        self.facts['gateway'] = gateway
+        # Its IPv6 default goes too: the guest has one (via en0's link-local router) that reaches
+        # nothing, so with only IPv4 cut a connection to the API's IPv6 address hung instead of
+        # failing (walk-3ee8d591416e: IPv4 failed in 0 ms, IPv6 timed out at 8 s).
+        gateway6 = guest(self.vm, "netstat -rn -f inet6 | awk '$1==\"default\" && $NF==\"en0\"{print $2; exit}'", 30).strip()
+        self.facts.update({'gateway': gateway, 'gateway6': gateway6})
         self.save()
-        guest(self.vm, 'sudo -n route -q -n delete default >/dev/null', 30)
+        guest(self.vm, 'sudo -n route -q -n delete default >/dev/null'
+              + ('; sudo -n route -q -n delete -inet6 default >/dev/null' if gateway6 else ''), 30)
         self.facts['cut_at_ms'] = round(self.clock())
         subnet = 'the guest subnet and loopback'
         answered = self.api_answers()
@@ -145,7 +150,9 @@ class NetcutWalk(adopt_walk.Walk):
         gateway = self.facts.get('gateway')
         if not gateway:
             raise StepFailed('no default route was recorded to put back')
-        guest(self.vm, 'sudo -n route -q -n add default ' + shlex.quote(gateway) + ' >/dev/null', 30)
+        gateway6 = self.facts.get('gateway6')
+        guest(self.vm, 'sudo -n route -q -n add default ' + shlex.quote(gateway) + ' >/dev/null'
+              + ('; sudo -n route -q -n add -inet6 default ' + shlex.quote(gateway6) + ' >/dev/null' if gateway6 else ''), 30)
         self.facts['restored_at_ms'] = round(self.clock())
         end = time.monotonic() + 60
         answered = ''
