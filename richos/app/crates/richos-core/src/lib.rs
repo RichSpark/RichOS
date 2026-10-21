@@ -71,6 +71,9 @@ pub mod bug_report;
 pub mod claude_accounts;
 pub mod cognition;
 pub mod company;
+/// A worker's turn that a lost internet connection ended waits for the connection and carries
+/// on (CEO, 2026-10-21).
+pub mod connection;
 pub mod correction;
 pub mod config;
 pub mod doctrine;
