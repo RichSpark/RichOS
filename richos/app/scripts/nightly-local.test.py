@@ -1754,6 +1754,79 @@ while True: time.sleep(.02)
             publisher.perform("publish", run_id="fixture-run-id")
         self.assertEqual(publisher.command.call_args.args[2], "finish")
 
+    # ---- 2026-10-21: a new user's first run is a gate of its own -------------------------
+    def build_that_walks_as_a_new_user(self, steps):
+        """A build whose candidate carries the plan's `new_user_walk_required`, as nightly.py
+        copies the plan into it, and whose walk writes `steps` as its report."""
+        r, calls = self.build_that_takes_its_vm_proof("pass")
+        proof_and_build = r.command.side_effect
+
+        def fake_command(*args, **kwargs):
+            if str(args[1]).endswith("run-walk.py"):
+                calls.append((args, kwargs))
+                walk = Path(args[args.index("--out") + 1])
+                walk.mkdir(parents=True, exist_ok=True)
+                (walk / "report.json").write_text(json.dumps({
+                    "expect_sha": args[args.index("--expect-sha") + 1], "steps": steps}))
+                if any(s["outcome"] != "PASS" for s in steps):
+                    raise RuntimeError("python3 failed (exit 1); see the run log")
+                return
+            proof_and_build(*args, **kwargs)
+            if args[2] == "build":
+                plan = json.loads(Path(args[args.index("--plan") + 1]).read_text())
+                self.assertIs(plan.get("new_user_walk_required"), True, "a new build requires the new-user walk")
+                out = Path(args[args.index("--out") + 1])
+                candidate = json.loads((out / "candidate.json").read_text())
+                candidate["info"]["new_user_walk_required"] = True
+                (out / "candidate.json").write_text(json.dumps(candidate))
+        r.command = Mock(side_effect=fake_command)
+        return r, calls
+
+    def test_a_build_walks_its_candidate_as_a_new_user_after_the_boot_proof_and_publish_requires_it(self):
+        passed = [{"step": s, "outcome": "PASS"} for s in ("identity", "setup", "signed-out", "update", "signed-in")]
+        r, calls = self.build_that_walks_as_a_new_user(passed)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            r.perform("build", no_host_screen=True)
+        order = [Path(str(a[1])).name for a, _ in calls if Path(str(a[1])).name in ("gui-proof-in-vm.sh", "run-walk.py")]
+        self.assertEqual(order, ["gui-proof-in-vm.sh", "run-walk.py"], "the walk follows the boot proof, one guest at a time")
+        args, kwargs = [(a, k) for a, k in calls if str(a[1]).endswith("run-walk.py")][0]
+        self.assertIn("--new-user", args)
+        self.assertEqual(Path(args[args.index("--bundle") + 1]).name,
+                         f"RichOS-{self.CANDIDATE_INFO['version']}-macos-aarch64.zip")
+        self.assertTrue(str(args[args.index("--") + 1]).endswith("new-user-walk.py"))
+        self.assertEqual(kwargs["env_extra"]["TESTVM_ROOT"], "/Volumes/E1TB/testvm") # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+        self.assertIn("New-user walk PASSED", buf.getvalue())
+        (self.root / "state" / "source").mkdir(parents=True, exist_ok=True)
+        publisher = self.runner()
+        publisher.command = Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            publisher.perform("publish", run_id="fixture-run-id")
+        self.assertEqual(publisher.command.call_args.args[2], "finish")
+
+    def test_a_new_user_walk_that_fails_fails_the_build_and_publish_refuses_the_candidate(self):
+        # The dead end a new user hit on 1.2.1, as the walk reports it.
+        steps = [{"step": "identity", "outcome": "PASS"}, {"step": "setup", "outcome": "PASS"},
+                 {"step": "signed-out", "outcome": "FAIL",
+                  "detail": "message 1: the turn ended as 'transient', not as \"not signed in\""}]
+        r, _ = self.build_that_walks_as_a_new_user(steps)
+        with contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaisesRegex(RuntimeError, "A NEW USER'S FIRST RUN OF IT FAILED"):
+            r.perform("build", no_host_screen=True)
+        (self.root / "state" / "source").mkdir(parents=True, exist_ok=True)
+        publisher = self.runner()
+        publisher.command = Mock()
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "signed-out: message 1"):
+            publisher.perform("publish", run_id="fixture-run-id")
+        publisher.command.assert_not_called()
+        # No walk at all is refused too; a candidate from before the requirement is not.
+        report = publisher.new_user_walk_dir("fixture-run-id") / "report.json"
+        report.unlink()
+        info = {**self.CANDIDATE_INFO, "new_user_walk_required": True}
+        with self.assertRaisesRegex(ValueError, "no new-user walk"):
+            publisher.require_new_user_walk(info, "fixture-run-id")
+        self.assertIsNone(publisher.require_new_user_walk(dict(self.CANDIDATE_INFO), "fixture-run-id"))
+
     def test_a_vm_proof_that_fails_fails_the_build_and_still_shows_the_candidate(self):
         r, _ = self.build_that_takes_its_vm_proof("fail:no-window")
         buf = io.StringIO()
