@@ -2687,6 +2687,37 @@ impl RefusalNotices {
     }
 }
 
+/// **THE HALF-DUPLEX LINE IS SHOWN WHEN RICH CAN TAKE THE REPLY, NOT WHEN IT IS EARNED.**
+///
+/// [`VoiceNotice::CouldNotListenWhileSpeaking`] ends "please say it again now". It is earned at
+/// a tainted discard, which happens while Rich is still audible, and while he is audible a
+/// short reply is discarded the same way. Shown at once (as until 2026-10-21), it invited the
+/// user to speak into the very window that had just lost their words: measured on the
+/// committed echo-path recording, the first discard came 2.608 s into an answer with
+/// 22.336 s of it still to play (review rv-20261021T175303Z-70f43b54-a22b). So the supervisor
+/// OWES the line at the discard ([`Self::owe`]) and delivers it on the first tick Rich is no
+/// longer audible ([`Self::due`]). The budget it spends is still claimed at the discard, so
+/// the recognizer's lines cannot stack on top of it meanwhile.
+#[derive(Debug, Default)]
+pub struct HalfDuplexDelivery {
+    owed: Option<VoiceNotice>,
+}
+
+impl HalfDuplexDelivery {
+    /// The line was earned (a tainted discard claimed it). Held until [`Self::due`].
+    pub fn owe(&mut self, n: VoiceNotice) {
+        self.owed = Some(n);
+    }
+
+    /// The line to show now, if one is owed and Rich is no longer audible; `None` otherwise.
+    pub fn due(&mut self, rich_audible: bool) -> Option<VoiceNotice> {
+        if rich_audible {
+            return None;
+        }
+        self.owed.take()
+    }
+}
+
 /// **THE CLOSING LINE OF A VOICE SESSION, printed on every path out of [`supervise`].**
 ///
 /// Defect 4 of Ray's candidate-.6 walk, verbatim: *"The new timestamped logging covers the
@@ -3238,6 +3269,7 @@ fn supervise(
     // Rich's first sound for an answer: from then on, what he says is a new turn, not the rest of
     // the one Rich is answering.
     let mut was_playing = false;
+    let mut half_duplex_line = HalfDuplexDelivery::default();
     let mut last_state = VoiceState::Off;
     // Rich's audible window, and the monotonic clock that drives it. `Instant`, never the wall
     // clock: a window that closes early because the system clock stepped is the defect again.
@@ -3374,11 +3406,12 @@ fn supervise(
                         // single-refusal lines cannot add themselves on top of it — which is
                         // precisely the three-cards-for-a-silent-man defect. See
                         // `RefusalNotices`.
+                        //
+                        // OWED HERE, SHOWN WHEN RICH IS NO LONGER AUDIBLE: the line ends "please
+                        // say it again now", and while Rich is still audible a short reply is
+                        // discarded the same way. See `HalfDuplexDelivery`.
                         if let Some(n) = notices.lock().ok().and_then(|mut b| b.half_duplex()) {
-                            observer.on_voice_event(&VoiceEvent::Notice {
-                                message: n.ceo_message().to_string(),
-                                at: now_millis(),
-                            });
+                            half_duplex_line.owe(n);
                         }
                     }
                 }
@@ -3502,6 +3535,9 @@ fn supervise(
         // synthesis has made no sound, and speech that starts then is his (`turn::rich_audible`).
         let playing = rich_audible(audible.is_open(), shared.answer_sounded.load(Ordering::Relaxed));
         shared.speaking.store(playing, Ordering::Relaxed);
+        if let Some(n) = half_duplex_line.due(playing) {
+            observer.on_voice_event(&VoiceEvent::Notice { message: n.ceo_message().to_string(), at: now_millis() });
+        }
         if playing && !was_playing {
             // Rich has begun answering aloud: his next words are a new turn.
             turns.unanswered = None;

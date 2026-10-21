@@ -37,7 +37,12 @@ after the spoken cut-off notice in the conversation. Whether the person also spo
 known on this path, which is why every clause about him is conditional. The sentence then
 ended with a status, a deliberate earlier choice, so it explained a loss and gave no step.
 
-The fix: the sentence now ends "If you did, please say it again now. I'm listening." Its two
+The fix: the sentence now ends "If you did, please say it again now. I'm listening." and
+it is shown only once Rich is no longer audible (`HalfDuplexDelivery`): shown at the discard,
+it invited a reply into the window that had just lost one (the first discard on the
+committed recording comes 2.592 s into an answer that is audible until 24.960 s). A next step
+the user cannot take yet is a dead end of the same kind; test
+`the_half_duplex_line_is_shown_only_once_rich_can_take_the_reply`. Its two
 siblings in the same family got the same treatment, because the check found them:
 `HeardNoVoice` ("...If you said something, please say it again. I'm still listening.") and
 `DidNotCatchThat` ("...Please say it again. I'm still listening."). The open microphone is the

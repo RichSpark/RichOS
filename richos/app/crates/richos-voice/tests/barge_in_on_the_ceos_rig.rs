@@ -701,3 +701,77 @@ fn a_short_word_of_his_over_rich_is_lost_and_the_line_tells_him_to_say_it_again(
     assert_eq!(said, VoiceNotice::CouldNotListenWhileSpeaking);
     assert!(said.ceo_message().contains("please say it again now"), "{}", said.ceo_message());
 }
+
+/// **THE LINE THAT SAYS "SAY IT AGAIN NOW" IS SHOWN ONLY ONCE RICH CAN TAKE THE REPLY.**
+///
+/// Review rv-20261021T175303Z-70f43b54-a22b: on this recording the first tainted discard comes
+/// early in Rich's answer, with most of it still to play, and the supervisor used to show the
+/// line right there, inviting a reply into the window that had just discarded one. This drives
+/// the shipped `CaptureBrain` frame by frame over the echo-only recording at every residual
+/// level, feeds each tainted discard to the same `RefusalNotices` + `HalfDuplexDelivery` pair
+/// `supervise` uses, asks for the line on every frame exactly as the supervisor's tick does,
+/// and requires that it is shown, and only on a frame where Rich is no longer audible, after
+/// his last audible frame. Run red on 2026-10-21 with `HalfDuplexDelivery::due` made to ignore
+/// `rich_audible` (the old show-at-once behavior): at residual -52.00 dBFS the line was shown at
+/// frame 162 (2.592 s) with Rich audible until 24.960 s.
+#[test]
+fn the_half_duplex_line_is_shown_only_once_rich_can_take_the_reply() {
+    use richos_voice::controller::{HalfDuplexDelivery, RefusalNotices, VoiceNotice};
+    let mic0 = read(ECHO_ONLY_VOL60, "-mic.wav");
+    let reference = read(ECHO_ONLY_VOL60, "-reference.wav");
+    for &vol in VOLUMES {
+        let g = mic_gain_for_residual(&mic0, &reference, vol);
+        let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
+        let n = mic.len().min(reference.len());
+        let frames = n / VAD_FRAME_SAMPLES;
+        let active: Vec<bool> = (0..frames)
+            .map(|b| {
+                let lo = b * VAD_FRAME_SAMPLES;
+                rms(&reference[lo..lo + VAD_FRAME_SAMPLES]) > richos_voice::aec::FAR_END_ACTIVE_RMS
+            })
+            .collect();
+        let first = active.iter().position(|a| *a).expect("the reference is never active");
+        let last = frames - 1 - active.iter().rev().position(|a| *a).unwrap();
+        let (aec, ring) = EchoCanceller::new();
+        let mut brain = CaptureBrain::with_aec(aec);
+        let mut notices = RefusalNotices::new();
+        let mut delivery = HalfDuplexDelivery::default();
+        let (mut discarded_at, mut shown) = (None, None);
+        // A tail of silence after the recording: the app keeps listening after Rich stops.
+        for b in 0..frames + 50 {
+            let speaking = b >= first && b <= last + 1;
+            let frame: Vec<f32> = if b < frames {
+                let lo = b * VAD_FRAME_SAMPLES;
+                ring.push(&reference[lo..lo + VAD_FRAME_SAMPLES]);
+                mic[lo..lo + VAD_FRAME_SAMPLES].to_vec()
+            } else {
+                ring.push(&[0.0; VAD_FRAME_SAMPLES]);
+                vec![0.0; VAD_FRAME_SAMPLES]
+            };
+            for m in brain.push_frame(&frame, speaking, false) {
+                if let CapMsg::Discarded { tainted: true } = m {
+                    discarded_at.get_or_insert(b);
+                    if let Some(n) = notices.half_duplex() {
+                        delivery.owe(n);
+                    }
+                }
+            }
+            if let Some(n) = delivery.due(speaking) {
+                assert_eq!(n, VoiceNotice::CouldNotListenWhileSpeaking);
+                assert!(shown.is_none(), "the line was shown twice at residual {vol:.2}");
+                shown = Some((b, speaking));
+            }
+        }
+        println!(
+            "[measured] residual {vol:.2} dBFS: first tainted discard at {:?} s, line shown at {:?} s, Rich audible until {:.3} s",
+            discarded_at.map(|f| frames_to_secs(f as u32)),
+            shown.map(|(f, _)| frames_to_secs(f as u32)),
+            frames_to_secs((last + 1) as u32)
+        );
+        let discarded = discarded_at.expect("premise: Rich's echo raised no tainted discard on this recording");
+        let (at, audible) = shown.expect("the owed line was never shown");
+        assert!(!audible, "the line was shown while Rich was audible, at frame {at}, residual {vol:.2}");
+        assert!(at > last + 1, "the line was shown at frame {at}, before Rich's last audible frame {}", last + 1);
+        assert!(at > discarded);
+    }
+}
