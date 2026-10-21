@@ -94,14 +94,13 @@ fn an_unrelated_or_redirected_directory_is_never_adopted() {
 }
 
 #[test]
-fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child() {
+fn child_configuration_is_explicit() {
     let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let mut command = std::process::Command::new("/fictional/provider");
     command.env("RICHOS_PROJECTS_DIR", "/fictional/terminal-context").env("RICHOS_SESSIONS_DIR", "/fictional/terminal-sessions").env("LORO_CORPUS", "/fictional/private-corpus").env("NODE_OPTIONS", "--require /fictional/private.js")
         .env("RICHOS_APP_READ_ROOTS", "[\"/fictional/other-company\"]");
     profile.configure(&mut command, Path::new("/fictional/provider"), "fictional-session", &f.0.join("scope.json"));
     let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
-    assert_eq!(environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"].as_deref(), Some("1"));
     assert_eq!(environment["RICHOS_ENTITY_ROOT"].as_deref(), profile.coordination.to_str());
     assert_eq!(environment["STALL_WATCH_STATE_DIR"].as_deref(), profile.state.join("stall-watch").to_str());
     assert!(!environment["PATH"].as_ref().unwrap().contains("homebrew"));
@@ -835,6 +834,40 @@ fn the_login_environment_is_the_login_shells_and_a_slow_shell_times_out() {
     let began = std::time::Instant::now();
     assert!(read(&slow, &[], std::time::Duration::from_secs(1)).is_err());
     assert!(began.elapsed() < std::time::Duration::from_secs(10), "the read waited {:?}", began.elapsed());
+}
+
+// =======================================================================================
+// AUTO-MEMORY — build plan 2026-10-21, item 10
+// =======================================================================================
+
+/// Rich and Stu keep auto-memory as the user's terminal does, in one folder in the app's data,
+/// and it is the same folder on every Claude account, so a switch keeps what they remembered.
+#[test]
+fn auto_memory_is_on_in_one_folder_whichever_claude_account_the_lease_runs_on() {
+    use richos_core::claude_accounts::Account;
+    let f = Scratch::new();
+    let mut profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    let memory = f.0.join("memory");
+    assert!(memory.is_dir(), "the memory folder exists before the first lease");
+    let lease = |profile: &EngineProfile| {
+        let mut command = std::process::Command::new("/fictional/provider");
+        command.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+        profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+        let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        let settings: serde_json::Value = serde_json::from_str(&args[args.iter().position(|a| a == "--settings").unwrap() + 1]).unwrap();
+        let disabled = command.get_envs().find(|(k, _)| *k == "CLAUDE_CODE_DISABLE_AUTO_MEMORY").map(|(_, v)| v.map(|v| v.to_owned()));
+        (settings, disabled)
+    };
+    let mut seen = Vec::new();
+    for account in [Account { id: "1".into(), label: "Home".into(), folder: None },
+                    Account { id: "2".into(), label: "Work".into(), folder: Some(f.0.join("claude-accounts/2")) }] {
+        profile.claude_account = Some(account);
+        let (settings, disabled) = lease(&profile);
+        assert_eq!(settings["autoMemoryEnabled"], true);
+        assert_eq!(disabled, Some(None), "an inherited switch-off is removed");
+        seen.push(settings["autoMemoryDirectory"].as_str().unwrap().to_string());
+    }
+    assert_eq!(seen, [memory.display().to_string(), memory.display().to_string()]);
 }
 
 // =======================================================================================
