@@ -1245,10 +1245,15 @@ def prepare(scope_path, scope, args):
         # assignment (plan §3). A REVIEWER's brief starts one step earlier, with the user's own
         # turn verbatim (second review, slice 4): the brief below is the coordinator's account of
         # the job, and the reviewer judges the work against what the user actually said.
+        # The instructions themselves never pass through Stu: Stu reads and resubmits this
+        # brief, so it holds INSTRUCTIONS.PLACEHOLDER, and the section waits beside the receipt
+        # for `dispatch_intent` to put in its place once the dispatch is admitted.
         duty = DUTIES[role].read_text(encoding="utf-8").strip()
         head = reviewer_words_block(words) + "\n\n" if role == "reviewer" else ""
-        body = head + duty + "\n\n" + (instructions + "\n\n" if instructions else "") + brief
+        body = head + duty + "\n\n" + (INSTRUCTIONS.PLACEHOLDER + "\n\n" if instructions else "") + brief
         with os.fdopen(fd,"w") as out: out.write(body); out.flush(); os.fsync(out.fileno())
+        if instructions:
+            save_words(root / (identity + ".instructions"), instructions)
         if words is not None and role != "consult":
             # The same words beside the receipt, for the app's own review-watch: a mid-job
             # review of this worker reads them from here (review_watch.py, app mode).
@@ -1418,9 +1423,18 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
             record["pierce_refused"] = True
             save(path,record)
             return
+        # The repository's own instruction file joins the prompt here, and only here: the
+        # admitted call's input is what the hook hands Agent as `updatedInput`, so the worker
+        # gets the file in full and Stu, who prepared and submitted the call, never read it.
+        kept = root / (record["id"] + ".instructions")
+        if kept.is_file() and not kept.is_symlink():
+            if ti["prompt"].count(INSTRUCTIONS.PLACEHOLDER) != 1:
+                raise ValueError("the prepared brief has lost the place for the repository's own instructions")
+            ti = {**ti, "prompt": ti["prompt"].replace(INSTRUCTIONS.PLACEHOLDER, kept.read_text(encoding="utf-8"), 1)}
         record.pop("pierce_refused", None)
         record.update(status="dispatching",tool_use_id=payload["tool_use_id"])
         save(path,record)
+        payload["tool_input"] = ti
 
 
 def validate_shell_target(payload):

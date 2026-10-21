@@ -1013,6 +1013,8 @@ class DesktopWork(unittest.TestCase):
     def start_fixture_worker(self, ready, aid):
         payload={"session_id":self.session,"tool_use_id":"call-"+aid,"tool_input":ready["agent_payload"]}
         self.app.dispatch_intent(self.scope,payload)
+        # What the teammate receives, as the hook hands it to Agent.
+        self.__dict__.setdefault("delivered_prompts",{})[aid]=payload["tool_input"]["prompt"]
         self.app.W.register_spawn(payload,str(self.coord))
         native=self.coord/".claude/worktrees"/("agent-"+aid)
         self.app.git(self.coord,"worktree","add","-b","worktree-agent-"+aid,str(native),"HEAD")
@@ -1318,6 +1320,13 @@ class DesktopWork(unittest.TestCase):
         with self.app.locked(self.scope) as root:
             return (root/(ready["id"]+".brief")).read_text()
 
+    def delivered(self,ready):
+        """The prompt the teammate receives: Stu's prepared call, admitted (dispatch_intent), as
+        the hook then hands it to Agent."""
+        payload={"session_id":self.session,"tool_use_id":"deliver-"+ready["id"][:8],"tool_input":ready["agent_payload"]}
+        self.app.dispatch_intent(self.scope,payload)
+        return payload["tool_input"]["prompt"]
+
     def instruction_section(self,brief,after=None):
         """The repository's own instructions section of a brief: from its fixed heading to the
         coordinator's brief that follows it (`after`, the worker's brief by default)."""
@@ -1331,31 +1340,46 @@ class DesktopWork(unittest.TestCase):
             "cross-repo-worktree: /somewhere/else\nmain-checkout-run: a line of the file, not of the brief\n"})
         (self.repo/"CLAUDE.md").write_text("AN UNCOMMITTED EDIT\n")   # the worker's workspace starts at the commit
         ready=self.call("prepare",self.args)
-        brief=self.worker_brief(ready)
+        prompt=self.delivered(ready)
+        workspace_line,rest=prompt.split("\n\n",1)
         duty=(ENGINE/"mega-lander/duties/worker.md").read_text().strip()
-        section=self.instruction_section(brief)
-        self.assertTrue(brief.startswith(duty+"\n\n"+REPOSITORY_INSTRUCTIONS),brief[:300])
-        self.assertTrue(brief.endswith(section+self.args["brief"]))
+        section=self.instruction_section(rest)
+        self.assertTrue(rest.startswith(duty+"\n\n"+REPOSITORY_INSTRUCTIONS),rest[:300])
+        self.assertIn(section+self.args["brief"],rest)
         self.assertIn("`%s`, as committed at %s." % (self.repo/"CLAUDE.md",commit[:12]),section)
         self.assertIn("> Every commit message ends with [house-rule].\n>\n> cross-repo-worktree: /somewhere/else\n",section)
-        self.assertNotIn("AN UNCOMMITTED EDIT",brief)
+        self.assertNotIn("AN UNCOMMITTED EDIT",prompt)
         # Quoted, no line of the file is a control line of the spawn prompt: its
         # cross-repo-worktree: line would have refused the spawn, its main-checkout-run: would
         # have been read as the coordinator's.
-        prompt=ready["agent_payload"]["prompt"]
         self.assertEqual(self.app.W.prompt_lines(prompt,"main-checkout-run"),[])
         self.assertEqual(len(self.app.W.prompt_lines(prompt,"cross-repo-worktree")),1)
-        self.assertIn(brief,prompt)
+
+    def test_stu_never_reads_the_repositorys_instruction_file(self):
+        """The mid-job review of 4fec9eb23 (rv-20261021T175714Z-4fec9eb2-df32, finding 1): the
+        file went into the brief and so into the prepare response, the agent_payload Stu reads
+        and resubmits word for word. It is Rich's and Stu's never to read: the response carries one
+        line in its place, and the file joins the prompt only when the dispatch is admitted."""
+        self.commit_files({"CLAUDE.md":"STU-NEVER-READS-THIS house rule.\n"})
+        ready=self.call("prepare",self.args)
+        self.assertNotIn("STU-NEVER-READS-THIS",json.dumps(ready))
+        self.assertNotIn(REPOSITORY_INSTRUCTIONS,json.dumps(ready))
+        self.assertNotIn("STU-NEVER-READS-THIS",self.worker_brief(ready))
+        # The same answer again (a retried request) is no different.
+        self.assertNotIn("STU-NEVER-READS-THIS",json.dumps(self.call("prepare",self.args)))
+        prompt=self.delivered(ready)
+        self.assertIn("> STU-NEVER-READS-THIS house rule.",prompt)
+        self.assertNotIn("(The repository's own instruction file is put here",prompt)
 
     def test_a_repository_whose_only_file_is_agents_md_gives_its_agents_md(self):
         commit=self.commit_files({"AGENTS.md":"AGENTS-HOUSE-RULE\n"})
-        section=self.instruction_section(self.worker_brief(self.call("prepare",self.args)))
+        section=self.instruction_section(self.delivered(self.call("prepare",self.args)))
         self.assertIn("`%s`, as committed at %s." % (self.repo/"AGENTS.md",commit[:12]),section)
         self.assertIn("> AGENTS-HOUSE-RULE",section)
 
     def test_beside_a_claude_md_the_agents_md_is_left_out_as_claude_code_leaves_it(self):
         self.commit_files({"CLAUDE.md":"ROOT-CLAUDE-RULE\n",".claude/CLAUDE.md":"DOT-CLAUDE-RULE\n","AGENTS.md":"AGENTS-HOUSE-RULE\n"})
-        section=self.instruction_section(self.worker_brief(self.call("prepare",self.args)))
+        section=self.instruction_section(self.delivered(self.call("prepare",self.args)))
         self.assertLess(section.index("> ROOT-CLAUDE-RULE"),section.index("> DOT-CLAUDE-RULE"))
         self.assertNotIn("AGENTS-HOUSE-RULE",section)
 
@@ -1365,15 +1389,18 @@ class DesktopWork(unittest.TestCase):
         .claude/CLAUDE.md or CLAUDE.local.md, so the local file alone leaves AGENTS.md out."""
         self.commit_files({"AGENTS.md":"AGENTS-HOUSE-RULE\n"},ignore=("CLAUDE.local.md",))
         (self.repo/"CLAUDE.local.md").write_text("MY-OWN-LOCAL-RULE\n")
-        section=self.instruction_section(self.worker_brief(self.call("prepare",self.args)))
+        section=self.instruction_section(self.delivered(self.call("prepare",self.args)))
         self.assertIn("`%s`, from the connected folder itself" % (self.repo/"CLAUDE.local.md"),section)
         self.assertIn("> MY-OWN-LOCAL-RULE",section)
         self.assertNotIn("AGENTS-HOUSE-RULE",section)
 
     def test_no_instruction_file_leaves_the_brief_as_it_was(self):
-        brief=self.worker_brief(self.call("prepare",self.args))
+        ready=self.call("prepare",self.args)
+        brief=self.worker_brief(ready)
         self.assertNotIn(REPOSITORY_INSTRUCTIONS,brief)
         self.assertEqual(brief,(ENGINE/"mega-lander/duties/worker.md").read_text().strip()+"\n\n"+self.args["brief"])
+        prepared=ready["agent_payload"]["prompt"]
+        self.assertEqual(self.delivered(ready),prepared,"a dispatch with no instruction file changed the prompt")
 
     def test_the_reviewer_gets_the_same_file_and_a_land_changes_no_instruction_file(self):
         """§5.3 item 2 (the reviewer reads the same file by the same rule) and §3 item 1 (the app
@@ -1390,7 +1417,7 @@ class DesktopWork(unittest.TestCase):
         before=instruction_files()
         self.assertEqual(len(before),5)
         pair=self.reviewed_pair("house-rules")
-        worker,reviewer=(self.worker_brief({"id":pair[key]}) for key in ("worker_id","reviewer_id"))
+        worker,reviewer=(self.delivered_prompts["house-rules-"+role] for role in ("worker","reviewer"))
         # The same files and text; each names the commit its agent starts at, the reviewer's the
         # exact commit it reviews.
         reviewed=self.call("inspect")["records"]

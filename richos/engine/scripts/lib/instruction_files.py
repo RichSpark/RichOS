@@ -14,6 +14,9 @@ Code 2.1.306), for a session started at the repository's root:
 A file is given in full, never cut: half a rule is a wrong rule. `@path` imports and a
 subfolder's own file are the worker's to read, as its duty says; they are not expanded here.
 
+NEVER THROUGH STU. The section is kept beside the work receipt and joins the worker's prompt only
+when its dispatch is admitted; the payload Stu reads carries PLACEHOLDER in its place.
+
 WHERE EACH FILE IS READ. The committed files come from the commit the agent starts at (a
 worker's workspace is a `git worktree` at that commit, so it is the file the agent can open).
 `CLAUDE.local.md` is normally gitignored and so is not in a workspace at all; it is read from
@@ -24,6 +27,10 @@ import os
 import subprocess
 
 HEADING = "## The repository's own instructions"
+# Where the section goes in a brief Stu dispatches. Stu reads and resubmits the prepared payload,
+# and the file is never Rich's or Stu's to read, so the payload carries this line instead; the
+# app puts the section in its place when the dispatch is admitted (app.py `dispatch_intent`).
+PLACEHOLDER = "(The repository's own instruction file is put here when the teammate starts.)"
 CLAUDE_FILES = ("CLAUDE.md", ".claude/CLAUDE.md")
 LOCAL_FILE = "CLAUDE.local.md"
 AGENTS_FILES = ("AGENTS.md", ".claude/AGENTS.md")
