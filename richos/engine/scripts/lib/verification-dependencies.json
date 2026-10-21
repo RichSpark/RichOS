@@ -5922,7 +5922,7 @@
     },
     "ass-kicker/tests/stated-actions.mutation.sh": {
       "source": "ass-kicker/tests/stated-actions.mutation.sh",
-      "sha256": "46c241edf2d080dbfdbe113dd17aa30c787ec59cf74a98b5dccadf9d7cb66162",
+      "sha256": "59fdeccbd96fb0cd94e1ed4aff864409314e8396d3cdcf2980646738d7de7973",
       "evidence": "Control and finite source mutants execute the same fixed stated-actions test, which recreates private entity config. The one added transcript reader reads generated JSON only. Replacement operands are source data; helper copies are fixed. The fixed helper copies include the corpus replay tool that the suite's case R29 runs.",
       "keys": [],
       "edges": [
@@ -16854,7 +16854,7 @@
       "sources": {
         "ass-kicker/guard-stated-actions.py": "c4e8bcba4f251a5adcb5b3f6cfe1094983b08d25cac5c88dc1401119ba8c13d6",
         "ass-kicker/tests/guard-stated-actions.test.sh": "9b963e019ed70f7a3e2502a14af9ca21068d84a7c14aee4dc8c10f1d353060c9",
-        "ass-kicker/tests/stated-actions.mutation.sh": "46c241edf2d080dbfdbe113dd17aa30c787ec59cf74a98b5dccadf9d7cb66162",
+        "ass-kicker/tests/stated-actions.mutation.sh": "59fdeccbd96fb0cd94e1ed4aff864409314e8396d3cdcf2980646738d7de7973",
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/tests/workspaces-e2e.test.sh": "d975cd25ffc05a4eff5f0ebd2d9bb9377ee8551eda6ad2571da77c275dd0c92c",
         "mega-lander/tests/workspaces.test.py": "f24c37fe45938759805b920d9e62bfa2bdc5b7fd1d41f5a8f70662e55f17c1e8",

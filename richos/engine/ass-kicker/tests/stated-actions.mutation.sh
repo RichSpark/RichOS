@@ -354,9 +354,9 @@ mutant arm3-memory-is-a-record "R7." "$P" \
     "a note in the private memory directory is not a record; §97 and the CEO both say so."
 
 mutant arm3-private-notes-not-honored "R8." "$P" \
-    '        if (memory and PRIVATE_NOTES_RE.search(sentence)) or \' \
-    '        if False or \' \
-    "'in my private notes' is the truth told plainly, and the brief lets it through."
+    '        if kind and PRIVATE_NOTES_RE.search(s) and not RULE_NOUN_RE.search(s):' \
+    '        if False and kind and PRIVATE_NOTES_RE.search(s) and not RULE_NOUN_RE.search(s):' \
+    "a private-notes claim is a note claim; only a committed repository file backs it (CEO 2026-10-21)."
 
 mutant arm3-notes-pointer-ignored "R5b." "$P" \
     '        if NOTES_POINTER_RE.search(sentence):' \
