@@ -133,8 +133,16 @@ class Walk(cw.CommandWalk):
         sent = self.send(f'{marker} ' + JOB.format(folder=shlex.quote(self.company)))
         pressed, record = [0], None
 
+        def mine():
+            # `thread` is known for Acme; Beta's is minted by the send, so it is the new Beta one.
+            if thread:
+                return thread
+            fresh = [t for t in self.threads() if t.get('entity_id') == self.facts.get('beta_entity')
+                     and t['thread_id'] not in self.facts.get('threads_before_beta_job', [])]
+            return fresh[0]['thread_id'] if fresh else None
+
         def pick():
-            rows = [r for r in self.records() if r.get('thread_id') == thread and r.get('registered_at_ms', 0) >= sent[0]]
+            rows = [r for r in self.records() if r.get('thread_id') == mine() and r.get('registered_at_ms', 0) >= sent[0]]
             return max(rows, key=lambda r: r.get('registered_at_ms', 0)) if rows else None
 
         # A one-line command may be answered by the conversation itself, with no assignment
@@ -150,13 +158,13 @@ class Walk(cw.CommandWalk):
             record = self.until_closed(pick, max(end - time.monotonic(), 1), pressed)
         record = self.settled_read(record) if record and record.get('state') not in OPEN else record
         commands = self.job_commands(marker)
-        if not record and ran(commands):
-            evidence = {'thread': thread, 'repository_head': {'short': short, 'subject': subject},
+        if not record and ran(commands) and mine():
+            evidence = {'thread': mine(), 'repository_head': {'short': short, 'subject': subject},
                         'assignment': None, 'answered_in_conversation': True, 'back_end_bash': commands}
             (self.out / f'{label}-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
-            return {'thread': thread, 'state': 'answered in the conversation', 'head': f'{short} {subject}',
+            return {'thread': mine(), 'state': 'answered in the conversation', 'head': f'{short} {subject}',
                     'approvals_pressed': 0}
-        evidence = {'thread': thread, 'repository_head': {'short': short, 'subject': subject},
+        evidence = {'thread': mine(), 'repository_head': {'short': short, 'subject': subject},
                     'approvals_pressed': pressed[0], 'assignment': record, 'back_end_bash': commands}
         (self.out / f'{label}-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
         if not record:
@@ -166,7 +174,7 @@ class Walk(cw.CommandWalk):
         failures = cw.verdict(record, short, subject, commands)
         if failures:
             raise StepFailed('; '.join(failures))
-        return {'thread': thread, 'state': record['state'], 'notice': record['notices'][-1]['text'],
+        return {'thread': mine(), 'state': record['state'], 'notice': record['notices'][-1]['text'],
                 'head': f'{short} {subject}', 'approvals_pressed': pressed[0]}
 
     def job_acme(self):
@@ -204,16 +212,19 @@ class Walk(cw.CommandWalk):
         self.type_into('Beta', '--role', 'AXTextField', '--title', "What's the company called?")
         self.type_into(self.beta, '--role', 'AXTextField', '--title', 'Its folder on this Mac')
         self.press('Add this company')
+        # A company's first conversation is minted by its first send (`create_thread_in`, main.js), so
+        # the proof that Beta exists is the registry row; its thread is read at the job (run of 11:20Z).
         end = time.monotonic() + 60
         while time.monotonic() < end:
-            fresh = [t for t in self.threads() if t['thread_id'] not in before]
-            if fresh:
-                self.facts['beta_thread'] = fresh[0]['thread_id']
-                self.facts['beta_entity'] = fresh[0].get('entity_id')
+            rows = {e['id']: e for e in self.registry().get('entities', [])}
+            if 'beta' in rows:
+                self.facts['beta_entity'] = 'beta'
+                self.facts['threads_before_beta_job'] = sorted(before)
                 self.save()
-                return {'thread': self.facts['beta_thread'], 'entity': self.facts['beta_entity']}
+                time.sleep(3)
+                return {'entity': 'beta', 'roots': rows['beta'].get('roots')}
             time.sleep(1)
-        raise StepFailed('no conversation was created after Beta was added: ' + json.dumps(self.registry())[:600])
+        raise StepFailed('Beta was not registered within 60 s: ' + json.dumps(self.registry())[:600])
 
     def open_sheet(self, company):
         """Settings > Connected folders, with `company` chosen. The settings row is a button
@@ -294,10 +305,9 @@ class Walk(cw.CommandWalk):
         return {'acme': acme, 'beta': beta, 'screen': shared}
 
     def job_beta(self):
-        thread = self.facts.get('beta_thread')
-        if not thread:
-            raise StepFailed('second-company must have run (no Beta thread on record)')
-        return self.job(thread, 'beta')
+        if not self.facts.get('beta_entity'):
+            raise StepFailed('second-company must have run (no Beta on record)')
+        return self.job(None, 'beta')
 
 
 def main():
