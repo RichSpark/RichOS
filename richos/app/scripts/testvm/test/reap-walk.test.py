@@ -237,22 +237,31 @@ class Enter(unittest.TestCase):
         walk.adopt.time.sleep, walk.adopt.time.monotonic = self.sleep, self.mono
         walk.time.sleep = self.rsleep
 
+    # The finds, in order: the home door, the conversation's composer, the conversation's
+    # title in its crumb, and (only when another conversation opened) its row.
+
+    def test_the_door_opens_the_conversation_and_no_row_is_pressed(self):
+        """walk-5a4e3ff2c768: the door opened "Acme / Onboarding" with the sidebar closed."""
+        w = self.walk_on([True, True, True])
+        w.enter()
+        self.assertEqual(w.pressed, ['Talk to Rich'])
+        self.assertEqual(w.calls[-1], ('find', 'Onboarding'))
+
+    def test_the_home_door_is_waited_for_when_home_is_not_drawn_yet(self):
+        """walk-45ed47dcaab0: checked once before home was drawn, the door was skipped and
+        the walk waited on the home screen for a conversation row."""
+        w = self.walk_on([False, False, True, True, True])
+        w.enter()
+        self.assertEqual(w.pressed, ['Talk to Rich'])
+        self.assertEqual(w.calls[:3], [('find', 'Talk to Rich')] * 3)
+
     def test_an_unanswered_read_of_the_row_is_asked_again_before_the_press(self):
         unanswered = walk.StepFailed('command failed (1): ax.sh find\n{"error": "unresponsive", "detail": '
                                      '"did not answer for AXWindows (kAXErrorCannotComplete)"}')
-        w = self.walk_on([True, unanswered, True])
+        w = self.walk_on([True, True, False, unanswered, True])
         w.enter()
         self.assertEqual(w.pressed, ['Talk to Rich', 'Onboarding'])
         self.assertEqual(w.calls[-2:], [('find', 'Onboarding'), ('click', 'Onboarding')])
-
-    def test_the_home_door_is_waited_for_when_home_is_not_drawn_yet(self):
-        """esc-20261021T213902Z-b513879e: checked once before home was drawn, the door was
-        skipped and the walk waited on the home screen for a conversation row."""
-        w = self.walk_on([False, False, True, True])
-        w.enter()
-        self.assertEqual(w.pressed, ['Talk to Rich', 'Onboarding'])
-        self.assertEqual([c for c in w.calls if c[0] == 'find'][:3],
-                         [('find', 'Talk to Rich')] * 3)
 
 
 if __name__ == '__main__':

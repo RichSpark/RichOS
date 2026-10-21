@@ -317,10 +317,15 @@ class Walk(adopt.Walk):
         # esc-20261021T213902Z-b513879e).
         self.wait_for('Talk to Rich', seconds=90)
         self.press('Talk to Rich')
-        time.sleep(2)
+        # The door opens the company's last conversation itself: walk-5a4e3ff2c768 showed
+        # "Acme / Onboarding" with its composer and the sidebar closed, so the row the walk then
+        # waited for was not on screen. The row is pressed only when the door opened another one.
+        self.wait_for('Message to Rich', role='AXTextArea')
+        title = self.facts.get('thread_title') or 'Running'
+        if self.present(title, role='AXStaticText'):
+            return
         # Waited for before it is pressed: a press is never asked again (axwait.py), and right
         # after a relaunch the app may not answer one read (esc-20261021T205850Z-48c70d7d).
-        title = self.facts.get('thread_title') or 'Running'
         self.wait_for(title)
         self.press(title)
 
