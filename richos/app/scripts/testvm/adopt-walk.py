@@ -130,6 +130,73 @@ class Walk:
         self.facts['built_from'] = built
         return {'built_from': built}
 
+    # --- connecting a folder: the ONE copy every walk uses -----------------------------------
+    def keys(self, applescript):
+        command([HERE / 'ax.sh', self.vm, applescript], 90)
+
+    def chooser_open(self):
+        """The system folder chooser is up: an AXSheet, or its own Open button (folders-walk.py)."""
+        for args in (('--role', 'AXSheet'), ('--title', 'Open', '--role', 'AXButton')):
+            try:
+                if [n for n in self.ax('find', *args) if 'x' in n and not n.get('meta')]:
+                    return True
+            except StepFailed as exc:
+                if 'notfound' not in str(exc) and 'nothing matched' not in str(exc):
+                    raise
+        return False
+
+    def wait_chooser(self, want, seconds=15):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if self.chooser_open() == want:
+                return True
+            time.sleep(1)
+        return False
+
+    def connect_folder(self):
+        """Settings -> "Connected folders (repositories)" -> the company folder, the way the app
+        asks for it since round 27: the row is a plain button (settings-button.js
+        buildDisclosureRow: "no `menuitem` role"), so pressing it as an AXMenuItem waits out the
+        guest's 20 s accessibility deadline (exit 124, guest_deadline). The sheet pre-selects the
+        only company and its folder field opens the system folder chooser on a click, so a typed
+        path never reaches it: Go to folder, the path, Return, Open, then Connect folder. Waits up
+        to 30 s for the registry to name the folder, closes the sheet, returns the connected paths."""
+        self.press('Settings', role='AXPopUpButton')
+        self.press('Connected folders')
+        self.wait_for('Company', role='AXPopUpButton')
+        time.sleep(2)
+        fields = [n for n in self.ax('find', '--title', 'Project folder location', '--role', 'AXTextField',
+                                     '--contains') if 'x' in n and not n.get('meta')]
+        if not fields:
+            raise StepFailed('no "Project folder location" field on the Connected folders sheet')
+        f = fields[0]
+        command([HERE / 'ax.sh', self.vm, 'click', '--at', '%d,%d' % (f['x'] + f['w'] / 2, f['y'] + f['h'] / 2)], 90)
+        if not self.wait_chooser(True):
+            self.ax('click', '--title', 'Project folder location', '--role', 'AXTextField', '--contains', '--first')
+            if not self.wait_chooser(True):
+                raise StepFailed('the folder field did not open the folder chooser')
+        self.keys('tell application "System Events" to keystroke "g" using {command down, shift down}')
+        time.sleep(2)
+        self.keys('tell application "System Events" to keystroke ' + json.dumps(self.company))
+        time.sleep(1)
+        self.keys('tell application "System Events" to key code 36')
+        time.sleep(2.5)
+        self.ax('click', '--title', 'Open', '--role', 'AXButton', '--in', 'dialog', '--first')
+        if not self.wait_chooser(False):
+            raise StepFailed('the folder chooser did not close after Open')
+        time.sleep(1)
+        self.ax('click', '--title', 'Connect folder', '--role', 'AXButton', '--in', 'dialog', '--first')
+        registry = self.data + '/entities.json'
+        end, value = time.monotonic() + 30, {}
+        while time.monotonic() < end:
+            value = json.loads(guest(self.vm, 'cat ' + shlex.quote(registry)))
+            connected = [r for e in value.get('entities', []) for r in e.get('connected_repositories', [])]
+            if connected:
+                self.press('Close')
+                return connected
+            time.sleep(1)
+        raise StepFailed('the repository was not connected within 30 s: ' + json.dumps(value)[:400])
+
     def decline_first_run_sheets(self, tries=3, seconds=45):
         """Press Not now on each sheet a first run puts up before the company question (main.js,
         WHAT A FIRST RUN ASKS: the setup sheet, then the memory question), one at a time, until

@@ -145,25 +145,10 @@ OPEN = {'registered', 'preparing', 'running', 'blocked', 'waiting-for-screen', '
 
 class CommandWalk(adopt_walk.Walk):
     def connect(self):
-        self.press('Settings', role='AXPopUpButton')
-        self.press('Connected folders', role='AXMenuItem')
-        self.wait_for('Company', role='AXPopUpButton')
-        self.ax('click', '--title', 'Company', '--role', 'AXPopUpButton', '--first')
-        self.ax('click', '--title', 'Acme', '--role', 'AXMenuItem', '--first')
-        self.type_into(self.company, '--role', 'AXTextField', '--title', 'Project folder location')
-        self.press('Connect folder')
-        registry = self.data + '/entities.json'
-        end = time.monotonic() + 30
-        while time.monotonic() < end:
-            value = json.loads(guest(self.vm, 'cat ' + shlex.quote(registry)))
-            connected = [p for e in value.get('entities', []) for p in e.get('connected_repositories', [])]
-            if connected:
-                self.press('Close')
-                self.facts['connected'] = connected
-                self.save()
-                return {'connected': connected}
-            time.sleep(1)
-        raise StepFailed('the repository was not connected within 30 s: ' + json.dumps(value))
+        connected = self.connect_folder()
+        self.facts['connected'] = connected
+        self.save()
+        return {'connected': connected}
 
     def task(self):
         before = self.clock()
