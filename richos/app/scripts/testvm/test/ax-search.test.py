@@ -400,6 +400,47 @@ class MenuBar(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# GuestHost.frontmost_pid: WindowServer's front app, never the system-wide AX element
+# ---------------------------------------------------------------------------
+class Frontmost(unittest.TestCase):
+    """walk-efb859fa9378: from the SSH session the system-wide element's AXFocusedApplication
+    answered kAXErrorCannotComplete on 60 of 60 reads while `lsappinfo` named the app, so every
+    focus and type refused focusfailed (walk-db710c72559c). `lsappinfo` is a stub on PATH here,
+    printing what the guest printed."""
+
+    class SystemWideNeverAnswers:
+        def get(self, el, attr):
+            raise TimeoutError('did not answer for AXFocusedApplication (kAXErrorCannotComplete)')
+
+        def system_wide(self):
+            return object()
+
+        def pid_of(self, el):
+            raise AssertionError('no pid without an element')
+
+    def frontmost(self, front_out, info_out):
+        import os, tempfile
+        with tempfile.TemporaryDirectory(prefix='ax-front-') as d:
+            stub = Path(d) / 'lsappinfo'
+            stub.write_text('#!/bin/sh\ncase "$1" in front) printf %%s %s ;; info) printf %%s %s ;; esac\n'
+                            % (repr(front_out), repr(info_out)))
+            stub.chmod(0o700)
+            saved = os.environ['PATH']
+            os.environ['PATH'] = d + os.pathsep + saved
+            try:
+                return ax.GuestHost().frontmost_pid(self.SystemWideNeverAnswers())
+            finally:
+                os.environ['PATH'] = saved
+
+    def test_the_front_app_comes_from_lsappinfo(self):
+        self.assertEqual(self.frontmost('ASN:0x0-0x2b02b:', '"pid"=1102'), 1102)
+
+    def test_no_front_app_is_none_never_a_guess(self):
+        self.assertIsNone(self.frontmost('', ''))
+        self.assertIsNone(self.frontmost('ASN:0x0-0x2b02b:', 'no such application'))
+
+
+# ---------------------------------------------------------------------------
 # The AX backend's CoreFoundation conversions, on real CF objects (macOS only)
 # ---------------------------------------------------------------------------
 @unittest.skipUnless(sys.platform == 'darwin', 'CoreFoundation is macOS only')

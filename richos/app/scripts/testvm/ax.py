@@ -40,6 +40,7 @@ point (`click --at`), one Apple Event each, both refused unless the target is fr
 import ctypes
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -468,12 +469,10 @@ class AX:
             f.restype, f.argtypes = res, args
         for fn, res, args in (
             ('AXUIElementCreateApplication', vp, [c_int]),
-            ('AXUIElementCreateSystemWide', vp, []),
             ('AXUIElementCopyAttributeValue', c_int, [vp, vp, ctypes.POINTER(vp)]),
             ('AXUIElementSetAttributeValue', c_int, [vp, vp, vp]),
             ('AXUIElementCopyActionNames', c_int, [vp, ctypes.POINTER(vp)]),
             ('AXUIElementPerformAction', c_int, [vp, vp]),
-            ('AXUIElementGetPid', c_int, [vp, ctypes.POINTER(c_int)]),
             ('AXUIElementGetTypeID', ctypes.c_ulong, []),
             ('AXValueGetTypeID', ctypes.c_ulong, []),
             ('AXValueGetType', c_int, [vp]),
@@ -561,14 +560,6 @@ class AX:
         if err:
             raise RuntimeError('%s failed (AXError %d)' % (action, err))
 
-    def pid_of(self, el):
-        pid = ctypes.c_int()
-        return pid.value if self.AS.AXUIElementGetPid(el.ref, ctypes.byref(pid)) == 0 else None
-
-    def system_wide(self):
-        return Element(self.AS.AXUIElementCreateSystemWide())
-
-
 class Element:
     __slots__ = ('ref',)
 
@@ -601,8 +592,18 @@ class GuestHost:
         return any(ax.get(ax.application(int(p)), 'AXWindows') for p in found)
 
     def frontmost_pid(self, ax):
-        focused = ax.get(ax.system_wide(), 'AXFocusedApplication')
-        return ax.pid_of(focused) if focused is not None else None
+        """The front application as WindowServer orders them (`lsappinfo front`): where a
+        keystroke or a click at a point lands. Not the system-wide element's AXFocusedApplication,
+        which, read from the SSH session, answered kAXErrorCannotComplete on 60 of 60 reads in
+        5.3 s while lsappinfo and System Events both named the app (walk-efb859fa9378), so every
+        focus and type refused focusfailed (walk-db710c72559c)."""
+        asn = subprocess.run(['lsappinfo', 'front'], capture_output=True, text=True, timeout=5).stdout.strip()
+        if not asn:
+            return None
+        info = subprocess.run(['lsappinfo', 'info', '-only', 'pid', asn], capture_output=True, text=True,
+                              timeout=5).stdout
+        found = re.search(r'"pid"\s*=\s*(\d+)', info)
+        return int(found.group(1)) if found else None
 
     def _osascript(self, script):
         r = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
