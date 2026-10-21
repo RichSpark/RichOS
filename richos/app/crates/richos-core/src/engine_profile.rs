@@ -325,25 +325,28 @@ impl EngineProfile {
         render_team(&self.engine,data,&self.coordination,&self.plugin,true)
     }
 
-    /// The app's lease profile: this install's machine settings and the user's own settings
-    /// files in the central folder (`company::install_central_root`).
+    /// The app's lease profile: this install's machine settings, the user's own settings
+    /// files in the central folder (`company::install_central_root`) and the user's login
+    /// shell environment (`login_environment::current`).
     pub fn prepare(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result<Self, RuntimeError> {
         Self::prepare_for(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?,
-            crate::company::install_central_root())
+            crate::company::install_central_root(), Some(crate::login_environment::current()))
     }
 
     /// A profile that reads no user settings file, for a caller that names its own machine
     /// settings (tests).
     pub fn prepare_with_settings(engine: &Path, data: &Path, runtime: EngineRuntime, machine_settings: crate::machine_settings::Settings) -> Result<Self, RuntimeError> {
-        Self::prepare_for(engine, data, runtime, machine_settings, None)
+        Self::prepare_for(engine, data, runtime, machine_settings, None, None)
     }
 
     /// `user_folder` is the user's central folder: on first run the shipped `rich.md` and
     /// `stu.md` and an empty `instructions.md` are copied there when the user has none, and
     /// the user's files there are read into this lease (`user_settings.rs`). `None` reads none
-    /// and starts Rich and Stu from the shipped plugin.
+    /// and starts Rich and Stu from the shipped plugin. `login` is the user's login shell
+    /// environment, which every lease and hook gets (build plan item 4); `None` adds none.
     pub fn prepare_for(engine: &Path, data: &Path, runtime: EngineRuntime, machine_settings: crate::machine_settings::Settings,
-                       user_folder: Option<PathBuf>) -> Result<Self, RuntimeError> {
+                       user_folder: Option<PathBuf>, login: Option<std::sync::Arc<std::collections::BTreeMap<String, String>>>)
+                       -> Result<Self, RuntimeError> {
         if !engine.is_absolute() || !data.is_absolute() { return Err(RuntimeError("desktop roots must be absolute".into())); }
         for name in ["scripts/app-engine-hook.py", "scripts/provider-supervisor.py", "mega-lander/app.py", "mega-lander/DESKTOP.md"] {
             if !engine.join(name).is_file() { return Err(RuntimeError(format!("missing desktop engine entry point: {name}"))); }
@@ -398,8 +401,9 @@ impl EngineProfile {
         render_team(&engine, &data, &coordination, &plugin,false)?;
         // Rich's and Stu's own files are the user's from the first run on: copied once, then
         // read into this session's plugin beside this lease's engine plugin.
-        let user = crate::user_settings::UserSetup::prepare(user_folder, &engine.join("app"),
+        let mut user = crate::user_settings::UserSetup::prepare(user_folder, &engine.join("app"),
             &plugin.with_file_name(format!("{}-standing", plugin.file_name().unwrap().to_string_lossy())))?;
+        user.login = login;
         write(&coordination.join("orchestration.config"),
               &crate::user_settings::orchestration_config(user.folder.as_deref(), &quote(&state.join("teams")))?)?;
         write(&coordination.join(".gitignore"), ".claude/\norchestration.config\napp-owned-coordination.json\n")?;
@@ -538,6 +542,14 @@ impl EngineProfile {
         format!("app={}", self.plugin.join("spawn-preflight.json").display())
     }
 
+    /// **A lease's `PATH`**: the runtime first, then the user's own `PATH` (`settings.json`'s
+    /// when it sets one, otherwise the login shell's), then the system folders and the tools
+    /// folder (`runtime::search_path_with`).
+    pub fn lease_path(&self) -> String {
+        let user = self.user.settings.env.get("PATH").or_else(|| self.user.login.as_ref()?.get("PATH"));
+        self.runtime.path_with(user.map(String::as_str))
+    }
+
     /// **The plugin Rich and Stu start from**: this lease's copy carrying the user's own
     /// `rich.md` and `stu.md` (`user_settings::standing_plugin`), or `shipped` when the
     /// profile reads no user folder.
@@ -560,9 +572,11 @@ impl EngineProfile {
     /// was Claude Code — so the brief check ran `python3 --print` and failed on every dispatch
     /// (nightly 54, 2026-10-13).
     pub fn configure(&self, command: &mut Command, provider: &Path, session: &str, scope: &Path) {
-        // The user's own environment additions (`settings.json`), under every name the app
-        // sets for itself below: those are applied after this and win.
-        command.envs(self.user.settings.env.iter().filter(|(name, _)| !crate::user_settings::app_owned(name)));
+        // The user's terminal environment (the login shell's, build plan item 4), then the
+        // user's own additions (`settings.json`), under every name the app sets for itself
+        // below: those are applied after this and win.
+        let user_env = self.user.login.iter().flat_map(|login| login.iter()).chain(self.user.settings.env.iter());
+        command.envs(user_env.filter(|(name, _)| !crate::user_settings::app_owned(name)));
         crate::runtime::isolate_interpreter_environment(command);
         // App bindings replace terminal component roots and test overrides.
         // Native transcript/session readers use the provider's selected Claude account.
@@ -616,7 +630,7 @@ impl EngineProfile {
             .args(["--permission-mode", "bypassPermissions"])
             .arg("--settings").arg(self.lease_settings().to_string())
             .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
-            .env("PATH", self.runtime.path()).env_remove("CLAUDECODE")
+            .env("PATH", self.lease_path()).env_remove("CLAUDECODE")
             // Hooks inherit the runtime-only PATH, which excludes Claude's installer path.
             .env("RICHOS_CLAUDE_BIN", provider)
             .env("PYTHONDONTWRITEBYTECODE", "1")

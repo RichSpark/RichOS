@@ -641,7 +641,7 @@ fn the_home_screen_team_is_the_users_own_teammates_by_name_and_role() {
 
 fn prepare_for_user(f: &Scratch, folder: &Path) -> EngineProfile {
     EngineProfile::prepare_for(&engine(), &f.0.join("data"), f.runtime(),
-        richos_core::machine_settings::Settings::default(), Some(folder.to_path_buf())).unwrap()
+        richos_core::machine_settings::Settings::default(), Some(folder.to_path_buf()), None).unwrap()
 }
 
 /// **The CEO, 2026-10-21: a technical user tweaks Rich's and Stu's own files by hand.** On
@@ -771,4 +771,61 @@ fn the_user_settings_digest_moves_with_the_users_files_and_nothing_else() {
     }
     for name in FILES { std::fs::remove_file(folder.join(name)).unwrap(); }
     assert_eq!(digest(&folder), empty);
+}
+
+// =======================================================================================
+// THE USER'S TERMINAL ENVIRONMENT — build plan 2026-10-21, item 4
+// =======================================================================================
+
+/// Every lease gets the login shell's environment, with the user's `PATH` after the runtime's
+/// and before the system folders; the names the app sets for itself stay the app's.
+#[test]
+fn a_lease_carries_the_users_login_environment_under_the_apps_own_names() {
+    let f = Scratch::new();
+    let login: BTreeMap<String, String> = [("FIXTURE_JAVA_HOME", "/fixture/jdk"), ("PATH", "/fixture/bin:/usr/bin:/fixture/bin"),
+        ("RICHOS_ENTITY_ROOT", "/fixture/hijack"), ("CLAUDE_CONFIG_DIR", "/fixture/other-account"), ("PYTHONPATH", "/fixture/py"),
+        ("ANTHROPIC_API_KEY", "fixture-not-a-key")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let profile = EngineProfile::prepare_for(&engine(), &f.0, f.runtime(), richos_core::machine_settings::Settings::default(),
+        None, Some(std::sync::Arc::new(login))).unwrap();
+    let mut command = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+    assert_eq!(environment["FIXTURE_JAVA_HOME"].as_deref(), Some("/fixture/jdk"));
+    let path = environment["PATH"].clone().unwrap();
+    let want = format!("{}:/fixture/bin:/usr/bin:/bin:/usr/sbin:/sbin", f.0.join("runtime/bin").display());
+    assert!(path == want || path.starts_with(&(want.clone() + ":")), "{path}");
+    assert_eq!(environment["RICHOS_ENTITY_ROOT"].as_deref(), profile.coordination.to_str());
+    assert!(!environment.contains_key("CLAUDE_CONFIG_DIR") && !environment.contains_key("ANTHROPIC_API_KEY"),
+        "which account a lease spends is the app's");
+    assert_eq!(environment.get("PYTHONPATH"), Some(&None), "the runtime's interpreters stay isolated");
+
+    // With no login environment the lease is today's: the runtime, the system folders.
+    let today = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(today.lease_path(), today.runtime.path());
+}
+
+/// The login shell is read as a login, interactive shell, between marks, and a shell that does
+/// not answer in time gives up rather than holding the lease.
+#[test]
+fn the_login_environment_is_the_login_shells_and_a_slow_shell_times_out() {
+    use richos_core::login_environment::read;
+    let f = Scratch::new();
+    // A real zsh with a fixture profile: what the user's terminal would have.
+    let zdotdir = f.0.join("zdot");
+    std::fs::create_dir_all(&zdotdir).unwrap();
+    std::fs::write(zdotdir.join(".zprofile"), "export FIXTURE_LOGIN_ONLY=from-zprofile\nexport PATH=/fixture/login/bin:$PATH\n").unwrap();
+    std::fs::write(zdotdir.join(".zshrc"), "echo interactive-noise\nexport FIXTURE_INTERACTIVE=from-zshrc\n").unwrap();
+    let found = read(Path::new("/bin/zsh"), &[("ZDOTDIR", zdotdir.to_str().unwrap())], std::time::Duration::from_secs(20)).unwrap();
+    assert_eq!(found.get("FIXTURE_LOGIN_ONLY").map(String::as_str), Some("from-zprofile"));
+    assert_eq!(found.get("FIXTURE_INTERACTIVE").map(String::as_str), Some("from-zshrc"));
+    assert!(found["PATH"].starts_with("/fixture/login/bin:"), "{}", found["PATH"]);
+    assert!(!found.contains_key("SHLVL") && !found.contains_key("_"));
+
+    let slow = f.0.join("slow-shell");
+    std::fs::write(&slow, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let began = std::time::Instant::now();
+    assert!(read(&slow, &[], std::time::Duration::from_secs(1)).is_err());
+    assert!(began.elapsed() < std::time::Duration::from_secs(10), "the read waited {:?}", began.elapsed());
 }

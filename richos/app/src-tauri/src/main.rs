@@ -2459,6 +2459,9 @@ fn main() {
         // read on the main thread.
         .register_asynchronous_uri_scheme_protocol(output_files::SCHEME, output_files::scheme_handler)
         .setup(|app| {
+            // The user's terminal environment, read once from the login shell for every lease
+            // (build plan item 4), started now so the first lease does not wait for it.
+            richos_core::login_environment::warm();
             // Durable ledger lives in the app data dir (survives restart + rotation).
             let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir());
             std::fs::create_dir_all(&data_dir).ok();

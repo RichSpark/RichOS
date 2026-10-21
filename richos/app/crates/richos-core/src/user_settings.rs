@@ -204,6 +204,8 @@ pub struct UserSetup {
     pub settings: LeaseSettings,
     /// This lease's [`standing_plugin`], or `None` to start from the shipped plugin.
     pub standing: Option<PathBuf>,
+    /// The user's login shell environment (`login_environment.rs`), or `None` for none.
+    pub login: Option<std::sync::Arc<BTreeMap<String, String>>>,
 }
 
 impl UserSetup {
@@ -213,7 +215,7 @@ impl UserSetup {
         let Some(folder) = folder else { return Ok(Self::default()) };
         provision(&folder, shipped)?;
         let standing = standing_plugin(&folder, shipped, standing)?;
-        Ok(Self { digest: Some(digest(&folder)), settings: lease_settings(&folder)?, standing: Some(standing), folder: Some(folder) })
+        Ok(Self { digest: Some(digest(&folder)), settings: lease_settings(&folder)?, standing: Some(standing), folder: Some(folder), login: None })
     }
 }
 
