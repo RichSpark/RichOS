@@ -203,6 +203,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('command_walk', HERE / 'command-walk.py')
 command_walk = importlib.util.module_from_spec(_spec)
@@ -807,7 +808,7 @@ class OutputWalk(command_walk.CommandWalk):
                 into += [n.get('desc') or n.get('title') or n.get('value') or ''
                          for n in self.ax('find', '--title', words, '--contains', '--first') if 'x' in n]
             except StepFailed as exc:
-                if not ('notfound' in str(exc) or 'nothing matched' in str(exc)):
+                if not axwait.absent(exc):
                     unread.append(f'{words}: {str(exc)[-200:]}')
             except subprocess.TimeoutExpired as exc:
                 unread.append(f'{words}: {exc}')
@@ -1084,7 +1085,7 @@ class OutputWalk(command_walk.CommandWalk):
         try:
             return bool(self.ax('find', '--value', words, '--role', 'AXStaticText', '--contains', '--first'))
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+            if axwait.absent(exc):
                 return False
             raise
 
@@ -1531,7 +1532,7 @@ class OutputWalk(command_walk.CommandWalk):
         try:
             return [n for n in self.ax('find', *args) if 'x' in n and not n.get('meta')]
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+            if axwait.absent(exc):
                 return []
             raise
 
@@ -1756,7 +1757,7 @@ class OutputWalk(command_walk.CommandWalk):
         try:
             found = [n for n in self.ax('find', '--role', 'AXMenuItem') if 'x' in n and not n.get('meta')]
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+            if axwait.absent(exc):
                 return []
             raise
         return [{k: m.get(k) for k in ('title', 'desc', 'enabled', 'help', 'x', 'y')} for m in found]
