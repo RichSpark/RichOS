@@ -315,17 +315,8 @@ class Walk(adopt.Walk):
 
     # --- steps --------------------------------------------------------------------------------
     def connect(self):
-        self.press('Settings', role='AXPopUpButton')
-        self.press('Connected folders', role='AXMenuItem')
-        self.ax('click', '--title', 'Company', '--role', 'AXPopUpButton', '--in', 'dialog', '--first')
-        self.press('Acme', role='AXMenuItem', contains=False)
-        self.type_into(self.company, '--role', 'AXTextField', '--title', 'Project folder location')
-        self.ax('click', '--title', 'Connect folder', '--role', 'AXButton', '--in', 'dialog', '--first')
-        time.sleep(2)
-        entities = guest(self.vm, 'cat ' + shlex.quote(self.data + '/entities.json'))
-        self.ax('click', '--title', 'Close', '--role', 'AXButton', '--in', 'dialog', '--first')
-        if self.company not in json.dumps(json.loads(entities).get('entities', [{}])[0].get('connected_repositories', [])):
-            raise StepFailed('the repository was not connected: ' + entities[:400])
+        """The folder through the shared connect step (adopt-walk.py connect_folder)."""
+        self.connect_folder()
         # Leases started before the connection carry the old --add-dir list; start fresh ones.
         self.facts['app'] = self.relaunched()
         self.save()
