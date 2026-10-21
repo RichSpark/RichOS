@@ -2316,7 +2316,10 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         RICHOS_AUTOCHECK_LAND_TARGET set. A real change still reads as changed."""
         subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
         exec_dir = subprocess.run(["git", "--exec-path"], check=True, capture_output=True, text=True).stdout.strip()
-        shell = {"PATH": os.environ["PATH"], "HOME": self.tmp.name, "RICHOS_BULK_ROOT": "/fixture/bulk"}
+        bulk, other = Path(self.tmp.name) / "bulk", Path(self.tmp.name) / "other-bulk"
+        bulk.mkdir()
+        other.mkdir()
+        shell = {"PATH": os.environ["PATH"], "HOME": self.tmp.name, "RICHOS_BULK_ROOT": str(bulk)}
         hook = {**shell, "PATH": exec_dir + os.pathsep + shell["PATH"], "RICHOS_AUTOCHECK_LAND_TARGET": "main"}
         shim = str(Path(self.tmp.name) / "shim")
 
@@ -2336,7 +2339,7 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         self.assertEqual(read(hook), (author_path, author))
         self.assertEqual(evidence.identity_difference(author, read(hook)[1]), "")
         # Not loosened: another directory first in PATH, or a real setting, is still a change.
-        for changed in ({"PATH": self.tmp.name + os.pathsep + shell["PATH"]}, {"RICHOS_BULK_ROOT": "/other/bulk"}):
+        for changed in ({"PATH": self.tmp.name + os.pathsep + shell["PATH"]}, {"RICHOS_BULK_ROOT": str(other)}):
             with self.subTest(changed=changed):
                 self.assertNotEqual(read({**hook, **changed})[1], author)
 
