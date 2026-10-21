@@ -27,7 +27,9 @@ STEPS, in the guest, never on the host's screen (CEO ruling 65):
   signed-out  Claude Code is on this Mac and nobody is signed in to it. A message typed and sent
               with real keys. PASS only when the turn ends with the not-signed-in cause and the
               screen names the way out (sign in), never the transient "usually fixes itself"
-              sentence and never machinery rows
+              sentence and never machinery rows. Two messages, as a new user sends them
+  accounts    Settings, Claude accounts, still signed out: PASS when the card says the account
+              is not signed in and offers Sign in, never "No reading yet"
   update      Settings opened, the update check pressed once: PASS when the row reaches a
               verdict (up to date, available, ready) and never a raw OS error
   signed-in   the host's login pushed into this home's keychain (claude-login.sh push), as a
@@ -61,7 +63,7 @@ StepFailed = setup_walk.StepFailed
 # The one subprocess helper every walk uses lives in adopt-walk.py, which setup-walk.py loads.
 command = setup_walk.adopt_walk.command
 
-STEPS = ['identity', 'setup', 'signed-out', 'update', 'signed-in']
+STEPS = ['identity', 'setup', 'signed-out', 'accounts', 'update', 'signed-in']
 RETURN_KEY = '36'
 COMPANY = 'RV Park'
 
@@ -124,6 +126,19 @@ def signed_out_verdict(outcome, screen_hits, screen_text):
         return 'dead end on screen: ' + ', '.join(screen_hits)
     if not re.search(r'sign in', screen_text or '', re.I):
         return 'the screen does not name the way out (sign in)'
+    return None
+
+
+def accounts_verdict(text):
+    """None when Settings, Claude accounts tells a signed-out new user so, with the way to sign
+    in, else why not (the dead end of 2026-10-21: "In use now" over "No reading yet")."""
+    hits = dead_ends(text)
+    if hits:
+        return 'dead end on screen: ' + ', '.join(hits)
+    if not re.search(r'not signed in', text or '', re.I):
+        return 'the account card does not say the account is not signed in'
+    if not re.search(r'sign in', re.sub(r'not signed in', '', text or '', flags=re.I), re.I):
+        return 'the account card does not offer the sign-in'
     return None
 
 
@@ -290,6 +305,24 @@ class NewUserWalk(setup_walk.SetupWalk):
         if why:
             raise StepFailed(why)
         return self.report['signed-out']
+
+    def accounts(self):
+        """Settings, Claude accounts, signed out: the card says so and offers Sign in."""
+        self.ax('click', '--id', 'set-btn', '--first')
+        time.sleep(2)
+        self.ax('click', '--id', 'set-accounts-open', '--first')
+        end = time.monotonic() + 120
+        while time.monotonic() < end and not self.shows_text('Not signed in'):
+            time.sleep(5)
+        text = self.frame('accounts')
+        command([HERE / 'ax.sh', self.vm, '--key', '53'])  # Escape closes the sheet
+        time.sleep(1)
+        command([HERE / 'ax.sh', self.vm, '--key', '53'])  # and Settings
+        self.report['accounts'] = {'screen': text.strip()[-1500:], 'dead_ends': dead_ends(text)}
+        why = accounts_verdict(text)
+        if why:
+            raise StepFailed(why)
+        return self.report['accounts']
 
     def update(self):
         self.ax('click', '--id', 'set-btn', '--first')

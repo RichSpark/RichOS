@@ -114,6 +114,23 @@ class SignedOutVerdict(unittest.TestCase):
         self.assertIsNone(walk.signed_out_verdict(self.OK, walk.dead_ends(SIGN_IN), SIGN_IN))
 
 
+class AccountsVerdict(unittest.TestCase):
+    def test_his_card_fails(self):
+        self.assertIn('account state unknown', walk.accounts_verdict(
+            'Your Claude account In use now\n' + NO_READING + '\nWeekly limit Not reported yet'))
+
+    def test_a_card_that_never_says_signed_out_fails(self):
+        self.assertIn('does not say', walk.accounts_verdict('Your Claude account In use now\nChecking whether this account is signed in on this Mac.'))
+
+    def test_the_signed_out_card_passes(self):
+        self.assertIsNone(walk.accounts_verdict(
+            'Your Claude account Not signed in Sign in\n'
+            'This account is not signed in on this Mac, so Rich cannot answer you yet. Sign in here.'))
+
+    def test_the_step_is_walked_between_the_signed_out_messages_and_the_update(self):
+        self.assertEqual(walk.STEPS, ['identity', 'setup', 'signed-out', 'accounts', 'update', 'signed-in'])
+
+
 class UpdateVerdict(unittest.TestCase):
     FAILED = 'RichOS could not prepare this update.'
 
