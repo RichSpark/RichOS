@@ -102,14 +102,22 @@ class NetcutWalk(adopt_walk.Walk):
         state = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / self.vm
         ip = (state / 'ip').read_text().strip()
         subnet = '.'.join(ip.split('.')[:3]) + '.0/24'
-        # The guest's own loopback stays open too: only the way out to the internet is cut.
-        rules = (f'pass out quick on lo0 all\nblock return out quick inet from any to ! {subnet}\n'
-                 'block return out quick inet6 all\n')
+        # The guest's own loopback stays open too: only the way out to the internet is cut. A TCP
+        # connection out is REFUSED (a reset, the incident's "Connection refused ... (ECONNREFUSED)"),
+        # never left hanging: Claude Code 2.1.305 waits on an unanswered request far longer than on
+        # a refused one (an unanswered attempt had not retried after minutes, measured 2026-10-21).
+        rules = (f'pass out quick on lo0 all\n'
+                 f'block return-rst out quick inet proto tcp from any to ! {subnet}\n'
+                 f'block return-icmp out quick inet proto udp from any to ! {subnet}\n'
+                 'block return-rst out quick inet6 proto tcp all\nblock drop out quick inet6 all\n')
         guest(self.vm, 'printf %s ' + shlex.quote(rules) + ' > /tmp/netcut.pf && sudo -n pfctl -q -E -f /tmp/netcut.pf', 30)
         self.facts['cut_at_ms'] = round(self.clock())
         answered = self.api_answers()
         if answered == '200':
             raise StepFailed('the API still answered from the guest after the cut')
+        # How a request fails now: refused at once, as in the incident, not left hanging.
+        self.facts['cut_probe'] = guest(self.vm, PREFLIGHT.replace('2>/dev/null', '2>&1')
+                                        .replace('%{http_code}', '%{http_code} %{time_total}s '), 30)
         self.facts.update({'cut_subnet_kept': subnet, 'api_after_cut': answered})
         self.save()
         # The cut is held until the app itself says Claude Code gave the turn up on the lost
