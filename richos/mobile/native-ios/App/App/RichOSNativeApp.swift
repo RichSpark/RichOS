@@ -213,6 +213,13 @@ enum Boot {
         return left > .zero ? left : .zero
     }
 
+    /// Where the files Rich attached are kept once they came over (round 36 screen 3): Application
+    /// Support, so a second tap opens one at once and the system never purges it under the person.
+    static func richFilesDirectory() -> URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("rich-files", isDirectory: true)
+    }
+
     static func start() {
         guard load == nil else { return }
         startedUptime = ProcessInfo.processInfo.systemUptime
@@ -221,7 +228,8 @@ enum Boot {
         // The courier reads voice messages from the same files the recorder writes.
         let network = NetworkEffects(transport: transport, stream: transport, identities: PlatformEffects.identityStore(),
                                      recordings: FileRecordingStore(directory: VoiceRecorder.defaultDirectory()),
-                                     attachments: FileAttachmentStore(directory: ShareIntake.attachmentsDirectory()))
+                                     attachments: FileAttachmentStore(directory: ShareIntake.attachmentsDirectory()),
+                                     richFiles: richFilesDirectory())
         let platform = PlatformEffects(network: network, attachments: ShareIntake.attachmentsDirectory(),
                                        replyAudio: { id, state in await network.replyAudio(messageID: id, state: state) })
         let effects: (any EffectHandler)?

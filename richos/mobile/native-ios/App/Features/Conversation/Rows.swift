@@ -200,7 +200,7 @@ struct MessageRow: View {
     private var hasControls: Bool {
         switch row.body {
         case .voice, .album, .file, .question: return true
-        default: return row.audio != nil || row.reference != nil
+        default: return row.audio != nil || row.reference != nil || !row.richFiles.isEmpty
         }
     }
 
@@ -217,11 +217,18 @@ struct MessageRow: View {
                             .layoutValue(key: FullWidthInBubble.self, value: true)
                             .padding(.bottom, 4)
                     }
-                    Text(text)
-                        .type(mine ? Typography.body.lineHeight(1.5) : Typography.answer)
-                        .foregroundStyle(palette.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                    if !text.isEmpty || row.richFiles.isEmpty {
+                        Text(text)
+                            .type(mine ? Typography.body.lineHeight(1.5) : Typography.answer)
+                            .foregroundStyle(palette.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    // The files Rich attached, under his words (round 36 screen 3).
+                    if !row.richFiles.isEmpty {
+                        RichFileList(files: row.richFiles, send: send)
+                            .layoutValue(key: FullWidthInBubble.self, value: true)
+                    }
                     Meta(row: row, calendar: calendar)
                         .layoutValue(key: TrailingInBubble.self, value: true)
                     if let audio = row.audio {
@@ -343,7 +350,9 @@ struct MessageRow: View {
         }
         switch row.body {
         case .question(let q, _, _, _): return q.text
-        case .text(let text): return "\(who), \(time)\(delivery): \(text)"
+        case .text(let text):
+            let files = row.richFiles.map(\.file.name).joined(separator: ", ")
+            return "\(who), \(time)\(delivery): \(text)" + (files.isEmpty ? "" : (text.isEmpty ? "" : ". ") + "Files: \(files)")
         case .voice(let ms, _): return "\(mine ? "Your" : "Rich's") voice message, \(DayLabel.spokenDuration(ms)), \(time)\(delivery)"
         case .replying: return "Rich is replying"
         case .streaming(let text): return "Rich, replying: \(text)"
