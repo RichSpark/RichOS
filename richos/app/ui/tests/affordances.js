@@ -644,6 +644,41 @@ const FIXTURES = {
     await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent.length > 0);
     return page;
   },
+  /// THE SAME FAILURE AGAIN (`InterruptionCause::Repeated`, 2026-10-21): a conversation whose
+  /// last turn ended on the repeated card, served through the real `get_timeline` path and drawn
+  /// by the real renderer. Its sentence is the registry row's own, so the row and the screen
+  /// cannot drift apart (review rv-20261021T193611Z-6df3f1f3-b313, finding 2).
+  async "interruption-repeated"(browser) {
+    const page = await openApp(browser);
+    const entry = REGISTRY.find(row => row.fixture === "interruption-repeated");
+    assert(entry, "no registry row for the repeated interruption");
+    const threads = page.locator(".nav-thread");
+    await threads.nth(0).click();
+    await page.waitForFunction(() => window.__RICHOS_TIMELINE__ && window.__RICHOS_TIMELINE__().threadId);
+    await page.evaluate(async (ceoMessage) => {
+      const threadId = window.__RICHOS_TIMELINE__().threadId;
+      const real = await window.RichBridge.invoke("get_timeline", { threadId });
+      const turn = "turn_repeated_fixture";
+      const base = (id, extra) => Object.assign({ id, entityId: real.entityId, threadId, turnId: turn,
+        bindingRevision: real.bindingRevision, createdAt: Date.now() - 5000, sequence: null,
+        slot: "stream", visibility: "ceo" }, extra);
+      const items = (real.items || []).concat([
+        Object.assign(base(turn + ":user", { slot: "opening" }), { kind: "user_message",
+          text: "Test to see if something is working.", source: "text" }),
+        Object.assign(base(turn + ":duration", { slot: "terminal" }), { kind: "work_duration",
+          state: "interrupted", startedAt: Date.now() - 5000, endedAt: Date.now() - 2000, activeMs: 3000 }),
+        Object.assign(base(turn + ":interruption", { slot: "terminal" }), { kind: "turn_interruption",
+          cause: "repeated", ceoMessage, lossMessage: "Your message is saved. Rich hadn't written any of his answer yet.",
+          offersRetry: false }),
+      ]);
+      window.__overrides.get_timeline = { value: Object.assign({}, real, { items }) };
+    }, entry.s);
+    // Away and back, so the conversation is read again through the overridden command.
+    await threads.nth(1).click();
+    await threads.nth(0).click();
+    await page.waitForFunction(text => document.body.innerText.includes(text), entry.s);
+    return page;
+  },
   /// The app as it opens. Proves the controls that the voice instructions NAME are on the
   /// screen those instructions render on.
   async shell(browser) {
@@ -1384,7 +1419,7 @@ const TEXT_RENDERING_FIXTURES = new Set([
   "connect-history-unreadable", "connect-unavailable", "connect-address-invalid", "connect-credential-invalid",
   "repository-empty", "permission-pending", "provider-start-error", "provider-poll-error", "provider-cancel-error",
   // The signed-out account renders its own words from the view alone (2026-10-21).
-  "accounts-signed-out", "accounts-row-signed-out",
+  "accounts-signed-out", "accounts-row-signed-out", "interruption-repeated",
   // The assignment surface renders its own words out of `work-summary.js`, with nothing but
   // software behind it — and §7.8 says the wording IS the test, so the sentence is asserted
   // present rather than only the control beneath it.

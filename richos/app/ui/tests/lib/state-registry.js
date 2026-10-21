@@ -259,7 +259,7 @@ module.exports = [
     s: "Rich could not answer again because Claude Code stopped before he replied, so sending again is unlikely to help. Open Settings and choose Claude accounts to check that your account is signed in on this Mac. If it is, press Bust a bug in Settings so we can see what went wrong.",
     c: "ACTIONABLE",
     control: "#set-btn",
-    fixture: null,
+    fixture: "interruption-repeated",
     why:
       "`InterruptionCause::Repeated` (2026-10-21, docs/development/failure-classes/" +
       "permanent-failure-told-as-passing.md): the lost connection again, right after the last " +
