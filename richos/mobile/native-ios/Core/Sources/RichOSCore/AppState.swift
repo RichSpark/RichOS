@@ -177,7 +177,7 @@ extension AppState {
         composerFocused = try c.decodeIfPresent(Bool.self, forKey: .composerFocused) ?? d.composerFocused
         playback = try c.decodeIfPresent(Playback.self, forKey: .playback)
         fileFetches = try c.decodeIfPresent([String: FileFetch].self, forKey: .fileFetches) ?? d.fileFetches
-        voice =try c.decodeIfPresent(VoiceSession.self, forKey: .voice)
+        voice = try c.decodeIfPresent(VoiceSession.self, forKey: .voice)
         keptRecordings = try c.decodeIfPresent([KeptRecording].self, forKey: .keptRecordings) ?? d.keptRecordings
         voiceAvailability = try c.decodeIfPresent(VoiceAvailability.self, forKey: .voiceAvailability) ?? d.voiceAvailability
         microphone = try c.decodeIfPresent(Permission.self, forKey: .microphone) ?? d.microphone

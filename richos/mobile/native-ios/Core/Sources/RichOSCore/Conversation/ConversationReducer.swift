@@ -182,9 +182,16 @@ public enum ConversationReducer {
         case .openRichFile(let id):
             guard let file = s.messages.last(where: { $0.richFile?.id == id })?.richFile else { return }
             if let fetch = s.fileFetches[id] {
-                if fetch.state == .coming { return }
+                if fetch.state == .coming || fetch.state == .finding { return }
                 if fetch.state == .kept { s.fileFetches[id]?.open = true; return }
             }
+            // The phone's own copy first: `fileFetches` does not survive a relaunch, and a copy that
+            // came over earlier opens with the Mac offline or the original deleted there.
+            s.fileFetches[id] = FileFetch(id: id, state: .finding, total: file.bytes, open: true)
+            effects.append(.findRichFile(id: id, name: file.name))
+        case .richFileNotKept(let id):
+            guard s.fileFetches[id]?.state == .finding,
+                  let file = s.messages.last(where: { $0.richFile?.id == id })?.richFile else { return }
             guard file.exists else {
                 s.fileFetches[id] = FileFetch(id: id, state: .failed, reason: RichFileRule.gone)
                 return
@@ -197,7 +204,7 @@ public enum ConversationReducer {
             s.fileFetches[id] = FileFetch(id: id, state: .coming, total: file.bytes, open: true)
             effects.append(.fetchRichFile(id: id, threadID: thread, name: file.name, total: file.bytes))
         case .stopRichFile(let id):
-            guard let state = s.fileFetches[id]?.state, state == .coming || state == .waiting else { return }
+            guard let state = s.fileFetches[id]?.state, state == .coming || state == .waiting || state == .finding else { return }
             s.fileFetches[id] = nil
             if state == .coming { effects.append(.stopRichFile(id: id)) }
         case .richFileProgress(let id, let received):

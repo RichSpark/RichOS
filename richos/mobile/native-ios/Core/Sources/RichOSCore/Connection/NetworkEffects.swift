@@ -102,7 +102,7 @@ public actor NetworkEffects: EffectHandler {
     public nonisolated func handles(_ effect: Effect) -> Bool {
         switch effect {
         case .pair, .confirmFingerprint, .checkMacConfirmation, .forgetIdentity, .deliver, .connect, .reconnect, .disconnect, .loadOlder,
-             .requestNotifications, .unregisterNotifications, .deleteAttachments, .fetchRichFile, .stopRichFile: return true
+             .requestNotifications, .unregisterNotifications, .deleteAttachments, .fetchRichFile, .findRichFile, .stopRichFile: return true
         default: return false
         }
     }
@@ -252,6 +252,13 @@ public actor NetworkEffects: EffectHandler {
         case .stopRichFile(let id):
             fileTasks.removeValue(forKey: id)?.cancel()
             return []
+        case .findRichFile(let id, let name):
+            // Disk only, never the Mac: a copy that came over earlier opens whatever the Mac says.
+            if let directory = richFiles, let kept = RichFileRule.keptURL(directory: directory, id: id, name: name),
+               FileManager.default.fileExists(atPath: kept.path) {
+                return [.richFileArrived(id: id, path: kept.path)]
+            }
+            return [.richFileNotKept(id: id)]
         default:
             return []
         }

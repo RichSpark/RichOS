@@ -153,6 +153,7 @@ extension Action: Codable {
         case "file-arrived": self = .richFileArrived(id: try need(w.id, "id"), path: try need(w.path, "path"))
         case "file-failed": self = .richFileFailed(id: try need(w.id, "id"), reason: try need(w.reason, "reason"))
         case "file-viewed": self = .richFileViewed(id: try need(w.id, "id"))
+        case "file-not-kept": self = .richFileNotKept(id: try need(w.id, "id"))
         case "playback-started": self = .playbackStarted(id: try need(w.id, "id"))
         case "playback-progress": self = .playbackProgress(id: try need(w.id, "id"), progress: try need(w.progress, "progress"))
         case "playback-ended": self = .playbackEnded
@@ -271,6 +272,7 @@ extension Action: Codable {
         case .richFileArrived(let id, let path): w = Wire("file-arrived"); w.id = id; w.path = path
         case .richFileFailed(let id, let reason): w = Wire("file-failed"); w.id = id; w.reason = reason
         case .richFileViewed(let id): w = Wire("file-viewed"); w.id = id
+        case .richFileNotKept(let id): w = Wire("file-not-kept"); w.id = id
         case .playbackStarted(let id): w = Wire("playback-started"); w.id = id
         case .playbackProgress(let id, let p): w = Wire("playback-progress"); w.id = id; w.progress = p
         case .playbackEnded: w = Wire("playback-ended")

@@ -30,9 +30,12 @@ public struct RichFile: Codable, Equatable, Sendable {
     }
 }
 
-/// Where one of Rich's files stands on this phone. TRANSIENT: a kept copy is found again on disk.
+/// Where one of Rich's files stands on this phone. TRANSIENT: after a relaunch a tap looks on disk
+/// for the kept copy first (`finding`), so it opens with the Mac offline or the original deleted.
 public struct FileFetch: Codable, Equatable, Sendable {
     public enum State: String, Codable, Sendable {
+        /// Tapped: the phone looks for its own copy first (a moment, on disk), before the Mac is needed.
+        case finding
         /// Coming over from the Mac: the ring fills.
         case coming
         /// Tapped while the Mac was out of reach: the clock, until it is back.

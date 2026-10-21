@@ -93,6 +93,8 @@ public enum Action: Equatable, Sendable {
     case richFileArrived(id: String, path: String)
     case richFileFailed(id: String, reason: String)
     case richFileViewed(id: String)
+    /// The phone looked for its own copy of a tapped file and has none: now the Mac is asked.
+    case richFileNotKept(id: String)
     case playbackStarted(id: String)
     case playbackProgress(id: String, progress: Double)
     case playbackEnded
@@ -273,6 +275,9 @@ public enum Effect: Equatable, Sendable {
     /// Bring a file Rich attached over from the Mac (signed `GET /api/messages?kind=file`) and keep
     /// it; its progress and outcome come back as `richFileProgress`, `richFileArrived`, `richFileFailed`.
     case fetchRichFile(id: String, threadID: String, name: String, total: Int64?)
+    /// A tapped file's own copy on this phone, looked for first, before the Mac is needed (a kept
+    /// copy opens with the Mac offline or the original deleted): `richFileArrived` or `richFileNotKept`.
+    case findRichFile(id: String, name: String)
     /// The × on a file coming over: stop it, keep nothing.
     case stopRichFile(id: String)
     case stopAudio
