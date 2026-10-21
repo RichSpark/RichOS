@@ -83,15 +83,6 @@ def dead_ends(text):
     return sorted(name for name, pattern in DEAD_ENDS.items() if re.search(pattern, text or '', re.I))
 
 
-def screen_lines(ocr_find_stdout):
-    """The frame's own words out of `ocr-find.sh --show` output: the indented lines under a HIT,
-    never its HIT/MISS headers or its closing `--- N of M frame(s) match /PATTERN/ ---` line,
-    which carries the pattern itself. Reading that line as screen text matched every dead end
-    on a frame that showed none (the first guest run of this walk, 2026-10-21)."""
-    return '\n'.join(line.strip() for line in (ocr_find_stdout or '').splitlines()
-                     if line.startswith((' ', '\t')) and line.strip())
-
-
 def turn_outcome(rows, words):
     """What happened to the turn that carried WORDS: None while it runs, else a dict with
     `state` (completed|interrupted), the interruption `cause` tag and sentence when there is one,
@@ -136,13 +127,28 @@ def signed_out_verdict(outcome, screen_hits, screen_text):
     return None
 
 
-def update_verdict(line, screen_hits):
+# The update row's headlines once a check has an answer (ui/updates.js `words`): up to date,
+# available, ready, going back, or a failure's headline. While it checks, the headline is the
+# bare "RichOS <version>" with "Checking for updates…" under it, so the headline alone is no
+# verdict (review rv-20261021T153457Z-fb99f171-52f1, finding 2).
+UPDATE_VERDICT = r'is up to date\.|is available\.|is ready|will go back|could not|did not|cannot'
+
+
+def update_settled(line, sub):
+    """True once the update row (headline LINE, subtitle SUB) says how the check ended."""
+    return bool(line) and bool(re.search(UPDATE_VERDICT, line, re.I)) \
+        and not re.search(r'checking|looking|downloading|preparing', (sub or '') + ' ' + line, re.I)
+
+
+def update_verdict(line, sub, screen_hits):
     """None when the update row reached a verdict a user can act on, else why not."""
     if screen_hits:
         return 'dead end on screen: ' + ', '.join(screen_hits)
     if not line:
         return 'the update row says nothing'
-    if re.search(r'could not', line, re.I):
+    if not update_settled(line, sub):
+        return 'the update check never reached a verdict: %s / %s' % (line, sub)
+    if re.search(r'could not|did not|cannot', line, re.I):
         return 'the update check failed: ' + line
     return None
 
@@ -155,13 +161,17 @@ class NewUserWalk(setup_walk.SetupWalk):
 
     # --- evidence -----------------------------------------------------------------------------
     def frame(self, name):
-        """A frame of the guest's screen, and the dead ends OCR finds on it."""
+        """A frame of the guest's screen and ALL of its text, read through the shared OCR cache
+        (qa/ocr-read.py). Never ocr-find's `--show`, which prints at most three matching lines
+        per frame, so three harmless lines could hide a dead end (review
+        rv-20261021T153457Z-fb99f171-52f1, finding 1)."""
         self.shot(name + '.png')
-        found = subprocess.run([str(HERE.parent / 'qa' / 'ocr-find.sh'), '|'.join(DEAD_ENDS.values()) + '|sign in',
-                                str(self.out / (name + '.png')), '--show'], capture_output=True, text=True, timeout=90)
-        if found.returncode not in (0, 1):
-            raise StepFailed('ocr-find could not read %s.png: %s' % (name, found.stderr.strip()))
-        return screen_lines(found.stdout)
+        read = subprocess.run([sys.executable, str(HERE.parent / 'qa' / 'ocr-read.py'), str(self.out / (name + '.png'))],
+                              capture_output=True, text=True, timeout=90)
+        if read.returncode != 0:
+            raise StepFailed('ocr-read could not read %s.png: %s' % (name, read.stderr.strip()))
+        (self.out / (name + '.txt')).write_text(read.stdout)
+        return read.stdout
 
     def ledger_rows(self):
         rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
@@ -287,12 +297,14 @@ class NewUserWalk(setup_walk.SetupWalk):
         before = (self.by_id('update-line') or {}).get('value')
         if self.by_id('update-check'):
             self.ax('click', '--id', 'update-check', '--first')
-        line = before
-        end = time.monotonic() + 90
+        line, sub = before, None
+        # Until the row says how the check ended (update_settled), never on an in-between state.
+        end = time.monotonic() + self.a.update_within
         while time.monotonic() < end:
             time.sleep(3)
             line = (self.by_id('update-line') or {}).get('value')
-            if line and not re.search(r'checking|looking', line, re.I):
+            sub = (self.by_id('update-sub') or {}).get('value')
+            if update_settled(line, sub):
                 break
         text = self.frame('update')
         if self.by_id('update-why'):
@@ -300,9 +312,9 @@ class NewUserWalk(setup_walk.SetupWalk):
             time.sleep(1)
             text += self.frame('update-reason')
         hits = [h for h in dead_ends(text) if h == 'raw OS error']
-        self.report['update'] = {'before': before, 'line': line, 'dead_ends': hits}
+        self.report['update'] = {'before': before, 'line': line, 'sub': sub, 'dead_ends': hits}
         command([HERE / 'ax.sh', self.vm, '--key', '53'])  # Escape closes Settings
-        why = update_verdict(line, hits)
+        why = update_verdict(line, sub, hits)
         if why:
             raise StepFailed(why)
         return self.report['update']
@@ -330,6 +342,8 @@ def main():
     p.add_argument('--expect-sha', default='', help='the commit the bundle under test was built from')
     p.add_argument('--within', type=float, default=1200, help='seconds for first setup (it fetches Claude Code and the engine)')
     p.add_argument('--turn-within', type=float, default=240, help='seconds for one message to Rich to end')
+    p.add_argument('--update-within', type=float, default=180,
+                   help='seconds for the update check to reach a verdict; past it the step fails, never passes')
     p.add_argument('--steps', default=','.join(STEPS))
     p.add_argument('--keep-going', action='store_true',
                    help='walk every step even after one fails (to collect evidence; the exit status still fails)')

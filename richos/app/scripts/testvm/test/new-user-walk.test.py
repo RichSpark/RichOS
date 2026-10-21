@@ -3,7 +3,12 @@
 the step that shows it, and a screen without one passes. The live walk is its own proof."""
 import importlib.util
 from pathlib import Path
+import re
+import subprocess
+import tempfile
+import types
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location('new_user_walk', HERE / 'new-user-walk.py')
@@ -39,19 +44,31 @@ class DeadEnds(unittest.TestCase):
         self.assertEqual(walk.dead_ends('RichOS 1.2.1 is up to date.\nChecked just now.'), [])
 
 
-class ScreenLines(unittest.TestCase):
-    """The first guest run read ocr-find's closing line, which carries the pattern, as screen text
-    and found every dead end on a frame that showed none."""
-    OUT = ('HIT  /x/signed-out.png\n'
-           '       Onboarding and sign in, then send your message again.\n'
-           '--- 1 of 1 frame(s) match /os error [0-9]+|usually fixes itself|control_request|No reading yet|sign in/ ---\n')
+class FrameReadsEveryLine(unittest.TestCase):
+    """A dead end anywhere on a frame fails its step (review rv-20261021T153457Z-fb99f171-52f1,
+    finding 1). ocr-find's `--show` prints at most three matching lines per frame, so a frame read
+    through it with three "sign in" lines above `control_request` passed. The stand-in below
+    answers as both OCR tools do, so the walk's own frame() decides which one it reads."""
+    SCREEN = '\n'.join(['Open Settings and sign in'] * 3 + ['Sign in here', 'control_request', 'system:init'])
 
-    def test_only_the_frames_own_words(self):
-        self.assertEqual(walk.screen_lines(self.OUT), 'Onboarding and sign in, then send your message again.')
-        self.assertEqual(walk.dead_ends(walk.screen_lines(self.OUT)), [])
+    def fake_run(self, argv, **_):
+        argv = [str(a) for a in argv]
+        if any(a.endswith('ocr-read.py') for a in argv):
+            out = self.SCREEN
+        else:  # ocr-find.sh <pattern> <png> --show: its own format, three matching lines at most
+            pattern = re.compile(argv[1], re.I)
+            hits = [l for l in self.SCREEN.splitlines() if pattern.search(l)][:3]
+            out = 'HIT  %s\n%s\n--- 1 of 1 frame(s) match /%s/ ---\n' % (
+                argv[2], '\n'.join('       ' + h for h in hits), argv[1])
+        return subprocess.CompletedProcess(argv, 0, out, '')
 
-    def test_a_miss_says_nothing(self):
-        self.assertEqual(walk.screen_lines('MISS /x/a.png\n--- 0 of 1 frame(s) match /os error/ ---\n'), '')
+    def test_a_dead_end_below_three_harmless_lines_is_seen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = types.SimpleNamespace(shot=lambda name: None, out=Path(tmp))
+            with mock.patch.object(walk.subprocess, 'run', self.fake_run):
+                text = walk.NewUserWalk.frame(stub, 'signed-out-1')
+        self.assertIn('machinery in the user view', walk.dead_ends(text))
+        self.assertIn('sign in', text)
 
 
 class TurnOutcome(unittest.TestCase):
@@ -98,15 +115,29 @@ class SignedOutVerdict(unittest.TestCase):
 
 
 class UpdateVerdict(unittest.TestCase):
+    FAILED = 'RichOS could not prepare this update.'
+
     def test_his_update_dead_end_fails(self):
-        self.assertIn('raw OS error', walk.update_verdict('RichOS could not prepare this update.', walk.dead_ends(OS_ERROR)))
-        self.assertIn('could not prepare', walk.update_verdict('RichOS could not prepare this update.', []))
+        self.assertIn('raw OS error', walk.update_verdict(self.FAILED, 'You are still running RichOS 1.2.1.',
+                                                          walk.dead_ends(OS_ERROR)))
+        self.assertIn('could not prepare', walk.update_verdict(self.FAILED, 'You are still running RichOS 1.2.1.', []))
 
     def test_silence_fails(self):
-        self.assertEqual(walk.update_verdict(None, []), 'the update row says nothing')
+        self.assertEqual(walk.update_verdict(None, None, []), 'the update row says nothing')
+
+    def test_a_check_still_running_is_never_a_pass(self):
+        # Review rv-20261021T153457Z-fb99f171-52f1, finding 2: while it checks, ui/updates.js shows
+        # the bare version as the headline and "Checking for updates…" under it.
+        for line, sub in (('RichOS 1.2.1', 'Checking for updates…'), ('RichOS 1.2.1', 'RichOS has not checked for updates yet.'),
+                          ('Downloading RichOS 1.2.2…', '3 MB so far'),
+                          ('Checking and preparing the update…', 'RichOS is confirming this update was signed by us.')):
+            self.assertFalse(walk.update_settled(line, sub), (line, sub))
+            self.assertIn('never reached a verdict', walk.update_verdict(line, sub, []), (line, sub))
 
     def test_a_verdict_passes(self):
-        self.assertIsNone(walk.update_verdict('RichOS 1.2.1 is up to date.', []))
+        self.assertTrue(walk.update_settled('RichOS 1.2.1 is up to date.', 'Checked just now.'))
+        self.assertIsNone(walk.update_verdict('RichOS 1.2.1 is up to date.', 'Checked just now.', []))
+        self.assertIsNone(walk.update_verdict('RichOS 1.2.2 is available.', 'You are running 1.2.1.', []))
 
 
 if __name__ == '__main__':
