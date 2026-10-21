@@ -50,6 +50,10 @@ same kind** and two reviews found two ways the line could invite a reply that wo
    x 256 / 16 000 = 0.416 s after it, an utterance carries his echo in its pre-roll and is
    discarded as tainted and a tainted recording still open when he stops absorbs whatever is
    said until its 50-frame (0.800 s) hangover discards it whole.
+3. Shown at the right moment, a reply of a word or two was still dropped unheard (review
+   rv-20261021T215433Z-1979e6d9-40f2): the endpoint drops anything under `MIN_SPEECH_FRAMES`
+   = 19 frames x 256 / 16 000 = 0.304 s as a cough, with no notice at all and "yes" or "send
+   it" can be that short.
 
 So the line now waits for three things together: Rich not audible, 26 quiet frames and no
 tainted recording open. Tests (`richos-voice/tests/barge_in_on_the_ceos_rig.rs`):
@@ -57,9 +61,16 @@ tainted recording open. Tests (`richos-voice/tests/barge_in_on_the_ceos_rig.rs`)
 and the shipped line over the committed echo-only recording at six residual levels and replies
 on the very frame after the line is shown, requiring the reply to be admitted and never
 discarded; `his_own_reply_to_the_half_duplex_line_is_heard` does the same with a real
-recorded voice (private fixture). The rule for anything new in this class: **a line that asks
-for a reply is shown only when the capture state says the reply would be kept** and its test
-replies at once and checks it was kept. Its two
+recorded voice (private fixture). And once it is shown, what he says next is kept however
+short (`CaptureBrain::invite_reply`, set by `supervise` through `Shared::reply_invited`): like
+a fragment of an open turn it is admitted from the 7-frame (0.112 s) onset and passed on to
+recognition, where a cough instead meets that desk's own line with its next step. Tests:
+`a_short_reply_to_the_half_duplex_line_is_kept_and_passed_on` (0.192 s of the public reference
+voice) and `his_own_short_reply_to_the_half_duplex_line_is_kept_and_passed_on` (0.192 s of a
+real recorded word, private fixture), both red before that fix. The rule for anything new in
+this class: **a line that asks for a reply is shown only when the capture state says the reply
+would be kept and then keeps it however short** and its test replies at once, long and short,
+and checks it was kept. Its two
 siblings in the same family got the same treatment, because the check found them:
 `HeardNoVoice` ("...If you said something, please say it again. I'm still listening.") and
 `DidNotCatchThat` ("...Please say it again. I'm still listening."). The open microphone is the

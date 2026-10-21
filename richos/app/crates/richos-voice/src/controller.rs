@@ -622,6 +622,18 @@ impl CaptureBrain {
         self.quiet_frames >= ECHO_LOOKBACK_FRAMES && !(self.recorder.is_recording() && self.tainted)
     }
 
+    /// **He has just been asked to say it again: what he says next is kept however short.** The
+    /// 0.304 s minimum ([`crate::endpoint::MIN_SPEECH_FRAMES`]) is there so a cough is not a
+    /// sentence, but a reply to "please say it again" is often a word or two ("yes", "send it"),
+    /// and dropping it unheard lost his words a second time with no notice at all (review
+    /// rv-20261021T215433Z-1979e6d9-40f2). So the reply is treated like a fragment of an open
+    /// turn: admitted from the 7-frame (0.112 s) onset and passed on, and the recognizer still
+    /// asks it for a voice of its own, so a cough instead gets that desk's own line with its
+    /// next step. Ends, like any open turn, the moment Rich is audible again.
+    pub fn invite_reply(&mut self) {
+        self.set_turn_open(true);
+    }
+
     /// **Voice is going off: close the open recording and say what became of it** (review
     /// rv-20261013T183507Z). The capture stream is about to be destroyed, and with it whatever he
     /// said in the last 0.800 s, which the endpointer had not yet closed. It is closed here by the
@@ -1154,6 +1166,9 @@ struct Shared {
     /// A reply starting now would be heard (`CaptureBrain::takes_a_reply`). Written per frame by
     /// the capture callback; the half-duplex line waits on it.
     takes_a_reply: AtomicBool,
+    /// The half-duplex line has just asked him to say it again: the capture callback calls
+    /// `CaptureBrain::invite_reply` on its next frame and clears this.
+    reply_invited: AtomicBool,
     /// Voice is going off: the capture callback closes the open recording on its next frame.
     finish_capture: AtomicBool,
     /// The capture callback has closed it and sent what became of it.
@@ -1906,6 +1921,7 @@ impl VoiceController {
             answer_sounded: AtomicBool::new(false),
             his_onset: AtomicBool::new(false),
             takes_a_reply: AtomicBool::new(false),
+            reply_invited: AtomicBool::new(false),
             finish_capture: AtomicBool::new(false),
             capture_finished: AtomicBool::new(false),
             drained_after_finish: AtomicBool::new(false),
@@ -1977,6 +1993,9 @@ impl VoiceController {
             }
             let speaking = cb_shared.speaking.load(Ordering::Relaxed);
             let forced = cb_force.swap(false, Ordering::Relaxed);
+            if cb_shared.reply_invited.swap(false, Ordering::Relaxed) {
+                brain.invite_reply();
+            }
             for msg in brain.push_frame(frame, speaking, forced) {
                 let _ = cap_tx.send(msg);
             }
@@ -3556,6 +3575,8 @@ fn supervise(
         let playing = rich_audible(audible.is_open(), shared.answer_sounded.load(Ordering::Relaxed));
         shared.speaking.store(playing, Ordering::Relaxed);
         if let Some(n) = half_duplex_line.due(playing, shared.takes_a_reply.load(Ordering::Relaxed)) {
+            // It asks him to say it again: keep what he says next however short.
+            shared.reply_invited.store(true, Ordering::Relaxed);
             observer.on_voice_event(&VoiceEvent::Notice { message: n.ceo_message().to_string(), at: now_millis() });
         }
         if playing && !was_playing {
@@ -4441,6 +4462,7 @@ mod tests {
             answer_sounded: AtomicBool::new(false),
             his_onset: AtomicBool::new(false),
             takes_a_reply: AtomicBool::new(false),
+            reply_invited: AtomicBool::new(false),
             finish_capture: AtomicBool::new(false),
             capture_finished: AtomicBool::new(false),
             drained_after_finish: AtomicBool::new(false),
