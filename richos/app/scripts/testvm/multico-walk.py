@@ -52,8 +52,10 @@ StepFailed = cw.StepFailed
 OPEN = cw.OPEN
 
 STEPS = ['identity', 'first-run', 'connect', 'job-acme', 'second-company', 'connect-shared', 'job-beta']
-JOB = ('Please run this harmless test command for me yourself with your shell tool, and tell me when it has '
-       'finished and what it printed: git -C {folder} log --oneline')
+# Worded as command-walk.py's TASK is (a job in "my Acme folder"): without the folder named, the
+# front desk answered the request itself and no assignment was registered (run of 2026-10-21).
+JOB = ('Please run this harmless test command for me yourself with your shell tool, in my Acme '
+       'folder, and tell me when it has finished and what it printed: git -C {folder} log --oneline')
 
 
 class Walk(cw.CommandWalk):
