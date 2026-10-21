@@ -19,6 +19,8 @@ walk with a second company, so every driving method is that walk's:
   identity        the running app says it was built from --expect-sha
   first-run       company "Acme" with a folder that is a Git repository (adopt-walk.py's)
   connect         that folder connected to Acme through Settings > Connected folders
+  (A job passes either as a settled assignment on the company's thread, or, when the conversation
+   answers a one-line command itself, as the back end's Bash hook record made after the send.)
   job-acme        `git log --oneline` run in the folder from Acme's conversation: the assignment is
                   on Acme's thread and settled, and its last notice carries the repository's HEAD
   second-company  "+ New chat or company" > New company: "Beta", with a folder of its own; Beta
@@ -100,6 +102,11 @@ class Walk(cw.CommandWalk):
     def job(self, thread, label):
         """Send the command from the open conversation and wait for the assignment on `thread`."""
         short, subject = self.head()
+
+        def ran(commands):
+            return [c for c in commands if 'git' in c.get('command', '') and short in c.get('stdout', '')]
+
+        already = len(ran(self.evidence_commands()))
         sent = self.send(JOB.format(folder=shlex.quote(self.company)))
         pressed, record = [0], None
 
@@ -107,9 +114,25 @@ class Walk(cw.CommandWalk):
             rows = [r for r in self.records() if r.get('thread_id') == thread and r.get('registered_at_ms', 0) >= sent[0]]
             return max(rows, key=lambda r: r.get('registered_at_ms', 0)) if rows else None
 
-        record = self.until_closed(pick, self.a.within, pressed)
+        # A one-line command may be answered by the conversation itself, with no assignment
+        # (seen 2026-10-21 on this build, twice). Then the proof is the back end's own Bash hook
+        # record made after this send, with the repository's head in its output.
+        end = time.monotonic() + self.a.within
+        while time.monotonic() < end:
+            record = pick()
+            if record or len(ran(self.evidence_commands())) > already:
+                break
+            time.sleep(3)
+        if record:
+            record = self.until_closed(pick, max(end - time.monotonic(), 1), pressed)
         record = self.settled_read(record) if record and record.get('state') not in OPEN else record
         commands = self.evidence_commands()
+        if not record and len(ran(commands)) > already:
+            evidence = {'thread': thread, 'repository_head': {'short': short, 'subject': subject},
+                        'assignment': None, 'answered_in_conversation': True, 'back_end_bash': commands}
+            (self.out / f'{label}-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
+            return {'thread': thread, 'state': 'answered in the conversation', 'head': f'{short} {subject}',
+                    'approvals_pressed': 0}
         evidence = {'thread': thread, 'repository_head': {'short': short, 'subject': subject},
                     'approvals_pressed': pressed[0], 'assignment': record, 'back_end_bash': commands}
         (self.out / f'{label}-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
