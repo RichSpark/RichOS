@@ -191,6 +191,8 @@ class NewUserWalk(setup_walk.SetupWalk):
         super().__init__(a)
         self.company = self.home + '/' + COMPANY.replace(' ', '-')
         self.report = {}
+        # Every frame taken, with the dead ends on it (run_step judges each step by its frames).
+        self.seen = []
 
     # --- evidence -----------------------------------------------------------------------------
     def frame(self, name):
@@ -204,6 +206,7 @@ class NewUserWalk(setup_walk.SetupWalk):
         if read.returncode != 0:
             raise StepFailed('ocr-read could not read %s.png: %s' % (name, read.stderr.strip()))
         (self.out / (name + '.txt')).write_text(read.stdout)
+        self.seen.append((name, dead_ends(read.stdout)))
         return read.stdout
 
     def ledger_rows(self):
@@ -404,6 +407,33 @@ class NewUserWalk(setup_walk.SetupWalk):
         return self.report['signed-in']
 
 
+def frames_with_dead_ends(seen):
+    """'frame: dead end, ...; ...' for every captured (frame, hits) pair that has one, else ''."""
+    return '; '.join('%s: %s' % (name, ', '.join(hits)) for name, hits in seen if hits)
+
+
+def run_step(walk, step):
+    """Walk STEP and judge it, AND every frame it captured against every known dead end. A step's
+    own verdict looks at the part of the screen it is about; a dead end anywhere else on a frame it
+    took still fails it (review rv-20261021T183543Z-ad01d021-62a5: the update step kept only
+    'raw OS error' and passed a frame showing 'Between turns')."""
+    start = len(walk.seen)
+    row = {'step': step}
+    try:
+        row['evidence'] = getattr(walk, step.replace('-', '_'))()
+        row['outcome'] = 'PASS'
+    except (StepFailed, RuntimeError, ValueError, KeyError, IndexError, subprocess.TimeoutExpired) as exc:
+        row['outcome'] = 'FAIL'
+        row['detail'] = str(exc)
+    hits = frames_with_dead_ends(walk.seen[start:])
+    if hits:
+        row['frame_dead_ends'] = hits
+        if row['outcome'] == 'PASS':
+            row['outcome'] = 'FAIL'
+            row['detail'] = 'dead end on screen: ' + hits
+    return row
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('vm')
@@ -426,14 +456,8 @@ def main():
     ok = True
     for step in steps:
         began = time.monotonic()
-        row = {'step': step}
-        try:
-            row['evidence'] = getattr(walk, step.replace('-', '_'))()
-            row['outcome'] = 'PASS'
-        except (StepFailed, RuntimeError, ValueError, KeyError, IndexError, subprocess.TimeoutExpired) as exc:
-            row['outcome'] = 'FAIL'
-            row['detail'] = str(exc)
-            ok = False
+        row = run_step(walk, step)
+        ok = ok and row['outcome'] == 'PASS'
         row['seconds'] = round(time.monotonic() - began, 1)
         report['steps'].append(row)
         a.out.mkdir(parents=True, exist_ok=True)

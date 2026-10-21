@@ -64,11 +64,46 @@ class FrameReadsEveryLine(unittest.TestCase):
 
     def test_a_dead_end_below_three_harmless_lines_is_seen(self):
         with tempfile.TemporaryDirectory() as tmp:
-            stub = types.SimpleNamespace(shot=lambda name: None, out=Path(tmp))
+            stub = types.SimpleNamespace(shot=lambda name: None, out=Path(tmp), seen=[])
             with mock.patch.object(walk.subprocess, 'run', self.fake_run):
                 text = walk.NewUserWalk.frame(stub, 'signed-out-1')
         self.assertIn('machinery in the user view', walk.dead_ends(text))
         self.assertIn('sign in', text)
+        self.assertEqual(stub.seen, [('signed-out-1', ['machinery in the user view'])], 'every frame is recorded')
+
+
+class EveryFrameEveryDeadEnd(unittest.TestCase):
+    """Review rv-20261021T183543Z-ad01d021-62a5: the update step kept only 'raw OS error' hits, so
+    a frame it took showing 'Between turns', 'No reading yet', 'Please run /login' or 'This usually
+    fixes itself.' passed. run_step judges every frame a step captured against every dead end."""
+
+    def walk_with(self, screen, step_fails=False):
+        stub = types.SimpleNamespace(seen=[('before', [])])
+
+        def update():
+            stub.seen.append(('update', walk.dead_ends(screen)))
+            if step_fails:
+                raise walk.StepFailed('the update check failed: RichOS could not prepare this update.')
+            return {'line': 'RichOS 1.2.2 is up to date.'}
+        stub.update = update
+        return stub
+
+    def test_any_dead_end_on_any_frame_of_a_step_fails_it(self):
+        for screen in ('Between turns', NO_READING, 'Not logged in · Please run /login', LOST, OS_ERROR):
+            row = walk.run_step(self.walk_with('Updates\nRichOS 1.2.2 is up to date.\n' + screen), 'update')
+            self.assertEqual(row['outcome'], 'FAIL', screen)
+            self.assertIn('dead end on screen: update:', row['detail'], screen)
+
+    def test_a_clean_frame_passes_and_frames_of_other_steps_are_not_charged(self):
+        stub = self.walk_with('Updates\nRichOS 1.2.2 is up to date.')
+        stub.seen = [('accounts', ['account state unknown'])]  # an earlier step's frame
+        self.assertEqual(walk.run_step(stub, 'update')['outcome'], 'PASS')
+
+    def test_a_failed_step_keeps_its_own_reason_and_records_the_frames(self):
+        row = walk.run_step(self.walk_with('Between turns', step_fails=True), 'update')
+        self.assertEqual(row['outcome'], 'FAIL')
+        self.assertIn('could not prepare', row['detail'])
+        self.assertEqual(row['frame_dead_ends'], 'update: machinery in the user view')
 
 
 class TurnOutcome(unittest.TestCase):
