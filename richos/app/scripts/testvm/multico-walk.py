@@ -179,7 +179,18 @@ class Walk(cw.CommandWalk):
                        '&& git init -q && git add README.md && git -c user.name=QA -c user.email=qa@example.invalid '
                        'commit -q -m init; fi'.format(c=shlex.quote(self.beta)))
         before = {t['thread_id'] for t in self.threads()}
-        self.ax('click', '--id', 'rail-new-thread')  # the rail's "+ New chat or company" button, by its DOM id
+        # The rail's "+ New chat or company" button, by its DOM id. With the sidebar hidden it is not
+        # in the tree (run of 11:01Z), so the sidebar toggle is pressed first and the button asked for again.
+        for attempt in range(2):
+            try:
+                self.ax('click', '--id', 'rail-new-thread')
+                break
+            except StepFailed as exc:
+                self.shot(f'second-company-no-rail-{attempt}.png')
+                if attempt or 'notfound' not in str(exc):
+                    raise
+                self.ax('click', '--id', 'rail-toggle')
+                time.sleep(2)
         time.sleep(1)
         opened = False
         for role in ('AXMenuItem', 'AXButton', 'AXStaticText'):
