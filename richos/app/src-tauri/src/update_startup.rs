@@ -184,14 +184,14 @@ mod tests {
         let mut attempts = 0;
         let busy_twice = wait_for_lock(|| {
             attempts += 1;
-            if attempts < 3 { Err(Error::new(ErrorKind::WouldBlock, "busy")) } else { Ok(attempts) }
+            if attempts < 3 { Err(Error::from(ErrorKind::WouldBlock)) } else { Ok(attempts) }
         });
         assert_eq!(busy_twice.unwrap(), 3, "a busy record is waited out");
 
         let mut attempts = 0;
         let refused = wait_for_lock(|| -> std::io::Result<()> {
             attempts += 1;
-            Err(Error::new(ErrorKind::InvalidData, "taken again on the holding thread"))
+            Err(Error::from(ErrorKind::InvalidData))
         });
         assert_eq!(refused.unwrap_err().kind(), ErrorKind::InvalidData);
         assert_eq!(attempts, 1, "a refusal that is not busy was retried");
