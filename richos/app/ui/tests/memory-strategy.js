@@ -87,7 +87,28 @@ async function evidence(page, name, note) {
     const s = m && typeof m.activeMemoryStrategy === "function" ? m.activeMemoryStrategy() : null;
     return s && typeof s.startedAt === "number" ? s.startedAt + 18600 : null;
   });
-  if (pinAt !== null) await pinClock(page, pinAt);
+  // AND THE BAND'S "Searched · Ns ago" IS A SECOND CLOCK THE PIN DOES NOT REACH. `whatAt` is
+  // stamped with the REAL `Date.now()` when the signal arrives (`main.js:3363`, `noteTurnSignal`),
+  // and the snapshot path only replaces it with the fixture's instant when that is newer than
+  // `lastAt` (`main.js:3781`), which it is not. The pin sits at `startedAt + 18,600 ms`, about 6s
+  // after the send, so the age shown is `6s - (real time the walk took to reach the signal)`:
+  // "6s ago" on a quick run, nothing at all (age under 1s -> no " ago") on a slow or sharded one.
+  // Nightly 70's build (run 20261021T003950Z-87713b77) was refused on exactly that: 337 pixels
+  // in the 58x16 box at x655,y821 of `ms-03`, in the sharded run and again in its retry. The
+  // band's own signal instant is put where each committed reference shows it: `ms-03` is the
+  // one picture whose reference reads "Searched · 6s ago" (the snapshot path had just stamped
+  // it, `main.js:3784`), so it gets 6,000 ms before the pin; the others read no age, so 0. The
+  // recompute below goes through the product's own visibility handler like every other timer.
+  if (pinAt !== null) {
+    const ageMs = name === "ms-03-three-workers-active" ? 6000 : 0;
+    await page.evaluate(
+      ([at, age]) => {
+        if (typeof waitTurn !== "undefined" && waitTurn && waitTurn.lastWhat) waitTurn.whatAt = at - age;
+      },
+      [pinAt, ageMs]
+    );
+    await pinClock(page, pinAt);
+  }
   let s;
   try {
     s = await shot(page, name); // throws unless the pixels are a real render
