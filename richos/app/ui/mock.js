@@ -884,7 +884,7 @@
       { role: "assistant", text: reply, turn_id: turnId, at: at + 2000 }
     );
     richFilesByThread.acme = [
-      richFileItem("acme", turnId, "rf_0a1b2c3d4e5f6071", "Acme-counteroffer.pdf", "PDF", "PDF · 184 KB", "Preview",
+      richFileItem("acme", turnId, "rf_0a1b2c3d4e5f6071", "Acme-counteroffer.pdf", "PDF", "PDF · 184 KB · 2 pages", "Preview",
         at + 1000, preset.richFiles !== "round-36-missing"),
       richFileItem("acme", turnId, "rf_8192a3b4c5d6e7f8", "Acme-comparables.xlsx", "XLSX", "Spreadsheet · 46 KB", "Numbers",
         at + 1100, true),
@@ -4992,7 +4992,7 @@
     /// turn named, the way `rich_files_host::start` sends it.
     richFileArrive(threadId, turnId, name) {
       const item = richFileItem(threadId, turnId, "rf_" + uid("x").replace(/[^0-9a-z]/gi, "").slice(-16),
-        name, name.split(".").pop().toUpperCase(), "PDF · 12 KB", "Preview", now(), true);
+        name, name.split(".").pop().toUpperCase(), "PDF · 12 KB · 1 page", "Preview", now(), true);
       (richFilesByThread[threadId] = richFilesByThread[threadId] || []).push(item);
       emit("rich://rich-file", JSON.parse(JSON.stringify(item)));
       return item.file.id;

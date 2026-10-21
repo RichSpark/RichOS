@@ -300,6 +300,19 @@ pub fn file_value(row: &Row) -> Value {
     })
 }
 
+/// A PDF's page count on its card (round 36 screen 3, "PDF · 184 KB · 2 pages"): `pages` and the
+/// meta line's last part. Counted by the window's host, which has the Mac's own PDF reader; a
+/// file that is gone, or a count of none, leaves the card as it was.
+pub fn add_pages(file: &mut Value, pages: usize) {
+    if pages == 0 || file["exists"] != true {
+        return;
+    }
+    let meta = file["meta"].as_str().unwrap_or_default().to_string();
+    let count = if pages == 1 { "1 page".to_string() } else { format!("{pages} pages") };
+    file["pages"] = json!(pages);
+    file["meta"] = json!(if meta.is_empty() { count } else { format!("{meta} · {count}") });
+}
+
 /// One attachment as a timeline item, the shape `question_host.rs` merges questions in.
 pub fn item(row: &Row) -> Value {
     json!({
@@ -481,6 +494,24 @@ mod tests {
         let gone = &super::items(&root, "acme", "t1")[0];
         assert_eq!(gone["file"]["exists"], false);
         assert_eq!(gone["file"]["meta"], "PDF");
+    }
+
+    #[test]
+    fn a_pdf_card_says_its_pages_as_the_round_writes_them() {
+        let mut two = json!({"exists": true, "meta": "PDF · 184 KB"});
+        add_pages(&mut two, 2);
+        assert_eq!(two["meta"], "PDF · 184 KB · 2 pages");
+        assert_eq!(two["pages"], 2);
+        let mut one = json!({"exists": true, "meta": "PDF · 3 KB"});
+        add_pages(&mut one, 1);
+        assert_eq!(one["meta"], "PDF · 3 KB · 1 page");
+        // A file that is gone, or a count of none, leaves the card as it was.
+        let mut gone = json!({"exists": false, "meta": "PDF"});
+        add_pages(&mut gone, 4);
+        assert_eq!(gone, json!({"exists": false, "meta": "PDF"}));
+        let mut none = json!({"exists": true, "meta": "PDF · 3 KB"});
+        add_pages(&mut none, 0);
+        assert_eq!(none, json!({"exists": true, "meta": "PDF · 3 KB"}));
     }
 
     fn items_of(root: &Path, entity: &str, thread: &str) -> Vec<Value> {

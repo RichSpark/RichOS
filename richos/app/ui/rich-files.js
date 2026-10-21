@@ -32,6 +32,37 @@
     }
   }
 
+  // A CARD THAT HAS JUST ARRIVED rises into place once (round 36 screen 3, `r36-file-in`: 0.7 s,
+  // the first 0.25 s after it arrives, each next one 0.12 s after the one before). Only a card
+  // that arrived live on `rich://rich-file` (`main.js` calls `arrived`), never one a reload draws
+  // again. The turn is rebuilt as the reply streams, so the card's start is kept here and carried
+  // into each new node (`--arrival-delay`, as `carryArrival` does for the rail), never restarted.
+  const ARRIVE_MS = 700;
+  const ARRIVE_LEAD_MS = 250;
+  const ARRIVE_STEP_MS = 120;
+  const starts = new Map();
+  let lastStart = 0;
+
+  function arrived(id) {
+    if (!id) return;
+    const start = Math.max(Date.now() + ARRIVE_LEAD_MS, lastStart + ARRIVE_STEP_MS);
+    lastStart = start;
+    starts.set(String(id), start);
+  }
+
+  function carryArrival(el, id) {
+    const start = starts.get(id);
+    if (start == null) return;
+    const now = Date.now();
+    if (now >= start + ARRIVE_MS) {
+      starts.delete(id);
+      return;
+    }
+    el.classList.add("is-arriving");
+    el.style.setProperty("--arrival-delay", start - now + "ms");
+    el.addEventListener("animationend", () => el.classList.remove("is-arriving"), { once: true });
+  }
+
   function card(item, opts) {
     const f = item.file || {};
     const name = f.name || item.text || "File";
@@ -41,6 +72,7 @@
     el.setAttribute("role", "listitem");
     el.dataset.fileId = f.id || item.id;
     el.dataset.s = f.exists === false ? "missing" : "ready";
+    carryArrival(el, el.dataset.fileId);
 
     const main = node("button", "tl-rfile-main");
     main.type = "button";
@@ -103,5 +135,5 @@
     return list;
   }
 
-  window.RichFiles = { render };
+  window.RichFiles = { render, arrived };
 })();

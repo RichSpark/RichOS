@@ -4208,7 +4208,10 @@ Bridge.listen("rich://question-upserted", ({payload}) => {
 Bridge.listen("rich://rich-file", ({ payload }) => {
   updateCachedThread("onActivityUpserted", payload);
   const result = window.RichTimeline.onActivityUpserted(timelineModel, payload);
-  if (!result.rejected) scheduleRender();
+  if (result.rejected) return;
+  // It rises into place once, as it arrives (`rich-files.js`); a reload draws it still.
+  if (window.RichFiles && payload) window.RichFiles.arrived(payload.file && payload.file.id ? payload.file.id : payload.id);
+  scheduleRender();
 });
 
 Bridge.listen("rich://activity-upserted", ({ payload }) => {

@@ -9955,6 +9955,24 @@ body.bp-narrow #out-bottom .out-word {
   outline-offset: 2px;
 }
 
+/* A card that has just arrived rises into place once (round 36 `r36-file-in`). `--arrival-delay`
+   carries its start across a rebuild of the turn (`rich-files.js`); `backwards` holds it unseen
+   until its start and leaves nothing behind, so hover keeps its lift afterwards. */
+.tl-rfile.is-arriving {
+  animation: tl-rfile-in 0.7s var(--out-quint, ease-out) var(--arrival-delay, 0ms) backwards;
+}
+
+@keyframes tl-rfile-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .tl-rfile-main {
   display: flex;
   align-items: center;
@@ -10131,6 +10149,10 @@ body.bp-narrow #out-bottom .out-word {
 
   .tl-rfile:hover {
     transform: none;
+  }
+
+  .tl-rfile.is-arriving {
+    animation: none;
   }
 }
 

@@ -119,7 +119,7 @@ async function main() {
     const got = await cards(page);
     assertEqual(got.length, 2, "cards in the conversation");
     assertEqual(got[0].name, "Acme-counteroffer.pdf");
-    assertEqual(got[0].meta, "PDF · 184 KB");
+    assertEqual(got[0].meta, "PDF · 184 KB · 2 pages", "a PDF's card says its pages, as the round writes it");
     assertEqual(got[0].ext, "PDF");
     assertEqual(got[0].open, "Open in Preview");
     assertEqual(got[0].label, "Open Acme-counteroffer.pdf in Preview");
@@ -182,6 +182,35 @@ async function main() {
     const got = await cards(page);
     assertEqual(got.length, 3, "cards after the live arrival");
     assertEqual(got[2].name, "Acme-signature-page.pdf");
+    assertEqual(got[2].meta, "PDF · 12 KB · 1 page");
+    // Round 36's arrival: the card that just came rises into place once (`r36-file-in`, 0.7 s,
+    // starting 0.25 s after it arrives); the cards a load drew stay still. The page's clock is
+    // fixed, so the delay still to run reads exactly 250 ms.
+    const motion = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll(".tl-rfile")].map((c) => {
+          const s = getComputedStyle(c);
+          return {
+            arriving: c.classList.contains("is-arriving"),
+            name: s.animationName,
+            duration: s.animationDuration,
+            delay: c.style.getPropertyValue("--arrival-delay"),
+          };
+        })
+      );
+    const moving = await motion();
+    assertEqual(moving.map((m) => m.arriving), [false, false, true], "only the card that arrived rises in");
+    assertEqual([moving[2].name, moving[2].duration, moving[2].delay], ["tl-rfile-in", "0.7s", "250ms"], "its rise");
+    // A rebuild of the turn while it runs (the reply streaming, a reload) carries its start, never restarts it.
+    await page.evaluate((t) => window.__RICHOS_MOCK__.richFileArrive("acme", t, "Acme-annex.pdf"), turn);
+    await page.waitForFunction(() => document.querySelectorAll(".tl-rfile").length === 4);
+    const again = await motion();
+    assertEqual(again.map((m) => m.arriving), [false, false, true, true], "both arrivals still rising after the rebuild");
+    assertEqual([again[2].delay, again[3].delay], ["250ms", "370ms"], "the second starts 0.12 s after the first");
+    // Reduced motion: no rise at all.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    assertEqual((await motion())[3].name, "none", "with reduced motion the card is simply there");
+    assertEqual(page.__errors, [], "the page reported errors");
     await page.context().close();
   });
 
