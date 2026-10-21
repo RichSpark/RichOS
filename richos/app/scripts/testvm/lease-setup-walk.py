@@ -48,6 +48,7 @@ It quits nothing: run-walk.py quits the app by its pid and deletes the clone (CE
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import random
 import shlex
@@ -255,16 +256,25 @@ class LeaseSetupWalk(command_walk.CommandWalk):
             raise StepFailed('the next reply does not follow the edited rich.md: ' + reply[:200])
         return {'reply': reply[:200]}
 
+    @staticmethod
+    def _deadline(exc):
+        return 'guest_deadline' in str(exc) or 'command failed (124)' in str(exc)
+
     def by_id(self, dom_id):
         try:
             return self.ax('find', '--id', dom_id, '--first')
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc) or 'guest_deadline' in str(exc):
+            if 'notfound' in str(exc) or 'nothing matched' in str(exc) or self._deadline(exc):
                 return None
             raise
 
     def press_by_id(self, dom_id):
-        return self.ax('click', '--id', dom_id)
+        try:
+            return self.ax('click', '--id', dom_id)
+        except StepFailed as exc:
+            if not self._deadline(exc):
+                raise
+            return None
 
     def thread_back(self, seconds=180):
         """After a relaunch: through the home screen's door into the thread, until the composer is back."""
@@ -302,10 +312,26 @@ class LeaseSetupWalk(command_walk.CommandWalk):
     def new_conversation_reply(self, text, seconds=300):
         """Open a new conversation, send `text` there and answer Rich's finished reply to it."""
         before = set(self.thread_ids())
-        end = time.monotonic() + 30
-        while not self.by_id('rail-new-thread') and time.monotonic() < end:
-            time.sleep(1)
-        self.press_by_id('rail-new-thread')
+        end = time.monotonic() + 120
+        while time.monotonic() < end:
+            # "+ New chat or company" opens a menu (main.js, the new-chat menu); its first item is
+            # "New chat in Acme". Run 1 typed into the open conversation because only the
+            # button was pressed.
+            if self.by_id('rail-new-thread'):
+                self.press_by_id('rail-new-thread')
+                time.sleep(2)
+                picked = False
+                for role in ('AXMenuItem', 'AXButton'):
+                    try:
+                        self.press('New chat in Acme', role=role)
+                        picked = True
+                        break
+                    except StepFailed:
+                        continue
+                if picked:
+                    time.sleep(3)
+                    break
+            time.sleep(2)
         self.type_into(text, '--role', 'AXTextArea', '--title', 'Message to Rich')
         self.press('Send')
         end = time.monotonic() + seconds
@@ -397,6 +423,9 @@ def main():
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     a.task, a.approvals = JOB, 3
+    # 40 s per accessibility call instead of ax.sh's 20, as accounts-walk.sh: on a shared, busy
+    # host a read past 20 s is the harness, not the app.
+    os.environ.setdefault('TESTVM_AX_TIMEOUT', '40')
     steps = a.steps.split(',')
     unknown = [s for s in steps if s not in STEPS]
     if unknown:
