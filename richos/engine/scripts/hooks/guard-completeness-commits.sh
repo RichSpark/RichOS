@@ -326,6 +326,9 @@ fi
 # subprocess is spawned. It is deliberately OVER-inclusive (a commit MESSAGE
 # containing the word "push" gets past it and is then classified properly);
 # being over-inclusive can only cost time, never coverage.
+# dispatch-words: commit push
+#   (dispatch-pretooluse.sh skips this rule on a call that names none of these
+#   words: they are the words the filter below needs before it can do anything.)
 case "$INPUT" in
     *commit*|*push*) ;;
     *) exit 0 ;;

@@ -356,23 +356,23 @@
       }
     },
     "engine scripts/lib/git-jurisdiction.test.sh": {
-      "review": "Resolver cases parse command strings. The five executed guards receive private Git targets with literal settings and no publication/TODO/row declarations. Broken helper cases exit before helper use. The source scanner reads the engine inventory as data. Git history used by assertions is generated privately; no live land or agent is observed. Renewed for richos/engine/mega-lander/workspaces.py on 2026-09-29 (2af6d481 to 98d5ba20 after a2355c58: a bounded poll of the existing _alive check in stop_processes and the constant PROCESS_KILL_WAIT) and on 2026-10-20 (5185e546 to f32296f7: a proof-run report pointer on TaskCompleted and a normal SubagentStop, and the merge's offer of the reported runs). Neither reads a new file, environment variable, tool or outside path on this unit's paths, so its input floor is unchanged (moved here from the prose review's Renewals section on 2026-10-20). Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py f32296f7 to 39a073c1. proof_report bounds its HEAD read and each saved-run read by what is left of the shared report deadline; it reads no new file, environment variable, tool or outside path, and this unit's fixtures never reach it. Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py 39a073c1 to 5a8efd33. _land_env passes the caller's LC_ALL to the merge instead of LC_ALL=C; it reads only os.environ, as before, and this unit's fixtures never reach a land. Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py 5a8efd33 to 5574f748. proof_report also says whether its run carries the retain marker and names other held runs of the checkout (an os.path.exists per saved run under the same proof-run history); no new file, environment variable, tool or outside path on this unit's paths. Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py 5574f748 to 7bf70c69. proof_report counts a KNOWN-RED row (the summary's known_red flag) with the incomplete checks; no new file, environment variable, tool or outside path on this unit's paths. Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py 7bf70c69 to 51c47a0d. proof_report bounds its scan of other runs' retain markers (at most 20, the deadline asked before each and after the last); no new file, environment variable, tool or outside path on this unit's paths. Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py 51c47a0d to e912381b. workspaces.py admits the questions-only recovery mode in two observe predicates; what these checks read is unchanged Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py e912381b to 40275ff6. workspaces.py follows observation projections recursively for recovery identity; what these checks read is unchanged",
+      "review": "Resolver cases parse command strings. The five executed guards receive private Git targets with literal settings and no publication/TODO/row declarations. Broken helper cases exit before helper use. The source scanner reads the engine inventory as data. Git history used by assertions is generated privately; no live land or agent is observed. Renewed for richos/engine/mega-lander/workspaces.py on 2026-09-29 (2af6d481 to 98d5ba20 after a2355c58: a bounded poll of the existing _alive check in stop_processes and the constant PROCESS_KILL_WAIT) and on 2026-10-20 (5185e546 to f32296f7: a proof-run report pointer on TaskCompleted and a normal SubagentStop, and the merge's offer of the reported runs). Neither reads a new file, environment variable, tool or outside path on this unit's paths, so its input floor is unchanged (moved here from the prose review's Renewals section on 2026-10-20). Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py f32296f7 to 39a073c1. proof_report bounds its HEAD read and each saved-run read by what is left of the shared report deadline; it reads no new file, environment variable, tool or outside path, and this unit's fixtures never reach it. Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py 39a073c1 to 5a8efd33. _land_env passes the caller's LC_ALL to the merge instead of LC_ALL=C; it reads only os.environ, as before, and this unit's fixtures never reach a land. Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py 5a8efd33 to 5574f748. proof_report also says whether its run carries the retain marker and names other held runs of the checkout (an os.path.exists per saved run under the same proof-run history); no new file, environment variable, tool or outside path on this unit's paths. Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py 5574f748 to 7bf70c69. proof_report counts a KNOWN-RED row (the summary's known_red flag) with the incomplete checks; no new file, environment variable, tool or outside path on this unit's paths. Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py 7bf70c69 to 51c47a0d. proof_report bounds its scan of other runs' retain markers (at most 20, the deadline asked before each and after the last); no new file, environment variable, tool or outside path on this unit's paths. Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py 51c47a0d to e912381b. workspaces.py admits the questions-only recovery mode in two observe predicates; what these checks read is unchanged Renewed 2026-10-20: richos/engine/mega-lander/workspaces.py e912381b to 40275ff6. workspaces.py follows observation projections recursively for recovery identity; what these checks read is unchanged Renewed 2026-10-21: richos/engine/scripts/hooks/guard-ceo-todos-commits.sh 94bd4125 to d4ce06b9, richos/engine/scripts/hooks/guard-completeness-commits.sh fb36f214 to 4007e496, richos/engine/scripts/hooks/guard-inflight-notify.sh 2d5c5cf2 to 8661a00b, richos/engine/scripts/hooks/guard-publication-commits.sh acc0b52b to 9652c70c, richos/engine/scripts/hooks/guard-row-currency-commits.sh 5e6104b9 to c89e57c5. 2026-10-21: one comment line added (# dispatch-words:), naming the words the rule filter already tests; no executable line changed.",
       "sources": {
         "richos/engine/scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/inflight.py": "d1feca630d8fda5b042c70e0940798856678db09faa65e4b722f3d9c6f9ec3a3",
         "richos/engine/scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
-        "richos/engine/scripts/hooks/guard-row-currency-commits.sh": "5e6104b981b6119bb22c51bbda81184df800c42e6353eeb16d05c2ca1d62c36d",
+        "richos/engine/scripts/hooks/guard-row-currency-commits.sh": "c89e57c587fff7f1da193268eb472218c844e32994bd1266cb1d5428cd02ef9e",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "richos/engine/scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "richos/engine/scripts/lib/ceo-todos.py": "5e6264edc76c9dc03b0c569c63de251dd5b053bd88e40aa7101538bbbeaf406b",
-        "richos/engine/scripts/hooks/guard-inflight-notify.sh": "2d5c5cf2de342b7978f4aad6222e7fc37d6a0b344023e576d7881111a4aba9ab",
+        "richos/engine/scripts/hooks/guard-inflight-notify.sh": "8661a00bea2a75b24d4519fd396489ae5d27e857b515a4f9aa625e9e39db968d",
         "richos/engine/scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
-        "richos/engine/scripts/hooks/guard-completeness-commits.sh": "fb36f214fcc59dd4bbbcdecae56368169d536327a6350afd864922df8ed2f395",
+        "richos/engine/scripts/hooks/guard-completeness-commits.sh": "4007e4965f75482abcf959c05e2edf302407f875f2a384727e4bab4e136e308b",
         "richos/engine/mega-lander/workspaces.py": "40275ff66da58eebcd26b7c31ba9024952deaf15a10eb24bd223ba2cbba31353",
-        "richos/engine/scripts/hooks/guard-ceo-todos-commits.sh": "94bd412597be8471b954d4eb845cc12fcffbde97d6a3b4b53416c26080f0b845",
-        "richos/engine/scripts/hooks/guard-publication-commits.sh": "acc0b52bb6bb2a54af722b8a0e5782078fc97adca2767a6198dca32e354b2adf",
+        "richos/engine/scripts/hooks/guard-ceo-todos-commits.sh": "d4ce06b9d6d3e6bcc741657e738bcbe3d227f0d5f370fc57121cd325cd808625",
+        "richos/engine/scripts/hooks/guard-publication-commits.sh": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
         "richos/engine/scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "richos/engine/scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
         "richos/engine/scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
@@ -1609,7 +1609,7 @@
       }
     },
     "engine scripts/hooks/ceo-todos.test.sh": {
-      "review": "Every declaration, record, artifact tree, front-door transcript and Git history is generated privately. The real engine is an adoption marker/source inventory only. Cold-open --record reads the private front door, and init skips the live cold-open reader. Nested mutation cases reconstruct the same fixtures. No network, operator record or live-clock predicate. The full outer suite still executes every case and registration/initializer assertion. Each of the twelve done-check mutants now runs its one named case against a private predicate fixture, first unmutated (required scoped exit 3 and exactly one PASS) and then mutated (required owning failure). Whole-engine identity is retained because the outer suite reads starter templates and registration/installer text beyond its executed helper closure.",
+      "review": "Every declaration, record, artifact tree, front-door transcript and Git history is generated privately. The real engine is an adoption marker/source inventory only. Cold-open --record reads the private front door, and init skips the live cold-open reader. Nested mutation cases reconstruct the same fixtures. No network, operator record or live-clock predicate. The full outer suite still executes every case and registration/initializer assertion. Each of the twelve done-check mutants now runs its one named case against a private predicate fixture, first unmutated (required scoped exit 3 and exactly one PASS) and then mutated (required owning failure). Whole-engine identity is retained because the outer suite reads starter templates and registration/installer text beyond its executed helper closure. Renewed 2026-10-21: richos/engine/scripts/hooks/guard-ceo-todos-commits.sh 94bd4125 to d4ce06b9. 2026-10-21: one comment line added (# dispatch-words:), naming the words the rule filter already tests; no executable line changed.",
       "sources": {
         "richos/engine/scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "richos/engine/scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -1628,7 +1628,7 @@
         "richos/engine/scripts/lib/proc_tree.py": "ca4557acad8c3b91f0137d2cd68f5695893ba85e52f5042595e00883b9a9144c",
         "richos/engine/scripts/ceo-todos-init.sh": "a98539a81ad89d378ab1cb43462fb7056e01988e6696c1b3dddae8535591fec6",
         "richos/engine/scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
-        "richos/engine/scripts/hooks/guard-ceo-todos-commits.sh": "94bd412597be8471b954d4eb845cc12fcffbde97d6a3b4b53416c26080f0b845",
+        "richos/engine/scripts/hooks/guard-ceo-todos-commits.sh": "d4ce06b9d6d3e6bcc741657e738bcbe3d227f0d5f370fc57121cd325cd808625",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "richos/engine/scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
@@ -1659,13 +1659,13 @@
       }
     },
     "engine scripts/hooks/completeness-commits.test.sh": {
-      "review": "All publication targets, artifact requirements and Git histories are private literal fixtures. Actual registration/probe text is read as source data. No nested driver or external publication command runs. Completeness predicates inspect private tree contents, not host/network state. Machine-path matching is pure tracked text with local reasons and a fixture baseline; its helper is a required source.",
+      "review": "All publication targets, artifact requirements and Git histories are private literal fixtures. Actual registration/probe text is read as source data. No nested driver or external publication command runs. Completeness predicates inspect private tree contents, not host/network state. Machine-path matching is pure tracked text with local reasons and a fixture baseline; its helper is a required source. Renewed 2026-10-21: richos/engine/scripts/hooks/guard-completeness-commits.sh fb36f214 to 4007e496. 2026-10-21: one comment line added (# dispatch-words:), naming the words the rule filter already tests; no executable line changed.",
       "sources": {
         "richos/engine/scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
         "richos/engine/scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "richos/engine/scripts/hooks/completeness-commits.test.sh": "a3224852ed2a5f6e74a6c85ce7813771aac758a343bb5f86810da33e1bbfc8af",
-        "richos/engine/scripts/hooks/guard-completeness-commits.sh": "fb36f214fcc59dd4bbbcdecae56368169d536327a6350afd864922df8ed2f395",
+        "richos/engine/scripts/hooks/guard-completeness-commits.sh": "4007e4965f75482abcf959c05e2edf302407f875f2a384727e4bab4e136e308b",
         "richos/engine/scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "richos/engine/scripts/publication-completeness.sh": "49a7df0809304e4e62de627d04fdcd1cb5840760df4b490057895a9ba2feaf99",
         "richos/engine/scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
@@ -1695,14 +1695,14 @@
       }
     },
     "engine scripts/hooks/named-persons.test.sh": {
-      "review": "Private roster, target, seed, HQ and worktree fixtures drive every case. RICHOS_NAMED_PERSONS_FILE is supplied for each roster path. Real registration/probe data stays inside the engine. No external roster, network, clock or host process contributes to a verdict.",
+      "review": "Private roster, target, seed, HQ and worktree fixtures drive every case. RICHOS_NAMED_PERSONS_FILE is supplied for each roster path. Real registration/probe data stays inside the engine. No external roster, network, clock or host process contributes to a verdict. Renewed 2026-10-21: richos/engine/scripts/hooks/guard-named-persons-commands.sh 56891e30 to c0f07f92. 2026-10-21: one comment line added (# dispatch-words:), naming the words the rule filter already tests; no executable line changed.",
       "sources": {
         "richos/engine/scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
         "richos/engine/scripts/lib/named-persons.sh": "2c28d15414eed56676bd2c5588d66fe88f30c03dfb78e5e2752ffc5de17fffc3",
         "richos/engine/scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "richos/engine/scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
-        "richos/engine/scripts/hooks/guard-named-persons-commands.sh": "56891e30dde5774e5430c9459cee10dc61bb683888f76917219d97c9e9cce825",
+        "richos/engine/scripts/hooks/guard-named-persons-commands.sh": "c0f07f9202cfbfb09018b69a379c98b2e4420cf6dedb81c163b9a92a7c86404a",
         "richos/engine/scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "richos/engine/scripts/lib/named-persons.py": "3392076d89530f9a120fea16eaba9fa6053f577ae836023c691b5f0eb011c871",
         "richos/engine/scripts/hooks/guard-named-persons-writes.sh": "95095c3eee1ac1f3f7f156dfc2fcb0b039868c63c1d10d45d043fdd7d86ad3ce",
@@ -1732,7 +1732,7 @@
       }
     },
     "engine scripts/hooks/row-currency.test.sh": {
-      "review": "Private record, artifact, declaration and Git-history fixtures drive guard, lint and headline verification. The entire mutation driver recreates these inputs. The real engine only supplies registration/adoption and source data. No live operator record, network or current-time predicate is consumed.",
+      "review": "Private record, artifact, declaration and Git-history fixtures drive guard, lint and headline verification. The entire mutation driver recreates these inputs. The real engine only supplies registration/adoption and source data. No live operator record, network or current-time predicate is consumed. Renewed 2026-10-21: richos/engine/scripts/hooks/guard-row-currency-commits.sh 5e6104b9 to c89e57c5. 2026-10-21: one comment line added (# dispatch-words:), naming the words the rule filter already tests; no executable line changed.",
       "sources": {
         "richos/engine/scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "richos/engine/scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -1752,7 +1752,7 @@
         "richos/engine/scripts/row-currency-lint.sh": "47b26a433c2a96e69844fdca03b263c37bd0f80bbbbeeacd87dd4117feef1167",
         "richos/engine/scripts/lib/proc_tree.py": "ca4557acad8c3b91f0137d2cd68f5695893ba85e52f5042595e00883b9a9144c",
         "richos/engine/scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
-        "richos/engine/scripts/hooks/guard-row-currency-commits.sh": "5e6104b981b6119bb22c51bbda81184df800c42e6353eeb16d05c2ca1d62c36d",
+        "richos/engine/scripts/hooks/guard-row-currency-commits.sh": "c89e57c587fff7f1da193268eb472218c844e32994bd1266cb1d5428cd02ef9e",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "richos/engine/scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
