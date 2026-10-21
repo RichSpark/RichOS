@@ -26,9 +26,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   connect         command-walk.py's: that folder connected
   skills          SKILLS_JOB typed: Rich hands it on, the fixture teammate walkqa lists its skills and
                   uses its playwright-cli skill. PASS needs all of: a lease's journaled system/init
-                  lists richos-app-engine:playwright-cli; the back end's hook record shows walkqa's
-                  own Skill call for playwright-cli and its own Bash call running playwright-cli; the
-                  stand-in's log shows it ran. The worker's answer and its transcript's skill names
+                  lists richos-app-engine:playwright-cli; the assignment settled; the back end's hook
+                  record shows walkqa's own Skill call for playwright-cli COMPLETED (PostToolUse), its
+                  own Bash call that opened the requested page with playwright-cli completed, and the
+                  page's title (printed by the stand-in only for that open) reached walkqa in a tool
+                  result; the stand-in's log shows that open. The worker's answer and its transcript's skill names
                   are recorded beside them.
   standing-order  ORDER typed ("From now on, ..."); within --within seconds ~/myrichos/instructions.md
                   holds ORDER_WORD, and the copied rich.md and stu.md are unchanged.
@@ -40,6 +42,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -110,6 +113,25 @@ def init_skills(raw_lines):
     return out
 
 
+# The requested browser action, in a command and in the stand-in's log.
+OPENED = re.compile(r'(?:^|\s)(?:playwright-cli )?(?:open|goto) https://example\.com')
+
+
+def worker_use(calls):
+    """The worker's SUCCESSFUL use of the skill, from the back end's hook record: (Skill calls for
+    playwright-cli that completed, never a PostToolUseFailure; the worker's own shell calls that
+    completed and opened the requested page with playwright-cli; the worker's tool results that
+    carry the page's title, which the stand-in prints only for that open). A worker's shell call
+    runs in the background in the app (run_in_background, empty stdout and a backgroundTaskId), so
+    the title comes back in a later result, `agent_hold.py wait`'s, and not in the open call's own."""
+    mine = [c for c in calls if c['agent_id']]
+    used = [c for c in mine if c['event'] == 'PostToolUse' and c['tool'] == 'Skill' and 'playwright-cli' in c['input']]
+    opened = [c for c in mine if c['event'] == 'PostToolUse' and c['tool'] == 'Bash'
+              and 'playwright-cli' in c['input'] and OPENED.search(c['input'])]
+    titled = [c for c in mine if TITLE in c['response']]
+    return used, opened, titled
+
+
 CALLBACKS = r"""import glob,json,sys
 out=[]
 for p in glob.glob(sys.argv[1]+"/engine-state/evidence/*/callbacks.jsonl"):
@@ -119,9 +141,9 @@ for p in glob.glob(sys.argv[1]+"/engine-state/evidence/*/callbacks.jsonl"):
         if c.get("hook_event_name") not in ("PreToolUse","PostToolUse","PostToolUseFailure"): continue
         i=c.get("tool_input") or {}
         r=c.get("tool_response")
+        r=json.dumps(r) if r is not None else str(c.get("error") or "")
         out.append({"event":c.get("hook_event_name"),"tool":c.get("tool_name"),"agent_id":c.get("agent_id"),
-                    "agent_type":c.get("agent_type"),"input":json.dumps(i)[:1500],
-                    "response":(json.dumps(r) if r is not None else "")[:1500]})
+                    "agent_type":c.get("agent_type"),"input":json.dumps(i)[:1500],"response":r[:6000]})
 print(json.dumps(out))
 """
 
@@ -142,13 +164,13 @@ class SkillsWalk(lease_setup_walk.LeaseSetupWalk):
         self.facts['skills_sent_ms'] = sent
         self.save()
         end = time.monotonic() + self.a.within
-        record, used, ran = None, [], []
+        record, used, ran, titled = None, [], [], []
         while time.monotonic() < end:
-            calls = self.calls()
-            used = [c for c in calls if c['agent_id'] and c['tool'] == 'Skill' and 'playwright-cli' in c['input']]
-            ran = [c for c in calls if c['agent_id'] and c['tool'] == 'Bash' and 'playwright-cli' in c['input']]
+            used, ran, titled = worker_use(self.calls())
             record = self.ours(sent)
-            if record and record.get('state') not in OPEN and used and ran:
+            if record and record.get('state') not in OPEN:
+                # Closed: read the hook record once more, so a call written as it closed counts.
+                used, ran, titled = worker_use(self.calls())
                 break
             if record:
                 self.approve_if_asked(record.get('title', ''))
@@ -161,18 +183,23 @@ class SkillsWalk(lease_setup_walk.LeaseSetupWalk):
         worker_names = guest(self.vm, 'python3 -c ' + shlex.quote(TRANSCRIPT_SKILLS) + ' ' + shlex.quote(self.home), 60).split()
         evidence = {'assignment': record, 'init_frames': len(frames),
                     'init_skills_engine': sorted(s for s in (listed[0] if listed else []) if s.startswith('richos-app-engine:')),
-                    'worker_skill_calls': used, 'worker_playwright_commands': ran, 'stand_in_log': log,
+                    'worker_skill_calls': used, 'worker_playwright_commands': ran,
+                    'worker_results_with_the_title': titled, 'stand_in_log': log,
                     'worker_transcript_skill_names': worker_names}
         (self.out / 'observed-skills.json').write_text(json.dumps(evidence, indent=2) + '\n')
         failures = []
         if not listed:
             failures.append(f'no journaled system/init frame lists {WANT} ({len(frames)} frame(s))')
+        if not record or record.get('state') != 'settled':
+            failures.append(f"the assignment did not end settled: {record.get('state') if record else 'none registered'}")
         if not used:
-            failures.append('no teammate called the Skill tool for playwright-cli')
+            failures.append("no teammate's Skill call for playwright-cli completed (PostToolUse)")
         if not ran:
-            failures.append('no teammate ran playwright-cli with its shell tool')
-        if not log.strip():
-            failures.append('the playwright-cli stand-in never ran')
+            failures.append(f"no teammate's own shell call that opened {URL} with playwright-cli completed")
+        if not titled:
+            failures.append(f"the opened page's title ({TITLE}) never reached the teammate in a tool result")
+        if not OPENED.search(log):
+            failures.append(f'the playwright-cli stand-in never opened {URL}: {log.strip()[:200]!r}')
         if failures:
             raise StepFailed('; '.join(failures))
         return {'init_engine_skills': len(evidence['init_skills_engine']), 'skill_call': used[0]['input'],
