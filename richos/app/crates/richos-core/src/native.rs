@@ -1203,10 +1203,60 @@ impl ActionGrant {
     }
 }
 
+/// **The turn-end signal of Stu's lease, for stall-watch's unfinished-work reminder.** The lease
+/// runs with `--print`, whose transcript never records a turn's end (0 of 794 `sdk-cli`
+/// transcripts did, richos-hq `6864034d0`), so the monitor takes the host's word instead
+/// (`engine/scripts/lib/host_child.py` `idle`/`started`, read from the file `RICHOS_WATCH_LEAD`
+/// names): `{"session", "started", "turn_ended"}`. `turn_ended` is present only while a turn has
+/// ended with nothing awaited, and is removed when input is given or a turn begins. Written only
+/// on a change; removed with the lease.
+pub(crate) struct LeadSignal {
+    path: std::path::PathBuf,
+    session: String,
+    started: u64,
+    idle: Mutex<bool>,
+}
+
+impl LeadSignal {
+    pub(crate) fn path_for(state: &Path, session: &str) -> std::path::PathBuf {
+        state.join("stall-watch-lead").join(format!("{session}.json"))
+    }
+    pub(crate) fn new(path: std::path::PathBuf, session: &str) -> std::io::Result<Self> {
+        let signal=Self {path,session:session.to_string(),started:crate::util::now_millis()/1000,idle:Mutex::new(false)};
+        signal.write(false)?;
+        Ok(signal)
+    }
+    fn write(&self, idle: bool) -> std::io::Result<()> {
+        let mut body=json!({"session":self.session,"started":self.started});
+        if idle {body["turn_ended"]=json!(crate::util::now_millis()/1000);}
+        if let Some(dir)=self.path.parent() {std::fs::create_dir_all(dir)?;}
+        let temporary=self.path.with_extension("json.tmp");
+        std::fs::write(&temporary,serde_json::to_vec(&body)?)?;
+        std::fs::rename(&temporary,&self.path)
+    }
+    fn set(&self, idle: bool) {
+        let mut current=self.idle.lock().unwrap();
+        if *current==idle {return}
+        match self.write(idle) {
+            Ok(())=>*current=idle,
+            Err(error)=>eprintln!("[richos] stall-watch lead file {}: {error}",self.path.display()),
+        }
+    }
+    /// A turn ended and nothing is awaited.
+    fn ended(&self) {self.set(true)}
+    /// Input was given, or a turn began.
+    fn began(&self) {self.set(false)}
+}
+
+impl Drop for LeadSignal {
+    fn drop(&mut self) {drop(std::fs::remove_file(&self.path));}
+}
+
 /// The existing engine monitor, owned by Stu's native lease. Its policy stays in the engine.
 struct StallWatch {
     _child: crate::owned_process::OwnedChild,
     _output: JoinHandle<()>,
+    lead: Arc<LeadSignal>,
 }
 
 impl StallWatch {
@@ -1218,12 +1268,14 @@ impl StallWatch {
         let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),entity_id:entity.clone(),thread_id:thread.clone()};
         let script=profile.engine.join("scripts/stall-watch.sh");
         if !script.is_file() {return Err(NativeError::Protocol("The engine's stall monitor is missing".into()))}
+        let lead=Arc::new(LeadSignal::new(LeadSignal::path_for(&profile.state,session),session).map_err(NativeError::Io)?);
         let mut command=Command::new("/bin/bash");
         for (key,value) in environment.get_envs() {
             if let Some(value)=value {command.env(key,value);} else {command.env_remove(key);}
         }
         command.arg(script).args(["--monitor","--jsonl"])
             .current_dir(&profile.coordination).env("RICHOS_SESSION_ID",session)
+            .env("RICHOS_WATCH_LEAD",&lead.path)
             .env("RICHOS_SESSION_PID",lease_pid.to_string())
             .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit());
         crate::owned_process::OwnedChild::configure(&mut command);
@@ -1247,7 +1299,7 @@ impl StallWatch {
                 }
             }
         }).map_err(NativeError::Io)?;
-        Ok(Some(Self {_child:child,_output:output}))
+        Ok(Some(Self {_child:child,_output:output,lead}))
     }
 }
 
@@ -1296,6 +1348,8 @@ pub struct NativeClient {
 /// to be declared first.
 struct ReaderState {
     agent_tasks: crate::operator_lead::TaskBook,
+    /// Stu's turn-end signal for stall-watch; `None` on every lease that has no monitor.
+    lead: Option<Arc<LeadSignal>>,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
     /// **Where every `assistant` frame's usage goes, and the account this lease runs on**
@@ -1507,6 +1561,7 @@ impl Default for ReaderState {
     fn default() -> Self {
         ReaderState {
             agent_tasks: crate::operator_lead::TaskBook::default(),
+            lead: None,
             question_scope: None,
             work_tools_loaded: InitFact::NotYetReported,
             assignment_tool_loaded: false,
@@ -2106,6 +2161,7 @@ impl NativeClient {
         };
         client.handshake_cancellable(control)?;
         client.stall_watch=StallWatch::start(profile,role,&command,&client.session_id,lease_pid,Arc::clone(&client.reader_closed))?;
+        if let Some(watch)=&client.stall_watch {client.reader_state.lock().unwrap().lead=Some(Arc::clone(&watch.lead));}
         Ok(client)
     }
 
@@ -2425,6 +2481,13 @@ impl NativeClient {
             return;
         }
 
+        // A turn the platform started itself (a helper's hand-back, a task notification) begins
+        // with the lead's own output: it is not between turns any more.
+        if ty == "assistant" || ty == "stream_event" {
+            let lead=state.lock().unwrap().lead.clone();
+            if let Some(lead)=lead {lead.began();}
+        }
+
         // ---- the terminal frame --------------------------------------------------------
         if ty == "result" {
             // **THE DENOMINATOR IS A FACT ABOUT THE MODEL, so it is learned from whichever
@@ -2445,13 +2508,19 @@ impl NativeClient {
             // with a user send still queued — ours, the only one there can be — ends a turn
             // that was already in flight when we sent, so it is RETAINED and the parked
             // prompt keeps waiting for its own.
-            let ready = {
+            let (ready, nothing_awaited) = {
                 let mut guard = current.lock().unwrap();
                 let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut *guard).into_iter()
                     .partition(|pending| !pending.result_is_another_turns(&msg));
                 *guard = waiting;
-                ready
+                (ready, guard.is_empty())
             };
+            // Between turns only with no input still awaited; written before the reply is
+            // delivered, so whoever sees the reply sees the signal.
+            if nothing_awaited {
+                let lead=state.lock().unwrap().lead.clone();
+                if let Some(lead)=lead {lead.ended();}
+            }
             if ready.is_empty() {
                 between.lock().unwrap().offer_frame(msg);
             } else {
@@ -2901,7 +2970,8 @@ impl NativeClient {
                     phase: TurnPhase::Unconfirmed,
                     child_names_turns,
                 });
-
+                let lead=self.reader_state.lock().unwrap().lead.clone();
+                if let Some(lead)=lead {lead.began();}
             }
             if let Err(error) = Self::write_line(&self.stdin, &msg) {
                 self.current_prompt.lock().unwrap().retain(|pending| pending.command_uuid != command_uuid);
@@ -4575,6 +4645,53 @@ for index,prompt in enumerate([first,second]):
         assert_eq!(client.session_id(),session);
     }
 
+    /// Stu's turn-end signal (one-app plan 2026-10-21, step 1): a turn that ends with nothing
+    /// awaited sets `turn_ended` in the file stall-watch reads, and new input clears it.
+    #[test]
+    fn a_turn_ending_with_nothing_awaited_sets_the_stall_watch_signal_and_new_input_clears_it() {
+        let script=write_script("lead-signal",r#"
+exec python3 -u -c '
+import json,sys
+def read(): return json.loads(sys.stdin.readline())
+def send(row): print(json.dumps(row),flush=True)
+init=read()
+send({"type":"control_response","response":{"subtype":"success","request_id":init["request_id"],"response":{}}})
+for index in range(2):
+ prompt=read()
+ while not __import__("os").path.exists("go-"+str(index)): __import__("time").sleep(0.01)
+ send({"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reply"}]}})
+ send({"type":"result","stop_reason":"end_turn","command_uuid":prompt["uuid"]})
+'
+"#);
+        let root=script.parent().unwrap().to_path_buf();
+        let client=NativeClient::spawn(&script,&root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        let path=LeadSignal::path_for(&root,client.session_id());
+        let signal=Arc::new(LeadSignal::new(path.clone(),client.session_id()).unwrap());
+        client.reader_state.lock().unwrap().lead=Some(signal);
+        let read=||->Value {serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()};
+        let first=read();
+        assert_eq!(first["session"],client.session_id());
+        assert!(first["started"].as_u64().is_some_and(|at|at>0));
+        assert!(first.get("turn_ended").is_none(),"a lease that has ended no turn: {first}");
+        for index in 0..2 {
+            let response=client.enqueue_prompt("Work",None).unwrap();
+            assert!(read().get("turn_ended").is_none(),"input given clears the signal: {}",read());
+            std::fs::write(root.join(format!("go-{index}")),"").unwrap();
+            assert_eq!(response.wait(&mut |_|{}).unwrap(),"end_turn");
+            let ended=read();
+            assert!(ended["turn_ended"].as_u64().is_some_and(|at|at>=first["started"].as_u64().unwrap()),"{ended}");
+            assert_eq!(ended["session"],client.session_id());
+        }
+        drop(client);
+        // The file is the lease's own and goes with it.
+        // load-bound: the reader thread holds the last reference briefly after the drop.
+        let deadline=std::time::Instant::now()+Duration::from_secs(10);
+        while path.exists() {
+            assert!(std::time::Instant::now()<deadline,"the signal outlived its lease");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn native_plugin_reload_is_a_control_request_and_keeps_the_session() {
         for (name,answer) in [("reload-success","success"),("reload-refused","error")] {
@@ -4884,7 +5001,7 @@ exec /bin/sleep 1000
         let other=crate::status_tools::StatusToolScope {thread_id:"thread-b".into(),..scope.clone()};
         assert!(crate::session_tools::pending(&other,"stu").unwrap().is_none());
         assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none());
-        let StallWatch {_child:child,_output:output}=monitor;
+        let StallWatch {_child:child,_output:output,..}=monitor;
         drop(child);
         output.join().unwrap();
         std::fs::remove_dir_all(root).unwrap();
