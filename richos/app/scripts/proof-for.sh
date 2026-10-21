@@ -496,6 +496,18 @@ while IFS= read -r p; do
       note "engine tree -> ci-affected-units.sh" ;;
   esac
 
+  # ---- teammate definitions: richos-core reads every one of them ----
+  # native_driver_tests::a_teammate_s_session_lists_every_skill_its_definition_names walks
+  # engine/agents, engine/team/shelf and engine/mega-lander/duties, so a change to any file in
+  # them can fail it. The engine's own mapping reaches none of it (a .md maps to nothing), which
+  # let a shelf file land on main with the test red (2026-10-21).
+  case "$p" in
+    richos/engine/agents/*|richos/engine/team/shelf/*|richos/engine/mega-lander/duties/*)
+      printf '%s\t%s\t--lib native::native_driver_tests::a_teammate_s_session_lists_every_skill_its_definition_names\n' \
+        "richos-core" "unit" >> "$WORK/rust"; MATCHED=1
+      note "richos-core reads every teammate definition" ;;
+  esac
+
   # ---- script suites: the suite's own declaration, and the suite itself ----
   case "$p" in
     "$APP_REL"/scripts/*.test.sh)
