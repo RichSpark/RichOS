@@ -276,8 +276,9 @@ def python_runtime(executable):
 #     not, plus every untracked file git does not ignore. Never HEAD: a merge being checked
 #     and the commit that concludes it are the same content. Any byte change anywhere in the
 #     checkout re-runs every unqualified check;
-#   * the checkout's path (a result is never shared between worktrees: what git ignores,
-#     node_modules and build products, differs between them);
+#   * the checkout's path (what git ignores, node_modules and build products, differs between
+#     worktrees; a pass made in another checkout stands here only when it still stands there,
+#     on the same content and installs: seat_gap);
 #   * the command (proof-run adds it), the runner's settings, the resolved interpreters, the
 #     environment variables named below, and the platform;
 #   * the INSTALLED DEPENDENCIES a check runs against (installed_dependencies below).
@@ -1634,9 +1635,12 @@ VERIFIES_OWN_INPUTS = frozenset(("engine receipts", "engine scripts/verification
 class Record:
     def __init__(self, root, logdir, items, source, identities, previous=None,
                  current_source=None, current_identity=None, current_identities=None, explain=None,
-                 current_commit=None, selection=None):
+                 current_commit=None, selection=None, seat=None):
         refuse_duplicates(items)  # before anything is written: a saved plan never holds one
         self.root, self.logdir = str(root), Path(logdir)
+        # seat(item, snapshot): the read_seat (seat_reader) for one check, so reuse() can accept
+        # a pass made in another checkout that still stands there (seat_gap). None: never.
+        self.seat = seat
         # What changed and who could have changed it, appended to an invalidation note, so a
         # check invalidated by another check's writes names the paths instead of only saying so.
         self.explain = explain or (lambda item: "")
@@ -2016,9 +2020,115 @@ def identity_difference(saved, wanted, limit=6):
     return " (" + "; ".join(shown[:limit]) + more + ")"
 
 
-def evidence_gap(label, old, identity, plan, exact=False, source=None):
+# A WHOLE-CHECKOUT PASS MADE IN ANOTHER CHECKOUT STANDS HERE WHEN IT STILL STANDS THERE (2026-10-21).
+#
+# The land of cc/zach-opus-reuse3 (richos main 06d2ae7af): the readiness preflight read the
+# author's handover run 20261021T051618Z-iscu0cdi as proving the branch (asked in the author's
+# own checkout, where it does), and the gate, offered that run, then executed every one of its 23
+# checks again: 1238.9 s of serial work, "23 planned, 23 passed (0 of them reused)"
+# (attempt-t40c12wk). Every whole-checkout identity names where its checkout is: `checkout`, the
+# installs bound by place (`installed.checkout` by name, `installed.playwright_package` by
+# candidate path) and, for a check whose PATH carries the checkout's own Cargo shim, its
+# environment. A pass made in the author's worktree could never stand in the main checkout the
+# gate runs in, however identical the bytes.
+#
+# The place is not dropped; it is read where the pass was made. A pass saved in another checkout
+# (its seat) stands for this check here only when ALL of these hold:
+#   * both are whole-checkout identities, and both checkouts hold the same content (`tree`:
+#     every byte git would land, untracked files included);
+#   * the same command and runner settings;
+#   * the pass still stands in its seat, read now in the seat (seat_reader) with this check's
+#     environment placed there: what the preflight asks, asked again by the consumer;
+#   * read there and read here, the two checkouts agree on everything but their place: tools,
+#     platform, browser installs, Rust toolchain, and the dependency installs each would load,
+#     by content (portable_dependencies);
+#   * the receipt and log it saved are intact (reuse() checks them as for any pass).
+# What git ignores beyond the dependency installs (build and bytecode caches, test output, hook
+# sidecars) is bound in neither checkout, as it is bound in no single checkout across runs.
+SEAT_INSTALLS = ("checkout", "playwright_package")
+
+
+def placed(value, seat, here):
+    """`value` with the checkout path `seat` named as `here` instead, in every string (each entry
+    of a PATH-like list too) and every key: the same reading of a check, made in another place."""
+    if isinstance(value, dict):
+        return {placed(k, seat, here): placed(v, seat, here) for k, v in value.items()}
+    if isinstance(value, list):
+        return [placed(v, seat, here) for v in value]
+    if isinstance(value, str) and seat in value:
+        return os.pathsep.join(here + entry[len(seat):] if entry == seat or entry.startswith(seat + os.sep) else entry
+                               for entry in value.split(os.pathsep))
+    return value
+
+
+def _beside_the_place(identity):
+    """`identity` without what depends on where its checkout is (see above)."""
+    rest = {k: v for k, v in identity.items() if k not in ("checkout", "environment", "command", "settings")}
+    if isinstance(identity.get("installed"), dict):
+        rest["installed"] = {k: v for k, v in identity["installed"].items() if k not in SEAT_INSTALLS}
+    return rest
+
+
+def made_elsewhere(saved, wanted):
+    """Are `saved` and `wanted` whole-checkout identities of two different checkouts?"""
+    return (isinstance(saved, dict) and isinstance(wanted, dict)
+            and saved.get("contract") == WHOLE_CHECKOUT == wanted.get("contract")
+            and bool(saved.get("checkout")) and saved.get("checkout") != wanted.get("checkout"))
+
+
+def seat_difference(saved, wanted):
+    """None when a pass saved under `saved` in another checkout may stand for `wanted` here as far
+    as the two identities alone say (above), else why not. Reads nothing; the rest is seat_gap's."""
+    if not made_elsewhere(saved, wanted):
+        return "not a whole-checkout pass made in another checkout"
+    if saved.get("tree") != wanted.get("tree"):
+        return "the two checkouts' content differs"
+    if saved.get("command") != wanted.get("command") or saved.get("settings") != wanted.get("settings"):
+        return "another command or runner setting"
+    return None
+
+
+def seat_gap(saved, wanted, read_seat):
+    """None when the whole-checkout pass saved under `saved` in another checkout stands for the
+    check whose identity here is `wanted` (above), else why not. `read_seat(seat)` reads that
+    checkout now (seat_reader)."""
+    gap = seat_difference(saved, wanted)
+    if gap:
+        return gap
+    seat, here = saved["checkout"], wanted["checkout"]
+    try:
+        there, installs_there, installs_here = read_seat(seat)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return "its checkout %s cannot be read now: %s" % (seat, exc)
+    made = {k: v for k, v in saved.items() if k not in ("command", "settings")}
+    if not stands_in(made, there):
+        return "it no longer stands in its own checkout %s%s" % (seat, identity_difference(made, there))
+    if _beside_the_place(placed(there, seat, here)) != _beside_the_place(wanted):
+        return "the two checkouts differ beyond their place%s" % identity_difference(
+            _beside_the_place(placed(there, seat, here)), _beside_the_place(wanted))
+    if installs_there != installs_here:
+        return "the two checkouts load different dependency installs"
+    return None
+
+
+def seat_reader(here, argv, environment, snapshot):
+    """read_seat for seat_gap: the whole-checkout identity of the check run as `argv` with this
+    checkout's `environment` placed in the seat, and the dependency installs, by content
+    (portable_dependencies), that the seat and `here` would each load."""
+    here = str(Path(here).resolve())
+
+    def read(seat):
+        seat = str(Path(seat).resolve())
+        there = placed(environment, here, seat)
+        return (checkout_identity(seat, argv, there, snapshot),
+                snapshot.portable(seat, there), snapshot.portable(here, environment))
+    return read
+
+
+def evidence_gap(label, old, identity, plan, exact=False, source=None, read_seat=None):
     """Why the saved outcome `old` cannot stand for check `label` whose inputs read `identity`
-    now, or None. The one predicate reuse() and coverage() share."""
+    now, or None. The one predicate reuse() and coverage() share. `read_seat`: a pass saved in
+    another checkout may stand when it still stands there (seat_gap)."""
     if label == "engine receipts":
         return "coverage verifier runs over the reconciled receipt set"
     if identity.get("fresh"):
@@ -2032,7 +2142,11 @@ def evidence_gap(label, old, identity, plan, exact=False, source=None):
         # inputs (Record says why), and the input identity is what decides it.
         return "the checkout's commit changed during the original execution"
     if not stands_in(old.get("input"), identity):
-        return "declared execution inputs changed" + identity_difference(old.get("input"), identity)
+        changed = "declared execution inputs changed" + identity_difference(old.get("input"), identity)
+        if read_seat is None or not made_elsewhere(old.get("input"), identity):
+            return changed
+        moved = seat_gap(old.get("input"), identity, read_seat)
+        return None if moved is None else "%s; made in another checkout, where %s" % (changed, moved)
     return None
 
 
@@ -2120,13 +2234,18 @@ def reuse(previous, items, record, exact=True):
         outcomes = json.loads((previous / "outcomes.json").read_text())
     except FileNotFoundError:
         outcomes = {}
+    # One reading of another checkout per call (InputSnapshot: never shared across passes).
+    snapshot = InputSnapshot()
     for item in items:
         if item.state == "passed":
             continue
         old = outcomes.get(item.label, {})
         item.retry_first = old.get("state") != "passed"
         identity = record.identities[item.label]
-        reason = evidence_gap(item.label, old, identity, plan, exact, record.source)
+        seat = getattr(record, "seat", None)
+        read_seat = seat(item, snapshot) if seat is not None and not exact else None
+        reason = evidence_gap(item.label, old, identity, plan, exact, record.source, read_seat)
+        elsewhere = reason is None and made_elsewhere(old.get("input"), identity)
         if reason is None:
             try:
                 if file_digest(old["log"]) != old["log_sha256"]:
@@ -2147,8 +2266,12 @@ def reuse(previous, items, record, exact=True):
                 item.provenance = {"run": str(previous), "source": old["source"],
                                    "receipt": old.get("receipt"), "log_sha256": old["log_sha256"],
                                    "input": old["input"], "earlier": old.get("provenance")}
+                if elsewhere:
+                    item.provenance["seat"] = old["input"]["checkout"]
                 item.reused_from = str(previous)
-                item.notes.append("validated evidence reused from " + str(previous))
+                item.notes.append("validated evidence reused from " + str(previous) + (
+                    " (made in %s, where it still stands, on the same content and installs)" % old["input"]["checkout"]
+                    if elsewhere else ""))
                 record.save(item, record.source)
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 reason = "saved evidence failed validation: " + str(exc)
@@ -2238,7 +2361,14 @@ def verify_target_receipts(directory, rows, root):
         historical = row.get("sha") != plan["source"]["commit"]
         provenance = outcome.get("provenance")
         if historical or outcome.get("reused_from"):
-            if (identity.get("fresh") or not provenance or not stands_in(provenance.get("input"), identity)
+            # A pass made in another checkout: the runner read that checkout when it reused it
+            # (seat_gap); what this verifier can read for itself is that the two identities say
+            # the same content, command and settings, and that the seat is the one it names.
+            elsewhere = (provenance and provenance.get("seat")
+                         and provenance.get("seat") == (provenance.get("input") or {}).get("checkout")
+                         and seat_difference(provenance.get("input"), identity) is None)
+            if (identity.get("fresh") or not provenance
+                    or not (stands_in(provenance.get("input"), identity) or elsewhere)
                     or row.get("sha") != outcome.get("receipt_sha")
                     or row.get("schema") != 2 or row.get("execution_status") != "completed"
                     or row.get("verdict") != "PASS" or row.get("rc") != row.get("expected_rc")
