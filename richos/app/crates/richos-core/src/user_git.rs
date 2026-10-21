@@ -5,15 +5,21 @@
 //! user installed (Homebrew's and Apple's both set `credential.helper = osxkeychain` there),
 //! not in `~/.gitconfig`: measured on the development Mac 2026-10-21,
 //! `git config --show-scope --show-origin --get-all credential.helper` printed one line, scope
-//! `system`. So the lease reads the user's own global file natively, includes the user's Git's
-//! system file below it, and finds that Git's helpers on `PATH` (`EngineProfile::configure`).
+//! `system`. Apple's Git keeps its `osxkeychain` default in a vendor file below the system one,
+//! which `git config --system` does not list: measured the same day with Apple Git 2.50.1
+//! (Apple Git-155) and an empty home, `git config --show-scope --show-origin --list` printed it
+//! with scope `unknown` (`<developer folder>/usr/share/git-core/gitconfig`), and `--system`
+//! failed on a missing `/etc/gitconfig`. So the lease reads the user's own global file natively,
+//! includes every file the user's Git reads below the global one (scopes `system` and
+//! `unknown`), and finds that Git's helpers on `PATH` (`EngineProfile::configure`).
 use std::path::{Path, PathBuf};
 
 /// The Git the user's terminal runs, as a lease needs it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UserGit {
-    /// That Git's system settings file, when it has one.
-    pub system_config: Option<PathBuf>,
+    /// The settings files that Git reads below the user's global file, in its order: its
+    /// vendor file (Apple's) and its system file, when it has them.
+    pub system_configs: Vec<PathBuf>,
     /// That Git's helper folder (`git --exec-path`), where `git-credential-osxkeychain` lives.
     pub exec_path: Option<PathBuf>,
 }
@@ -40,23 +46,30 @@ pub fn discover(path: &str, home: Option<&Path>, runtime_root: &Path) -> UserGit
         let mut command = std::process::Command::new(&git);
         command.args(args).env_clear().env("PATH", path).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
         if let Some(home) = home { command.env("HOME", home); }
-        let output = command.output().ok().filter(|o| o.status.success())?;
+        // Outside any repository, so a repository's own settings are never listed.
+        let output = command.current_dir("/").output().ok().filter(|o| o.status.success())?;
         String::from_utf8(output.stdout).ok()
     };
     let exec_path = ask(&["--exec-path"]).map(|p| PathBuf::from(p.trim())).filter(|p| p.is_dir());
-    let system_config = ask(&["config", "--system", "--list", "--show-origin"]).and_then(|listing| listing.lines()
-        .find_map(|line| line.strip_prefix("file:").and_then(|rest| rest.split_once('\t')).map(|(file, _)| PathBuf::from(file))))
-        .filter(|file| file.is_file());
-    UserGit { system_config, exec_path }
+    let mut system_configs: Vec<PathBuf> = Vec::new();
+    for line in ask(&["config", "--list", "--show-origin", "--show-scope"]).unwrap_or_default().lines() {
+        let mut fields = line.splitn(3, '\t');
+        let (Some(scope), Some(origin)) = (fields.next(), fields.next()) else { continue };
+        let Some(file) = origin.strip_prefix("file:").map(PathBuf::from) else { continue };
+        if matches!(scope, "system" | "unknown") && file.is_file() && !system_configs.contains(&file) {
+            system_configs.push(file);
+        }
+    }
+    UserGit { system_configs, exec_path }
 }
 
 /// **The lowest Git settings layer a lease reads** (its `GIT_CONFIG_SYSTEM`): the app's own
-/// identity, used only when no other layer names one, then the user's Git's system file. The
+/// identity, used only when no other layer names one, then the user's Git's own lower files. The
 /// user's `~/.gitconfig` and each repository's own settings are read as Git always reads them,
 /// above this, so the user's name, email and helpers win.
 pub fn system_layer(git: &UserGit) -> String {
     let mut layer = String::from("[user]\n\tname = RichOS\n\temail = richos@localhost\n");
-    if let Some(file) = git.system_config.as_ref().map(|f| f.display().to_string()).filter(|f| !f.contains(['"', '\\', '\n'])) {
+    for file in git.system_configs.iter().map(|f| f.display().to_string()).filter(|f| !f.contains(['"', '\\', '\n'])) {
         layer.push_str(&format!("[include]\n\tpath = \"{file}\"\n"));
     }
     layer

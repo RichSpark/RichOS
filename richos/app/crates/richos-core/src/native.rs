@@ -3890,7 +3890,7 @@ impl Drop for NativeCognition {
         if let Some(path)=self.client.reader_state.lock().unwrap().question_scope.as_ref(){drop(std::fs::remove_file(path));}
         let _ = self.client.child.kill();
         let _ = self.client.child.wait();
-        if let Some(profile) = &self.engine_profile { let _ = std::fs::remove_dir_all(&profile.plugin); }
+        if let Some(profile) = &self.engine_profile { profile.remove_session_files(); }
         if let Some((_, path)) = &self.continuity { let _ = std::fs::remove_file(path); }
         if let Some(path) = &self.assignments_scope { let _ = std::fs::remove_file(path); }
         if let Some(path) = &self.status_scope { let _ = std::fs::remove_file(path); }

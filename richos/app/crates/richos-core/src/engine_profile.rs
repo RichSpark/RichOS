@@ -184,8 +184,6 @@ pub const DUTIES: [&str; 3] = ["worker", "reviewer", "consult"];
 /// itself (`engine/team/shelf/`) is never registered.
 pub const USER_TEAM: &str = "team";
 
-/// **Rich's and Stu's auto-memory folder, in the app's data** (`EngineProfile::memory_folder`).
-pub const MEMORY: &str = "memory";
 
 /// Every definition this lease registers, by name: the stock ones, then the user's. A user's
 /// file of the same name as a stock one is the user's refit of it and wins (plan §10 point 3:
@@ -400,9 +398,6 @@ impl EngineProfile {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).map_err(|e| RuntimeError(e.to_string()))?;
         }
-        // Rich's and Stu's auto-memory, one folder whichever Claude account a lease runs on
-        // (build plan item 10; `Self::memory_folder`).
-        std::fs::create_dir_all(data.join(MEMORY)).map_err(|e| RuntimeError(format!("the memory folder could not be created: {e}")))?;
         let plugin = data.join("engine-profiles").join(uuid::Uuid::new_v4().to_string());
         render_team(&engine, &data, &coordination, &plugin,false)?;
         // Rich's and Stu's own files are the user's from the first run on: copied once, then
@@ -570,6 +565,16 @@ impl EngineProfile {
         path
     }
 
+    /// **The folders this one lease was given, removed when it retires**: its engine plugin and
+    /// its copy of the plugin Rich and Stu start from (`user_settings::standing_plugin`).
+    pub fn remove_session_files(&self) {
+        for folder in std::iter::once(&self.plugin).chain(self.user.standing.as_ref()) {
+            if let Err(e) = std::fs::remove_dir_all(folder) {
+                if e.kind() != std::io::ErrorKind::NotFound { eprintln!("[richos] {} was not removed: {e}", folder.display()); }
+            }
+        }
+    }
+
     /// **The plugin Rich and Stu start from**: this lease's copy carrying the user's own
     /// `rich.md` and `stu.md` (`user_settings::standing_plugin`), or `shipped` when the
     /// profile reads no user folder.
@@ -577,20 +582,12 @@ impl EngineProfile {
         self.user.standing.clone().unwrap_or_else(|| shipped.to_path_buf())
     }
 
-    /// **Where Rich and Stu keep their auto-memory: `<app data>/memory`** (build plan item 10),
-    /// the same folder whichever Claude account the lease runs on. Without it Claude Code keeps
-    /// it under the account's own folder (`<CLAUDE_CONFIG_DIR>/projects/<folder>/memory`, its
-    /// own setting's description, 2.1.305), so an account switch would start with none. Measured
-    /// 2026-10-21 on 2.1.305 with `--setting-sources ''`: an `autoMemoryDirectory` given in
-    /// `--settings` is where a memory is written (`MEMORY.md` and the note, in that folder).
-    pub fn memory_folder(&self) -> PathBuf {
-        self.state.parent().map(|data| data.join(MEMORY)).unwrap_or_else(|| self.state.join(MEMORY))
-    }
-
     /// **The `--settings` a lease starts with**: the app's own keys, and the user's own hooks
     /// from `settings.json` beside the engine plugin's, which Claude Code runs together.
     pub fn lease_settings(&self) -> serde_json::Value {
-        let mut settings = json!({"autoMemoryEnabled":true, "autoMemoryDirectory":self.memory_folder(),
+        // Auto-memory on (build plan item 10); where Rich and Stu keep it is their definitions'
+        // `memory:` scope (`user_settings::MEMORY_SCOPE`), in the coordination folder.
+        let mut settings = json!({"autoMemoryEnabled":true,
             "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]});
         if let Some(hooks) = &self.user.settings.hooks { settings["hooks"] = hooks.clone(); }
         settings
