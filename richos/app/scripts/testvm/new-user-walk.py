@@ -58,7 +58,8 @@ _spec = importlib.util.spec_from_file_location('setup_walk', HERE / 'setup-walk.
 setup_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(setup_walk)
 StepFailed = setup_walk.StepFailed
-command = setup_walk.command
+# The one subprocess helper every walk uses lives in adopt-walk.py, which setup-walk.py loads.
+command = setup_walk.adopt_walk.command
 
 STEPS = ['identity', 'setup', 'signed-out', 'update', 'signed-in']
 RETURN_KEY = '36'
@@ -71,12 +72,24 @@ DEAD_ENDS = {
     'retry loop on a permanent cause': r'usually fixes itself',
     'machinery in the user view': r'control_request|system:init|outcome not recorded|Between turns',
     'account state unknown': r'No reading yet',
+    # Claude Code's own terminal instruction, shown as Rich's reply on 1.2.1 (guest walk,
+    # 2026-10-21): a person using the app has no terminal to run it in.
+    "machine words as Rich's words": r'Please run /login',
 }
 
 
 def dead_ends(text):
     """The dead-end names whose pattern matches TEXT (OCR or accessibility text)."""
     return sorted(name for name, pattern in DEAD_ENDS.items() if re.search(pattern, text or '', re.I))
+
+
+def screen_lines(ocr_find_stdout):
+    """The frame's own words out of `ocr-find.sh --show` output: the indented lines under a HIT,
+    never its HIT/MISS headers or its closing `--- N of M frame(s) match /PATTERN/ ---` line,
+    which carries the pattern itself. Reading that line as screen text matched every dead end
+    on a frame that showed none (the first guest run of this walk, 2026-10-21)."""
+    return '\n'.join(line.strip() for line in (ocr_find_stdout or '').splitlines()
+                     if line.startswith((' ', '\t')) and line.strip())
 
 
 def turn_outcome(rows, words):
@@ -114,6 +127,8 @@ def signed_out_verdict(outcome, screen_hits, screen_text):
     if outcome.get('cause') != 'not-signed-in':
         return ('the turn ended as %r (%s), not as "not signed in": the user is told the wrong thing'
                 % (outcome.get('cause'), outcome.get('reason')))
+    if outcome.get('rich_wrote'):
+        return "the turn failed and still recorded text as Rich's answer (the vendor's line as his words)"
     if screen_hits:
         return 'dead end on screen: ' + ', '.join(screen_hits)
     if not re.search(r'sign in', screen_text or '', re.I):
@@ -146,7 +161,7 @@ class NewUserWalk(setup_walk.SetupWalk):
                                 str(self.out / (name + '.png')), '--show'], capture_output=True, text=True, timeout=90)
         if found.returncode not in (0, 1):
             raise StepFailed('ocr-find could not read %s.png: %s' % (name, found.stderr.strip()))
-        return found.stdout
+        return screen_lines(found.stdout)
 
     def ledger_rows(self):
         rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
@@ -251,12 +266,17 @@ class NewUserWalk(setup_walk.SetupWalk):
         return outcome, text
 
     def signed_out(self):
-        words = 'what do I do now?'
-        outcome, text = self.send(words, 'signed-out', self.a.turn_within)
-        hits = dead_ends(text)
-        self.report['signed-out'] = {'outcome': outcome, 'screen': text.strip()[-1500:], 'dead_ends': hits}
+        """Two messages, as he sent them: the second is where a passing-hiccup sentence becomes a
+        loop. Each must end not-signed-in, with the way out on screen and no dead end."""
+        rows = []
+        for n, words in enumerate(('what do I do now?', 'Test to see if something is working.'), 1):
+            outcome, text = self.send(words, 'signed-out-%d' % n, self.a.turn_within)
+            hits = dead_ends(text)
+            rows.append({'words': words, 'outcome': outcome, 'screen': text.strip()[-1500:], 'dead_ends': hits,
+                         'verdict': signed_out_verdict(outcome, hits, text)})
+        self.report['signed-out'] = rows
         self.pull()
-        why = signed_out_verdict(outcome, hits, text)
+        why = '; '.join('message %d: %s' % (n, r['verdict']) for n, r in enumerate(rows, 1) if r['verdict'])
         if why:
             raise StepFailed(why)
         return self.report['signed-out']
