@@ -40,9 +40,10 @@ When an explicit role excludes a title/ID match, failure includes up to three
 A role-less exact selector still requires uniqueness. Do not silently resolve a
 collision by adding `--contains --first`.
 
-Traversal uses collection indexes so JXA's same-name references cannot turn
-different controls into repeated matches. Focusing can rebuild WebKit's AX tree
-and invalidate an index. If the subsequent focus read fails, the tool may refresh
+The guest side is `ax.py`, which reads each attribute with the accessibility API
+(`AXUIElementCopyAttributeValue`) on the element itself, so two controls with the
+same label are always two elements. Focusing can rebuild WebKit's AX tree and
+invalidate an element. If the subsequent focus read fails, the tool may refresh
 the original DOM ID within the same scope, requiring a complete traversal and
 one match. It never resends focus; a missing ID or uncertain refresh refuses text.
 
@@ -83,7 +84,8 @@ a controlled comparison, but increasing it is not a recovery strategy.
 
 A read still running after 10 seconds (`TESTVM_AX_SLOW_SECONDS`; a `find` answers in
 0.01 to 0.5 s) is photographed while it is overdue, once: `sample` of the app under test,
-System Events and the WebContent process (each main thread's heaviest path), the guest's
+the read's own process (`ax.py`, the AX client), System Events (keystrokes and raw
+scripts) and the WebContent process (each main thread's heaviest path), the guest's
 second `top` sample and its memory counters, printed after an `ax_slow_read` line on
 stderr. The host adds an `ax_host_reading` line (its admission sample and the VM
 processes' CPU). The read is never retried and its deadline never moves; the snapshot
