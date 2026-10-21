@@ -20,5 +20,16 @@
     "source_commit": "03e09f43c87ed346920b621f6035fa4e074375d8",
     "tag": "v1.2.1-nightly.20261020.68",
     "version": "1.2.1-nightly.20261020.68"
+  },
+  "v1.2.2-nightly.20261021.70": {
+    "schema": 1,
+    "tag": "v1.2.2-nightly.20261021.70",
+    "version": "1.2.2-nightly.20261021.70",
+    "channel": "nightly",
+    "source_commit": "c63bcea7d5de5a21387735964557686f1695a9c5",
+    "build_commit": "b0ca69c3133cb8ce7aac1b09915d125c6816d70e",
+    "previous_tag": "v1.2.1-nightly.20261020.68",
+    "previous_source": "03e09f43c87ed346920b621f6035fa4e074375d8",
+    "entry": "- Fixed Rename in a chat's menu doing nothing; it now turns the chat's own row into a text field, saves with Enter and cancels with Esc and the sidebar, the chat header and the company overview all show the new title\n- Fixed the first message typed right after reopening RichOS vanishing and messages sent before the conversation opens now reach Rich in the order you sent them"
   }
 }
