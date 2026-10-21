@@ -88,9 +88,11 @@ public struct StreamRow: Codable, Equatable, Sendable {
     /// `audio` synthesizes any reply on request and sends `false` here (`phone/rows.rs`), so this is
     /// one of two ways a reply can be heard (`ReplyAudio.hearable`).
     public var hasAudio: Bool
+    /// `kind: "file"`: a file Rich put in front of the person (round 36 screen 3); `nil` otherwise.
+    public var file: RichFile?
 
     enum CodingKeys: String, CodingKey {
-        case id, cursor, role, kind, text, complete, question
+        case id, cursor, role, kind, text, complete, question, file
         case threadID = "thread_id", createdAt = "created_at", clientID = "client_id", durationMs = "duration_ms"
         case hasAudio = "has_audio"
     }
@@ -116,6 +118,7 @@ public struct StreamRow: Codable, Equatable, Sendable {
         question = try c.decodeIfPresent(QuestionCard.self, forKey: .question)
         durationMs = try c.decodeIfPresent(Int.self, forKey: .durationMs)
         hasAudio = try c.decodeIfPresent(Bool.self, forKey: .hasAudio) ?? false
+        file = try c.decodeIfPresent(RichFile.self, forKey: .file)
     }
 
     /// The conversation bubble this row is. A row carrying `duration_ms` is a voice note whatever
@@ -131,6 +134,11 @@ public struct StreamRow: Codable, Equatable, Sendable {
                        sentAt: sentAt, durationMs: durationMs, clientID: clientID, cursor: cursor, attachments: attached?.files)
         message.question = question
         if role != "ceo", hasAudio { message.hasAudio = true }
+        if role != "ceo", kind == "file", let file {
+            // A file Rich attached: no words of its own, the card under his (round 36 screen 3).
+            message.text = ""
+            message.richFile = file
+        }
         return message
     }
 }

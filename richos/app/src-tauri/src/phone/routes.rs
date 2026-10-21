@@ -130,6 +130,13 @@ pub trait Bridge: Send + Sync {
     fn oxford_comma(&self) -> bool { false }
     fn transcribe(&self, _bytes: &[u8]) -> Result<String, String> { Err("Speech recognition is unavailable".into()) }
     fn reply_audio(&self, _thread: Option<&str>, _id: &str) -> Result<Vec<u8>, String> { Err("Audio playback is unavailable".into()) }
+    /// Whether this Mac sends the files Rich attached (`files` in the capabilities).
+    fn files_available(&self) -> bool { false }
+    /// The bytes of a file Rich attached in this conversation, by its attachment id
+    /// (`richos_core::rich_files::read_for_phone`): the file's name and its bytes.
+    fn rich_file(&self, _thread: &str, _id: &str) -> Result<(String, Vec<u8>), richos_core::rich_files::Fetch> {
+        Err(richos_core::rich_files::Fetch::NotAttached)
+    }
 
     /// **The turn an accepted message became, by the id `submit_text` answered with — an id and
     /// nothing else.** The one narrow reach past the gated payload, and deliberately so: it
@@ -294,6 +301,8 @@ pub fn dispatch(channel: &Channel, request: &Incoming) -> Outcome {
     match (request.method.as_str(), request.path.as_str()) {
         ("POST", "/api/pair") => pair_or_device_record(channel, request),
         ("POST", "/api/messages") => messages(channel, request),
+        // A file Rich attached, on the message route as voice moved onto it: no new route.
+        ("GET", "/api/messages") => rich_file(channel, request),
         ("GET", "/api/events") => events(channel, request),
         ("GET", path) if path.starts_with("/api/audio/") => audio(channel, request, &path[11..]),
         ("GET", path) => static_asset(channel, path),
@@ -636,7 +645,10 @@ pub const PROTOCOL_VERSION: u64 = 1;
 ///   ([`super::notifications::Registration`]), whenever native push is offered at all.
 fn channel_capabilities(channel:&Channel)->Vec<&'static str> {
     let mut caps=capabilities(channel.bridge.voice_available(),channel.bridge.native_notifications_available());
-    if channel.bridge.questions_available(){caps.push("questions");}caps
+    if channel.bridge.questions_available(){caps.push("questions");}
+    // `files`: a file Rich attached comes over on a signed `GET /api/messages?kind=file`.
+    if channel.bridge.files_available(){caps.push("files");}
+    caps
 }
 
 pub fn capabilities(voice: bool, native_push: bool) -> Vec<&'static str> {
@@ -1063,6 +1075,57 @@ fn audio(channel: &Channel, request: &Incoming, message_id: &str) -> Outcome {
             eprintln!("[richos] a minted audio id pointed at nothing readable: {e}");
             Outcome::NotFound
         }
+    }
+}
+
+// -------------------------------------------------------------------------------------
+// GET /api/messages?kind=file&file_id=<id>&thread_id=<thread> — a file Rich attached
+// -------------------------------------------------------------------------------------
+
+/// The phone's tap on a file Rich put in front of the user (round 36 screen 3): its bytes, from
+/// this Mac, only when asked. Signed like the audio route. The id is looked up in the named
+/// conversation's own record (`rich_files::read_for_phone`); there is no path in the request.
+/// A file that has gone, or one too large to send, is a `410`/`413` with a `reason` the phone
+/// shows; everything else that is not a file this conversation holds is the flat 404.
+fn rich_file(channel: &Channel, request: &Incoming) -> Outcome {
+    use richos_core::rich_files::Fetch;
+    let Some(header) = request.authorization.as_deref() else { return Outcome::NotFound };
+    let path = signed_path(&request.path, &request.query);
+    if let Err(refusal) = verified(channel, request, header, &path) {
+        return refusal;
+    }
+    if query_value(&request.query, "kind") != Some("file") || !channel.bridge.files_available() {
+        return Outcome::NotFound;
+    }
+    let decoded = |key: &str| query_value(&request.query, key).and_then(|v| percent_decode_component(v).ok());
+    let (Some(id), Some(thread)) = (decoded("file_id"), decoded("thread_id")) else { return Outcome::NotFound };
+    let plain = |s: &str| !s.is_empty() && s.len() <= 256 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"_:-".contains(&b));
+    if !plain(&id) || !plain(&thread) {
+        return Outcome::NotFound;
+    }
+    match channel.bridge.rich_file(&thread, &id) {
+        Ok((name, body)) => Outcome::Bytes {
+            status: 200,
+            content_type: crate::output_files::mime_of(std::path::Path::new(&name)).to_string(),
+            body,
+            download_as: None,
+        },
+        Err(Fetch::Gone) => Outcome::Json {
+            status: 410,
+            body: json!({"retry": false, "reason": "No longer on this Mac. It was moved or deleted."}).to_string(),
+        },
+        Err(Fetch::TooLarge(_)) => Outcome::Json {
+            status: 413,
+            body: json!({"retry": false, "reason": "This file is too large to send to your phone. Open it on your Mac."}).to_string(),
+        },
+        Err(Fetch::Unreadable(why)) => {
+            eprintln!("[richos] an attached file could not be read for the phone: {why}");
+            Outcome::Json {
+                status: 503,
+                body: json!({"retry": false, "reason": "Your Mac could not read this file."}).to_string(),
+            }
+        }
+        Err(Fetch::NotAttached) | Err(Fetch::Refused) => Outcome::NotFound,
     }
 }
 
@@ -2525,6 +2588,71 @@ mod tests {
         }
         fn current_thread(&self) -> Option<(String, String)> { Some(("thr_5c1e".into(), "the proposal".into())) }
         fn threads(&self) -> Vec<(String, String)> { vec![("thr_5c1e".into(), "the proposal".into())] }
+    }
+
+    /// A bridge over a real `rich_files` record: one turn in which Rich attached a PDF before he
+    /// wrote his reply, as the tool is called while he works.
+    struct FileBridge { root: std::path::PathBuf }
+    impl Bridge for FileBridge {
+        fn files_available(&self) -> bool { true }
+        fn rich_file(&self, thread: &str, id: &str) -> Result<(String, Vec<u8>), richos_core::rich_files::Fetch> {
+            richos_core::rich_files::read_for_phone(&self.root, thread, id).map(|(row, body)| (row.name, body))
+        }
+        fn submit_text(&self, _t: Option<&str>, _text: &str, _c: &str) -> Result<Accepted, String> { Err("not here".into()) }
+        fn snapshot(&self, _thread_id: Option<&str>) -> Result<Value, String> {
+            let mut items = vec![
+                json!({"kind":"user_message","id":"t1:user","threadId":"thr_5c1e","turnId":"t1","createdAt":1,"text":"send me the counter","source":"text","visibility":"ceo"}),
+            ];
+            items.extend(richos_core::rich_files::items(&self.root, "femcboost", "thr_5c1e"));
+            items.push(json!({"kind":"rich_message","id":"t1:text:0","threadId":"thr_5c1e","turnId":"t1","createdAt":u64::MAX,"text":"Here it is.","visibility":"ceo"}));
+            Ok(json!({"items": items}))
+        }
+        fn current_thread(&self) -> Option<(String, String)> { Some(("thr_5c1e".into(), "the proposal".into())) }
+        fn threads(&self) -> Vec<(String, String)> { vec![("thr_5c1e".into(), "the proposal".into())] }
+    }
+
+    /// **A FILE RICH ATTACHED REACHES THE PHONE** (round 36 screen 3): a `file` row under his
+    /// reply in `hello`, `files` among the capabilities, and the bytes on a signed tap — from this
+    /// conversation's record only, with the gone state said rather than a flat 404.
+    #[test]
+    fn a_file_rich_attached_is_a_row_under_his_reply_and_comes_over_on_a_signed_tap() {
+        let mut f = fixture("rich-file");
+        let root = f.dir.0.join("engine-state");
+        let file = f.dir.0.join("Acme-counteroffer.pdf");
+        std::fs::write(&file, b"%PDF-1.4 counter").unwrap();
+        let row = richos_core::rich_files::attach(&root, "femcboost", "thr_5c1e", "t1", "front_desk", &file.to_string_lossy()).unwrap();
+        f.channel.bridge = Arc::new(FileBridge { root: root.clone() });
+
+        let data = match dispatch(&f.channel, &signed_stream(&f, "thread_id=thr_5c1e")) {
+            Outcome::Stream { opening, .. } => serde_json::from_str::<Value>(opening[0].split("data: ").nth(1).unwrap().trim_end()).unwrap(),
+            other => panic!("{other:?}"),
+        };
+        assert!(data["capabilities"].as_array().unwrap().contains(&json!("files")), "{}", data["capabilities"]);
+        let rows = data["messages"].as_array().unwrap();
+        let kinds: Vec<&str> = rows.iter().map(|r| r["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["text", "text", "file"], "the file goes under his words: {rows:?}");
+        assert_eq!(rows[2]["role"], "rich");
+        assert_eq!(rows[2]["file"]["id"], row.id.as_str());
+        assert_eq!(rows[2]["file"]["name"], "Acme-counteroffer.pdf");
+        assert!(rows[2]["file"].get("path").is_none(), "the phone is handed an id, never a path");
+
+        let id = row.id.clone();
+        let query = format!("kind=file&file_id={id}&thread_id=thr_5c1e");
+        match dispatch(&f.channel, &signed(&f, "GET", "/api/messages", &query, b"")) {
+            Outcome::Bytes { status, content_type, body, .. } => {
+                assert_eq!((status, content_type.as_str(), body.as_slice()), (200, "application/pdf", &b"%PDF-1.4 counter"[..]));
+            }
+            other => panic!("{other:?}"),
+        }
+        // Unsigned, another conversation, an id nobody attached, or no `kind`: the flat 404.
+        assert_eq!(dispatch(&f.channel, &plain("GET", "/api/messages")), Outcome::NotFound);
+        for q in [format!("kind=file&file_id={id}&thread_id=thr_other"), "kind=file&file_id=rf_00&thread_id=thr_5c1e".into(), format!("file_id={id}&thread_id=thr_5c1e")] {
+            assert_eq!(dispatch(&f.channel, &signed(&f, "GET", "/api/messages", &q, b"")), Outcome::NotFound, "{q}");
+        }
+        // Gone from the Mac: said, so the phone can say it.
+        std::fs::remove_file(&file).unwrap();
+        let (status, answer) = json_of(dispatch(&f.channel, &signed(&f, "GET", "/api/messages", &query, b"")));
+        assert_eq!((status, answer["reason"].as_str()), (410, Some("No longer on this Mac. It was moved or deleted.")));
     }
 
     #[test]

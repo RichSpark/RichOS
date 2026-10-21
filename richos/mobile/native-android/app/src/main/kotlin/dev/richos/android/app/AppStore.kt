@@ -3,6 +3,7 @@ package dev.richos.android.app
 import dev.richos.android.core.Action
 import dev.richos.android.core.AppState
 import dev.richos.android.core.CoreError
+import dev.richos.android.core.FileFetchState
 import dev.richos.android.core.RichCore
 import dev.richos.android.core.VoicePhase
 import dev.richos.android.core.VoiceSession
@@ -72,6 +73,22 @@ class AppStore(private val scope: CoroutineScope) {
                 if (tick != null && tick <= due) dispatch(Action.Tick)
                 if (owed != null && owed <= due) drain()
                 if (mac != null && mac <= due) dispatch(Action.MacWait)
+            }
+        }
+        // A file Rich attached that was tapped while the Mac was out of reach ("Opens when your Mac
+        // is back online", round 36): the tap is asked again once each time the link opens. Core
+        // keeps the rule (a second ask while it is coming over does nothing); this only says when.
+        scope.launch {
+            val asked = mutableSetOf<String>()
+            states.collect { s ->
+                if (s == null) return@collect
+                if (!s.online || !s.paired) {
+                    asked.clear()
+                    return@collect
+                }
+                for (fetch in s.fileFetches.values) {
+                    if (fetch.state == FileFetchState.WAITING && asked.add(fetch.id)) dispatch(Action.OpenRichFile(fetch.id))
+                }
             }
         }
     }

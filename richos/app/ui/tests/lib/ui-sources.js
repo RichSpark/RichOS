@@ -100,6 +100,7 @@ const ROLES = {
   "work-summary.js": { role: "ui", why: "saved work receipts and their availability states" },
   "repositories.js": { role: "ui", why: "company repository connections and their status" },
   "questions.js": { role: "ui", why: "non-blocking question cards, explicit answers and delivery states" },
+  "rich-files.js": { role: "ui", why: "the file cards Rich puts in front of the user: Open in …, Show in Finder, gone and Ask Rich again" },
   "quit-question.js": { role: "ui", why: "the question he is asked before a quit stops running background work" },
   "timeline.js": { role: "ui", why: "the working timeline's model and render" },
   "oxford-comma.js": { role: "ui", why: "the Oxford comma filter (CEO 2026-10-19): what Claude writes, drawn with the comma before and/or/nor deleted while the setting is off; it has no user-visible strings" },

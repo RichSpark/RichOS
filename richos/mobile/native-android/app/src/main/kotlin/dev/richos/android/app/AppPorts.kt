@@ -59,6 +59,9 @@ object AppPorts {
             recorder = recorder,
             platform = platform,
             picker = picker,
+            // The files Rich attached, kept once they came over, and read in parts so the ring fills.
+            richFiles = dev.richos.android.platform.RichFileKeeper(dev.richos.android.platform.RichFileKeeper.dir(context)),
+            download = wire,
         )
     }
 

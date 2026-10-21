@@ -132,6 +132,13 @@ class Ports(
     val files: FileStore = FileStore.NONE,
     /** Android's photo picker, camera and document picker (the + menu). */
     val picker: AttachPicker = AttachPicker.NONE,
+    /** Where the files Rich attached are kept once they came over (round 36 screen 3). */
+    val richFiles: RichFileStore = RichFileStore.NONE,
+    /**
+     * A signed GET whose answer arrives in parts, so the ring fills as the bytes come (the app's
+     * `HttpsMac`). Null: the file comes in one answer through [http], and the ring jumps.
+     */
+    val download: EventStream? = null,
     /** The id the Mac registers push for (Echo 65952d16: `dev.richos.native.android` in development). */
     val applicationId: String = "dev.richos.native.android",
     val performance: PerformanceEvents = PerformanceEvents { },

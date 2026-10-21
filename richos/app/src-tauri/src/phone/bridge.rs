@@ -148,6 +148,12 @@ impl Bridge for PhoneBridge {
         self.voice.synthesize(row["text"].as_str().unwrap_or(""))
     }
 
+    fn files_available(&self) -> bool { true }
+    fn rich_file(&self, thread: &str, id: &str) -> Result<(String, Vec<u8>), richos_core::rich_files::Fetch> {
+        let root = crate::rich_files_host::root(&self.app.state::<AppState>());
+        richos_core::rich_files::read_for_phone(&root, thread, id).map(|(row, body)| (row.name, body))
+    }
+
     fn submit_text(&self, thread_id: Option<&str>, text: &str, client_id: &str) -> Result<Accepted, String> {self.submit_words(thread_id,text,"phone_typed",client_id,false)}
     /// The transcript of a voice note: the same road as typed words, written as a voice note, so
     /// every row of the turn (the live one that can beat this POST's answer included) is a voice

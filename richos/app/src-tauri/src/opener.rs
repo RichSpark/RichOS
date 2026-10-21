@@ -120,6 +120,57 @@ fn open_tailscale() -> Result<(), String> {
     Err("I could not find Tailscale on this Mac to open it.".into())
 }
 
+// ---- a file Rich put in front of the user (§138, build plan item 12) -------------------------
+//
+// **The one destination that is not in the table above, and the same rule holds for it.** The
+// key is an attachment id, never a path: it is looked up in the conversation's own record of the
+// files Rich and Stu attached (`richos-core`'s `rich_files.rs`), and only what that record holds
+// for THAT conversation opens. Anything else is refused by name, exactly like an address nobody
+// allowlisted. The file opens with the Mac's default app for it, as a double-click in Finder
+// would; nothing here chooses an app or passes an option.
+
+/// An id the conversation's record does not hold.
+pub const NOT_ATTACHED: &str = "I don't have that file in this conversation.";
+/// Nothing at the recorded path now.
+pub const FILE_GONE: &str = "No longer on this Mac. It was moved or deleted.";
+/// A link, a folder, or another file swapped in under the recorded path.
+pub const FILE_REFUSED: &str = "This file was replaced by a link or a folder, so I won't open it from here.";
+
+/// The file an attachment id names in this conversation, checked as it is now.
+pub fn resolve_attached(root: &Path, thread_id: &str, id: &str) -> Result<std::path::PathBuf, String> {
+    use richos_core::rich_files::{locate, now, Now};
+    let row = locate(root, thread_id, id).ok_or_else(|| NOT_ATTACHED.to_string())?;
+    match now(&row) {
+        Now::Here { .. } => Ok(std::path::PathBuf::from(row.path)),
+        Now::Gone => Err(FILE_GONE.into()),
+        Now::Refused => Err(FILE_REFUSED.into()),
+    }
+}
+
+/// Open an attached file with the Mac's default app for it.
+pub fn open_attached(root: &Path, thread_id: &str, id: &str) -> Result<(), String> {
+    open_attached_with(root, thread_id, id, &run)
+}
+
+/// Select an attached file in a Finder window.
+pub fn reveal_attached(root: &Path, thread_id: &str, id: &str) -> Result<(), String> {
+    let path = resolve_attached(root, thread_id, id)?;
+    run(&["/usr/bin/open", "-R", &path.to_string_lossy()])
+}
+
+/// [`open_attached`] with the runner handed in, so a test sees the exact command.
+pub fn open_attached_with(
+    root: &Path,
+    thread_id: &str,
+    id: &str,
+    runner: &dyn Fn(&[&str]) -> Result<(), String>,
+) -> Result<(), String> {
+    let path = resolve_attached(root, thread_id, id)?;
+    // The recorded path is canonical and absolute, so it begins with `/` and `open` cannot
+    // read it as an option.
+    runner(&["/usr/bin/open", &path.to_string_lossy()])
+}
+
 fn run(argv: &[&str]) -> Result<(), String> {
     let status = Command::new(argv[0])
         .args(&argv[1..])
@@ -227,6 +278,70 @@ mod tests {
             assert_eq!(resolve(asked), None, "{asked:?} was allowed");
             assert!(open(asked).is_err(), "{asked:?} was opened");
         }
+    }
+
+    /// **A FILE RICH ATTACHED REACHES THE CONVERSATION AND OPENS THROUGH THIS OPENER** (§138,
+    /// build plan item 12): the tool call Rich makes, the item the conversation shows, and the
+    /// command the click runs, end to end through the code that ships.
+    #[test]
+    fn a_file_rich_attached_reaches_the_conversation_and_opens_through_the_opener() {
+        use richos_core::question_tools::{write_scope, Scope};
+        use richos_core::questions::AskScope;
+        use richos_core::rich_files;
+        use serde_json::json;
+        use std::cell::RefCell;
+
+        let dir = std::env::temp_dir().join(format!("richos-opener-attached-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.join("engine-state");
+        let file = dir.join("Acme counteroffer.pdf");
+        std::fs::write(&file, b"%PDF-1.4").unwrap();
+        let scope = dir.join("assignments.questions.json");
+        write_scope(&scope, &Scope {
+            context: AskScope { root: root.clone(), entity_id: "acme".into(), thread_id: "t1".into(),
+                turn_id: "turn-1".into(), asker: "front_desk".into(), obligation_id: None,
+                session_id: "s".into(), engine: None, entity_root: None, app_run: None },
+            actions_allowed: true, answer_method: "typed".into(), surface: "mac".into(),
+        }).unwrap();
+
+        // Rich calls the tool, as the model does through the MCP server.
+        let out = rich_files::call(&scope, rich_files::TOOL, json!({"path": file.to_string_lossy()})).unwrap();
+        let id = out["id"].as_str().unwrap().to_string();
+
+        // The conversation carries it, in Rich's turn.
+        let items = rich_files::items(&root, "acme", "t1");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["kind"], "rich_file");
+        assert_eq!(items[0]["turnId"], "turn-1");
+        assert_eq!(items[0]["file"]["id"], id.as_str());
+        assert_eq!(items[0]["file"]["name"], "Acme counteroffer.pdf");
+
+        // A click opens it through this opener, with the Mac's default app.
+        let ran = RefCell::new(Vec::<String>::new());
+        let runner = |argv: &[&str]| {
+            *ran.borrow_mut() = argv.iter().map(|s| s.to_string()).collect();
+            Ok(())
+        };
+        open_attached_with(&root, "t1", &id, &runner).unwrap();
+        let canonical = std::fs::canonicalize(&file).unwrap();
+        assert_eq!(*ran.borrow(), vec!["/usr/bin/open".to_string(), canonical.to_string_lossy().into_owned()]);
+
+        // Only that conversation's record opens it; a made-up id and a path are refused.
+        assert_eq!(open_attached_with(&root, "t2", &id, &runner), Err(NOT_ATTACHED.into()));
+        assert_eq!(open_attached_with(&root, "t1", &file.to_string_lossy(), &runner), Err(NOT_ATTACHED.into()));
+        // And the table's own addresses are not attachment ids, nor the other way round.
+        assert_eq!(resolve(&id), None);
+
+        // Moved or deleted: the click says so instead of opening something else.
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(open_attached_with(&root, "t1", &id, &runner), Err(FILE_GONE.into()));
+        // Replaced by a link: refused, never followed.
+        std::os::unix::fs::symlink("/etc/hosts", &file).unwrap();
+        assert_eq!(open_attached_with(&root, "t1", &id, &runner), Err(FILE_REFUSED.into()));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The only folder Share on a file Rich attached can name: where the files that came over from the
+     Mac are kept (platform/RichFileKeeper.kt). -->
+<paths>
+    <files-path name="rich-files" path="rich-files/" />
+</paths>

@@ -85,6 +85,14 @@ public enum Action: Equatable, Sendable {
     case clearFocus
     /// "Hear it" on one of Rich's replies.
     case hearReply(id: String)
+    /// A file Rich attached (round 36 screen 3; Android's `file-open` and its siblings): tapped,
+    /// its × while it comes over, how much has come, here and kept, refused, its viewer closed.
+    case openRichFile(id: String)
+    case stopRichFile(id: String)
+    case richFileProgress(id: String, received: Int64)
+    case richFileArrived(id: String, path: String)
+    case richFileFailed(id: String, reason: String)
+    case richFileViewed(id: String)
     case playbackStarted(id: String)
     case playbackProgress(id: String, progress: Double)
     case playbackEnded
@@ -262,6 +270,11 @@ public enum Effect: Equatable, Sendable {
     case loadOlder(before: String?)
     /// Fetch and play the reply's audio (contract §5.6).
     case fetchReplyAudio(messageID: String)
+    /// Bring a file Rich attached over from the Mac (signed `GET /api/messages?kind=file`) and keep
+    /// it; its progress and outcome come back as `richFileProgress`, `richFileArrived`, `richFileFailed`.
+    case fetchRichFile(id: String, threadID: String, name: String, total: Int64?)
+    /// The × on a file coming over: stop it, keep nothing.
+    case stopRichFile(id: String)
     case stopAudio
     /// Open (or keep) the live connection to the paired Mac.
     case connect
