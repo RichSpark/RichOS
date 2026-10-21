@@ -264,10 +264,18 @@ pub fn tool_residency_env(role: LeaseRole) -> Option<(&'static str, &'static str
 pub const OVERLOADED_RETRY_DELAY_ENV: &str = "CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS";
 pub const OVERLOADED_RETRY_DELAY_MS: &str = "2000";
 
+/// How many times Claude Code retries a failed request (default 10, clamped at 15 in 2.1.305).
+/// A connection error always waits base 500 ms, cap 32 s, so the count is the only lever: at 15
+/// the minimum total wait for a connection error is 500+1000+2000+4000+8000+16000 + 9*32000
+/// = 319500 ms (5.3 min) against 159500 ms at 10, which rides out an internet cutoff of a few
+/// minutes. For overload at base 2000 the minimum goes from 222000 to 382000 ms.
+pub const MAX_RETRIES_ENV: &str = "CLAUDE_CODE_MAX_RETRIES";
+pub const MAX_RETRIES: &str = "15";
+
 /// The environment every lease child (conversation and work) is spawned with, whatever its role.
 /// A pure function of nothing, so the pin is a unit test, as [`tool_residency_env`] is.
-pub fn lease_retry_env() -> (&'static str, &'static str) {
-    (OVERLOADED_RETRY_DELAY_ENV, OVERLOADED_RETRY_DELAY_MS)
+pub fn lease_retry_env() -> [(&'static str, &'static str); 2] {
+    [(OVERLOADED_RETRY_DELAY_ENV, OVERLOADED_RETRY_DELAY_MS), (MAX_RETRIES_ENV, MAX_RETRIES)]
 }
 
 /// Native continuity checkpoint tool identity.
@@ -1948,8 +1956,9 @@ impl NativeClient {
         if let Some((name, value)) = tool_residency_env(role) {
             command.env(name, value);
         }
-        let (retry_name, retry_value) = lease_retry_env();
-        command.env(retry_name, retry_value);
+        for (retry_name, retry_value) in lease_retry_env() {
+            command.env(retry_name, retry_value);
+        }
         if let Some(profile) = profile {
             let scope = continuity.ok_or_else(|| NativeError::Protocol("desktop engine needs a scoped continuity bridge".into()))?.1;
             profile.configure(&mut command,bin,&session_id,scope);
@@ -5908,10 +5917,18 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
 
     #[test]
     fn every_lease_waits_longer_before_retrying_an_overloaded_request() {
-        assert_eq!(lease_retry_env(), ("CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS", "2000"));
+        assert!(lease_retry_env().contains(&("CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS", "2000")));
         // 10 retries, delay = min(32000, base * 2^(n-1)): the minimum total, in ms.
         let total: u64 = (1..=10u32).map(|n| (2000u64 << (n - 1)).min(32000)).sum();
         assert_eq!(total, 222_000);
+    }
+
+    #[test]
+    fn every_lease_retries_fifteen_times_so_an_internet_cutoff_of_minutes_is_ridden_out() {
+        assert!(lease_retry_env().contains(&("CLAUDE_CODE_MAX_RETRIES", "15")));
+        // A connection error: base 500, cap 32000, 15 retries: the minimum total, in ms.
+        let total: u64 = (1..=15u32).map(|n| (500u64 << (n - 1)).min(32000)).sum();
+        assert_eq!(total, 319_500);
     }
 
     #[test]
