@@ -99,15 +99,38 @@ class Walk(cw.CommandWalk):
         rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true')
         return [json.loads(r) for r in rows.splitlines() if '"ThreadCreated"' in r]
 
+    def job_commands(self, marker):
+        """The back end's Bash hook records made in the conversation turn that began with `marker`:
+        callbacks are read in order per session and only those after a prompt carrying the marker
+        (and before the next prompt without it) count, so another company's job cannot pass this one."""
+        script = ('import json,glob,sys\n'
+                  'out=[]\n'
+                  'for p in glob.glob(sys.argv[1]+"/engine-state/evidence/*/callbacks.jsonl"):\n'
+                  '    on=False\n'
+                  '    for l in open(p):\n'
+                  '        try: c=json.loads(l).get("callback",{})\n'
+                  '        except Exception: continue\n'
+                  '        e=c.get("hook_event_name")\n'
+                  '        if e=="UserPromptSubmit": on=sys.argv[2] in c.get("prompt","")\n'
+                  '        elif on and e=="PostToolUse" and c.get("tool_name")=="Bash" and not c.get("agent_id"):\n'
+                  '            r=c.get("tool_response") or {}\n'
+                  '            out.append({"command":c.get("tool_input",{}).get("command",""),\n'
+                  '                        "background":bool(c.get("tool_input",{}).get("run_in_background")),\n'
+                  '                        "stdout":(r.get("stdout","") if isinstance(r,dict) else str(r))[:2000]})\n'
+                  'print(json.dumps(out))\n')
+        return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data)
+                                + ' ' + shlex.quote(marker), 60))
+
     def job(self, thread, label):
         """Send the command from the open conversation and wait for the assignment on `thread`."""
         short, subject = self.head()
 
+        marker = f'[{label} job]'
+
         def ran(commands):
             return [c for c in commands if 'git' in c.get('command', '') and short in c.get('stdout', '')]
 
-        already = len(ran(self.evidence_commands()))
-        sent = self.send(JOB.format(folder=shlex.quote(self.company)))
+        sent = self.send(f'{marker} ' + JOB.format(folder=shlex.quote(self.company)))
         pressed, record = [0], None
 
         def pick():
@@ -120,14 +143,14 @@ class Walk(cw.CommandWalk):
         end = time.monotonic() + self.a.within
         while time.monotonic() < end:
             record = pick()
-            if record or len(ran(self.evidence_commands())) > already:
+            if record or ran(self.job_commands(marker)):
                 break
             time.sleep(3)
         if record:
             record = self.until_closed(pick, max(end - time.monotonic(), 1), pressed)
         record = self.settled_read(record) if record and record.get('state') not in OPEN else record
-        commands = self.evidence_commands()
-        if not record and len(ran(commands)) > already:
+        commands = self.job_commands(marker)
+        if not record and ran(commands):
             evidence = {'thread': thread, 'repository_head': {'short': short, 'subject': subject},
                         'assignment': None, 'answered_in_conversation': True, 'back_end_bash': commands}
             (self.out / f'{label}-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
