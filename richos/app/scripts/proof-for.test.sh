@@ -118,6 +118,21 @@ else
 fi
 
 # -----------------------------------------------------------------------------------------
+# A2. A teammate definition is READ by a richos-core test (2026-10-21: Newt's shelf file landed
+#     naming no media skill, the selector mapped it to nothing, and the test failed on main).
+# -----------------------------------------------------------------------------------------
+A2_TEST="native::native_driver_tests::"
+A2_TEST="${A2_TEST}a_teammate_s_session_lists_every_skill_its_definition_names"
+for d in agents team/shelf mega-lander/duties; do
+  run_pf "$WORK/a2.out" --paths "richos/engine/$d/zz-fixture.md"
+  if grep -qF "richos-core --lib $A2_TEST" "$WORK/a2.out"; then
+    ok "A2 a file under engine/$d selects the test that reads every teammate definition"
+  else
+    bad "A2 a file under engine/$d selects the definition-reading test" "$(cat "$WORK/a2.out")"
+  fi
+done
+
+# -----------------------------------------------------------------------------------------
 # B. e7facc99 — the land whose three subjects are named one by one in its own message.
 #    This is the case that found the nested-runner blind spot.
 # -----------------------------------------------------------------------------------------

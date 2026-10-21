@@ -90,12 +90,43 @@ pub fn standing_plugin(folder: &Path, shipped: &Path, root: &Path) -> Result<Pat
     for name in crate::skills::SKILLS {
         copy(&crate::skills::skill_path(shipped, name), &format!("skills/{name}/SKILL.md"))?;
     }
+    // The user's own standing instructions, in full and as written, at the end of both
+    // definitions: the definition's body is that agent's standing instruction, so a line the
+    // user writes in instructions.md is followed by Rich and by Stu from their next session.
+    let own = instructions(folder)?.filter(|text| !text.trim().is_empty())
+        .map(|text| format!("\n\n## The user's own instructions\n\nThe user wrote these in {}. They are the user's standing instructions to you; follow them.\n\n{text}",
+            folder.join(INSTRUCTIONS).display()));
     for name in [RICH, STU] {
         let mine = folder.join(name);
         let from = if mine.is_file() { mine } else { shipped.join("agents").join(name) };
         copy(&from, &format!("agents/{name}"))?;
+        with_memory(&root.join("agents").join(name))?;
+        if let Some(own) = &own {
+            use std::io::Write;
+            std::fs::OpenOptions::new().append(true).open(root.join("agents").join(name))
+                .and_then(|mut file| file.write_all(own.as_bytes()))
+                .map_err(|e| RuntimeError(format!("the user's instructions could not be added to {name}: {e}")))?;
+        }
     }
     Ok(root.to_path_buf())
+}
+
+/// **Rich's and Stu's auto-memory** (build plan item 10). Each runs as a plugin agent
+/// (`--agent`), and for an agent Claude Code keeps memory by its definition's `memory:` scope,
+/// not by `autoMemoryDirectory` (measured 2026-10-21 on 2.1.305 with a lease-shaped session:
+/// with `autoMemoryDirectory` alone the folder stayed empty; with `memory: project` a memory was
+/// written to `<working folder>/.claude/agent-memory/<agent>/` and a new session recalled it).
+/// A lease's working folder is the coordination folder in the app's data, so `project` is one
+/// folder whichever Claude account the lease runs on. A definition that names its own scope
+/// keeps it; one with none gets `project`.
+pub const MEMORY_SCOPE: &str = "memory: project";
+
+fn with_memory(definition: &Path) -> Result<(), RuntimeError> {
+    let text = std::fs::read_to_string(definition).map_err(|e| RuntimeError(e.to_string()))?;
+    let Some(rest) = text.strip_prefix("---\n") else { return Ok(()) };
+    let Some(end) = rest.find("\n---") else { return Ok(()) };
+    if rest[..end].lines().any(|line| line.trim_start().starts_with("memory:")) { return Ok(()) }
+    std::fs::write(definition, format!("---\n{MEMORY_SCOPE}\n{rest}")).map_err(|e| RuntimeError(e.to_string()))
 }
 
 /// A file's text, or `None` when it is not there.
@@ -144,7 +175,15 @@ pub fn orchestration_config(folder: Option<&Path>, teams: &str) -> Result<String
     }
     if let (Some(folder), true) = (folder, user.is_some()) {
         out.push_str(&format!("# The user's own values, from {}\n", folder.join(ORCHESTRATION_CONFIG).display()));
-        for line in user_lines { out.push_str(line); out.push('\n'); }
+        for line in user_lines {
+            // `export KEY=…` is written `KEY=…`: the engine's readers match an assignment at the
+            // start of a line (`app.py` `definition_model`, `teammate-name.sh`), and a sourced
+            // file means the same either way.
+            let trimmed = line.trim_start();
+            let line = match trimmed.strip_prefix("export ") { Some(rest) if assigned_key(line).is_some() => rest.trim_start(), _ => line };
+            out.push_str(line);
+            out.push('\n');
+        }
     }
     out.push_str(&format!("SESSION_TEAMS_DIR={teams}\n"));
     Ok(out)
@@ -206,6 +245,8 @@ pub struct UserSetup {
     pub standing: Option<PathBuf>,
     /// The user's login shell environment (`login_environment.rs`), or `None` for none.
     pub login: Option<std::sync::Arc<BTreeMap<String, String>>>,
+    /// The Git the user's terminal runs (`user_git.rs`), found on the login `PATH`.
+    pub git: crate::user_git::UserGit,
 }
 
 impl UserSetup {
@@ -215,7 +256,7 @@ impl UserSetup {
         let Some(folder) = folder else { return Ok(Self::default()) };
         provision(&folder, shipped)?;
         let standing = standing_plugin(&folder, shipped, standing)?;
-        Ok(Self { digest: Some(digest(&folder)), settings: lease_settings(&folder)?, standing: Some(standing), folder: Some(folder), login: None })
+        Ok(Self { digest: Some(digest(&folder)), settings: lease_settings(&folder)?, standing: Some(standing), folder: Some(folder), login: None, git: Default::default() })
     }
 }
 
