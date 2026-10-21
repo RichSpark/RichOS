@@ -322,8 +322,14 @@ class Walk(adopt.Walk):
         # waited for was not on screen. The row is pressed only when the door opened another one.
         self.wait_for('Message to Rich', role='AXTextArea')
         title = self.facts.get('thread_title') or 'Running'
-        if self.present(title, role='AXStaticText'):
-            return
+        # The crumb is static text, whose words are its AXValue (walk-08aeea74dab4's tree:
+        # {"role": "AXStaticText", "title": "", "value": "Onboarding"}), never its title.
+        try:
+            if self.ax('find', '--value', title, '--role', 'AXStaticText', '--first'):
+                return
+        except StepFailed as exc:
+            if not adopt.axwait.not_yet(exc, 'find'):
+                raise
         # Waited for before it is pressed: a press is never asked again (axwait.py), and right
         # after a relaunch the app may not answer one read (esc-20261021T205850Z-48c70d7d).
         self.wait_for(title)

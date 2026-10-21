@@ -211,9 +211,10 @@ class Enter(unittest.TestCase):
 
     def walk_on(self, finds):
         w = walk.Walk.__new__(walk.Walk)
-        w.facts, w.calls, w.pressed = {'thread_title': 'Onboarding'}, [], []
+        w.facts, w.calls, w.pressed, w.args = {'thread_title': 'Onboarding'}, [], [], []
         def ax(mode, *a, **k):
             w.calls.append((mode, a[1] if len(a) > 1 else None))
+            w.args.append(a)
             if mode == 'click':
                 w.pressed.append(a[1])
                 return [{'clicked': True}]
@@ -246,6 +247,8 @@ class Enter(unittest.TestCase):
         w.enter()
         self.assertEqual(w.pressed, ['Talk to Rich'])
         self.assertEqual(w.calls[-1], ('find', 'Onboarding'))
+        # walk-08aeea74dab4: the crumb's words are its AXValue, so it is matched by value.
+        self.assertEqual(w.args[-1][:4], ('--value', 'Onboarding', '--role', 'AXStaticText'))
 
     def test_the_home_door_is_waited_for_when_home_is_not_drawn_yet(self):
         """walk-45ed47dcaab0: checked once before home was drawn, the door was skipped and
