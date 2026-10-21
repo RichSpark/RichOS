@@ -1767,7 +1767,8 @@ while True: time.sleep(.02)
                 walk = Path(args[args.index("--out") + 1])
                 walk.mkdir(parents=True, exist_ok=True)
                 (walk / "report.json").write_text(json.dumps({
-                    "expect_sha": args[args.index("--expect-sha") + 1], "steps": steps}))
+                    "expect_sha": args[args.index("--expect-sha") + 1], "steps": steps,
+                    "complete": [s["step"] for s in steps] == list(m.NEW_USER_WALK_STEPS)}))
                 if any(s["outcome"] != "PASS" for s in steps):
                     raise RuntimeError("python3 failed (exit 1); see the run log")
                 return
@@ -1783,7 +1784,7 @@ while True: time.sleep(.02)
         return r, calls
 
     def test_a_build_walks_its_candidate_as_a_new_user_after_the_boot_proof_and_publish_requires_it(self):
-        passed = [{"step": s, "outcome": "PASS"} for s in ("identity", "setup", "signed-out", "update", "signed-in")]
+        passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
         r, calls = self.build_that_walks_as_a_new_user(passed)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -1803,6 +1804,37 @@ while True: time.sleep(.02)
         with contextlib.redirect_stdout(io.StringIO()):
             publisher.perform("publish", run_id="fixture-run-id")
         self.assertEqual(publisher.command.call_args.args[2], "finish")
+
+    def test_a_walk_that_stopped_before_its_end_is_refused_however_its_steps_went(self):
+        # Review rv-20261021T163510Z-b612361c-0e62, finding 3: the walk rewrites report.json after
+        # every step, and publish accepted any nonempty all-PASS list, so a walk that stopped after
+        # `identity` published. Red before the gate required every step and the walk's own end.
+        r = self.runner()
+        info = {**self.CANDIDATE_INFO, "new_user_walk_required": True}
+        walk = r.new_user_walk_dir("fixture-run-id")
+        walk.mkdir(parents=True, exist_ok=True)
+        cases = (
+            ("identity only", [{"step": "identity", "outcome": "PASS"}], False),
+            ("every step, no recorded end", [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS], False),
+            ("a step missing, marked complete",
+             [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS if s != "accounts"], True),
+        )
+        for what, steps, complete in cases:
+            with self.subTest(what):
+                (walk / "report.json").write_text(json.dumps({"expect_sha": info["build_commit"], "steps": steps,
+                                                              **({"complete": True} if complete else {})}))
+                with self.assertRaisesRegex(ValueError, "did not walk to its end"):
+                    r.require_new_user_walk(info, "fixture-run-id")
+        (walk / "report.json").write_text(json.dumps({"expect_sha": info["build_commit"], "complete": True,
+            "steps": [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]}))
+        self.assertTrue(r.require_new_user_walk(info, "fixture-run-id")["complete"])
+
+    def test_the_gates_step_list_is_the_walks(self):
+        spec = importlib.util.spec_from_file_location(
+            "new_user_walk", Path(__file__).with_name("testvm") / "new-user-walk.py")
+        walk = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(walk)
+        self.assertEqual(list(m.NEW_USER_WALK_STEPS), walk.STEPS)
 
     def test_a_new_user_walk_that_fails_fails_the_build_and_publish_refuses_the_candidate(self):
         # The dead end a new user hit on 1.2.1, as the walk reports it.

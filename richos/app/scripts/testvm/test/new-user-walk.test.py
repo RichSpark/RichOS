@@ -131,6 +131,26 @@ class AccountsVerdict(unittest.TestCase):
         self.assertEqual(walk.STEPS, ['identity', 'setup', 'signed-out', 'accounts', 'update', 'signed-in'])
 
 
+class ReadsTheScreenAsAPersonDoes(unittest.TestCase):
+    """The guest walk of 2026-10-21 on the fixed build: the update row's accessibility value was
+    empty while the frame said "RichOS 1.2.2 is up to date.", and Settings stayed open after
+    Escape, so the signed-in message was typed into nothing. Both are read off the frame now."""
+    FRAME = ('Claude accounts\nNot signed in on this Mac\nMemory folder\nUpdates\nRichOS 1.2.2 is up to date.\n'
+             'Checked 3 minutes ago.\n{ Check for updates |\nHOW IT LOOKS\nTheme\n')
+
+    def test_the_update_row_is_read_off_the_frame(self):
+        self.assertEqual(walk.update_row(self.FRAME), ('RichOS 1.2.2 is up to date.', 'Checked 3 minutes ago.'))
+        self.assertTrue(walk.update_settled(*walk.update_row(self.FRAME)))
+        self.assertEqual(walk.update_row('Updates\nRichOS 1.2.2\nChecking for updates…\n'),
+                         ('RichOS 1.2.2', 'Checking for updates…'))
+        self.assertFalse(walk.update_settled(*walk.update_row('Updates\nRichOS 1.2.2\nChecking for updates…\n')))
+        self.assertEqual(walk.update_row('no row here'), (None, None))
+
+    def test_whether_settings_is_open_is_read_off_the_frame(self):
+        self.assertTrue(walk.settings_open(self.FRAME))
+        self.assertFalse(walk.settings_open('RV Park / Onboarding\nTalk to Rich...\nhow it looks to me'))
+
+
 class UpdateVerdict(unittest.TestCase):
     FAILED = 'RichOS could not prepare this update.'
 

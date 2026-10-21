@@ -27,8 +27,14 @@ The build walks every candidate as a new user before it can be published:
   hit fails the step that showed it.
 - `nightly-local.py build` runs it after the VM boot proof, in its own guest
   (phase `new-user-walk`) and `publish` refuses a candidate whose walk did not pass on its own
-  build commit (`require_new_user_walk`). A candidate built before this requirement keeps the
-  contract it was built under.
+  build commit (`require_new_user_walk`): every step of the whole walk (`NEW_USER_WALK_STEPS`,
+  the walk's own `STEPS`) must have run and passed and the walk must have written its own end
+  (`complete`), because the report is rewritten after each step and a walk that stopped early
+  leaves only passes behind. A candidate built before this requirement keeps the contract it
+  was built under.
+- The walk reads the screen as a person does: whole-frame OCR text (never a capped search), the
+  update row read off the frame, Settings opened and closed with its own button and checked and
+  the Claude accounts card visited (step `accounts`).
 
 ## The checks that guard the class
 
@@ -36,7 +42,8 @@ The build walks every candidate as a new user before it can be published:
 |---|---|
 | `nightly-local.py` phase `new-user-walk`, `require_new_user_walk` | publishing a build a new user's first run has not passed on |
 | `scripts/nightly-local.test.py` `test_a_build_walks_its_candidate_as_a_new_user_after_the_boot_proof_and_publish_requires_it`, `test_a_new_user_walk_that_fails_fails_the_build_and_publish_refuses_the_candidate` | the gate being skipped, run out of order or a failed or missing walk being published |
-| `scripts/testvm/test/new-user-walk.test.py` (in `testvm/test/run-tests.sh`) | a dead end the walk would not fail on; reading the OCR tool's summary line as screen text |
+| `scripts/nightly-local.test.py` `test_a_walk_that_stopped_before_its_end_is_refused_however_its_steps_went`, `test_the_gates_step_list_is_the_walks` | a walk that stopped early or a step list that drifted from the walk's |
+| `scripts/testvm/test/new-user-walk.test.py` (in `testvm/test/run-tests.sh`) | a dead end the walk would not fail on (anywhere on a frame); an update step passing on an in-between state; the account card's verdict; the update row and the Settings panel read off the frame |
 
 ## When a new dead end is found
 

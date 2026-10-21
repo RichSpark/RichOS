@@ -302,6 +302,9 @@ VM_PROOF_BUDGET = 3600 + 1200
 # of 2026-10-21 took 595 s from slot to clean (setup 253 s, of which the app's own download of
 # Claude Code and the 178 MB engine is most), so 40 minutes covers a slow network twice over.
 NEW_USER_WALK_PHASE = "new-user-walk"
+# The whole walk, in its order: testvm/new-user-walk.py STEPS (nightly-local.test.py asserts the
+# two are the same list). A report is accepted only when it walked exactly these, to its end.
+NEW_USER_WALK_STEPS = ("identity", "setup", "signed-out", "accounts", "update", "signed-in")
 NEW_USER_WALK_WAIT = 3600
 NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 
@@ -2761,9 +2764,21 @@ class Runner:
                              "A new user's first run is a gate: walk it with nightly-local.py's "
                              "new-user walk (testvm/run-walk.py --new-user ... new-user-walk.py).") from None
         failed = [s for s in walked.get("steps", []) if s.get("outcome") != "PASS"]
-        if failed or not walked.get("steps"):
+        if failed:
             raise ValueError(f"the new-user walk of this candidate did not pass ({report}): "
-                             + "; ".join(f"{s.get('step')}: {s.get('detail')}" for s in failed or [{}]))
+                             + "; ".join(f"{s.get('step')}: {s.get('detail')}" for s in failed))
+        # EVERY STEP, WALKED TO THE END. The report is rewritten after each step, so passes alone
+        # can be a walk that stopped after its first step (review
+        # rv-20261021T163510Z-b612361c-0e62, finding 3): the step list must be the whole walk and
+        # the walk must have written its own end (`complete`).
+        walked_steps = [s.get("step") for s in walked.get("steps", [])]
+        if walked_steps != list(NEW_USER_WALK_STEPS) or walked.get("complete") is not True:
+            never = [s for s in NEW_USER_WALK_STEPS if s not in walked_steps]
+            raise ValueError(f"the new-user walk at {report} did not walk to its end: walked "
+                             f"{', '.join(walked_steps) or 'nothing'}"
+                             + (f"; never ran: {', '.join(never)}" if never else "")
+                             + ("" if walked.get("complete") is True else "; it did not record its own end")
+                             + ". Walk this candidate again.")
         accepted = [s for s in (info.get("build_commit"), info.get("source_commit")) if s]
         if walked.get("expect_sha") not in accepted:
             raise ValueError(f"the new-user walk at {report} walked {walked.get('expect_sha') or '<no commit>'}, "

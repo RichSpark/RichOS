@@ -155,6 +155,24 @@ def update_settled(line, sub):
         and not re.search(r'checking|looking|downloading|preparing', (sub or '') + ' ' + line, re.I)
 
 
+def update_row(text):
+    """(headline, subtitle) of Settings' Updates row, read from a frame's OCR TEXT: the two lines
+    after the "Updates" heading. The accessibility tree's `value` of #update-line came back empty
+    on the guest walk of 2026-10-21 (WebKit keeps a paragraph's words in its child text) while
+    the frame said "RichOS 1.2.2 is up to date.", so the row is read the way a person reads it."""
+    lines = [l.strip() for l in (text or '').splitlines() if l.strip()]
+    for i, line in enumerate(lines):
+        if line == 'Updates':
+            rest = lines[i + 1:i + 3] + [None, None]
+            return rest[0], rest[1]
+    return None, None
+
+
+def settings_open(text):
+    """Whether a frame's OCR TEXT shows the Settings panel (its first column's heading)."""
+    return bool(re.search(r'^\s*HOW IT LOOKS\s*$', text or '', re.M))
+
+
 def update_verdict(line, sub, screen_hits):
     """None when the update row reached a verdict a user can act on, else why not."""
     if screen_hits:
@@ -308,45 +326,62 @@ class NewUserWalk(setup_walk.SetupWalk):
 
     def accounts(self):
         """Settings, Claude accounts, signed out: the card says so and offers Sign in."""
-        self.ax('click', '--id', 'set-btn', '--first')
-        time.sleep(2)
+        self.settings(True, 'accounts-settings')
         self.ax('click', '--id', 'set-accounts-open', '--first')
         end = time.monotonic() + 120
-        while time.monotonic() < end and not self.shows_text('Not signed in'):
+        text = ''
+        while time.monotonic() < end:
             time.sleep(5)
-        text = self.frame('accounts')
-        command([HERE / 'ax.sh', self.vm, '--key', '53'])  # Escape closes the sheet
-        time.sleep(1)
-        command([HERE / 'ax.sh', self.vm, '--key', '53'])  # and Settings
+            text = self.frame('accounts')
+            if re.search(r'not signed in', text, re.I) or 'No reading yet' in text:
+                break
+        if self.by_id('acc-close'):
+            self.ax('click', '--id', 'acc-close', '--first')  # the sheet's own close button
+            time.sleep(1)
+        self.settings(False, 'accounts-closed')
         self.report['accounts'] = {'screen': text.strip()[-1500:], 'dead_ends': dead_ends(text)}
         why = accounts_verdict(text)
         if why:
             raise StepFailed(why)
         return self.report['accounts']
 
+    def settings(self, want_open, name):
+        """Open or close Settings the way a person does, with its own button, and check the frame:
+        Escape left it open on the guest walk of 2026-10-21, and the next message was typed into
+        nothing. Returns the frame's text with Settings in the state asked for."""
+        text = self.frame(name)
+        for _ in range(2):
+            if settings_open(text) == want_open:
+                return text
+            self.ax('click', '--id', 'set-btn', '--first')
+            time.sleep(2)
+            text = self.frame(name)
+        if settings_open(text) != want_open:
+            raise StepFailed('Settings did not %s' % ('open' if want_open else 'close'))
+        return text
+
     def update(self):
-        self.ax('click', '--id', 'set-btn', '--first')
-        time.sleep(2)
-        before = (self.by_id('update-line') or {}).get('value')
+        text = self.settings(True, 'update-before')
+        before = update_row(text)
         if self.by_id('update-check'):
             self.ax('click', '--id', 'update-check', '--first')
-        line, sub = before, None
-        # Until the row says how the check ended (update_settled), never on an in-between state.
+        line, sub = before
+        # Until the row says how the check ended (update_settled), never on an in-between state,
+        # read off the frame as a person reads it (update_row).
         end = time.monotonic() + self.a.update_within
         while time.monotonic() < end:
-            time.sleep(3)
-            line = (self.by_id('update-line') or {}).get('value')
-            sub = (self.by_id('update-sub') or {}).get('value')
+            time.sleep(5)
+            text = self.frame('update')
+            line, sub = update_row(text)
             if update_settled(line, sub):
                 break
-        text = self.frame('update')
         if self.by_id('update-why'):
             self.ax('click', '--id', 'update-why', '--first')
             time.sleep(1)
             text += self.frame('update-reason')
         hits = [h for h in dead_ends(text) if h == 'raw OS error']
         self.report['update'] = {'before': before, 'line': line, 'sub': sub, 'dead_ends': hits}
-        command([HERE / 'ax.sh', self.vm, '--key', '53'])  # Escape closes Settings
+        self.settings(False, 'update-closed')
         why = update_verdict(line, sub, hits)
         if why:
             raise StepFailed(why)
@@ -405,6 +440,12 @@ def main():
         print(f"{step}: {row['outcome']}" + (f" — {row.get('detail')}" if row['outcome'] != 'PASS' else ''), flush=True)
         if not ok and not a.keep_going:
             break
+    # THE WALK'S OWN END, written only here: report.json is rewritten after every step, so a walk
+    # that stopped after `identity` left a report of passes the gate would have read as a pass
+    # (review rv-20261021T163510Z-b612361c-0e62, finding 3). `complete` says every step asked
+    # for was walked; nightly-local.py require_new_user_walk refuses a report without it.
+    report['complete'] = [row['step'] for row in report['steps']] == steps
+    (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     walk.pull()
     return 0 if ok else 1
 
