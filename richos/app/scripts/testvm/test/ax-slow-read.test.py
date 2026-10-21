@@ -27,6 +27,8 @@ Call graph:
     +     180 richos_tauri::blocking_thing  (in richos-tauri) + 10  [0x100002000]
     +     ! 180 __psynch_mutexwait  (in libsystem_kernel.dylib) + 8  [0x18c8e9000]
     +     3 other_branch  (in richos-tauri) + 1  [0x100003000]
+    +     : 3 deeper_in_other_branch  (in richos-tauri) + 1  [0x100004000]
+    +     :   3 deepest_in_other_branch  (in richos-tauri) + 1  [0x100005000]
     183 Thread_200: tokio-runtime-worker
     + 183 thread_start  (in libsystem_pthread.dylib) + 8  [0x18c900000]
 
@@ -92,6 +94,8 @@ class SlowRead(unittest.TestCase):
         # The main thread's heaviest path, and nothing from the next thread or a lighter branch.
         self.assertIn('180 __psynch_mutexwait  (in libsystem_kernel.dylib) + 8', r.stderr)
         self.assertNotIn('other_branch', r.stderr)
+        # A lighter sibling deeper than the heaviest leaf is not spliced onto its path.
+        self.assertNotIn('deepest_in_other_branch', r.stderr)
         self.assertNotIn('tokio-runtime-worker', r.stderr)
         self.assertIn('CPU usage: 90.00% user, 9.00% sys, 1.00% idle', r.stderr, 'the second top sample')
         self.assertNotIn('85.0% idle', r.stderr)
@@ -108,6 +112,16 @@ class SlowRead(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), 'answered', 'the read is never retried or replaced')
         self.assertIn('ax_slow_read', r.stderr)
         self.assertEqual(sum(c.startswith('sample ') for c in calls), 2)
+
+    def test_host_reading_is_taken_while_the_read_is_overdue(self):
+        with tempfile.TemporaryDirectory(prefix='ax-slow-') as directory:
+            env = dict(os.environ, TMPDIR=directory, TESTVM_AX_SLOW_SECONDS='1')
+            r = subprocess.run([sys.executable, '-B', str(DEADLINE), '--host', '5', 'sleep', '30'],
+                               input='', text=True, capture_output=True, env=env, timeout=120)
+        self.assertEqual(r.returncode, 124)
+        reading = next(json.loads(l) for l in r.stderr.splitlines() if l.startswith('{"ax_host_reading"'))
+        self.assertLess(reading['at_seconds'], 3.0, 'taken at the slow line, not after the deadline')
+        self.assertIn('busy_percent', reading, r.stderr)
 
 
 if __name__ == '__main__':

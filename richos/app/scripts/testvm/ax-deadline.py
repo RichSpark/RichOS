@@ -96,12 +96,13 @@ def _heaviest_path(text, limit=70):
             continue
         if path and line.startswith('    ') and line[4:5].isdigit():
             break  # the next thread
-        if digits > column:
-            path.append(line[digits:].split('  [0x')[0].strip()[:160])
-            column = digits
-            if len(path) >= limit:
-                path.append('...')
-                break
+        if digits <= column:
+            break  # the heaviest branch ended; what follows is a lighter sibling's
+        path.append(line[digits:].split('  [0x')[0].strip()[:160])
+        column = digits
+        if len(path) >= limit:
+            path.append('...')
+            break
     return path
 
 
@@ -199,8 +200,9 @@ class Snapshot:
 
 
 def host_reading():
-    """The host's own admission reading and the guests' VM processes, taken the moment a
-    read was slow or hit its deadline. Diagnostics only; never raises."""
+    """The host's own admission reading and the guests' VM processes, taken WHILE a read is
+    overdue (at SLOW_SECONDS on the host's clock, beside the guest's snapshot), as a JSON line.
+    Diagnostics only; never raises."""
     try:
         sys.dont_write_bytecode = True
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -216,7 +218,8 @@ def host_reading():
                                   if l.rstrip().endswith('com.apple.Virtualization.VirtualMachine')]
     except (OSError, subprocess.SubprocessError):
         pass
-    print(json.dumps(record), file=sys.stderr, flush=True)
+    record['at_seconds'] = round(time.monotonic() - float(os.environ.get('TESTVM_AX_BEGAN', time.monotonic())), 2)
+    return json.dumps(record)
 
 
 def run(command, source, seconds, host=False, pid=None):
@@ -237,22 +240,26 @@ def run(command, source, seconds, host=False, pid=None):
             owned.wait()
         raise SystemExit(128 + signum)
     previous = {s: signal.signal(s, stop) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
-    snapshot = None
+    snapshot = reading = None
+    os.environ['TESTVM_AX_BEGAN'] = str(began)
     try:
         try:
             allowance = max(.01, seconds - 1)
-            if not host and allowance > SLOW_SECONDS:
+            if allowance > SLOW_SECONDS:
                 try:
                     out, err = child.communicate(source, timeout=SLOW_SECONDS)
                 except subprocess.TimeoutExpired:
-                    snapshot = Snapshot(pid, time.monotonic() - began)
+                    if host:
+                        reading = host_reading()
+                    else:
+                        snapshot = Snapshot(pid, time.monotonic() - began)
                     out, err = child.communicate(timeout=max(.01, began + allowance - time.monotonic()))
             else:
                 out, err = child.communicate(source, timeout=allowance)
             if snapshot:
                 snapshot.report(began + allowance)
-            if host and b'"ax_slow_read": true' in err:
-                host_reading()
+            if reading:
+                print(reading, file=sys.stderr, flush=True)
             sys.stdout.buffer.write(out)
             sys.stdout.buffer.flush()
             sys.stderr.buffer.write(err)
@@ -273,7 +280,7 @@ def run(command, source, seconds, host=False, pid=None):
             sys.stderr.buffer.flush()
             print(json.dumps(timing(began, host, err)), file=sys.stderr, flush=True)
             if host:
-                host_reading()
+                print(reading or host_reading(), file=sys.stderr, flush=True)
             if snapshot:
                 snapshot.report(deadline - 1)
             # Process state is independent of a possibly blocked accessibility server.
