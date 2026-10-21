@@ -89,7 +89,8 @@ class Stale(Exception):
 
 class El:
     def __init__(self, role, title='', desc=None, kids=(), **attrs):
-        self.attrs = dict(attrs, AXRole=role, AXTitle=title)
+        # Every AX element has a role description; a missing AXDescription may fall back to it.
+        self.attrs = dict({'AXRoleDescription': role[2:].lower()}, **attrs, AXRole=role, AXTitle=title)
         if desc is not None:
             self.attrs['AXDescription'] = desc
         self.kids = kids if callable(kids) else list(kids)
@@ -363,6 +364,11 @@ class Run(unittest.TestCase):
              'max': 100, 'depth': 16, 'contains': False}
         node = json.loads(ax.run(P, FakeAX(world), FakeHost(world)).split('\n')[-1])
         self.assertEqual(node['desc'], 'text entry area')
+        # ...but a menu element with no AXDescription printed '' (walk-8feee21b526b: all 77).
+        records, world = MenuBar().exercise(scope='menubar', mode='tree', text=None, role=None, first=False)
+        menu = [r for r in records if r.get('role', '').startswith('AXMenu')]
+        self.assertEqual(len(menu), 5, records)
+        self.assertEqual({r['desc'] for r in menu}, {''})
 
 
 class MenuBar(unittest.TestCase):

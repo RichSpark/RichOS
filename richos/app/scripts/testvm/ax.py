@@ -120,6 +120,10 @@ def ax_search(roots, P, api):
             'scoped': scoped, 'exhaustive': head >= len(queue) and not truncated and not stopped_early}
 
 
+# Elements whose missing AXDescription System Events printed as '' (see description() in run()).
+MENU_ROLES = ('AXMenuBar', 'AXMenuBarItem', 'AXMenu', 'AXMenuItem')
+
+
 def js_string(v):
     """String(v) as ax.js wrote it, so `--expect enabled=true` and value=1 compare the same."""
     if v is None:
@@ -168,16 +172,19 @@ def run(P, ax, host):
         return js_string(scalar_or(get(el, attr), ''))
 
     def description(el):
-        # System Events' "description" was AXDescription when the element has one and its
-        # role description when it has none ("standard window", "group" on native views),
-        # and the walks match on what it printed. Kept so a walk reads the same tree.
+        # System Events' "description", which the walks match on, measured element by element
+        # against the raw AX answers in one guest (walk-8feee21b526b, 2026-10-21): AXDescription
+        # when it answers ('' included); when it does not, the role description ("standard
+        # window", "group", "close button") for the 8 window-tree elements, and '' for all 77
+        # menu elements, with the same kAXErrorNoValue on both sides. Role is what separates
+        # them, so the fallback skips the menu roles.
         try:
             v = ax.get(el, 'AXDescription')
         except TimeoutError:
             raise
         except Exception:
             v = None
-        if v is None:
+        if v is None and get(el, 'AXRole', '') not in MENU_ROLES:
             v = get(el, 'AXRoleDescription', '')
         return js_string(scalar_or(v, ''))
 
