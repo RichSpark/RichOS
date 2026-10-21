@@ -23,6 +23,7 @@ fn evidence_lock(folder: &Path, patience: std::time::Duration) -> Option<std::fs
         if !metadata.is_file() { return None; }
         let deadline = Instant::now() + patience;
         loop {
+            // lock-busy: one poll inside EVIDENCE_LOCK_PATIENCE; busy past it is "evidence unavailable", an unknown state, never a failure.
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0 { return Some(file); }
             if std::io::Error::last_os_error().kind() != std::io::ErrorKind::WouldBlock || Instant::now() >= deadline {
                 return None;

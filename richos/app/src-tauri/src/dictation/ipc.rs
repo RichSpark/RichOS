@@ -181,6 +181,7 @@ pub fn claim(dir: &Path) -> std::io::Result<Option<KeyOwner>> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(dir.join(LOCK_NAME))?;
     // SAFETY: a valid descriptor we own, for the life of `lock`.
+    // lock-busy: busy is the answer: another process owns the key socket, returned as Ok(None).
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         let error = std::io::Error::last_os_error();
         return if error.kind() == std::io::ErrorKind::WouldBlock { Ok(None) } else { Err(error) };

@@ -8,6 +8,7 @@
   },
   "counts": {
     "dialect": 124,
+    "lock-busy-undeclared": 0,
     "process-pattern-kill": 0,
     "process-self-wait": 0,
     "suite-inputs": 0,
@@ -1164,6 +1165,7 @@
     "dialect": "blocking",
     "env-mutation-unguarded": "blocking-site",
     "host-sample": "blocking-site",
+    "lock-busy-undeclared": "blocking",
     "process-pattern-kill": "blocking",
     "process-self-wait": "blocking",
     "short-deadline": "blocking-site",
