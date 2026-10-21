@@ -92,6 +92,13 @@ data class RichColors(
         val viewerInk = Color(0xFFDFE4EE)
         val viewerInkSoft = Color(0xFFDFE4EE).copy(alpha = 0.78f)
         val viewerDotOff = Color(0xFFDFE4EE).copy(alpha = 0.40f)
+
+        /** A spreadsheet in the viewer (round 36 "Phone: opened", the comps): a white sheet in both themes. */
+        val sheetGround = Color(0xFFFFFFFF)
+        val sheetHead = Color(0xFFEEF0F4)
+        val sheetInk = Color(0xFF16181D)
+        /** The grid: 3.62:1 on the sheet, 3.17:1 on its header row (the round's #c9c9ce is 1.65:1, too faint to read the columns by). */
+        val sheetLine = Color(0xFF86868C)
     }
 
     companion object {

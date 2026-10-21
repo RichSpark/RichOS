@@ -68,10 +68,25 @@ object RichFileShare {
 
     /** The phone's share sheet for a kept file: Save to Files, Mail, Messages, … */
     fun share(context: Context, path: String, name: String) {
-        val file = File(path)
-        val uri = runCatching { FileProvider.getUriForFile(context, context.packageName + AUTHORITY, file) }.getOrNull() ?: return
-        val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
-        val send = Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val uri = uri(context, path) ?: return
+        val send = Intent(Intent.ACTION_SEND).setType(type(name)).putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         runCatching { context.startActivity(Intent.createChooser(send, name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
+
+    /**
+     * A kept file of a kind the app does not show itself (a Word document, a slide deck, …), opened
+     * in the app on this phone that opens that kind, read-only. False when no app here opens it.
+     */
+    fun view(context: Context, path: String, name: String): Boolean {
+        val uri = uri(context, path) ?: return false
+        val open = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type(name))
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching { context.startActivity(open) }.isSuccess
+    }
+
+    private fun uri(context: Context, path: String) =
+        runCatching { FileProvider.getUriForFile(context, context.packageName + AUTHORITY, File(path)) }.getOrNull()
+
+    private fun type(name: String) =
+        MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
 }
