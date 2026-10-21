@@ -24,8 +24,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
               the signal this walk is about
   reminder    the settled job left nothing unfinished, so a finished teammate of Stu's session,
               waiting for its review, is registered in the app's own registry
-              (stu-reminder-guest.py). PASS needs a row from stall-watch, written at or after the
-              minute of that registration, in THIS conversation's inbox for Stu
+              (stu-reminder-guest.py). PASS needs a NEW row from stall-watch, after that
+              registration, naming the wait, in THIS conversation's inbox for Stu
               (<app state>/messages/<company>/<conversation>/stu.jsonl), and its words in the
               transcript of THIS Stu session.
   (`connect`, command-walk.py's, is not in the default run: its Settings menu path is stale on main.)
@@ -225,26 +225,20 @@ class StuReminderWalk(command_walk.CommandWalk):
             shlex.quote(script), shlex.quote(self.data), shlex.quote(REMINDER_MARK),
             shlex.quote(self.facts['thread'])), 120) or '[]')
 
-    def after(self, row, settled):
-        """Whether the reminder was written at or after the minute the job settled: its first line
-        is "UNFINISHED-WORK HH:MMZ: ..." in UTC."""
-        at = row['text'].split(REMINDER_MARK, 1)[1].split('Z', 1)[0].strip()
-        now = time.gmtime(settled)
-        return (int(at[:2]), int(at[3:5])) >= (now.tm_hour, now.tm_min)
-
     def in_transcript(self, session):
-        """Stu's own transcript for this session holding the reminder: it reached THIS session."""
-        return guest(self.vm, 'grep -l %s %s/.claude/projects/*/%s.jsonl 2>/dev/null || true' % (
-            shlex.quote(REMINDER_MARK), shlex.quote(self.home), shlex.quote(session)), 60).split()
+        """How many lines of Stu's own transcript for this session carry the reminder: what reached THIS session."""
+        said = guest(self.vm, 'cat %s/.claude/projects/*/%s.jsonl 2>/dev/null | grep -c %s || true' % (
+            shlex.quote(self.home), shlex.quote(session), shlex.quote(REMINDER_MARK)), 60).strip()
+        return int(said) if said.isdigit() else 0
 
     def reminder(self):
-        """Stu's job is settled and his turn has ended (the steps before this one). The reminder of
-        the unfinished work that remains (the job's own review and land) must then come: a row from
-        stall-watch in this conversation's inbox for Stu, written at or after the minute the job
-        settled, and its words in the transcript of THIS Stu session."""
-        session, settled = self.facts.get('stu_session'), self.facts.get('job_settled_s')
-        if not session or not settled:
-            raise StepFailed('job and idle must have run (no Stu session or settle time on record)')
+        """Stu's job is settled and his turn has ended (the steps before this one). After the
+        registration below, a NEW row from stall-watch naming that wait must come in this
+        conversation's inbox for Stu, and a NEW line carrying it in the transcript of THIS Stu session
+        (the positions of both are taken before the registration)."""
+        session = self.facts.get('stu_session')
+        if not session:
+            raise StepFailed('idle must have run (no Stu session on record)')
         # The settled job left nothing unfinished (its work is landed), so there is nothing to remind
         # of until something is: a finished teammate of Stu's session, waiting for its review, is
         # registered in the app's own registry, as spawn.sh registers one.
@@ -252,31 +246,34 @@ class StuReminderWalk(command_walk.CommandWalk):
         guest(self.vm, 'mkdir -p ' + shlex.quote(made), 60)
         command_walk.command([HERE / 'guest.sh', self.vm, '--push', HERE / 'stu-reminder-guest.py', made + '/'], 300)
         partition = self.partition(session)
-        settled = self.clock() / 1000
+        # Positions before the registration: only what arrives after them counts.
+        rows_before, transcript_before = len(self.found()), self.in_transcript(session)
+        registered = self.clock() / 1000
         mate = guest(self.vm, '/usr/bin/python3 %s finished %s %s %s' % (
             shlex.quote(made + '/stu-reminder-guest.py'), shlex.quote(self.payload + '/engine'),
             shlex.quote(partition), shlex.quote(session)), 60).strip()
         waited = self.a.reminder_seconds + 240
         end = time.monotonic() + waited
-        fresh, transcript = [], []
+        fresh, transcript_new = [], 0
         while time.monotonic() < end:
-            fresh = [r for r in self.found() if self.after(r, settled)]
-            transcript = self.in_transcript(session) if fresh else []
-            if fresh and transcript:
+            fresh = [r for r in self.found()[rows_before:] if WAIT_MARK in r['text']]
+            transcript_new = self.in_transcript(session) - transcript_before if fresh else 0
+            if fresh and transcript_new > 0:
                 break
             time.sleep(10)
         evidence = {'session': session, 'partition': partition, 'teammate': mate,
-                    'registered_at_utc': time.strftime('%H:%M:%SZ', time.gmtime(settled)),
+                    'registered_at_utc': time.strftime('%H:%M:%SZ', time.gmtime(registered)),
+                    'rows_before_registration': rows_before, 'transcript_lines_before_registration': transcript_before,
                     'reminder_seconds': self.a.reminder_seconds, 'waited_up_to_s': waited,
-                    'rows_at_or_after_the_settle': fresh, 'stu_session_transcript': transcript,
+                    'new_rows_naming_the_wait': fresh, 'new_transcript_lines': transcript_new,
                     'all_rows': self.found(), 'lead_files': self.lead_files()}
         (self.out / 'reminder.json').write_text(json.dumps(evidence, indent=2) + '\n')
         if not fresh:
-            raise StepFailed('no %s row from stall-watch, written after the job settled, reached Stu\'s inbox in this '
-                             'conversation within %.0f s; see reminder.json' % (REMINDER_MARK, waited))
-        if not transcript:
-            raise StepFailed("the reminder reached Stu's inbox but not the transcript of his session %s within "
-                             "%.0f s; see reminder.json" % (session, waited))
+            raise StepFailed('no new %s row naming "%s" reached Stu\'s inbox in this conversation after the '
+                             'registration within %.0f s; see reminder.json' % (REMINDER_MARK, WAIT_MARK, waited))
+        if transcript_new <= 0:
+            raise StepFailed("the reminder reached Stu's inbox but no new line of the transcript of his session %s "
+                             "carries it within %.0f s; see reminder.json" % (session, waited))
         return evidence
 
 
