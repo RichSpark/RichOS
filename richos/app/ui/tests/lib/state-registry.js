@@ -2939,13 +2939,27 @@ module.exports = [
     control: "#update-check",
     fixture: "updates-install-failed",
     why:
-      "`install_failure()`'s headline at updates.rs:271 — the `failed` state with kind " +
-      "`install`, which is every staging failure that is not a refused signature. He can " +
+      "`INSTALL_HEADLINE` in updates.rs (`Failure::of_journal`) — the `failed` state with kind " +
+      "`install`, which is every update-record or staging failure that is not a refused " +
+      "signature and not a busy record (the row below). He can " +
       "act, and the control is the same one the network failure names: `isSignature(v)` is " +
       "false here, so `paint()` keeps `#update-check` visible and relabels it 'Try again'. " +
       "It gets its OWN fixture rather than borrowing `updates-failed`, because the row " +
       "claims this headline renders with that control and the network fixture renders a " +
       "different headline.",
+  },
+  {
+    s: "RichOS is busy with another update task. Try again in a minute.",
+    c: "ACTIONABLE",
+    control: "#update-check",
+    fixture: "updates-busy",
+    why:
+      "`BUSY_HEADLINE` in updates.rs, the `failed` state with kind `busy`: the update record's " +
+      "lock stayed held for the updater's whole wait (`richos_user_update::PUBLICATION_WAIT`, " +
+      "5 s) by another part of RichOS. Nothing failed, so it is said as busy; until 2026-10-21 " +
+      "this was 'RichOS could not prepare this update.' over 'Resource temporarily unavailable " +
+      "(os error 35)' on a plain check. He can act: `isSignature(v)` is false, so `paint()` " +
+      "keeps `#update-check` visible as 'Try again', which the sentence names.",
   },
   {
     s: "Password-free application updates are not implemented on this platform.",

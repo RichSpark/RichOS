@@ -1310,6 +1310,21 @@ const FIXTURES = {
     });
   },
 
+  /// A BUSY UPDATE RECORD (`Failure::of_journal`, kind `busy`), the state that replaced the
+  /// 2026-10-21 "could not prepare" over "os error 35" on a plain check. Its row claims the
+  /// headline renders with `#update-check`, so it gets its own fixture for the same reason
+  /// the install failure does.
+  async "updates-busy"(browser) {
+    return openUpdates(browser, {
+      state: "failed",
+      failure: {
+        kind: "busy",
+        headline: "RichOS is busy with another update task. Try again in a minute.",
+        detail: "the update record stayed in use by another part of RichOS",
+      },
+    });
+  },
+
   /// THE §26 STATE ITSELF: an update is waiting and RichOS is working, so the control is
   /// REMOVED rather than dimmed and the sentence has to carry the whole answer on its own.
   async "updates-waiting-available"(browser) {
