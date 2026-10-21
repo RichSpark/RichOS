@@ -31,6 +31,13 @@ pub fn payload(state: &AppState, thread: &str) -> Result<Value, String> {
         for q in store(state).list(binding.entity_id().as_str(), thread)? {
             items.push(q.item(revision));
         }
+        // The files Rich and Stu put in front of the user (`rich_files_host.rs`), the same way:
+        // one item each, in the turn that attached it. The phone reads this same payload.
+        items.extend(crate::rich_files_host::items(
+            &crate::rich_files_host::root(state),
+            binding.entity_id().as_str(),
+            thread,
+        ));
         items.sort_by_key(|i| i["createdAt"].as_u64().unwrap_or(0));
     }
     Ok(payload)

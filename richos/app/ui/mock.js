@@ -498,6 +498,11 @@
   // the shape the §13 contract actually has, so the browser harness is not dead against the
   // renderer that ships.
   const turnsById = new Map(); // turnId -> { threadId, entityId, userText, runs, state, createdAt, startedAt, endedAt }
+  // thread_id -> the `rich_file` timeline items `rich_files::item` writes (round 36 screen 3).
+  // Empty unless a suite asks for the `{ richFiles: "round-36" }` preset.
+  const richFilesByThread = {};
+  // What `rich_file_open` / `rich_file_reveal` were asked to do, for a suite to read.
+  const richFileActions = [];
 
   function seedTurn(threadId, turnId, userText, replyText, at, durationMs) {
     const t = threads.find((x) => x.id === threadId);
@@ -595,6 +600,9 @@
       if (activeMs !== null) dur.activeMs = activeMs;
       items.push(dur);
     }
+    // The files Rich put in front of the user (`question_host::payload` merges them from
+    // `rich_files_host::items`), one item each, in the turn that attached them.
+    for (const f of richFilesByThread[threadId] || []) items.push(JSON.parse(JSON.stringify(f)));
     return {
       entityId: t ? t.entity_id : null,
       threadId,
@@ -853,6 +861,49 @@
       outputEntry("acme", acmeTurn1, "acme/deals", "comps-2026-10-04.xlsx", 41000, end1 - 1000, { source: "command" }),
       outputEntry("acme", acmeTurn1, "acme/deals", "comps-summary.md", 2100, end1 - 2000),
     ];
+  }
+
+  /// A `rich_file` item exactly as `rich_files::item` + `rich_files_host::item` write it.
+  function richFileItem(threadId, turnId, id, name, ext, meta, app, at, exists) {
+    const t = threads.find((x) => x.id === threadId);
+    const file = { id, name, ext, type: meta.split(" · ")[0], meta: exists ? meta : meta.split(" · ")[0],
+      bytes: exists ? 1 : null, exists, refused: false };
+    if (exists && app) file.app = app;
+    return { kind: "rich_file", id, entityId: t ? t.entity_id : null, threadId, turnId, visibility: "ceo",
+      createdAt: at, sequence: at, text: name, file };
+  }
+
+  // ROUND 36 SCREEN 3, "A file from Rich": his ask, Rich's reply, and the two files under it — the
+  // round's own words and files. `round-36-missing` is the same turn with the PDF gone from the Mac.
+  if (preset.richFiles === "round-36" || preset.richFiles === "round-36-missing") {
+    const turnId = uid("t");
+    const at = now() - 1000 * 60 * 3;
+    const ask = "send me the final counter as a PDF, and the comps";
+    const reply =
+      "Here they are. The counter holds at list minus 3%, with onboarding waived. The comps cover the eight deals like this one from the last two years; Acme’s ask is the lowest of them.";
+    seedTurn("acme", turnId, ask, reply, at, 161000);
+    messagesByThread.acme.push(
+      { role: "user", text: ask, turn_id: turnId, at },
+      { role: "assistant", text: reply, turn_id: turnId, at: at + 2000 }
+    );
+    richFilesByThread.acme = [
+      richFileItem("acme", turnId, "rf_0a1b2c3d4e5f6071", "Acme-counteroffer.pdf", "PDF", "PDF · 184 KB", "Preview",
+        at + 1000, preset.richFiles !== "round-36-missing"),
+      richFileItem("acme", turnId, "rf_8192a3b4c5d6e7f8", "Acme-comparables.xlsx", "XLSX", "Spreadsheet · 46 KB", "Numbers",
+        at + 1100, true),
+    ];
+  }
+
+  /// `rich_file_open` / `rich_file_reveal`: Rust resolves the id in the conversation's record and
+  /// refuses a gone file with the opener's own sentence (`opener.rs` `FILE_GONE`).
+  function richFileAction(cmd, args) {
+    const threadId = args.threadId ?? args.thread_id;
+    const id = args.fileId ?? args.file_id;
+    const f = (richFilesByThread[threadId] || []).find((x) => x.file.id === id);
+    if (!f) return Promise.reject("I don't have that file in this conversation.");
+    if (!f.file.exists) return Promise.reject("No longer on this Mac. It was moved or deleted.");
+    richFileActions.push({ cmd, threadId, id, name: f.file.name });
+    return Promise.resolve(null);
   }
 
   /// Round 17's `arrives`: his fifth message, Rich's reply, and the two files that turn wrote,
@@ -3731,6 +3782,10 @@
         case "output_reveal":
         case "output_save_copy":
           return outputAction(cmd, args);
+        // A file Rich put in front of the user (round 36 screen 3): opened through the opener.
+        case "rich_file_open":
+        case "rich_file_reveal":
+          return richFileAction(cmd, args);
         case "nav_state":
           return JSON.parse(JSON.stringify(navPrefs));
         case "set_sidebar_width":
@@ -4923,6 +4978,18 @@
 
   // --- dev-only test hooks, exercised by a headless check, never by real users ----------
   window.__RICHOS_MOCK__ = {
+    // ---- a file Rich put in front of the user (round 36 screen 3) --------------------------
+    /// What the cards asked the shell to open or show in Finder, oldest first.
+    richFileActions() { return richFileActions.slice(); },
+    /// A file attached between turns (Stu's, say) arrives live on `rich://rich-file`, under the
+    /// turn named, the way `rich_files_host::start` sends it.
+    richFileArrive(threadId, turnId, name) {
+      const item = richFileItem(threadId, turnId, "rf_" + uid("x").replace(/[^0-9a-z]/gi, "").slice(-16),
+        name, name.split(".").pop().toUpperCase(), "PDF · 12 KB", "Preview", now(), true);
+      (richFilesByThread[threadId] = richFilesByThread[threadId] || []).push(item);
+      emit("rich://rich-file", JSON.parse(JSON.stringify(item)));
+      return item.file.id;
+    },
     // ---- the output record (output side-panel PRD §6) --------------------------------------
     /// Round 17's `arrives`: a turn that writes two files, announced on `rich://output`.
     outputArrive(threadId) { outputArrive(threadId); },
