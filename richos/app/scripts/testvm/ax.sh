@@ -27,7 +27,7 @@
 # AXTitle, `axpress2.js` added a role filter, and `axpress3.js` — the third
 # rewrite, after the second had reported NOTFOUND on buttons that were plainly
 # on the screen — added AXDescription, because an aria-label surfaces there and
-# not in the title. That lesson is now in ax.js's matcher, once, where the next
+# not in the title. That lesson is now in ax.py's matcher, once, where the next
 # walk gets it for free instead of rediscovering it.
 #
 # ===========================================================================
@@ -91,7 +91,9 @@ PID="$(cat "$TESTVM_RUN/$VM/app.pid" 2>/dev/null || true)"
 # The deadline on every accessibility read. A tree walk of a wedged app is the
 # command must also reap any helper it starts when its deadline expires.
 AX_TIMEOUT="${TESTVM_AX_TIMEOUT:-20}"
-REMOTE_OSA="$(python3 - "$HERE/ax-deadline.py" "$AX_TIMEOUT" <<'DEADLINE'
+# REMOTE is the supervised prefix; each caller below appends its interpreter:
+# `python3 -` for ax.py (tree/find/click/focus/type), `osascript -` for the raw scripts.
+REMOTE="$(python3 - "$HERE/ax-deadline.py" "$AX_TIMEOUT" "${PID:-0}" <<'DEADLINE'
 import json, os, pathlib, shlex, sys, time
 try:
     seconds = float(sys.argv[2])
@@ -104,13 +106,16 @@ if remaining < 1:
     print(json.dumps({"error": "preflight_deadline", "phase": "preflight", "detail": "preflight consumed the AX deadline; no guest command sent"}))
     raise SystemExit(124)
 seconds = min(seconds, remaining)
+# --pid names the app under test, so a read still running at SLOW_SECONDS in ax-deadline.py
+# is sampled while it is overdue (esc-20261021T122950Z-b8b7362a).
+pid = sys.argv[3] if sys.argv[3].isdigit() else "0"
 print("python3 -c " + shlex.quote(pathlib.Path(sys.argv[1]).read_text()) +
-      " " + shlex.quote(str(seconds)) + " osascript -l JavaScript -")
+      " --pid " + pid + " " + shlex.quote(str(seconds)))
 DEADLINE
-)" || { rc=$?; printf '%s\n' "$REMOTE_OSA"; exit "$rc"; }
+)" || { rc=$?; printf '%s\n' "$REMOTE"; exit "$rc"; }
 
 # ===========================================================================
-# tree / find / click — the JXA path
+# tree / find / click / focus / type — ax.py, the accessibility API in the guest
 # ===========================================================================
 ax_walk() {  # ax_walk <mode> <args...>
   local mode="$1"; shift
@@ -171,8 +176,9 @@ ax_walk() {  # ax_walk <mode> <args...>
   fi
 
   # The parameter block is built by python3 so a title with a quote, a brace or
-  # a newline in it cannot become part of the program. It is PREPENDED to ax.js
-  # and travels on stdin; nothing is interpolated into a remote command line.
+  # a newline in it cannot become part of the program. It is PREPENDED to ax.py as
+  # one assignment of a Python string literal (repr of the JSON) and travels on
+  # stdin; nothing is interpolated into a remote command line.
   local params
   params="$(AX_MODE="$mode" AX_APP="$app" AX_PID="${PID:-0}" AX_WINDOW="$window" \
             AX_DEPTH="$depth" AX_MAX="$maxn" AX_ROLE="$role" AX_SUBROLE="$subrole" \
@@ -232,14 +238,14 @@ if p["first"] and p["nth"] is not None:
 for key in ("depth", "max", "window"):
     if p[key] is not None and p[key] < 1: raise SystemExit(key + " must be positive")
 if p["nth"] is not None and p["nth"] < 0: raise SystemExit("--nth must be nonnegative")
-print("var AX_PARAMS = %s;" % json.dumps(p))
+print("AX_PARAMS_JSON = %r" % json.dumps(p))
 ' ${expect_args[@]+"${expect_args[@]}"})" || die "could not build the parameter block (see above)"
 
   local errf raw rc=0
   # §54: this scratch file goes however this function ends.
   errf="${TESTVM_AX_LOG_FILE:-$(mktemp "${TMPDIR:-/tmp}/testvm-ax.XXXXXX")}"
   ax_phase transport
-  raw="$( { printf '%s\n' "$params"; cat "$HERE/ax.js"; } | ag "$REMOTE_OSA" 2>"$errf" )" || rc=$?
+  raw="$( { printf '%s\n' "$params"; cat "$HERE/ax.py"; } | ag "$REMOTE python3 -" 2>"$errf" )" || rc=$?
   ax_phase render
   if [ "$rc" -ne 0 ]; then
     printf '%s\n' "$raw"
@@ -267,7 +273,8 @@ import json, os, sys
 # ===========================================================================
 # THE RENDERER, AND THE ONE THING IT REFUSES TO PRINT
 # ===========================================================================
-# ax.js emits real numbers, so a fused geometry token cannot arrive from it.
+# ax.py emits real numbers (AXPosition/AXSize unpacked as CGPoint/CGSize), so a
+# fused geometry token cannot arrive from it.
 # This check is here for the day something else feeds this renderer — an
 # AppleScript dump, a hand-made fixture, a future guest-side rewrite — because
 # the failure it catches is SILENT: "1024700" is a plausible-looking number and
@@ -454,7 +461,7 @@ case "${1:-}" in
         -- {1024, 700} becomes \"1024700\" and a 1024x700 window is
         -- indistinguishable from a 102x4700 one. The items are pulled out and
         -- punctuated by hand for that reason. (\`tree\` sidesteps this
-        -- entirely by being JavaScript — see ax.js's header.)
+        -- entirely by reading AXPosition/AXSize as numbers — see ax.py's header.)
         set sz to size of w
         set ps to position of w
         set out to out & (name of w) & \" \" & (item 1 of sz) & \"x\" & (item 2 of sz) & \" at (\" & (item 1 of ps) & \",\" & (item 2 of ps) & \")\" & linefeed
@@ -479,7 +486,7 @@ esac
 # The script goes in over stdin, never interpolated into a remote command line:
 # AppleScript is full of quotes and newlines and a shell would shred it.
 ax_phase transport
-printf '%s' "$SCRIPT" | ag "${REMOTE_OSA%osascript -l JavaScript -}osascript -" 2>&1 || {
+printf '%s' "$SCRIPT" | ag "$REMOTE osascript -" 2>&1 || {
   rc=$?
   echo "[testvm] osascript failed. If the error mentions 'not allowed assistive access',"  >&2
   echo "         the Accessibility TCC grant did not take — re-run testvm/setup.sh --reprovision." >&2

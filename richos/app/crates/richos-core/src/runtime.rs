@@ -161,20 +161,35 @@ impl EngineRuntime {
     /// user-writable and not hash-checked at load, so nothing put there may shadow a system
     /// command.
     pub fn path(&self) -> String {
+        self.path_with(None)
+    }
+
+    /// [`Self::path`] with the user's own `PATH` (their login shell's, build plan item 4) after
+    /// the runtime and before the system folders: the runtime's interpreters stay first, and
+    /// every tool the user's terminal finds is found.
+    pub fn path_with(&self, user: Option<&str>) -> String {
         let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
-        search_path(&self.root.join("bin"), home.map(|h| crate::media_tools::tools_dir(&h)).as_deref())
+        search_path_with(&self.root.join("bin"), user, home.map(|h| crate::media_tools::tools_dir(&h)).as_deref())
     }
 }
 
 /// The PATH for a runtime `bin` folder and, if there is one, the tools folder. A folder whose
 /// name holds `:` cannot be a PATH entry and is left out rather than split in two.
 pub fn search_path(runtime_bin: &Path, tools: Option<&Path>) -> String {
-    let mut path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", runtime_bin.display());
-    if let Some(tools) = tools.map(|t| t.display().to_string()).filter(|t| !t.contains(':')) {
-        path.push(':');
-        path.push_str(&tools);
+    search_path_with(runtime_bin, None, tools)
+}
+
+/// The runtime `bin` folder, then each folder of `user` in its order, then the system folders,
+/// then the tools folder; each folder once, at its first place.
+pub fn search_path_with(runtime_bin: &Path, user: Option<&str>, tools: Option<&Path>) -> String {
+    let runtime = runtime_bin.display().to_string();
+    let tools = tools.map(|t| t.display().to_string()).filter(|t| !t.contains(':'));
+    let mut entries: Vec<&str> = vec![&runtime];
+    let user = user.unwrap_or_default().split(':').filter(|entry| !entry.is_empty());
+    for entry in user.chain(["/usr/bin", "/bin", "/usr/sbin", "/sbin"]).chain(tools.as_deref()) {
+        if !entries.contains(&entry) { entries.push(entry); }
     }
-    path
+    entries.join(":")
 }
 
 /// Delivered interpreters must not import a launching terminal's modules or
