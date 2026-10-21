@@ -204,5 +204,47 @@ class Grade(unittest.TestCase):
         self.assertAlmostEqual(walk.cpu_seconds(' 1:02:03.50\n'), 3723.5)
 
 
+class Enter(unittest.TestCase):
+    """enter() after a relaunch: the conversation's row is waited for before it is pressed, so a
+    read the relaunched app did not answer is asked again (axwait) instead of ending the step.
+    esc-20261021T205850Z-48c70d7d: the press of "Onboarding" got 'unresponsive' on AXWindows."""
+
+    def walk_on(self, finds):
+        w = walk.Walk.__new__(walk.Walk)
+        w.facts, w.calls, w.pressed = {'thread_title': 'Onboarding'}, [], []
+        def ax(mode, *a, **k):
+            w.calls.append((mode, a[1] if len(a) > 1 else None))
+            if mode == 'click':
+                w.pressed.append(a[1])
+                return [{'clicked': True}]
+            answer = finds.pop(0) if finds else True
+            if isinstance(answer, Exception):
+                raise answer
+            return [{'title': a[1]}] if answer else []
+        w.ax = ax
+        return w
+
+    def setUp(self):
+        self.sleep, self.mono = walk.adopt.time.sleep, walk.adopt.time.monotonic
+        self.rsleep = walk.time.sleep
+        self.now = 0.0
+        def sleep(s):
+            self.now += s
+        walk.adopt.time.sleep = walk.time.sleep = sleep
+        walk.adopt.time.monotonic = lambda: self.now
+
+    def tearDown(self):
+        walk.adopt.time.sleep, walk.adopt.time.monotonic = self.sleep, self.mono
+        walk.time.sleep = self.rsleep
+
+    def test_an_unanswered_read_of_the_row_is_asked_again_before_the_press(self):
+        unanswered = walk.StepFailed('command failed (1): ax.sh find\n{"error": "unresponsive", "detail": '
+                                     '"did not answer for AXWindows (kAXErrorCannotComplete)"}')
+        w = self.walk_on([True, unanswered, True])
+        w.enter()
+        self.assertEqual(w.pressed, ['Talk to Rich', 'Onboarding'])
+        self.assertEqual(w.calls[-2:], [('find', 'Onboarding'), ('click', 'Onboarding')])
+
+
 if __name__ == '__main__':
     unittest.main()

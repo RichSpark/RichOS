@@ -313,7 +313,11 @@ class Walk(adopt.Walk):
         if self.present('Talk to Rich'):
             self.press('Talk to Rich')
         time.sleep(2)
-        self.press(self.facts.get('thread_title') or 'Running')
+        # Waited for before it is pressed: a press is never asked again (axwait.py), and right
+        # after a relaunch the app may not answer one read (esc-20261021T205850Z-48c70d7d).
+        title = self.facts.get('thread_title') or 'Running'
+        self.wait_for(title)
+        self.press(title)
 
     # --- steps --------------------------------------------------------------------------------
     def review_watch(self):
