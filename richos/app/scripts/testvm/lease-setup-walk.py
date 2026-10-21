@@ -122,6 +122,8 @@ class LeaseSetupWalk(command_walk.CommandWalk):
                 by_id[r['turn_id']]['reply'] += r.get('text', '')
             elif r.get('event') in ('TurnCompleted', 'TurnInterrupted', 'TurnStopped', 'TurnFailed') and r.get('turn_id') in by_id:
                 by_id[r['turn_id']]['done'] = True
+                by_id[r['turn_id']]['end'] = r.get('event')
+                by_id[r['turn_id']]['end_row'] = {k: v for k, v in r.items() if k not in ('text',)}
         return turns, rows
 
     def reply_to(self, text, seconds=240):
@@ -340,11 +342,19 @@ class LeaseSetupWalk(command_walk.CommandWalk):
             if fresh:
                 mine = [t for t in self.turns(fresh[-1])[0] if t['prompt'].strip() == text.strip()]
                 if mine and mine[-1]['done']:
-                    self.facts.setdefault('new_threads', []).append(fresh[-1])
+                    self.facts.setdefault('new_threads', []).append({'thread': fresh[-1], 'prompt': text,
+                                                                    'end': mine[-1].get('end'), 'end_row': mine[-1].get('end_row')})
                     self.save()
                     return mine[-1]['reply']
             time.sleep(3)
         raise StepFailed(f'Rich did not finish a reply in a new conversation within {seconds} s')
+
+    def keep_logs(self):
+        kept = super().keep_logs()
+        text = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
+        (self.out / 'conversation-ledger.jsonl').write_text(text + '\n')
+        kept['conversation-ledger.jsonl'] = len(text)
+        return kept
 
     def lease_env(self, name):
         """The value of `name` in every `claude` lease process of the running app, read from the kernel."""
