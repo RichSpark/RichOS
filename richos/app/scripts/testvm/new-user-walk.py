@@ -292,10 +292,11 @@ class NewUserWalk(setup_walk.SetupWalk):
 
     def send(self, words, name, seconds):
         """Type WORDS into the composer with real keys, send with Return, and wait for its turn to end."""
-        self.ax('click', '--title', 'Message to Rich', '--role', 'AXTextArea', '--contains', '--first')
-        literal = words.replace('\\', '\\\\').replace('"', '\\"')
-        command([HERE / 'guest.sh', self.vm, 'osascript', '-e',
-                 'tell application "System Events" to keystroke "%s"' % literal], 120)
+        # ax.sh `type` sets the composer's focus and VERIFIES it before a word is sent
+        # (`focusfailed` otherwise). A click on a text area does not focus it: on the guest walk
+        # of 2026-10-21 the third message was typed into nothing once Settings had been opened
+        # and closed, and the composer stayed empty.
+        self.type_into(words, '--role', 'AXTextArea', '--title', 'Message to Rich')
         command([HERE / 'ax.sh', self.vm, '--key', RETURN_KEY])
         end = time.monotonic() + seconds
         outcome = None
