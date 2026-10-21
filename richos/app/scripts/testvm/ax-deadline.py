@@ -70,7 +70,10 @@ def timeout_record(host, err=b''):
 # of the app under test and of System Events (the AX client side), and the
 # guest's own CPU and memory by `top`. The read itself is never retried and its
 # deadline never moves; the snapshot only describes the read it rides on.
-SLOW_SECONDS = float(os.environ.get('TESTVM_AX_SLOW_SECONDS', '5'))
+# 10 s, half the deadline: a `find` answers in 0.01-0.5 s, but a whole `tree` of
+# 150-240 nodes took 3.0-8.1 s on a calm guest (walk-56dbcca781c4, 2026-10-21), and
+# `sample` suspends what it samples, so a lower line slowed every healthy tree.
+SLOW_SECONDS = float(os.environ.get('TESTVM_AX_SLOW_SECONDS', '10'))
 SNAPSHOT_SAMPLE_SECONDS = 1
 _snapshot_children = []
 
@@ -272,7 +275,7 @@ def run(command, source, seconds, host=False, pid=None):
             if host:
                 host_reading()
             if snapshot:
-                snapshot.report(deadline - .5)
+                snapshot.report(deadline - 1)
             # Process state is independent of a possibly blocked accessibility server.
             try:
                 if host:

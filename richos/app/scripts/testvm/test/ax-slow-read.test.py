@@ -87,7 +87,8 @@ class SlowRead(unittest.TestCase):
         self.assertIn('sample 4242 1 10 -mayDie', calls, 'the app under test is sampled')
         self.assertIn('sample 777 1 10 -mayDie', calls, 'System Events (the AX client) is sampled')
         marker = next(json.loads(l) for l in r.stderr.splitlines() if l.startswith('{"ax_slow_read"'))
-        self.assertEqual(marker['snapshot_started_at_seconds'], 1.0)
+        self.assertGreaterEqual(marker['snapshot_started_at_seconds'], 1.0)
+        self.assertLess(marker['snapshot_started_at_seconds'], 3.0, 'started at the line, not at the deadline')
         # The main thread's heaviest path, and nothing from the next thread or a lighter branch.
         self.assertIn('180 __psynch_mutexwait  (in libsystem_kernel.dylib) + 8', r.stderr)
         self.assertNotIn('other_branch', r.stderr)

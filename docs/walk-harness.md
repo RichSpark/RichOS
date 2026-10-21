@@ -78,7 +78,7 @@ distinct from `notfound`. Process errors
 retain their exit status. `TESTVM_AX_TIMEOUT` can select a different total bound for
 a controlled comparison, but increasing it is not a recovery strategy.
 
-A read still running after 5 seconds (`TESTVM_AX_SLOW_SECONDS`; healthy reads answer in
+A read still running after 10 seconds (`TESTVM_AX_SLOW_SECONDS`; a `find` answers in
 0.01 to 0.5 s) is photographed while it is overdue, once: `sample` of the app under test,
 System Events and the WebContent process (each main thread's heaviest path), the guest's
 second `top` sample and its memory counters, printed after an `ax_slow_read` line on
