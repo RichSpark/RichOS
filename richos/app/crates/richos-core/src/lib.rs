@@ -219,6 +219,10 @@ pub mod assignment_tools;
 pub mod status_tools;
 pub mod session_tools;
 pub mod work_host;
+/// `agent_tasks` — the task book: which of the provider's own background tasks is which and how
+/// each last stood, read off the stream, and the `stop_task` frame that stops one of them. The
+/// regular app's Stop of one worker and its worker status run on it.
+pub mod agent_tasks;
 /// `review_watch` — the engine's review-watch run as the HOST's own child (automatic second
 /// review, slice 4): mid-job reviews of the app's workers, and on an operator install the
 /// notices for his team's leads, sent as messages of the host's own.

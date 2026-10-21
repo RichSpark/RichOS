@@ -1295,7 +1295,7 @@ pub struct NativeClient {
 /// starting value is `NotYetReported` and a derived default would be whichever variant happens
 /// to be declared first.
 struct ReaderState {
-    agent_tasks: crate::operator_lead::TaskBook,
+    agent_tasks: crate::agent_tasks::TaskBook,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
     /// **Where every `assistant` frame's usage goes, and the account this lease runs on**
@@ -1506,7 +1506,7 @@ impl ReaderState {
 impl Default for ReaderState {
     fn default() -> Self {
         ReaderState {
-            agent_tasks: crate::operator_lead::TaskBook::default(),
+            agent_tasks: crate::agent_tasks::TaskBook::default(),
             question_scope: None,
             work_tools_loaded: InitFact::NotYetReported,
             assignment_tool_loaded: false,
@@ -3268,16 +3268,16 @@ impl TurnCancel for NativeCancelHandle {
         wrote && woke
     }
 
-    /// `control_request{stop_task}` for one of the provider's own background tasks, the same
-    /// frame the operator client writes for a named agent (`operator_lead::stop_task_request`,
-    /// measured on this wire in operator probe P12). No turn is interrupted and no other
+    /// `control_request{stop_task}` for one of the provider's own background tasks, the frame
+    /// `agent_tasks::stop_task_request` builds (measured on this wire in operator probe P12).
+    /// No turn is interrupted and no other
     /// command is touched (hunt 2026-09-29 part 1, finding 11).
     ///
     /// **Its answer is the provider's, not the pipe's** (finding 11, v2 re-check). This used
     /// to return `true` the moment the line was written, and the work host then told him the
     /// job's command had stopped; a provider that refused the stop left it running while his
     /// assignment said otherwise, and the refusal sat unread on the between-turn lane. Now
-    /// the reply is awaited the way `operator_lead::control` awaits it (an `error` reply is
+    /// the reply is awaited by its request id (an `error` reply is
     /// [`CommandStop::Refused`]), and only the task's own `task_notification` — the authority
     /// for an ending everywhere else in this file — makes it [`CommandStop::Ended`].
     fn stop_worker(&self, tool_use_id: &str) -> crate::steering::CommandStop {
@@ -3297,7 +3297,7 @@ impl TurnCancel for NativeCancelHandle {
             return CommandStop::Ended;
         }
         let id = format!("richos_stop_task_{}", self.next_id.fetch_add(1, Ordering::SeqCst));
-        let request = crate::operator_lead::stop_task_request(&id, task_id);
+        let request = crate::agent_tasks::stop_task_request(&id, task_id);
         let (tx, rx) = channel();
         self.pending.lock().unwrap().insert(id.clone(), tx);
         if NativeClient::write_line(&self.stdin, &request).is_err() {
@@ -5427,7 +5427,7 @@ read -r scope_response"#);
     /// finding 11; `work_host.rs` drives it through `TurnCancel::stop_background_command`).
     /// A stand-in child records every line it is sent after the handshake. Stopping one
     /// background command sends exactly one frame, `control_request{stop_task}` for that task
-    /// id (the frame `operator_lead::stop_task_request` builds, P12), and no `interrupt`: no
+    /// id (the frame `agent_tasks::stop_task_request` builds, P12), and no `interrupt`: no
     /// turn is ended by it.
     #[test]
     fn stopping_one_background_command_sends_stop_task_for_it_and_nothing_else() {
