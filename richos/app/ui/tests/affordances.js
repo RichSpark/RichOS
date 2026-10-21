@@ -563,6 +563,10 @@ async function questionState(browser, mode) {
   return page;
 }
 
+// What quota.rs publishes for an account Claude Code says is not signed in (`ReadError::SignedOut`).
+const SIGNED_OUT_QUOTA = { state: "unavailable", windows: [], checkedAt: null, retryAt: null,
+  message: "This Claude account is not signed in on this Mac.", signedIn: false };
+
 const FIXTURES = {
   "question-edit": browser => questionState(browser,"edit"),
   "question-saved": browser => questionState(browser,"saved"),
@@ -620,6 +624,24 @@ const FIXTURES = {
     await page.waitForSelector("#provider-cancel:not([hidden])");
     await page.click("#provider-cancel");
     await page.waitForFunction(() => document.getElementById("setup-account").textContent.includes("could not be canceled"));
+    return page;
+  },
+  /// THE ACCOUNT IN USE, SIGNED OUT (a new user's first run, 2026-10-21). The view says what
+  /// quota.rs says after Claude Code's own `auth status` answered "not signed in": no figures,
+  /// `signedIn: false`. The card must say so with Sign in on it, never "No reading yet".
+  async "accounts-signed-out"(browser) {
+    const page = await openApp(browser, undefined, { quota: SIGNED_OUT_QUOTA });
+    await page.click("#set-btn");
+    await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent.length > 0);
+    await page.click("#set-accounts-open");
+    await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
+    return page;
+  },
+  /// The same state on the Settings row, before the sheet is opened.
+  async "accounts-row-signed-out"(browser) {
+    const page = await openApp(browser, undefined, { quota: SIGNED_OUT_QUOTA });
+    await page.click("#set-btn");
+    await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent.length > 0);
     return page;
   },
   /// The app as it opens. Proves the controls that the voice instructions NAME are on the
@@ -1361,6 +1383,8 @@ const TEXT_RENDERING_FIXTURES = new Set([
   "connect-setup", "connect-setup-unreadable", "connect-helper-missing", "connect-history-full",
   "connect-history-unreadable", "connect-unavailable", "connect-address-invalid", "connect-credential-invalid",
   "repository-empty", "permission-pending", "provider-start-error", "provider-poll-error", "provider-cancel-error",
+  // The signed-out account renders its own words from the view alone (2026-10-21).
+  "accounts-signed-out", "accounts-row-signed-out",
   // The assignment surface renders its own words out of `work-summary.js`, with nothing but
   // software behind it — and §7.8 says the wording IS the test, so the sentence is asserted
   // present rather than only the control beneath it.

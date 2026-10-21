@@ -224,6 +224,9 @@ pub struct AccountView {
     pub exhausted_until: Option<u64>,
     /// Shown instead of the figures when the account could not be read.
     pub message: Option<String>,
+    /// [`crate::quota::View::signed_in`] for this account.
+    #[serde(default)]
+    pub signed_in: Option<bool>,
 }
 
 /// Why an account is being left, for the one-line notice, with the figure it was read at.

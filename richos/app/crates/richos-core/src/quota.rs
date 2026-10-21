@@ -314,6 +314,13 @@ pub struct View {
     pub next_check_at: Option<u64>,
     pub refresh_interval_ms: u64,
     pub message: Option<String>,
+    /// **Is this account signed in on this Mac?** `Some(false)` when Claude Code's own
+    /// `auth status` says nobody is ([`ReadError::SignedOut`]), `Some(true)` once a reading has
+    /// arrived (only a signed-in account reports one), `None` while nothing says either. The
+    /// account card draws "Not signed in" with the sign-in from `Some(false)`, never "No
+    /// reading yet" (`ui/accounts.js`).
+    #[serde(default)]
+    pub signed_in: Option<bool>,
     pub policy: Policy,
     pub admission: Admission,
     /// **Fill-first** (`claude_accounts.rs`). Every field below is additive and defaulted, so
@@ -389,11 +396,16 @@ pub enum ReadError {
     /// failure and not unreadable data: nothing is reported as broken, no backoff starts, and
     /// the next check comes on the normal schedule.
     NoReading,
+    /// Claude Code reported no limits AND its own `claude auth status` says nobody is signed in
+    /// to this account's folder (`probe.rs`). Permanent until somebody signs in, so the card
+    /// says so and offers the sign-in, never "No reading yet".
+    SignedOut,
 }
 impl ReadError {
     fn message(self) -> &'static str {
         match self {
             Self::Unsupported => "Claude Code did not report subscription limits for this account.",
+            Self::SignedOut => "This Claude account is not signed in on this Mac.",
             // Round 16's words for a refresh that got no answer (quota.html, `refresh-failed`).
             Self::Failed => "Claude Code did not answer just now.",
             Self::Malformed => "Claude Code returned quota data this version of RichOS could not read.",
@@ -677,7 +689,7 @@ impl Snapshot {
             if self.checked_at.is_none() { self.empties = self.empties.saturating_add(1); }
             return;
         }
-        if error == ReadError::Unsupported {
+        if matches!(error, ReadError::Unsupported | ReadError::SignedOut) {
             self.windows.clear();
             self.checked_at = None;
         }
@@ -699,6 +711,16 @@ impl Snapshot {
     }
     fn view(&self, policy: Policy, now: u64) -> View {
         self.view_with(policy, None, now)
+    }
+    /// [`View::signed_in`]: what the last check established about the sign-in, and nothing more.
+    fn signed_in(&self) -> Option<bool> {
+        if self.error == Some(ReadError::SignedOut) {
+            Some(false)
+        } else if self.checked_at.is_some() {
+            Some(true)
+        } else {
+            None
+        }
     }
     /// The view of this account, with its test cut-off (`Reading::weekly_cutoff`).
     fn view_with(&self, policy: Policy, weekly_cutoff: Option<f64>, now: u64) -> View {
@@ -796,6 +818,7 @@ impl Snapshot {
             refresh_interval_ms: interval,
             retry_at: self.retry_at.filter(|t| *t > now),
             message: self.error.map(|e| e.message().into()),
+            signed_in: self.signed_in(),
             policy,
             admission,
             accounts: Vec::new(),
@@ -1048,6 +1071,7 @@ impl Service {
                     checked_at: account_view.checked_at,
                     exhausted_until: exhausted.map(|(_, until)| until),
                     message: account_view.message,
+                    signed_in: account_view.signed_in,
                 }
             }).collect();
             view.held_until = self.accounts.held_until(&readings, policy.line(), now);
@@ -1939,6 +1963,24 @@ pub(crate) mod tests {
         s.empty(ReadError::NoReading, at + 1_000);
         assert_eq!(s.view(policy(), at + 1_000).next_check_at, Some(at + 1_000 + REFRESH_INTERVAL_MS),
             "with a reading in hand, the normal schedule");
+    }
+
+    /// **The view says whether the account is signed in, and only what was established**: not
+    /// known before the first check, signed out from Claude Code's own `auth status`
+    /// (`probe.rs`), signed in once a reading has arrived. The account card draws its verdict
+    /// from this, never "No reading yet" (`ui/accounts.js`).
+    #[test]
+    fn the_view_carries_the_sign_in_the_last_check_established() {
+        let mut s = Snapshot::default();
+        assert_eq!(s.view(policy(), NOW).signed_in, None, "nothing checked yet");
+        s.empty(ReadError::SignedOut, NOW);
+        let view = s.view(policy(), NOW);
+        assert_eq!(view.signed_in, Some(false));
+        assert_eq!(view.message.as_deref(), Some("This Claude account is not signed in on this Mac."));
+        s.empty(ReadError::Unsupported, NOW + 1);
+        assert_eq!(s.view(policy(), NOW + 1).signed_in, None, "no limits alone says nothing about the sign-in");
+        s.accept(snapshot(20., 3_600_000).windows, NOW + 2);
+        assert_eq!(s.view(policy(), NOW + 2).signed_in, Some(true));
     }
 
     #[test]

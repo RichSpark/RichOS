@@ -15,6 +15,9 @@ const win = (five, week, fiveAt = now + 2 * HOUR, weekAt = now + 2 * DAY) => [
   { id: "five_hour", label: "Five-hour", usedPercent: five, resetsAt: fiveAt, durationMs: 5 * HOUR },
   { id: "seven_day", label: "Weekly", usedPercent: week, resetsAt: weekAt, durationMs: 7 * DAY },
 ];
+// What quota.rs publishes once Claude Code's own `auth status` says nobody is signed in (2026-10-21).
+const signedOut = { state: "unavailable", checkedAt: null, retryAt: null, windows: [], signedIn: false,
+  message: "This Claude account is not signed in on this Mac." };
 const one = (week, five = 22) => ({ state: "fresh", checkedAt: now, retryAt: null, message: null, windows: win(five, week) });
 function two(home, work, opts = {}) {
   const working = opts.working || {};
@@ -127,6 +130,33 @@ async function main() {
     assertEqual(await text(page, ".acc-how-title"), "How Rich uses your accounts");
     await page.close();
     return "one: Your Claude account + the slot; two: Home In use now, Work Next, the handover line";
+  });
+
+  // A new user's first run (2026-10-21): "In use now" over "No reading yet. If this account is not
+  // signed in on this Mac, sign in here." on a Mac where nobody had signed in. Red on main, where
+  // the card ignores the sign-in verdict.
+  await run.check("signed out: the card says Not signed in with Sign in, the row says it in gold, and nothing says No reading yet", async () => {
+    let page = await open("dark", signedOut);
+    await menu(page);
+    await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent === "Not signed in on this Mac");
+    assert(await page.locator("#set-accounts-state.is-attention").isVisible(), "the row says it in gold");
+    await page.click("#set-accounts-open");
+    await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
+    assertEqual(await texts(page, ".acc-pill"), ["Not signed in"]);
+    assertEqual(await text(page, ".acc-note"), "This account is not signed in on this Mac, so Rich cannot answer you yet. Sign in here.");
+    assert(await page.locator('#accounts-sheet [data-act="sign-one"]').isVisible(), "Sign in is on the card");
+    assert(!(await text(page, "#accounts-sheet")).includes("No reading yet"), "never No reading yet");
+    // An account known to be signed out has no limits to report: no meters saying "Not reported yet".
+    assertEqual(await page.locator("#accounts-sheet .acc-card .acc-meter").count(), 0, "no meters on a signed-out card");
+    await page.close();
+    // Before the first check has answered, the card says the check is under way.
+    page = await open("dark", { state: "unavailable", checkedAt: null, retryAt: null, windows: [], message: null });
+    await menu(page);
+    await page.click("#set-accounts-open");
+    await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
+    assertEqual(await text(page, ".acc-note"), "Checking whether this account is signed in on this Mac.");
+    await page.close();
+    return "signed out: Not signed in + Sign in on the card, gold row line; unchecked: the check is under way";
   });
 
   await run.check("Use this one now: the cards trade places, Recent changes says so, Undo puts it back; a near-full account says when Rich switches again", async () => {
@@ -484,6 +514,8 @@ async function main() {
   // ---- every state, both themes: contrast, type size, fit, no dash ---------------------------
   const STATES = [
     ["menu-one", one(41), async p => { await menu(p); }],
+    ["signed-out", signedOut, sheet],
+    ["menu-signed-out", signedOut, async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["menu-near", one(86), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["one", one(86, 47), sheet],
     ["add", one(86, 47), async p => { await sheet(p); await p.click(".acc-slot"); await p.click("#acc-continue"); }],

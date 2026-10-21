@@ -87,7 +87,7 @@
     // While a second account is being added, step 1 has already named this one ("Home"), and
     // the screen says "You signed in as Home again"; its card says the same name.
     const named = view.accounts.length > 1 && settled()[0] ? settled()[0].label : "";
-    return [{ id: "1", label: view.firstLabel || named, inUse: true, windows: view.windows || [], checkedAt: view.checkedAt, exhaustedUntil: null, message: view.message }];
+    return [{ id: "1", label: view.firstLabel || named, inUse: true, windows: view.windows || [], checkedAt: view.checkedAt, exhaustedUntil: null, message: view.message, signedIn: view.signedIn }];
   }
   const inUse = () => list().find(a => a.inUse) || list()[0] || null;
   const nameOf = a => multi() ? a.label : (a.label || "Your Claude account");
@@ -156,6 +156,10 @@
       line = moving() ? `Switching to ${cur.label}` : sw ? `Using ${cur.label}, switched ` : `Using ${cur.label}`;
       time = sw && !moving() ? clock(sw.at) : "";
       attention = !!sw || moving();
+    } else if (cur && cur.signedIn === false) {
+      // Signed out is said on the row too: it is why Rich cannot answer (2026-10-21).
+      line = "Not signed in on this Mac";
+      attention = true;
     } else if (week && week.usedPercent >= ATTENTION) {
       line = `${Math.floor(week.usedPercent)}% of this week used`;
       attention = true;
@@ -220,9 +224,18 @@
     // drawn as Next is, with its own words.
     if (kind === "leaving") { pill = `<span class="acc-pill is-inuse"><i></i>Still in use</span>`; note = movingNote(a); }
     else if (kind === "arriving") { pill = `<span class="acc-pill is-next"><i></i>Switching to this one</span>`; note = movingNote(a); }
-    else if (kind === "inuse") {
+    // THE ACCOUNT IN USE, SIGNED OUT, SAYS SO (a new user's first run, 2026-10-21: "In use now"
+    // over "No reading yet. If this account is not signed in on this Mac, sign in here." on a Mac
+    // where nobody had signed in). `signedIn` is Claude Code's own `auth status` (quota.rs
+    // `View::signed_in`); with no verdict yet the card says the check is still under way, and
+    // when the check answered something else it says what (`message`), never "No reading yet".
+    else if (kind === "inuse" && a.signedIn === false) {
+      pill = `<span class="acc-pill is-resting"><i></i>Not signed in</span>`;
+      note = signingId === a.id ? "Finish signing in in your browser, then come back here."
+        : "This account is not signed in on this Mac, so Rich cannot answer you yet. Sign in here.";
+    } else if (kind === "inuse") {
       pill = `<span class="acc-pill is-inuse"><i></i>In use now</span>`;
-      note = !read(a) ? "No reading yet. If this account is not signed in on this Mac, sign in here."
+      note = !read(a) ? esc(a.message || "Checking whether this account is signed in on this Mac.")
         : multi() ? `Rich and the team are working on this one${team}.` : `Rich and the team work on this account${n ? `${team} right now` : ""}.`;
     } else if (kind === "next") { pill = `<span class="acc-pill is-next"><i></i>Next</span>`; note = "Its week is fresh again soonest, so it goes next."; }
     else if (kind === "resting") { pill = `<span class="acc-pill is-resting"><i></i>Resting</span>`; note = "Rich can use it again once its week is fresh."; }
@@ -231,7 +244,7 @@
     let acts = "";
     if (multi() && kind !== "inuse" && kind !== "arriving" && kind !== "unread" && kind !== "resting") acts += `<button class="acc-btn" type="button" data-act="use" data-id="${esc(a.id)}" aria-label="Use ${esc(a.label)} now">${ICON.swap}Use this one now</button>`;
     if (!read(a) && a.id === "1") acts += `<button class="acc-btn" type="button" data-act="sign-one">Sign in</button>`;
-    else if (kind === "unread" && signingId !== a.id) acts += `<button class="acc-btn" type="button" data-act="sign" data-id="${esc(a.id)}">Sign in</button>`;
+    else if ((kind === "unread" || a.signedIn === false) && signingId !== a.id) acts += `<button class="acc-btn" type="button" data-act="sign" data-id="${esc(a.id)}">Sign in</button>`;
     // Account 1 is this Mac's own Claude sign-in and is never removed here (claude_accounts.rs).
     if (multi() && a.id !== "1") acts += `<button class="acc-btn acc-btn-quiet" type="button" data-act="remove" data-id="${esc(a.id)}" aria-label="Remove ${esc(a.label)}">Remove</button>`;
     let confirm = "";
@@ -242,7 +255,7 @@
     const look = kind === "leaving" ? "inuse" : kind === "arriving" ? "next" : kind;
     return `<article class="acc-card is-${look}" data-id="${esc(a.id)}" aria-label="${esc(nameOf(a))}"><span class="acc-spine"></span>
       <header class="acc-head"><h3 class="acc-name">${esc(nameOf(a))}</h3>${pill}<span class="acc-acts">${acts}</span></header>
-      ${who(a)}<p class="acc-note">${note}</p><div class="acc-meters">${meter(a, "week")}${meter(a, "five")}</div>${confirm}</article>`;
+      ${who(a)}<p class="acc-note">${note}</p>${a.signedIn === false ? "" : `<div class="acc-meters">${meter(a, "week")}${meter(a, "five")}</div>`}${confirm}</article>`;
   }
   // The card's one line under its name: "Show email" at rest, the email while it shows.
   function who(a) {
