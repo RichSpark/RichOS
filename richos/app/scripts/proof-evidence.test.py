@@ -2242,6 +2242,40 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
             with self.subTest(key=key):
                 self.assertNotEqual(identity({**environment, **changed, key: value}), before)
 
+    def test_the_agent_harness_owner_tags_never_make_an_unchanged_pass_read_as_changed(self):
+        """2026-10-21, the first land after the switch-over: zach-sonnet-probes305b's handover run
+        passed 24 checks at a2389cbfd and the land's preflight, on the same commit in the same
+        checkout, called 18 of them "declared execution inputs changed". Measured field by field:
+        every one differed only in RICHOS_AGENT_OWNER and RICHOS_AGENT_SESSION, the tags the agent
+        harness gives each agent's shell (agent_hold.py TAG, SESSION_TAG); the lead's land carries
+        another value or none. They name who started a process, not anything a check reads. A pass
+        saved before this rule, with the tags in its identity, stands in too; a real change does not."""
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
+        land = {"PATH": "/usr/bin:/bin", "HOME": self.tmp.name, "RICHOS_BULK_ROOT": "/fixture/bulk"}
+        author = {**land, "RICHOS_AGENT_OWNER": "a2f8c4ad0b1e3c5d7", "RICHOS_AGENT_SESSION": "871311fb-session"}
+        identity = lambda env: evidence.checkout_identity(self.root, ["bash", "suite.sh"], env)
+        wanted = identity(land)
+        self.assertEqual(identity(author), wanted)
+        self.assertEqual(identity({**author, "RICHOS_AGENT_OWNER": "another-agent"}), wanted)
+        # The saved run in the incident was written by the runner before this rule: its identity
+        # carries the tags' digests. It still stands for the land's reading of the same inputs.
+        saved = json.loads(json.dumps(wanted))
+        saved["environment"].update({name: evidence.digest(author[name])
+                                     for name in ("RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION")})
+        plan = {"source": dict(self.source)}
+        old = {"state": "passed", "exit": 0, "source": dict(self.source), "input": saved}
+        self.assertIsNone(evidence.evidence_gap("dialect.js", old, wanted, plan))
+        # Not loosened: any input the identity binds still invalidates the pass.
+        for key, value in (("RICHOS_BULK_ROOT", "/other/bulk"), ("RICHOS_UNKNOWN_INPUT", "new"),
+                           ("PATH", "/opt/other:/usr/bin:/bin")):
+            with self.subTest(key=key):
+                self.assertEqual(evidence.evidence_gap("dialect.js", old, identity({**land, key: value}), plan),
+                                 "declared execution inputs changed")
+        # A reviewed recipe that names a tag outright still binds it (explicit recipes bind their
+        # own keys): only the whole-checkout reading, which binds every RICHOS_ name, leaves them out.
+        recipe = {"contract": "recipe", "environment": {"RICHOS_AGENT_OWNER": evidence.digest("x")}}
+        self.assertFalse(evidence.stands_in(recipe, {**recipe, "environment": {"RICHOS_AGENT_OWNER": None}}))
+
     def test_the_whole_checkout_identity_binds_installed_browsers_and_the_rust_toolchain(self):
         # The same finding names the browser suites' external browser installations and the
         # Rust toolchain that `cargo` resolves: neither is in the checkout, and a changed one

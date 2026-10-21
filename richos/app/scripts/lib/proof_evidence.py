@@ -310,7 +310,13 @@ RUN_SCOPED_ENVIRONMENT = frozenset(("RICHOS_AUTOCHECK_ACTIVE", "RICHOS_TEST_RESU
                                     # The host shield's per-run log, its declared runs and its own
                                     # path (HOST SHIELD below).
                                     "RICHOS_HOST_SHIELD_LOG", "RICHOS_HOST_SHIELD_RUNS",
-                                    "RICHOS_HOST_SHIELD_TOOL"))
+                                    "RICHOS_HOST_SHIELD_TOOL",
+                                    # The tags the agent harness gives each agent's shell (engine
+                                    # agent_hold.py TAG, SESSION_TAG): who started the process, a
+                                    # value per agent and session, so the land, run by the lead,
+                                    # never carried the author's. 2026-10-21: 18 of 24 unchanged
+                                    # passes read as changed by them alone (stands_in below).
+                                    "RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION"))
 _TOOL_DIGESTS = {}
 
 # THE HOST SHIELD (ceo-decisions §65, engine lib/host_shield.py) starts every check with its
@@ -1928,7 +1934,12 @@ _MUTATION_OFF = digest("0")
 
 
 def stands_in(saved, wanted):
-    """Does a pass saved under identity `saved` stand for one under `wanted` (above)?"""
+    """Does a pass saved under identity `saved` stand for one under `wanted` (above)?
+
+    A whole-checkout identity never binds a RUN_SCOPED_ENVIRONMENT name (checkout_identity), so
+    one saved before a name joined that set is read without it: the 2026-10-21 handover run bound
+    RICHOS_AGENT_OWNER and RICHOS_AGENT_SESSION, and its passes are as valid as they were. A
+    reviewed recipe binds exactly the names it declares, so its identity is compared whole."""
     if saved == wanted:
         return True
     if not isinstance(saved, dict) or not isinstance(wanted, dict):
@@ -1936,6 +1947,9 @@ def stands_in(saved, wanted):
     have, want = saved.get("environment"), wanted.get("environment")
     if not isinstance(have, dict) or not isinstance(want, dict):
         return False
+    if saved.get("contract") == WHOLE_CHECKOUT == wanted.get("contract"):
+        have = {k: v for k, v in have.items() if k not in RUN_SCOPED_ENVIRONMENT}
+        want = {k: v for k, v in want.items() if k not in RUN_SCOPED_ENVIRONMENT}
     if ({k: v for k, v in saved.items() if k != "environment"}
             != {k: v for k, v in wanted.items() if k != "environment"}):
         return False
