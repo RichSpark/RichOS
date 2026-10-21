@@ -144,6 +144,27 @@ class LandChecksWalk(review_walk.ReviewWalk):
             raise StepFailed('main moved during the fixture')
         return {**found, 'fence': 'on', 'lease_home': conf['HOME'], 'control': control}
 
+    def connect(self):
+        """The shared step (adopt-walk.py connect_folder), with what it types read in the guest
+        first, and the chooser as it stood kept when the step fails: walks walk-9696d0b3a4f1 and
+        walk-eb9f006fb025 ended there with Open disabled, and neither left a picture of why."""
+        c = shlex.quote(self.company)
+        self.facts['company_path'] = {'typed': self.company, 'guest': guest(
+            self.vm, 'ls -ld %s 2>&1; [ -d %s/.git ] && echo "git repository" || echo "no .git"' % (c, c)).strip()}
+        self.save()
+        try:
+            return super().connect()
+        except StepFailed:
+            for name, keep in (('connect-failure.png', lambda: self.shot('connect-failure.png')),
+                               ('connect-failure-tree.txt', lambda: (self.out / 'connect-failure-tree.txt').write_text(
+                                   command_walk.command([HERE / 'ax.sh', self.vm, 'tree', '--depth', '8'], 90)))):
+                try:
+                    keep()
+                except (StepFailed, subprocess.TimeoutExpired, OSError) as exc:
+                    self.facts.setdefault('connect_failure_evidence', {})[name] = 'not kept: %s' % str(exc)[-300:]
+            self.save()
+            raise
+
     def job(self):
         """THIS walk's JOB, the one that says the check refuses once and asks for the land again.
         Not ReviewWalk.job(), which sends review-walk.py's own request (mid-job review
