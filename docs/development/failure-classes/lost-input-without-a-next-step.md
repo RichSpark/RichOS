@@ -38,11 +38,28 @@ known on this path, which is why every clause about him is conditional. The sent
 ended with a status, a deliberate earlier choice, so it explained a loss and gave no step.
 
 The fix: the sentence now ends "If you did, please say it again now. I'm listening." and
-it is shown only once Rich is no longer audible (`HalfDuplexDelivery`): shown at the discard,
-it invited a reply into the window that had just lost one (the first discard on the
-committed recording comes 2.592 s into an answer that is audible until 24.960 s). A next step
-the user cannot take yet is a dead end of the same kind; test
-`the_half_duplex_line_is_shown_only_once_rich_can_take_the_reply`. Its two
+it is shown only once a reply starting at that moment would be heard (`HalfDuplexDelivery`,
+`CaptureBrain::takes_a_reply`). **A next step the user cannot take yet is a dead end of the
+same kind** and two reviews found two ways the line could invite a reply that would be lost:
+
+1. Shown at the discard, it invited a reply while Rich was still audible (the first discard on
+   the committed recording comes 2.592 s into an answer that is audible until 24.960 s; review
+   rv-20261021T175303Z-70f43b54-a22b).
+2. Shown the moment Rich fell silent, it was still too early (review
+   rv-20261021T205407Z-bcae8bd4-dcd6): for `ECHO_LOOKBACK_FRAMES` = 19 + 7 = 26 frames
+   x 256 / 16 000 = 0.416 s after it, an utterance carries his echo in its pre-roll and is
+   discarded as tainted and a tainted recording still open when he stops absorbs whatever is
+   said until its 50-frame (0.800 s) hangover discards it whole.
+
+So the line now waits for three things together: Rich not audible, 26 quiet frames and no
+tainted recording open. Tests (`richos-voice/tests/barge_in_on_the_ceos_rig.rs`):
+`the_half_duplex_line_is_shown_only_once_a_reply_would_be_heard` drives the shipped capture
+and the shipped line over the committed echo-only recording at six residual levels and replies
+on the very frame after the line is shown, requiring the reply to be admitted and never
+discarded; `his_own_reply_to_the_half_duplex_line_is_heard` does the same with a real
+recorded voice (private fixture). The rule for anything new in this class: **a line that asks
+for a reply is shown only when the capture state says the reply would be kept** and its test
+replies at once and checks it was kept. Its two
 siblings in the same family got the same treatment, because the check found them:
 `HeardNoVoice` ("...If you said something, please say it again. I'm still listening.") and
 `DidNotCatchThat` ("...Please say it again. I'm still listening."). The open microphone is the

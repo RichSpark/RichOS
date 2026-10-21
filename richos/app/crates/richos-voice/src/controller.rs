@@ -613,6 +613,15 @@ impl CaptureBrain {
         building || his_recording_open
     }
 
+    /// **A reply that starts now would be heard, not discarded.** Rich has been silent for the
+    /// whole [`ECHO_LOOKBACK_FRAMES`] (an utterance born sooner carries his echo in its pre-roll
+    /// and is tainted), and no tainted recording is still open (one that is would absorb the
+    /// reply and be discarded whole when its hangover ends). `HalfDuplexDelivery` waits for this
+    /// before asking him to say it again (review rv-20261021T205407Z-bcae8bd4-dcd6).
+    pub fn takes_a_reply(&self) -> bool {
+        self.quiet_frames >= ECHO_LOOKBACK_FRAMES && !(self.recorder.is_recording() && self.tainted)
+    }
+
     /// **Voice is going off: close the open recording and say what became of it** (review
     /// rv-20261013T183507Z). The capture stream is about to be destroyed, and with it whatever he
     /// said in the last 0.800 s, which the endpointer had not yet closed. It is closed here by the
@@ -1142,6 +1151,9 @@ struct Shared {
     /// may not have published the floor yet (`CaptureBrain::his_onset_building`). Written per
     /// frame by the capture callback; the speaker waits on it as on the floor.
     his_onset: AtomicBool,
+    /// A reply starting now would be heard (`CaptureBrain::takes_a_reply`). Written per frame by
+    /// the capture callback; the half-duplex line waits on it.
+    takes_a_reply: AtomicBool,
     /// Voice is going off: the capture callback closes the open recording on its next frame.
     finish_capture: AtomicBool,
     /// The capture callback has closed it and sent what became of it.
@@ -1893,6 +1905,7 @@ impl VoiceController {
             his_floor: AtomicBool::new(false),
             answer_sounded: AtomicBool::new(false),
             his_onset: AtomicBool::new(false),
+            takes_a_reply: AtomicBool::new(false),
             finish_capture: AtomicBool::new(false),
             capture_finished: AtomicBool::new(false),
             drained_after_finish: AtomicBool::new(false),
@@ -1968,6 +1981,7 @@ impl VoiceController {
                 let _ = cap_tx.send(msg);
             }
             cb_shared.his_onset.store(brain.his_onset_building(), Ordering::Relaxed);
+            cb_shared.takes_a_reply.store(brain.takes_a_reply(), Ordering::Relaxed);
             cb_shared.set_level(brain.level());
             // Publish the canceller's live state for the supervisor and the UI without ever
             // touching the audio thread from outside it. Signed and unclamped: a negative ERLE
@@ -2695,9 +2709,10 @@ impl RefusalNotices {
 /// user to speak into the very window that had just lost their words: measured on the
 /// committed echo-path recording, the first discard came 2.608 s into an answer with
 /// 22.336 s of it still to play (review rv-20261021T175303Z-70f43b54-a22b). So the supervisor
-/// OWES the line at the discard ([`Self::owe`]) and delivers it on the first tick Rich is no
-/// longer audible ([`Self::due`]). The budget it spends is still claimed at the discard, so
-/// the recognizer's lines cannot stack on top of it meanwhile.
+/// OWES the line at the discard ([`Self::owe`]) and delivers it on the first tick a reply would
+/// be heard ([`Self::due`]): Rich no longer audible, the echo lookback past and no tainted
+/// recording still open ([`CaptureBrain::takes_a_reply`]). The budget it spends is still
+/// claimed at the discard, so the recognizer's lines cannot stack on top of it meanwhile.
 #[derive(Debug, Default)]
 pub struct HalfDuplexDelivery {
     owed: Option<VoiceNotice>,
@@ -2709,9 +2724,14 @@ impl HalfDuplexDelivery {
         self.owed = Some(n);
     }
 
-    /// The line to show now, if one is owed and Rich is no longer audible; `None` otherwise.
-    pub fn due(&mut self, rich_audible: bool) -> Option<VoiceNotice> {
-        if rich_audible {
+    /// The line to show now, if one is owed and a reply starting now would be heard: Rich is no
+    /// longer audible (`rich_audible`) AND capture would take it (`capture_takes_a_reply`, the
+    /// capture callback's latest [`CaptureBrain::takes_a_reply`]); `None` otherwise. Rich falling
+    /// silent is not enough: for 0.416 s after it an utterance still carries his echo in its
+    /// pre-roll, and an open tainted recording absorbs whatever is said until its hangover ends
+    /// (review rv-20261021T205407Z-bcae8bd4-dcd6).
+    pub fn due(&mut self, rich_audible: bool, capture_takes_a_reply: bool) -> Option<VoiceNotice> {
+        if rich_audible || !capture_takes_a_reply {
             return None;
         }
         self.owed.take()
@@ -3535,7 +3555,7 @@ fn supervise(
         // synthesis has made no sound, and speech that starts then is his (`turn::rich_audible`).
         let playing = rich_audible(audible.is_open(), shared.answer_sounded.load(Ordering::Relaxed));
         shared.speaking.store(playing, Ordering::Relaxed);
-        if let Some(n) = half_duplex_line.due(playing) {
+        if let Some(n) = half_duplex_line.due(playing, shared.takes_a_reply.load(Ordering::Relaxed)) {
             observer.on_voice_event(&VoiceEvent::Notice { message: n.ceo_message().to_string(), at: now_millis() });
         }
         if playing && !was_playing {
@@ -4420,6 +4440,7 @@ mod tests {
             his_floor: AtomicBool::new(false),
             answer_sounded: AtomicBool::new(false),
             his_onset: AtomicBool::new(false),
+            takes_a_reply: AtomicBool::new(false),
             finish_capture: AtomicBool::new(false),
             capture_finished: AtomicBool::new(false),
             drained_after_finish: AtomicBool::new(false),
