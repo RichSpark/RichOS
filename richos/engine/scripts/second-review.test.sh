@@ -65,6 +65,11 @@
 #   C22  a recheck reviews only what changed since the last review of a commit it
 #        was built on: its diff.patch holds since..tip, and a merge from main in
 #        between brings none of main's changes in
+#   C23  the repository's own instruction file, by Claude Code's rule and the same one the
+#        worker's brief carries (scripts/lib/instruction_files.py; folder-instruction-files
+#        plan §5.3 item 2): CLAUDE.md in
+#        full past 64 KiB, the connected folder's uncommitted CLAUDE.local.md after it, and
+#        no AGENTS.md beside a CLAUDE.md
 #
 
 # Exit 0 = every case passed; exit 1 = at least one failed.
@@ -826,6 +831,36 @@ has "$P" "SINCE: $TIPA. Review $RIDA already covered BASE..SINCE" && [ "$(field 
   && [ "$(field "$(last_row)" 'r["since_review"]')" = "$RIDA" ]
 check "C22 the input and the row name the commit and the review the recheck starts after" $? "row=$(last_row)"
 G checkout -q cc/echo-sonnet-x1
+
+# --- C23 ---------------------------------------------------------------------
+# richos-hq docs/plans/2026-10-21-folder-instruction-files.md §5.3 item 2: the reviewer reads the
+# repository's own instruction file by the same rule as the worker's brief. Before, it read
+# AGENTS.md only, cut at 64 KiB, and never CLAUDE.md, so it judged a worker by rules the worker
+# was never shown.
+REPO3="$SB/repo-with-claude-md"
+G3() { git -C "$REPO3" -c core.hooksPath=/dev/null -c user.name=Author -c user.email=author@example.invalid -c commit.gpgsign=false "$@"; }
+mkdir -p "$REPO3"; G3 init -q -b main
+python3 -c 'import sys; open(sys.argv[1], "w").write("# House rules\nCLAUDE-RULE-START\n" + "Keep every line of this file.\n" * 2500 + "CLAUDE-RULE-END\n")' "$REPO3/CLAUDE.md"
+printf 'AGENTS-ONLY-LINE\n' >"$REPO3/AGENTS.md"
+printf 'CLAUDE.local.md\n' >"$REPO3/.gitignore"
+printf 'base\n' >"$REPO3/a.txt"
+G3 add -A; G3 commit -qm "base"
+BASE3="$(G3 rev-parse HEAD)"
+printf 'CLAUDE-LOCAL-LINE\n' >"$REPO3/CLAUDE.local.md"
+G3 checkout -qb cc/house-rules
+printf 'base\nchange\n' >"$REPO3/a.txt"; G3 commit -qam "a change"
+FAKE_MODE=pass run --repo "$REPO3" --tip "$(G3 rev-parse HEAD)" --base "$BASE3" --words-file "$SB/codex-words.txt"
+# This prompt is over 64 KiB, so it is searched in its file: `has` pipes it into `grep -q`, which
+# stops reading at the first match, and under pipefail the writer's SIGPIPE fails the check.
+P3="$(last_call)/prompt.md"
+in_p3() { grep -qF -- "$1" "$P3"; }
+[ "$(wc -c <"$REPO3/CLAUDE.md")" -gt 65536 ] && in_p3 "CLAUDE-RULE-START" && in_p3 "CLAUDE-RULE-END" \
+  && ! in_p3 "the whole file is tree/CLAUDE.md"
+check "C23 the input holds the repository's CLAUDE.md in full, past 64 KiB" $? "rc=$RC prompt=$P3"
+in_p3 "CLAUDE-LOCAL-LINE" && in_p3 "$(cd "$REPO3" && pwd -P)/CLAUDE.local.md, from the connected folder itself"
+check "C23 the input holds the connected folder's uncommitted CLAUDE.local.md, named as not in tree/" $? "prompt=$P3"
+! in_p3 "AGENTS-ONLY-LINE"
+check "C23 beside a CLAUDE.md the AGENTS.md is not given, as Claude Code would not load it" $? "prompt=$P3"
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"

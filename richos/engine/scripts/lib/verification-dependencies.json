@@ -16278,8 +16278,8 @@
     },
     "scripts/lib/second_review.py": {
       "source": "scripts/lib/second_review.py",
-      "sha256": "92047cd3281b04cc52df09ab7276c30553d0a36dce3f03022d46fde4bf7615f5",
-      "evidence": "Reviewed writer and outcome adapter: source execution claims, private JSONL/full verdict records and recovery claims. Test reviewers are literal fake executables with fixed quota/CPU controls. No production provider is invoked by the fixtures. Original authority is retained as data, not an executable configuration. Recovery-model fixtures reach its module constants, bounded subprocess runner, private quota-command override and literal provider decoder; they do not enter the review CLI or workspace lifecycle. The lead's follow-up ruling (--follow-up, --reopen) appends to the private review-deferrals.jsonl and review-follow-ups.jsonl beside the ledger, and reads RICHOS_AGENT_OWNER and the caller's Claude session record through operator_fences.claude_session; no orchestration setting.",
+      "sha256": "0b068fb398161a22f0d92478866ee60e4d78690e3fba5daa6f8da9f1c4e733a1",
+      "evidence": "Reviewed writer and outcome adapter: source execution claims, private JSONL/full verdict records and recovery claims. Test reviewers are literal fake executables with fixed quota/CPU controls. No production provider is invoked by the fixtures. Original authority is retained as data, not an executable configuration. Recovery-model fixtures reach its module constants, bounded subprocess runner, private quota-command override and literal provider decoder; they do not enter the review CLI or workspace lifecycle. The lead's follow-up ruling (--follow-up, --reopen) appends to the private review-deferrals.jsonl and review-follow-ups.jsonl beside the ledger, and reads RICHOS_AGENT_OWNER and the caller's Claude session record through operator_fences.claude_session; no orchestration setting. Renewed 2026-10-21 (zach-opus-folderfiles1): the input's repository instructions come from instruction_files.py (edge added), read from the export and the reviewed repository's folder; AGENTS.md left RULE_FILES.",
       "keys": [],
       "edges": [
         {
@@ -16287,6 +16287,9 @@
         },
         {
           "to": "mega-lander/workspaces.py#recovery-model-records"
+        },
+        {
+          "to": "scripts/lib/instruction_files.py"
         }
       ]
     },
