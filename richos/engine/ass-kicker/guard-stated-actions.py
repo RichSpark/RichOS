@@ -1231,7 +1231,7 @@ def _staged_in_commit(path, traffic):
     p = path.lower()
     for a in adds:
         toks = a.split()
-        if any(t in ("-a", "--all") for t in toks):
+        if any(t in ("-a", "--all", "-u", "--update") for t in toks):
             return True
         for t in toks:
             t = t.strip("'\"")

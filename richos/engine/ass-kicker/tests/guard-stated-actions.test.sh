@@ -634,6 +634,11 @@ run_hook "$TR_REPO_COMMIT" "Noted.
 The numbering goes in after the next nightly: \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
 silent && ok "R47. the file and commit sit in the claim's own paragraph (next line): SILENT" || bad "R47. same paragraph" "rc=$RC out=$OUT"
 
+TR_ADD_U="$SANDBOX/add-u.jsonl"
+mk_tr "$TR_ADD_U" "[{\"prompt\":\"go\"},{\"bash\":$(js "cd $ENTITY && echo x >> wiki/ceo-decisions.md")},{\"bashout\":[$(js "cd $ENTITY && git add -u && git commit -m 'decisions 101'"),\"[main cf7e16b7] decisions 101\"]}]"
+run_hook "$TR_ADD_U" "Noted. The numbering goes in after the next nightly: \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
+silent && ok "R48. review 5: a tracked note file committed after 'git add -u': SILENT" || bad "R48. add -u" "rc=$RC out=$OUT"
+
 run_hook "$TR_MEM_WRITE" "Noted that the build is green."
 silent && ok "R39. 'Noted that the build is green.' stays an acknowledgment: SILENT" || bad "R39. noted that" "rc=$RC out=$OUT"
 
