@@ -147,7 +147,7 @@ pub fn start(app: AppHandle) {
                 // The pass itself is richos-core's (`WorkHost::deliver_team_answers`, the
                 // work-path design D8), so the tests and the VM crash matrix run it as it ships.
                 let binding_for = |thread: &str| view.ledger().thread_binding(thread).ok();
-                state.work.deliver_team_answers(&binding_for, None);
+                state.work.deliver_team_answers(&binding_for);
             }
         })
         .expect("start question work delivery");

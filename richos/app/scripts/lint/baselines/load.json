@@ -25,22 +25,6 @@
         }
       }
     },
-    "richos/app/crates/richos-core/src/operator_desk.rs": {
-      "sleep-then-assert": {
-        "6e57511a08a73760": {
-          "count": 1,
-          "text": "std::thread::sleep(Duration::from_millis(200)); // several more timer ticks: no third send"
-        }
-      }
-    },
-    "richos/app/crates/richos-core/src/operator_lead.rs": {
-      "short-deadline": {
-        "4cc9b4132fcdd790": {
-          "count": 4,
-          "text": "let deadline = Instant::now() + Duration::from_secs(10);"
-        }
-      }
-    },
     "richos/app/crates/richos-core/src/owned_process.rs": {
       "sleep-then-assert": {
         "138428ea339b9fea": {

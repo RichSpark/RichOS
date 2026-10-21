@@ -121,7 +121,7 @@ impl Walk {
     }
 
     fn wake(&self) {
-        self.host.deliver_team_answers(&|thread| self.binding(thread), None);
+        self.host.deliver_team_answers(&|thread| self.binding(thread));
     }
 
     /// His request on a conversation: the turn written to the conversation ledger the way the

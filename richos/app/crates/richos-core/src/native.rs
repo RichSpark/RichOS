@@ -1755,18 +1755,6 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
             "type":"stdio","command":executable,"args":["--assignments-mcp",assignments_scope]
         });
     }
-    if role == LeaseRole::Conversation {
-        // **HIS TEAM'S TOOLS, on an operator install only** (operator back-end spec r3 (d),
-        // (o); the operator-client record's §7 item 2): stop named agents, stop his team's
-        // turn, read what it is doing. `operator_desk` is `None` on every product install, so
-        // this entry is absent there and the list above is exactly what it was (N1).
-        if profile.and_then(|p| p.operator_desk.as_ref()).is_some() {
-            config["mcpServers"][crate::operator_desk_tools::SERVER_NAME] = json!({
-                "type": "stdio", "command": executable,
-                "args": ["--operator-desk-mcp", crate::operator_desk_tools::scope_beside(assignments_scope)]
-            });
-        }
-    }
     config["mcpServers"][crate::status_tools::SERVER_NAME] = json!({
         "type":"stdio", "command":executable, "args":["--status-mcp",status_scope]
     });
@@ -3613,16 +3601,6 @@ impl NativeTurnScope {
             crate::status_tools::write_scope(path,&scope).map_err(CognitionError::Io)?;
             crate::session_tools::bind_with_assignments(path,&scope,&self.session_id,"rich",user_instruction.clone(),self.assignments_scope.as_deref()).map_err(CognitionError::Io)?;
         }
-        let desk = self.engine_profile.as_ref().and_then(|p| p.operator_desk.clone());
-        if let (Some(path), Some(desk)) = (&self.assignments_scope, desk) {
-            crate::operator_desk_tools::write_scope(&crate::operator_desk_tools::scope_beside(path),
-                &crate::operator_desk_tools::DeskToolScope {
-                    version: 1, socket: desk.socket, token: desk.token, origins: desk.origins,
-                    entity_id: binding.entity_id().to_string(), thread_id: binding.thread_id().to_string(),
-                    ledger_ref: Some(format!("ledger:{}:{turn}", binding.thread_id())),
-                })
-                .map_err(CognitionError::Io)?;
-        }
         if let Some(path)=&self.question_scope {
             let scope=crate::question_tools::read_scope(path).map_err(CognitionError::Io)?;
             let questions:Vec<_>=crate::questions::Store::new(&scope.context.root).list(&scope.context.entity_id,&scope.context.thread_id)
@@ -3894,15 +3872,6 @@ impl Drop for NativeCognition {
         if let Some((_, path)) = &self.continuity { let _ = std::fs::remove_file(path); }
         if let Some(path) = &self.assignments_scope { let _ = std::fs::remove_file(path); }
         if let Some(path) = &self.status_scope { let _ = std::fs::remove_file(path); }
-        // The operator scope beside the register's, written only on an operator install: gone
-        // already is the ordinary case, anything else is said.
-        if let Some(path) = &self.assignments_scope {
-            if let Err(e) = std::fs::remove_file(crate::operator_desk_tools::scope_beside(path)) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("[richos] the front desk's operator scope could not be removed ({e})");
-                }
-            }
-        }
         if let Some(path) = &self.onboarding_scope {
             let _ = std::fs::remove_file(path);
         }
@@ -4814,7 +4783,7 @@ send({"type":"result","stop_reason":"end_turn"})
             },
             work_scope: None,
 
-            operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default(),
+            claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default(),
         }
     }
 
@@ -4951,31 +4920,6 @@ exec /bin/sleep 1000
     /// sentence as a measurement. It is written as an exact set on purpose: a test that
     /// asserted only `richos_work`'s absence would go on passing if a fifth server appeared
     /// beside it, and "no orchestration tools" is a claim about everything on the lease.
-    /// **On an operator install the front desk also holds his team's three tools, and the back
-    /// end does not** (the operator-client record's §7 item 2). The positive half of the
-    /// inventory test below, whose exact list is the N1 control: a profile with no desk access
-    /// is every product install, and there the list does not move.
-    #[test]
-    fn an_operator_install_gives_the_front_desk_his_team_s_tools_and_the_back_end_none() {
-        let root = fixture_root().join(format!("mcp-operator-{}", uuid::Uuid::new_v4()));
-        let bridge = fixture_bridge(&root);
-        let mut profile = fixture_profile(&root);
-        profile.operator_desk = Some(crate::operator_desk_tools::DeskAccess {
-            socket: root.join("desk.sock"), token: "t".repeat(32), origins: vec!["desk-typed".into()] });
-        let (scope, continuity, executable) = (root.join("scope.json"), root.join("continuity.json"), root.join("RichOS"));
-        let continuity_tools = root.join("continuity-tools.json");
-        let (assignments, status) = (root.join("abc-assignments.json"), root.join("abc-status.json"));
-        let chat = mcp_config(&executable, &scope, &assignments, &status,
-            Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Conversation, Path::new("claude"));
-        let server = &chat["mcpServers"][crate::operator_desk_tools::SERVER_NAME];
-        assert_eq!(server["args"], json!(["--operator-desk-mcp", root.join("abc-operator.json")]), "{chat}");
-        assert_eq!(server["command"], json!(executable));
-        let work = mcp_config(&executable, &scope, &assignments, &status,
-            Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Work, Path::new("claude"));
-        assert!(work["mcpServers"].get(crate::operator_desk_tools::SERVER_NAME).is_none(), "the back end stops nothing of his");
-        if let Err(error) = std::fs::remove_dir_all(&root) { eprintln!("fixture cleanup: {error}"); }
-    }
-
     #[test]
     fn rich_has_the_register_and_full_evidence_while_stu_has_execution() {
         let root = fixture_root().join(format!("mcp-inventory-{}", uuid::Uuid::new_v4()));
@@ -7460,7 +7404,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                work_scope:None,  operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
+                work_scope:None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();

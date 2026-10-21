@@ -225,19 +225,19 @@ impl TaskBook {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
 
     // ---- the task book, from the recorded shapes (P12) -------------------------------------
 
-    pub(crate) fn agent_use(id: &str, name: &str) -> Value {
+    fn agent_use(id: &str, name: &str) -> Value {
         json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":id,"name":"Agent",
                "input":{"name":name,"description":"d","prompt":"p","run_in_background":true}}]}})
     }
-    pub(crate) fn started(task: &str, tool: &str) -> Value {
+    fn started(task: &str, tool: &str) -> Value {
         json!({"type":"system","subtype":"task_started","task_id":task,"tool_use_id":tool})
     }
-    pub(crate) fn notified(task: &str, status: &str) -> Value {
+    fn notified(task: &str, status: &str) -> Value {
         json!({"type":"system","subtype":"task_notification","task_id":task,"status":status})
     }
 
