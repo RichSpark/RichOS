@@ -188,7 +188,7 @@ pub struct AskScope {
     #[serde(default)]
     pub entity_root: Option<PathBuf>,
     /// **The app run** his team's lead was started in: the claim id the app gives every lead
-    /// of one launch (`RICHOS_OPERATOR_LEAD`, `operator_claim.rs`). The display witness writes
+    /// of one launch (`RICHOS_OPERATOR_LEAD`, set by the retired operator client). The display witness writes
     /// it on the ledger line, so an ask one conversation's lead put to him satisfies the
     /// engine's ask-first gate for every lead of the same run (operator contract notes §4
     /// item 2, Frank's F10; engine `scripts/lib/ceo-asks.sh`, "THE ONE WIDENING"). `None`

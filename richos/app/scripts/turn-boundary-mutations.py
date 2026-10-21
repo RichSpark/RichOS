@@ -17,9 +17,9 @@ beside the copy, never the shared Cargo cache: cargo judges a workspace member f
 and keys it relative to the workspace root, so a mutant compiled into the shared cache is what
 the next older checkout runs (esc-20260926T113721Z-70ef679e, measured on this harness's first
 version). The copy and its target are deleted at the end unless --keep is given; with --keep and
-the same --copy, a rerun is incremental. (`operator-mutations.py` mutates
-richos-core in place; these mutants reach the Tauri shell, whose build reads richos/web,
-richos/mobile and richos/engine/voice/models too, so a copy is the one way not to touch them.)
+the same --copy, a rerun is incremental. (These mutants reach the Tauri shell, whose build reads
+richos/web, richos/mobile and richos/engine/voice/models too, so a copy is the one way not to
+touch them.)
 
   turn-boundary-mutations.py --check          every mutant applies exactly once, every test it
                                               names exists; no cargo (turn-boundary-mutations.test.sh)

@@ -1,6 +1,6 @@
 //! THE WORK PATH'S CRASH-MATRIX HOST — his answers to a background job, through a crash
 //! (richos-hq `docs/plans/2026-09-27-work-path-answer-delivery-design.md` §4.2, the W4 step of
-//! `scripts/operator-probes/guest_probes.py`).
+//! the operator probes' guest runner, retired before that harness was deleted on 2026-10-21).
 //!
 //! It is the app's own wiring of the ordinary work path, without the window: the real
 //! `WorkHost` with the production work lease (`NativeCognition::start_work_lease`, the factory
@@ -121,7 +121,7 @@ impl Walk {
     }
 
     fn wake(&self) {
-        self.host.deliver_team_answers(&|thread| self.binding(thread), None);
+        self.host.deliver_team_answers(&|thread| self.binding(thread));
     }
 
     /// His request on a conversation: the turn written to the conversation ledger the way the

@@ -14955,12 +14955,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/lib/runtime_cache.py",
-          "sha256": "1795b481afe2193c7432dc22d9ff9571b0b5a47475ded48e2c0317ed05c60c49",
-          "evidence": "Imported by proof-run.py supply_runtime and nightly-local.py Runner.runtime_path: hashes the bytes of runtime-sources.json to name the nightly's recipe-keyed runtime cache directory, and (gui_speech_models) checks whether ~/Models/Whisper/ggml-small.en.bin and ggml-large-v3-turbo-q5_0.bin under HOME are files, the speech models gui-boot's fixture needs. Stdlib only; reads no configuration and no file contents."
-        },
-        {
-          "root": "repository",
           "path": "richos/engine/scripts/lib/proc_tree.py",
           "sha256": "ca4557acad8c3b91f0137d2cd68f5695893ba85e52f5042595e00883b9a9144c",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
@@ -14994,6 +14988,12 @@
           "path": "richos/app/scripts/lib/cargo_identity.py",
           "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
           "evidence": "Private-output dispatcher used by the bound app runner. Reads Cargo manifests only for its selected workspace or private fixture; fixture imports that do not enter main execute no Cargo command."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/runtime_cache.py",
+          "sha256": "23879473cf282fcbb07cfc28fc18c9b993f7426d85e65e695b617348c56397ec",
+          "evidence": "Imported by proof-run.py supply_runtime and nightly-local.py Runner.runtime_path: hashes the bytes of runtime-sources.json to name the nightly's recipe-keyed runtime cache directory, and (gui_speech_models) checks whether ~/Models/Whisper/ggml-small.en.bin and ggml-large-v3-turbo-q5_0.bin under HOME are files, the speech models gui-boot's fixture needs. Stdlib only; reads no configuration and no file contents."
         }
       ]
     },
@@ -15127,7 +15127,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/runtime_cache.py",
-          "sha256": "1795b481afe2193c7432dc22d9ff9571b0b5a47475ded48e2c0317ed05c60c49",
+          "sha256": "23879473cf282fcbb07cfc28fc18c9b993f7426d85e65e695b617348c56397ec",
           "evidence": "Imported by proof-run.py supply_runtime and nightly-local.py Runner.runtime_path: hashes the bytes of runtime-sources.json to name the nightly's recipe-keyed runtime cache directory, and (gui_speech_models) checks whether ~/Models/Whisper/ggml-small.en.bin and ggml-large-v3-turbo-q5_0.bin under HOME are files, the speech models gui-boot's fixture needs. Stdlib only; reads no configuration and no file contents."
         }
       ]

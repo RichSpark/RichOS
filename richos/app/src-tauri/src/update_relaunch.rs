@@ -7,8 +7,8 @@
 //!
 //! WHAT "RUNNING" MEANS is not decided here. It is `updates::work_verdict`, the same gate that
 //! already hides the download control: the active turn, the spine, this session's workers,
-//! background work on every work lease, his team on an operator install, and commands Rich
-//! started. One gate, so the relaunch and the download can never disagree about it.
+//! background work on every work lease, and commands Rich started. One gate, so the relaunch
+//! and the download can never disagree about it.
 //!
 //! WHY A HELPER PROCESS AND NOT `AppHandle::restart`. Activation of a prepared update needs
 //! the EXCLUSIVE side of the session lease at startup (`update_startup::prepare`), and every

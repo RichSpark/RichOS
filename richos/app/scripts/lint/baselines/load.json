@@ -25,22 +25,6 @@
         }
       }
     },
-    "richos/app/crates/richos-core/src/operator_desk.rs": {
-      "sleep-then-assert": {
-        "6e57511a08a73760": {
-          "count": 1,
-          "text": "std::thread::sleep(Duration::from_millis(200)); // several more timer ticks: no third send"
-        }
-      }
-    },
-    "richos/app/crates/richos-core/src/operator_lead.rs": {
-      "short-deadline": {
-        "4cc9b4132fcdd790": {
-          "count": 4,
-          "text": "let deadline = Instant::now() + Duration::from_secs(10);"
-        }
-      }
-    },
     "richos/app/crates/richos-core/src/owned_process.rs": {
       "sleep-then-assert": {
         "138428ea339b9fea": {
@@ -956,46 +940,6 @@
         "1d2eee744c3a2a35": {
           "count": 1,
           "text": "await page.waitForSelector(\"#first-run:not([hidden])\", { timeout: 8000 });"
-        }
-      }
-    },
-    "richos/app/ui/tests/operator-notice.js": {
-      "short-deadline": {
-        "032d16b2360449cb": {
-          "count": 1,
-          "text": "undefined, { timeout: 8000 }"
-        },
-        "0808ce6c870892ee": {
-          "count": 1,
-          "text": "await control.waitForFunction(() => document.querySelectorAll(\"#messages .tl-notice--team\").length === 1, undefined, { timeout: 8000 });"
-        },
-        "125ac9b4f31fdc45": {
-          "count": 1,
-          "text": "await page.waitForFunction(() => anyLiveTurn(), undefined, { timeout: 5000 }); // eslint-disable-line no-undef"
-        },
-        "43938559e652a4bf": {
-          "count": 1,
-          "text": "await page.waitForFunction(() => document.querySelectorAll(\"#messages .tl-notice--team\").length === 1, undefined, { timeout: 5000 });"
-        },
-        "895f94b5d075be53": {
-          "count": 1,
-          "text": "await page.waitForFunction(() => window.__RICHOS_MOCK__.operatorCalls().includes(\"acme\"), undefined, { timeout: 8000 });"
-        },
-        "aa07bc5c9eb12ac8": {
-          "count": 1,
-          "text": "await page.waitForFunction(() => !anyLiveTurn(), undefined, { timeout: 15000 }); // eslint-disable-line no-undef"
-        },
-        "ab59a51ff21fc7f5": {
-          "count": 1,
-          "text": "await page.waitForFunction(() => document.querySelectorAll(\"#messages .tl-notice--team\").length === 2, undefined, { timeout: 8000 });"
-        },
-        "dfb0b2fdf19a0464": {
-          "count": 1,
-          "text": "{ timeout: 10000 }"
-        },
-        "ef4335965964e1ba": {
-          "count": 1,
-          "text": "await page.waitForFunction(() => document.querySelectorAll(\"#messages .tl-notice\").length === 1, undefined, { timeout: 8000 });"
         }
       }
     },

@@ -4868,30 +4868,6 @@ body.bp-narrow .tl-user-bubble {
   color: var(--ink);
 }
 
-/* HIS TEAM, ON AN OPERATOR INSTALL (the operator-client record's §7 item 1). The same card;
-   what it adds is the from-line, in the message lane's own byline shape (`.tl-who` for the
-   name, the rest quieter), so a line from his team reads as attributed without becoming a
-   message from Rich. `failed` and `alarm` take the failure card's `--danger` rule, the only
-   second tone this card family has.
-
-   16px, not the message byline's 14px, and that is deliberate: here the from-line carries
-   the KIND ("asks you", "could not finish"), which he is expected to take in, so it is not
-   the skippable tier (`wiki/ceo-decisions.md` §15). Nothing is declared exempt.
-
-   CONTRAST, COMPUTED UNDER WEBKIT IN BOTH THEMES by `ui/tests/operator-notice.js` for every
-   kind: the from-line is `--ink-faint` on `--surface`, floor 4.5:1; the `--danger` rule is a
-   non-text indicator, floor 3:1. */
-.tl-notice--danger {
-  border-left-color: var(--danger);
-}
-
-.tl-notice-from {
-  margin: 0 0 4px;
-  font-size: 1rem;
-  line-height: 1.4;
-  color: var(--ink-faint);
-}
-
 .tl-intervention-body {
   margin: 0;
   font-size: 1rem;

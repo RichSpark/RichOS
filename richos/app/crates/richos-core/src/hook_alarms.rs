@@ -1,12 +1,14 @@
-//! HIS ENGINE'S ALARMS, READ OFF THE LEAD'S STREAM (operator back-end spec r2 (r), unchanged
-//! in r3 §11 item 6; Frank's B4).
+//! THE ENGINE'S ALARMS, READ OFF A LEASE'S STREAM (written for the operator back-end spec r2
+//! (r), unchanged in r3 §11 item 6, Frank's B4; moved here from `operator_frames.rs` when the
+//! operator path was retired, because every user's app runs the engine's full checks and their
+//! alarms must reach the user as work notices: ruling §138).
 //!
-//! His engine speaks to HIM through a hook's `{"systemMessage": …}`: the escalation ledger,
-//! the in-flight acknowledgements, the CPU guard, the engine's own ACTIVE/BROKEN banner
-//! (`engine-status.sh`'s header measured which channel reaches a person, on 2.1.270). In his
-//! terminal Claude Code renders those lines on his screen. Behind the app nobody sees the
-//! screen, so the lead is started with `--include-hook-events` (`operator_profile.rs`) and this
-//! file reads the two frames that carry them:
+//! The engine speaks to the PERSON through a hook's `{"systemMessage": …}`: the escalation
+//! ledger, the in-flight acknowledgements, the CPU guard, the engine's own ACTIVE/BROKEN banner
+//! (`engine-status.sh`'s header measured which channel reaches a person, on 2.1.270). In a
+//! terminal Claude Code renders those lines on screen. Behind the app nobody sees that screen,
+//! so a lease started with `--include-hook-events` carries them on its stream, and this file
+//! reads the two frames that carry them:
 //!
 //! - `{"type":"system","subtype":"hook_response", "hook_event", "hook_name", "stdout",
 //!   "stderr", "output", "outcome", …}` — the hook's own stdout, in which a `systemMessage` is
@@ -16,14 +18,14 @@
 //!   (2.1.251), as `"Stop says: <message>"`.
 //!
 //! **Only `systemMessage` is an alarm.** Plain stdout and stderr go to the model or to nobody
-//! in his terminal (engine-status.sh's table), so treating them as alarms here would put in
-//! front of him what his terminal never showed him. That is P10's control, as a test.
+//! in a terminal (engine-status.sh's table), so treating them as alarms here would put in
+//! front of the user what a terminal never shows. That is P10's control, as a test.
 //!
 //! **Verbatim.** The text is delivered as the engine wrote it. Nothing is summarized, because
 //! a summarized alarm is a second author's opinion of an alarm.
 //!
-//! **Once, across every lead** ([`AlarmDeduper`]). Five leads each run his `Stop` hooks, so
-//! one escalation would otherwise reach him five times. The key is the message's own text,
+//! **Once, across every lease** ([`AlarmDeduper`]). Five leases each run the `Stop` hooks, so
+//! one escalation would otherwise reach the user five times. The key is the message's own text,
 //! with the platform's `"<Hook> says: "` framing removed so the same message arriving on both
 //! frames counts once. A LOUDER repeat is different text (the ledger escalates at 1 h, 24 h
 //! and 72 h), so it is a new alarm by construction. An identical text is delivered again
@@ -33,7 +35,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// How long an identical alarm is held as already delivered. The spec says "within one alarm
-/// period" and names none; one hour is the escalation ledger's first step, so an alarm he
+/// period" and names none; one hour is the escalation ledger's first step, so an alarm the user
 /// was told about is repeated no more often than the ledger itself grows louder.
 pub const ALARM_PERIOD: Duration = Duration::from_secs(60 * 60);
 
@@ -46,7 +48,7 @@ pub enum AlarmFrame {
     Informational,
 }
 
-/// One message his engine addressed to him.
+/// One message the engine addressed to the user.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Alarm {
     /// Exactly as the engine wrote it (or as the platform framed it, for `informational`).
@@ -129,7 +131,7 @@ pub fn dedupe_key(text: &str) -> String {
     text.to_string()
 }
 
-/// Delivered-once bookkeeping, shared by every lead of the app.
+/// Delivered-once bookkeeping, shared by every lease of the app.
 #[derive(Debug)]
 pub struct AlarmDeduper {
     period: Duration,
@@ -163,11 +165,6 @@ impl AlarmDeduper {
     pub fn remembered(&self) -> usize {
         self.delivered.len()
     }
-}
-
-/// The engine's ACTIVE banner, if this alarm is it (read for the init check, (b)).
-pub fn banner_in(alarm: &Alarm) -> Option<crate::operator_profile::EngineBanner> {
-    crate::operator_profile::parse_banner(&dedupe_key(&alarm.text))
 }
 
 #[cfg(test)]
@@ -209,7 +206,7 @@ mod tests {
         assert_eq!(alarms_in(&hook_response("Stop", pretty, ""))[0].text, "pretty");
     }
 
-    /// P10's control, as a unit: what his terminal never showed him is not an alarm here.
+    /// P10's control, as a unit: what a terminal never shows is not an alarm here.
     #[test]
     fn plain_stdout_stderr_and_additional_context_are_not_alarms() {
         assert!(alarms_in(&hook_response("Stop", "just text for the model\n", "")).is_empty());
@@ -276,16 +273,5 @@ mod tests {
         assert_eq!(dedupe_key("Rich says: keep this"), "Rich says: keep this",
             "only a hook event's framing is removed, never the message's own words");
         assert_eq!(dedupe_key("plain"), "plain");
-    }
-
-    #[test]
-    fn the_banner_is_found_among_the_alarms() {
-        let banner = "RichOS engine 1.2.0 ACTIVE. Engine: /e. Governing: /f (resolved via CLAUDE_PROJECT_DIR). 26/26 guards present (…). Enforcement is ON for this repository.";
-        let alarm = &alarms_in(&hook_response("SessionStart", &json!({"systemMessage": banner}).to_string(), ""))[0];
-        let parsed = banner_in(alarm).expect("the banner is an alarm like any other");
-        assert_eq!(parsed.engine_root, std::path::PathBuf::from("/e"));
-        assert_eq!((parsed.guard_count, parsed.guard_expected), (26, 26));
-        let framed = &alarms_in(&informational(&format!("SessionStart says: {banner}"), "notice"))[0];
-        assert!(banner_in(framed).is_some(), "the platform's framing must not hide the banner");
     }
 }

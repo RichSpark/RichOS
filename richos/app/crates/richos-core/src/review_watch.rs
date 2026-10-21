@@ -5,12 +5,9 @@
 //! §113): *"A regular RichOS user can never be expected anything even remotely close to that.
 //! So, this all must be completely automated."*
 //!
-//! The engine's `review-watch` is a Claude Code plugin monitor, and neither of the app's two
-//! kinds of lead can run one: a product lease loads no settings and no monitors
-//! (`native.rs`, `--setting-sources ''`), and a monitor inside the operator install's print-mode
-//! lead would start a turn the host never asked for and cannot attribute (`operator_lead.rs`
-//! identifies a turn by the user message this host sent). So the HOST runs it, as its own
-//! child, started at launch and ended at quit:
+//! The engine's `review-watch` is a Claude Code plugin monitor, and the app's leases cannot run
+//! one: a product lease loads no settings and no monitors (`native.rs`, `--setting-sources ''`).
+//! So the HOST runs it, as its own child, started at launch and ended at quit:
 //!
 //! * [`Mode::App`]: every install. `review_watch.py --app-state <engine-state>` reads the
 //!   app's own registry and starts MID-JOB reviews of running workers (the handover review is
@@ -18,14 +15,6 @@
 //!   running worker through the app's hook (`scripts/app-engine-hook.py`), so nothing it prints
 //!   needs delivering; its output goes to a log. Each review runs on the Claude account the
 //!   app's work runs on when its reviewer starts (`--accounts`, the app's account list).
-//! * [`Mode::Operator`]: his team's install. `review_watch.py --host-json` against his
-//!   governed repository's `orchestration.config`; each notice comes back as one JSON line per
-//!   lead session, and the shell hands it to [`crate::operator_desk::OperatorDesk::tell_lead`],
-//!   which sends it to that lead as a message of the host's own. **A verdict counts as delivered
-//!   only once its lead was told** (the real second review of 0d83e456d, finding 3): the child is
-//!   started with [`ACKS_ENV`] set, and for each notice the sink accepted the host writes the
-//!   notice's review ids back on the child's stdin as `{"ack": [...]}`; a notice the desk
-//!   refused gets no acknowledgment and is told again at the child's next look.
 //!
 //! **Its process id is recorded** (`<state>/review-watch/host-child-<mode>.json`) while it
 //! runs, and the record goes when it has been stopped and reaped. **Stopping** is SIGTERM to
@@ -35,10 +24,10 @@
 //! this host's, which it is given at spawn ([`HOST_ENV`]), so an app that dies while the child is
 //! still starting is noticed before its first look too.
 use std::collections::BTreeMap;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::owned_process::{OwnedChild, SupervisedSet};
@@ -57,27 +46,10 @@ pub const STOP_BOUND: Duration = Duration::from_secs(5);
 /// stays a count of leases.
 static WATCHERS: SupervisedSet = SupervisedSet::new();
 
-/// Set in the operator child's environment: this host acknowledges what it delivered, so the
-/// child records a verdict delivered only on that acknowledgment (`review_watch.py` `host_acks`).
-/// An engine that predates it ignores the variable, and its lines carry no ids to acknowledge.
-pub const ACKS_ENV: &str = "RICHOS_REVIEW_WATCH_ACKS";
-
 /// Set in every child's environment: this host's own process id, which the child checks its
 /// parent against before its first look (`review_watch.py` `run_host_loop`; the real second
 /// review of 16c154f5a, finding 2).
 pub const HOST_ENV: &str = "RICHOS_REVIEW_WATCH_HOST";
-
-/// One notice for one lead, from the operator child's JSON line.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Notice {
-    pub session: String,
-    pub text: String,
-    /// The review ids of the verdicts in it, acknowledged back to the child once delivered.
-    pub keys: Vec<String>,
-}
-
-/// Where a notice goes, called on the child's reader thread: true once its lead was told.
-pub type NoticeSink = Arc<dyn Fn(Notice) -> bool + Send + Sync>;
 
 #[derive(Clone)]
 pub enum Mode {
@@ -98,25 +70,18 @@ pub enum Mode {
         /// run), Claude.
         codex_reviews: PathBuf,
     },
-    /// The operator install's watcher over his team's registry.
-    Operator {
-        /// The governed repository's `orchestration.config` (`SECOND_REVIEW_REPOS`).
-        config: PathBuf,
-        sink: NoticeSink,
-    },
 }
 
 impl Mode {
     fn name(&self) -> &'static str {
         match self {
             Mode::App { .. } => "app",
-            Mode::Operator { .. } => "operator",
         }
     }
 }
 
-/// Everything one child needs. `state` is `<app data>/engine-state` in both modes: the child's
-/// record and log live under it, and in [`Mode::App`] it is also the app state the watcher reads.
+/// Everything one child needs. `state` is `<app data>/engine-state`: the child's record and log
+/// live under it, and it is also the app state the watcher reads.
 #[derive(Clone)]
 pub struct Launch {
     pub python: PathBuf,
@@ -167,42 +132,18 @@ impl ReviewWatch {
                     command.arg("--claude").arg(claude);
                 }
             }
-            Mode::Operator { config, .. } => {
-                command.arg("--host-json").arg("--config").arg(config);
-            }
         }
         command.env_clear().envs(&launch.environment)
             .env("PYTHONDONTWRITEBYTECODE", "1").env("PYTHONNOUSERSITE", "1")
             .env(HOST_ENV, std::process::id().to_string());
-        let reads = matches!(launch.mode, Mode::Operator { .. });
-        if reads {
-            command.env(ACKS_ENV, "1");
-        }
         command.current_dir(&launch.state).stderr(Stdio::from(log.try_clone()?));
-        command.stdin(if reads { Stdio::piped() } else { Stdio::null() });
-        command.stdout(if reads { Stdio::piped() } else { Stdio::from(log) });
+        command.stdin(Stdio::null());
+        command.stdout(Stdio::from(log));
         OwnedChild::configure(&mut command);
-        let mut child = command.spawn()?;
+        let child = command.spawn()?;
         let pid = child.id();
-        let (out, acks) = (child.stdout.take(), child.stdin.take());
         // Fenced before anything else can fail, so an error below still ends it.
         let owned = OwnedChild::supervised_in(child, STOP_BOUND, &WATCHERS);
-        if let (Mode::Operator { sink, .. }, Some(out), Some(mut acks)) = (&launch.mode, out, acks) {
-            let sink = sink.clone();
-            std::thread::Builder::new().name("richos-review-watch".into()).spawn(move || {
-                for line in io::BufReader::new(out).lines() {
-                    let Ok(line) = line else { return };
-                    let Some(notice) = parse_notice(&line) else { continue };
-                    let keys = notice.keys.clone();
-                    if sink(notice) && !keys.is_empty() {
-                        if let Err(e) = writeln!(acks, "{}", serde_json::json!({"ack": keys})).and_then(|()| acks.flush()) {
-                            // Unacknowledged, the watcher tells it again: a repeat, never a loss.
-                            eprintln!("[richos] second review: a delivered notice could not be acknowledged ({e})");
-                        }
-                    }
-                }
-            })?;
-        }
         let record = launch.record_path();
         let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         write_record(&record, &serde_json::json!({"pid": pid, "started_at": started, "mode": launch.mode.name()}))?;
@@ -239,7 +180,7 @@ impl Drop for ReviewWatch {
     }
 }
 
-/// A child's record, written whole (also [`crate::team_watch`]'s).
+/// A child's record, written whole.
 pub(crate) fn write_record(path: &Path, value: &serde_json::Value) -> io::Result<()> {
     let temporary = path.with_extension(format!("{}.incoming", uuid::Uuid::new_v4()));
     let written = (|| {
@@ -252,16 +193,6 @@ pub(crate) fn write_record(path: &Path, value: &serde_json::Value) -> io::Result
         eprintln!("[richos] a watcher's record: {} was left behind", temporary.display());
     }
     written
-}
-
-fn parse_notice(line: &str) -> Option<Notice> {
-    let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    let text = value["text"].as_str()?.to_string();
-    let session = value["session"].as_str().unwrap_or_default().to_string();
-    let keys = value["keys"].as_array()
-        .map(|keys| keys.iter().filter_map(|k| k.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-    (!text.is_empty()).then_some(Notice { session, text, keys })
 }
 
 /// The process's own children, one per mode, started at launch and ended at quit.
@@ -380,67 +311,6 @@ mod tests {
         assert_eq!(stop_all(), vec![pid]);
         assert!(!alive(pid), "the recorded pid {pid} is still running after quit");
         assert!(!launch.record_path().exists(), "the record outlived the child");
-        std::fs::remove_dir_all(&root).unwrap();
-    }
-
-    /// The operator child's notices reach the sink, one per JSON line, with their session.
-    #[test]
-    fn an_operator_notice_line_carries_its_session_and_text() {
-        assert_eq!(parse_notice(r#"{"session":"s-1","text":"REVIEW-WATCH 10:00Z: 1 notice"}"#),
-                   Some(Notice { session: "s-1".into(), text: "REVIEW-WATCH 10:00Z: 1 notice".into(), keys: vec![] }));
-        assert_eq!(parse_notice(r#"{"session":"s-1","text":"t","keys":["rv-1","rv-2"]}"#).unwrap().keys,
-                   vec!["rv-1".to_string(), "rv-2".to_string()]);
-        assert_eq!(parse_notice("REVIEW-WATCH 10:00Z: not json"), None);
-        assert_eq!(parse_notice(r#"{"session":"s-1","text":""}"#), None);
-    }
-
-    /// **The real second review of 0d83e456d, finding 3: only a notice its lead was told is
-    /// acknowledged.** A stand-in for the engine's watcher prints three notices: one the sink
-    /// accepts, one it refuses (a desk that refuses at quit) and one with no ids (an engine that
-    /// predates acknowledgments); it records what comes back on its stdin and whether it was
-    /// started with [`ACKS_ENV`]. One acknowledgment, of the accepted notice's ids only.
-    #[test]
-    fn the_host_acknowledges_only_the_notices_its_lead_was_told() {
-        let root = std::env::temp_dir().join(format!("review-watch-acks-{}", uuid::Uuid::new_v4()));
-        let engine = root.join("engine");
-        std::fs::create_dir_all(engine.join("scripts/lib")).unwrap();
-        std::fs::create_dir_all(root.join("engine-state")).unwrap();
-        let got = root.join("got.json");
-        std::fs::write(engine.join("scripts/lib/review_watch.py"), format!(r#"
-import json, os, select, sys, time
-print(json.dumps({{"session": "told", "text": "REVIEW-WATCH: 1 notice", "keys": ["rv-told"]}}), flush=True)
-print(json.dumps({{"session": "refused", "text": "REVIEW-WATCH: 1 notice", "keys": ["rv-refused"]}}), flush=True)
-print(json.dumps({{"session": "told", "text": "REVIEW-WATCH: 1 notice"}}), flush=True)
-acks, end = [], time.monotonic() + 5
-while time.monotonic() < end and len(acks) < 3:
-    if select.select([sys.stdin], [], [], 0.6)[0]:
-        line = sys.stdin.readline()
-        if not line:
-            break
-        acks.append(json.loads(line))
-    elif acks:
-        break
-with open({got:?} + ".pending", "w") as target:
-    json.dump({{"acks": acks, "env": os.environ.get("{ACKS_ENV}")}}, target)
-os.replace({got:?} + ".pending", {got:?})
-time.sleep(60)
-"#)).unwrap();
-        let sink: NoticeSink = Arc::new(|notice: Notice| notice.session == "told");
-        let launch = Launch {
-            python: python(), engine, state: root.join("engine-state"),
-            environment: environment("/usr/bin:/bin:/usr/sbin:/sbin"),
-            mode: Mode::Operator { config: root.join("orchestration.config"), sink },
-        };
-        let watch = ReviewWatch::start(&launch).unwrap();
-        let began = std::time::Instant::now();
-        while !got.is_file() && began.elapsed() < Duration::from_secs(20) {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let recorded = std::fs::read(&got).unwrap_or_default();
-        drop(watch);
-        let recorded: serde_json::Value = serde_json::from_slice(&recorded).unwrap_or_else(|e| panic!(
-            "the stand-in recorded nothing ({e}): {}", std::fs::read_to_string(launch.log_path()).unwrap_or_default()));
-        assert_eq!(recorded, serde_json::json!({"acks": [{"ack": ["rv-told"]}], "env": "1"}));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
