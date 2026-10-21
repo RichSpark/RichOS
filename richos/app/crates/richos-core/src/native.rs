@@ -1316,6 +1316,10 @@ struct ReaderState {
     /// Held until the turn's `result` says whether the turn carries on, so the vendor's line
     /// never becomes Rich's or Stu's words in a turn that goes on.
     api_error: Option<(Option<String>, Option<String>)>,
+    /// The helpers (by their `parent_tool_use_id`) whose run the lost connection ended and whose
+    /// parent is told once the connection is back ([`NativeClient::after_helper_api_error`]):
+    /// one wait per helper, however many frames carry its failure.
+    helpers_waiting: std::collections::HashSet<String>,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
     /// **Where every `assistant` frame's usage goes, and the account this lease runs on**
@@ -1529,6 +1533,7 @@ impl Default for ReaderState {
             agent_tasks: crate::operator_lead::TaskBook::default(),
             connection: Arc::new(crate::connection::ConnectionWatch::system()),
             api_error: None,
+            helpers_waiting: Default::default(),
             question_scope: None,
             work_tools_loaded: InitFact::NotYetReported,
             assignment_tool_loaded: false,
@@ -2445,6 +2450,11 @@ impl NativeClient {
         // context watermark or terminal state. In particular, whole-message fallback
         // must not promote worker narration when the lead has no active text stream.
         if msg.get("parent_tool_use_id").is_some_and(|parent| !parent.is_null()) {
+            // A helper's run Claude Code ended on an API failure (its message carries `error`)
+            // may have been ended by the lost connection: its parent is told once it is back.
+            if ty == "assistant" && msg.get("error").is_some_and(|error| !error.is_null()) {
+                Self::after_helper_api_error(&msg, stdin, state, closed);
+            }
             // A worker's whole message also reaches the between-turn sink when a turn took it:
             // Stu's host reads his workers' overloads there (`work_host.rs` observe_worker),
             // whichever turn carried them. A lease with no sink keeps nothing extra.
@@ -2775,10 +2785,58 @@ impl NativeClient {
                 pending.phase = TurnPhase::Unconfirmed;
             }
         }
+        Self::tell_connection_restored(stdin, &id, json!({"event":"connection_restored","error":said}))
+    }
+
+    /// Write one `connection_restored` fact into this session as a message from `connection`, in
+    /// the shape every app message to Rich and Stu has (`session_tools::Message`).
+    fn tell_connection_restored(stdin: &Arc<Mutex<ChildStdin>>, id: &str, fact: Value) -> Result<(), NativeError> {
         let message = crate::session_tools::Message { handoff: false, from: "connection".into(),
-            text: json!({"event":"connection_restored","error":said}).to_string(), instruction: None, work: None };
+            text: fact.to_string(), instruction: None, work: None };
         let text = serde_json::to_string(&message).map_err(|error| NativeError::Protocol(error.to_string()))?;
         Self::write_line(stdin, &json!({"type":"user","uuid":id,"message":{"role":"user","content":[{"type":"text","text":text}]}}))
+    }
+
+    /// **A helper (a teammate of Rich's or Stu's) that the lost connection ended** (CEO,
+    /// 2026-10-21, "every worker the app runs"). Its run is Claude Code's, inside this lease, so
+    /// the app cannot send it anything itself; its parent can, and a message to a finished helper
+    /// continues that helper's own conversation from its transcript (Claude Code 2.1.305's
+    /// SendMessage: "a send resumes it from its transcript"). So once the connection is back the
+    /// parent gets one `connection_restored` message naming the helper (its call, agent id and
+    /// task), and its instruction file says to continue that helper, not start it over.
+    ///
+    /// The helper's failure is decided by the same rule as a turn's ([`crate::connection::lost`]),
+    /// from its message: the `error` kind, the `api_error_status` or the status its line names.
+    /// An overload is not the connection and keeps the overload schedule (`work_host.rs`).
+    fn after_helper_api_error(frame: &Value, stdin: &Arc<Mutex<ChildStdin>>, state: &Arc<Mutex<ReaderState>>,
+        closed: &Arc<AtomicBool>) {
+        let Some(call) = frame.get("parent_tool_use_id").and_then(Value::as_str).map(str::to_string) else { return };
+        if !state.lock().unwrap().helpers_waiting.insert(call.clone()) { return; }
+        let said: Vec<&str> = frame.pointer("/message/content").and_then(Value::as_array).into_iter().flatten()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|block| block.get("text").and_then(Value::as_str)).collect();
+        let said = said.join("\n");
+        let kind = frame.get("error").and_then(Value::as_str).map(str::to_string);
+        let ended = json!({"api_error_status": frame.get("api_error_status"), "result": said});
+        let fact = json!({"event":"connection_restored","error":said,
+            "helper":{"tool_use_id":call,"agent_id":frame.get("agent_id"),"task":frame.get("task_description")}});
+        let (stdin, state, closed) = (stdin.clone(), state.clone(), closed.clone());
+        let waited = std::thread::Builder::new().name("richos-helper-connection-wait".into()).spawn(move || {
+            let watch = state.lock().unwrap().connection.clone();
+            if crate::connection::lost(&ended, kind.as_deref(), &watch) {
+                eprintln!("[richos] a helper's run ended on the lost connection ({said}); its parent is told when it is back");
+                if watch.wait_until_up(&|| closed.load(Ordering::SeqCst)) {
+                    match Self::tell_connection_restored(&stdin, &uuid::Uuid::new_v4().to_string(), fact) {
+                        Ok(()) => eprintln!("[richos] the connection is back; the helper's parent is told to continue it"),
+                        Err(error) => eprintln!("[richos] the helper's parent could not be told: {error}"),
+                    }
+                }
+            }
+            state.lock().unwrap().helpers_waiting.remove(&call);
+        });
+        if let Err(error) = waited {
+            eprintln!("[richos] the wait for a helper's connection could not start: {error}");
+        }
     }
 
     /// Answer the agent's `control_request`s, AND route them as machinery.
@@ -6612,7 +6670,17 @@ while True:
     sent=v["uuid"]
     send({"type":"command_lifecycle","command_uuid":sent,"state":"queued"})
     send({"type":"command_lifecycle","command_uuid":sent,"state":"started"})
-    if first:
+    if first and case.get("helper"):
+        first=False
+        said={"type":"assistant","parent_tool_use_id":"helper-call","agent_id":"a1b2c3d4-helper","task_description":"Fixture helper",
+            "error":case["kind"],"is_api_error_message":True,"message":{"model":"<synthetic>","role":"assistant","type":"message",
+                "content":[{"type":"text","text":case["text"]}]}}
+        if case["status"] is not None: said["api_error_status"]=case["status"]
+        send(said)
+        send({"type":"assistant","parent_tool_use_id":None,"message":{"role":"assistant","content":[{"type":"text","text":"Parent done."}]}})
+        send({"type":"result","subtype":"success","is_error":False,"stop_reason":"end_turn","terminal_reason":"completed","queued_turn_count":0})
+        send({"type":"command_lifecycle","command_uuid":sent,"state":"completed"})
+    elif first:
         first=False
         said={"type":"assistant","parent_tool_use_id":None,"error":case["kind"],"is_api_error_message":True,
             "message":{"model":"<synthetic>","role":"assistant","type":"message","stop_reason":"stop_sequence",
@@ -6637,10 +6705,16 @@ while True:
     /// `down` times and then "up"; returns it, its folder and how often the check was asked.
     fn lease_failing_once(name: &str, kind: &str, status: Option<u64>, text: &str, down: usize)
         -> (NativeClient, std::path::PathBuf, Arc<AtomicUsize>) {
+        lease_failing_once_in(name, json!({"kind":kind,"status":status,"text":text}), down)
+    }
+
+    /// [`lease_failing_once`] for any `case.json`; `"helper": true` puts the failure on a helper
+    /// of the turn, whose parent then ends its own turn normally.
+    fn lease_failing_once_in(name: &str, case: Value, down: usize) -> (NativeClient, std::path::PathBuf, Arc<AtomicUsize>) {
         let script = write_script(name, "exec python3 -u \"$(dirname \"$0\")/provider.py\"\n");
         let root = script.parent().unwrap().to_path_buf();
         std::fs::write(root.join("provider.py"), FAILS_ONCE_ON_THE_API).unwrap();
-        std::fs::write(root.join("case.json"), json!({"kind":kind,"status":status,"text":text}).to_string()).unwrap();
+        std::fs::write(root.join("case.json"), case.to_string()).unwrap();
         let client = NativeClient::spawn(&script, &root, &doctrine_fixture(), &skills_fixture()).unwrap();
         let asked = Arc::new(AtomicUsize::new(0));
         let counter = asked.clone();
@@ -6705,6 +6779,38 @@ while True:
         assert!(outcome.expect_err("a 403 with the connection up must still fail").to_string().contains("Error 1034"));
         assert_eq!(said, EDGE_403);
         assert_eq!(received_texts(&root), ["Draft the plan"]);
+    }
+
+    /// **A teammate the lost connection ended is carried on too** (review
+    /// rv-20261021T021642Z-c50b0db8-452f; the incident's dead worker). Its parent's turn ends
+    /// normally; once the connection is back the parent gets one `connection_restored` message
+    /// naming that helper (its call, agent id and task), so it continues the helper's own
+    /// conversation. Both of the incident's errors; nothing is sent while the connection is down.
+    #[test]
+    fn a_teammate_the_lost_connection_ended_is_named_to_its_parent_once_the_connection_is_back() {
+        for (case, kind, status, text) in [("refused", "server_error", None, REFUSED), ("edge-403", "authentication_failed", Some(403), EDGE_403)] {
+            let (client, root, asked) = lease_failing_once_in(&format!("lost-connection-helper-{case}"),
+                json!({"kind":kind,"status":status,"text":text,"helper":true}), 3);
+            let mut said = String::new();
+            let outcome = client.prompt("Draft the plan", &mut |item| if let TurnItem::Text { text, .. } = item { said.push_str(text) });
+            assert_eq!(outcome.map_err(|error| error.to_string()).as_deref(), Ok("end_turn"), "case={case}");
+            assert_eq!(said, "Parent done.", "case={case}: a helper's failure line reached the parent's reply");
+            // load-bound: hang guard only; the stand-in reading the second message is the verdict.
+            let end = std::time::Instant::now() + Duration::from_secs(60);
+            let mut received = received_texts(&root);
+            while received.len() < 2 && std::time::Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(20));
+                received = received_texts(&root);
+            }
+            assert_eq!(received.len(), 2, "case={case}: {received:?}");
+            assert_eq!(received[0], "Draft the plan", "case={case}");
+            let told: Value = serde_json::from_str(&received[1]).unwrap();
+            let fact: Value = serde_json::from_str(told["text"].as_str().unwrap()).unwrap();
+            assert_eq!((told["from"].as_str(), fact["event"].as_str(), fact["error"].as_str()),
+                (Some("connection"), Some("connection_restored"), Some(text)), "case={case}");
+            assert_eq!(fact["helper"], json!({"tool_use_id":"helper-call","agent_id":"a1b2c3d4-helper","task":"Fixture helper"}), "case={case}");
+            assert!(asked.load(Ordering::SeqCst) >= 4, "case={case}: the parent was told before the connection was back");
+        }
     }
 
     #[test]
