@@ -29,42 +29,36 @@ if str(LIBRARY) not in sys.path:
     sys.path.insert(0, str(LIBRARY))
 
 ENGINE = LIBRARY.parents[1]
+SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 LIMIT = 300
 TTL = 900
 CONTEXT_LIMIT = 128000
 REVIEW_RULES = """
-FINDINGS means a demonstrated mistake that would materially misdirect the work,
-violate human authorization or make the required proof invalid. Explain that
-effect for every finding. Small editorial points, harmless background omissions,
-redundancy and missing citations that do not affect the job belong in notes,
-never in a refusal. With only notes, return PASS. Do not demand an edit merely
-to satisfy a wording rule. A necessary implementation detail or preservation of
-the requested outcome is not an unrequested product feature or safeguard.
-Earlier human authorizations remain in force until the human changes, cancels
-or completes that work. A later question, status request or parallel task does
-not cancel unfinished authorized work. Read the requests together, applying
-later corrections to the work they concern. The planner cannot grant new scope.
-Your read restrictions are not the worker's restrictions. If a source or a
-command is unavailable to you, state that uncertainty; it is not evidence that
-the claim is false or that the worker cannot read or run it. A missing citation
-alone is a note unless you can demonstrate a material error or missing decision.
-Guard acknowledgment lines are required operator-to-guard evidence. Their
-presence, placement, historical counts and explanatory wording are not faults
-in the worker's assignment. Do not demand their removal. The generated
-merge-main-once handover paragraph is required by another guard. Do not report
-it as useless, unrequested scope or a contradiction when the task explicitly
-says its earlier merge is that same one merge. Still report a task-specific
-instruction that actually requires two merges or defeats that contract.
-For review.mode=revision, this is a continuation of your preceding inspection,
-not a new cold review. Judge only changed lines and whether the preceding
-findings are fixed. Recheck the facts needed for those judgments using file
-tools. Do not discover new editorial issues in unchanged text or reopen an
-unchanged decision from the preceding report. New errors introduced by the
-revision, including changes to scope or instructions, remain findings.
-Unchanged standing instructions were supplied in the initial review; read the
-listed source files only if a changed line needs them. A clean revision can
-PASS. Keep reports short and substantive; do not pad them to seven findings.
+Judge the consequence of following the assignment as written. A demonstrated
+scope, authorization or proof error is FINDINGS, even if easily repaired or
+surrounded by correct facts. Do not move such an error into notes. Verify the
+actual selection/defaults of prescribed commands and the behavior on which
+required proof depends. Correct intentions do not repair an incorrect command
+or a false starting-state/cause claim. Necessary implementation details are
+not unrequested product features. Harmless prose and missing citations alone
+are never blockers. Usually leave notes empty.
+Earlier human authorizations persist until changed, cancelled or completed.
+A later question, status request or parallel task does not revoke unfinished
+work. The planner cannot grant new scope. Your read restrictions are not the
+worker's restrictions; unavailable evidence means uncertainty, not falsity.
+Resource economy does not waive required proof. A proof handoff must explicitly
+retain that obligation; do not infer it from the planner's general workflow.
+Reviewing a flawed document is legitimate work, not a reason to refuse the
+review. Required guard acknowledgments and a single generated merge handover
+are operator evidence, not product scope; report actual incompatible task
+instructions rather than their presence.
+For review.mode=revision, continue the preceding inspection. Judge only changed lines,
+whether the prior material findings are fixed and any new material errors
+introduced by the revision. Do not reopen unchanged decisions or find
+new editorial issues in unchanged text. Read listed standing-instruction
+sources only when a changed line needs them. A clean revision can PASS.
 """
+
 SCHEMA = {"type": "object", "properties": {
     "verdict": {"type": "string", "enum": ["PASS", "FINDINGS"],
                 "description": "FINDINGS only for material errors; PASS includes notes-only reviews."},
@@ -518,8 +512,18 @@ def read_roots(project, assignment, payload=None):
         if target.is_absolute() and target.is_dir():
             roots.append(target.resolve())
     paths = re.findall(r"`([^`\n]+)`|(?<![\w/])((?:~/|/)[^\s`\"'<>()]+)", assignment)
+    candidates = []
     for quoted, bare in paths:
-        raw = (quoted or bare).rstrip(".,;")
+        candidates.append(quoted or bare)
+        if quoted:
+            # A backtick may contain a command rather than one literal path.
+            # Tokenize it for cited paths, including quoted spaces; never run it.
+            try:
+                candidates.extend(shlex.split(quoted))
+            except ValueError:
+                pass
+    for candidate in dict.fromkeys(candidates):
+        raw = candidate.rstrip(".,;")
         raw = re.sub(r":\d+(?:-\d+)?$", "", raw)
         if not raw.startswith(("/", "~/")):
             continue
@@ -943,7 +947,12 @@ def inspect(payload):
                     verdict = Verdict({"verdict": "UNAVAILABLE", "report": str(error)})
                     verdict.metrics = getattr(error, "metrics", {})
             result = {"id": identity, "at": time.time(), "session_id": payload["session_id"],
-                      "tool_use_id": payload["tool_use_id"], "review_mode": review["review"]["mode"], **verdict}
+                      "tool_use_id": payload["tool_use_id"], "review_mode": review["review"]["mode"], **verdict,
+                      "metrics": getattr(verdict, "metrics", {}),
+                      "hook_seconds": round(time.monotonic() - began, 3),
+                      "inspection": {"request": review, "source_sha256": SOURCE_SHA256,
+                                     "profile_sha256": hashlib.sha256(profile.encode()).hexdigest(),
+                                     "rules_sha256": hashlib.sha256(REVIEW_RULES.encode()).hexdigest()}}
             if request.get("recovery_observation_gaps"):
                 result["recovery_observation_gaps"] = request["recovery_observation_gaps"]
             if classification:
