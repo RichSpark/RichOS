@@ -1151,6 +1151,16 @@ while True: time.sleep(.02)
             sentinel.kill()
             sentinel.wait()  # SIGKILL is certain; only the kernel's time is left
 
+    def test_a_release_candidate_requires_the_new_user_walk_too(self):
+        # Review rv-20261021T173525Z-f1f16a31-356b: only `build` wrote the requirement into the
+        # plan, so a `release` candidate skipped the walk and publish never asked for it.
+        r = self.runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("release")
+        plan = json.loads((self.root / "plan.json").read_text())
+        self.assertIs(plan.get("new_user_walk_required"), True)
+        self.assertNotIn("screen_suites_required", plan, "release keeps its own on-screen gate policy")
+
     def test_only_release_reaches_publisher(self):
         r = self.runner()
         r.perform("release")
@@ -1370,8 +1380,12 @@ while True: time.sleep(.02)
             "tag": "v1.2.0", "version": "1.2.0", "source_commit": source_commit or self.SOURCE}))
         r.env["RICHOS_NIGHTLY_RUN_ID"] = "20261019T120000Z-0000000f"
         r.vm_boot_proof = Mock(return_value=None)
+        r.new_user_walk = Mock(return_value=None)
         def completed(out):
-            info = {**self.CANDIDATE_INFO, **r.stable_plan.return_value[1],
+            # nightly.py copies the plan it was given into the candidate's info.
+            plan_file = r.stable_plan.return_value[0]
+            plan = json.loads(plan_file.read_text()) if plan_file.exists() else {}
+            info = {**self.CANDIDATE_INFO, **r.stable_plan.return_value[1], **plan,
                     "run_id": r.env["RICHOS_NIGHTLY_RUN_ID"], "channel": "stable"}
             out.mkdir(parents=True, exist_ok=True)
             (out / "candidate.json").write_text(json.dumps({"info": info}))
@@ -1434,9 +1448,13 @@ while True: time.sleep(.02)
         order = []
         r.command.side_effect = lambda *a, **k: order.append(str(a[2]))
         r.vm_boot_proof.side_effect = lambda run: order.append(f"boot {run}")
+        # And walked as a new user, as every new candidate is: the dead ends of 2026-10-21 were
+        # on stable 1.2.1 (review rv-20261021T173525Z-f1f16a31-356b).
+        r.new_user_walk.side_effect = lambda run, out, info: order.append(
+            f"walk {run} {info.get('new_user_walk_required')}")
         with contextlib.redirect_stdout(io.StringIO()):
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
-        self.assertEqual(order, ["build", "boot 20261019T120000Z-0000000f"])
+        self.assertEqual(order, ["build", "boot 20261019T120000Z-0000000f", "walk 20261019T120000Z-0000000f True"])
         pointer = json.loads(r.run_pointer("20261019T120000Z-0000000f").read_text())
         self.assertEqual(pointer["out"], str(r.state / "releases" / "v1.2.0"))
         # A boot that was not proven publishes nothing and asks for nothing.

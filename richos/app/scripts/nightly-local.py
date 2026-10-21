@@ -3177,6 +3177,10 @@ class Runner:
                     self.skip(name, f"passed in run {passed['run_id']} on {passed['source_commit']}")
             else:
                 self.gates(no_host_screen=no_host_screen)
+            # The stable bundle is the one a new user downloads first (the dead ends of
+            # 2026-10-21 were on stable 1.2.1), so it carries the walk's requirement too.
+            info = {**info, "new_user_walk_required": True}
+            Path(plan_path).write_text(json.dumps(info, indent=2) + "\n")
             out = self.state / "releases" / info["tag"]
             self.announce(f"Building and publishing {info['tag']} from "
                           f"{info['source_commit'][:12]}...")
@@ -3191,6 +3195,8 @@ class Runner:
             self.prepare_changelog(info, out)
             run = info["run_id"]
             proof_error = self.vm_boot_proof(run)
+            if not proof_error and info.get("new_user_walk_required"):
+                proof_error = self.new_user_walk(run, out, info)
             if proof_error:
                 raise RuntimeError(f"{info['tag']} IS NOT PUBLISHED. {proof_error}")
             self.announce(f"{info['tag']} built, not published. The lead will publish run {run} "
@@ -3281,8 +3287,13 @@ class Runner:
             print(info["reason"] + "; nothing published.", flush=True)
             return
         if command == "build":
-            info = {**info, "screen_suites_required": True, "new_user_walk_required": True}
+            info = {**info, "screen_suites_required": True}
             plan_path.write_text(json.dumps(info, indent=2) + "\n")
+        # A NEW USER'S FIRST RUN GATES EVERY NEW CANDIDATE, whichever command made it: `release`
+        # builds and is published by the same `publish` (review rv-20261021T173525Z-f1f16a31-356b:
+        # with the flag on `build` alone, a release candidate skipped the walk and its check).
+        info = {**info, "new_user_walk_required": True}
+        plan_path.write_text(json.dumps(info, indent=2) + "\n")
         if no_host_screen or isinstance(suites, dict):
             # Into the plan for the same reason the land proof is: nightly.py copies the
             # plan verbatim into build-info.json and the candidate's committed provenance,
