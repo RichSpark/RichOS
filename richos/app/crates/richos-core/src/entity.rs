@@ -74,7 +74,7 @@ pub enum EntityError {
     DuplicateId(String),
     #[error("entity is not registered: {0}")]
     UnknownId(String),
-    #[error("connected repository must be an explicit registered root: {0}")]
+    #[error("connected repository must be an explicit registered root, or one another company already connected: {0}")]
     InvalidRepository(String),
     /// A company with no name renders as an empty button. Refused at the door rather than
     /// stored and discovered by the person looking at a blank row.
@@ -366,7 +366,11 @@ impl EntityRegistry {
     pub fn connect_repository(&mut self, id: &EntityId, root: PathBuf) -> Result<(), EntityError> {
         let mut entity = self.get(id).cloned().ok_or_else(|| EntityError::UnknownId(id.to_string()))?;
         if entity.connected_repositories.contains(&root) { return Ok(()); }
-        if !entity.roots.contains(&root) { entity.roots.push(root.clone()); }
+        // A repository already connected (and owned) by another company is SHARED, not
+        // re-owned: `roots` stays exclusive so a path still resolves to one company, while
+        // `connected_repositories` may overlap so both companies can work in it.
+        let shared = self.entities.iter().any(|e| &e.id != id && owns_connected(e, &root));
+        if !shared && !entity.roots.contains(&root) { entity.roots.push(root.clone()); }
         entity.connected_repositories.push(root);
         // Validate against the other entities before changing the live registry.
         let mut others = Self::new(self.entities.iter().filter(|e| &e.id != id).cloned().collect())?;
@@ -376,7 +380,7 @@ impl EntityRegistry {
     }
 
     pub fn register(&mut self, entity: Entity) -> Result<(), EntityError> {
-        if entity.connected_repositories.iter().any(|p| !entity.roots.contains(p)) {
+        if entity.connected_repositories.iter().any(|p| !entity.roots.contains(p) && !self.entities.iter().any(|e| owns_connected(e, p))) {
             return Err(EntityError::InvalidRepository(entity.id.to_string()));
         }
         if self.contains(&entity.id) {
@@ -651,6 +655,12 @@ struct RegistryFileRow {
     connected_repositories: Vec<PathBuf>,
 }
 
+/// True when `entity` both owns `path` as a root and has it connected: the one company a
+/// shared repository belongs to for deciding which company a path is in.
+fn owns_connected(entity: &Entity, path: &Path) -> bool {
+    entity.roots.iter().any(|r| r == path) && entity.connected_repositories.iter().any(|r| r == path)
+}
+
 impl EntityRegistry {
     /// Read the registry from `path`. **Never panics, never errors, never guesses.**
     ///
@@ -727,7 +737,9 @@ impl EntityRegistry {
 
         let mut registry = EntityRegistry::empty();
         for (i, row) in file.entities.iter().enumerate() {
-            if (file.version == 1 && !row.connected_repositories.is_empty()) || row.connected_repositories.iter().any(|p| !row.roots.contains(p)) {
+            let shared_elsewhere = |p: &PathBuf| file.entities.iter().enumerate()
+                .any(|(j, o)| j != i && o.roots.contains(p) && o.connected_repositories.contains(p));
+            if (file.version == 1 && !row.connected_repositories.is_empty()) || row.connected_repositories.iter().any(|p| !row.roots.contains(p) && !shared_elsewhere(p)) {
                 notes.push("connected repositories require registry version 2 and an exact owned root".into());
                 return unreadable(notes);
             }
@@ -965,6 +977,37 @@ mod tests {
         let d = std::env::temp_dir().join(format!("richos-entity-{name}-{}", crate::util::now_millis()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn one_repository_can_be_connected_to_two_companies_while_roots_stay_exclusive() {
+        let dir = tmp_dir("shared-repo");
+        let shared = PathBuf::from("/Users/example/Projects/shared");
+        let (a, b) = (EntityId::parse("alpha").unwrap(), EntityId::parse("beta").unwrap());
+        let mut reg = EntityRegistry::from_existing_ids(&[a.clone(), b.clone()]);
+        reg.connect_repository(&a, shared.clone()).unwrap();
+        reg.connect_repository(&b, shared.clone()).unwrap();
+        assert_eq!(reg.get(&a).unwrap().connected_repositories, vec![shared.clone()]);
+        assert_eq!(reg.get(&b).unwrap().connected_repositories, vec![shared.clone()]);
+        // Roots stay exclusive: the path still resolves to the one company that owns it.
+        assert!(reg.get(&b).unwrap().roots.is_empty());
+        assert_eq!(reg.resolve_root(&shared.join("src")).unwrap().id, a);
+        // The shared state survives a save and a load.
+        let file = dir.join("entities.json");
+        reg.save(&file).unwrap();
+        let back = EntityRegistry::load(&file).registry;
+        assert_eq!(back.get(&b).unwrap().connected_repositories, vec![shared]);
+        assert_eq!(back.len(), 2);
+    }
+
+    #[test]
+    fn a_folder_that_is_only_a_company_root_is_still_not_shareable() {
+        let b = EntityId::parse("beta").unwrap();
+        let mut reg = EntityRegistry::empty();
+        reg.register(Entity::new("alpha", "Alpha", &["/Users/example/Projects/shared"]).unwrap()).unwrap();
+        reg.register(Entity::new("beta", "Beta", &[]).unwrap()).unwrap();
+        // Alpha has not connected it, so Beta connecting it still claims a root and is refused.
+        assert!(matches!(reg.connect_repository(&b, PathBuf::from("/Users/example/Projects/shared")), Err(EntityError::OverlappingRoot { .. })));
     }
 
     #[test]

@@ -57,6 +57,8 @@ pub fn connect_folder(registry: &EntityRegistry, entity: &EntityId, selected: &P
     for other in registry.entities().iter().filter(|e| &e.id != entity) {
         for old in &other.roots {
             let old = std::fs::canonicalize(old).unwrap_or_else(|_| old.clone());
+            // The exact repository another company already has connected is shared, not overlapped.
+            if old == root && other.connected_repositories.contains(&root) { continue; }
             if root.starts_with(&old) || old.starts_with(&root) { return Err("That folder overlaps another company's folder.".into()); }
         }
     }
