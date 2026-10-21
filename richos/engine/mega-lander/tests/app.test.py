@@ -232,7 +232,11 @@ class DesktopWork(unittest.TestCase):
              # ~/.claude) and would write its land locks under the operator's
              # home. CLAUDE_CONFIG_DIR is the one name the app does not strip, so the
              # suite owns the child's land-lock home by pointing it inside the fixture.
-             "CLAUDE_CONFIG_DIR":str(self.root/"claude config")}
+             "CLAUDE_CONFIG_DIR":str(self.root/"claude config"),
+             # A land reads the user's own Git settings (users_git_settings): the fixture's user
+             # is an empty home, never the person running the suite.
+             "HOME":str(self.root/"user home"),"XDG_CONFIG_HOME":str(self.root/"user home"/".config")}
+        (self.root/"user home").mkdir()
         self.env=patch.dict(os.environ,env);self.env.start();self.addCleanup(self.env.stop)
         self.app=load();ecs=self.root/"ecs"
         binding=self.app.ECS.execute(ecs,{"protocol":1,"command":"bind","scope":{"entity_id":"depot","thread_id":"thread-a","session_id":self.session,"turn_id":"turn-a","audience":"ceo"},"request_id":"bind-first","source_ref":"ledger:thread-a:turn-a","expected_revision":None})["binding"]
@@ -2132,6 +2136,46 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^1"),tip)
         self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])   # the reviewed commit, unrewritten
         self.assertEqual((self.repo/"result.txt").read_text(),"FICTIONAL gated")
+
+    def users_own_hooks_refuse(self,how):
+        """The user's own Git settings select a hook folder whose merge check refuses, the way a
+        user sets one for every repository (`global`: core.hooksPath in ~/.gitconfig) or for one
+        repository (`includeIf`: a gitdir condition naming it). The app's lease hides the user's
+        global file behind a generated identity-only GIT_CONFIG_GLOBAL, as EngineProfile::configure
+        does today (mid-job review rv-20261021T082940Z-f79aeabf-fd06)."""
+        hooks=self.root/"users own hooks";hooks.mkdir()
+        (hooks/"pre-merge-commit").write_text('#!/bin/sh\necho "USERS OWN MERGE CHECK: refused" >&2\nexit 1\n')
+        (hooks/"pre-merge-commit").chmod(0o755)
+        home=Path(os.environ["HOME"]);setting='[core]\n\thooksPath = "%s"\n' % hooks
+        if how=="global":
+            (home/".gitconfig").write_text(setting)
+        else:
+            (home/"acme.gitconfig").write_text(setting)
+            (home/".gitconfig").write_text('[includeIf "gitdir:%s/"]\n\tpath = "%s"\n'
+                                           % (os.path.realpath(self.repo),home/"acme.gitconfig"))
+        app_layer=self.root/"app identity.gitconfig"
+        app_layer.write_text("[user]\n\tname = RichOS\n\temail = richos@localhost\n")
+        return {"GIT_CONFIG_GLOBAL":str(app_layer),"GIT_CONFIG_NOSYSTEM":"1"}
+
+    def test_an_app_land_runs_the_merge_check_the_users_global_git_settings_select(self):
+        args=self.reviewed_pair("globalhooks")
+        lease=self.users_own_hooks_refuse("global")
+        tip=self.app.git(self.repo,"rev-parse","main")
+        with patch.dict(os.environ,lease):
+            with self.assertRaisesRegex(ValueError,"USERS OWN MERGE CHECK: refused"):
+                self.call("integrate",args)
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),tip)
+        self.assertEqual(self.app.git(self.repo,"status","--porcelain","--untracked-files=all"),"")
+
+    def test_an_app_land_runs_the_merge_check_an_includeif_in_the_users_settings_selects(self):
+        args=self.reviewed_pair("includeif")
+        lease=self.users_own_hooks_refuse("includeIf")
+        tip=self.app.git(self.repo,"rev-parse","main")
+        with patch.dict(os.environ,lease):
+            with self.assertRaisesRegex(ValueError,"USERS OWN MERGE CHECK: refused"):
+                self.call("integrate",args)
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),tip)
+        self.assertEqual(self.app.git(self.repo,"status","--porcelain","--untracked-files=all"),"")
 
     def fence_on(self,locks=None):
         """The fixture repository's land fence, installed and switched on with operator-fences.sh.

@@ -526,13 +526,32 @@ def land_merge(repo, tip, commit, branch, reviewer_id, author_runs=()):
                % (commit[:12], branch, commit, reviewer_id))
     result = subprocess.run(["git", "-c", "commit.gpgSign=false", "-C", str(repo), "merge", "--no-ff", "--no-edit",
                              "-m", message, commit], text=True, capture_output=True, stdin=subprocess.DEVNULL,
-                            env=W._land_env(branch, author_runs))
+                            env=users_git_settings(W._land_env(branch, author_runs)))
     if result.returncode == 0:
         return git(repo, "rev-parse", "HEAD")
     said = (result.stdout + result.stderr).strip()[-6000:]
     raise ValueError("%s did not land in %s: git merge exited %d, so %s did not move. What Git and this "
                      "repository's own checks said:\n%s\n%s"
                      % (commit[:12], repo, result.returncode, branch, said, _abort_own_merge(repo, tip, commit)))
+
+
+def users_git_settings(env):
+    """THE LAND READS THE USER'S OWN GIT SETTINGS, as a merge from the user's terminal does
+    (mid-job review rv-20261021T082940Z-f79aeabf-fd06). The app gives its leases a generated
+    identity-only file as GIT_CONFIG_GLOBAL and switches the system layer off
+    (EngineProfile::configure), which hides every hook the user selects in their own settings:
+    a global core.hooksPath, or an includeIf that sets one for this repository. So the land's
+    Git reads the user's ~/.gitconfig (and XDG file) as Git always does, and the app's file
+    becomes the lowest layer (GIT_CONFIG_SYSTEM), whose identity counts only when no other layer
+    names one. Where the lease already passes no GIT_CONFIG_GLOBAL (build plan item 8 makes a
+    lease read the user's settings natively), this changes nothing. Which hooks those settings
+    select is the user's and the repository's; nothing here names one."""
+    env = dict(env)
+    app_layer = env.pop("GIT_CONFIG_GLOBAL", None)
+    env.pop("GIT_CONFIG_NOSYSTEM", None)
+    if app_layer and not env.get("GIT_CONFIG_SYSTEM"):
+        env["GIT_CONFIG_SYSTEM"] = app_layer
+    return env
 
 
 def _abort_own_merge(repo, tip, commit):
@@ -549,7 +568,7 @@ def _abort_own_merge(repo, tip, commit):
         return ("A merge is in progress that this land did not start (MERGE_HEAD %s, HEAD %s); it was left alone."
                 % (found.stdout.strip()[:12], head[:12]))
     aborted = subprocess.run(["git", "-C", str(repo), "merge", "--abort"], text=True, capture_output=True,
-                             stdin=subprocess.DEVNULL, env=W._git_env())
+                             stdin=subprocess.DEVNULL, env=users_git_settings(W._git_env()))
     if aborted.returncode == 0 and _git_answer(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode != 0:
         return "The merge this land started was aborted: the checkout is back at %s." % tip[:12]
     return ("The merge this land started could NOT be aborted (exit %d) and is still in progress: %s"
