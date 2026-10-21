@@ -227,12 +227,11 @@ class Walk(cw.CommandWalk):
         raise StepFailed('Beta was not registered within 60 s: ' + json.dumps(self.registry())[:600])
 
     def open_sheet(self, company):
-        """Settings > Connected folders, with `company` chosen. The settings row is a button
-        since the menu was rebuilt, which command-walk.py's connect still calls a menu item."""
+        """Settings > Connected folders (the shared adopt-walk.py step: the row is a button), with
+        `company` chosen in the sheet's Company menu."""
         self.press('Settings', role='AXPopUpButton')
         time.sleep(2)
-        self.press('Connected folders', role='AXButton')
-        self.wait_for('Company', role='AXPopUpButton')
+        self.open_connected_folders(settings_open=True)
         self.ax('click', '--title', 'Company', '--role', 'AXPopUpButton', '--first')
         self.ax('click', '--title', company, '--role', 'AXMenuItem', '--first')
 
