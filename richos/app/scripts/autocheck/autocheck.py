@@ -249,10 +249,10 @@ def clean_env(common):
     # turn them into NOT RUN, which the land refuses (accepted_not_run).
     env.pop("RUN_TESTS_SKIP_UNCHANGED", None)
     # The land's own target is not a suite's: a suite's fixture merge is no land. Nor are the
-    # author runs offered to it (AUTHOR_RUNS), which no suite reads.
-    env.pop(LAND_TARGET, None)
-    env.pop(AUTHOR_RUNS, None)
-    env.pop("RICHOS_AUTOCHECK_FROM_MAIN", None)    # FROM_MAIN: main's copy's answer for this hook only
+    # author runs offered to it (AUTHOR_RUNS), which no suite reads, or FROM_MAIN, main's copy's
+    # answer for this hook only.
+    for name in LAND_ONLY:
+        env.pop(name, None)
     cargo = str(Path.home() / ".cargo/bin")
     if cargo not in env.get("PATH", "").split(":"):
         env["PATH"] = env.get("PATH", "") + ":" + cargo
@@ -347,6 +347,8 @@ WORKSPACES = "richos/engine/mega-lander/workspaces.py"
 INTEGRATION_SECONDS = 20
 FROM_MAIN = "RICHOS_AUTOCHECK_FROM_MAIN"
 NOT_A_LAND = "not-a-land"
+# The variables only the land itself carries, never a check's input (clean_env, coverage_of).
+LAND_ONLY = (LAND_TARGET, AUTHOR_RUNS, FROM_MAIN)
 
 
 def integration_branches(repo):
@@ -1555,7 +1557,11 @@ def coverage_of(run):
     """(exit, summary or None, output lines, the run's checkout or None) of
     `proof-run.py --coverage RUN`, asked in the run's own checkout. Exit 2: no answer."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.pop(AUTHOR_RUNS, None)
+    # The land's own variables, which no check reads (clean_env takes them from every check the
+    # gate runs) and no author run has: every check without a reviewed contract binds each RICHOS_
+    # name, so the lander's LAND_TARGET here read an unchanged pass as changed (2026-10-21).
+    for name in LAND_ONLY:
+        env.pop(name, None)
     try:
         root = json.loads((Path(run) / "plan.json").read_text())["root"]
     except (OSError, ValueError, KeyError, TypeError) as exc:

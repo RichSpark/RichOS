@@ -1304,8 +1304,8 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         found = evidence.coverage(previous.logdir, old, {"check": dict(self.inputs)}, dict(self.source))
         self.assertEqual(found, {"check": None})
         # A final edit to its inputs, a check the run never passed, a damaged log: each is missing.
-        self.assertEqual(evidence.coverage(previous.logdir, old, {"check": {"paths": {"fixture": "edited"}}},
-                                           dict(self.source))["check"], "declared execution inputs changed")
+        self.assertTrue(evidence.coverage(previous.logdir, old, {"check": {"paths": {"fixture": "edited"}}},
+                                          dict(self.source))["check"].startswith("declared execution inputs changed ("))
         Path(old[0].log).write_text("rewritten\n")
         self.assertEqual(evidence.coverage(previous.logdir, old, {"check": dict(self.inputs)},
                                            dict(self.source))["check"], "result log changed")
@@ -2241,6 +2241,107 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
                            ("RICHOS_MACHINE_WORKERS", "/other/namespace"), ("RICHOS_UNKNOWN_INPUT", "new")):
             with self.subTest(key=key):
                 self.assertNotEqual(identity({**environment, **changed, key: value}), before)
+
+    def test_the_agent_harness_owner_tags_never_make_an_unchanged_pass_read_as_changed(self):
+        """2026-10-21, the first land after the switch-over: zach-sonnet-probes305b's handover run
+        passed 24 checks at a2389cbfd and the land's preflight, on the same commit in the same
+        checkout, called 18 of them "declared execution inputs changed". Measured field by field:
+        every one differed only in RICHOS_AGENT_OWNER and RICHOS_AGENT_SESSION, the tags the agent
+        harness gives each agent's shell (agent_hold.py TAG, SESSION_TAG); the lead's land carries
+        another value or none. They name who started a process, not anything a check reads. A pass
+        saved before this rule, with the tags in its identity, stands in too; a real change does not."""
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
+        land = {"PATH": "/usr/bin:/bin", "HOME": self.tmp.name, "RICHOS_BULK_ROOT": "/fixture/bulk"}
+        author = {**land, "RICHOS_AGENT_OWNER": "a2f8c4ad0b1e3c5d7", "RICHOS_AGENT_SESSION": "871311fb-session"}
+        identity = lambda env: evidence.checkout_identity(self.root, ["bash", "suite.sh"], env)
+        wanted = identity(land)
+        self.assertEqual(identity(author), wanted)
+        self.assertEqual(identity({**author, "RICHOS_AGENT_OWNER": "another-agent"}), wanted)
+        # The saved run in the incident was written by the runner before this rule: its identity
+        # carries the tags' digests. It still stands for the land's reading of the same inputs.
+        saved = json.loads(json.dumps(wanted))
+        saved["environment"].update({name: evidence.digest(author[name])
+                                     for name in ("RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION")})
+        plan = {"source": dict(self.source)}
+        old = {"state": "passed", "exit": 0, "source": dict(self.source), "input": saved}
+        self.assertIsNone(evidence.evidence_gap("dialect.js", old, wanted, plan))
+        # Not loosened: any input the identity binds still invalidates the pass.
+        for key, value in (("RICHOS_BULK_ROOT", "/other/bulk"), ("RICHOS_UNKNOWN_INPUT", "new"),
+                           ("PATH", "/opt/other:/usr/bin:/bin")):
+            with self.subTest(key=key):
+                self.assertTrue(evidence.evidence_gap("dialect.js", old, identity({**land, key: value}), plan)
+                                .startswith("declared execution inputs changed (environment.%s: saved " % key))
+        # A reviewed recipe that names a tag outright still binds it (explicit recipes bind their
+        # own keys): only the whole-checkout reading, which binds every RICHOS_ name, leaves them out.
+        recipe = {"contract": "recipe", "environment": {"RICHOS_AGENT_OWNER": evidence.digest("x")}}
+        self.assertFalse(evidence.stands_in(recipe, {**recipe, "environment": {"RICHOS_AGENT_OWNER": None}}))
+
+    def test_a_refused_pass_names_each_identity_field_that_differs(self):
+        """2026-10-21: two lands in a row refused 21 unchanged passes as "declared execution inputs
+        changed", naming no field, and the cause had to be guessed from a reproduction that was not
+        the land. The reason names each field, saved value against the value read now; a difference
+        stands_in excuses (a run-scoped name, a mutation pass switched off) is not named."""
+        saved = {"contract": evidence.WHOLE_CHECKOUT, "tree": "a" * 64,
+                 "environment": {"PATH": evidence.digest("/usr/bin:/bin"), "LANG": evidence.digest("en_US.UTF-8"),
+                                 "RICHOS_AGENT_OWNER": evidence.digest("author"),
+                                 "RICHOS_MUTATION_PASSES": evidence.digest("1")},
+                 "tools": {"git": {"path": "/usr/bin/git", "sha256": "b" * 64}}}
+        wanted = json.loads(json.dumps(saved))
+        wanted["environment"].update({"PATH": evidence.digest("/opt/git-core:/usr/bin:/bin"),
+                                      "RICHOS_MUTATION_PASSES": evidence.digest("0"),
+                                      "RICHOS_BULK_ROOT": evidence.digest("/other/bulk"),
+                                      "RICHOS_AUTOCHECK_LAND_TARGET": evidence.digest("main")})
+        del wanted["environment"]["RICHOS_AGENT_OWNER"]
+        wanted["tools"]["git"] = {"path": "/opt/git-core/git", "sha256": "c" * 64}
+        plan = {"source": dict(self.source)}
+        old = {"state": "passed", "exit": 0, "source": dict(self.source), "input": saved}
+        gap = evidence.evidence_gap("autocheck", old, wanted, plan)
+        self.assertEqual(gap, "declared execution inputs changed ("
+                         "environment.PATH: saved %s..., now %s...; "
+                         "environment.RICHOS_BULK_ROOT: saved absent, now %s...; "
+                         "tools.git.path: saved /usr/bin/git, now /opt/git-core/git; "
+                         "tools.git.sha256: saved bbbbbbbbbbbb..., now cccccccccccc...)" % (
+                             saved["environment"]["PATH"][:12], wanted["environment"]["PATH"][:12],
+                             evidence.digest("/other/bulk")[:12]))
+        # Equal identities still prove; the diagnostic never changes what is accepted.
+        self.assertIsNone(evidence.evidence_gap("autocheck", old, saved, plan))
+        self.assertEqual(evidence.identity_difference(saved, None), "")
+
+    def test_a_land_from_gits_hook_reads_an_unchanged_pass_as_the_authors_shell_did(self):
+        """2026-10-21, measured in a disposable clone's real `git merge` with the land's hooks and
+        environment: the preflight called 20 of the author's 24 unchanged passes changed. Two fields
+        did it. git starts every hook with its exec-path first in PATH (environment.PATH, and `git`
+        resolved inside git-core; second once the Cargo shim or reserve.py puts a directory in front
+        of it), and main's copy of the gate, which is the one a land runs, asks with the lander's
+        RICHOS_AUTOCHECK_LAND_TARGET set. A real change still reads as changed."""
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
+        exec_dir = subprocess.run(["git", "--exec-path"], check=True, capture_output=True, text=True).stdout.strip()
+        bulk, other = Path(self.tmp.name) / "bulk", Path(self.tmp.name) / "other-bulk"
+        bulk.mkdir()
+        other.mkdir()
+        shell = {"PATH": os.environ["PATH"], "HOME": self.tmp.name, "RICHOS_BULK_ROOT": str(bulk)}
+        hook = {**shell, "PATH": exec_dir + os.pathsep + shell["PATH"], "RICHOS_AUTOCHECK_LAND_TARGET": "main"}
+        shim = str(Path(self.tmp.name) / "shim")
+
+        def read(environment):
+            """The PATH and identity a check gets from a runner launched with `environment`."""
+            item = runner.Item("check", str(self.root), ["bash", "suite.sh"])
+            with patch.dict(os.environ, runner.runner_environment(environment), clear=True):
+                env = runner.execution_environment(item)
+            return env["PATH"], evidence.checkout_identity(self.root, item.argv, env)
+
+        author_path, author = read(shell)
+        self.assertNotIn(exec_dir, author_path.split(os.pathsep))
+        for launched in (hook, {**hook, "PATH": shim + os.pathsep + hook["PATH"]}):
+            with self.subTest(path=launched["PATH"][:80]):
+                expected = read({**shell, "PATH": launched["PATH"].replace(exec_dir + os.pathsep, "")})
+                self.assertEqual(read(launched), expected, "the check runs as the author's shell would run it")
+        self.assertEqual(read(hook), (author_path, author))
+        self.assertEqual(evidence.identity_difference(author, read(hook)[1]), "")
+        # Not loosened: another directory first in PATH, or a real setting, is still a change.
+        for changed in ({"PATH": self.tmp.name + os.pathsep + shell["PATH"]}, {"RICHOS_BULK_ROOT": str(other)}):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(read({**hook, **changed})[1], author)
 
     def test_the_whole_checkout_identity_binds_installed_browsers_and_the_rust_toolchain(self):
         # The same finding names the browser suites' external browser installations and the

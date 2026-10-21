@@ -2831,6 +2831,36 @@ class AuthorRuns(unittest.TestCase):
                 else:
                     os.environ[module.AUTHOR_RUNS] = before
 
+    def test_the_readiness_preflight_reads_inputs_without_the_lands_own_variables(self):
+        """2026-10-21, the first land after the switch-over: the preflight is asked in the land's
+        environment, which carries the lander's RICHOS_AUTOCHECK_LAND_TARGET. The author's run never
+        has it and no suite reads it (clean_env takes it from every check the gate runs), but every
+        check without a reviewed contract binds each RICHOS_ name, so an unchanged pass read as
+        "declared execution inputs changed". The preflight gets the environment the checks get."""
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as top:
+            root, run = Path(top) / "checkout", Path(top) / "run"
+            (root / module.PROOF_RUN).parent.mkdir(parents=True)
+            (root / module.PROOF_RUN).write_text("# fixture: takes --coverage\n")
+            run.mkdir()
+            (run / "plan.json").write_text(json.dumps({"root": str(root)}))
+            seen = []
+            def preflight(argv, **kwargs):
+                seen.append(kwargs["env"])
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            land = {module.LAND_TARGET: "main", module.AUTHOR_RUNS: str(run), module.FROM_MAIN: "fixture",
+                    "RICHOS_BULK_ROOT": "/fixture/bulk"}
+            with mock.patch.dict(os.environ, land), mock.patch.object(module.subprocess, "run", side_effect=preflight):
+                module.coverage_of(str(run))
+                checks = module.clean_env("common")
+        self.assertEqual(len(seen), 1)
+        for name in (module.LAND_TARGET, module.AUTHOR_RUNS, module.FROM_MAIN):
+            self.assertNotIn(name, seen[0])
+            self.assertNotIn(name, checks)
+        self.assertEqual(seen[0]["RICHOS_BULK_ROOT"], "/fixture/bulk")    # a real setting still reaches it
 
     def test_the_land_releases_only_the_handover_holds_of_the_candidates_it_merged(self):
         """PRD A11: the final consumer releases the handover's `retain` marker once its own

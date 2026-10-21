@@ -11656,7 +11656,7 @@
           "default": "/Users/alex/ab/femcboost",
           "path": "scripts/hooks/guard-brief-verification-scope.sh",
           "optional_file": true,
-          "sha256": "e9813c75276bff02ef23af18637261c18321d33967587bdf6e3e559184fccf49",
+          "sha256": "4809d5e9adf47bd4dfd26c7c6f48e3dce12bafb5f951a279f898bb8464211998",
           "evidence": "Full external guard reviewed: parses a literal Agent prompt through stdlib Python and grep, no config/import/source. The fixed test prompt has no full-suite-ack so no state write. Changed bytes require review; absent file is an explicit skipped case, not a pass."
         }
       ]
@@ -14980,13 +14980,13 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "3c3880038bcf5a3b3567642afe5bb39df1551b03e6406a0404dfdd8604fd923f",
+          "sha256": "ddd76dc6e863a231d25cb69c117c883a5e8bb7acc4b00a2f601efec508964c2b",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "b2b6ff11547c1ff5fd8ffd226c54f8766e375b17870b57a8da633d4b08c4607e",
+          "sha256": "1dfc533bf957dc42462dcda10aa10240ee7fba586aed990243d384b891549c8f",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15085,7 +15085,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "3c3880038bcf5a3b3567642afe5bb39df1551b03e6406a0404dfdd8604fd923f",
+          "sha256": "ddd76dc6e863a231d25cb69c117c883a5e8bb7acc4b00a2f601efec508964c2b",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15109,7 +15109,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "b2b6ff11547c1ff5fd8ffd226c54f8766e375b17870b57a8da633d4b08c4607e",
+          "sha256": "1dfc533bf957dc42462dcda10aa10240ee7fba586aed990243d384b891549c8f",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {

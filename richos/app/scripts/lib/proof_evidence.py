@@ -310,7 +310,22 @@ RUN_SCOPED_ENVIRONMENT = frozenset(("RICHOS_AUTOCHECK_ACTIVE", "RICHOS_TEST_RESU
                                     # The host shield's per-run log, its declared runs and its own
                                     # path (HOST SHIELD below).
                                     "RICHOS_HOST_SHIELD_LOG", "RICHOS_HOST_SHIELD_RUNS",
-                                    "RICHOS_HOST_SHIELD_TOOL"))
+                                    "RICHOS_HOST_SHIELD_TOOL",
+                                    # The tags the agent harness gives each agent's shell (engine
+                                    # agent_hold.py TAG, SESSION_TAG): who started the process, a
+                                    # value per agent and session, so the land, run by the lead,
+                                    # never carried the author's. 2026-10-21: 18 of 24 unchanged
+                                    # passes read as changed by them alone (stands_in below).
+                                    "RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION",
+                                    # The land's own variables (autocheck.py LAND_ONLY): its target,
+                                    # the author runs offered to it and main's copy's answer. No
+                                    # check reads them (clean_env takes them from every check the
+                                    # gate runs), but the preflight of main's older copy asks with
+                                    # them set, and the copy that runs at a land is main's, so a fix
+                                    # in autocheck.py cannot reach its own land. 2026-10-21: 19 of
+                                    # 24 unchanged passes read as changed by LAND_TARGET at the land.
+                                    "RICHOS_AUTOCHECK_LAND_TARGET", "RICHOS_AUTOCHECK_AUTHOR_RUNS",
+                                    "RICHOS_AUTOCHECK_FROM_MAIN"))
 _TOOL_DIGESTS = {}
 
 # THE HOST SHIELD (ceo-decisions §65, engine lib/host_shield.py) starts every check with its
@@ -1928,7 +1943,12 @@ _MUTATION_OFF = digest("0")
 
 
 def stands_in(saved, wanted):
-    """Does a pass saved under identity `saved` stand for one under `wanted` (above)?"""
+    """Does a pass saved under identity `saved` stand for one under `wanted` (above)?
+
+    A whole-checkout identity never binds a RUN_SCOPED_ENVIRONMENT name (checkout_identity), so
+    one saved before a name joined that set is read without it: the 2026-10-21 handover run bound
+    RICHOS_AGENT_OWNER and RICHOS_AGENT_SESSION, and its passes are as valid as they were. A
+    reviewed recipe binds exactly the names it declares, so its identity is compared whole."""
     if saved == wanted:
         return True
     if not isinstance(saved, dict) or not isinstance(wanted, dict):
@@ -1936,6 +1956,9 @@ def stands_in(saved, wanted):
     have, want = saved.get("environment"), wanted.get("environment")
     if not isinstance(have, dict) or not isinstance(want, dict):
         return False
+    if saved.get("contract") == WHOLE_CHECKOUT == wanted.get("contract"):
+        have = {k: v for k, v in have.items() if k not in RUN_SCOPED_ENVIRONMENT}
+        want = {k: v for k, v in want.items() if k not in RUN_SCOPED_ENVIRONMENT}
     if ({k: v for k, v in saved.items() if k != "environment"}
             != {k: v for k, v in wanted.items() if k != "environment"}):
         return False
@@ -1944,6 +1967,53 @@ def stands_in(saved, wanted):
         return False
     return all(have.get(name) == want.get(name) or (want.get(name) == _MUTATION_OFF and have.get(name) != _MUTATION_OFF)
                for name in MUTATION_SWITCHES)
+
+
+_ABSENT = object()
+
+
+def _shown(value):
+    """A field's value, short enough for one line of a refusal: a digest by its first 12 characters."""
+    if value is _ABSENT:
+        return "absent"
+    text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+    return text[:12] + "..." if re.fullmatch(r"[0-9a-f]{40,}", text) else (text[:72] + "..." if len(text) > 75 else text)
+
+
+def identity_difference(saved, wanted, limit=6):
+    """Which identity fields keep a pass saved under `saved` from standing for one under `wanted`
+    (stands_in), each as `field: saved X, now Y`, or "" when they are not two identities.
+
+    THE MISSING DIAGNOSTIC (2026-10-21). "declared execution inputs changed" named no field, so
+    two lands in a row refused 21 unchanged passes and the reason had to be guessed at from a
+    reproduction that was not the land. A difference stands_in excuses is not listed."""
+    if not isinstance(saved, dict) or not isinstance(wanted, dict):
+        return ""
+    rows = []
+
+    def walk(path, have, want):
+        if have == want:
+            return
+        if isinstance(have, dict) and isinstance(want, dict):
+            for key in sorted(set(have) | set(want), key=str):
+                walk(path + [str(key)], have.get(key, _ABSENT), want.get(key, _ABSENT))
+        else:
+            rows.append((path, have, want))
+
+    walk([], saved, wanted)
+    whole = saved.get("contract") == WHOLE_CHECKOUT == wanted.get("contract")
+    shown = []
+    for path, have, want in rows:
+        name = path[1] if len(path) == 2 and path[0] == "environment" else None
+        if name and whole and name in RUN_SCOPED_ENVIRONMENT:
+            continue
+        if name in MUTATION_SWITCHES and want == _MUTATION_OFF and have != _MUTATION_OFF:
+            continue
+        shown.append("%s: saved %s, now %s" % (".".join(path), _shown(have), _shown(want)))
+    if not shown:
+        return ""
+    more = " and %d more" % (len(shown) - limit) if len(shown) > limit else ""
+    return " (" + "; ".join(shown[:limit]) + more + ")"
 
 
 def evidence_gap(label, old, identity, plan, exact=False, source=None):
@@ -1962,7 +2032,7 @@ def evidence_gap(label, old, identity, plan, exact=False, source=None):
         # inputs (Record says why), and the input identity is what decides it.
         return "the checkout's commit changed during the original execution"
     if not stands_in(old.get("input"), identity):
-        return "declared execution inputs changed"
+        return "declared execution inputs changed" + identity_difference(old.get("input"), identity)
     return None
 
 
