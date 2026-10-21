@@ -588,6 +588,26 @@ alerted 'only a private memory note' && ok "R27. a claim backed only by an ECS c
 run_hook "$TR_ECS" "I've saved the missing end-of-turn record."
 silent && ok "R28. an ECS checkpoint named as what it is ('end-of-turn record'): SILENT" || bad "R28. ecs named" "rc=$RC out=$OUT"
 
+# CEO 2026-10-21: "noted" as a promise and "private (follow-up) notes" are record
+# claims too; only a committed repository file the reply names backs them.
+run_hook "$TR_ECS" "Noted. The numbering goes in right after the next nightly."
+alerted 'follow-ups.md' && ok "R34. 'Noted.' promising later work, only an ECS write: ALERTED, names the follow-up list" || bad "R34. noted ecs" "rc=$RC out=$OUT"
+
+run_hook "$TR_MEM_WRITE" "It's in my private notes."
+alerted 'follow-ups.md' && ok "R35. 'it's in my private notes', memory-directory write only: ALERTED" || bad "R35. private notes memory" "rc=$RC out=$OUT"
+
+run_hook "$TR_MEM_WRITE" "It's in my private follow-up notes, not filed in a repository."
+alerted 'follow-ups.md' && ok "R36. the 2026-10-21 slip 'my private follow-up notes', memory write only: ALERTED" || bad "R36. private follow-up notes" "rc=$RC out=$OUT"
+
+run_hook "$TR_REPO_COMMIT" "Noted. The numbering goes in after the next nightly: it is in \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
+silent && ok "R37. 'Noted.' promise with a committed repository file named and its commit: SILENT" || bad "R37. noted backed" "rc=$RC out=$OUT"
+
+run_hook "$TR_REPO_COMMIT" "It's in my private follow-up notes: \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
+silent && ok "R38. 'in my private follow-up notes' with the committed file and commit named: SILENT" || bad "R38. notes backed" "rc=$RC out=$OUT"
+
+run_hook "$TR_MEM_WRITE" "Noted that the build is green."
+silent && ok "R39. 'Noted that the build is green.' stays an acknowledgment: SILENT" || bad "R39. noted that" "rc=$RC out=$OUT"
+
 # The misread classes the corpus replay found: none is a claim of THIS turn.
 run_hook "$TR_BASH" "I recorded it wrong. The version is 1.0.0, not 0.1.0."
 silent && ok "R30. a past CONFESSION ('I recorded it wrong.') is not a claim" || bad "R30. confession" "rc=$RC out=$OUT"
