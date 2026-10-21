@@ -311,6 +311,15 @@ class MacApi(private val http: Http, private val keys: DeviceKeys) {
      * A signed GET on `/api/events`, whose credential travels as the LAST query parameter `auth`
      * and is not part of the signed path (contract §3.2, §5.5). Same 404 recovery as [signed].
      */
+    /**
+     * The `Authorization` header for one signed GET, and nothing sent: for a file whose answer
+     * arrives in parts (round 36 screen 3), read through the app's streaming GET so the ring fills.
+     */
+    suspend fun authorization(apiBase: String, deviceId: String, challenge: String, pathWithQuery: String): String {
+        val raw = Signing.derToRaw(signature(apiBase, Signing.signingString(challenge, "GET", pathWithQuery, null).toByteArray(Charsets.UTF_8)))
+        return Signing.authorization(deviceId, challenge, raw)
+    }
+
     suspend fun signedQuery(apiBase: String, deviceId: String, challenge: String, pathWithQuery: String): Signed {
         var current = challenge
         repeat(2) { attempt ->

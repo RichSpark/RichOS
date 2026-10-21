@@ -62,6 +62,8 @@ object RichIcons {
     val Stop = filled("stop", rect(6f, 6f, 12f, 12f, 2.5f))
     val Settings = icon("settings", listOf("M4 8h9M17 8h3M4 16h3M11 16h9", circle(14.5f, 8f, 2.5f), circle(8.5f, 16f, 2.5f)))
     val Close = icon("close", listOf("M6 6l12 12M18 6L6 18"))
+    /** Round 36's `I.share`: the file viewer's Share (the phone's share sheet). */
+    val Share = icon("share", listOf("M12 3v12M7.5 7.5L12 3l4.5 4.5", "M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"))
     val Check = icon("check", listOf("M5 12.5l4.5 4.5L19 7"), width = 2.4f)
     val Spinner = icon("spinner", listOf("M12 4a8 8 0 1 1-8 8"), width = 2.4f)
     val Clock = icon("clock", listOf(circle(12f, 12f, 8f), "M12 8v4l3 2"), width = 2.4f)

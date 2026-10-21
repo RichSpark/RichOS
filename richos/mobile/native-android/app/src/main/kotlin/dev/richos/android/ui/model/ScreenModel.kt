@@ -23,6 +23,9 @@ import dev.richos.android.core.SentMessage
 import dev.richos.android.core.PairingPhase
 import dev.richos.android.core.ReplyAudioRule
 import dev.richos.android.core.RichCore
+import dev.richos.android.core.FileFetch
+import dev.richos.android.core.FileFetchState
+import dev.richos.android.core.RichFile
 import dev.richos.android.core.protocol.Row
 import java.time.Instant
 import java.time.ZoneId
@@ -327,9 +330,43 @@ data class ScreenModel(
                     is Line.Mac -> emptyList()
                 }
             }
-            if (extra.isEmpty()) return rows + mine
-            val at = extraAfter?.let { id -> rows.indexOfFirst { it.id == id } + 1 }?.takeIf { it > 0 } ?: rows.size
-            return rows.take(at) + extra + rows.drop(at) + mine
+            val folded = withFilesUnderWords(rows)
+            if (extra.isEmpty()) return folded + mine
+            val at = extraAfter?.let { id -> folded.indexOfFirst { it.id == id } + 1 }?.takeIf { it > 0 } ?: folded.size
+            return folded.take(at) + extra + folded.drop(at) + mine
+        }
+
+    /**
+     * The files Rich attached sit in his bubble, under his words (round 36 "Phone: in the chat"):
+     * the Mac sends each as its own row right after his reply (`phone/rows.rs`), and a file row
+     * joins the finished words of Rich's just before it. One with no words of his before it (a file
+     * for a job) is a bubble of its own.
+     */
+    private fun withFilesUnderWords(rows: List<Message>): List<Message> {
+        val out = ArrayList<Message>(rows.size)
+        for (m in rows) {
+            val prev = out.lastOrNull()
+            val fileOnly = m.files.isNotEmpty() && (m.body as? Body.Text)?.text?.isEmpty() == true
+            if (fileOnly && prev != null && prev.speaker == Speaker.RICH && prev.body is Body.Text &&
+                !prev.replying && !prev.streaming && !prev.unfinished
+            ) {
+                out[out.lastIndex] = prev.copy(files = prev.files + m.files)
+            } else {
+                out += m
+            }
+        }
+        return out
+    }
+
+    /**
+     * The file Rich attached whose viewer is open (round 36 "Phone: opened"): core says it is kept
+     * on this phone and was tapped. Its row gives the time the viewer names.
+     */
+    val fileViewer: Triple<RichFile, FileFetch, String>?
+        get() {
+            val fetch = app.fileFetches.values.firstOrNull { it.state == FileFetchState.KEPT && it.open && it.path != null } ?: return null
+            val row = app.messages.lastOrNull { it.file?.id == fetch.id } ?: return null
+            return Triple(row.file!!, fetch, TimeLabels.row(row.createdAt, nowMs, zone))
         }
 
     /** A voice message's length on the phone: the frame's pose, else the recording's own. */
@@ -358,6 +395,16 @@ data class ScreenModel(
 
     /** One of the Mac's rows as a bubble (contract §5.4: `role` ceo|rich, `kind` text|voice, `state`). */
     private fun bubble(row: Row, clientId: String? = null, echo: Echo? = null): Message {
+        // A file Rich attached (round 36 screen 3): no words of its own, the card under his.
+        row.file?.takeIf { row.kind == "file" && row.role != "ceo" }?.let { file ->
+            return Message(
+                id = row.id,
+                speaker = Speaker.RICH,
+                body = Body.Text(""),
+                time = TimeLabels.row(row.createdAt, nowMs, zone),
+                files = listOf(RichFileCard(file, app.fileFetches[file.id])),
+            )
+        }
         val question = row.question?.takeIf { "questions" in app.capabilities }
         val rich = row.role != "ceo"
         val arriving = rich && !row.complete
@@ -516,7 +563,13 @@ data class Message(
     val via: String? = null,
     /** Why the Mac refused this message, in its own words; null when it gave no sentence. */
     val refusal: String? = null,
+    /** The files Rich attached, drawn under his words in this bubble (round 36 screen 3). */
+    val files: List<RichFileCard> = emptyList(),
 )
+
+/** One file Rich attached, and where it stands on this phone (core `fileFetches`), or null if never tapped. */
+@Immutable
+data class RichFileCard(val file: RichFile, val fetch: FileFetch?)
 
 enum class HistoryEdge { MORE_AVAILABLE, LOADING_OLDER, BEGINNING }
 
