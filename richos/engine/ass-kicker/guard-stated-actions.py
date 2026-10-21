@@ -852,7 +852,7 @@ PRIVATE_NOTES_RE = re.compile(r"\bprivate\s+(?:memory\s+|follow-?up\s+)?notes?\b
 # backs it; the memory directory and ECS do not. "Noted that ..." stays an
 # acknowledgment (R25), and a bare "Noted." with no later work promised is one too.
 NOTED_ONLY_RE = re.compile(r"^(?:(?:ok(?:ay)?|got\s+it|understood)\s*[,.—–-]?\s+)?noted\s*[.!]?\s*$", re.I)
-NOTED_LEAD_RE = re.compile(r"^noted\s*[,—–-]\s*(?!that\b)(\S.*)$", re.I)
+NOTED_LEAD_RE = re.compile(r"^noted\s*(?:[,:—–-]\s*|\s+(?=(?:for|as|on|in|re)\b))(?!that\b)(\S.*)$", re.I)
 FUTURE_RE = re.compile(r"\b(?:goes?\s+in|going\s+in|will|I'll|we'll|it'll|after|once|next|later|then|when|"
                        r"before|follow-?ups?|queued|on\s+the\s+list|after\s+that)\b|'ll\b", re.I)
 NOTES_CLAIM_RE = re.compile(r"\b(?:it|this|that|they|these)(?:'s|\s+is|\s+are|'re)\s+(?:now\s+|also\s+|just\s+|only\s+)?"
@@ -974,6 +974,11 @@ def record_claims(message):
             else:
                 k = "act"
             kind = "act" if (kind == "act" or k == "act") else "state"
+        if kind and PRIVATE_NOTES_RE.search(s) and not RULE_NOUN_RE.search(s):
+            # "Saved it in my private notes" is a note claim like "Noted.":
+            # saying "private" no longer excuses a memory-only write (CEO
+            # 2026-10-21). A RULE keeps its own, stricter judgment.
+            kind = "note"
         if kind:
             out.append((kind, s[:300]))
     return out
@@ -1197,6 +1202,46 @@ def raw_window(raw, sentence):
     return sentence
 
 
+def note_window(raw, sentence):
+    """The paragraph a note claim sits in: the file and commit that back a
+    claim are named WITH it, never in another paragraph of the reply."""
+    first = re.split(r"\s{2,}", sentence.strip())[0]
+    probes = [first[:40].strip()]
+    if ". " in first:
+        probes.append(first.split(". ", 1)[1][:40].strip())
+    for probe in probes:
+        if len(probe) >= 8:
+            for para in re.split(r"\n\s*\n", raw):
+                if probe in EMPH_RE.sub("", para).replace("`", ""):
+                    return para
+    return sentence
+
+
+GIT_ADD_RE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?add\b([^\n;&|]*)")
+GIT_COMMIT_ALL_RE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?commit\b[^\n;&|]*\s-[a-z]*a")
+
+
+def _staged_in_commit(path, traffic):
+    """True unless the turn staged explicit paths and this file is not one of
+    them. Without a `git add` in view (commit -a, staging done elsewhere) the
+    commit flag stands. `traffic` is lowercase."""
+    adds = GIT_ADD_RE.findall(traffic)
+    if not adds or GIT_COMMIT_ALL_RE.search(traffic):
+        return True
+    p = path.lower()
+    for a in adds:
+        toks = a.split()
+        if any(t in ("-a", "--all") for t in toks):
+            return True
+        for t in toks:
+            t = t.strip("'\"")
+            if t.startswith("-") or not t:
+                continue
+            if t in (".", "./", "*") or t in p or p in t:
+                return True
+    return False
+
+
 def judge_record_claims(claims, writes, raw):
     """[(sentence, code, problem)] for every claim this turn does not back.
     code is one of: nothing, private, where, sha, state. Pure: claims from
@@ -1233,8 +1278,12 @@ def judge_record_claims(claims, writes, raw):
             # A promise or follow-up said to be "noted", or "in my notes": only
             # a committed repository file the reply names backs it. The
             # memory directory and ECS do not.
-            repo_named = [p for p, k in named if k == "repo"]
-            if not (repo_named and cited):
+            win = note_window(raw, sentence)
+            wl = win.lower()
+            here = [s for s in cited if s in wl]
+            repo_named = [p for p, k in durable if k == "repo" and _named(p, win)]
+            if not (here and writes["committed"]
+                    and any(_staged_in_commit(p, traffic) for p in repo_named)):
                 failing.append((sentence, "followup", "a promise or follow-up is called noted or in the "
                                                       "notes, and this turn wrote %s. Only a committed "
                                                       "repository file the reply names, with its commit, "
