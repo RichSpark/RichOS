@@ -245,7 +245,7 @@
     if (multi() && kind !== "inuse" && kind !== "arriving" && kind !== "unread" && kind !== "resting") acts += `<button class="acc-btn" type="button" data-act="use" data-id="${esc(a.id)}" aria-label="Use ${esc(a.label)} now">${ICON.swap}Use this one now</button>`;
     // A signed-in verdict stands on its own: an account Claude Code says is signed in is never
     // offered "Sign in" because no usage reading came with it (review rv-20261021T213648Z).
-    if (!read(a) && a.id === "1" && a.signedIn !== true) acts += `<button class="acc-btn" type="button" data-act="sign-one">Sign in</button>`;
+    if (!read(a) && a.id === "1" && a.signedIn !== true) acts += `<button class="acc-btn" type="button" id="acc-sign-one" data-act="sign-one">Sign in</button>`;
     else if ((kind === "unread" || a.signedIn === false) && signingId !== a.id) acts += `<button class="acc-btn" type="button" data-act="sign" data-id="${esc(a.id)}">Sign in</button>`;
     // Account 1 is this Mac's own Claude sign-in and is never removed here (claude_accounts.rs).
     if (multi() && a.id !== "1") acts += `<button class="acc-btn acc-btn-quiet" type="button" data-act="remove" data-id="${esc(a.id)}" aria-label="Remove ${esc(a.label)}">Remove</button>`;

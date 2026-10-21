@@ -134,12 +134,26 @@ def signed_out_verdict(outcome, screen_hits, screen_text):
     return None
 
 
-def accounts_verdict(text):
+def accounts_verdict(text, sheet=None, sign=None):
     """None when Settings, Claude accounts tells a signed-out new user so, with the way to sign
-    in, else why not (the dead end of 2026-10-21: "In use now" over "No reading yet")."""
+    in, else why not (the dead end of 2026-10-21: "In use now" over "No reading yet").
+
+    SHEET is the Claude accounts sheet's own close button as the accessibility tree reports it
+    (present only while the sheet is open) and SIGN the card's own Sign in button
+    (#acc-sign-one). Text alone is not enough: Settings' row says "Not signed in on this Mac"
+    and the interruption before it says "sign in", so a frame could pass with no account card
+    and no button at all (review rv-20261021T213648Z-b3f0990a-85f9, finding 2)."""
     hits = dead_ends(text)
     if hits:
         return 'dead end on screen: ' + ', '.join(hits)
+    if not sheet:
+        return 'the Claude accounts sheet did not open'
+    if not sign:
+        return "the account card has no Sign in button"
+    if sign.get('enabled') is False:
+        return 'the account card\'s Sign in button cannot be pressed'
+    if not re.search(r'sign in', ' '.join(str(sign.get(k) or '') for k in ('title', 'desc', 'value')), re.I):
+        return 'the account card\'s Sign in button does not say Sign in'
     if not re.search(r'not signed in', text or '', re.I):
         return 'the account card does not say the account is not signed in'
     if not re.search(r'sign in', re.sub(r'not signed in', '', text or '', flags=re.I), re.I):
@@ -338,18 +352,21 @@ class NewUserWalk(setup_walk.SetupWalk):
         self.settings(True, 'accounts-settings')
         self.ax('click', '--id', 'set-accounts-open', '--first')
         end = time.monotonic() + 120
-        text = ''
+        text, sheet, sign = '', None, None
         while time.monotonic() < end:
             time.sleep(5)
             text = self.frame('accounts')
-            if re.search(r'not signed in', text, re.I) or 'No reading yet' in text:
+            sheet, sign = self.by_id('acc-close'), self.by_id('acc-sign-one')
+            if sheet and (sign or 'No reading yet' in text):
                 break
-        if self.by_id('acc-close'):
+        if sheet:
             self.ax('click', '--id', 'acc-close', '--first')  # the sheet's own close button
             time.sleep(1)
         self.settings(False, 'accounts-closed')
-        self.report['accounts'] = {'screen': text.strip()[-1500:], 'dead_ends': dead_ends(text)}
-        why = accounts_verdict(text)
+        self.report['accounts'] = {'screen': text.strip()[-1500:], 'dead_ends': dead_ends(text),
+                                   'sheet_open': bool(sheet),
+                                   'sign_in': sign and {k: sign.get(k) for k in ('role', 'title', 'desc', 'enabled')}}
+        why = accounts_verdict(text, sheet, sign)
         if why:
             raise StepFailed(why)
         return self.report['accounts']

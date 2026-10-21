@@ -164,12 +164,27 @@ class AccountsVerdict(unittest.TestCase):
             'Your Claude account In use now\n' + NO_READING + '\nWeekly limit Not reported yet'))
 
     def test_a_card_that_never_says_signed_out_fails(self):
-        self.assertIn('does not say', walk.accounts_verdict('Your Claude account In use now\nChecking whether this account is signed in on this Mac.'))
+        self.assertIn('does not say', walk.accounts_verdict('Your Claude account In use now\nChecking whether this account is signed in on this Mac.',
+                                                                   self.SHEET, self.SIGN))
+
+    CARD = ('Your Claude account Not signed in Sign in\n'
+            'This account is not signed in on this Mac, so Rich cannot answer you yet. Sign in here.')
+    SHEET = {'role': 'AXButton', 'desc': 'Close Claude accounts', 'enabled': True}
+    SIGN = {'role': 'AXButton', 'title': 'Sign in', 'enabled': True}
 
     def test_the_signed_out_card_passes(self):
-        self.assertIsNone(walk.accounts_verdict(
-            'Your Claude account Not signed in Sign in\n'
-            'This account is not signed in on this Mac, so Rich cannot answer you yet. Sign in here.'))
+        self.assertIsNone(walk.accounts_verdict(self.CARD, self.SHEET, self.SIGN))
+
+    def test_sign_in_words_without_the_sheet_or_its_button_fail(self):
+        # Review rv-20261021T213648Z-b3f0990a-85f9, finding 2: Settings' row says "Not signed in
+        # on this Mac" and the interruption before it says "sign in", so text alone passed with
+        # no account card and no button.
+        words = ('Settings Claude accounts Not signed in on this Mac\n'
+                 'Rich could not answer because Claude Code is not signed in. Sign in in Settings.')
+        self.assertIn('did not open', walk.accounts_verdict(words, None, None))
+        self.assertIn('no Sign in button', walk.accounts_verdict(words, self.SHEET, None))
+        self.assertIn('cannot be pressed', walk.accounts_verdict(self.CARD, self.SHEET, dict(self.SIGN, enabled=False)))
+        self.assertIn('does not say Sign in', walk.accounts_verdict(self.CARD, self.SHEET, {'role': 'AXButton', 'title': 'Remove'}))
 
     def test_the_step_is_walked_between_the_signed_out_messages_and_the_update(self):
         self.assertEqual(walk.STEPS, ['identity', 'setup', 'signed-out', 'accounts', 'update', 'signed-in'])
