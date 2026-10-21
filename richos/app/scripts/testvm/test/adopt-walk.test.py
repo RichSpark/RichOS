@@ -206,6 +206,25 @@ class OpenEnabled(unittest.TestCase):
         self.assertIn('mach_msg2_trap', str(ctx.exception))
         self.assertTrue((Path(root) / 'unanswered-photo.txt').exists())
 
+    def test_a_wait_that_ends_not_found_pictures_the_screen(self):
+        """esc-20261021T213902Z-b513879e: the failure names what IS on screen."""
+        import tempfile
+        root = Path(tempfile.mkdtemp())
+        w = walk.Walk.__new__(walk.Walk)
+        w.vm, w.out, w.shots = 'vm1', root, []
+        def ax(mode, *a, **k):
+            if mode == 'tree':
+                return [{'meta': True}, {'role': 'AXButton', 'title': 'Acme'},
+                        {'role': 'AXButton', 'title': '', 'desc': 'Talk to Rich'}, {'role': 'AXStaticText', 'title': 'x'}]
+            raise walk.StepFailed('command failed (1): ax.sh find\n{"error": "notfound", "detail": "nothing matched"}')
+        w.ax = ax
+        w.shot = lambda name: w.shots.append(name)
+        with self.assertRaises(walk.StepFailed) as ctx:
+            w.wait_for('Onboarding', seconds=3)
+        self.assertEqual(w.shots, ['notfound-Onboarding.png'])
+        self.assertIn('buttons on screen: ["Acme", "Talk to Rich"]', str(ctx.exception))
+        self.assertTrue((root / 'notfound-Onboarding.tree.jsonl').exists())
+
     def test_connect_folder_has_no_fixed_sleep_before_open(self):
         source = (HERE / 'adopt-walk.py').read_text()
         body = source[source.index('    def connect_folder'):source.index('    def decline_first_run_sheets')]

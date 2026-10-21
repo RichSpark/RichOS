@@ -116,9 +116,29 @@ class Walk:
                 return True
             time.sleep(1)
         why = f'; the last read had no answer: {self.unanswered}' if self.unanswered else ''
-        if self.unanswered:
-            why += '\n' + self.photograph_app()
+        why += '\n' + (self.photograph_app() if self.unanswered else self.picture_screen(title))
         raise StepFailed(f'{role} "{title}" never appeared within {seconds} s{why}')
+
+    def picture_screen(self, title):
+        """What WAS on screen when a wait ended with every read answered "not found": a
+        screenshot and the accessibility tree in the walk's out folder, and the buttons the tree
+        holds in the failure, so a stale expectation can be told from a wrong screen
+        (esc-20261021T213902Z-b513879e). A diagnostic only: it never changes the outcome."""
+        slug = re.sub(r'[^A-Za-z0-9]+', '-', title).strip('-')[:40] or 'wait'
+        lines = []
+        try:
+            self.shot('notfound-%s.png' % slug)
+            lines.append('screenshot: %s' % (self.out / ('notfound-%s.png' % slug)))
+        except Exception as exc:  # noqa: BLE001
+            lines.append('screenshot failed: %s' % str(exc)[-200:])
+        try:
+            nodes = [n for n in self.ax('tree') if not n.get('meta')]
+            (self.out / ('notfound-%s.tree.jsonl' % slug)).write_text(''.join(json.dumps(n) + '\n' for n in nodes))
+            buttons = [n.get('title') or n.get('desc') or '' for n in nodes if n.get('role') == 'AXButton']
+            lines.append('%d nodes; buttons on screen: %s' % (len(nodes), json.dumps([b for b in buttons if b][:40])))
+        except Exception as exc:  # noqa: BLE001
+            lines.append('tree failed: %s' % str(exc)[-300:])
+        return '\n'.join(lines)
 
     def photograph_app(self):
         """What the app and the guest were doing when a wait ended with no answer. A read the app
