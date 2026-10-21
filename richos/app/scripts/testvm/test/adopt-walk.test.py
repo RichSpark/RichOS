@@ -225,6 +225,22 @@ class OpenEnabled(unittest.TestCase):
         self.assertIn('buttons on screen: ["Acme", "Talk to Rich"]', str(ctx.exception))
         self.assertTrue((root / 'notfound-Onboarding.tree.jsonl').exists())
 
+    def test_the_last_read_chooses_the_picture(self):
+        """Second review of 1d0f056eb (P3): unresponsive, then not found, then not found is a
+        screen to picture, not an app to sample."""
+        w = walk.Walk.__new__(walk.Walk)
+        answers = [walk.StepFailed('{"error": "unresponsive"}')] + \
+                  [walk.StepFailed('{"error": "notfound", "detail": "nothing matched"}')] * 10
+        def ax(mode, *a, **k):
+            raise answers.pop(0) if len(answers) > 1 else answers[0]
+        w.ax = ax
+        w.picture_screen = lambda title: 'PICTURED'
+        w.photograph_app = lambda: 'SAMPLED'
+        with self.assertRaises(walk.StepFailed) as ctx:
+            w.wait_for('Onboarding', seconds=3)
+        self.assertIn('PICTURED', str(ctx.exception))
+        self.assertNotIn('SAMPLED', str(ctx.exception))
+
     def test_connect_folder_has_no_fixed_sleep_before_open(self):
         source = (HERE / 'adopt-walk.py').read_text()
         body = source[source.index('    def connect_folder'):source.index('    def decline_first_run_sheets')]

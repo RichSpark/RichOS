@@ -104,8 +104,9 @@ class Walk:
         except StepFailed as exc:
             if not axwait.not_yet(exc, 'find'):
                 raise
-            if axwait.no_answer(exc):
-                self.unanswered = str(exc).strip()[-300:]
+            # The LAST read decides which picture a failed wait takes: an answered "not found"
+            # after an unanswered read is a screen to picture, not an app to sample.
+            self.unanswered = str(exc).strip()[-300:] if axwait.no_answer(exc) else None
             return False
 
     def wait_for(self, title, role='AXButton', app=None, seconds=30):
