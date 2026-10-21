@@ -15,23 +15,22 @@ internet while Rich's turn runs and restores it minutes later.
 WHAT IT DOES, in the guest, never on the host (CEO rulings 65 and 54):
   identity   the running app says it was built from --expect-sha
   first-run  adopt-walk.py's: company "Acme" and its first conversation
-  cut        a one-word message to Rich; the moment it is received, the guest's packet filter
-             refuses every connection that leaves the guest's own subnet (its loopback stays open),
-             so ssh from the host keeps working and the API does not answer (checked with Claude
-             Code's own preflight, `/api/hello`). Held until the app's log says the connection was
-             lost (Claude Code's own retries ran out and ended the turn), then --hold-seconds more.
-  restore    the filter is switched off and the API answers again
+  cut        a one-word message to Rich; the moment it is received, the guest's default route is
+             removed, so every connection beyond the guest's own subnet fails at once while ssh from
+             the host keeps working, and the API does not answer (checked with Claude Code's own
+             preflight, `/api/hello`). Held until the app's log says the connection was lost (Claude
+             Code's own retries ran out and ended the turn), then --hold-seconds more.
+  restore    the default route is put back and the API answers again
   observe    within --within seconds of the restore: the turn completes, ONCE, with the one word;
              his message reached Rich once; the app's log says it lost the connection and carried
              the same turn on. Evidence: <out>/observe.json, the ledger and app.log tail.
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54), and
-the filter dies with the guest, which run-walk.py deletes.
+a route left removed dies with the guest, which run-walk.py deletes.
 """
 import argparse
 import importlib.util
 import json
-import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -98,24 +97,24 @@ class NetcutWalk(adopt_walk.Walk):
         if not received:
             raise StepFailed('his message never reached Rich (no PromptReceived row within 120 s)')
         self.facts['turn'] = received['turn_id']
-        # The guest's own subnet stays reachable (ssh from the host); everything beyond it is refused.
-        state = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / self.vm
-        ip = (state / 'ip').read_text().strip()
-        subnet = '.'.join(ip.split('.')[:3]) + '.0/24'
-        # The guest's own loopback stays open too: only the way out to the internet is cut. A TCP
-        # connection out is REFUSED (a reset, the incident's "Connection refused ... (ECONNREFUSED)"),
-        # never left hanging: Claude Code 2.1.305 waits on an unanswered request far longer than on
-        # a refused one (an unanswered attempt had not retried after minutes, measured 2026-10-21).
-        rules = (f'pass out quick on lo0 all\n'
-                 f'block return-rst out quick inet proto tcp from any to ! {subnet}\n'
-                 f'block return-icmp out quick inet proto udp from any to ! {subnet}\n'
-                 'block return-rst out quick inet6 proto tcp all\nblock drop out quick inet6 all\n')
-        guest(self.vm, 'printf %s ' + shlex.quote(rules) + ' > /tmp/netcut.pf && sudo -n pfctl -q -E -f /tmp/netcut.pf', 30)
+        # The guest loses its way to the internet: its default route is removed, so a connection out
+        # fails at once (no route), as a dropped line does. The guest's own subnet (ssh from the host,
+        # its DNS) and loopback stay. A packet filter that drops or "returns" was tried first and
+        # left connections hanging (curl: "Connection timed out after 10005 ms"), and Claude Code
+        # 2.1.305 waits about 75 s on each hanging attempt (measured 2026-10-21), so its retries
+        # would take some 25 minutes instead of the minutes of a real outage.
+        gateway = guest(self.vm, "route -n get default 2>/dev/null | awk '/gateway:/{print $2}'", 30).strip()
+        if not gateway:
+            raise StepFailed('the guest has no default route to remove')
+        self.facts['gateway'] = gateway
+        self.save()
+        guest(self.vm, 'sudo -n route -q -n delete default >/dev/null', 30)
         self.facts['cut_at_ms'] = round(self.clock())
+        subnet = 'the guest subnet and loopback'
         answered = self.api_answers()
         if answered == '200':
             raise StepFailed('the API still answered from the guest after the cut')
-        # How a request fails now: refused at once, as in the incident, not left hanging.
+        # How a request fails now: at once, not left hanging.
         self.facts['cut_probe'] = guest(self.vm, PREFLIGHT.replace('2>/dev/null', '2>&1')
                                         .replace('%{http_code}', '%{http_code} %{time_total}s '), 30)
         self.facts.update({'cut_subnet_kept': subnet, 'api_after_cut': answered})
@@ -143,7 +142,10 @@ class NetcutWalk(adopt_walk.Walk):
                 'lost_logged': lost, 'lost_after_cut_s': round((self.facts['lost_at_ms'] - self.facts['cut_at_ms']) / 1000)}
 
     def restore(self):
-        guest(self.vm, 'sudo -n pfctl -q -d; sudo -n pfctl -q -f /etc/pf.conf; true', 30)
+        gateway = self.facts.get('gateway')
+        if not gateway:
+            raise StepFailed('no default route was recorded to put back')
+        guest(self.vm, 'sudo -n route -q -n add default ' + shlex.quote(gateway) + ' >/dev/null', 30)
         self.facts['restored_at_ms'] = round(self.clock())
         end = time.monotonic() + 60
         answered = ''
