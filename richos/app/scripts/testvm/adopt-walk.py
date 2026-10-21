@@ -280,7 +280,12 @@ class Walk:
         url = None
         end = time.monotonic() + 30
         while time.monotonic() < end and not url:
-            text = command([HERE / 'ax.sh', self.vm, 'tree', '--in', 'dialog', '--max', '150'], 60)
+            try:
+                text = command([HERE / 'ax.sh', self.vm, 'tree', '--in', 'dialog', '--max', '150'], 60)
+            except StepFailed as exc:
+                if not axwait.ask_again(exc, 'tree'):  # a read with no answer: not drawn yet
+                    raise
+                text = ''
             m = re.search(r'https://[^\s\'"<>]+#pair=[A-Z0-9]+', text)
             url = m.group(0) if m else None
             if not url:

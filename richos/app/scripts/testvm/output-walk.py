@@ -1899,11 +1899,20 @@ class OutputWalk(command_walk.CommandWalk):
         # The row's own words are not separate texts in the tree (a role="button" row's children
         # are presentational), so the panel's head, which counts the gone files, is what is read:
         # "N files from this thread · 1 no longer where it was written". The frame shows the row.
-        line, end = [], time.monotonic() + 20
+        line, end, unanswered = [], time.monotonic() + 20, []
         while time.monotonic() < end and not line:
-            line = [h.get('value') for h in self.in_panel(self.texts('no longer where it was written'))
-                    if 'from this thread' in (h.get('value') or '')]
+            try:
+                line = [h.get('value') for h in self.in_panel(self.texts('no longer where it was written'))
+                        if 'from this thread' in (h.get('value') or '')]
+            except StepFailed as exc:
+                # A read with no answer is "not yet" inside this wait (axwait.py); the wait's own
+                # 20 s still decides, and the reads that had no answer are kept as evidence.
+                if not axwait.ask_again(exc, 'find'):
+                    raise
+                unanswered.append(str(exc).strip()[-200:])
             time.sleep(1)
+        if unanswered:
+            note(missing_line_unanswered_reads=unanswered)
         head = [h.get('value') for h in self.in_panel(self.texts('from this thread'))]
         note(missing_line=line, panel_head=head)
         self.shot('missing-1-list.png')
@@ -2102,7 +2111,13 @@ class OutputWalk(command_walk.CommandWalk):
             end = time.monotonic() + 30
             while time.monotonic() < end and not seen['question_cards']:
                 time.sleep(3)
-                seen = self.conversation_read()
+                try:
+                    seen = self.conversation_read()
+                except StepFailed as exc:
+                    # A tree read with no answer is "not yet" (axwait.py): `seen` stays the last
+                    # read that answered, so the verdict below always rests on a real read.
+                    if not axwait.ask_again(exc, 'tree'):
+                        raise
             note(**seen)
         # The tree reads above are the verdict; the photographs (both themes) illustrate them.
         note(shots=self.flip_theme('job-question'))

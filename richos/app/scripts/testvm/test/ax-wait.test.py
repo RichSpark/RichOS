@@ -122,10 +122,6 @@ class EveryWalksWaitingFind(unittest.TestCase):
         w = object.__new__(cls)
         with mock.patch.object(root, 'ax', side_effect=root.ax.__globals__['StepFailed'](UNRESPONSIVE)):
             self.assertFalse(w.shown('Hello Rich'))
-        mod, cls, root = walk_class('folders-walk.py')
-        w = object.__new__(cls)
-        with mock.patch.object(root, 'ax', side_effect=root.ax.__globals__['StepFailed'](UNRESPONSIVE)):
-            self.assertEqual(w.nodes('--title', 'Acme-docs'), [])
 
     def test_present_still_raises_a_real_failure(self):
         for file in WALKS:
@@ -150,6 +146,105 @@ class EveryWalksWaitingFind(unittest.TestCase):
                         with self.assertRaises(failed):
                             w.ax('click', '--title', 'Send', '--role', 'AXButton', '--first')
                     self.assertEqual(base.call_count, 1, answer[:30])
+
+
+
+class AnUnansweredReadIsNeverAbsence(unittest.TestCase):
+    """rv-20261021T174957Z-61b9837c-fa0e: a wait for something to GO must not take a read with
+    no answer as "gone", and every polling read asks again inside its own wait."""
+
+    def setUp(self):
+        sleep = mock.patch('time.sleep', lambda s: None)
+        sleep.start()
+        self.addCleanup(sleep.stop)
+
+    def test_the_folder_chooser_is_not_closed_by_an_unanswered_read(self):
+        mod, cls, root = walk_class('folders-walk.py')
+        w = object.__new__(cls)
+        failed = root.ax.__globals__['StepFailed']
+        sheet = [{'meta': True}, {'role': 'AXSheet', 'x': 1}]
+        with mock.patch.object(root, 'ax', side_effect=failed(UNRESPONSIVE)):
+            self.assertIsNone(w.sheet_open())
+            with self.assertRaises(failed):
+                w.nodes('--title', 'Acme-docs')
+        answers = [failed(UNRESPONSIVE)] * 3 + [sheet] * 50
+        clock = iter(range(0, 10_000))
+        with mock.patch.object(mod.time, 'monotonic', lambda: next(clock)), \
+                mock.patch.object(root, 'ax', side_effect=answers):
+            self.assertFalse(w.wait_sheet(False, seconds=5))
+        with mock.patch.object(root, 'ax', side_effect=[failed(UNRESPONSIVE)] * 3 + [failed(NOTFOUND)]):
+            self.assertTrue(w.wait_sheet(False, seconds=30))
+
+    def test_the_pairing_address_is_read_again_after_an_unanswered_tree(self):
+        mod, cls, root = walk_class('adopt-walk.py')
+        w = object.__new__(cls)
+        w.vm = 'walk-x'
+        failed = root.ax.__globals__['StepFailed']
+
+        class Opened(Exception):
+            pass
+
+        w.press = w.wait_for = lambda *a, **k: None
+        w.present = lambda *a, **k: False
+        reads = [failed(UNRESPONSIVE), failed(DEADLINE.replace('find', 'tree')),
+                 'AXStaticText value="https://pair.example/#pair=ABC123"']
+        with mock.patch.object(mod, 'command', side_effect=reads) as tree, \
+                mock.patch.object(mod, 'guest', side_effect=Opened):
+            with self.assertRaises(Opened):
+                w.pair()
+        self.assertEqual(tree.call_count, 3)
+        with mock.patch.object(mod, 'command', side_effect=failed(REAL)):
+            with self.assertRaises(failed):
+                w.pair()
+
+    def test_the_gone_files_count_is_read_again_and_a_job_question_verdict_rests_on_a_real_read(self):
+        mod, cls, root = walk_class('output-walk.py')
+        failed = root.ax.__globals__['StepFailed']
+
+        class Shot(Exception):
+            pass
+
+        w = object.__new__(cls)
+        w.vm = 'walk-x'
+        notes = {}
+        w.observed = lambda name: ({}, lambda **f: notes.update(f))
+        w.record = lambda: [{'path': '/g/home/Acme/' + mod.CSV_NAME}]
+        w.exists_in_guest = mock.Mock(side_effect=[True, False])
+        w.close_panel = w.open_panel = w.to_list = lambda *a, **k: None
+        w.in_panel = lambda nodes: nodes
+        w.shot = mock.Mock(side_effect=Shot)
+        head = [{'value': '2 files from this thread · 1 no longer where it was written'}]
+        texts = [failed(UNRESPONSIVE), head, head]
+        w.texts = mock.Mock(side_effect=lambda words: (lambda a: (_ for _ in ()).throw(a)
+                                                         if isinstance(a, Exception) else a)(texts.pop(0)))
+        with mock.patch.object(mod, 'guest', lambda *a, **k: ''):
+            with self.assertRaises(Shot):
+                w.missing()
+        self.assertEqual(notes['missing_line'], [head[0]['value']])
+        self.assertEqual(len(notes['missing_line_unanswered_reads']), 1)
+
+        quiet = {'nodes_read': 9, 'question_cards': 0, 'quit_card': [], 'status_unavailable': []}
+        asked = dict(quiet, question_cards=1)
+        reads = [failed(UNRESPONSIVE), failed(DEADLINE.replace('find', 'tree')), asked]
+        w.conversation_read = mock.Mock(side_effect=lambda: (lambda a: (_ for _ in ()).throw(a)
+                                                              if isinstance(a, Exception) else a)(reads.pop(0)))
+        w.observed = lambda name: ({}, lambda **f: notes.update(f))
+        w.present = lambda *a, **k: False
+        w.facts = {'thread': 't1'}
+        w.records = lambda: [{'thread_id': 't1', 'obligation_id': 'o1', 'state': 'blocked', 'id': 'a1'}]
+        w.app_pid = lambda: 7
+        w.ask_as_the_job = lambda job: {'asked': True}
+        w.flip_theme = lambda name: []
+        first = [quiet]
+        reads.insert(0, first[0])
+        with mock.patch.dict(mod.os.environ, {}):
+            self.assertEqual(w.job_question(), {})
+        self.assertEqual(w.conversation_read.call_count, 4)
+        self.assertEqual(notes['question_cards'], 1)
+        reads[:] = [quiet, failed(REAL)]
+        with mock.patch.dict(mod.os.environ, {}):
+            with self.assertRaises(failed):
+                w.job_question()
 
 
 class TheReapWalksFirstRun(unittest.TestCase):

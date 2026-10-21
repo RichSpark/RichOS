@@ -103,10 +103,12 @@ class Walk(adopt.Walk):
         return '\n'.join(l for l in out.splitlines() if not l.startswith('{')).strip()
 
     def nodes(self, *args):
+        """The matching nodes, [] when nothing matched. A read with no answer raises (after ax()
+        asked it again): most callers record what is on screen, and no answer is not absence."""
         try:
             return [n for n in self.ax('find', *args) if 'x' in n and not n.get('meta')]
         except StepFailed as exc:
-            if axwait.not_yet(exc, 'find'):
+            if axwait.absent(exc):
                 return []
             raise
 
@@ -121,7 +123,14 @@ class Walk(adopt.Walk):
         return bool(self.nodes('--value', words, '--contains') or self.nodes('--title', words, '--contains'))
 
     def sheet_open(self):
-        return bool(self.nodes('--role', 'AXSheet'))
+        """Whether the folder chooser is up; None when the read had no answer (axwait.py), so
+        wait_sheet() asks again and never reads it as either open or closed."""
+        try:
+            return bool(self.nodes('--role', 'AXSheet'))
+        except StepFailed as exc:
+            if axwait.not_yet(exc, 'find'):
+                return None
+            raise
 
     def wait_sheet(self, want, seconds=20):
         end = time.monotonic() + seconds
