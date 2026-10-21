@@ -6,8 +6,8 @@ that captures the screen may "bypass the system private window picker", and the 
 keyboard focus. The base image's own record of its one approval (2026-09-19, for
 /usr/libexec/sshd-keygen-wrapper, the client every ssh capture runs as) came due on 2026-10-19
 18:49Z, so from then on the first frame a walk takes in a fresh clone raises it, and whatever the
-walk types next goes to the alert instead of the app (team-watch-walk runs 10 and 11, 2026-10-20:
-the task was typed while it was up, so no lead ever started).
+walk types next goes to the alert instead of the app (two walks on 2026-10-20: the task was typed
+while it was up, so no lead ever started).
 
 Each clone is fresh from that image, so each clone's record is renewed here, before anything
 captures: every recorded client is marked as alerted and used now, its next hint one policy

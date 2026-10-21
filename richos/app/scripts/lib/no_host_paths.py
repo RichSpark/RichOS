@@ -174,7 +174,7 @@ def operational_text(text, path):
     name = Path(path).name
     if name in {'proof-inputs.json', 'verification-dependencies.json', 'verification-input-qualifications.json'}:
         return ''
-    if any(p.lower() in {'docs', 'test', 'tests', 'testvm', 'operator-probes', 'fixtures', 'examples', 'validation'} for p in parts):
+    if any(p.lower() in {'docs', 'test', 'tests', 'testvm', 'fixtures', 'examples', 'validation'} for p in parts):
         return ''
     if '.test.' in name or '.mutation.' in name or name.endswith(('.md', '.patch', '-fixture.sh', '_fixture.py')):
         if 'skills' not in parts and 'agents' not in parts:

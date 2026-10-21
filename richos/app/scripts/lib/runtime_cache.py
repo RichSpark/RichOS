@@ -8,9 +8,8 @@ recipe is simply no longer used; nothing deletes it.
 
 It also names the speech model gui-boot's fixture needs (`gui_speech_model`, below).
 
-Read by `nightly-local.py` (`Runner.runtime`, which builds it), `proof-run.py`
-(`supply_runtime`) and `operator-probes/run-probes.py` (`--runtime` default), so all three name
-the same directory for the same recipe.
+Read by `nightly-local.py` (`Runner.runtime`, which builds it) and `proof-run.py`
+(`supply_runtime`), so both name the same directory for the same recipe.
 """
 import hashlib
 from pathlib import Path

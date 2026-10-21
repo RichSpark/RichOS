@@ -102,16 +102,15 @@ try:
     check(len(recv) == 1 and recv[0].after == {i.label for i in shards} and "--verify-receipts" in recv[0].argv,
           "P1e and a receipts check runs after every shard, proving the union of units run is the set selected")
     check("web-app" in labels, "P1f every other command runs as printed", labels)
-    # P1g: two checks never share a label. The operator-probes harness and the run-tests.test.sh
+    # P1g: two checks never share a label. A dir/test/run-tests.sh harness and the run-tests.test.sh
     # suite were both "run-tests", so one identity served both and a merge refused the first as
     # INVALID (inputs changed during the check) though the tree never changed.
     its = items_from([
-        "cd richos/app && bash scripts/operator-probes/test/run-tests.sh",
         "cd richos/app && bash scripts/testvm/test/run-tests.sh",
         "cd richos/app && scripts/run-tests.sh --only run-tests.test.sh",
     ], tmp)
     got = sorted(i.label for i in its)
-    check(got == ["operator-probes", "run-tests", "testvm"],
+    check(got == ["run-tests", "testvm"],
           "P1g a dir/test/run-tests.sh is labeled by its directory and never collides with the run-tests suite", got)
     # P1h: two crates with a same-named module are two checks under two labels. Both were
     # "cargo dictation::" (the filter alone), so the evidence record refused the plan as one
