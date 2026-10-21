@@ -127,6 +127,10 @@ pub struct EngineProfile {
     /// and the work lease (Stu) `stu`.
     pub lease_models: crate::config::LeaseModels,
     pub machine_settings: crate::machine_settings::Settings,
+    /// **What this lease takes from the user's own settings files** (§138, build plan item 0):
+    /// read by [`Self::prepare`] from the user's central folder, the same way for every user.
+    /// Empty when prepared without a user folder ([`Self::prepare_with_settings`]).
+    pub user: crate::user_settings::UserSetup,
 }
 
 /// **Which speech model the video skill transcribes with**, the value of
@@ -321,11 +325,28 @@ impl EngineProfile {
         render_team(&self.engine,data,&self.coordination,&self.plugin,true)
     }
 
+    /// The app's lease profile: this install's machine settings, the user's own settings
+    /// files in the central folder (`company::install_central_root`) and the user's login
+    /// shell environment (`login_environment::current`).
     pub fn prepare(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result<Self, RuntimeError> {
-        Self::prepare_with_settings(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?)
+        Self::prepare_for(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?,
+            crate::company::install_central_root(), Some(crate::login_environment::current()))
     }
 
+    /// A profile that reads no user settings file, for a caller that names its own machine
+    /// settings (tests).
     pub fn prepare_with_settings(engine: &Path, data: &Path, runtime: EngineRuntime, machine_settings: crate::machine_settings::Settings) -> Result<Self, RuntimeError> {
+        Self::prepare_for(engine, data, runtime, machine_settings, None, None)
+    }
+
+    /// `user_folder` is the user's central folder: on first run the shipped `rich.md` and
+    /// `stu.md` and an empty `instructions.md` are copied there when the user has none, and
+    /// the user's files there are read into this lease (`user_settings.rs`). `None` reads none
+    /// and starts Rich and Stu from the shipped plugin. `login` is the user's login shell
+    /// environment, which every lease and hook gets (build plan item 4); `None` adds none.
+    pub fn prepare_for(engine: &Path, data: &Path, runtime: EngineRuntime, machine_settings: crate::machine_settings::Settings,
+                       user_folder: Option<PathBuf>, login: Option<std::sync::Arc<std::collections::BTreeMap<String, String>>>)
+                       -> Result<Self, RuntimeError> {
         if !engine.is_absolute() || !data.is_absolute() { return Err(RuntimeError("desktop roots must be absolute".into())); }
         for name in ["scripts/app-engine-hook.py", "scripts/provider-supervisor.py", "mega-lander/app.py", "mega-lander/DESKTOP.md"] {
             if !engine.join(name).is_file() { return Err(RuntimeError(format!("missing desktop engine entry point: {name}"))); }
@@ -378,8 +399,13 @@ impl EngineProfile {
         }
         let plugin = data.join("engine-profiles").join(uuid::Uuid::new_v4().to_string());
         render_team(&engine, &data, &coordination, &plugin,false)?;
-        write(&coordination.join("orchestration.config"), &format!(
-            "# Generated desktop coordination, not target-repository configuration.\nALLOWED_MODELS=\"opus sonnet haiku\"\nMODEL_TIERS=\"opus > sonnet > haiku\"\nSESSION_TEAMS_DIR={}\n", quote(&state.join("teams"))))?;
+        // Rich's and Stu's own files are the user's from the first run on: copied once, then
+        // read into this session's plugin beside this lease's engine plugin.
+        let mut user = crate::user_settings::UserSetup::prepare(user_folder, &engine.join("app"),
+            &plugin.with_file_name(format!("{}-standing", plugin.file_name().unwrap().to_string_lossy())))?;
+        user.login = login;
+        write(&coordination.join("orchestration.config"),
+              &crate::user_settings::orchestration_config(user.folder.as_deref(), &quote(&state.join("teams")))?)?;
         write(&coordination.join(".gitignore"), ".claude/\norchestration.config\napp-owned-coordination.json\n")?;
         write(&plugin.join("gitconfig"), "[user]\n\tname = RichOS\n\temail = richos@localhost\n")?;
         let command = format!("{} {}", quote(&runtime.python), quote(&engine.join("scripts/app-engine-hook.py")));
@@ -430,7 +456,7 @@ impl EngineProfile {
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
         Ok(Self { engine, coordination, plugin, state, runtime, work_scope: None,
                   operator_desk: None, claude_account: None, token_sink: None, speech_model: None,
-                  lease_models: crate::config::lease_models_from_config(&data), machine_settings })
+                  lease_models: crate::config::lease_models_from_config(&data), machine_settings, user })
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which
     /// do not implement that CLI entrypoint keep their canonical hooks unchanged.
@@ -516,12 +542,41 @@ impl EngineProfile {
         format!("app={}", self.plugin.join("spawn-preflight.json").display())
     }
 
+    /// **A lease's `PATH`**: the runtime first, then the user's own `PATH` (`settings.json`'s
+    /// when it sets one, otherwise the login shell's), then the system folders and the tools
+    /// folder (`runtime::search_path_with`).
+    pub fn lease_path(&self) -> String {
+        let user = self.user.settings.env.get("PATH").or_else(|| self.user.login.as_ref()?.get("PATH"));
+        self.runtime.path_with(user.map(String::as_str))
+    }
+
+    /// **The plugin Rich and Stu start from**: this lease's copy carrying the user's own
+    /// `rich.md` and `stu.md` (`user_settings::standing_plugin`), or `shipped` when the
+    /// profile reads no user folder.
+    pub fn standing_plugin(&self, shipped: &Path) -> PathBuf {
+        self.user.standing.clone().unwrap_or_else(|| shipped.to_path_buf())
+    }
+
+    /// **The `--settings` a lease starts with**: the app's own keys, and the user's own hooks
+    /// from `settings.json` beside the engine plugin's, which Claude Code runs together.
+    pub fn lease_settings(&self) -> serde_json::Value {
+        let mut settings = json!({"autoMemoryEnabled":false,
+            "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]});
+        if let Some(hooks) = &self.user.settings.hooks { settings["hooks"] = hooks.clone(); }
+        settings
+    }
+
     /// `provider` is the `claude` binary itself, named by the caller. It is NOT read off
     /// `command`: a product lease's program is the supervisor's Python
     /// (`lease_commands::supervisor_args`), and reading it there told every helper that Python
     /// was Claude Code — so the brief check ran `python3 --print` and failed on every dispatch
     /// (nightly 54, 2026-10-13).
     pub fn configure(&self, command: &mut Command, provider: &Path, session: &str, scope: &Path) {
+        // The user's terminal environment (the login shell's, build plan item 4), then the
+        // user's own additions (`settings.json`), under every name the app sets for itself
+        // below: those are applied after this and win.
+        let user_env = self.user.login.iter().flat_map(|login| login.iter()).chain(self.user.settings.env.iter());
+        command.envs(user_env.filter(|(name, _)| !crate::user_settings::app_owned(name)));
         crate::runtime::isolate_interpreter_environment(command);
         // App bindings replace terminal component roots and test overrides.
         // Native transcript/session readers use the provider's selected Claude account.
@@ -573,10 +628,9 @@ impl EngineProfile {
         command.env("RICHOS_APP_READ_ROOTS", serde_json::to_string(&read_roots).unwrap());
         command.arg("--plugin-dir").arg(&self.plugin)
             .args(["--permission-mode", "bypassPermissions"])
-            .arg("--settings").arg(json!({"autoMemoryEnabled":false,
-                "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]}).to_string())
+            .arg("--settings").arg(self.lease_settings().to_string())
             .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
-            .env("PATH", self.runtime.path()).env_remove("CLAUDECODE")
+            .env("PATH", self.lease_path()).env_remove("CLAUDECODE")
             // Hooks inherit the runtime-only PATH, which excludes Claude's installer path.
             .env("RICHOS_CLAUDE_BIN", provider)
             .env("PYTHONDONTWRITEBYTECODE", "1")
