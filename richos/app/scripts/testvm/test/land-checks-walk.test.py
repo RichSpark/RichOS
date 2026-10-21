@@ -60,5 +60,18 @@ class Verdict(unittest.TestCase):
         self.assertEqual(self.outcomes(record={'state': 'running'})['10'], 'FAIL')
 
 
+class Job(unittest.TestCase):
+    def test_the_walk_sends_its_own_refuse_once_job(self):
+        """Mid-job review rv-20261021T072931Z-a4453faa-ffff, finding 2: the inherited job() sent
+        review-walk.py's request, so the refusal-and-retry was never asked for."""
+        sent = []
+        fake = type('Fake', (), {'send': lambda self, text: sent.append(text) or [1.0, 2.0], 'facts': {},
+                                 'save': lambda self: None})()
+        walk.LandChecksWalk.job(fake)
+        self.assertEqual(sent, [walk.JOB])
+        self.assertNotEqual(walk.JOB, walk.review_walk.JOB)
+        self.assertIn('refuses the first land', sent[0])
+
+
 if __name__ == '__main__':
     unittest.main()

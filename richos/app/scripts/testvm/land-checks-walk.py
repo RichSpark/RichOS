@@ -144,6 +144,16 @@ class LandChecksWalk(review_walk.ReviewWalk):
             raise StepFailed('main moved during the fixture')
         return {**found, 'fence': 'on', 'lease_home': conf['HOME'], 'control': control}
 
+    def job(self):
+        """THIS walk's JOB, the one that says the check refuses once and asks for the land again.
+        Not ReviewWalk.job(), which sends review-walk.py's own request (mid-job review
+        rv-20261021T072931Z-a4453faa-ffff, finding 2)."""
+        sent = self.send(JOB)
+        self.facts['sent_ms'] = sent
+        self.facts['job'] = JOB
+        self.save()
+        return {'sent_between_guest_ms': [round(v) for v in sent], 'job': JOB}
+
     # --- reading the guest --------------------------------------------------------------------
     def asked_count(self):
         text = guest(self.vm, 'cat %s 2>/dev/null || true' % shlex.quote(self.asked))
