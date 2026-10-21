@@ -33,12 +33,13 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               `export` line); the generated config carries it once and plain; a job for the
               fixture's own teammate, whose definition names opus, is refused by the app with the
               user's list ("one of sonnet, haiku"), in the back end's own records.
-  rich-edit   a rule appended to the copied ~/myrichos/rich.md; the next reply Rich writes starts
-              with the rule's word.
+  rich-edit   a rule appended to the copied ~/myrichos/rich.md; in a new conversation (a session
+              that starts after the edit) Rich's reply starts with the rule's word.
   instructions  a rule written into the user's own ~/myrichos/instructions.md (empty until now);
-              the next reply Rich writes ends with the rule's word.
+              in a new conversation Rich's reply ends with the rule's word.
   memory      Account 2 "Work" added at the folder run.sh signed in; Rich asked to save a code
-              word to his auto-memory; the memory file is in <app data>/memory; the account in use
+              word to his auto-memory; the memory file is under <app data>/coordination/.claude/
+              agent-memory (his definition's `memory: project`); the account in use
               moved to Work and the app relaunched; in a NEW conversation, on a lease whose
               CLAUDE_CONFIG_DIR is Work's folder, Rich answers with the code word.
 Evidence in --out: report.json, facts.json, observed-*.json, screenshots, the app's logs.
@@ -129,9 +130,9 @@ class LeaseSetupWalk(command_walk.CommandWalk):
         self.send(text)
         end = time.monotonic() + seconds
         while time.monotonic() < end:
-            turns = self.turns(thread)[0]
-            if len(turns) > before and turns[-1]['done']:
-                return turns[-1]['reply']
+            mine = [t for t in self.turns(thread)[0][before:] if t['prompt'].strip() == text.strip()]
+            if mine and mine[-1]['done']:
+                return mine[-1]['reply']
             time.sleep(3)
         raise StepFailed(f'Rich did not finish a reply to "{text[:60]}" within {seconds} s')
 
@@ -164,7 +165,8 @@ class LeaseSetupWalk(command_walk.CommandWalk):
                        f'{shlex.quote(self.payload + "/remote.log")} {shlex.quote(backend)} > /dev/null 2>&1 &')
         guest(self.vm, 'git -C ' + shlex.quote(self.company) + f' remote add origin http://127.0.0.1:{PORT}/acme.git')
         time.sleep(2)
-        anonymous = guest(self.vm, f'curl -s -o /dev/null -w "%{{http_code}}" http://127.0.0.1:{PORT}/acme.git/info/refs?service=git-receive-pack')
+        anonymous = guest(self.vm, 'curl -s -o /dev/null -w "%{http_code}" '
+                          + shlex.quote(f'http://127.0.0.1:{PORT}/acme.git/info/refs?service=git-receive-pack'))
         if anonymous.strip() != '401':
             raise StepFailed('the stand-in remote did not refuse an anonymous push: ' + anonymous)
         return {'origin': f'http://127.0.0.1:{PORT}/acme.git', 'anonymous': anonymous.strip()}
@@ -245,7 +247,7 @@ class LeaseSetupWalk(command_walk.CommandWalk):
         path = self.central() + '/rich.md'
         rule = f'\\n\\n## A rule of this test\\n\\nStart every reply with the word {RULE_WORD}, in capitals.\\n'
         guest(self.vm, 'printf ' + shlex.quote(rule) + ' >> ' + shlex.quote(path))
-        reply = self.reply_to('Say hello in one short sentence.')
+        reply = self.new_conversation_reply('Say hello in one short sentence.')
         self.facts['rich_edit_reply'] = reply
         self.save()
         self.shot('rich-edit.png')
@@ -285,13 +287,38 @@ class LeaseSetupWalk(command_walk.CommandWalk):
         path = self.central() + '/instructions.md'
         rule = f'End every reply with the word {OWN_WORD}, in capitals, as its last word.\n'
         guest(self.vm, 'printf ' + shlex.quote(rule) + ' >> ' + shlex.quote(path))
-        reply = self.reply_to('Say good morning in one short sentence.')
+        reply = self.new_conversation_reply('Say good morning in one short sentence.')
         self.facts['instructions_reply'] = reply
         self.save()
         self.shot('instructions-edit.png')
         if not reply.rstrip().rstrip('.!*').rstrip().endswith(OWN_WORD):
             raise StepFailed('the next reply does not follow the user\'s instructions.md: ' + reply[-200:])
         return {'reply': reply[:200]}
+
+    def thread_ids(self):
+        return [json.loads(r)['thread_id'] for r in guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl')).splitlines()
+                if '"ThreadCreated"' in r]
+
+    def new_conversation_reply(self, text, seconds=300):
+        """Open a new conversation, send `text` there and answer Rich's finished reply to it."""
+        before = set(self.thread_ids())
+        end = time.monotonic() + 30
+        while not self.by_id('rail-new-thread') and time.monotonic() < end:
+            time.sleep(1)
+        self.press_by_id('rail-new-thread')
+        self.type_into(text, '--role', 'AXTextArea', '--title', 'Message to Rich')
+        self.press('Send')
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            fresh = [t for t in self.thread_ids() if t not in before]
+            if fresh:
+                mine = [t for t in self.turns(fresh[-1])[0] if t['prompt'].strip() == text.strip()]
+                if mine and mine[-1]['done']:
+                    self.facts.setdefault('new_threads', []).append(fresh[-1])
+                    self.save()
+                    return mine[-1]['reply']
+            time.sleep(3)
+        raise StepFailed(f'Rich did not finish a reply in a new conversation within {seconds} s')
 
     def lease_env(self, name):
         """The value of `name` in every `claude` lease process of the running app, read from the kernel."""
@@ -318,34 +345,15 @@ class LeaseSetupWalk(command_walk.CommandWalk):
         accounts('1')
         relaunch(self.vm)
         self.thread_back()
-        saved = self.reply_to(f'Please save this to your auto-memory so you still know it in future conversations: '
+        saved = self.new_conversation_reply(f'Please save this to your auto-memory so you still know it in future conversations: '
                               f'the walk code word is {word}. Then reply with the single word saved.')
-        memory_dir = self.data + '/memory'
+        memory_dir = self.data + '/coordination/.claude/agent-memory'
         stored = guest(self.vm, 'grep -rl ' + shlex.quote(word) + ' ' + shlex.quote(memory_dir) + ' 2>/dev/null || true')
         on_home = self.lease_env('CLAUDE_CONFIG_DIR')
         accounts('2')
         relaunch(self.vm)
         self.thread_back()
-        end = time.monotonic() + 30
-        while not self.by_id('rail-new-thread') and time.monotonic() < end:
-            time.sleep(1)
-        before = set(json.loads(r)['thread_id'] for r in guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl')).splitlines()
-                     if '"ThreadCreated"' in r)
-        self.press_by_id('rail-new-thread')
-        answer = None
-        self.type_into('What is the walk code word in your auto-memory? Reply with the word only.', '--role', 'AXTextArea', '--title', 'Message to Rich')
-        self.press('Send')
-        end = time.monotonic() + 300
-        while time.monotonic() < end and answer is None:
-            created = [json.loads(r)['thread_id'] for r in guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl')).splitlines()
-                       if '"ThreadCreated"' in r]
-            fresh = [t for t in created if t not in before]
-            if fresh:
-                turns = self.turns(fresh[-1])[0]
-                if turns and turns[-1]['done']:
-                    answer = turns[-1]['reply']
-                    self.facts['memory_thread'] = fresh[-1]
-            time.sleep(3)
+        answer = self.new_conversation_reply('What is the walk code word in your memory? Reply with the word only.')
         on_work = self.lease_env('CLAUDE_CONFIG_DIR')
         self.shot('memory-after-switch.png')
         evidence = {'word': word, 'saved_reply': saved, 'memory_files_with_word': stored.split(), 'leases_before': on_home,
