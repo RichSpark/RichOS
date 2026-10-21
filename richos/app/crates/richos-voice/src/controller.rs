@@ -1527,15 +1527,14 @@ impl VoiceNotice {
             // fixed here is the app sending a sentence he never said — so the line has to
             // close that question, in his own words, before anything else.
             //
-            // IT ENDS WITH A STATUS AND NOT AN INSTRUCTION, deliberately. "Say it again"
-            // is an imperative aimed at the reader, which makes it a request wearing a
-            // status's clothes: the affordance for saying it again is the open microphone,
-            // and there is no button to point at. So it says the mic is still open and
-            // leaves the next move where it belongs. Same discipline as `SoundButNoWords`
-            // above, whose last three words are "Voice is still on."
+            // THEN IT SAYS WHAT TO DO, since 2026-10-21. A line that tells him his words may
+            // not have gone anywhere and stops there is a dead end (the failure class in
+            // `docs/development/failure-classes/lost-input-without-a-next-step.md`, guarded
+            // by `affordances.js`). The step is conditional, because a cough reaches this
+            // path as well as a word, and the open microphone is its control.
             VoiceNotice::HeardNoVoice => {
-                "That didn't come through as speech, so I haven't sent anything. I'm still \
-                 listening."
+                "That didn't come through as speech, so I haven't sent anything. If you said \
+                 something, please say it again. I'm still listening."
             }
             // IT SAYS THE ANSWER STOPPED, not that "something went wrong". The CEO is
             // listening, not reading, and the fact he needs first is that what he heard is
@@ -1560,13 +1559,13 @@ impl VoiceNotice {
             // sent as if it were a whole sentence is the failure mode this crate has already
             // shipped once. So the line closes that question before anything else.
             //
-            // IT ENDS WITH A STATUS AND NOT AN INSTRUCTION. "Say that again" is an imperative
-            // aimed at a reader who has no button to press — the affordance for repeating
-            // himself IS the open microphone, and saying so is what tells him he can just
-            // speak. Same last three words as `HeardNoVoice`, deliberately: the two are the
+            // THEN IT SAYS WHAT TO DO, for `HeardNoVoice`'s reason, and here unconditionally:
+            // a voice WAS measured, so he did say something and it is lost unless he says it
+            // again. Same last three words as `HeardNoVoice`, deliberately: the two are the
             // same event to him, and only the cause differs.
             VoiceNotice::DidNotCatchThat => {
-                "I didn't catch that, so I haven't sent anything. I'm still listening."
+                "I didn't catch that, so I haven't sent anything. Please say it again. I'm \
+                 still listening."
             }
             // EVERY CLAUSE ABOUT THE CEO IS CONDITIONAL, and that is the whole correction.
             // The sentence this replaced opened "You started talking while I was still
@@ -1588,13 +1587,20 @@ impl VoiceNotice {
             // He watched Rich answer a fragment. "I haven't sent anything" is the fact that
             // makes that make sense.
             //
-            // IT ENDS WITH A STATUS AND NOT AN INSTRUCTION. "Wait until I finish" is an
-            // imperative, and worse, it is an instruction to use the product more carefully
-            // to work around a limitation — which is not a thing to ask of him.
+            // IT ENDS BY SAYING WHAT TO DO, since 2026-10-21. It used to end with a status
+            // ("I'm listening now.") on the argument that the open microphone is the
+            // affordance and an imperative with no button is a request. A new user on 1.2.1
+            // got this line right after a failed answer and was left with a sentence that
+            // explained a loss and gave no next step (the failure class in
+            // `docs/development/failure-classes/lost-input-without-a-next-step.md`). The step
+            // is real and has a control: the microphone is open, so whatever he said is
+            // recovered by saying it again now. It is still CONDITIONAL ("If you did"),
+            // because on this path the app cannot know whether he spoke, and it is still not
+            // "wait until I finish", which would ask him to work around a limitation.
             VoiceNotice::CouldNotListenWhileSpeaking => {
                 "While I was speaking, I couldn't tell your voice from my own, so if you \
                  said something just then, it didn't reach me and I haven't sent anything. \
-                 I'm listening now."
+                 If you did, please say it again now. I'm listening."
             }
         }
     }
@@ -5151,19 +5157,23 @@ mod tests {
         assert!(lower.contains("while i was speaking"), "{m}");
     }
 
-    /// INVARIANT: the line still states the CONSEQUENCE and still ends with a status rather
-    /// than an instruction — the two properties the wording change had to preserve.
+    /// INVARIANT: the line states the CONSEQUENCE and then WHAT TO DO about it (2026-10-21: a
+    /// new user was left with a loss and no next step). The step is the one the open
+    /// microphone supports, saying it again now, and never a work-around such as waiting
+    /// for Rich to finish.
     #[test]
-    fn the_half_duplex_line_states_the_consequence_and_promises_nothing() {
+    fn the_half_duplex_line_states_the_consequence_and_what_to_do() {
         let m = VoiceNotice::CouldNotListenWhileSpeaking.ceo_message();
         // The fact he is missing: those words did not arrive, and nothing was sent in his
         // name. The second half is what makes Rich answering a fragment make sense.
         assert!(m.contains("didn't reach me"), "{m}");
         assert!(m.contains("haven't sent anything"), "{m}");
-        // Ends with a status, never an instruction to work around the limitation.
-        assert!(m.ends_with("I'm listening now."), "{m}");
-        for imperative in ["wait ", "try ", "please", "say it again"] {
-            assert!(!m.to_lowercase().contains(imperative), "{m} contains {imperative:?}");
+        // The next step, conditional like everything else it says about him.
+        assert!(m.contains("If you did, please say it again now."), "{m}");
+        assert!(m.ends_with("I'm listening."), "{m}");
+        // Never an instruction to work around the limitation.
+        for workaround in ["wait ", "until i finish", "headphones", "speak louder"] {
+            assert!(!m.to_lowercase().contains(workaround), "{m} contains {workaround:?}");
         }
         // No machinery, same bar as every other notice here.
         assert!(!m.chars().any(|c| c.is_ascii_digit()), "{m}");
@@ -5745,8 +5755,9 @@ mod tests {
             assert_ne!(caught, other);
         }
         // House discipline, asserted rather than trusted: it closes the "was anything sent?"
-        // question and ends with a status rather than an instruction.
+        // question, says what to do about it (2026-10-21), and ends with the status.
         assert!(caught.contains("haven't sent anything"));
+        assert!(caught.contains("Please say it again."), "{caught}");
         assert!(caught.ends_with("I'm still listening."));
         // NAMES NO MACHINERY — the same bar `the_silent_discard_notice_names_no_control_and_no
         // _machinery` holds `SoundButNoWords` to. The transcript that was thrown away is the
@@ -5766,6 +5777,7 @@ mod tests {
         let b = VoiceNotice::SoundButNoWords.ceo_message();
         assert_ne!(a, b);
         assert!(a.contains("haven't sent anything"), "the refusal must close the send question: {a}");
+        assert!(a.contains("please say it again"), "the refusal must say what to do: {a}");
         assert!(!a.contains('/') && !a.contains("dBFS"), "machinery leaked to the CEO: {a}");
         assert!(!b.contains('/') && !b.contains("dBFS"), "machinery leaked to the CEO: {b}");
     }

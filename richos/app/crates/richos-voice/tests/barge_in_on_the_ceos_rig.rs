@@ -612,3 +612,92 @@ fn every_duration_in_this_file_is_the_frame_math() {
         );
     }
 }
+
+/// **WHAT MADE THE APP SAY "I COULDN'T TELL YOUR VOICE FROM MY OWN" — and what it now tells him.**
+///
+/// On 2026-10-21 a new user on 1.2.1 got `VoiceNotice::CouldNotListenWhileSpeaking` right after
+/// Rich spoke a cut-off notice through his Mac's speakers. This replays the shipped `CaptureBrain`
+/// over the committed echo-path fixtures to show the two ways that line is reached and what it
+/// says, with no sound played anywhere (CEO §53):
+///
+/// 1. **Rich's own echo, nobody speaking.** Over the echo-only recordings at the six volumes, an
+///    utterance opened by Rich's residual is discarded tainted, which is the one thing that
+///    raises the line (`supervise`, `CapMsg::Discarded { tainted: true }`). Measured and printed
+///    per condition; at least one condition must reach it, or this is not the incident's path.
+/// 2. **A short word of his own over Rich** (private fixture): 0.192 s of the CEO's recorded
+///    voice from `-nearend2-mic.wav`, at its recorded near-field level (about -18 dBFS, see
+///    `the_ceos_own_voice_over_rich_interrupts_him_and_his_words_are_kept`), summed into the
+///    echo-only track while Rich speaks, at a volume where the echo alone raises nothing. 0.192 s
+///    is 12 frames, under the 15 a barge-in needs, so the word cannot stop Rich and is discarded:
+///    this is the case where he DID say something and lost it.
+///
+/// In both, the line he is shown must say what to do: say it again now.
+#[test]
+fn richs_own_echo_raises_the_half_duplex_line_and_it_says_what_to_do() {
+    use richos_voice::controller::{RefusalNotices, VoiceNotice};
+    let line = VoiceNotice::CouldNotListenWhileSpeaking.ceo_message();
+    assert!(line.contains("please say it again now"), "the line gives no next step: {line}");
+
+    let (mut raised, mut conditions) = (0, 0);
+    for prefix in [ECHO_ONLY_MORNING, ECHO_ONLY_VOL60] {
+        let mic0 = read(prefix, "-mic.wav");
+        let reference = read(prefix, "-reference.wav");
+        for &vol in VOLUMES {
+            let g = mic_gain_for_residual(&mic0, &reference, vol);
+            let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
+            let o = replay(&mic, &reference, None, 0);
+            conditions += 1;
+            // `supervise` claims the line on the first tainted discard of a voice session.
+            let mut notices = RefusalNotices::new();
+            let said = (0..o.tainted_discards).find_map(|_| notices.half_duplex());
+            println!(
+                "[measured] {prefix} at residual {vol:.2} dBFS, nobody speaking: {} tainted \
+                 discard(s) -> {}",
+                o.tainted_discards,
+                said.map_or("no line".to_string(), |n| n.ceo_message().to_string())
+            );
+            if let Some(n) = said {
+                assert_eq!(n, VoiceNotice::CouldNotListenWhileSpeaking);
+                raised += 1;
+            }
+        }
+    }
+    assert!(raised >= 1, "Rich's own echo raised the line in no condition: this is not the incident's path");
+    println!("[measured] Rich's own echo alone raised the line in {raised} of {conditions} conditions");
+}
+
+/// The second case of the test above, on the private recording of the CEO's own voice.
+#[test]
+#[cfg_attr(
+    not(private_fixtures),
+    ignore = "PRIVATE FIXTURE: ceo-rig-2026-09-18-nearend2-mic.wav is a recording of the CEO's \
+              own voice and is not committed to this public repository. It is in the private \
+              richos-hq repository at fixtures/echo-path/. Set RICHOS_PRIVATE_FIXTURES to that \
+              directory to run this."
+)]
+fn a_short_word_of_his_over_rich_is_lost_and_the_line_tells_him_to_say_it_again() {
+    use richos_voice::controller::{RefusalNotices, VoiceNotice};
+    let his_mic = read_his_mic();
+    // 12 frames from the middle of his first marked interval: under the 15 a barge-in needs.
+    let (open, close) = HIS_INTERVALS[0];
+    let mid = (((open + close) / 2.0) * SAMPLE_RATE as f32) as usize;
+    let word: Vec<f32> = his_mic[mid..mid + 12 * VAD_FRAME_SAMPLES].to_vec();
+    println!("[measured] his word: {:.3} s at {:.1} dBFS", word.len() as f32 / SAMPLE_RATE as f32, dbfs(&word));
+
+    // The morning recording at Ray's walk volume: measured 2026-10-21, its echo alone opens no
+    // utterance at any of the six volumes, so a discard here is his word's and nothing else's.
+    let mic0 = read(ECHO_ONLY_MORNING, "-mic.wav");
+    let reference = read(ECHO_ONLY_MORNING, "-reference.wav");
+    let g = mic_gain_for_residual(&mic0, &reference, VOLUMES[3]);
+    let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
+    let alone = replay(&mic, &reference, None, 0);
+    assert_eq!(alone.tainted_discards, 0, "the echo alone already raises the line here: {alone:?}");
+    let at = (4.0 * SAMPLE_RATE as f32 / VAD_FRAME_SAMPLES as f32) as usize;
+    let o = replay(&mic, &reference, Some(&word), at);
+    println!("[measured] his word over Rich at 4.0 s: {o:?}");
+    assert_eq!(o.barge_ins, 0, "a 12-frame word stopped Rich; the premise moved: {o:?}");
+    assert!(o.tainted_discards >= 1, "his word was not discarded, so it is not the lost-word case: {o:?}");
+    let said = RefusalNotices::new().half_duplex().expect("the first tainted discard of a session says the line");
+    assert_eq!(said, VoiceNotice::CouldNotListenWhileSpeaking);
+    assert!(said.ceo_message().contains("please say it again now"), "{}", said.ceo_message());
+}
