@@ -4,7 +4,7 @@
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
   run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT -- \\
-      netcut-walk.py --out DIR --expect-sha SHA [--cut-seconds 300] [--within 900]
+      netcut-walk.py --out DIR --expect-sha SHA [--lost-within 1500] [--hold-seconds 60] [--within 900]
 
 THE QUESTION (CEO, 2026-10-21: "Of course, that must be built into the app. What else is the app good
 for if it can't handle that?"). The internet dropped for a few minutes and a worker's turn ended on
@@ -15,11 +15,11 @@ internet while Rich's turn runs and restores it minutes later.
 WHAT IT DOES, in the guest, never on the host (CEO rulings 65 and 54):
   identity   the running app says it was built from --expect-sha
   first-run  adopt-walk.py's: company "Acme" and its first conversation
-  cut        a message to Rich that keeps his turn running (a shell `sleep`, then one word); once
-             it is received, the guest's packet filter refuses every connection that leaves the
-             guest's own subnet, so ssh from the host keeps working and the API does not answer
-             (checked with Claude Code's own preflight, `/api/hello`). Held --cut-seconds, longer
-             than Claude Code's own retries, so its turn really ends on the connection error.
+  cut        a one-word message to Rich; the moment it is received, the guest's packet filter
+             refuses every connection that leaves the guest's own subnet (its loopback stays open),
+             so ssh from the host keeps working and the API does not answer (checked with Claude
+             Code's own preflight, `/api/hello`). Held until the app's log says the connection was
+             lost (Claude Code's own retries ran out and ended the turn), then --hold-seconds more.
   restore    the filter is switched off and the API answers again
   observe    within --within seconds of the restore: the turn completes, ONCE, with the one word;
              his message reached Rich once; the app's log says it lost the connection and carried
@@ -49,8 +49,7 @@ StepFailed = adopt_walk.StepFailed
 command = adopt_walk.command
 
 STEPS = ['identity', 'first-run', 'cut', 'restore', 'observe']
-WORDS = ('Do this yourself here in the conversation, not through Stu: run the shell command sleep 40, '
-         'then reply with the single word: finished.')
+WORDS = 'Reply with the single word: finished.'
 LOST = 'the internet connection is lost'
 CARRIED = 'the same turn carries on'
 PREFLIGHT = ('curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://api.anthropic.com/api/hello '
@@ -58,6 +57,18 @@ PREFLIGHT = ('curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://api.
 
 
 class NetcutWalk(adopt_walk.Walk):
+    def ax(self, mode, *args, app=None, timeout=40):
+        """A READ that hits the accessibility deadline on a busy host is asked again, twice at most
+        (ax.sh: exit 124 is the read's own deadline). Only `find`: it changes nothing, so asking
+        again cannot act twice; a click or a paste that timed out is still a failure."""
+        for attempt in range(3):
+            try:
+                return super().ax(mode, *args, app=app, timeout=timeout)
+            except StepFailed as exc:
+                if mode != 'find' or 'guest_deadline' not in str(exc) or attempt == 2:
+                    raise
+        raise AssertionError('unreachable')
+
     def ledger_rows(self):
         rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
         out = []
@@ -101,12 +112,27 @@ class NetcutWalk(adopt_walk.Walk):
             raise StepFailed('the API still answered from the guest after the cut')
         self.facts.update({'cut_subnet_kept': subnet, 'api_after_cut': answered})
         self.save()
-        time.sleep(self.a.cut_seconds)
-        log = self.app_log()
-        self.facts['lost_in_log_during_cut'] = [l for l in log.splitlines() if LOST in l]
+        # The cut is held until the app itself says Claude Code gave the turn up on the lost
+        # connection (its own retries run first and their length is Claude Code's, not ours: a
+        # fixed 300 s cut was outlasted by them on 2026-10-21), then --hold-seconds more, so the
+        # app's wait for the connection is what carries the turn on.
+        end = time.monotonic() + self.a.lost_within
+        lost = []
+        while time.monotonic() < end and not lost:
+            lost = [line for line in self.app_log().splitlines() if LOST in line]
+            if not lost:
+                if any(r.get('turn_id') == self.facts['turn'] and r.get('event') in ('TurnCompleted', 'TurnInterrupted',
+                                                                                    'TurnStopped') for r in self.ledger_rows()):
+                    raise StepFailed('the turn ended during the cut before the app said the connection was lost')
+                time.sleep(10)
+        if not lost:
+            raise StepFailed('the app never said the connection was lost within %g s of the cut' % self.a.lost_within)
+        self.facts['lost_at_ms'] = round(self.clock())
+        self.facts['lost_in_log_during_cut'] = lost
         self.save()
+        time.sleep(self.a.hold_seconds)
         return {'turn': self.facts['turn'], 'api_after_cut': answered, 'subnet_kept': subnet,
-                'lost_logged': self.facts['lost_in_log_during_cut']}
+                'lost_logged': lost, 'lost_after_cut_s': round((self.facts['lost_at_ms'] - self.facts['cut_at_ms']) / 1000)}
 
     def restore(self):
         guest(self.vm, 'sudo -n pfctl -q -d; sudo -n pfctl -q -f /etc/pf.conf; true', 30)
@@ -169,9 +195,11 @@ def main():
     p.add_argument('vm')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--expect-sha', required=True, help='the commit the bundle under test was built from')
-    p.add_argument('--cut-seconds', type=float, default=300,
-                   help='how long the guest has no internet: longer than Claude Code\'s own retries '
-                        '(10 by default, about 160 s of waits plus up to 25%% jitter)')
+    p.add_argument('--lost-within', type=float, default=1500,
+                   help='seconds after the cut for the app to say the connection was lost (Claude Code '
+                        'retries first: 15 retries since 9b5a5cd4d, at least 319.5 s of waits)')
+    p.add_argument('--hold-seconds', type=float, default=60,
+                   help='how long the cut is held after that, so the app waits for the connection')
     p.add_argument('--within', type=float, default=900, help='seconds after the restore for the turn to end')
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
