@@ -673,10 +673,12 @@ fn rich_and_stu_start_from_the_users_own_copies_which_the_app_never_writes_again
     std::fs::write(folder.join(INSTRUCTIONS), "My own rules.\n").unwrap();
     let next = prepare_for_user(&f, &folder);
     let standing = next.standing_plugin(&shipped);
-    assert_eq!(std::fs::read_to_string(standing.join("agents").join(RICH)).unwrap(), edited, "the next session follows the edit");
+    // The user's instructions.md follows each definition (a_line_in_the_users_instructions...).
+    let loaded = std::fs::read_to_string(standing.join("agents").join(RICH)).unwrap();
+    assert!(loaded.starts_with(&edited) && loaded.ends_with("My own rules.\n"), "the next session follows the edit");
     assert_eq!(std::fs::read_to_string(folder.join(RICH)).unwrap(), edited, "the user's rich.md was written over");
     assert_eq!(std::fs::read_to_string(folder.join(INSTRUCTIONS)).unwrap(), "My own rules.\n");
-    assert_eq!(std::fs::read(standing.join("agents").join(STU)).unwrap(), std::fs::read(folder.join(STU)).unwrap());
+    assert!(std::fs::read_to_string(standing.join("agents").join(STU)).unwrap().starts_with(&std::fs::read_to_string(folder.join(STU)).unwrap()));
     assert_ne!(first.user.digest, next.user.digest, "the edit must renew a session at its next boundary");
     assert_eq!(std::fs::read_to_string(first.standing_plugin(&shipped).join("agents").join(RICH)).unwrap(),
         std::fs::read_to_string(shipped.join("agents").join(RICH)).unwrap(), "a running session's plugin was changed under it");
@@ -694,6 +696,33 @@ fn rich_and_stu_start_from_the_users_own_copies_which_the_app_never_writes_again
     let profile = prepare_for_user(&linked, &folder);
     assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "Kept elsewhere.\n");
     assert_eq!(std::fs::read_to_string(profile.standing_plugin(&shipped).join("agents").join(RICH)).unwrap(), "Kept elsewhere.\n");
+}
+
+/// **The user's instructions.md reaches both agents** (second review
+/// rv-20261021T082940Z-f7fbba2a-0c12): a line written there is in Rich's and Stu's standing
+/// instructions from the next session, in full; an empty file adds nothing.
+#[test]
+fn a_line_in_the_users_instructions_reaches_both_rich_and_stu() {
+    use richos_core::user_settings::{RICH, STU, INSTRUCTIONS};
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    let shipped = engine().join("app");
+    let first = prepare_for_user(&f, &folder);
+    for name in [RICH, STU] {
+        assert_eq!(std::fs::read(first.standing_plugin(&shipped).join("agents").join(name)).unwrap(),
+            std::fs::read(folder.join(name)).unwrap(), "an empty instructions.md must add nothing to {name}");
+    }
+    let rule = "Fixture rule: sign every message with the word lighthouse.";
+    let long = format!("{rule}\n{}", "Another fixture line that makes this file long.\n".repeat(400));
+    std::fs::write(folder.join(INSTRUCTIONS), &long).unwrap();
+    let next = prepare_for_user(&f, &folder);
+    for name in [RICH, STU] {
+        let loaded = std::fs::read_to_string(next.standing_plugin(&shipped).join("agents").join(name)).unwrap();
+        assert!(loaded.starts_with(&std::fs::read_to_string(folder.join(name)).unwrap()), "{name}'s own file comes first, frontmatter intact");
+        assert!(loaded.contains(rule), "the user's rule is not in {name}'s standing instructions");
+        assert!(loaded.ends_with(&long), "{name} did not get the user's instructions in full");
+    }
+    assert_ne!(first.user.digest, next.user.digest, "the edit must renew a session at its next boundary");
 }
 
 /// With no file of the user's, the generated config is the one every lease had before; with

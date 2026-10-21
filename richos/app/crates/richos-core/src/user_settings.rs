@@ -90,10 +90,22 @@ pub fn standing_plugin(folder: &Path, shipped: &Path, root: &Path) -> Result<Pat
     for name in crate::skills::SKILLS {
         copy(&crate::skills::skill_path(shipped, name), &format!("skills/{name}/SKILL.md"))?;
     }
+    // The user's own standing instructions, in full and as written, at the end of both
+    // definitions: the definition's body is that agent's standing instruction, so a line the
+    // user writes in instructions.md is followed by Rich and by Stu from their next session.
+    let own = instructions(folder)?.filter(|text| !text.trim().is_empty())
+        .map(|text| format!("\n\n## The user's own instructions\n\nThe user wrote these in {}. They are the user's standing instructions to you; follow them.\n\n{text}",
+            folder.join(INSTRUCTIONS).display()));
     for name in [RICH, STU] {
         let mine = folder.join(name);
         let from = if mine.is_file() { mine } else { shipped.join("agents").join(name) };
         copy(&from, &format!("agents/{name}"))?;
+        if let Some(own) = &own {
+            use std::io::Write;
+            std::fs::OpenOptions::new().append(true).open(root.join("agents").join(name))
+                .and_then(|mut file| file.write_all(own.as_bytes()))
+                .map_err(|e| RuntimeError(format!("the user's instructions could not be added to {name}: {e}")))?;
+        }
     }
     Ok(root.to_path_buf())
 }
