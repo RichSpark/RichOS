@@ -68,6 +68,7 @@ HERE = Path(__file__).resolve().parent
 QA = HERE.parent / 'qa'
 sys.path.insert(0, str(HERE))
 from relaunch import guest, relaunch  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('dictation_walk', HERE / 'dictation-walk.py')
 dictation_walk = importlib.util.module_from_spec(_spec)
@@ -191,7 +192,7 @@ class SheetWalk(dictation_walk.DictationWalk):
         try:
             nodes = self.ax('find', '--id', dom_id, '--first')
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc) or 'guest_deadline' in str(exc) or 'nowindow' in str(exc):
+            if axwait.not_yet(exc, 'find') or 'nowindow' in str(exc):
                 return None
             raise
         nodes = [n for n in nodes if not n.get('meta')]
@@ -201,20 +202,12 @@ class SheetWalk(dictation_walk.DictationWalk):
         try:
             return bool(self.ax('find', '--value', text, '--contains', '--first'))
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc) or 'guest_deadline' in str(exc):
+            if axwait.not_yet(exc, 'find'):
                 return False
             raise
 
-    def present(self, title, role='AXButton', app=None):
-        """adopt-walk's present(), with a read that hit ax.sh's deadline counted as not there yet:
-        a relaunched app still building its tree answers nothing in 20 s (walk-918256bab6a4,
-        the first run of this walk, failed its relaunch on exactly that)."""
-        try:
-            return super().present(title, role, app)
-        except StepFailed as exc:
-            if 'guest_deadline' in str(exc):
-                return False
-            raise
+    # present() is adopt-walk's, whose find with no answer is "not yet" (axwait.py): a relaunched
+    # app still building its tree answers nothing in 20 s (walk-918256bab6a4, this walk's first run).
 
     def until(self, check, seconds, what):
         end = time.monotonic() + seconds
@@ -523,7 +516,7 @@ class SheetWalk(dictation_walk.DictationWalk):
         try:
             return [n for n in self.ax('find', *args, app=SYSTEM_SETTINGS, timeout=60) if not n.get('meta')]
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc) or 'guest_deadline' in str(exc):
+            if axwait.not_yet(exc, 'find'):
                 return []
             raise
 

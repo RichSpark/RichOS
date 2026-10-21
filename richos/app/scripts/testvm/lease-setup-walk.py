@@ -66,6 +66,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest, relaunch  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('command_walk', HERE / 'command-walk.py')
 command_walk = importlib.util.module_from_spec(_spec)
@@ -345,15 +346,11 @@ class LeaseSetupWalk(command_walk.CommandWalk):
             raise StepFailed('the next reply does not follow the edited rich.md: ' + reply[:200])
         return {'reply': reply[:200]}
 
-    @staticmethod
-    def _deadline(exc):
-        return 'guest_deadline' in str(exc) or 'command failed (124)' in str(exc)
-
     def by_id(self, dom_id):
         try:
             return self.ax('find', '--id', dom_id, '--first')
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc) or self._deadline(exc):
+            if axwait.not_yet(exc, 'find'):
                 return None
             raise
 
@@ -361,7 +358,7 @@ class LeaseSetupWalk(command_walk.CommandWalk):
         try:
             return self.ax('click', '--id', dom_id)
         except StepFailed as exc:
-            if not self._deadline(exc):
+            if not axwait.no_answer(exc):
                 raise
             return None
 
