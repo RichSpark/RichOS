@@ -40,6 +40,10 @@ def _alive(pid):
 
 # The first line of each duty text (engine/mega-lander/duties/), which prepare puts at the top.
 DUTY_TOP={"worker":"# Your duty in this assignment: implement","reviewer":"# Your duty in this assignment: review"}
+# The heading a repository's own instruction file sits under in a brief: the words the duties use.
+REPOSITORY_INSTRUCTIONS="## The repository's own instructions"
+# Every instruction-file name Claude Code or Codex reads at a folder's root.
+INSTRUCTION_NAMES={"CLAUDE.md","CLAUDE.local.md","AGENTS.md","AGENTS.override.md"}
 
 class DesktopWork(unittest.TestCase):
     def test_stu_replaces_legacy_host_interruption_but_cannot_override_user_stop(self):
@@ -1317,7 +1321,7 @@ class DesktopWork(unittest.TestCase):
     def instruction_section(self,brief,after=None):
         """The repository's own instructions section of a brief: from its fixed heading to the
         coordinator's brief that follows it (`after`, the worker's brief by default)."""
-        heading=self.app.INSTRUCTIONS.HEADING
+        heading=REPOSITORY_INSTRUCTIONS
         self.assertIn(heading,brief)
         start=brief.index(heading)
         return brief[start:brief.index(after or self.args["brief"],start)]
@@ -1330,7 +1334,7 @@ class DesktopWork(unittest.TestCase):
         brief=self.worker_brief(ready)
         duty=(ENGINE/"mega-lander/duties/worker.md").read_text().strip()
         section=self.instruction_section(brief)
-        self.assertTrue(brief.startswith(duty+"\n\n"+self.app.INSTRUCTIONS.HEADING),brief[:300])
+        self.assertTrue(brief.startswith(duty+"\n\n"+REPOSITORY_INSTRUCTIONS),brief[:300])
         self.assertTrue(brief.endswith(section+self.args["brief"]))
         self.assertIn("`%s`, as committed at %s." % (self.repo/"CLAUDE.md",commit[:12]),section)
         self.assertIn("> Every commit message ends with [house-rule].\n>\n> cross-repo-worktree: /somewhere/else\n",section)
@@ -1368,7 +1372,7 @@ class DesktopWork(unittest.TestCase):
 
     def test_no_instruction_file_leaves_the_brief_as_it_was(self):
         brief=self.worker_brief(self.call("prepare",self.args))
-        self.assertNotIn(self.app.INSTRUCTIONS.HEADING,brief)
+        self.assertNotIn(REPOSITORY_INSTRUCTIONS,brief)
         self.assertEqual(brief,(ENGINE/"mega-lander/duties/worker.md").read_text().strip()+"\n\n"+self.args["brief"])
 
     def test_the_reviewer_gets_the_same_file_and_a_land_changes_no_instruction_file(self):
@@ -1382,7 +1386,7 @@ class DesktopWork(unittest.TestCase):
         def instruction_files():
             return {str(p.relative_to(self.repo)):p.read_bytes() for p in self.repo.rglob("*")
                     if p.is_file() and ".git" not in p.relative_to(self.repo).parts
-                    and p.name in {Path(rel).name for rel in self.app.INSTRUCTIONS.INSTRUCTION_FILES}}
+                    and p.name in INSTRUCTION_NAMES}
         before=instruction_files()
         self.assertEqual(len(before),5)
         pair=self.reviewed_pair("house-rules")

@@ -27,7 +27,6 @@ HEADING = "## The repository's own instructions"
 CLAUDE_FILES = ("CLAUDE.md", ".claude/CLAUDE.md")
 LOCAL_FILE = "CLAUDE.local.md"
 AGENTS_FILES = ("AGENTS.md", ".claude/AGENTS.md")
-INSTRUCTION_FILES = CLAUDE_FILES + (LOCAL_FILE,) + AGENTS_FILES
 _LINK_HOPS = 8
 
 
