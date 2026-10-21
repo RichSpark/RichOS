@@ -74,7 +74,10 @@ including remote startup and shell overhead, not a pure SSH measurement. These
 phase records are ephemeral under the configured temporary root and cleaned by
 the supervisor. Partial output is preserved; the owned command group is killed.
 `SecurityAgent` windows and a modal hiding the requested control produce `blocked`,
-distinct from `notfound`. Process errors
+distinct from `notfound`. An element whose app does not answer an attribute read
+(`kAXErrorCannotComplete`, after the AX messaging timeout) ends the read
+with `unresponsive`, never a tree with that branch missing; after a press it is
+`effect_unknown`. Process errors
 retain their exit status. `TESTVM_AX_TIMEOUT` can select a different total bound for
 a controlled comparison, but increasing it is not a recovery strategy.
 

@@ -323,6 +323,36 @@ class Run(unittest.TestCase):
         self.assertEqual(exercise('type', staleAfterFocus=True, noID=True)[1].typed, 0)
         self.assertEqual(exercise('type', staleAfterFocus=True, duplicateAfterFocus=True, max=2)[1].typed, 0)
 
+    def test_an_app_that_stops_answering_is_a_failure_never_a_pruned_tree(self):
+        # kAXErrorCannotComplete arrives after the AX messaging timeout, which can fall inside the
+        # 20 s deadline: a fallback there would print a tree with a branch missing as complete.
+        world = World({})
+        P = {'mode': 'tree', 'pid': 71, 'text': None, 'value': None, 'first': False, 'nth': None,
+             'max': 100, 'depth': 16, 'contains': False}
+        stalled = FakeAX(world)
+        real_get = stalled.get
+        def get(el, attr):
+            if el is world.window and attr == 'AXChildren':
+                raise TimeoutError('AXUIElement did not answer for AXChildren (kAXErrorCannotComplete)')
+            return real_get(el, attr)
+        stalled.get = get
+        records = [json.loads(l) for l in ax.respond(P, stalled, FakeHost(world)).split('\n')]
+        self.assertEqual(len(records), 1, records)
+        self.assertEqual(records[0]['error'], 'unresponsive')
+        self.assertIn('kAXErrorCannotComplete', records[0]['detail'])
+        # A stall after the press was sent is effect_unknown: the press may have landed.
+        world = World({})
+        P = dict(P, mode='click', text='Message', first=True, expect={'value': '1'})
+        stalled = FakeAX(world)
+        real_get2 = stalled.get
+        def after_press(el, attr):
+            if world.pressed and attr == 'AXValue':
+                raise TimeoutError('did not answer')
+            return real_get2(el, attr)
+        stalled.get = after_press
+        last = json.loads(ax.respond(P, stalled, FakeHost(world)).split('\n')[-1])
+        self.assertEqual((last['error'], last['press_sent'], world.pressed), ('effect_unknown', True, 1))
+
     def test_description_falls_back_to_the_role_description(self):
         # System Events' `description` was AXRoleDescription when an element had no
         # AXDescription; the walks match on what it printed.

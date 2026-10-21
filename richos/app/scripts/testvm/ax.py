@@ -152,9 +152,14 @@ def run(P, ax, host):
         record.update(extra or {})
         return json.dumps(record)
 
+    # An attribute the element does not implement is the fallback. An app that did not ANSWER
+    # (TimeoutError, kAXErrorCannotComplete) is not: a fallback there would prune the tree
+    # silently and report it complete, so it ends the read (respond() below).
     def get(el, attr, fallback=None):
         try:
             v = ax.get(el, attr)
+        except TimeoutError:
+            raise
         except Exception:
             return fallback
         return fallback if v is None else v
@@ -168,6 +173,8 @@ def run(P, ax, host):
         # and the walks match on what it printed. Kept so a walk reads the same tree.
         try:
             v = ax.get(el, 'AXDescription')
+        except TimeoutError:
+            raise
         except Exception:
             v = None
         if v is None:
@@ -625,5 +632,15 @@ class GuestHost:
         return int(time.time() * 1000)
 
 
+def respond(P, ax, host):
+    """run(), except that an app which stopped answering is a failure with its reason. A press
+    already sent is effect_unknown inside run(); this covers the reads around it."""
+    try:
+        return run(P, ax, host)
+    except TimeoutError as e:
+        return json.dumps({'error': 'unresponsive', 'detail': '%s; the read is incomplete, so nothing is '
+                           'reported as found or absent' % e})
+
+
 if __name__ == '__main__' and 'AX_PARAMS_JSON' in globals():
-    print(run(json.loads(AX_PARAMS_JSON), AX(), GuestHost()))  # noqa: F821 - prepended by ax.sh
+    print(respond(json.loads(AX_PARAMS_JSON), AX(), GuestHost()))  # noqa: F821 - prepended by ax.sh
