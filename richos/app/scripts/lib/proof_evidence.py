@@ -633,14 +633,16 @@ INSTALL_ENVIRONMENT_NAMES = ("PATH", "HOME", "PLAYWRIGHT_BROWSERS_PATH", "RUSTUP
                              "CARGO_HOME", "RICHOS_PLAYWRIGHT", "NODE_PATH")
 
 
-def installed_dependencies(root, environment):
-    """What a check executes that git does not track (WHOLE_CHECKOUT above)."""
-    return {"checkout": checkout_installs(root), "playwright": playwright_installs(environment),
+def installed_dependencies(root, environment, browsers=None):
+    """What a check executes that git does not track (WHOLE_CHECKOUT above). `browsers`: the
+    playwright_installs(environment) reading this pass already took (InputSnapshot.browsers)."""
+    return {"checkout": checkout_installs(root),
+            "playwright": browsers if browsers is not None else playwright_installs(environment),
             "playwright_package": external_playwright(root, environment),
             "rust": rust_toolchain(root, environment)}
 
 
-def portable_dependencies(root, environment):
+def portable_dependencies(root, environment, browsers=None):
     """installed_dependencies() bound by WHAT a UI suite loads, never by WHERE the checkout is.
 
     installed_dependencies() keys the Playwright package by each absolute candidate path and binds
@@ -667,7 +669,8 @@ def portable_dependencies(root, environment):
         chain.append(digest(path_identity(module_root)))
     checkout = {name: value for name, value in checkout_installs(root).items()
                 if Path(os.path.realpath(root / name)) not in loaded}
-    return {"checkout": checkout, "playwright": playwright_installs(environment),
+    return {"checkout": checkout,
+            "playwright": browsers if browsers is not None else playwright_installs(environment),
             "playwright_package": chain, "rust": rust_toolchain(root, environment)}
 
 
@@ -719,6 +722,7 @@ class InputSnapshot:
         self.rows = {}
         self.contents = {}
         self.portables = {}
+        self.browser_installs = {}
 
     def checkout(self, root):
         key = str(root)
@@ -746,14 +750,23 @@ class InputSnapshot:
     def installed(self, root, environment):
         key = (str(root), *(environment.get(name) for name in INSTALL_ENVIRONMENT_NAMES))
         if key not in self.installs:
-            self.installs[key] = installed_dependencies(root, environment)
+            self.installs[key] = installed_dependencies(root, environment, self.browsers(environment))
         return self.installs[key]
 
     def portable(self, root, environment):
         key = (str(root), *(environment.get(name) for name in INSTALL_ENVIRONMENT_NAMES))
         if key not in self.portables:
-            self.portables[key] = portable_dependencies(root, environment)
+            self.portables[key] = portable_dependencies(root, environment, self.browsers(environment))
         return self.portables[key]
+
+    def browsers(self, environment):
+        """playwright_installs once per pass for what it reads (the browsers path and HOME): a
+        whole-checkout identity and a UI family identity each walked every browser install, so a
+        pass holding both kinds walked them twice (03-E, PRD line 139's no-execution budget)."""
+        key = (environment.get("PLAYWRIGHT_BROWSERS_PATH"), environment.get("HOME"))
+        if key not in self.browser_installs:
+            self.browser_installs[key] = playwright_installs(environment)
+        return self.browser_installs[key]
 
     def path(self, path):
         key = str(Path(path).absolute())
@@ -774,7 +787,9 @@ class InputSnapshot:
 
 
 def prepare_environment(item, root, logdir, environment, create=True):
-    recipe = contract_for(root, item.label)
+    # Only a declared contract names an isolation profile; a UI family recipe (contract_for)
+    # never does, so its whole derivation is not repeated here just to learn that (03-E).
+    recipe = declared_contract(root, item.label)
     if not recipe.get("isolation"):
         return
     if recipe["isolation"] != PRIVATE_PROFILE:
@@ -1209,12 +1224,9 @@ def require_closure(root, *starts):
         if current.suffix not in (".js", ".cjs", ".mjs"):
             continue
         try:
-            text = current.read_text(errors="replace")
+            targets = _file_scan(current)["requires"]
         except OSError:
             continue
-        targets = [match.group(2) for match in _REQUIRE.finditer(text)]
-        targets += [os.path.join(*re.findall(r"""["']([^"']+)["']""", match.group(1)))
-                    for match in _REQUIRE_JOINED.finditer(text)]
         for target in targets:
             base = current.parent / target
             for candidate in (base, Path(str(base) + ".js"), Path(str(base) + ".json"), base / "index.js"):
@@ -1260,6 +1272,30 @@ def node_builtins():
 
 
 _LOAD_SCANS = {}
+_FILE_SCANS = {}
+
+
+def _file_scan(path):
+    """{"requires": the relative targets require_closure follows, "shots": every literal
+    `shots-<folder>/<file>` outside comment lines (library_shot_names)} of one file. Read again
+    whenever the file's stat identity changes, as _file_loads and _tool_digest are: every UI suite's
+    closure holds the same shipped files, and reading each of them again for every suite, twice a
+    pass, was most of the family identity's cost (03-E, PRD line 139's no-execution budget)."""
+    info = os.stat(path)
+    key = (str(path), info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino)
+    if key not in _FILE_SCANS:
+        text = Path(path).read_text(errors="replace")
+        requires = [match.group(2) for match in _REQUIRE.finditer(text)]
+        requires += [os.path.join(*re.findall(r"""["']([^"']+)["']""", match.group(1)))
+                     for match in _REQUIRE_JOINED.finditer(text)]
+        shots = []
+        if "shots-" in text:
+            for line in text.splitlines():
+                if line.lstrip().startswith(("//", "*", "/*")):
+                    continue  # a comment's example name is no read
+                shots += [match.group(1) for match in _SHOT_FILE.finditer(line)]
+        _FILE_SCANS[key] = {"requires": requires, "shots": shots}
+    return _FILE_SCANS[key]
 
 
 def _file_loads(path):
@@ -1405,16 +1441,13 @@ def library_shot_names(root, family, label, closure, bound):
         if rel == suite or not rel.endswith((".js", ".cjs", ".mjs")):
             continue
         try:
-            text = (Path(root) / rel).read_text(errors="replace")
+            shots = _file_scan(Path(root) / rel)["shots"]
         except OSError:
             continue
-        for line in text.splitlines():
-            if line.lstrip().startswith(("//", "*", "/*")):
-                continue  # a comment's example name is no read
-            for match in _SHOT_FILE.finditer(line):
-                name = family["suites"] + "/" + match.group(1)
-                if not any(name == path or name.startswith(path + "/") for path in bound):
-                    found.add(name)
+        for shot in shots:
+            name = family["suites"] + "/" + shot
+            if not any(name == path or name.startswith(path + "/") for path in bound):
+                found.add(name)
     return sorted(found)
 
 
@@ -1471,6 +1504,17 @@ def family_invocation(root, recipe, cwd, argv):
         return recipe
     return {"fresh": "the %s family qualifies only `cd %s && %s`, not this invocation" % (
         recipe.get("family"), expected.get("cwd"), " ".join(expected.get("argv") or []))}
+
+
+def declared_contract(root, label):
+    """The contract proof-inputs.json declares for `label` by name, or {} (none, or a family's)."""
+    try:
+        data = json.loads((Path(root) / "richos/app/scripts/proof-inputs.json").read_text())
+    except FileNotFoundError:
+        return {}
+    if data.get("schema") != 1 or not isinstance(data.get("checks"), dict):
+        raise ValueError("invalid proof-inputs.json")
+    return data["checks"].get(label) or {}
 
 
 def contract_for(root, label):
@@ -1969,8 +2013,10 @@ def coverage(previous, items, identities, source):
     saved run cover its candidate's whole selected plan? Asked in the author's own checkout, so
     a check keyed by that checkout (cargo, packaging) is judged on the bytes it ran on, exactly as
     reuse() would judge it there. It never says proven where reuse() would refuse: a `fresh`
-    check and `engine receipts` are never reused, so they are named apart (FRESH_GAP), neither
-    proven nor missing: they execute at every seat, and a recovery job could not prove them."""
+    check and `engine receipts` are never reused, so one the run PASSED is named apart
+    (FRESH_GAP), neither proven nor missing: it executes at every seat. One the run failed, timed
+    out or never finished is unresolved like any other check, so it stays missing and goes into
+    the recovery job (review rv-20261020T163601Z-4b96c956-ed75 #1: a failed one was hidden)."""
     previous = Path(previous)
     plan = read_plan(previous)
     try:
@@ -1982,7 +2028,10 @@ def coverage(previous, items, identities, source):
         old = outcomes.get(item.label, {})
         identity = identities[item.label]
         if item.label == "engine receipts" or identity.get("fresh"):
-            found[item.label] = "%s %s" % (FRESH_GAP, evidence_gap(item.label, old, identity, plan))
+            if old.get("state") == "passed" and old.get("exit") == 0 and not old.get("invalid"):
+                found[item.label] = "%s %s" % (FRESH_GAP, evidence_gap(item.label, old, identity, plan))
+            else:
+                found[item.label] = "no validated passing execution"
             continue
         found[item.label] = (evidence_gap(item.label, old, identity, plan) or _saved_artifacts_hold(old)
                              or _receipt_proves(item, old))

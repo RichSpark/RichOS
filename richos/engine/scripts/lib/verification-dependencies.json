@@ -11528,7 +11528,7 @@
     },
     "scripts/prepare-agent-spawn.py": {
       "source": "scripts/prepare-agent-spawn.py",
-      "sha256": "65740e2dafc47f39392e533698f2aa2d7c3973f29e631a4eee18bc40c81a7f64",
+      "sha256": "8e47126285a2f30a8a598b63d696c4ff27cc162d09e14680c074e067cd310a10",
       "evidence": "Full prepare module reviewed: literal JSON validation and acknowledgement text construction. No command in the prepared prompt is executed.",
       "keys": [],
       "edges": []
@@ -13357,7 +13357,7 @@
     },
     "scripts/prepare-agent-spawn.test.py": {
       "source": "scripts/prepare-agent-spawn.test.py",
-      "sha256": "1db83444cbf63afa7db123b3765c1f588b7f651b8f3dbc1fa0306d0608c535aa",
+      "sha256": "9014e763e071c18f84bbcef5c1fd70f2469ec4bdcd2c3926af07c6c8fcfb6fc0",
       "evidence": "Imports only the pure preparation helper. Actual prompt verifier calls use a newly written literal config via VERIFY_REPO_ROOT_OVERRIDE and explicit private entity/teams. Prepared inflight-ack text is never executed.",
       "keys": [],
       "edges": [
@@ -14853,21 +14853,9 @@
       "external": [
         {
           "root": "repository",
-          "path": "richos/app/scripts/proof-run.py",
-          "sha256": "006f15522c39f544f788eddff5c162e670f5b00e1d28235a4005ef51cce5f310",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
           "path": "richos/app/scripts/lib/rerun_tree.py",
           "sha256": "139649a8a41a954f7a371824db72537277cb76abf5083912914e5c69b822a101",
           "evidence": "Imported by proof-run.py write_rerun when a check starts: reads the checkout's tree with git (a scratch index, add -A, write-tree) and copies itself beside the run's rerun files. Stdlib only; reads no configuration."
-        },
-        {
-          "root": "repository",
-          "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "77f1c5c4ac34d450b24a4ea3c2e5af5bb922c8b47b9a70315172b7df62909ea9",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
           "root": "repository",
@@ -14967,12 +14955,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/lib/cargo_identity.py",
-          "sha256": "755a578a69f92f535d8c9642bc17933cda599038c3df311f426ec9b2052945cd",
-          "evidence": "Private-output dispatcher used by the bound app runner. Reads Cargo manifests only for its selected workspace or private fixture; fixture imports that do not enter main execute no Cargo command."
-        },
-        {
-          "root": "repository",
           "path": "richos/app/scripts/lib/runtime_cache.py",
           "sha256": "1795b481afe2193c7432dc22d9ff9571b0b5a47475ded48e2c0317ed05c60c49",
           "evidence": "Imported by proof-run.py supply_runtime and nightly-local.py Runner.runtime_path: hashes the bytes of runtime-sources.json to name the nightly's recipe-keyed runtime cache directory, and (gui_speech_models) checks whether ~/Models/Whisper/ggml-small.en.bin and ggml-large-v3-turbo-q5_0.bin under HOME are files, the speech models gui-boot's fixture needs. Stdlib only; reads no configuration and no file contents."
@@ -14994,6 +14976,24 @@
           "path": "richos/app/scripts/nightly-local.py",
           "sha256": "cba87ed5ddb391098069d75405dbdeefe8a17883330a138bee02a5f964933bd9",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/proof-run.py",
+          "sha256": "3c3880038bcf5a3b3567642afe5bb39df1551b03e6406a0404dfdd8604fd923f",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/proof_evidence.py",
+          "sha256": "b2b6ff11547c1ff5fd8ffd226c54f8766e375b17870b57a8da633d4b08c4607e",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/cargo_identity.py",
+          "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
+          "evidence": "Private-output dispatcher used by the bound app runner. Reads Cargo manifests only for its selected workspace or private fixture; fixture imports that do not enter main execute no Cargo command."
         }
       ]
     },
@@ -15085,7 +15085,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "006f15522c39f544f788eddff5c162e670f5b00e1d28235a4005ef51cce5f310",
+          "sha256": "3c3880038bcf5a3b3567642afe5bb39df1551b03e6406a0404dfdd8604fd923f",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15109,7 +15109,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "77f1c5c4ac34d450b24a4ea3c2e5af5bb922c8b47b9a70315172b7df62909ea9",
+          "sha256": "b2b6ff11547c1ff5fd8ffd226c54f8766e375b17870b57a8da633d4b08c4607e",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15121,7 +15121,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/cargo_identity.py",
-          "sha256": "755a578a69f92f535d8c9642bc17933cda599038c3df311f426ec9b2052945cd",
+          "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
           "evidence": "Private-output dispatcher used by the bound app runner. Reads Cargo manifests only for its selected workspace or private fixture; fixture imports that do not enter main execute no Cargo command."
         },
         {
@@ -17867,7 +17867,7 @@
         "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
         "scripts/lib/testdevices.py": "4778658233aa549936341e4b85a6cac2f36e99364b7fe4381439424d29e3fec2",
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
-        "scripts/prepare-agent-spawn.py": "65740e2dafc47f39392e533698f2aa2d7c3973f29e631a4eee18bc40c81a7f64",
+        "scripts/prepare-agent-spawn.py": "8e47126285a2f30a8a598b63d696c4ff27cc162d09e14680c074e067cd310a10",
         "scripts/spawn.sh": "c1965676afbb3cca7b2659304bc23574cc738dedd84c1410841b11498ba26bc9",
         "ass-kicker/brief-done.py": "db1fd5e6658db77631bbde3d54b0ca47bbad319c14cde21bb7a44e4135efb4f3"
       },

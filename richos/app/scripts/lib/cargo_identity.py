@@ -40,7 +40,10 @@ def enable_environment(environment):
     if not shutil.which("cargo", path=env.get("PATH")):
         env["PATH"] = str(Path(cargo).parent) + os.pathsep + env.get("PATH", "")
     wrapper = str(Path(__file__).resolve().parent.parent / "bin")
-    env["PATH"] = wrapper + os.pathsep + env.get("PATH", "")
+    # Idempotent (03-E): applied by reserve.py and again by the runner it launches, the shim
+    # directory is put first once, never twice, so both launches give the same PATH.
+    rest = [p for p in env.get("PATH", "").split(os.pathsep) if p != wrapper]
+    env["PATH"] = os.pathsep.join([wrapper, *rest])
     if not env.get("RUSTC_WRAPPER") and not env.get("CARGO_BUILD_RUSTC_WRAPPER"):
         cache = shutil.which("sccache", path=env["PATH"])
         if cache:

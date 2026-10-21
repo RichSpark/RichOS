@@ -2120,7 +2120,7 @@
         "richos/app/scripts/lib/test_results.py": "9790f38172be11848fbc50fc5fc387831f25a5bda49e877e1ed4aa59fb6fa0e2",
         "richos/engine/scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "richos/app/scripts/bin/cargo": "a8bf3c3381f84deaa3be9eb793d077e0a66863bd599014d0e51772b0ed4dbed2",
-        "richos/app/scripts/lib/cargo_identity.py": "755a578a69f92f535d8c9642bc17933cda599038c3df311f426ec9b2052945cd",
+        "richos/app/scripts/lib/cargo_identity.py": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
         "richos/app/scripts/lib/cargo-cache-env.sh": "ac4a55c8cd1408e658b39e70fbb320eb478ad06bba22d3e191edbf5fa0a72913"
       },
       "requires": {
@@ -2572,7 +2572,7 @@
         "richos/engine/scripts/lib/named-persons.sh": "2c28d15414eed56676bd2c5588d66fe88f30c03dfb78e5e2752ffc5de17fffc3",
         "richos/engine/scripts/lib/named-persons.py": "3392076d89530f9a120fea16eaba9fa6053f577ae836023c691b5f0eb011c871",
         "richos/app/scripts/bin/cargo": "a8bf3c3381f84deaa3be9eb793d077e0a66863bd599014d0e51772b0ed4dbed2",
-        "richos/app/scripts/lib/cargo_identity.py": "755a578a69f92f535d8c9642bc17933cda599038c3df311f426ec9b2052945cd",
+        "richos/app/scripts/lib/cargo_identity.py": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
         "richos/app/scripts/lib/cargo-cache-env.sh": "ac4a55c8cd1408e658b39e70fbb320eb478ad06bba22d3e191edbf5fa0a72913"
       },
       "requires": {

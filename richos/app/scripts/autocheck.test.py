@@ -23,6 +23,7 @@ scratch ledger through the real escalate.sh. Nothing touches this repository or 
   INSTALL  install, --check and --uninstall, a foreign hook left alone, a chain that
            would never call the hook reported.
 """
+import hashlib
 import importlib.util
 import json
 import os
@@ -196,6 +197,25 @@ import sys
 # --only-check LABEL (a resume that runs only the named checks), as the retry of a check with
 # no verdict passes it.
 from pathlib import Path
+if "--coverage" in sys.argv:
+    # The readiness preflight (proof-run.py --coverage RUN --summary-out F): the fixture's author
+    # run names the commit it proved in RUN/candidate, its range's base in RUN/base and the checks
+    # it did not prove in RUN/missing.json.
+    run = Path(sys.argv[sys.argv.index("--coverage") + 1])
+    with open(os.environ["AUTOCHECK_FIXTURE_LOG"] + ".coverage", "a") as log:
+        log.write(str(run) + "\\n")
+    missing = json.loads((run / "missing.json").read_text()) if (run / "missing.json").exists() else {}
+    summary = {"candidate": (run / "candidate").read_text().strip(), "missing": missing, "mode": "normal",
+               "base": (run / "base").read_text().strip() if (run / "base").exists() else None,
+               "line": "fixture author coverage: %d missing" % len(missing),
+               "recovery": "cd %s && python3 richos/app/scripts/proof-run.py base..candidate --reuse %s" % (
+                   os.getcwd(), run) if missing else None}
+    print("proof-run: " + summary["line"])
+    for label, why in missing.items():
+        print("  %s: %s" % (label, why))
+    if "--summary-out" in sys.argv:
+        Path(sys.argv[sys.argv.index("--summary-out") + 1]).write_text(json.dumps(summary))
+    sys.exit(1 if missing else 0)
 with open(os.environ["AUTOCHECK_FIXTURE_LOG"] + ".runner", "a") as log:
     log.write(" ".join(sys.argv[1:]) + "\\n")
 directory = (Path(sys.argv[sys.argv.index("--log-dir") + 1]) if "--log-dir" in sys.argv
@@ -319,6 +339,17 @@ class Fixture(unittest.TestCase):
                         RICHOS_AUTOCHECK_PROOF_ROOT=str(self.base / "proof-runs"),
                         RICHOS_WORKSPACES_DIR=str(self.base / "workspaces"))
         self.repo = self.base / "repo"
+        # THE AUTHOR'S RUN (verification reliability PRD rollout): a land of a branch is refused
+        # unless an author run proves that branch's candidate (autocheck.py author_preflight). Every
+        # merge below is of a branch its author proved: git() writes the merged commit into this
+        # run before the merge (`author_proves`); a case about the refusal turns that off.
+        self.author_run = self.base / "author-run"
+        self.author_run.mkdir()
+        (self.author_run / "plan.json").write_text(json.dumps({"root": str(self.repo)}))
+        (self.author_run / "outcomes.json").write_text("{}")
+        self.env["RICHOS_AUTOCHECK_AUTHOR_RUNS"] = str(self.author_run)
+        self.env["RICHOS_PROOF_RUN_DIR"] = str(self.base / "author-proof-runs")
+        self.author_proves = True
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -375,6 +406,12 @@ class Fixture(unittest.TestCase):
                               timeout=HANG_GUARD)
 
     def git(self, *args, cwd=None, expect=0, env=None):
+        if self.author_proves and args[:1] == ("merge",) and not {"--abort", "--continue"} & set(args):
+            tip = self.run_(["git", "rev-parse", "--verify", "-q", args[-1] + "^{commit}"], cwd=cwd, env=env)
+            if tip.returncode == 0:
+                (self.author_run / "candidate").write_text(tip.stdout.strip() + "\n")
+                base = self.run_(["git", "merge-base", "HEAD", tip.stdout.strip()], cwd=cwd, env=env)
+                (self.author_run / "base").write_text(base.stdout.strip() + "\n")
         result = self.run_(["git", *args], cwd=cwd, env=env)
         if expect is not None:
             self.assertEqual(result.returncode, expect, f"git {' '.join(args)}\n{result.stdout}{result.stderr}")
@@ -2400,6 +2437,137 @@ class ActiveGate(Fixture):
         self.assertIn("autocheck: commit: passed", out.stderr)
 
 
+class AuthorProof(Fixture):
+    """THE ROLLOUT'S REFUSAL (verification reliability PRD lines 49 and 59, A8): a land of a branch
+    whose author run does not prove its candidate's whole selected plan is refused BEFORE the gate
+    runs anything, with every unresolved check named and ONE runner job that resolves them all;
+    the land after that job is not refused. Replayed through the real hooks on fixture repos."""
+
+    def test_a_land_with_no_author_run_is_refused_before_the_gate_runs_anything(self):
+        self.make()
+        self.author_proves = False
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
+        tip = self.head("feature")
+        env = {k: v for k, v in self.env.items() if k != "RICHOS_AUTOCHECK_AUTHOR_RUNS"}
+        before = self.head("main")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", env=env, expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("MERGE INTO MAIN REFUSED: the author's proof does not cover what this land brings", text)
+        self.assertIn("no author run of it was offered or is held for it", text)
+        self.assertIn("cd richos/app && bash scripts/suite.sh", text)      # the whole unproven plan
+        base = self.head("main")
+        self.assertIn(f"python3 richos/app/scripts/proof-run.py {base}..{tip}", text)   # the one job
+        self.assertEqual(self.side_log(".runner"), "", "the gate ran with the author proof missing")
+        self.assertNotIn("run cd richos/app", self.tools())
+        self.assertEqual(self.head("main"), before)
+        self.git("merge", "--abort")
+
+    def test_a_partial_author_run_is_refused_with_its_unresolved_checks_and_one_recovery_job(self):
+        self.make()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
+        (self.author_run / "missing.json").write_text(json.dumps({
+            "cd richos/app && bash scripts/suite.sh": "failed: no validated passing execution"}))
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("REFUSED: the author's proof does not cover what this land brings", text)
+        self.assertIn("cd richos/app && bash scripts/suite.sh: failed: no validated passing execution", text)
+        self.assertEqual(text.count("the one job: "), 1, text)
+        self.assertIn(f"--reuse {self.author_run}", text)
+        self.assertEqual(self.side_log(".runner"), "")
+        self.git("merge", "--abort")
+        # The recovery job ran (its run now proves the candidate): the same land is not refused.
+        (self.author_run / "missing.json").unlink()
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature")
+        self.assertIn("fixture author coverage: 0 missing", out.stderr)
+        self.assertIn(f"--reuse {self.author_run}", self.side_log(".runner"))   # offered to the gate
+        self.assertEqual(self.head("main^2"), self.head("feature"))
+
+    def test_a_run_of_only_the_last_commit_does_not_prove_the_branch(self):
+        """Review rv-20261020T174711Z-042986a6-bafe #1: the candidate was checked, its range was not,
+        so a run of the branch's last commit alone was accepted for a branch of two."""
+        self.make()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, first\n")
+        self.git("checkout", "-q", "feature")
+        self.write("richos/app/src/thing.txt", "fine, second\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "second", "--no-verify")
+        self.git("checkout", "-q", "main")
+        self.log.unlink(missing_ok=True)
+        self.author_proves = False
+        (self.author_run / "candidate").write_text(self.head("feature") + "\n")
+        (self.author_run / "base").write_text(self.head("feature^") + "\n")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("REFUSED: the author's proof does not cover what this land brings", text)
+        self.assertIn("covers only part of what the branch brings", text)
+        self.assertIn(f"{self.head('main')}..{self.head('feature')}", text)    # the whole range
+        self.assertIn(f"--reuse {self.author_run}", text)
+        self.assertEqual(self.side_log(".runner"), "")
+        self.git("merge", "--abort")
+        # The same run over the whole range proves it.
+        (self.author_run / "base").write_text(self.head("main") + "\n")
+        self.git("merge", "--no-ff", "-m", "land feature", "feature")
+        self.assertEqual(self.head("main^2"), self.head("feature"))
+
+    def test_a_run_of_another_commit_proves_nothing_about_this_one(self):
+        self.make()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
+        self.author_proves = False
+        (self.author_run / "candidate").write_text(self.head("main") + "\n")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        self.assertIn("no author run of it was offered or is held for it", out.stdout + out.stderr)
+        self.git("merge", "--abort")
+
+    def test_a_range_that_selects_nothing_needs_no_author_proof(self):
+        self.make()
+        self.author_proves = False
+        env = {k: v for k, v in self.env.items() if k != "RICHOS_AUTOCHECK_AUTHOR_RUNS"}
+        self.branch_with("docs", "docs/notes.md", "a note\n")
+        out = self.git("merge", "--no-ff", "-m", "land docs", "docs", env=env)
+        self.assertIn("selects no check, so it needs none", out.stderr)
+        self.assertEqual(self.head("main^2"), self.head("docs"))
+
+    def test_a_commit_on_main_itself_brings_no_handover(self):
+        self.make()
+        self.author_proves = False
+        env = {k: v for k, v in self.env.items() if k != "RICHOS_AUTOCHECK_AUTHOR_RUNS"}
+        self.write("richos/app/src/thing.txt", "fine, on main\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-q", "-m", "on main", env=env)
+        self.assertIn("no branch is merged here, so there is no handover to ask about", out.stderr)
+        self.assertIn("run cd richos/app && bash scripts/suite.sh", self.tools())
+
+    def test_a_run_held_for_the_candidate_in_its_checkout_is_found_without_a_named_path(self):
+        """The recovery job's run (or any author run made after the handover report) is found by the
+        handover hold proof-run.py writes, in the author's own checkout, and offered to the gate."""
+        self.make()
+        self.author_proves = False
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
+        tip = self.head("feature")
+        seat = self.base / "author-seat"
+        self.git("worktree", "add", "-q", "--detach", str(seat), tip)
+        root = self.run_(["git", "rev-parse", "--show-toplevel"], cwd=seat).stdout.strip()
+        logs = Path(self.env["RICHOS_PROOF_RUN_DIR"]) / hashlib.sha256(root.encode()).hexdigest()[:12]
+        held = logs / "20261020T180000Z-held"
+        held.mkdir(parents=True)
+        (held / "plan.json").write_text(json.dumps({"root": str(self.repo)}))
+        (held / "outcomes.json").write_text("{}")
+        (held / "candidate").write_text(tip + "\n")
+        (held / "base").write_text(self.head("main") + "\n")
+        (held / "retain").write_text(json.dumps({"holder": "handover", "candidate": tip, "checkout": root}))
+        stale = logs / "20261020T170000Z-other"
+        stale.mkdir()
+        (stale / "retain").write_text(json.dumps({"holder": "handover", "candidate": self.head("main")}))
+        env = {k: v for k, v in self.env.items() if k != "RICHOS_AUTOCHECK_AUTHOR_RUNS"}
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", env=env)
+        self.assertIn(f"author proof of {tip[:12]}: fixture author coverage: 0 missing ({held})", out.stderr)
+        self.assertIn(f"--reuse {held}", self.side_log(".runner"))
+        self.assertNotIn(str(stale), self.side_log(".runner") + self.side_log(".coverage"))
+        # The land consumed it, so its handover hold is released; the other commit's stays.
+        self.assertFalse((held / "retain").exists())
+        self.assertTrue((stale / "retain").exists())
+
+
 class ReferenceLooks(Fixture):
     """Verification reliability PRD R7 and A5 (group B's T06, group D's gate): a reference picture
     in ui/tests/shots-* is kept only with a recorded look at it, one line per picture."""
@@ -2655,7 +2823,7 @@ class AuthorRuns(unittest.TestCase):
             before = os.environ.get(module.AUTHOR_RUNS)
             os.environ[module.AUTHOR_RUNS] = os.pathsep.join([str(saved), str(empty)])
             try:
-                self.assertEqual(module.offered_author_runs("measure"), ["--reuse", str(saved)])
+                self.assertEqual(module.offered_author_runs("measure", module.author_runs(None, [])), ["--reuse", str(saved)])
                 self.assertNotIn(module.AUTHOR_RUNS, module.clean_env("common"))
             finally:
                 if before is None:
@@ -2708,22 +2876,6 @@ class AuthorRuns(unittest.TestCase):
             self.assertFalse((runs["merged"] / "retain").exists())
             self.assertTrue((runs["unmerged"] / "retain").exists())
             self.assertTrue((runs["foreign"] / "retain").exists())
-
-    def test_the_preflight_says_when_no_author_proof_was_offered(self):
-        from unittest import mock
-        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        said = []
-        before = os.environ.pop(module.AUTHOR_RUNS, None)
-        try:
-            with mock.patch.object(module, "say", side_effect=said.append):
-                module.author_preflight("land")
-        finally:
-            if before is not None:
-                os.environ[module.AUTHOR_RUNS] = before
-        self.assertIn("no saved author run was offered", " ".join(said))
-
 
 class TimeLimit(unittest.TestCase):
     """A check that runs out of time ends gracefully and leaves no process (2026-10-09: the

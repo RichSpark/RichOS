@@ -1327,6 +1327,268 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         # Nothing was written: coverage reads only.
         self.assertFalse((previous.logdir / "reused").exists())
 
+    def test_the_preflight_keeps_a_failed_fresh_check_unresolved(self):
+        """Review rv-20261020T163601Z-4b96c956-ed75 #1, the reviewer's fixture through the real
+        preflight: a `fresh` check went into the fresh bucket before its saved outcome was read, so
+        one the author's run failed or timed out left the preflight at exit 0, nothing missing and
+        no recovery job. A passed one is still only "fresh at every seat"; none is ever proven."""
+        source = {"commit": "a" * 40, "tracked_diff_sha256": "clean", "untracked_sha256": "clean"}
+        identity = {"fresh": "external pin validator must run every time"}
+        label = "engine scripts/verification-pins.test.sh"
+        for state, rc, unresolved in [("passed", 0, False), ("failed", 1, True), ("timed-out", 124, True)]:
+            saved = Path(self.tmp.name) / ("fresh-" + state)
+            saved.mkdir()
+            item = runner.Item(label, str(self.root), ["bash", "pins"])
+            record = evidence.Record(str(self.root), saved, [item], source, {label: identity},
+                                     selection={"base": "b" * 40, "candidate": source["commit"], "mode": "normal"})
+            self.addCleanup(record.close)
+            item.state, item.rc, item.log = state, rc, str(saved / "execution.log")
+            Path(item.log).write_text("fixture execution: " + state + "\n")
+            record.checkpoint([item])
+            args = SimpleNamespace(coverage=str(saved), summary_out=str(saved / "coverage.json"))
+            with patch.object(runner, "ROOT", str(self.root)), \
+                    patch.object(runner, "head_commit", return_value=source["commit"]), \
+                    patch.object(runner, "source_identity", return_value=source), \
+                    patch.object(runner, "selection", return_value=[]), \
+                    patch.object(runner, "plan", return_value=[item]), \
+                    patch.object(runner, "default_logdir", return_value=str(Path(self.tmp.name) / "history")), \
+                    patch.object(runner, "history_weights", return_value={}), \
+                    patch.object(runner, "supply_runtime"), \
+                    patch.object(runner, "supply_speech_models"), \
+                    patch.object(evidence, "prepare_environment"), \
+                    patch.object(runner, "execution_environment", return_value={}), \
+                    patch.object(runner, "input_identity", return_value=identity), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                status = runner.author_coverage(args)
+            summary = json.loads(Path(args.summary_out).read_text())
+            self.assertEqual(summary["proven"], [], state)
+            if unresolved:
+                self.assertEqual(status, 1, output.getvalue())
+                self.assertEqual(list(summary["missing"]), [label], state)
+                self.assertTrue(summary["missing"][label].startswith(state + ":"), summary["missing"])
+                self.assertEqual(summary["fresh"], {}, state)
+                self.assertIn("--reuse", summary["recovery"] or "")
+                self.assertTrue((summary["recovery"] or "").endswith(Path(saved).name), summary["recovery"])
+            else:
+                self.assertEqual(status, 0, output.getvalue())
+                self.assertEqual(summary["missing"], {}, state)
+                self.assertTrue(summary["fresh"][label].startswith(evidence.FRESH_GAP), summary["fresh"])
+                self.assertIsNone(summary["recovery"])
+
+    def test_the_preflight_reads_the_saved_plan_when_the_checkout_reads_as_the_run_started(self):
+        """PRD line 139, the no-execution budget (03-E): selecting again cost about 45 s of the
+        preflight's 49, for a plan that is a function of the range, the mode and the checkout's
+        bytes. With the bytes as the run started, the saved plan is that selection and nothing is
+        selected; with any change it selects again, so a suite a final edit adds is still missing.
+        The inputs are read now either way."""
+        source = dict(self.source)
+        saved = Path(self.tmp.name) / "saved-plan"
+        saved.mkdir()
+        lines = ["cd . && bash fixture.sh"]
+        args = SimpleNamespace(coverage=str(saved), summary_out=str(saved / "coverage.json"), capacity=2,
+                               engine_shards=1, fail_fast=False, as_printed=False)
+        with patch.object(runner, "ROOT", str(self.root)):
+            items = runner.plan(lines, args, str(saved), {})
+        label = items[0].label
+        record = evidence.Record(str(self.root), saved, items, source, {label: dict(self.inputs)},
+                                 selection={"base": "b" * 40, "candidate": source["commit"], "mode": "normal"})
+        self.addCleanup(record.close)
+        items[0].state, items[0].rc, items[0].log = "passed", 0, str(saved / "execution.log")
+        Path(items[0].log).write_text("passed\n")
+        record.checkpoint(items)
+        selected = []
+
+        def select(_args):
+            selected.append(True)
+            return lines + ["cd . && bash added-by-a-final-edit.sh"]
+
+        def preflight(now):
+            with patch.object(runner, "ROOT", str(self.root)), \
+                    patch.object(runner, "head_commit", return_value=source["commit"]), \
+                    patch.object(runner, "source_identity", return_value=now), \
+                    patch.object(runner, "selection", side_effect=select), \
+                    patch.object(runner, "default_logdir", return_value=str(Path(self.tmp.name) / "history")), \
+                    patch.object(runner, "history_weights", return_value={}), \
+                    patch.object(runner, "supply_runtime"), \
+                    patch.object(runner, "supply_speech_models"), \
+                    patch.object(evidence, "prepare_environment"), \
+                    patch.object(runner, "execution_environment", return_value={}), \
+                    patch.object(runner, "input_identity", side_effect=lambda item, *_a, **_k: dict(self.inputs)), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                rc = runner.author_coverage(args)
+            return rc, json.loads(Path(args.summary_out).read_text()), output.getvalue()
+
+        rc, summary, out = preflight(dict(source))
+        self.assertEqual((rc, selected), (0, []), out)
+        self.assertEqual(summary["proven"], [label])
+        self.assertIn("the run's saved plan", out)
+        rc, summary, out = preflight(dict(source, untracked_sha256="a final edit"))
+        self.assertEqual((rc, selected), (1, [True]), out)
+        self.assertEqual(summary["proven"], [label])
+        self.assertEqual(list(summary["missing"].values()), ["selected now, never in the run's plan"])
+        self.assertIn("selected again", out)
+
+    def review_range_probe(self, fail_fast):
+        """Review rv-20261020T174711Z-042986a6-bafe's probe: three real commits (main, an alpha fix,
+        then a beta fix), a saved run of the author's checks with real passing executions, and the
+        real author_coverage. Returns (exit, summary, output, root, main, narrow base, tip, run)."""
+        base = Path(self.tmp.name) / ("range-probe-%s" % fail_fast)
+        root = base / "repo"
+        scripts = root / "richos/app/scripts"
+        scripts.mkdir(parents=True)
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+        def git(*args):
+            return subprocess.check_output([
+                "git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture",
+                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *args],
+                cwd=root, env=clean_env, stderr=subprocess.PIPE, text=True).strip()
+
+        (root / "alpha.sh").write_text("exit 0\n")
+        (root / "beta.sh").write_text("exit 0\n")
+        (root / "review.md").write_text("Each fixture script reads only itself.\n")
+        (root / "qualification.json").write_text(json.dumps({"schema": 1, "review": "review.md", "requires": {
+            "paths": [], "tools": [], "environment": [], "external": []}}))
+        recipes = {label: {"paths": [label + ".sh"], "tools": ["bash"], "environment": [], "external": [],
+                           "qualification": "qualification.json"} for label in ("alpha", "beta")}
+        (scripts / "proof-inputs.json").write_text(json.dumps({"schema": 1, "checks": recipes}))
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "base")
+        main = git("rev-parse", "HEAD")
+        git("checkout", "-qb", "author")
+        (root / "alpha.sh").write_text("# alpha fix\nexit 0\n")
+        git("add", ".")
+        git("commit", "-qm", "alpha fix")
+        narrow = git("rev-parse", "HEAD")
+        (root / "beta.sh").write_text("# beta fix\nexit 0\n")
+        git("add", ".")
+        git("commit", "-qm", "beta fix")
+        tip = git("rev-parse", "HEAD")
+        run = base / "saved"
+        run.mkdir()
+        with patch.object(runner, "author_coverage", side_effect=lambda args: args):
+            args = runner.run_main(["--coverage", str(run), "--summary-out", str(base / "coverage.json")], {})
+        planned = SimpleNamespace(**vars(args))
+        planned.fail_fast, planned.commands = fail_fast, None
+        output = io.StringIO()
+        with patch.object(runner, "ROOT", str(root)), \
+                patch.object(runner, "supply_runtime"), patch.object(runner, "supply_speech_models"), \
+                patch.object(runner, "execution_environment", return_value=clean_env):
+            # With --fail-fast: the whole branch, beta's run failed. Without: only beta, the last commit.
+            lines = ["cd . && bash alpha.sh", "cd . && bash beta.sh"] if fail_fast else ["cd . && bash beta.sh"]
+            items = runner.plan(lines, planned, str(run), {})
+            identities = {i.label: runner.input_identity(i, planned, str(run)) for i in items}
+            record = evidence.Record(root, run, items, runner.source_identity(), identities,
+                selection={"base": main if fail_fast else narrow, "candidate": tip, "mode": "normal"})
+            try:
+                for item in items:
+                    done = subprocess.run(item.argv, cwd=root, env=clean_env, capture_output=True, text=True)
+                    failed = fail_fast and item.label == "beta"
+                    item.state, item.rc = ("failed", 1) if failed else ("passed", done.returncode)
+                    item.log = str(run / (item.label + ".log"))
+                    Path(item.log).write_text(done.stdout + done.stderr)
+                record.checkpoint(items)
+            finally:
+                record.close()
+            with contextlib.redirect_stdout(output):
+                rc = runner.author_coverage(args)
+        return rc, json.loads(Path(args.summary_out).read_text()), output.getvalue(), root, main, narrow, tip, run
+
+    def test_the_preflight_reads_a_run_under_the_settings_it_ran_with(self):
+        """Review rv-20261020T174711Z-042986a6-bafe #2, its fixture: a pass made with --fail-fast was
+        "declared execution inputs changed" under this process's default settings, and the recovery
+        job dropped --fail-fast, so it could reuse nothing. The run's own settings are read back."""
+        rc, summary, out, *_rest = self.review_range_probe(fail_fast=True)
+        self.assertEqual(summary["proven"], ["alpha"], out)
+        self.assertEqual(list(summary["missing"]), ["beta"], out)
+        self.assertTrue(summary["missing"]["beta"].startswith("failed:"), summary["missing"])
+        self.assertEqual(rc, 1)
+        self.assertIn(" --fail-fast ", summary["recovery"])
+
+    def test_the_land_refuses_a_run_of_only_the_branchs_last_commit(self):
+        """Review rv-20261020T174711Z-042986a6-bafe #1, its fixture: the land checked the run's
+        candidate and never its range, so a run of the last of two commits was accepted (preflight
+        exit 0, the selector never asked). The range must start on the branch landed onto."""
+        autocheck_spec = importlib.util.spec_from_file_location("autocheck_range", HERE / "autocheck/autocheck.py")
+        autocheck = importlib.util.module_from_spec(autocheck_spec)
+        autocheck_spec.loader.exec_module(autocheck)
+        rc, summary, out, root, main, narrow, tip, run = self.review_range_probe(fail_fast=False)
+        self.assertEqual((rc, summary["proven"], summary["missing"]), (0, ["beta"], {}), out)
+        subprocess.run(["git", "checkout", "-q", "main"], cwd=root, check=True,
+                       env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
+        repo = SimpleNamespace(top=root, env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
+        selected, said = [], []
+        with patch.object(autocheck, "coverage_of", return_value=(rc, summary, out.splitlines(), str(root))), \
+                patch.object(autocheck, "select", side_effect=lambda *_a, **_k: selected.append(True)), \
+                patch.object(autocheck, "say", side_effect=said.append):
+            refused = autocheck.author_preflight(repo, "land", [tip], [str(run)])
+        text = "\n".join(said)
+        self.assertEqual(refused, 1, text)
+        self.assertIn("covers only part of what the branch brings", text)
+        self.assertIn("%s..%s --reuse %s" % (main, tip, run), text)
+        self.assertEqual(selected, [])
+
+    def test_the_runner_environment_is_the_same_whether_or_not_reserve_launched_it(self):
+        """03-E, found by the recovery demonstration: a job run through reserve.py (the documented
+        launch) saved identities with reserve.py's Cargo environment (RUSTC_WRAPPER, SCCACHE_DIR, the
+        cargo shim on PATH), and the land's preflight, launched without it, read every pass as
+        "declared execution inputs changed". The runner applies the same rule itself, idempotently."""
+        import cargo_identity
+        seen = []
+        base = {k: v for k, v in os.environ.items()
+                if k not in ("RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER", "SCCACHE_DIR")}
+        shim = str(HERE / "bin")
+        base["PATH"] = os.pathsep.join(p for p in base.get("PATH", "").split(os.pathsep) if p != shim)
+        for start in (base, cargo_identity.enable_environment(base)):     # direct; through reserve.py
+            with patch.dict(os.environ, start, clear=True), \
+                    patch.object(runner, "author_coverage", side_effect=lambda args: seen.append(dict(os.environ))):
+                runner.run_main(["--coverage", str(self.root)], {})
+        self.assertEqual(seen[0], seen[1])
+        self.assertEqual(seen[0]["PATH"].split(os.pathsep).count(shim), 1)
+
+    def test_the_preflight_reads_run_files_under_a_resolved_scratch(self):
+        """03-E, found by the recovery demonstration: a run-tests.sh check's command names its result
+        file as $RUN/... only when the path starts with the resolved run directory, and the
+        preflight's scratch was not resolved, so under a TMPDIR behind a symlink (macOS's /var ->
+        /private/var) every such check read as "declared execution inputs changed"."""
+        real = Path(self.tmp.name) / "real-tmp"
+        real.mkdir()
+        linked = Path(self.tmp.name) / "linked-tmp"
+        linked.symlink_to(real)
+        saved = Path(self.tmp.name) / "scratch-run"
+        saved.mkdir()
+        lines = ["cd . && scripts/run-tests.sh --no-host-screen --only fixture.test.sh"]
+        args = SimpleNamespace(coverage=str(saved), summary_out=str(saved / "coverage.json"), capacity=2,
+                               engine_shards=1, fail_fast=False, as_printed=False)
+        with patch.object(runner, "ROOT", str(self.root)):
+            items = runner.plan(lines, args, str(saved), {})
+        self.assertTrue(any("results-out" in a for a in items[0].argv), items[0].argv)
+
+        def identity(item, _args, logdir, *_rest):
+            return {"paths": {"fixture": "digest"}, "command": evidence.command_identity(item, str(self.root), logdir)}
+
+        with patch.object(runner, "ROOT", str(self.root)):
+            record = evidence.Record(str(self.root), saved, items, dict(self.source),
+                                     {items[0].label: identity(items[0], args, str(saved))},
+                                     selection={"base": "b" * 40, "candidate": self.source["commit"], "mode": "normal"})
+        self.addCleanup(record.close)
+        items[0].state, items[0].rc, items[0].log = "passed", 0, str(saved / "execution.log")
+        Path(items[0].log).write_text("passed\n")
+        record.checkpoint(items)
+        with patch.object(runner, "ROOT", str(self.root)), \
+                patch.object(tempfile, "tempdir", str(linked)), \
+                patch.object(runner, "head_commit", return_value=self.source["commit"]), \
+                patch.object(runner, "source_identity", return_value=dict(self.source)), \
+                patch.object(runner, "supply_runtime"), patch.object(runner, "supply_speech_models"), \
+                patch.object(evidence, "prepare_environment"), \
+                patch.object(runner, "execution_environment", return_value={}), \
+                patch.object(runner, "input_identity", side_effect=identity), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            rc = runner.author_coverage(args)
+        summary = json.loads(Path(args.summary_out).read_text())
+        self.assertEqual((rc, summary["proven"]), (0, [items[0].label]), output.getvalue())
+
     def test_the_summary_carries_its_own_coverage_line_and_never_counts_known_red_as_passed(self):
         """PRD A11/A14: the line is counted from the summary's own rows, a KNOWN-RED unit is named
         beside the passes (an established exception, never a pass) and NOT RUN is never a pass."""
@@ -2200,6 +2462,67 @@ class UiFamily(unittest.TestCase):
         for root in (self.root, self.worktree):
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             (root / rel).write_text(text)
+
+    def test_a_shared_library_is_read_once_for_every_suite_and_again_once_it_changes(self):
+        """03-E, PRD line 139's no-execution budget: every UI suite's closure holds the same
+        library files, and reading each again for every suite (twice for the closure, once for
+        its loads) was most of the family identity's cost. Each file's requires and picture names
+        are now read once per stat identity, as its loads are; a change is read at once, so a
+        library that gains a require or names a picture changes the recipe of every suite that
+        loads it. prepare_environment no longer derives a family recipe at all."""
+        harness = self.root / "richos/app/ui/tests/lib/harness.js"
+        reads = []
+        original = Path.read_text
+
+        def counting(path, *args, **kwargs):
+            if Path(path) == harness:
+                reads.append(path)
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", autospec=True, side_effect=counting):
+            first = evidence.contract_for(self.root, "a.js")
+            evidence.contract_for(self.root, "b.js")
+            evidence.prepare_environment(SimpleNamespace(label="a.js"), self.root, self.tmp.name, self.environment)
+        self.assertLessEqual(len(reads), 2, "the library was read %d times for two suites" % len(reads))
+        self.assertNotIn("richos/app/ui/tests/lib/extra.js", first["paths"])
+        self.edit("richos/app/ui/tests/lib/extra.js", "// a new library\n")
+        self.edit("richos/app/ui/tests/lib/harness.js",
+                  'require("./ui-sources");\nrequire("./extra");\nconst bound = "shots-b/one.png";\n')
+        again = evidence.contract_for(self.root, "a.js")
+        self.assertIn("richos/app/ui/tests/lib/extra.js", again["paths"])
+        self.assertEqual(again.get("exists"), ["richos/app/ui/tests/shots-b/one.png"])
+
+    def test_one_pass_reads_the_browser_installs_once_for_both_kinds_of_identity(self):
+        """03-E, PRD line 139's no-execution budget: a whole-checkout identity and a UI family
+        identity each walked every browser install, so a pass holding both kinds walked them
+        twice (three times with two environments: 10 of the preflight's 27 profiled seconds).
+        One reading per pass now, shared by both; the next pass reads again, so a changed install
+        still changes both identities."""
+        walks = []
+        real = evidence.playwright_installs
+
+        def counting(environment):
+            walks.append(environment.get("PLAYWRIGHT_BROWSERS_PATH"))
+            return real(environment)
+
+        recipe = evidence.family_invocation(self.root, evidence.contract_for(self.root, "a.js"),
+                                            self.root / "richos/app/ui/tests", ["node", "a.js"])
+
+        def one_pass():
+            snapshot = evidence.InputSnapshot()
+            ui = evidence.recipe_identity(self.root, recipe, self.environment, snapshot)
+            whole = evidence.checkout_identity(self.root, ["node", "b.js"], self.environment, snapshot)
+            return ui["installed"]["playwright"], whole["installed"]["playwright"]
+
+        with patch.object(evidence, "playwright_installs", side_effect=counting):
+            first = one_pass()
+            self.assertEqual(len(walks), 1, walks)
+            (self.browsers / "chromium-1/updated").write_text("a changed install\n")
+            second = one_pass()
+        self.assertEqual(len(walks), 2, walks)
+        self.assertEqual(first[0], first[1])
+        self.assertNotEqual(second[0], first[0])
+        self.assertNotEqual(second[1], first[1])
 
     def test_the_same_bytes_in_another_worktree_are_the_same_identity(self):
         first, second = self.identity(self.root), self.identity(self.worktree)
