@@ -20,9 +20,9 @@ Each start also gets a `--plugin-dir` whose `skills/` holds one real folder and 
 folder, and reports which of the two `system/init.skills` lists (the premise of
 engine_profile.rs `link_skills`).
 
-EXIT. 0: the lease kept all three and control-default deleted its 60-day transcript (so a sweep
-was visible to this probe). 1: the lease deleted something. 2: no sweep was seen in
-control-default either, so the probe cannot tell. The JSON for each start goes to stdout.
+EXIT. 0: every start reached system/init, the lease kept all three and control-default deleted its
+60-day transcript (so a sweep was visible to this probe). 1: the lease deleted something. 2: a start
+never reached system/init, or no sweep was seen in control-default either, so the probe cannot tell. The JSON for each start goes to stdout.
 """
 import argparse
 import json
@@ -128,7 +128,8 @@ def start(claude, root, sources, user_settings):
     debug = ""
     if os.path.exists(os.path.join(root, "debug.log")):
         debug = open(os.path.join(root, "debug.log"), errors="replace").read()
-    return {"setting_sources": sources, "user_settings": user_settings, "kept": kept,
+    return {"setting_sources": sources, "user_settings": user_settings, "started": init is not None,
+            "exit": proc.returncode, "kept": kept,
             "deleted": sorted(set(AGES) - set(kept)),
             "init_skills": sorted(s for s in (init or {}).get("skills", []) if s.startswith("skillprobe:")),
             "retention_log": [l for l in debug.splitlines()
@@ -155,6 +156,13 @@ def main():
     if results["lease"]["deleted"]:
         print(f"the lease-shaped start DELETED {results['lease']['deleted']}", file=sys.stderr)
         return 1
+    unstarted = [case for case in CASES if not results[case]["started"]]
+    if unstarted:
+        # A start that never reached system/init measured nothing: keeping every transcript is
+        # then no answer (second review rv-20261021T185839Z-93ecee44-dd52, P3).
+        print(f"no system/init frame from {unstarted}: that start measured nothing, so this probe cannot tell",
+              file=sys.stderr)
+        return 2
     if "age060" not in results["control-default"]["deleted"]:
         print("no sweep was seen in control-default either, so this probe cannot tell", file=sys.stderr)
         return 2

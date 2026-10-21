@@ -90,9 +90,10 @@
 #   US1-US4 usage-shape: a get_usage answer RichOS's reader gets no figures from (rate_limits
 #           null) exits 1 naming the rule; a readable one exits 0; no binary and a
 #           claude that never answers are refused, against a scripted claude
-#   LR1-LR4 lease-retention-probe: a lease that keeps everything while the default control
+#   LR1-LR5 lease-retention-probe: a lease that keeps everything while the default control
 #           sweeps exits 0; a lease that deletes exits 1; no sweep anywhere exits 2; no binary
-#           is refused, against a scripted claude
+#           is refused; a lease start that dies before system/init exits 2, against a
+#           scripted claude
 #   X1      the committed fixtures still match their generator
 #
 # run-tests: no-host-screen: its only capture/keystroke references are the strings it asserts those two tools REFUSE to act on, and its frames are committed PNG fixtures
@@ -1653,7 +1654,7 @@ LR="$QA/lease-retention-probe.py"
 # behavior is in the file, not a variable): each reads the probe's two frames, deletes fixture
 # transcripts as its mode says for the --setting-sources it was given, then prints an init frame
 # and a result.
-for mode in honest lease-sweeps never; do
+for mode in honest lease-sweeps never no-init; do
   sed "s/@MODE@/$mode/" > "$TMP/fake-retention-claude-$mode" <<'FAKE'
 #!/bin/sh
 [ "${1:-}" = "--version" ] && { echo "9.9.9 (scripted)"; exit 0; }
@@ -1662,8 +1663,9 @@ src=absent; prev=
 for a in "$@"; do [ "$prev" = "--setting-sources" ] && src="[$a]"; prev="$a"; done
 gone() { find "$HOME/.claude/projects" -name "*-$1.jsonl" -delete; }
 case "@MODE@:$src" in
-  honest:absent) gone age060; gone age150 ;;
-  'honest:[user]') gone age150 ;;
+  honest:absent|no-init:absent) gone age060; gone age150 ;;
+  'honest:[user]'|'no-init:[user]') gone age150 ;;
+  'no-init:[]') echo "fixture: lease startup failed before system/init" >&2; exit 64 ;;
   lease-sweeps:*) gone age060 ;;
 esac
 printf '%s\n' '{"type":"system","subtype":"init","skills":["skillprobe:probe-copied","skillprobe:probe-linked"]}'
@@ -1679,6 +1681,8 @@ run "$LR" --claude "$TMP/fake-retention-claude-never"
 expect "LR3 no sweep in the default control either is no answer, exit 2" 2 "cannot tell"
 run "$LR" --claude "$TMP/no-such-claude"
 expect "LR4 no claude binary is refused, exit 2" 2 "is not an executable"
+run "$LR" --claude "$TMP/fake-retention-claude-no-init"
+expect "LR5 a lease start that dies before system/init measured nothing, exit 2" 2 "that start measured nothing"
 
 echo ""
 echo "=== X. the fixtures are still the fixtures ==="
