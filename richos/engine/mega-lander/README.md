@@ -66,7 +66,7 @@ creator as part of preparing a cross-repo agent. The creator can also be run
 directly: `mega-lander/create-teammate-worktree.sh <repo> <agent-name>`.
 
 One agent can work in SEVERAL other repositories: give `spawn.sh` one `--repo`
-per repository, and it creates and registers one `cc/` workspace in each under
+per repository and it creates and registers one `cc/` workspace in each under
 the one agent name, with one `cross-repo-worktree:` line per workspace in the
 payload. Run by hand, the creator does the same thing when it is run again with
 a different `<repo>` and the same `<agent-name>`; a second workspace in the SAME
@@ -100,9 +100,9 @@ store, because that store is partitioned per conversation. `app.py`'s
 keyed to the realpath of the repository's `--git-common-dir`, so two paths to
 one repository — a symlinked connection, a linked worktree — are one lock and
 two different repositories are two. It is held across the whole land: the
-recorded-tip check, the fast-forward, and the workspace cleanup. Two
+recorded-tip check, the merge and the workspace cleanup. Two
 conversations may share a repository and their lands take turns; the second one
-waits, reports what it waited for, and refuses only if the holder has not
+waits, reports what it waited for and refuses only if the holder has not
 released within `RICHOS_LAND_LOCK_TIMEOUT` (600s) — a refusal that names the
 holding thread and confirms nothing was merged. Order among waiters is the
 kernel's rather than a first-come queue, because a ticket file is not
@@ -113,18 +113,28 @@ it resolves inside either per-conversation partition. The path is derived in
 to read it and `workspaces.py` cannot import `app.py`; one keying rule, in the
 layer both halves can reach.
 
+The land itself is the merge the terminal's lander runs (`workspaces.sh merge`):
+`git merge --no-ff` of the reviewed commit, in the repository's checkout, with
+the repository's own hooks. So its merge-time check (`pre-merge-commit`) runs
+before the merge commit exists and a refusal lands nothing and is returned in
+the check's own words. Where the repository's land fence is on
+(`operator-fences.sh`, its `reference-transaction` hook), the land takes the
+land lease as itself under the same lock, holds it for exactly its land and
+releases it before the lock. Both are the repository's settings; the app names
+none of them.
+
 Beside each lock is that repository's **land record**, `<label>-<digest>.lands`
 — one appended JSON line per land, naming the conversation thread, the branch,
 the before tip and the commit. Appended and never overwritten, because the lock
 file itself holds one holder record that the next lander rewrites in place, so
 of two lands in a row only the second would survive. It is written at the moment
-the fast-forward happens, under the lock, so a repeated `integrate` records
+the merge moves the branch, under the lock, so a repeated `integrate` records
 nothing.
 
 That record is what lets a thread be TOLD its base moved. `_restore_protected_refs`
 reports a fast-forward of a recorded branch when the land record attributes it to
 a **different** conversation (`<branch> MOVED UNDER YOU`, through
-`observe-created-refs.sh`), stays silent for this conversation's own land, and
+`observe-created-refs.sh`), stays silent for this conversation's own land and
 reports a move no record names **only** where that repository keeps land records
 at all — a repository with none is the terminal path, where Rich lands by hand
 and `guard-inflight-notify.sh` tells the teammates at the push. Nothing is
