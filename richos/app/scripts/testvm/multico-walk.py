@@ -179,7 +179,7 @@ class Walk(cw.CommandWalk):
                        '&& git init -q && git add README.md && git -c user.name=QA -c user.email=qa@example.invalid '
                        'commit -q -m init; fi'.format(c=shlex.quote(self.beta)))
         before = {t['thread_id'] for t in self.threads()}
-        self.press('New chat or company')
+        self.ax('click', '--id', 'rail-new-thread')  # the rail's "+ New chat or company" button, by its DOM id
         time.sleep(1)
         opened = False
         for role in ('AXMenuItem', 'AXButton', 'AXStaticText'):
