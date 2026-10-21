@@ -32,6 +32,7 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -115,7 +116,39 @@ class Walk:
                 return True
             time.sleep(1)
         why = f'; the last read had no answer: {self.unanswered}' if self.unanswered else ''
+        if self.unanswered:
+            why += '\n' + self.photograph_app()
         raise StepFailed(f'{role} "{title}" never appeared within {seconds} s{why}')
+
+    def photograph_app(self):
+        """What the app and the guest were doing when a wait ended with no answer. A read the app
+        did not answer fails in about 3 s (kAXErrorCannotComplete), before ax-deadline.py's
+        overdue snapshot starts, so nothing told a blocked app from a starved guest
+        (esc-20261021T212321Z-0d63eb9f). The same instruments, taken here: `sample` of the
+        recorded app pid and of the web view's process, and the guest's `top`. The full text goes
+        to the walk's out folder; the main threads' heaviest paths go into the failure."""
+        spec = importlib.util.spec_from_file_location('ax_deadline', HERE / 'ax-deadline.py')
+        deadline = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(deadline)
+        state = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / self.vm
+        try:
+            pid = (state / 'app.pid').read_text().strip()
+            pids = [('app pid ' + pid, pid)] if pid.isdigit() else []
+            pids += [('WebContent pid ' + p, p) for p in
+                     guest(self.vm, 'pgrep -f com.apple.WebKit.WebContent || true').split()[:2]]
+            raw, lines = [], []
+            top = guest(self.vm, 'top -l 2 -s 1 -n 10 -o cpu -stats pid,command,cpu,state,th,mem', 60)
+            raw.append('--- guest top\n' + top)
+            lines += ['guest top:'] + ['  ' + l for l in deadline._top_summary(top)[:14]]
+            for label, p in pids:
+                text = guest(self.vm, 'sample %s 1 10 -mayDie 2>&1 || true' % p, 60)
+                raw.append('--- ' + label + '\n' + text)
+                lines += [label + ', main thread, heaviest path:'] + \
+                         ['  ' + f for f in deadline._heaviest_path(text, limit=25)]
+            (self.out / 'unanswered-photo.txt').write_text('\n'.join(raw) + '\n')
+            return '\n'.join(lines)
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
+            return 'photograph of the app failed: %s' % exc
 
     def type_into(self, text, *selector, app=None):
         # ax.sh type pastes through the guest clipboard and refuses one that holds no text.
