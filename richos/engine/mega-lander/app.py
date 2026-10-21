@@ -836,15 +836,15 @@ CONSULT_ANSWER_LIMIT = 100000
 TEAMMATE_NAME = re.compile(r"[a-z][a-z0-9]{1,15}")
 
 
-def teammate_model(teammate):
-    """The model an ACTIVE teammate runs on: its own definition's `model:` line (plan §5).
+def active_definition(teammate):
+    """The frontmatter of an ACTIVE teammate's definition, whose `model:` line is the model it
+    runs on unless one job names another (plan §5; `job_model`).
 
     Active means on the roster this lease registered, `<entity root>/.claude/agents/`, which
     is the same file the isolation guard resolves `richos-app-engine:<teammate>` to and the
     same bytes the lease's plugin carries (`EngineProfile::prepare`). A name that is not
-    there is refused with the names that are. The `model:` line gets the guard's own reading
-    (scripts/lib/resolve-model.sh): the first frontmatter block, lowercased, a verbose id
-    reduced to the alias it contains, which must be one ALLOWED_MODELS lists."""
+    there is refused with the names that are. The frontmatter gets the guard's own reading
+    (scripts/lib/resolve-model.sh): the first frontmatter block, lowercased (`front_matter`)."""
     if not TEAMMATE_NAME.fullmatch(teammate):
         raise ValueError("teammate must be an active teammate's name: 2 to 16 lowercase letters and digits")
     root = Path(os.environ["RICHOS_ENTITY_ROOT"])
@@ -853,7 +853,7 @@ def teammate_model(teammate):
     if teammate in DUTIES or path.is_symlink() or not path.is_file():
         active = sorted(p.stem for p in roster.glob("*.md") if TEAMMATE_NAME.fullmatch(p.stem) and p.stem not in DUTIES)
         raise ValueError(f"{teammate} is not an active teammate. Active teammates: {', '.join(active) or 'none'}")
-    return definition_model(teammate, front_matter(path.read_text(encoding="utf-8")))
+    return front_matter(path.read_text(encoding="utf-8"))
 
 
 def front_matter(body):
@@ -869,12 +869,17 @@ def front_matter(body):
     return front
 
 
+def require_named(teammate, front):
+    """A definition can be started only by the name it gives itself."""
+    if front.get("name") != teammate:
+        raise ValueError(f"{teammate}'s definition names itself {front.get('name')!r}, so it cannot be started by that name")
+
+
 def definition_model(teammate, front):
     """The model a definition named `teammate` starts on, or a refusal saying why it cannot be
     started by that name: its `name:` must be `teammate` and its `model:` must contain one of
     the coordination folder's ALLOWED_MODELS (a verbose id reduced to the alias it contains)."""
-    if front.get("name") != teammate:
-        raise ValueError(f"{teammate}'s definition names itself {front.get('name')!r}, so it cannot be started by that name")
+    require_named(teammate, front)
     allowed = allowed_models()
     written = front.get("model", "").lower()
     model = next((m for m in allowed if m in written), None)
@@ -895,13 +900,16 @@ def allowed_models():
 def job_model(teammate, chosen):
     """The model one job runs on (build plan item 7): `chosen` when the back end names one,
     which must be an alias the user's ALLOWED_MODELS lists, otherwise the teammate's own
-    default. The cost ceiling is guard-model-ceiling.sh's, at the spawn, as for any dispatch."""
-    model = teammate_model(teammate)
+    default. Only the model the job runs on is checked, so a teammate whose default the user
+    does not allow can still run on one they do. The cost ceiling is guard-model-ceiling.sh's,
+    at the spawn, as for any dispatch."""
+    front = active_definition(teammate)
     if chosen is None:
-        return model
+        return definition_model(teammate, front)
+    require_named(teammate, front)
     allowed = allowed_models()
     if chosen not in allowed:
-        raise ValueError(f"model must be one of {', '.join(allowed)}, or left out for {teammate}'s own model ({model})")
+        raise ValueError(f"model must be one of {', '.join(allowed)}, or left out for {teammate}'s own model")
     return chosen
 
 

@@ -357,6 +357,22 @@ class DesktopWork(unittest.TestCase):
             "brief":"model-downgrade-ack: a one-line rename that needs no reasoning at all\n"+self.args["brief"]})
         self.assertRegex(cheaper["name"],r"^mark-haiku-[0-9a-f]{12}$")
         self.assertEqual(cheaper["agent_payload"]["model"],"haiku")
+        # A user whose allowed list and ceiling sit below a teammate's own default can still run
+        # that teammate on a model they allow (mid-job review rv-20261021T164124Z-0fe64c41-a94a,
+        # finding 1): only the model the job runs on is checked, never the default it replaces.
+        (self.coord/"orchestration.config").write_text('ALLOWED_MODELS="fable sonnet haiku"\n'
+                                                       'MODEL_TIERS="fable > opus > sonnet > haiku"\nMODEL_CEILING="sonnet"\n')
+        frank={**self.args,"teammate":"frank","obligation_id":"fixture-task"}
+        on_sonnet=self.call("prepare",{**frank,"request_id":"frank-sonnet","model":"sonnet","title":"Frank on Sonnet",
+            "brief":"model-downgrade-ack: the user's own ceiling is sonnet, below this teammate's default\n"+self.args["brief"]})
+        self.assertEqual(on_sonnet["status"],"prepared")
+        self.assertRegex(on_sonnet["name"],r"^frank-sonnet-[0-9a-f]{12}$")
+        self.assertEqual(on_sonnet["agent_payload"]["model"],"sonnet")
+        with self.assertRaisesRegex(Exception,"more expensive model"):
+            self.call("prepare",{**frank,"request_id":"frank-fable","model":"fable","title":"Frank on Fable"})
+        # With no model named, the teammate's own default still has to be one the user allows.
+        with self.assertRaisesRegex(ValueError,"frank's definition names no model this app can start"):
+            self.call("prepare",{**frank,"request_id":"frank-default","title":"Frank on his own model"})
         # The field is in the tool's schema, so the back end can pass it.
         prepare_tool=next(t for t in self.app.available_tools() if t["name"]=="prepare")
         self.assertIn("model",prepare_tool["inputSchema"]["properties"])
