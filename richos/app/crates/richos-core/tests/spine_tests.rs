@@ -404,6 +404,58 @@ fn a_failed_turn_is_classified_identically_whether_it_was_typed_or_spoken() {
     assert_eq!(text.cause, "transient", "{text:?}");
 }
 
+/// **THE SAME LOST CONNECTION TWICE IN A ROW IS NOT TOLD AS PASSING THE SECOND TIME** (a new
+/// user's first run, 2026-10-21: every message ended "RichOS lost its connection to Claude
+/// Code ... This usually fixes itself. Press Restore my message, then send it again." in a
+/// loop). Red on main, where every one of them is `transient` with the retry offered. The
+/// first is a lost connection; the next one right after it is `repeated`, with no retry
+/// offered; an answer in between makes the next failure a first one again.
+#[test]
+fn the_same_lost_connection_again_is_told_as_repeated_and_offers_no_retry() {
+    let (path, ledger) = tmp_ledger("repeated-loss");
+    let mut spine = support::spine(ledger);
+    spine.create_thread("General", &femcboost()).unwrap();
+    let mut causes = Vec::new();
+    for words in ["what do I do now?", "Test to see if something is working."] {
+        spine.attach_lease(Box::new(FailingCognition { session_id: "sess-r".into() }));
+        let turn_id = spine.submit_prompt(words, Source::Text).unwrap_err_turn(&spine);
+        let record = spine.ledger().turn(&turn_id).unwrap().interruption.clone().expect("classified");
+        causes.push((record.cause.clone(), record.offers_retry, record.ceo_message.clone()));
+    }
+    assert_eq!((causes[0].0.as_str(), causes[0].1), ("transient", true), "{causes:?}");
+    assert_eq!((causes[1].0.as_str(), causes[1].1), ("repeated", false), "{causes:?}");
+    assert!(!causes[1].2.contains("send it again."), "the repeat does not invite another try: {}", causes[1].2);
+
+    // An answer in between: the next failure is a first one again.
+    spine.attach_lease(Box::new(MockCognition::new("sess-ok", vec!["Here is your answer."])));
+    spine.submit_prompt("one more", Source::Text).unwrap();
+    spine.attach_lease(Box::new(FailingCognition { session_id: "sess-r2".into() }));
+    let turn_id = spine.submit_prompt("and again", Source::Text).unwrap_err_turn(&spine);
+    let record = spine.ledger().turn(&turn_id).unwrap().interruption.clone().expect("classified");
+    assert_eq!(record.cause, "transient", "an answer in between resets it");
+
+    // THE WHOLE CLASS, NOT ONLY THIS ARM: an unexplained failure offers another try too, so it
+    // cannot follow a failure that offered one either.
+    spine.attach_lease(Box::new(UnexplainedCognition { session_id: "sess-u".into() }));
+    let turn_id = spine.submit_prompt("still there?", Source::Text).unwrap_err_turn(&spine);
+    let record = spine.ledger().turn(&turn_id).unwrap().interruption.clone().expect("classified");
+    assert_eq!((record.cause.as_str(), record.offers_retry), ("repeated", false), "{record:?}");
+    let _best_effort = std::fs::remove_file(&path);
+}
+
+/// A lease that fails with a reason `interruption::classify` has no story for (`unknown`).
+struct UnexplainedCognition {
+    session_id: String,
+}
+impl Cognition for UnexplainedCognition {
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+    fn prompt(&mut self, _text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        Err(CognitionError::Protocol("something RichOS has no name for".into()))
+    }
+}
+
 /// Small helper: submit_prompt returns the turn id even when delivery fails (the prompt
 /// is always journaled first). This recovers that id from the ledger for the error test.
 trait UnwrapErrTurn {

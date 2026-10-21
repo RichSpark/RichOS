@@ -38,6 +38,12 @@ pub fn status(bin: &Path) -> AuthView {
 /// [`status`] for one Claude Code configuration folder (fill-first: an added account). `None`
 /// is Account 1, the folder the app's own environment names.
 pub fn status_in(bin: &Path, folder: Option<&Path>) -> AuthView {
+    status_within(bin, folder, Duration::from_secs(15))
+}
+
+/// [`status_in`] with the caller's bound: a turn that already failed asks it for a few seconds
+/// only (`native.rs`, the child that ended mid-turn).
+pub fn status_within(bin: &Path, folder: Option<&Path>, within: Duration) -> AuthView {
     let mut command = Command::new(bin);
     command.args(["auth", "status", "--json"]).env_remove("CLAUDECODE")
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
@@ -51,7 +57,7 @@ pub fn status_in(bin: &Path, folder: Option<&Path>) -> AuthView {
         let result = stdout.by_ref().take(64 * 1024 + 1).read_to_end(&mut output);
         (result, output)
     });
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + within;
     let exit = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),

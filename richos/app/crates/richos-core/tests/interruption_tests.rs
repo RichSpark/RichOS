@@ -229,6 +229,7 @@ fn no_two_causes_share_a_sentence() {
         InterruptionCause::ProviderMissing,
         InterruptionCause::StoppedByCeo,
         InterruptionCause::Transient,
+        InterruptionCause::Repeated,
         InterruptionCause::Unknown,
     ];
     for (i, a) in all.iter().enumerate() {
@@ -251,6 +252,7 @@ fn every_sentence_survives_being_spoken() {
         InterruptionCause::ProviderMissing,
         InterruptionCause::StoppedByCeo,
         InterruptionCause::Transient,
+        InterruptionCause::Repeated,
         InterruptionCause::Unknown,
     ] {
         // THE ARROW IS ON THE FORBIDDEN LIST BECAUSE THE ROUTE IS IN THE SENTENCE NOW.
@@ -265,4 +267,61 @@ fn every_sentence_survives_being_spoken() {
             assert!(m.ends_with('.'), "{cause:?} is not a finished sentence: {m}");
         }
     }
+}
+
+/// **NO SENTENCE PROMISES THAT A FAILURE CLEARS BY ITSELF** (2026-10-21). "This usually fixes
+/// itself" was the lost-connection line, and a new user was shown it on every message of a Mac
+/// where it never did. A lost connection is told once as what happened, with the offer to send
+/// again; the same failure again is `Repeated`, which invites no further try.
+#[test]
+fn no_cause_promises_that_it_clears_by_itself() {
+    for cause in [
+        InterruptionCause::NotSignedIn,
+        InterruptionCause::CredentialRejected,
+        InterruptionCause::ProviderMissing,
+        InterruptionCause::StoppedByCeo,
+        InterruptionCause::Transient,
+        InterruptionCause::Repeated,
+        InterruptionCause::Unknown,
+    ] {
+        let m = cause.ceo_message().to_lowercase();
+        for promise in ["fixes itself", "usually clears", "clears on its own", "should work now"] {
+            assert!(!m.contains(promise), "{cause:?} promises it clears: {m}");
+        }
+    }
+    let repeated = InterruptionCause::Repeated;
+    assert!(!repeated.offers_retry(), "a failure that repeats is not offered as a retry");
+    assert!(repeated.ceo_message().contains("Claude accounts"), "it names where to look");
+    assert_eq!(InterruptionCause::from_tag(repeated.tag()), repeated);
+}
+
+/// **A CHILD THAT ENDED MID-TURN, WITH CLAUDE CODE SAYING NOBODY IS SIGNED IN**, is told as
+/// the sign-in it is (`native.rs`, `NativeError::Exited`, which carries
+/// `CHILD_EXIT_SIGNED_OUT`), never as a lost connection. The exact reason `spine.rs` records.
+#[test]
+fn a_child_exit_with_no_sign_in_is_not_signed_in() {
+    let reason = format!(
+        "cognition io: claude stopped before answering; it wrote nothing on stderr; {}",
+        richos_core::native::CHILD_EXIT_SIGNED_OUT
+    );
+    assert_eq!(classify(&reason), InterruptionCause::NotSignedIn);
+    // The same end without that verdict stays the lost connection it is.
+    assert_eq!(
+        classify("cognition io: claude stopped before answering; it wrote nothing on stderr"),
+        InterruptionCause::Transient
+    );
+    // And the child's own words decide when they name the cause.
+    assert_eq!(
+        classify("cognition io: claude stopped before answering; the child said: Invalid API key · Fix external API key"),
+        InterruptionCause::CredentialRejected
+    );
+}
+
+/// **AN OAUTH SIGN-IN ANTHROPIC NO LONGER ACCEPTS** is a sign-in to renew, measured on Claude
+/// Code 2.1.306 (2026-10-21, `CLAUDE_CODE_OAUTH_TOKEN` set to a token Anthropic does not know):
+/// its `result` was exactly the string below. It fell to `Unknown` and its retry control.
+#[test]
+fn an_oauth_token_anthropic_refuses_is_a_sign_in_to_renew() {
+    let reason = "cognition protocol: \"Failed to authenticate. API Error: 401 OAuth access token is invalid.\"";
+    assert_eq!(classify(reason), InterruptionCause::NotSignedIn);
 }

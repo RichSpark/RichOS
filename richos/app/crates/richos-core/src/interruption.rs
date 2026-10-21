@@ -70,9 +70,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::upstream::TurnLoss;
 
-/// The CEO's own sign-in, missing or expired. Read verbatim from the shipped bundle; see
-/// the module header.
-const VENDOR_NOT_SIGNED_IN: &str = "Not logged in";
+/// The CEO's own sign-in, missing or expired. The first was read verbatim from the shipped
+/// bundle (see the module header). The second is the `result` Claude Code 2.1.306 writes for
+/// an OAuth sign-in whose token is no longer accepted, measured 2026-10-21 with
+/// `CLAUDE_CODE_OAUTH_TOKEN` set to a token Anthropic does not know: *"Failed to authenticate.
+/// API Error: 401 OAuth access token is invalid."* Until then it fell to
+/// [`InterruptionCause::Unknown`] and its retry control, for a state only a new sign-in clears.
+const VENDOR_NOT_SIGNED_IN: [&str; 2] = ["Not logged in", "OAuth access token is invalid"];
+
+/// RichOS's own words when the child ended mid-turn and Claude Code's `auth status` then said
+/// nobody is signed in (`native.rs`, [`crate::native::CHILD_EXIT_SIGNED_OUT`]). Ours, so it is
+/// matched as our own structure. Checked ahead of the IO prefix the same message carries.
+const OUR_CHILD_EXIT_SIGNED_OUT: &str = crate::native::CHILD_EXIT_SIGNED_OUT;
 
 /// A credential that is PRESENT and rejected — an API key, an auth token, or a header set in
 /// this machine's environment. Four vendor constants, all of them somebody else's to fix.
@@ -124,6 +133,14 @@ pub enum InterruptionCause {
     /// A pipe, a child that went away, a read that failed. **The one arm where asking
     /// again is a plan**, which is exactly why it is not the default.
     Transient,
+    /// **The same lost connection again, right after the last one, with nothing of Rich's
+    /// written in between.** A failure that repeats is not passing, so this arm never invites
+    /// another try: it says what to check and where (2026-10-21: a new user's every message
+    /// ended "This usually fixes itself. Press Restore my message, then send it again." in a
+    /// loop, `docs/development/failure-classes/permanent-failure-told-as-passing.md`).
+    /// Decided by `spine.rs::record_interruption` from the ledger, never by [`classify`],
+    /// which sees one reason string and cannot know what came before it.
+    Repeated,
     /// Something RichOS has no story for. Named rather than guessed.
     Unknown,
 }
@@ -139,6 +156,7 @@ impl InterruptionCause {
             InterruptionCause::ProviderMissing => "provider-missing",
             InterruptionCause::StoppedByCeo => "stopped-by-ceo",
             InterruptionCause::Transient => "transient",
+            InterruptionCause::Repeated => "repeated",
             InterruptionCause::Unknown => "unknown",
         }
     }
@@ -150,6 +168,7 @@ impl InterruptionCause {
             "provider-missing" => InterruptionCause::ProviderMissing,
             "stopped-by-ceo" => InterruptionCause::StoppedByCeo,
             "transient" => InterruptionCause::Transient,
+            "repeated" => InterruptionCause::Repeated,
             _ => InterruptionCause::Unknown,
         }
     }
@@ -202,8 +221,14 @@ impl InterruptionCause {
             InterruptionCause::StoppedByCeo => {
                 "Stopped, as you asked."
             }
+            // NO PROMISE THAT IT CLEARS. "This usually fixes itself" stood here until
+            // 2026-10-21 and was said on every message of a Mac where it never did. Once is a
+            // fact and an offer; the second time in a row is `Repeated`, below.
             InterruptionCause::Transient => {
-                "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Restore my message, then send it again."
+                "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. Press Restore my message, then send it again."
+            }
+            InterruptionCause::Repeated => {
+                "Rich could not answer again because Claude Code stopped before he replied, so sending again is unlikely to help. Open Settings and choose Claude accounts to check that your account is signed in on this Mac. If it is, press Bust a bug in Settings so we can see what went wrong."
             }
             InterruptionCause::Unknown => {
                 "Rich's answer stopped early and RichOS can't tell you why. Press Restore my message, then send it again."
@@ -220,7 +245,8 @@ impl InterruptionCause {
         match self {
             InterruptionCause::NotSignedIn
             | InterruptionCause::CredentialRejected
-            | InterruptionCause::ProviderMissing => false,
+            | InterruptionCause::ProviderMissing
+            | InterruptionCause::Repeated => false,
             // Nothing failed. There is nothing to retry, and his words go back in the box
             // by the ordinary route rather than through a failure card's control.
             InterruptionCause::StoppedByCeo => false,
@@ -247,7 +273,7 @@ pub fn classify(reason: &str) -> InterruptionCause {
     if VENDOR_CREDENTIAL_REJECTED.iter().any(|needle| reason.contains(needle)) {
         return InterruptionCause::CredentialRejected;
     }
-    if reason.contains(VENDOR_NOT_SIGNED_IN) {
+    if VENDOR_NOT_SIGNED_IN.iter().any(|needle| reason.contains(needle)) || reason.contains(OUR_CHILD_EXIT_SIGNED_OUT) {
         return InterruptionCause::NotSignedIn;
     }
     // Checked BEFORE the generic IO prefix: `provider-supervisor.py`'s own failure text

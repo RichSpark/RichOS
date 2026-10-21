@@ -243,7 +243,7 @@ module.exports = [
       "deliberate stop as an error. It issues no instruction and asks for nothing.",
   },
   {
-    s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Restore my message, then send it again.",
+    s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. Press Restore my message, then send it again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: null,
@@ -251,7 +251,22 @@ module.exports = [
       "`InterruptionCause::Transient` — the ONE class where asking again is honest advice, " +
       "and therefore the one that still draws the card's button. It is the positive control " +
       "for the whole change: without a class that keeps the control, 'the sign-in case has " +
-      "no button' could just mean the card stopped drawing one.",
+      "no button' could just mean the card stopped drawing one. It said 'This usually fixes " +
+      "itself' until 2026-10-21, when a new user was shown it on every message of a Mac where it " +
+      "never did; the same failure again right after it is `Repeated`, the row below.",
+  },
+  {
+    s: "Rich could not answer again because Claude Code stopped before he replied, so sending again is unlikely to help. Open Settings and choose Claude accounts to check that your account is signed in on this Mac. If it is, press Bust a bug in Settings so we can see what went wrong.",
+    c: "ACTIONABLE",
+    control: "#set-btn",
+    fixture: null,
+    why:
+      "`InterruptionCause::Repeated` (2026-10-21, docs/development/failure-classes/" +
+      "permanent-failure-told-as-passing.md): the lost connection again, right after the last " +
+      "one, with no answer in between. A failure that repeats is not passing, so it offers no " +
+      "retry; it names the one place that says whether the account is signed in (Claude " +
+      "accounts, which now says Not signed in with Sign in on the card) and the way to report " +
+      "it when it is. The Settings button is on screen in every view this card appears in.",
   },
   {
     s: "Rich's answer stopped early and RichOS can't tell you why. Press Restore my message, then send it again.",
