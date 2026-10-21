@@ -23,7 +23,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   connect-tools  Tools connected to the same company
   house-rule   typed: add notes.md to the Acme repository, commit it and land it. PASS needs the
                job settled, notes.md landed in Acme, the commit that added it ending with
-               [house-rule], and a worker's and a reviewer's brief each holding the CLAUDE.md
+               [house-rule], a worker and a reviewer each having received the CLAUDE.md (the
+               first message of its own transcript), and no payload Stu read holding it
   agents-rule  the same for tools.md in Tools, its AGENTS.md and [agents-rule]
   preserved    every instruction file in both folders has the sha256 it had at seed, and none
                was added or removed
@@ -108,23 +109,39 @@ class FolderInstructionsWalk(command_walk.CommandWalk):
         return {'connected': connected}
 
     def receipts(self, repo, rule):
-        """Every work receipt for `repo`, with its role and whether its brief holds the folder's file."""
+        """Every work receipt for `repo`: its role, whether the prompt its agent RECEIVED (the
+        first message of the agent's own transcript) holds the folder's file, and whether the
+        payload Stu read (the receipt's) does."""
         script = ('import glob,json,os,sys\n'
+                  'data,repo,rule,home=sys.argv[1],os.path.realpath(sys.argv[2]),sys.argv[3],sys.argv[4]\n'
+                  'def first_message(aid):\n'
+                  '    for root in (home+"/.claude",data):\n'
+                  '        for p in glob.glob(root+"/**/agent-"+aid+".jsonl",recursive=True):\n'
+                  '            for line in open(p,errors="replace"):\n'
+                  '                try: row=json.loads(line)\n'
+                  '                except Exception: continue\n'
+                  '                if row.get("type")=="user":\n'
+                  '                    c=(row.get("message") or {}).get("content")\n'
+                  '                    return c if isinstance(c,str) else json.dumps(c)\n'
+                  '    return None\n'
                   'out=[]\n'
-                  'repo=os.path.realpath(sys.argv[2])\n'
-                  'for p in glob.glob(sys.argv[1]+"/engine-state/work-receipts/*/*.json"):\n'
+                  'for p in glob.glob(data+"/engine-state/work-receipts/*/*.json"):\n'
                   '    try: r=json.load(open(p))\n'
                   '    except Exception: continue\n'
                   '    q=r.get("request") or {}\n'
                   '    if q.get("repo")!=repo: continue\n'
-                  '    b=p[:-5]+".brief"\n'
-                  '    brief=open(b).read() if os.path.exists(b) else ""\n'
+                  '    aid=r.get("agent_id")\n'
+                  '    got=first_message(aid) if isinstance(aid,str) else None\n'
+                  '    stu=json.dumps(r.get("payload") or {})\n'
                   '    out.append({"id":r.get("id"),"role":q.get("role"),"teammate":q.get("teammate"),"status":r.get("status"),\n'
-                  '                "heading":"## The repository\'s own instructions" in brief,\n'
-                  '                "rule":("> "+sys.argv[3]) in brief,"other_file":"AGENTS-BESIDE-CLAUDE" in brief})\n'
+                  '                "agent_id":aid,"transcript_found":got is not None,\n'
+                  '                "heading":got is not None and "## The repository\'s own instructions" in got,\n'
+                  '                "rule":got is not None and ("> "+rule) in got,\n'
+                  '                "other_file":got is not None and "AGENTS-BESIDE-CLAUDE" in got,\n'
+                  '                "stu_payload_holds_rule":rule in stu})\n'
                   'print(json.dumps(out))\n')
         return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data) + ' '
-                                + shlex.quote(repo) + ' ' + shlex.quote(rule), 60))
+                                + shlex.quote(repo) + ' ' + shlex.quote(rule) + ' ' + shlex.quote(self.home), 120))
 
     def job(self, step):
         if not self.facts.get('thread'):
@@ -166,9 +183,11 @@ class FolderInstructionsWalk(command_walk.CommandWalk):
             failures.append('the commit that added %s does not end with %s: %r' % (file, tag, message[-200:]))
         for role in ('worker', 'reviewer'):
             if not [r for r in receipts if r['role'] == role and r['heading'] and r['rule']]:
-                failures.append("no %s's brief holds the folder's instruction file" % role)
+                failures.append("no %s received the folder's instruction file" % role)
         if [r for r in receipts if r['other_file']]:
-            failures.append("a brief holds Acme's AGENTS.md beside its CLAUDE.md")
+            failures.append("an agent received Acme's AGENTS.md beside its CLAUDE.md")
+        if [r for r in receipts if r['stu_payload_holds_rule']]:
+            failures.append("the payload Stu read holds the folder's instruction file")
         if failures:
             raise StepFailed('; '.join(failures))
         return {'commit_message': message, 'briefs': [(r['role'], r['teammate']) for r in receipts],
