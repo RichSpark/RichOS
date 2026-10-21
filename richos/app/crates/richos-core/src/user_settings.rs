@@ -144,7 +144,15 @@ pub fn orchestration_config(folder: Option<&Path>, teams: &str) -> Result<String
     }
     if let (Some(folder), true) = (folder, user.is_some()) {
         out.push_str(&format!("# The user's own values, from {}\n", folder.join(ORCHESTRATION_CONFIG).display()));
-        for line in user_lines { out.push_str(line); out.push('\n'); }
+        for line in user_lines {
+            // `export KEY=…` is written `KEY=…`: the engine's readers match an assignment at the
+            // start of a line (`app.py` `definition_model`, `teammate-name.sh`), and a sourced
+            // file means the same either way.
+            let trimmed = line.trim_start();
+            let line = match trimmed.strip_prefix("export ") { Some(rest) if assigned_key(line).is_some() => rest.trim_start(), _ => line };
+            out.push_str(line);
+            out.push('\n');
+        }
     }
     out.push_str(&format!("SESSION_TEAMS_DIR={teams}\n"));
     Ok(out)

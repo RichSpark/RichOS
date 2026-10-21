@@ -715,7 +715,9 @@ fn the_users_orchestration_config_reaches_the_coordination_folder_beside_the_app
     let profile = prepare_for_user(&f, &folder);
     let written = std::fs::read_to_string(profile.coordination.join("orchestration.config")).unwrap();
     let lines = |key: &str| written.lines().filter(|l| l.trim_start().trim_start_matches("export ").starts_with(&format!("{key}="))).map(str::to_string).collect::<Vec<_>>();
-    assert_eq!(lines("ALLOWED_MODELS"), ["export ALLOWED_MODELS=\"sonnet haiku\""], "{written}");
+    // Written without `export`, so the engine's readers, which match `KEY="` at the start of a
+    // line, read the user's value (second review rv-20261021T072931Z-6a246fab-ad3e, finding 2).
+    assert_eq!(lines("ALLOWED_MODELS"), ["ALLOWED_MODELS=\"sonnet haiku\""], "{written}");
     assert_eq!(lines("MODEL_TIERS"), ["MODEL_TIERS=\"opus > sonnet > haiku\""], "{written}");
     assert_eq!(lines("MODEL_CEILING"), ["MODEL_CEILING=\"sonnet\""], "{written}");
     assert_eq!(lines("SESSION_TEAMS_DIR"), [format!("SESSION_TEAMS_DIR='{}'", teams.display())], "{written}");
