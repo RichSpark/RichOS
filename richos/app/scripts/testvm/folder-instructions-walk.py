@@ -138,7 +138,10 @@ class FolderInstructionsWalk(command_walk.CommandWalk):
                   '                "heading":got is not None and "## The repository\'s own instructions" in got,\n'
                   '                "rule":got is not None and ("> "+rule) in got,\n'
                   '                "other_file":got is not None and "AGENTS-BESIDE-CLAUDE" in got,\n'
-                  '                "stu_payload_holds_rule":rule in stu})\n'
+                  # The app's own section, never the sentence: Stu may read a connected folder's
+                  # file itself and write its rule into the brief in its own words (the first run
+                  # on main did), and that is Stu's reading, not the app handing it the file.
+                  '                "stu_payload_holds_rule":"## The repository\'s own instructions" in stu or json.dumps("> "+rule)[1:-1] in stu})\n'
                   'print(json.dumps(out))\n')
         return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data) + ' '
                                 + shlex.quote(repo) + ' ' + shlex.quote(rule) + ' ' + shlex.quote(self.home), 120))
@@ -216,7 +219,9 @@ def main():
     p.add_argument('vm')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--expect-sha', required=True, help='the commit the bundle under test was built from')
-    p.add_argument('--within', type=float, default=1500, help='seconds for each job to settle')
+    # 45 minutes: in a fresh guest no code teammate is active, so Stu hires a worker and a
+    # reviewer before the first job starts (the first run on main spent all of 25 minutes so).
+    p.add_argument('--within', type=float, default=2700, help='seconds for each job to settle')
     p.add_argument('--approvals', type=int, default=6, help='most Approve presses per job')
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
