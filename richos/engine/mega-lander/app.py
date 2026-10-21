@@ -1800,48 +1800,76 @@ def _take_fence_lease(repo, lock):
     fence's test is ancestry, pid and start time (operator_fences.authorized), and every Git
     command of this land is this process's child.
 
-    Called holding `lock`, this repository's land flock. It is the lease's own lock
-    (operator_fences_admin installs the launcher's home and key from the same land_lock_path), and
-    land-lease.sh takes and releases a lease only under it, so writing the lease here is the same
-    check-and-set acquire makes. A launcher whose lease home is another file refuses (G10, as
-    land-lease.sh refuses it): two callers with two homes would each see their own lease as free.
+    THE LEASE IS TAKEN UNDER THE FENCE'S OWN LOCK, named by the repository's launcher (its baked
+    home and key): the lock land-lease.sh takes and releases a lease under. Usually that is `lock`,
+    the land flock this land already holds (operator_fences_admin installs the launcher's home from
+    the same land_lock_path). It is ANOTHER file when this lease runs under another Claude account:
+    EngineProfile.configure points CLAUDE_CONFIG_DIR at the selected account's folder, and the land
+    lock's home follows it while the fence keeps the home it was installed with. Then the fence's
+    lock is taken as well, after this land's own (one order for every land, so two never wait on
+    each other), and a live lease of another holder is waited for under it, within the land lock's
+    bound.
 
-    Returns (fence program, its Files, the holder) for _release_fence_lease, or None when the
-    repository has no fence or has it off. The switch and the lease home are read from the
-    repository's own launcher, never from anything the app holds."""
+    Returns (fence program, its Files, the holder, the fence lock taken here or None) for
+    _release_fence_lease, or None when the repository has no fence or has it off. The switch and
+    the lease home are the repository's own settings, never anything the app holds."""
     F = W._fence_program()
     conf, _paths = F.launcher_for(str(repo))
     if not F.fenced(conf):
         return None
     files = F.Files(conf)
-    if os.path.realpath(files.lock) != os.path.realpath(lock):
-        raise ValueError(
-            "nothing was merged into %s: its land fence keeps its lease under %s, but this land holds %s. "
-            "Two lands with two lease homes would each see their own lease as free (G10), so it does not "
-            "take one. The home is CLAUDE_CONFIG_DIR's state/land-locks; it must be the one the fence was "
-            "installed with." % (repo, files.lock, lock))
     me = F.proc(os.getpid())
     if not me:
         raise ValueError("nothing was merged into %s: its land fence is on, and this process's own start time, "
                          "which a land lease names, could not be read" % repo)
     holder = {"kind": "app", "pid": me["pid"], "start": me["start"]}
-    F.write_json_atomic(files.lease, F._new_lease(holder, conf.get("REPO") or str(repo)))
-    return F, files, holder
+    fence_lock = None
+    if os.path.realpath(files.lock) != os.path.realpath(lock):
+        timeout, started = land_lock_timeout(), time.monotonic()
+        while True:
+            fence_lock = F._Flock(files.lock)
+            if fence_lock.try_take():
+                lease = F.read_lease(files)
+                if F.lease_state(lease) not in ("live", "expired") or F.same_holder(lease.get("holder"), holder):
+                    break
+                busy = F.holder_label(lease.get("holder"))
+            else:
+                busy = "another land of this repository"
+            fence_lock.release()
+            fence_lock = None
+            if time.monotonic() - started >= timeout:
+                raise ValueError("nothing was merged into %s: its land lease is held by %s and was not free within "
+                                 "%.0f seconds. Retry once that land has finished." % (repo, busy, timeout))
+            time.sleep(0.5)
+    try:
+        F.write_json_atomic(files.lease, F._new_lease(holder, conf.get("REPO") or str(repo)))
+    except BaseException:
+        if fence_lock:
+            fence_lock.release()
+        raise
+    return F, files, holder, fence_lock
 
 
 def _release_fence_lease(taken):
-    """Ends the lease _take_fence_lease wrote, still under the land flock, and only while it is
-    still this land's. Never raises: the land has happened or been refused by then, and a lease
-    left by a process that has ended is taken by the next acquire at rest."""
+    """Ends the lease _take_fence_lease wrote, still under the lock it was written under, and only
+    while it is still this land's; then lets go of the fence's lock if this land took it. Never
+    raises: the land has happened or been refused by then, and a lease left by a process that has
+    ended is taken by the next acquire at rest."""
     if not taken:
         return
-    F, files, holder = taken
+    F, files, holder, fence_lock = taken
     try:
         lease = F.read_lease(files)
         if lease and F.same_holder(lease.get("holder"), holder):
             os.unlink(files.lease)
     except OSError:
         pass
+    finally:
+        if fence_lock:
+            try:
+                fence_lock.release()
+            except OSError:
+                pass
 
 
 def _land_holder_text(holder):

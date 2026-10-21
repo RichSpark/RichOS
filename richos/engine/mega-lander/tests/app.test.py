@@ -2133,21 +2133,55 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])   # the reviewed commit, unrewritten
         self.assertEqual((self.repo/"result.txt").read_text(),"FICTIONAL gated")
 
+    def fence_on(self,locks=None):
+        """The fixture repository's land fence, installed and switched on with operator-fences.sh.
+        `locks` is the land-lock home it is installed with (by default the one this land uses)."""
+        entity=self.root/"fence entity";entity.mkdir()
+        (entity/"orchestration.config").write_text('OPERATOR_FENCES="on"\nLAND_LEASE_HOLDERS=""\nOPERATOR_FENCES_REPOS=""\n')
+        env={**os.environ,**({"RICHOS_LAND_LOCKS_DIR":str(locks)} if locks else {})}
+        for verb in ("install","on"):
+            done=subprocess.run(["bash",str(ENGINE/"scripts/operator-fences.sh"),verb,"--repo",str(self.repo),"--entity",str(entity)],
+                                capture_output=True,text=True,env=env)
+            self.assertEqual(done.returncode,0,done.stdout+done.stderr)
+        F=self.app.W._fence_program()
+        conf,_paths=F.launcher_for(str(self.repo))
+        self.assertTrue(F.fenced(conf))
+        return F.Files(conf)
+
+    def test_an_app_land_under_another_claude_account_takes_the_fences_own_lease_and_lands(self):
+        """An account switch (mid-job review rv-20261021T072931Z-a4453faa-ffff, finding 1). The
+        app runs a lease under an added account with CLAUDE_CONFIG_DIR at that account's folder, so
+        this land's lock lives in that folder while the fence keeps the home it was installed with.
+        The land still takes the fence's own lease, under the fence's own lock, and lands."""
+        args=self.reviewed_pair("switched")
+        first_account=self.root/"first account land locks"
+        files=self.fence_on(first_account)
+        self.assertNotEqual(os.path.realpath(files.lock),os.path.realpath(self.app.land_lock_path(self.repo)))  # CONTROL
+        tip=self.app.git(self.repo,"rev-parse","main")
+        seen=self.root/"lease during the switched land"
+        self.repository_hook("pre-merge-commit","cp %s %s\n" % (shlex.quote(files.lease),shlex.quote(str(seen))))
+        held=[]
+        original=self.app.land_merge
+        def watch(*argv):
+            held.append(not self.land_lock_free(files.lock))
+            return original(*argv)
+        with patch.object(self.app,"land_merge",side_effect=watch):
+            landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertEqual(held,[True],"the merge ran without the fence's own lock held")
+        self.assertEqual(json.loads(seen.read_text())["holder"]["pid"],os.getpid())
+        self.assertFalse(os.path.exists(files.lease),"the land lease outlived the land")
+        self.assertTrue(self.land_lock_free(files.lock),"the fence's lock outlived the land")
+        head=self.app.git(self.repo,"rev-parse","main")
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^1"),tip)
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])
+
     def test_an_app_land_into_a_fenced_repository_takes_the_land_lease_and_lands(self):
         # The work is prepared, done and reviewed first, and the fence switched on after: this test
         # is about the land. (The fence reads a `git worktree add` writer's argv from `ps`, split
         # on spaces, and this fixture's paths have spaces in them on purpose.)
         args=self.reviewed_pair("fenced")
-        entity=self.root/"fence entity";entity.mkdir()
-        (entity/"orchestration.config").write_text('OPERATOR_FENCES="on"\nLAND_LEASE_HOLDERS=""\nOPERATOR_FENCES_REPOS=""\n')
-        for verb in ("install","on"):
-            done=subprocess.run(["bash",str(ENGINE/"scripts/operator-fences.sh"),verb,"--repo",str(self.repo),"--entity",str(entity)],
-                                capture_output=True,text=True)
-            self.assertEqual(done.returncode,0,done.stdout+done.stderr)
-        F=self.app.W._fence_program()
-        conf,_paths=F.launcher_for(str(self.repo))
-        self.assertTrue(F.fenced(conf))
-        files=F.Files(conf)
+        files=self.fence_on()
         tip=self.app.git(self.repo,"rev-parse","main")
         # POSITIVE CONTROL: the fence is on. A move of main by a process holding no lease is refused.
         stray=self.app.git(self.repo,"commit-tree",tip+"^{tree}","-p",tip,"-m","stray")
