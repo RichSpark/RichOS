@@ -310,8 +310,13 @@ class Walk(adopt.Walk):
         return relaunch(self.vm, environment={'ANTHROPIC_MODEL': model} if model else None)
 
     def enter(self):
-        if self.present('Talk to Rich'):
-            self.press('Talk to Rich')
+        # Every caller has just relaunched the app, and a launch with a company opens on the HOME
+        # screen (asked-again-walk.py waits up to 90 s for it). Its door is waited for, not
+        # checked once: checked before home was drawn, it was skipped, and the walk then waited
+        # on the home screen for a conversation row (walk-45ed47dcaab0's screenshot,
+        # esc-20261021T213902Z-b513879e).
+        self.wait_for('Talk to Rich', seconds=90)
+        self.press('Talk to Rich')
         time.sleep(2)
         # Waited for before it is pressed: a press is never asked again (axwait.py), and right
         # after a relaunch the app may not answer one read (esc-20261021T205850Z-48c70d7d).

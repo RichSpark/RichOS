@@ -245,6 +245,15 @@ class Enter(unittest.TestCase):
         self.assertEqual(w.pressed, ['Talk to Rich', 'Onboarding'])
         self.assertEqual(w.calls[-2:], [('find', 'Onboarding'), ('click', 'Onboarding')])
 
+    def test_the_home_door_is_waited_for_when_home_is_not_drawn_yet(self):
+        """esc-20261021T213902Z-b513879e: checked once before home was drawn, the door was
+        skipped and the walk waited on the home screen for a conversation row."""
+        w = self.walk_on([False, False, True, True])
+        w.enter()
+        self.assertEqual(w.pressed, ['Talk to Rich', 'Onboarding'])
+        self.assertEqual([c for c in w.calls if c[0] == 'find'][:3],
+                         [('find', 'Talk to Rich')] * 3)
+
 
 if __name__ == '__main__':
     unittest.main()
