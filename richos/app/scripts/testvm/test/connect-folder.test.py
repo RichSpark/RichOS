@@ -28,20 +28,20 @@ class ConnectFolder(unittest.TestCase):
         self.assertEqual(bad, [], 'the row is a button now; use Walk.connect_folder')
 
     def test_no_walk_keeps_its_own_connect_step(self):
-        # folders-walk.py checks the sheet's words and chooser clicks; it is not a connect step.
-        own = [p.name for p in WALKS if p.name not in ('adopt-walk.py', 'folders-walk.py')
+        own = [p.name for p in WALKS if p.name != 'adopt-walk.py'
                and re.search(r"press\('Connected folders'", p.read_text())]
         self.assertEqual(own, [], 'a walk presses the row itself instead of calling connect_folder')
 
     def test_the_shared_step_presses_the_row_as_a_button(self):
         source = (HERE / 'adopt-walk.py').read_text()
-        body = source[source.index('    def connect_folder'):source.index('    def decline_first_run_sheets')]
+        body = source[source.index('    def open_connected_folders'):source.index('    def decline_first_run_sheets')]
         self.assertIn("self.press('Connected folders')", body)
         self.assertNotIn("role='AXMenuItem'", body)
 
     def test_the_connecting_walks_call_it(self):
         for name in ('command-walk.py', 'reap-walk.py'):
             self.assertIn('self.connect_folder()', (HERE / name).read_text(), name)
+        self.assertIn('self.open_connected_folders(', (HERE / 'folders-walk.py').read_text())
 
 
 if __name__ == '__main__':

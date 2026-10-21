@@ -153,6 +153,15 @@ class Walk:
             time.sleep(1)
         return False
 
+    def open_connected_folders(self, settings_open=False):
+        """The Connected folders sheet, open: Settings (unless the caller already has it open), then
+        the row pressed as the plain button it is since round 27, then the sheet's Company menu."""
+        if not settings_open:
+            self.press('Settings', role='AXPopUpButton')
+        self.press('Connected folders')
+        self.wait_for('Company', role='AXPopUpButton')
+        time.sleep(2)
+
     def connect_folder(self):
         """Settings -> "Connected folders (repositories)" -> the company folder, the way the app
         asks for it since round 27: the row is a plain button (settings-button.js
@@ -161,10 +170,7 @@ class Walk:
         only company and its folder field opens the system folder chooser on a click, so a typed
         path never reaches it: Go to folder, the path, Return, Open, then Connect folder. Waits up
         to 30 s for the registry to name the folder, closes the sheet, returns the connected paths."""
-        self.press('Settings', role='AXPopUpButton')
-        self.press('Connected folders')
-        self.wait_for('Company', role='AXPopUpButton')
-        time.sleep(2)
+        self.open_connected_folders()
         fields = [n for n in self.ax('find', '--title', 'Project folder location', '--role', 'AXTextField',
                                      '--contains') if 'x' in n and not n.get('meta')]
         if not fields:

@@ -275,9 +275,7 @@ class Walk(adopt.Walk):
         self.appearance(True)
         self.shot('2-menu-dark.png')
         self.appearance(False)
-        self.press('Connected folders')
-        self.wait_for('Company', role='AXPopUpButton', seconds=30)
-        time.sleep(2)
+        self.open_connected_folders(settings_open=True)
         self.shot('2-sheet-light.png')
         copy = {}
         for key, words in SHEET_COPY.items():

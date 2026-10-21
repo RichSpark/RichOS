@@ -1826,6 +1826,10 @@ t "reap-walk: unrecorded pids are refused, late or surviving commands fail, a fi
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/reap-walk.test.py" >"$TMP/reap-walk.log" 2>&1; ok $? "$(cat "$TMP/reap-walk.log")"
 t_done
 
+t "connect-folder: no walk presses the Connected folders row as a menu item or keeps its own connect step (guest_deadline, exit 124)"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/connect-folder.test.py" >"$TMP/connect-folder.log" 2>&1; ok $? "$(cat "$TMP/connect-folder.log")"
+t_done
+
 t "command-walk: a settled task carrying the command's result passes; the 2026-09-27 'No work was started' record fails"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/command-walk.test.py" >"$TMP/command-walk.log" 2>&1; ok $? "$(cat "$TMP/command-walk.log")"
 t_done
