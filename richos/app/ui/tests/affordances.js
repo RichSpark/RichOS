@@ -637,6 +637,17 @@ const FIXTURES = {
     await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
     return page;
   },
+  /// THE CHECK STILL UNDER WAY: no reading, no answer yet, nothing known about the sign-in. The
+  /// card says the check is under way, never "No reading yet" (2026-10-21).
+  async "accounts-checking"(browser) {
+    const page = await openApp(browser, undefined, { quota: { state: "unavailable", windows: [], checkedAt: null,
+      retryAt: null, message: null } });
+    await page.click("#set-btn");
+    await page.waitForSelector("#set-accounts-open", { state: "visible" });
+    await page.click("#set-accounts-open");
+    await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
+    return page;
+  },
   /// The same state on the Settings row, before the sheet is opened.
   async "accounts-row-signed-out"(browser) {
     const page = await openApp(browser, undefined, { quota: SIGNED_OUT_QUOTA });
@@ -1419,7 +1430,7 @@ const TEXT_RENDERING_FIXTURES = new Set([
   "connect-history-unreadable", "connect-unavailable", "connect-address-invalid", "connect-credential-invalid",
   "repository-empty", "permission-pending", "provider-start-error", "provider-poll-error", "provider-cancel-error",
   // The signed-out account renders its own words from the view alone (2026-10-21).
-  "accounts-signed-out", "accounts-row-signed-out", "interruption-repeated",
+  "accounts-signed-out", "accounts-row-signed-out", "accounts-checking", "interruption-repeated",
   // The assignment surface renders its own words out of `work-summary.js`, with nothing but
   // software behind it — and §7.8 says the wording IS the test, so the sentence is asserted
   // present rather than only the control beneath it.
