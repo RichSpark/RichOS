@@ -27,7 +27,7 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   unrelated     `sleep` started in the guest by the harness: must survive every step
   normal        a short heartbeat assignment ends BY ITSELF (.done written) and is never reaped
   stop          a background and a foreground heartbeat; Stop pressed; both end within the bound,
-                timed from the press itself (ax.js); the assignment reads as stopped, not failed
+                timed from the press itself (ax.py); the assignment reads as stopped, not failed
   quit          both again; the app's Quit (a menu bar item); the question names the commands;
                 "Quit and stop the work"; both end within the quit bound; app.log and the reap
                 log say so; the assignment reads as stopped
