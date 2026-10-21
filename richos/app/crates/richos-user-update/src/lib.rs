@@ -320,11 +320,27 @@ fn root(home: &Path) -> io::Result<PathBuf> {
     Ok(root)
 }
 struct Lock(File);
+/// How long a publication-lock caller waits for another holder before it answers "busy".
+///
+/// Every holder of `lock` holds it for a short, bounded act: a receipt read, a lease
+/// conversion, a rename. So a caller that finds it held WAITS for it, bounded, rather than
+/// failing on the first try. Until 2026-10-21 the readers (`staged`, `last_activation`,
+/// `rollback_target`, `collect_retired`) took it with ONE non-blocking `flock` and no wait,
+/// so two of the app's own threads asking at the same moment -- the launch check's
+/// `staged()` and the window's `update_state` reading `rollback_target()` -- made one of them
+/// fail with `EWOULDBLOCK`, which a user saw as "RichOS could not prepare this update.",
+/// technical reason "Resource temporarily unavailable (os error 35)", on a Mac where nothing
+/// was being prepared at all. There is deliberately no non-waiting way to take this lock any
+/// more, so no future reader can reintroduce that.
+const PUBLICATION_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 impl Lock {
     fn acquire_startup(root: &Path) -> io::Result<Self> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        Self::acquire(root)
+    }
+    fn acquire(root: &Path) -> io::Result<Self> {
+        let deadline = std::time::Instant::now() + PUBLICATION_WAIT;
         loop {
-            match Self::acquire(root) {
+            match Self::named(root, "lock") {
                 Err(e)
                     if e.kind() == io::ErrorKind::WouldBlock
                         && std::time::Instant::now() < deadline =>
@@ -334,9 +350,6 @@ impl Lock {
                 result => return result,
             }
         }
-    }
-    fn acquire(root: &Path) -> io::Result<Self> {
-        Self::named(root, "lock")
     }
     fn named(root: &Path, name: &str) -> io::Result<Self> {
         lock_step(|| {
@@ -2717,6 +2730,31 @@ released lease, so the next session refused to activate over a session that had 
             .unwrap()
             .success());
         assert!(preferred(&h).is_err());
+    }
+    /// THE 2026-10-21 FIRST-RUN DEFECT, as a test: a READER of the publication journal that
+    /// finds the lock held by somebody else for a moment WAITS for it. Before the fix, each of
+    /// these three failed on the first try with `EWOULDBLOCK` -- "Resource temporarily
+    /// unavailable (os error 35)" -- which the update row showed a new user as "RichOS could
+    /// not prepare this update." while nothing was being prepared.
+    #[test]
+    fn journal_readers_wait_for_a_short_hold_instead_of_failing() {
+        let t = home();
+        let h = canonical(&t);
+        let r = root(&h).unwrap();
+        for reader in ["staged", "last_activation", "rollback_target"] {
+            let held = Lock::acquire(&r).unwrap();
+            let releaser = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                drop(held);
+            });
+            let answer = match reader {
+                "staged" => staged(&h).map(|_| ()),
+                "last_activation" => last_activation(&h).map(|_| ()),
+                _ => rollback_target(&h).map(|_| ()),
+            };
+            releaser.join().unwrap();
+            assert!(answer.is_ok(), "{reader} failed while the lock was held for 300 ms: {answer:?}");
+        }
     }
     #[test]
     fn concurrent_install_cannot_modify_existing_journal() {
