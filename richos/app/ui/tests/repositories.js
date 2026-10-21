@@ -172,7 +172,7 @@ async function main(){
   await page.waitForSelector(".repository-shared");
   const notice=await page.textContent(".repository-shared");
   assert(notice.includes("Already connected to "+aName),"the notice names the company that has it: "+notice);
-  assert(notice.includes("Nothing in the folder moves, and each company keeps its own chats and notes."),"the notice says what does not change");
+  assert(notice.includes("Nothing in the folder moves and each company keeps its own chats and notes."),"the notice says what does not change");
   assert(notice.includes("Rich can work in it from "+bName+" chats as well as "+aName+" chats"),"the notice says what connecting means");
   assertEqual(await page.textContent("#repository-connect"),"Connect to "+bName+" too","the button says what it will do");
   await page.click("#repository-connect");
