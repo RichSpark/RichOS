@@ -2289,6 +2289,7 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         wanted = json.loads(json.dumps(saved))
         wanted["environment"].update({"PATH": evidence.digest("/opt/git-core:/usr/bin:/bin"),
                                       "RICHOS_MUTATION_PASSES": evidence.digest("0"),
+                                      "RICHOS_BULK_ROOT": evidence.digest("/other/bulk"),
                                       "RICHOS_AUTOCHECK_LAND_TARGET": evidence.digest("main")})
         del wanted["environment"]["RICHOS_AGENT_OWNER"]
         wanted["tools"]["git"] = {"path": "/opt/git-core/git", "sha256": "c" * 64}
@@ -2297,14 +2298,41 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         gap = evidence.evidence_gap("autocheck", old, wanted, plan)
         self.assertEqual(gap, "declared execution inputs changed ("
                          "environment.PATH: saved %s..., now %s...; "
-                         "environment.RICHOS_AUTOCHECK_LAND_TARGET: saved absent, now %s...; "
+                         "environment.RICHOS_BULK_ROOT: saved absent, now %s...; "
                          "tools.git.path: saved /usr/bin/git, now /opt/git-core/git; "
                          "tools.git.sha256: saved bbbbbbbbbbbb..., now cccccccccccc...)" % (
                              saved["environment"]["PATH"][:12], wanted["environment"]["PATH"][:12],
-                             evidence.digest("main")[:12]))
+                             evidence.digest("/other/bulk")[:12]))
         # Equal identities still prove; the diagnostic never changes what is accepted.
         self.assertIsNone(evidence.evidence_gap("autocheck", old, saved, plan))
         self.assertEqual(evidence.identity_difference(saved, None), "")
+
+    def test_a_land_from_gits_hook_reads_an_unchanged_pass_as_the_authors_shell_did(self):
+        """2026-10-21, measured in a disposable clone's real `git merge` with the land's hooks and
+        environment: the preflight called 20 of the author's 24 unchanged passes changed. Two fields
+        did it. git starts every hook with its exec-path first in PATH (environment.PATH, and `git`
+        resolved inside git-core), and main's copy of the gate, which is the one a land runs, asks
+        with the lander's RICHOS_AUTOCHECK_LAND_TARGET set. A real change still reads as changed."""
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
+        exec_dir = subprocess.run(["git", "--exec-path"], check=True, capture_output=True, text=True).stdout.strip()
+        shell = {"PATH": os.environ["PATH"], "HOME": self.tmp.name, "RICHOS_BULK_ROOT": "/fixture/bulk"}
+        hook = {**shell, "PATH": exec_dir + os.pathsep + shell["PATH"], "RICHOS_AUTOCHECK_LAND_TARGET": "main"}
+
+        def read(environment):
+            item = runner.Item("check", str(self.root), ["bash", "suite.sh"])
+            with patch.dict(os.environ, environment, clear=True):
+                env = runner.execution_environment(item)
+            return env, evidence.checkout_identity(self.root, item.argv, env)
+
+        author_env, author = read(shell)
+        land_env, land = read(hook)
+        self.assertEqual(land_env["PATH"], author_env["PATH"], "the check runs with the PATH the author's did")
+        self.assertEqual(land, author)
+        self.assertEqual(evidence.identity_difference(author, land), "")
+        # Not loosened: another directory first in PATH, or a real setting, is still a change.
+        for changed in ({"PATH": self.tmp.name + os.pathsep + shell["PATH"]}, {"RICHOS_BULK_ROOT": "/other/bulk"}):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(read({**hook, **changed})[1], author)
 
     def test_the_whole_checkout_identity_binds_installed_browsers_and_the_rust_toolchain(self):
         # The same finding names the browser suites' external browser installations and the

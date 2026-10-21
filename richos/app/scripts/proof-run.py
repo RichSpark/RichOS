@@ -730,13 +730,40 @@ def conditions_line(items):
     return "nightly conditions: " + "; ".join(parts)
 
 
+_GIT_EXEC_DIR = []
+
+
+def without_git_exec_path(path):
+    """`path` without the directory git puts first in the PATH of every hook it runs.
+
+    GIT PREPENDS ITS OWN EXEC-PATH (2026-10-21). A land runs its checks, and asks the readiness
+    preflight, from git's pre-merge-commit hook, and git starts every hook with `git --exec-path`
+    (/opt/homebrew/opt/git/libexec/git-core here) at the front of PATH; the author's run, started
+    from a shell, has no such entry. Every check that binds PATH read an unchanged pass as changed
+    at the land (environment.PATH, and `git` resolved inside git-core), measured in a disposable
+    clone's real merge. Without it the check runs as the author's did: `git` resolves to the same
+    git through the rest of PATH, which finds its exec-path itself."""
+    if not _GIT_EXEC_DIR:
+        try:
+            found = subprocess.run(["git", "--exec-path"], capture_output=True, text=True, timeout=30,
+                                   stdin=subprocess.DEVNULL)
+            _GIT_EXEC_DIR.append(os.path.realpath(found.stdout.strip()) if found.returncode == 0
+                                 and found.stdout.strip() else None)
+        except (OSError, subprocess.SubprocessError):
+            _GIT_EXEC_DIR.append(None)
+    entries = path.split(os.pathsep)
+    while len(entries) > 1 and _GIT_EXEC_DIR[0] and os.path.realpath(entries[0]) == _GIT_EXEC_DIR[0]:
+        entries.pop(0)
+    return os.pathsep.join(entries)
+
+
 def execution_environment(item):
     if hasattr(item, "private_environment"):
         return {**item.private_environment, **item.env}
     # Verification must not rewrite bytecode inside its own declared inputs. The nightly's
     # conditions sit between the caller's environment and the check's own values.
     env = {**os.environ, **nightly_conditions(item), **item.env, "PYTHONDONTWRITEBYTECODE": "1"}
-    path = env.get("PATH", "").split(os.pathsep)
+    path = without_git_exec_path(env.get("PATH", "")).split(os.pathsep)
     for extra in (os.path.join(os.path.expanduser("~"), ".cargo", "bin"), "/opt/homebrew/bin", "/usr/local/bin"):
         if extra not in path:
             path.append(extra)

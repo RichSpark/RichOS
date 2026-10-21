@@ -316,7 +316,16 @@ RUN_SCOPED_ENVIRONMENT = frozenset(("RICHOS_AUTOCHECK_ACTIVE", "RICHOS_TEST_RESU
                                     # value per agent and session, so the land, run by the lead,
                                     # never carried the author's. 2026-10-21: 18 of 24 unchanged
                                     # passes read as changed by them alone (stands_in below).
-                                    "RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION"))
+                                    "RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION",
+                                    # The land's own variables (autocheck.py LAND_ONLY): its target,
+                                    # the author runs offered to it and main's copy's answer. No
+                                    # check reads them (clean_env takes them from every check the
+                                    # gate runs), but the preflight of main's older copy asks with
+                                    # them set, and the copy that runs at a land is main's, so a fix
+                                    # in autocheck.py cannot reach its own land. 2026-10-21: 19 of
+                                    # 24 unchanged passes read as changed by LAND_TARGET at the land.
+                                    "RICHOS_AUTOCHECK_LAND_TARGET", "RICHOS_AUTOCHECK_AUTHOR_RUNS",
+                                    "RICHOS_AUTOCHECK_FROM_MAIN"))
 _TOOL_DIGESTS = {}
 
 # THE HOST SHIELD (ceo-decisions §65, engine lib/host_shield.py) starts every check with its
