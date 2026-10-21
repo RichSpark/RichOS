@@ -84,8 +84,8 @@ class SlowRead(unittest.TestCase):
         self.assertEqual(r.returncode, 124)
         self.assertEqual(json.loads(r.stdout.splitlines()[0])['error'], 'guest_deadline',
                          'the classification still comes first')
-        self.assertIn('sample 4242 2 10 -mayDie', calls, 'the app under test is sampled')
-        self.assertIn('sample 777 2 10 -mayDie', calls, 'System Events (the AX client) is sampled')
+        self.assertIn('sample 4242 1 10 -mayDie', calls, 'the app under test is sampled')
+        self.assertIn('sample 777 1 10 -mayDie', calls, 'System Events (the AX client) is sampled')
         marker = next(json.loads(l) for l in r.stderr.splitlines() if l.startswith('{"ax_slow_read"'))
         self.assertEqual(marker['snapshot_started_at_seconds'], 1.0)
         # The main thread's heaviest path, and nothing from the next thread or a lighter branch.

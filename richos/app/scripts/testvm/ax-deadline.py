@@ -71,7 +71,7 @@ def timeout_record(host, err=b''):
 # guest's own CPU and memory by `top`. The read itself is never retried and its
 # deadline never moves; the snapshot only describes the read it rides on.
 SLOW_SECONDS = float(os.environ.get('TESTVM_AX_SLOW_SECONDS', '5'))
-SNAPSHOT_SAMPLE_SECONDS = 2
+SNAPSHOT_SAMPLE_SECONDS = 1
 _snapshot_children = []
 
 
@@ -137,6 +137,8 @@ class Snapshot:
                             '-stats', 'pid,command,cpu,state,th,mem'])
         for label, p in pids.items():
             self._start(label + ' pid ' + p, ['sample', p, str(SNAPSHOT_SAMPLE_SECONDS), '10', '-mayDie'])
+        # Every process by CPU, at once: top shows ten, and a starved guest had 60 running.
+        self._start('processes', ['ps', '-A', '-r', '-o', 'pid=,ppid=,pcpu=,stat=,rss=,comm='])
         self._start('memory', ['sysctl', 'vm.loadavg', 'kern.memorystatus_vm_pressure_level',
                                'kern.memorystatus_level', 'vm.swapusage'])
 
@@ -178,6 +180,11 @@ class Snapshot:
                 body = _heaviest_path(text)
                 total = next((l.strip() for l in text.splitlines() if l.startswith('Analysis of sampling')), '')
                 body = ([total] if total else []) + ['main thread, heaviest path:'] + body if body else text.strip().splitlines()[-3:]
+            elif label == 'processes':
+                rows = text.strip().splitlines()
+                running = sum(1 for r in rows if len(r.split()) > 3 and r.split()[3].startswith('R'))
+                body = ['%d processes, %d runnable (R); the 25 busiest by ps %%cpu:' % (len(rows), running)]
+                body += [r[:150] for r in rows[:25]]
             else:
                 body = text.strip().splitlines()
             lines.append('--- ' + label + (' (UNFINISHED at the deadline: the guest could not finish it)' if unfinished else ''))
