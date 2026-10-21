@@ -334,18 +334,68 @@ class Walk(adopt.Walk):
             time.sleep(2)
         raise StepFailed('no review-watch child was recorded at ' + path)
 
+    def chooser_open(self):
+        """The system folder chooser is up: an AXSheet, or its own Open button (review-walk.py)."""
+        for args in (('--role', 'AXSheet'), ('--title', 'Open', '--role', 'AXButton')):
+            try:
+                if [n for n in self.ax('find', *args) if 'x' in n and not n.get('meta')]:
+                    return True
+            except StepFailed as exc:
+                if 'notfound' not in str(exc) and 'nothing matched' not in str(exc):
+                    raise
+        return False
+
+    def wait_chooser(self, want, seconds=15):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if self.chooser_open() == want:
+                return True
+            time.sleep(1)
+        return False
+
+    def keys(self, applescript):
+        command([HERE / 'ax.sh', self.vm, applescript], 90)
+
     def connect(self):
+        """Settings -> "Connected folders (repositories)", a plain button since round 27
+        (settings-button.js buildDisclosureRow: "no `menuitem` role"), so it is pressed as an
+        AXButton. The sheet pre-selects the only company, and the folder field opens the system
+        folder chooser on a click, so a typed path never reaches it: Go to folder, the path,
+        Return, Open, then Connect folder, as review-walk.py drives it."""
         self.press('Settings', role='AXPopUpButton')
-        self.press('Connected folders', role='AXMenuItem')
-        self.ax('click', '--title', 'Company', '--role', 'AXPopUpButton', '--in', 'dialog', '--first')
-        self.press('Acme', role='AXMenuItem', contains=False)
-        self.type_into(self.company, '--role', 'AXTextField', '--title', 'Project folder location')
-        self.ax('click', '--title', 'Connect folder', '--role', 'AXButton', '--in', 'dialog', '--first')
+        self.press('Connected folders')
+        self.wait_for('Company', role='AXPopUpButton')
         time.sleep(2)
-        entities = guest(self.vm, 'cat ' + shlex.quote(self.data + '/entities.json'))
-        self.ax('click', '--title', 'Close', '--role', 'AXButton', '--in', 'dialog', '--first')
-        if self.company not in json.dumps(json.loads(entities).get('entities', [{}])[0].get('connected_repositories', [])):
-            raise StepFailed('the repository was not connected: ' + entities[:400])
+        fields = [n for n in self.ax('find', '--title', 'Project folder location', '--role', 'AXTextField',
+                                     '--contains') if 'x' in n and not n.get('meta')]
+        if not fields:
+            raise StepFailed('no "Project folder location" field on the Connected folders sheet')
+        f = fields[0]
+        command([HERE / 'ax.sh', self.vm, 'click', '--at', '%d,%d' % (f['x'] + f['w'] / 2, f['y'] + f['h'] / 2)], 90)
+        if not self.wait_chooser(True):
+            self.ax('click', '--title', 'Project folder location', '--role', 'AXTextField', '--contains', '--first')
+            if not self.wait_chooser(True):
+                raise StepFailed('the folder field did not open the folder chooser')
+        self.keys('tell application "System Events" to keystroke "g" using {command down, shift down}')
+        time.sleep(2)
+        self.keys('tell application "System Events" to keystroke ' + json.dumps(self.company))
+        time.sleep(1)
+        self.keys('tell application "System Events" to key code 36')
+        time.sleep(2.5)
+        self.ax('click', '--title', 'Open', '--role', 'AXButton', '--in', 'dialog', '--first')
+        if not self.wait_chooser(False):
+            raise StepFailed('the folder chooser did not close after Open')
+        time.sleep(1)
+        self.ax('click', '--title', 'Connect folder', '--role', 'AXButton', '--in', 'dialog', '--first')
+        end, entities = time.monotonic() + 30, '{}'
+        while time.monotonic() < end:
+            entities = guest(self.vm, 'cat ' + shlex.quote(self.data + '/entities.json'))
+            if self.company in json.dumps([e.get('connected_repositories', []) for e in json.loads(entities).get('entities', [])]):
+                break
+            time.sleep(1)
+        else:
+            raise StepFailed('the repository was not connected within 30 s: ' + entities[:400])
+        self.press('Close')
         # Leases started before the connection carry the old --add-dir list; start fresh ones.
         self.facts['app'] = self.relaunched()
         self.save()
