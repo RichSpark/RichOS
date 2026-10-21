@@ -31,13 +31,16 @@ function source(name) {
 // The launch-hold state, declared exactly as main.js declares it, whatever it is called.
 const launchState = main.match(/^let launch\w+ = [^\n]*;$/gm) || [];
 assert(launchState.length >= 2, "main.js no longer declares its launch-hold state; update this test");
+// The send line (`sendLine`, `sendWaitingForAcceptance`), declared exactly as main.js declares it.
+const sendLineState = main.match(/^let send(?:Line|WaitingForAcceptance) = [^\n]*;$/gm) || [];
+assert(sendLineState.length === 2, "main.js no longer declares its send-line state; update this test");
 
 function makeShell() {
   const c = vm.createContext({ console });
   c.window = c;
   vm.runInContext(fs.readFileSync(path.join(root, "timeline.js"), "utf8"), c);
   vm.runInContext(
-    launchState.join("\n") +
+    launchState.concat(sendLineState).join("\n") +
       `
     const noop = () => {};
     const inputEl = {value: '', disabled: false};
