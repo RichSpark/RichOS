@@ -70,6 +70,7 @@
 #        plan §5.3 item 2): CLAUDE.md in
 #        full past 64 KiB, the connected folder's uncommitted CLAUDE.local.md after it, and
 #        no AGENTS.md beside a CLAUDE.md
+#   C24  a CLAUDE.md linked out of the repository is read as the worker's brief reads it
 #
 
 # Exit 0 = every case passed; exit 1 = at least one failed.
@@ -861,6 +862,28 @@ in_p3 "CLAUDE-LOCAL-LINE" && in_p3 "$(cd "$REPO3" && pwd -P)/CLAUDE.local.md, fr
 check "C23 the input holds the connected folder's uncommitted CLAUDE.local.md, named as not in tree/" $? "prompt=$P3"
 ! in_p3 "AGENTS-ONLY-LINE"
 check "C23 beside a CLAUDE.md the AGENTS.md is not given, as Claude Code would not load it" $? "prompt=$P3"
+
+# --- C24 ---------------------------------------------------------------------
+# The mid-job review of 4fec9eb23 (rv-20261021T175714Z-4fec9eb2-df32, finding 2): a CLAUDE.md that
+# links out of the repository, a common way to share one file between projects. The worker's brief
+# read it through the repository; the second review followed the link inside its export, found
+# nothing there, and gave the reviewer the AGENTS.md instead. Both now read by the same call.
+REPO4="$SB/repo-with-shared-rules"
+mkdir -p "$SB/shared-rules" "$REPO4"
+printf 'SHARED-RULE-LINE\n' >"$SB/shared-rules/CLAUDE.md"
+G4() { git -C "$REPO4" -c core.hooksPath=/dev/null -c user.name=Author -c user.email=author@example.invalid -c commit.gpgsign=false "$@"; }
+G4 init -q -b main
+ln -s ../shared-rules/CLAUDE.md "$REPO4/CLAUDE.md"
+printf 'AGENTS-BESIDE-THE-LINK\n' >"$REPO4/AGENTS.md"
+printf 'base\n' >"$REPO4/a.txt"
+G4 add -A; G4 commit -qm "base"
+BASE4="$(G4 rev-parse HEAD)"
+G4 checkout -qb cc/shared-rules
+printf 'base\nchange\n' >"$REPO4/a.txt"; G4 commit -qam "a change"
+FAKE_MODE=pass run --repo "$REPO4" --tip "$(G4 rev-parse HEAD)" --base "$BASE4" --words-file "$SB/codex-words.txt"
+P4="$(last_call)/prompt.md"
+grep -qF -- "SHARED-RULE-LINE" "$P4" && ! grep -qF -- "AGENTS-BESIDE-THE-LINK" "$P4"
+check "C24 a CLAUDE.md linked out of the repository reaches the reviewer, as it reaches the worker" $? "rc=$RC prompt=$P4"
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"

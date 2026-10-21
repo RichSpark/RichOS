@@ -720,9 +720,10 @@ def build_input(w, a, export, earlier):
     parts.append("## The repository's own instructions (as they are at the tip)\n\n")
     # The same instruction file, by the same rule, as the worker's brief (prepare in
     # mega-lander/app.py; richos-hq docs/plans/2026-10-21-folder-instruction-files.md §5.3 item 2),
-    # read at the tip: in full, never cut.
-    for rel, text, where in instruction_files.choose(instruction_files.from_disk(tree),
-                                                     instruction_files.from_disk(w.repo)):
+    # read at the tip: in full, never cut. Read from the repository at the tip, never from the
+    # export: a link out of the repository (CLAUDE.md -> ../shared/CLAUDE.md) points nowhere
+    # inside the export, and the same call as prepare's resolves every link the same way.
+    for rel, text, where in instruction_files.for_repository(w.repo, w.tip):
         label = ("tree/" + rel if where == "commit"
                  else "%s, from the connected folder itself (not committed, so not in tree/)" % os.path.join(w.repo, rel))
         parts.append(fence(label, text) + "\n")
