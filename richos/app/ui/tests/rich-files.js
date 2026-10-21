@@ -204,6 +204,45 @@ async function main() {
     await p.context().close();
   });
 
+  await run.check("with Techy Mode on the cards stay through a turn's end and through reopening the conversation", async () => {
+    // Review rv-20261021T083350Z-8ca9bacf-e592: Techy Mode reloads from `get_machinery`, which
+    // carried no cards, so the reload at every turn's end took them away.
+    const p = await openApp(browser);
+    await p.evaluate(() => window.RichBridge.invoke("set_techy_mode", { threadId: "acme", enabled: true }));
+    await openThread(p, "hiring");
+    await openThread(p, "acme");
+    await p.waitForSelector(".tl-rfile");
+    assertEqual((await cards(p)).length, 2, "cards after reopening in Techy Mode");
+    // Count Techy Mode's snapshot reads, so the check waits for the re-read itself.
+    await p.evaluate(() => {
+      window.__machineryReads = 0;
+      const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+      window.RichBridge.invoke = (cmd, args, options) => {
+        const answer = invoke(cmd, args, options);
+        if (cmd !== "get_machinery") return answer;
+        return answer.then((payload) => {
+          window.__machineryReads++;
+          window.__machineryCards = payload.timeline.items.filter((i) => i.kind === "rich_file").length;
+          return payload;
+        });
+      };
+    });
+    const turnsBefore = await p.evaluate(() => document.querySelectorAll(".tl-turn").length);
+    await p.fill("#input", "and the signed copy when it comes back");
+    await p.keyboard.press("Enter");
+    await p.waitForFunction((n) => document.querySelectorAll(".tl-turn").length > n, turnsBefore);
+    // The reply streams, the turn ends and the conversation is re-read from Techy Mode's snapshot.
+    await p.waitForFunction(() => window.__machineryReads > 0, null, { timeout: 30000 });
+    assertEqual(await p.evaluate(() => window.__machineryCards), 2, "Techy Mode's snapshot carries the cards");
+    await p.waitForFunction(() =>
+      [...window.__RICHOS_TIMELINE__().items.values()].filter((i) => i.kind === "rich_file").length === 2 &&
+      document.querySelectorAll(".tl-rfile").length === 2);
+    const got = await cards(p);
+    assertEqual(got.map((c) => c.name), ["Acme-counteroffer.pdf", "Acme-comparables.xlsx"], "the cards after the turn ended");
+    assertEqual(p.__errors, [], "the page reported errors");
+    await p.context().close();
+  });
+
   for (const theme of ["dark", "light"]) {
     await run.check(theme + " — the card's text and edges clear WCAG AA", async () => {
       const p = await openApp(browser, { theme });

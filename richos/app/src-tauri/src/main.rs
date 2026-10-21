@@ -85,8 +85,8 @@ mod timeline_view;
 /// The `get_machinery` command body — techy mode's read path. Its own file for the same
 /// reason `timeline_view` is: an example includes the SAME source and prints the exact
 /// JSON the webview receives.
+/// `get_machinery` adds the files Rich attached to it (`rich_files_host::machinery_with_files`).
 mod machinery_view;
-use machinery_view::machinery_payload;
 
 /// COMPANY MEMORY: where it is, whether it is readable, and — new on 2026-09-01 — how a
 /// machine that has none gets one. Its own file because `wire_company_memory` runs twice:
@@ -8930,7 +8930,8 @@ fn get_machinery(state: State<AppState>, thread_id: String) -> Result<serde_json
     if let Ok(mut spine) = state.spine.try_lock() {
         spine.pump_between_turn();
     }
-    machinery_payload(&*state.reader.snapshot(), &thread_id)
+    // Techy Mode reloads from here, so the files Rich attached ride on this snapshot too.
+    rich_files_host::machinery_with_files(&*state.reader.snapshot(), &rich_files_host::root(&state), &thread_id)
 }
 
 /// §2.4's raw pane, one record at a time.

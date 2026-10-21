@@ -7,6 +7,7 @@
 //! record and opens the file with the Mac's default app. The page holds ids, never paths.
 
 use crate::AppState;
+use richos_core::read_view::SpineView;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
@@ -23,6 +24,22 @@ pub fn items(root: &Path, entity_id: &str, thread_id: &str) -> Vec<Value> {
         .iter()
         .map(item)
         .collect()
+}
+
+/// The conversation's file cards added to Techy Mode's technical view, `get_machinery`'s
+/// `{"timeline": {"items": [...]}}`: the same rows `question_host::payload` adds to the calm view,
+/// so a reload in either mode keeps the cards (review rv-20261021T083350Z-8ca9bacf-e592: with
+/// Techy Mode on they vanished at every turn's end and on reopening). Appended, not re-sorted: the
+/// technical rows keep the projection's own order, and the window places each card by its turn.
+/// An unbound conversation has no cards.
+pub fn machinery_with_files(view: &dyn SpineView, files_root: &Path, thread_id: &str) -> Result<Value, String> {
+    let mut payload = crate::machinery_view::machinery_payload(view, thread_id)?;
+    if let Ok(binding) = view.ledger().thread_binding(thread_id) {
+        if let Some(items) = payload["timeline"]["items"].as_array_mut() {
+            items.extend(self::items(files_root, binding.entity_id().as_str(), thread_id));
+        }
+    }
+    Ok(payload)
 }
 
 fn item(row: &richos_core::rich_files::Row) -> Value {
@@ -93,6 +110,41 @@ pub fn start(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    use richos_core::entity::{Entity, EntityId, EntityRegistry};
+    use richos_core::ledger::Ledger;
+    use richos_core::spine::Spine;
+
+    /// **BOTH SNAPSHOT PATHS CARRY THE CARDS** (review rv-20261021T083350Z-8ca9bacf-e592): the
+    /// calm view's (`question_host::payload_in`, `get_timeline` and the phone) and Techy Mode's
+    /// (`machinery_with_files`, `get_machinery`), each over a real spine's published view. Before
+    /// the fix Techy Mode's had none, so every reload after a turn took the cards away.
+    #[test]
+    fn a_file_rich_attached_is_in_the_calm_and_the_techy_snapshot_alike() {
+        let dir = std::env::temp_dir().join(format!("richos-rich-files-paths-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut spine = Spine::new(Ledger::open(dir.join("ledger.jsonl")).unwrap());
+        spine.set_entity_registry(EntityRegistry::new(vec![Entity::new("alpha", "Alpha", &["/fixture/alpha"]).unwrap()]).unwrap());
+        let thread = spine.create_thread("A conversation", &EntityId::parse("alpha").unwrap()).unwrap();
+        let root = dir.join("engine-state");
+        let file = dir.join("counter.pdf");
+        std::fs::write(&file, b"%PDF-1.4").unwrap();
+        let row = richos_core::rich_files::attach(&root, "alpha", &thread, "turn-1", "front_desk", &file.to_string_lossy()).unwrap();
+        let view = spine.reader().snapshot();
+        let has_card = |items: &serde_json::Value| {
+            items.as_array().unwrap().iter().any(|i| i["kind"] == "rich_file" && i["file"]["id"] == row.id.as_str())
+        };
+        let calm = crate::question_host::payload_in(&*view, &richos_core::questions::Store::new(&root), &root, &thread).unwrap();
+        assert!(has_card(&calm["items"]), "the calm snapshot has the card: {calm}");
+        let techy = super::machinery_with_files(&*view, &root, &thread).unwrap();
+        assert!(has_card(&techy["timeline"]["items"]), "Techy Mode's snapshot has the card: {techy}");
+        // Another company's conversation never sees it.
+        assert_eq!(richos_core::rich_files::items(&root, "beta", &thread).len(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// Both commands answer off Tauri's async workers (`crate::command_rule_tests`).
     #[test]
     fn its_two_commands_run_off_the_async_workers() {

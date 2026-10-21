@@ -600,9 +600,6 @@
       if (activeMs !== null) dur.activeMs = activeMs;
       items.push(dur);
     }
-    // The files Rich put in front of the user (`question_host::payload` merges them from
-    // `rich_files_host::items`), one item each, in the turn that attached them.
-    for (const f of richFilesByThread[threadId] || []) items.push(JSON.parse(JSON.stringify(f)));
     return {
       entityId: t ? t.entity_id : null,
       threadId,
@@ -892,6 +889,12 @@
       richFileItem("acme", turnId, "rf_8192a3b4c5d6e7f8", "Acme-comparables.xlsx", "XLSX", "Spreadsheet · 46 KB", "Numbers",
         at + 1100, true),
     ];
+  }
+
+  /// A snapshot with the conversation's file cards added, as each Rust snapshot path adds them.
+  function withRichFiles(payload, threadId) {
+    for (const f of richFilesByThread[threadId] || []) payload.items.push(JSON.parse(JSON.stringify(f)));
+    return payload;
   }
 
   /// `rich_file_open` / `rich_file_reveal`: Rust resolves the id in the conversation's record and
@@ -3096,7 +3099,9 @@
           const t = threads.find((x) => x.id === id);
           // Fails closed on an unbound thread exactly like the real command.
           if (t && !t.entity_id) return Promise.reject(UNBOUND_ERR(id));
-          return projectTimeline(id);
+          // The files Rich attached ride on this snapshot because `question_host::payload_in`
+          // adds them, one item each, in the turn that attached them.
+          return withRichFiles(projectTimeline(id), id);
         }
         // ---- techy mode (techy-mode design §3.1/§3.4) ------------------------------
         case "get_machinery": {
@@ -3111,7 +3116,9 @@
           // difference matters: an unreadable store projects NO lane rows, so a sentence
           // derived from the raw fixture instead of from the projection would be answering
           // about rows the CEO cannot see.
-          const projected = projectTimeline(id, st.state === "recorded" ? "technical" : "technical-empty");
+          // ...and on Techy Mode's because `rich_files_host::machinery_with_files` adds the same rows
+          // (review rv-20261021T083350Z-8ca9bacf-e592: until it did, the cards vanished here).
+          const projected = withRichFiles(projectTimeline(id, st.state === "recorded" ? "technical" : "technical-empty"), id);
           return {
             threadId: id,
             state: st.state,
