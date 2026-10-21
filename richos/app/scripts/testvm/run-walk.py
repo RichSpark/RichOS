@@ -47,7 +47,7 @@ RETIRED={'hold-walk.py':'hold-walk.py is retired (the CEO, 2026-09-27): a guest 
 PHONE_WALKS={'delta-walk.py'}
 
 
-def boot_argv(vm,bundle,home,engine,tailnet):
+def boot_argv(vm,bundle,home,engine,tailnet,new_user=False):
     """run.sh's command line. The tailnet join is the phone path's and nothing else's: a
     walk that never touches the phone must not fail because a network join failed (run.sh
     exits 1 on a failed join), so --no-tailnet is the default and --tailnet opts in.
@@ -55,6 +55,8 @@ def boot_argv(vm,bundle,home,engine,tailnet):
     app=['--bundle',bundle] if bundle else ['--no-app']
     argv=[str(HERE/'run.sh'),'--vm',vm,*app,'--home',home,'--engine',engine]
     if not tailnet:argv.append('--no-tailnet')
+    # A first run as a new user has it: HOME only, no harness login, claude path or engine (run.sh).
+    if new_user:argv.append('--new-user')
     return argv
 
 
@@ -72,6 +74,9 @@ def main():
                    help='wait for a free guest slot and CPU/memory admission for at most SECONDS (default 0: refuse at once)')
     p.add_argument('--tailnet',action='store_true',
                    help='join the phone network in the guest (only a walk that pairs a phone needs it; default: no join)')
+    p.add_argument('--new-user',action='store_true',
+                   help='launch the app as a new user does: HOME only, no harness claude path, login or engine '
+                        '(run.sh --new-user; new-user-walk.py)')
     p.add_argument('command',nargs=argparse.REMAINDER)
     a=p.parse_args();command=a.command[1:] if a.command[:1]==['--'] else a.command
     if not command:p.error('a scenario command is required after --')
@@ -102,7 +107,7 @@ def main():
         try:
             # Give each subprocess a group so interruption cannot strand the SSH
             # command. stop.sh subsequently reaps the captured VM process.
-            boot=boot_argv(vm,a.bundle,a.home,a.engine,a.tailnet)
+            boot=boot_argv(vm,a.bundle,a.home,a.engine,a.tailnet,a.new_user)
             child=subprocess.Popen(boot,start_new_session=True)
             rc=child.wait(timeout=480)
             result['boot_seconds']=time.monotonic()-began
