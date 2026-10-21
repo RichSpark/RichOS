@@ -316,7 +316,8 @@ pub struct View {
     pub message: Option<String>,
     /// **Is this account signed in on this Mac?** `Some(false)` when Claude Code's own
     /// `auth status` says nobody is ([`ReadError::SignedOut`]), `Some(true)` once a reading has
-    /// arrived (only a signed-in account reports one), `None` while nothing says either. The
+    /// arrived (only a signed-in account reports one) or `auth status` says it is signed in
+    /// ([`ReadError::SignedInNoLimits`]), `None` while nothing says either. The
     /// account card draws "Not signed in" with the sign-in from `Some(false)`, never "No
     /// reading yet" (`ui/accounts.js`).
     #[serde(default)]
@@ -400,12 +401,17 @@ pub enum ReadError {
     /// to this account's folder (`probe.rs`). Permanent until somebody signs in, so the card
     /// says so and offers the sign-in, never "No reading yet".
     SignedOut,
+    /// Claude Code reported no limits AND its own `claude auth status` says this account IS
+    /// signed in (`probe.rs`): an account without subscription limits. The sign-in verdict
+    /// stands on its own, so the card never offers "Sign in" to it.
+    SignedInNoLimits,
 }
 impl ReadError {
     fn message(self) -> &'static str {
         match self {
             Self::Unsupported => "Claude Code did not report subscription limits for this account.",
             Self::SignedOut => "This Claude account is not signed in on this Mac.",
+            Self::SignedInNoLimits => "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show.",
             // Round 16's words for a refresh that got no answer (quota.html, `refresh-failed`).
             Self::Failed => "Claude Code did not answer just now.",
             Self::Malformed => "Claude Code returned quota data this version of RichOS could not read.",
@@ -689,7 +695,7 @@ impl Snapshot {
             if self.checked_at.is_none() { self.empties = self.empties.saturating_add(1); }
             return;
         }
-        if matches!(error, ReadError::Unsupported | ReadError::SignedOut) {
+        if matches!(error, ReadError::Unsupported | ReadError::SignedOut | ReadError::SignedInNoLimits) {
             self.windows.clear();
             self.checked_at = None;
         }
@@ -716,7 +722,7 @@ impl Snapshot {
     fn signed_in(&self) -> Option<bool> {
         if self.error == Some(ReadError::SignedOut) {
             Some(false)
-        } else if self.checked_at.is_some() {
+        } else if self.checked_at.is_some() || self.error == Some(ReadError::SignedInNoLimits) {
             Some(true)
         } else {
             None
@@ -1979,6 +1985,10 @@ pub(crate) mod tests {
         assert_eq!(view.message.as_deref(), Some("This Claude account is not signed in on this Mac."));
         s.empty(ReadError::Unsupported, NOW + 1);
         assert_eq!(s.view(policy(), NOW + 1).signed_in, None, "no limits alone says nothing about the sign-in");
+        s.empty(ReadError::SignedInNoLimits, NOW + 1);
+        let view = s.view(policy(), NOW + 1);
+        assert_eq!(view.signed_in, Some(true), "a signed-in verdict stands without a usage reading");
+        assert!(view.windows.is_empty());
         s.accept(snapshot(20., 3_600_000).windows, NOW + 2);
         assert_eq!(s.view(policy(), NOW + 2).signed_in, Some(true));
     }

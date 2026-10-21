@@ -197,11 +197,17 @@ impl Source for ClaudeSource {
         // (`rate_limits_available: false`; measured on 2.1.306, 2026-10-21), so the card said
         // "No reading yet" to a person who had never signed in and could not tell that from a
         // slow check (`docs/development/failure-classes/unknown-state-shown-as-pending.md`).
-        // Claude Code's own `auth status` decides which one this is.
-        if result == Err(ReadError::Unsupported)
-            && crate::provider_auth::status_in(bin, self.folder.as_deref()).state == crate::provider_auth::AuthState::SignedOut
-        {
-            return Err(ReadError::SignedOut);
+        // Claude Code's own `auth status` decides which one this is, and BOTH answers are kept:
+        // a signed-in verdict stands on its own and is never lost because no usage reading
+        // came with it (mid-job review rv-20261021T213648Z-b3f0990a-85f9: a signed-in account
+        // without limits was offered "Sign in").
+        if result == Err(ReadError::Unsupported) {
+            use crate::provider_auth::AuthState;
+            match crate::provider_auth::status_in(bin, self.folder.as_deref()).state {
+                AuthState::SignedOut => return Err(ReadError::SignedOut),
+                AuthState::Connected => return Err(ReadError::SignedInNoLimits),
+                _ => {}
+            }
         }
         result
     }
@@ -260,10 +266,12 @@ for line in sys.stdin:
     /// **A signed-out account is told apart from one with no limits** (a new user's first run,
     /// 2026-10-21: the card said "No reading yet" to somebody who had never signed in). Both
     /// answer `get_usage` with `rate_limits_available: false`, exactly as Claude Code 2.1.306
-    /// does signed out; only `claude auth status --json` separates them.
+    /// does signed out; only `claude auth status --json` separates them. And a signed-in verdict
+    /// stands on its own: it is never lost because no usage reading came with it (mid-job
+    /// review rv-20261021T213648Z-b3f0990a-85f9: the card offered "Sign in" to it).
     #[test]
     fn no_limits_from_a_signed_out_account_is_reported_as_signed_out() {
-        for (logged_in, want) in [("False", ReadError::SignedOut), ("True", ReadError::Unsupported)] {
+        for (logged_in, want) in [("False", ReadError::SignedOut), ("True", ReadError::SignedInNoLimits)] {
             let root = Scratch::new();
             let bin = script(
                 root.path(),

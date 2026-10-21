@@ -20,9 +20,13 @@ already had the one call that answers the question: Claude Code's own `claude au
 
 When a check comes back without figures, the app asks the question that decides it before it
 shows anything: the usage reader asks `claude auth status` for that account's folder and a
-signed-out account is `ReadError::SignedOut`. The view carries the verdict
+signed-out account is `ReadError::SignedOut`, a signed-in one `ReadError::SignedInNoLimits`. Both
+verdicts are kept: a signed-in verdict stands on its own and is never lost because no usage
+reading came with it. The view carries the verdict
 (`quota::View::signed_in` and `AccountView::signed_in` per added account): `Some(false)` signed
-out, `Some(true)` once a reading arrived, `None` while nothing says either. The card then says
+out, `Some(true)` once a reading arrived or `auth status` said signed in, `None` while nothing
+says either. The card in use that is signed in without limits says so, with no Sign in and no
+empty meters. The card then says
 "Not signed in", "This account is not signed in on this Mac, so Rich cannot answer you yet. Sign
 in here." with Sign in on it and no meters and the Settings row says "Not signed in on this
 Mac" in gold. Before the first check has answered it says "Checking whether this account is
@@ -32,11 +36,13 @@ signed in on this Mac." and once a check answered something else it says what.
 
 | Check | What it refuses |
 |---|---|
-| `quota/probe.rs` `no_limits_from_a_signed_out_account_is_reported_as_signed_out` | a signed-out account read as "no limits" |
+| `quota/probe.rs` `no_limits_from_a_signed_out_account_is_reported_as_signed_out` | a signed-out account read as "no limits" and a signed-in verdict dropped because no limits came with it |
+| `ui/tests/accounts.js` "signed in without limits: the card says so, with no Sign in and no empty meters" | Sign in offered to an account Claude Code says is signed in |
 | `quota.rs` `the_view_carries_the_sign_in_the_last_check_established` | a view that claims more or less, than the last check established |
 | `ui/tests/accounts.js` "signed out: the card says Not signed in with Sign in, the row says it in gold and nothing says No reading yet" | the card or row showing a waiting state for a known sign-out; contrast of both states computed in both themes by the same suite |
 | `ui/tests/affordances.js` fixtures `accounts-signed-out`, `accounts-row-signed-out` (rows in `ui/tests/lib/state-registry.js`) | the sentence rendering without its Sign in control |
 | `scripts/testvm/new-user-walk.py` dead end `account state unknown` | "No reading yet" on any frame of a real first run |
+| `scripts/testvm/new-user-walk.py` `accounts_verdict` (tests in `test/new-user-walk.test.py`) | an accounts step passed on words alone: it needs the Claude accounts sheet open and the card's own Sign in button (`#acc-sign-one`), pressable |
 
 ## Other places in the app that belong to this class
 

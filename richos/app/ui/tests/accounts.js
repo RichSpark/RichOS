@@ -18,6 +18,8 @@ const win = (five, week, fiveAt = now + 2 * HOUR, weekAt = now + 2 * DAY) => [
 // What quota.rs publishes once Claude Code's own `auth status` says nobody is signed in (2026-10-21).
 const signedOut = { state: "unavailable", checkedAt: null, retryAt: null, windows: [], signedIn: false,
   message: "This Claude account is not signed in on this Mac." };
+// What quota.rs publishes when `auth status` says signed in but no limits come back (ReadError::SignedInNoLimits).
+const SIGNED_IN_NO_LIMITS = "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show.";
 const one = (week, five = 22) => ({ state: "fresh", checkedAt: now, retryAt: null, message: null, windows: win(five, week) });
 function two(home, work, opts = {}) {
   const working = opts.working || {};
@@ -157,6 +159,24 @@ async function main() {
     assertEqual(await text(page, ".acc-note"), "Checking whether this account is signed in on this Mac.");
     await page.close();
     return "signed out: Not signed in + Sign in on the card, gold row line; unchecked: the check is under way";
+  });
+
+  // Mid-job review rv-20261021T213648Z-b3f0990a-85f9: a signed-in verdict stands on its own.
+  // An account Claude Code says is signed in, but that reports no usage limits, is never
+  // offered "Sign in" and never shown empty meters. Red before: signedIn was lost (null), the
+  // card offered Sign in and drew two "Not reported yet" meters.
+  await run.check("signed in without limits: the card says so, with no Sign in and no empty meters", async () => {
+    const page = await open("dark", { state: "unavailable", checkedAt: null, retryAt: null, windows: [], signedIn: true,
+      message: SIGNED_IN_NO_LIMITS });
+    await menu(page);
+    await page.click("#set-accounts-open");
+    await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
+    assertEqual(await texts(page, ".acc-pill"), ["In use now"]);
+    assertEqual(await text(page, ".acc-note"), SIGNED_IN_NO_LIMITS);
+    assertEqual(await page.locator('#accounts-sheet [data-act="sign-one"], #accounts-sheet [data-act="sign"]').count(), 0, "no Sign in for a signed-in account");
+    assertEqual(await page.locator("#accounts-sheet .acc-card .acc-meter").count(), 0, "no empty meters");
+    await page.close();
+    return "In use now, the signed-in sentence, no Sign in, no meters";
   });
 
   await run.check("Use this one now: the cards trade places, Recent changes says so, Undo puts it back; a near-full account says when Rich switches again", async () => {
