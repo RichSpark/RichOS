@@ -206,6 +206,8 @@ pub struct UserSetup {
     pub standing: Option<PathBuf>,
     /// The user's login shell environment (`login_environment.rs`), or `None` for none.
     pub login: Option<std::sync::Arc<BTreeMap<String, String>>>,
+    /// The Git the user's terminal runs (`user_git.rs`), found on the login `PATH`.
+    pub git: crate::user_git::UserGit,
 }
 
 impl UserSetup {
@@ -215,7 +217,7 @@ impl UserSetup {
         let Some(folder) = folder else { return Ok(Self::default()) };
         provision(&folder, shipped)?;
         let standing = standing_plugin(&folder, shipped, standing)?;
-        Ok(Self { digest: Some(digest(&folder)), settings: lease_settings(&folder)?, standing: Some(standing), folder: Some(folder), login: None })
+        Ok(Self { digest: Some(digest(&folder)), settings: lease_settings(&folder)?, standing: Some(standing), folder: Some(folder), login: None, git: Default::default() })
     }
 }
 

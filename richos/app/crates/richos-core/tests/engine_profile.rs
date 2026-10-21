@@ -106,7 +106,8 @@ fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child(
     assert_eq!(environment["STALL_WATCH_STATE_DIR"].as_deref(), profile.state.join("stall-watch").to_str());
     assert!(!environment["PATH"].as_ref().unwrap().contains("homebrew"));
     assert_eq!(environment["RICHOS_CLAUDE_BIN"].as_deref(), Some("/fictional/provider"));
-    assert_eq!(environment["GIT_CONFIG_GLOBAL"].as_deref(), profile.plugin.join("gitconfig").to_str());
+    assert_eq!(environment["GIT_CONFIG_SYSTEM"].as_deref(), profile.plugin.join("gitconfig").to_str());
+    assert_eq!(environment.get("GIT_CONFIG_GLOBAL"), Some(&None), "the user's own ~/.gitconfig is read as Git always reads it");
     assert_eq!(environment["GIT_AUTHOR_NAME"], None);
     assert_eq!(environment["LORO_CORPUS"], None);
     assert_eq!(environment["NODE_OPTIONS"], None);
@@ -263,11 +264,15 @@ fn generic_git_identity_is_a_default_and_explicit_assignment_identity_can_overri
     let f=Scratch::new(); let profile=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let mut configured=std::process::Command::new("/fictional/provider");
     profile.configure(&mut configured,Path::new("/fictional/provider"),"fixture-session",&f.0.join("scope.json"));
+    // A user whose own Git settings name nobody: an empty fixture home, so the person running
+    // this test is never read.
+    let home=f.0.join("home without git settings"); std::fs::create_dir_all(&home).unwrap();
     for (extra, expected) in [(vec![],"RichOS"), (vec!["-c","user.name=Fixture"],"Fixture")] {
         let mut git=std::process::Command::new("/usr/bin/git");
         for (key,value) in configured.get_envs() {
             if let Some(value)=value { git.env(key,value); } else { git.env_remove(key); }
         }
+        git.env("HOME",&home).env_remove("XDG_CONFIG_HOME");
         let output=git.current_dir(&profile.coordination).args(extra).args(["config","--get","user.name"]).output().unwrap();
         assert!(output.status.success());
         assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
@@ -828,4 +833,54 @@ fn the_login_environment_is_the_login_shells_and_a_slow_shell_times_out() {
     let began = std::time::Instant::now();
     assert!(read(&slow, &[], std::time::Duration::from_secs(1)).is_err());
     assert!(began.elapsed() < std::time::Duration::from_secs(10), "the read waited {:?}", began.elapsed());
+}
+
+// =======================================================================================
+// THE USER'S OWN GIT — build plan 2026-10-21, item 8
+// =======================================================================================
+
+/// A lease commits under the user's own name and email from ~/.gitconfig, and its Git asks the
+/// helpers the user's settings name: the user's own Git's system file is included (where a Mac's
+/// osxkeychain helper is set) and that Git's helper folder is on PATH, last.
+#[test]
+fn a_lease_commits_as_the_user_and_asks_the_users_credential_helpers() {
+    let f = Scratch::new();
+    let home = f.0.join("home");
+    let bin = f.0.join("user git/bin");
+    let helpers = f.0.join("user git/libexec/git-core");
+    for dir in [&home, &bin, &helpers] { std::fs::create_dir_all(dir).unwrap(); }
+    std::fs::write(home.join(".gitconfig"), "[user]\n\tname = Fixture Person\n\temail = fixture.person@example.invalid\n[credential]\n\thelper = fixture-user-helper\n").unwrap();
+    let system = f.0.join("user git/etc/gitconfig");
+    std::fs::create_dir_all(system.parent().unwrap()).unwrap();
+    std::fs::write(&system, "[credential]\n\thelper = fixture-system-helper\n").unwrap();
+    // The user's Git, as `git --exec-path` and `git config --system --list --show-origin` answer.
+    let git = bin.join("git");
+    std::fs::write(&git, format!("#!/bin/sh\ncase \"$1\" in\n  --exec-path) echo '{}' ;;\n  config) printf 'file:%s\\tcredential.helper=fixture-system-helper\\n' '{}' ;;\nesac\n",
+        helpers.display(), system.display())).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let login: BTreeMap<String, String> = [("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("HOME", home.display().to_string())]
+        .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+    let profile = EngineProfile::prepare_for(&engine(), &f.0.join("data"), f.runtime(), richos_core::machine_settings::Settings::default(),
+        None, Some(std::sync::Arc::new(login))).unwrap();
+    assert_eq!(profile.user.git, richos_core::user_git::UserGit { system_config: Some(system.clone()), exec_path: Some(helpers.clone()) });
+    let mut configured = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut configured, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let environment: BTreeMap<_, _> = configured.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+    assert_eq!(environment["HOME"].as_deref(), home.to_str());
+    assert!(environment["PATH"].as_deref().unwrap().ends_with(&format!(":{}", helpers.display())), "{:?}", environment["PATH"]);
+    let ask = |args: &[&str]| {
+        let mut git = std::process::Command::new("/usr/bin/git");
+        for (key, value) in configured.get_envs() {
+            if let Some(value) = value { git.env(key, value); } else { git.env_remove(key); }
+        }
+        let output = git.env_remove("XDG_CONFIG_HOME").current_dir(&profile.coordination).args(args).output().unwrap();
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    assert_eq!(ask(&["config", "--get", "user.name"]), "Fixture Person");
+    assert_eq!(ask(&["config", "--get", "user.email"]), "fixture.person@example.invalid");
+    // Ends with: Apple's own `git`, which this test runs, reads one more layer of its own first.
+    let helpers = ask(&["config", "--get-all", "credential.helper"]);
+    assert!(helpers.ends_with("fixture-system-helper\nfixture-user-helper"),
+        "the user's Git's system helper, then the user's own, as the user's terminal asks them: {helpers:?}");
 }

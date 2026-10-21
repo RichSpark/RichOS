@@ -404,10 +404,16 @@ impl EngineProfile {
         let mut user = crate::user_settings::UserSetup::prepare(user_folder, &engine.join("app"),
             &plugin.with_file_name(format!("{}-standing", plugin.file_name().unwrap().to_string_lossy())))?;
         user.login = login;
+        // The Git the user's terminal runs, found on the login PATH (build plan item 8).
+        if let Some(path) = user.login.as_ref().and_then(|login| login.get("PATH")) {
+            let home = user.login.as_ref().and_then(|login| login.get("HOME")).map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+            user.git = crate::user_git::discover(path, home.as_deref(), &runtime.root);
+        }
         write(&coordination.join("orchestration.config"),
               &crate::user_settings::orchestration_config(user.folder.as_deref(), &quote(&state.join("teams")))?)?;
         write(&coordination.join(".gitignore"), ".claude/\norchestration.config\napp-owned-coordination.json\n")?;
-        write(&plugin.join("gitconfig"), "[user]\n\tname = RichOS\n\temail = richos@localhost\n")?;
+        write(&plugin.join("gitconfig"), &crate::user_git::system_layer(&user.git))?;
         let command = format!("{} {}", quote(&runtime.python), quote(&engine.join("scripts/app-engine-hook.py")));
         let mut hooks = serde_json::Map::new();
         // **NO `matcher` KEY, ON ANY OF THE NINE EVENTS — SO THE `PreToolUse` REGISTRATION
@@ -547,7 +553,15 @@ impl EngineProfile {
     /// folder (`runtime::search_path_with`).
     pub fn lease_path(&self) -> String {
         let user = self.user.settings.env.get("PATH").or_else(|| self.user.login.as_ref()?.get("PATH"));
-        self.runtime.path_with(user.map(String::as_str))
+        let mut path = self.runtime.path_with(user.map(String::as_str));
+        // The user's Git's helpers (`git-credential-osxkeychain` and the like), last, so the
+        // runtime's Git finds the helper the user's settings name and nothing is shadowed.
+        if let Some(helpers) = self.user.git.exec_path.as_ref().map(|p| p.display().to_string())
+            .filter(|p| !p.contains(':') && !path.split(':').any(|entry| entry == p)) {
+            path.push(':');
+            path.push_str(&helpers);
+        }
+        path
     }
 
     /// **The plugin Rich and Stu start from**: this lease's copy carrying the user's own
@@ -634,9 +648,13 @@ impl EngineProfile {
             // Hooks inherit the runtime-only PATH, which excludes Claude's installer path.
             .env("RICHOS_CLAUDE_BIN", provider)
             .env("PYTHONDONTWRITEBYTECODE", "1")
-            // A settings-isolated provider must not execute terminal Git hooks
-            // or borrow a developer's identity through global Git configuration.
-            .env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", self.plugin.join("gitconfig"))
+            // Commits under the user's own name and pushes with the user's own credential
+            // helper (build plan item 8): Git reads the user's ~/.gitconfig and each
+            // repository's settings as it always does, above the app's lowest layer, which
+            // holds the identity used only when the user has none and includes the user's
+            // Git's system file (`user_git::system_layer`).
+            .env_remove("GIT_CONFIG_NOSYSTEM").env_remove("GIT_CONFIG_GLOBAL")
+            .env("GIT_CONFIG_SYSTEM", self.plugin.join("gitconfig"))
             .env("GIT_CONFIG_COUNT", "0").env_remove("GIT_CONFIG_PARAMETERS").env_remove("GIT_TEMPLATE_DIR")
             .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
             .env_remove("GIT_AUTHOR_DATE").env_remove("GIT_COMMITTER_DATE")

@@ -195,6 +195,7 @@ pub mod provider_auth;
 pub mod engine_profile;
 pub mod user_settings;
 pub mod login_environment;
+pub mod user_git;
 
 pub mod repositories;
 pub mod work_status;
