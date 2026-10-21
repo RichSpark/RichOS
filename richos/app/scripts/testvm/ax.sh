@@ -91,7 +91,7 @@ PID="$(cat "$TESTVM_RUN/$VM/app.pid" 2>/dev/null || true)"
 # The deadline on every accessibility read. A tree walk of a wedged app is the
 # command must also reap any helper it starts when its deadline expires.
 AX_TIMEOUT="${TESTVM_AX_TIMEOUT:-20}"
-REMOTE_OSA="$(python3 - "$HERE/ax-deadline.py" "$AX_TIMEOUT" <<'DEADLINE'
+REMOTE_OSA="$(python3 - "$HERE/ax-deadline.py" "$AX_TIMEOUT" "${PID:-0}" <<'DEADLINE'
 import json, os, pathlib, shlex, sys, time
 try:
     seconds = float(sys.argv[2])
@@ -104,8 +104,11 @@ if remaining < 1:
     print(json.dumps({"error": "preflight_deadline", "phase": "preflight", "detail": "preflight consumed the AX deadline; no guest command sent"}))
     raise SystemExit(124)
 seconds = min(seconds, remaining)
+# --pid names the app under test, so a read still running at SLOW_SECONDS in ax-deadline.py
+# is sampled while it is overdue (esc-20261021T122950Z-b8b7362a).
+pid = sys.argv[3] if sys.argv[3].isdigit() else "0"
 print("python3 -c " + shlex.quote(pathlib.Path(sys.argv[1]).read_text()) +
-      " " + shlex.quote(str(seconds)) + " osascript -l JavaScript -")
+      " --pid " + pid + " " + shlex.quote(str(seconds)) + " osascript -l JavaScript -")
 DEADLINE
 )" || { rc=$?; printf '%s\n' "$REMOTE_OSA"; exit "$rc"; }
 
