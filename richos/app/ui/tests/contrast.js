@@ -380,6 +380,30 @@ const SURFACES = [
     },
   },
   {
+    // ONE FOLDER, TWO COMPANIES (round 36 screen 2, plan item 11, CEO 2026-10-21): the folder is
+    // connected to the first company, then chosen for the second, so the sheet shows the gold
+    // notice "Already connected to ..." and the button "Connect to ... too" before anything is
+    // connected. Driven through the sheet's own controls, no preset.
+    name: "repositories-shared",
+    what: "the connect sheet with a folder another company already has: the notice and the button",
+    drive: async (p) => {
+      await p.click("#set-btn");
+      await p.click("#set-repositories-open");
+      await p.waitForSelector("#repository-company option:nth-child(3)", {state: "attached"});
+      await overlaySettled(p, "#repositories-sheet");
+      const first = await p.locator("#repository-company option").nth(1).getAttribute("value");
+      const second = await p.locator("#repository-company option").nth(2).getAttribute("value");
+      await p.selectOption("#repository-company", first);
+      await p.fill("#repository-folder", "/fictional/shared project");
+      await p.click("#repository-connect");
+      await p.waitForFunction(() => document.getElementById("repository-message").textContent.startsWith("Folder connected."));
+      await p.selectOption("#repository-company", second);
+      await p.fill("#repository-folder", "/fictional/shared project");
+      await p.waitForSelector(".repository-shared");
+      await overlaySettled(p, "#repositories-sheet");
+    },
+  },
+  {
     // TWO SURFACES FOR ONE PANEL, because the panel has two states and they share almost no
     // words. The pairing state carries the code, the countdown, the four phone steps and the six
     // words he COMPARES; the paired state carries the device card and what forgetting it does.

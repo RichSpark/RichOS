@@ -24,7 +24,14 @@
     <button id="repository-close" class="desk-btn" type="button">Close</button></div></div>`;
   document.body.appendChild(sheet);
   const field = id => sheet.querySelector("#" + id);
-  let companies = [], busy = false, returnFocus;
+  let companies = [], busy = false, returnFocus, lastAdded = null;
+  const LINK = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8.5 11.5a3.5 3.5 0 0 0 5 0l2.5-2.5a3.5 3.5 0 0 0-5-5l-1 1"/><path d="M11.5 8.5a3.5 3.5 0 0 0-5 0L4 11a3.5 3.5 0 0 0 5 5l1-1"/></svg>';
+  /// The other companies that have `path` connected: one folder may be connected in several
+  /// (plan item 11, round 36). Names, in the order the sheet lists companies.
+  function otherCompanies(path, id) {
+    return companies.filter(c => c.id !== id && (c.repositories || []).includes(path)).map(c => c.name);
+  }
+  const joined = names => names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names.at(-1) : names[0];
   function renderList() {
     const company = companies.find(c => c.id === field("repository-company").value);
     const list = field("repository-list"); list.replaceChildren();
@@ -32,9 +39,36 @@
       // Break opportunities at `/`, `.`, `-`, `_` (audit D7, 2026-09-17) rather than
       // leaving `overflow-wrap: anywhere` alone to pick a point mid-word.
       const row = document.createElement("li"); row.appendChild(window.RichWrapPath(path)); row.style.overflowWrap = "anywhere"; list.appendChild(row);
+      const also = otherCompanies(path, company.id);
+      if (also.length) {
+        const note = document.createElement("span"); note.className = "repository-also";
+        note.innerHTML = LINK; const text = document.createElement("span"); text.append("Also in "); const bold = document.createElement("b"); bold.textContent = joined(also); text.appendChild(bold);
+        note.appendChild(text); row.appendChild(note);
+      }
+      if (path === lastAdded) row.classList.add("repository-new");
     }
     if (!list.children.length) { const row = document.createElement("li"); row.textContent = "No project folders connected yet."; list.appendChild(row); }
     field("repository-connect").disabled = busy || !company;
+    paintPick();
+  }
+  /// What the folder in the field means for the company chosen: a folder another company already
+  /// has says so BEFORE anything is connected, and the button says what it will do.
+  function paintPick() {
+    sheet.querySelector(".repository-shared")?.remove();
+    const button = field("repository-connect"); button.textContent = "Connect folder";
+    const company = companies.find(c => c.id === field("repository-company").value);
+    const path = field("repository-folder").value.trim();
+    if (!company || !path || busy) return;
+    if ((company.repositories || []).includes(path)) { field("repository-message").textContent = "Already connected to " + company.name + "."; return; }
+    const also = otherCompanies(path, company.id);
+    if (!also.length) return;
+    field("repository-message").textContent = "";
+    const box = document.createElement("div"); box.className = "repository-shared"; box.setAttribute("role", "status");
+    const title = document.createElement("p"); title.className = "repository-shared-title"; title.innerHTML = LINK; title.append("Already connected to " + joined(also));
+    const how = document.createElement("p"); how.textContent = "Connect it here too and Rich can work in it from " + company.name + " chats as well as " + joined(also) + " chats.";
+    const same = document.createElement("p"); same.textContent = "Nothing in the folder moves and each company keeps its own chats and notes.";
+    box.append(title, how, same); field("repository-message").before(box);
+    button.textContent = "Connect to " + company.name + " too";
   }
   async function refresh(preferred) {
     const result = await bridge.invoke("repository_connections");
@@ -65,7 +99,8 @@
   // item 2c): main.js's shared picker, the same one the first-run company sheet uses. Once
   // he has chosen, Connect folder is the next thing to press.
   window.RichFolderPicker.attach(field("repository-folder"), "Choose a project folder", () => field("repository-connect").focus());
-  field("repository-company").addEventListener("change", renderList);
+  field("repository-company").addEventListener("change", () => { lastAdded = null; field("repository-message").textContent = ""; renderList(); });
+  field("repository-folder").addEventListener("input", paintPick);
   field("repository-close").addEventListener("click", close);
   // Escape is main.js's alone, through `data-dismiss` above: it closes whatever is on top. A
   // handler of its own here closed this sheet even with the report panel open over it (review
@@ -85,9 +120,12 @@
     try {
       // Every connected folder gets Git (CEO, 2026-10-06); the message says when it was set up.
       const result = await bridge.invoke("connect_repository", {entityId, folder:field("repository-folder").value.trim()});
+      const folder = field("repository-folder").value.trim();
+      const also = otherCompanies(folder, entityId);
+      lastAdded = folder; field("repository-folder").value = "";
       await refresh(entityId);
-      field("repository-message").textContent = result.repository.initialized ? "Folder connected. Git was set up to track its files." : "Folder connected.";
-      field("repository-folder").value = "";
+      const name = companies.find(c => c.id === entityId)?.name;
+      field("repository-message").textContent = also.length ? "Folder connected. It is now in " + name + " and " + joined(also) + "." : result.repository.initialized ? "Folder connected. Git was set up to track its files." : "Folder connected.";
     } catch (error) { field("repository-message").textContent = String(error); }
     finally { busy = false; renderList(); field("repository-close").disabled = false; }
   });
