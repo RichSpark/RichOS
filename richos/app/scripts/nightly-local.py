@@ -1613,11 +1613,11 @@ class Runner:
         title = f"Prepare {info['tag']} changelog before publication"
         brief = request.with_name("brief.md")
         brief.write_text((ROOT / CHANGELOG_WORKER_BRIEF).read_text()
-                         .replace(BRIEF_TAG, info["tag"]).replace("<REQUEST>", shlex.quote(str(request))))
+                         .replace(BRIEF_TAG, info["tag"]).replace("<REQUEST>", shlex.quote(str(request)))
+                         + CHANGELOG_SPAWN_LINES)
         model = "opus" if info.get("channel") == "stable" else "sonnet"
-        slug = re.sub(r"[^a-z0-9]+", "-", info["tag"].lower()).strip("-")[:40].rstrip("-")
         start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
-                            f"newt-{model}-{slug}-{digest[:8]}", "--repo", "richos",
+                            f"newt-{model}-{digest[:12]}", "--repo", "richos",
                             "--type", "newt", "--model", model, "--brief", str(brief)])
         question = (f"Start Newt, the Release Notes Writer, with this exact command: `{start}`. "
                     f"The brief already names the tag and request. The candidate's run is "
@@ -3288,6 +3288,11 @@ ESCALATE = Path(__file__).resolve().parents[2] / "engine/scripts/escalate.sh"
 ESCALATE_TIMEOUT = 60
 ESCALATION_TEAMMATE = "nightly-local"
 CHANGELOG_WORKER_BRIEF = SCRIPTS / "changelog-worker-brief.md"
+# Lines the spawn guards require in every brief; the printed start command must run as printed.
+CHANGELOG_SPAWN_LINES = (
+    "\nceo-todos-deferred: the nightly build requested its changelog worker; "
+    "publishing a nightly on QA READY is his standing order (CEO decision 134)\n"
+    "owned-state-ack: ecs \u2014 this job neither reads nor writes ECS\n")
 # The tag placeholder is filled before either worker brief is dispatched.
 BRIEF_TAG = "<TAG>"
 

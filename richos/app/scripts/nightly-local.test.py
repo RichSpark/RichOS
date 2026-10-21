@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -3467,6 +3468,9 @@ class PublishedReportTests(unittest.TestCase):
         self.assertIn("--type newt --model sonnet", nightly["question"])
         self.assertIn("newt-opus-", stable["question"])
         self.assertIn("--type newt --model opus", stable["question"])
+        for row, model in ((nightly, "sonnet"), (stable, "opus")):
+            name = re.search(r"spawn\.sh (\S+)", row["question"]).group(1)
+            self.assertRegex(name, r"^[a-z][a-z0-9]{1,15}-%s-[a-z0-9]{1,12}$" % model)
         for identity, tag in (("b", self.TAG), ("c", "v1.2.1")):
             brief = self.root / "state/changelogs" / (identity * 40) / "brief.md"
             text = brief.read_text()
@@ -3474,6 +3478,8 @@ class PublishedReportTests(unittest.TestCase):
             self.assertNotIn("<TAG>", text)
             self.assertNotIn("<REQUEST>", text)
             self.assertIn(str(brief.with_name("request.json")), text)
+            self.assertRegex(text, r"(?m)^ceo-todos-deferred: \S")
+            self.assertRegex(text, r"(?m)^owned-state-ack: ecs \u2014 \S")
         self.main_untouched()
 
     def test_failed_dispatch_refuses_and_leaves_no_false_receipt(self):
