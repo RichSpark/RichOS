@@ -3,8 +3,13 @@
 
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
+  command-walk.py --seed-team EMPTY_DIR ENGINE/team/shelf/norm.md ENGINE/team/shelf/tom.md
   run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT -- \\
       folder-instructions-walk.py --out DIR --expect-sha SHA [--within SECONDS]
+
+Seed the engineer and the reviewer first. In a fresh guest no teammate who writes code is active,
+so Stu has Dean fit two from the shelf, and they register only at the next provider connection:
+the first runs spent 25 and 45 minutes of the first job there and never started a worker.
 
 THE QUESTION (richos-hq docs/plans/2026-10-21-folder-instruction-files.md §5.5, ruling §138
 addendum 4). A user who already keeps a CLAUDE.md or AGENTS.md in a folder he connects must find
