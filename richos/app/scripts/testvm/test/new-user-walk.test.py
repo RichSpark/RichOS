@@ -39,6 +39,15 @@ class DeadEnds(unittest.TestCase):
                          ['machinery in the user view'])
         self.assertEqual(walk.dead_ends('Not logged in · Please run /login'), ["machine words as Rich's words"])
 
+    def test_a_dead_end_wrapped_across_lines_is_still_one(self):
+        # Review rv-20261021T193611Z-6df3f1f3-b313, finding 1: OCR keeps the screen's line breaks.
+        for text, name in (('No reading\nyet. If this account', 'account state unknown'),
+                           ('This usually fixes\n  itself. Press Restore', 'retry loop on a permanent cause'),
+                           ('Please run\n/login', "machine words as Rich's words"),
+                           ('Resource temporarily\nunavailable (os error\n35)', 'raw OS error'),
+                           ('outcome not\nrecorded', 'machinery in the user view')):
+            self.assertIn(name, walk.dead_ends(text), repr(text))
+
     def test_the_way_out_is_not_a_dead_end(self):
         self.assertEqual(walk.dead_ends(SIGN_IN), [])
         self.assertEqual(walk.dead_ends('RichOS 1.2.1 is up to date.\nChecked just now.'), [])

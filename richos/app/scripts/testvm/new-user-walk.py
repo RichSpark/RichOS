@@ -55,6 +55,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('setup_walk', HERE / 'setup-walk.py')
 setup_walk = importlib.util.module_from_spec(_spec)
@@ -81,8 +82,12 @@ DEAD_ENDS = {
 
 
 def dead_ends(text):
-    """The dead-end names whose pattern matches TEXT (OCR or accessibility text)."""
-    return sorted(name for name, pattern in DEAD_ENDS.items() if re.search(pattern, text or '', re.I))
+    """The dead-end names whose pattern matches TEXT (OCR or accessibility text). Whitespace is
+    folded first: OCR keeps the screen's line breaks, so "No reading\\nyet" (a sentence wrapped
+    where the card wraps it) slipped past every pattern (review rv-20261021T193611Z-6df3f1f3-b313,
+    finding 1)."""
+    flat = re.sub(r'\s+', ' ', text or '')
+    return sorted(name for name, pattern in DEAD_ENDS.items() if re.search(pattern, flat, re.I))
 
 
 def turn_outcome(rows, words):
@@ -289,7 +294,7 @@ class NewUserWalk(setup_walk.SetupWalk):
             args = ['--title', title, '--role', role, '--first'] + (['--contains'] if contains else [])
             return bool([n for n in self.ax('find', *args, app=app) if not n.get('meta')])
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+            if axwait.absent(exc):
                 return False
             raise
 
