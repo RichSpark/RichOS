@@ -730,40 +730,13 @@ def conditions_line(items):
     return "nightly conditions: " + "; ".join(parts)
 
 
-_GIT_EXEC_DIR = []
-
-
-def without_git_exec_path(path):
-    """`path` without the directory git puts first in the PATH of every hook it runs.
-
-    GIT PREPENDS ITS OWN EXEC-PATH (2026-10-21). A land runs its checks, and asks the readiness
-    preflight, from git's pre-merge-commit hook, and git starts every hook with `git --exec-path`
-    (/opt/homebrew/opt/git/libexec/git-core here) at the front of PATH; the author's run, started
-    from a shell, has no such entry. Every check that binds PATH read an unchanged pass as changed
-    at the land (environment.PATH, and `git` resolved inside git-core), measured in a disposable
-    clone's real merge. Without it the check runs as the author's did: `git` resolves to the same
-    git through the rest of PATH, which finds its exec-path itself."""
-    if not _GIT_EXEC_DIR:
-        try:
-            found = subprocess.run(["git", "--exec-path"], capture_output=True, text=True, timeout=30,
-                                   stdin=subprocess.DEVNULL)
-            _GIT_EXEC_DIR.append(os.path.realpath(found.stdout.strip()) if found.returncode == 0
-                                 and found.stdout.strip() else None)
-        except (OSError, subprocess.SubprocessError):
-            _GIT_EXEC_DIR.append(None)
-    entries = path.split(os.pathsep)
-    while len(entries) > 1 and _GIT_EXEC_DIR[0] and os.path.realpath(entries[0]) == _GIT_EXEC_DIR[0]:
-        entries.pop(0)
-    return os.pathsep.join(entries)
-
-
 def execution_environment(item):
     if hasattr(item, "private_environment"):
         return {**item.private_environment, **item.env}
     # Verification must not rewrite bytecode inside its own declared inputs. The nightly's
     # conditions sit between the caller's environment and the check's own values.
     env = {**os.environ, **nightly_conditions(item), **item.env, "PYTHONDONTWRITEBYTECODE": "1"}
-    path = without_git_exec_path(env.get("PATH", "")).split(os.pathsep)
+    path = env.get("PATH", "").split(os.pathsep)
     for extra in (os.path.join(os.path.expanduser("~"), ".cargo", "bin"), "/opt/homebrew/bin", "/usr/local/bin"):
         if extra not in path:
             path.append(extra)
@@ -2565,17 +2538,56 @@ def main(argv=None):
         return CRASHED
 
 
-def run_main(argv, run_state):
-    # THE RUNNER'S ENVIRONMENT DOES NOT DEPEND ON WHAT LAUNCHED IT (03-E). reserve.py, the documented
-    # way to launch heavy work, adds the Cargo environment (RUSTC_WRAPPER, SCCACHE_DIR, the cargo
-    # shim on PATH) before its command starts; a land hook or a shell launching this runner directly
-    # did not, and those values are part of check identities, so a valid author run made through
-    # reserve.py read as changed inputs at every land and preflight. The runner applies the same
-    # rule itself (cargo_identity.enable_environment, idempotent), so both launches agree. Like
-    # reserve.py, only where the tree holds the Cargo helpers (a test fixture's runner may not).
+_GIT_EXEC_DIR = []
+
+
+def without_git_exec_path(path):
+    """`path` without git's own exec-path directory (`git --exec-path`), wherever it stands.
+
+    GIT PUTS ITS EXEC-PATH ON PATH (2026-10-21). A land runs its checks, and asks the readiness
+    preflight, from git's pre-merge-commit hook, and git starts every hook with its exec-path
+    (/opt/homebrew/opt/git/libexec/git-core here) first in PATH; the author's run, started from a
+    shell, has no such entry. So every check that binds PATH read an unchanged pass as changed at
+    the land (environment.PATH, and `git` resolved inside git-core), measured in a disposable
+    clone's real merge. Anything that put a directory in front of it since (the Cargo shim below,
+    reserve.py) leaves it second, so it is taken out wherever it is. Without it a check runs as
+    the author's did: `git` is the same git through the rest of PATH, and finds its exec-path itself."""
+    if not _GIT_EXEC_DIR:
+        try:
+            found = subprocess.run(["git", "--exec-path"], capture_output=True, text=True, timeout=30,
+                                   stdin=subprocess.DEVNULL)
+            _GIT_EXEC_DIR.append(os.path.realpath(found.stdout.strip()) if found.returncode == 0
+                                 and found.stdout.strip() else None)
+        except (OSError, subprocess.SubprocessError):
+            _GIT_EXEC_DIR.append(None)
+    if not _GIT_EXEC_DIR[0]:
+        return path
+    return os.pathsep.join(p for p in path.split(os.pathsep) if not p or os.path.realpath(p) != _GIT_EXEC_DIR[0])
+
+
+def runner_environment(environ):
+    """`environ` as this runner starts every check from it, whatever launched the runner (run_main).
+
+    THE RUNNER'S ENVIRONMENT DOES NOT DEPEND ON WHAT LAUNCHED IT (03-E). reserve.py, the documented
+    way to launch heavy work, adds the Cargo environment (RUSTC_WRAPPER, SCCACHE_DIR, the cargo
+    shim on PATH) before its command starts; a land hook or a shell launching this runner directly
+    did not, and those values are part of check identities, so a valid author run made through
+    reserve.py read as changed inputs at every land and preflight. The runner applies the same
+    rule itself (cargo_identity.enable_environment, idempotent), so both launches agree. Like
+    reserve.py, only where the tree holds the Cargo helpers (a test fixture's runner may not).
+    And git's exec-path, which a land's hook has on PATH and a shell does not, is taken out
+    (without_git_exec_path)."""
+    env = dict(environ)
+    if "PATH" in env:
+        env["PATH"] = without_git_exec_path(env["PATH"])
     if all(os.path.isfile(os.path.join(HERE, "lib", name)) for name in ("cargo_identity.py", "machine_storage.py")):
         import cargo_identity
-        os.environ.update(cargo_identity.enable_environment(os.environ))
+        env = cargo_identity.enable_environment(env)
+    return env
+
+
+def run_main(argv, run_state):
+    os.environ.update(runner_environment(os.environ))
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
                                 usage="proof-run.py [options] [proof-for arguments]")
     p.add_argument("--commands")

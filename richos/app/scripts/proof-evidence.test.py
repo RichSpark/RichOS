@@ -2311,24 +2311,30 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         """2026-10-21, measured in a disposable clone's real `git merge` with the land's hooks and
         environment: the preflight called 20 of the author's 24 unchanged passes changed. Two fields
         did it. git starts every hook with its exec-path first in PATH (environment.PATH, and `git`
-        resolved inside git-core), and main's copy of the gate, which is the one a land runs, asks
-        with the lander's RICHOS_AUTOCHECK_LAND_TARGET set. A real change still reads as changed."""
+        resolved inside git-core; second once the Cargo shim or reserve.py puts a directory in front
+        of it), and main's copy of the gate, which is the one a land runs, asks with the lander's
+        RICHOS_AUTOCHECK_LAND_TARGET set. A real change still reads as changed."""
         subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
         exec_dir = subprocess.run(["git", "--exec-path"], check=True, capture_output=True, text=True).stdout.strip()
         shell = {"PATH": os.environ["PATH"], "HOME": self.tmp.name, "RICHOS_BULK_ROOT": "/fixture/bulk"}
         hook = {**shell, "PATH": exec_dir + os.pathsep + shell["PATH"], "RICHOS_AUTOCHECK_LAND_TARGET": "main"}
+        shim = str(Path(self.tmp.name) / "shim")
 
         def read(environment):
+            """The PATH and identity a check gets from a runner launched with `environment`."""
             item = runner.Item("check", str(self.root), ["bash", "suite.sh"])
-            with patch.dict(os.environ, environment, clear=True):
+            with patch.dict(os.environ, runner.runner_environment(environment), clear=True):
                 env = runner.execution_environment(item)
-            return env, evidence.checkout_identity(self.root, item.argv, env)
+            return env["PATH"], evidence.checkout_identity(self.root, item.argv, env)
 
-        author_env, author = read(shell)
-        land_env, land = read(hook)
-        self.assertEqual(land_env["PATH"], author_env["PATH"], "the check runs with the PATH the author's did")
-        self.assertEqual(land, author)
-        self.assertEqual(evidence.identity_difference(author, land), "")
+        author_path, author = read(shell)
+        self.assertNotIn(exec_dir, author_path.split(os.pathsep))
+        for launched in (hook, {**hook, "PATH": shim + os.pathsep + hook["PATH"]}):
+            with self.subTest(path=launched["PATH"][:80]):
+                expected = read({**shell, "PATH": launched["PATH"].replace(exec_dir + os.pathsep, "")})
+                self.assertEqual(read(launched), expected, "the check runs as the author's shell would run it")
+        self.assertEqual(read(hook), (author_path, author))
+        self.assertEqual(evidence.identity_difference(author, read(hook)[1]), "")
         # Not loosened: another directory first in PATH, or a real setting, is still a change.
         for changed in ({"PATH": self.tmp.name + os.pathsep + shell["PATH"]}, {"RICHOS_BULK_ROOT": "/other/bulk"}):
             with self.subTest(changed=changed):
