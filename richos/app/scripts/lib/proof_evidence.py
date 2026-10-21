@@ -1960,6 +1960,53 @@ def stands_in(saved, wanted):
                for name in MUTATION_SWITCHES)
 
 
+_ABSENT = object()
+
+
+def _shown(value):
+    """A field's value, short enough for one line of a refusal: a digest by its first 12 characters."""
+    if value is _ABSENT:
+        return "absent"
+    text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+    return text[:12] + "..." if re.fullmatch(r"[0-9a-f]{40,}", text) else (text[:72] + "..." if len(text) > 75 else text)
+
+
+def identity_difference(saved, wanted, limit=6):
+    """Which identity fields keep a pass saved under `saved` from standing for one under `wanted`
+    (stands_in), each as `field: saved X, now Y`, or "" when they are not two identities.
+
+    THE MISSING DIAGNOSTIC (2026-10-21). "declared execution inputs changed" named no field, so
+    two lands in a row refused 21 unchanged passes and the reason had to be guessed at from a
+    reproduction that was not the land. A difference stands_in excuses is not listed."""
+    if not isinstance(saved, dict) or not isinstance(wanted, dict):
+        return ""
+    rows = []
+
+    def walk(path, have, want):
+        if have == want:
+            return
+        if isinstance(have, dict) and isinstance(want, dict):
+            for key in sorted(set(have) | set(want), key=str):
+                walk(path + [str(key)], have.get(key, _ABSENT), want.get(key, _ABSENT))
+        else:
+            rows.append((path, have, want))
+
+    walk([], saved, wanted)
+    whole = saved.get("contract") == WHOLE_CHECKOUT == wanted.get("contract")
+    shown = []
+    for path, have, want in rows:
+        name = path[1] if len(path) == 2 and path[0] == "environment" else None
+        if name and whole and name in RUN_SCOPED_ENVIRONMENT:
+            continue
+        if name in MUTATION_SWITCHES and want == _MUTATION_OFF and have != _MUTATION_OFF:
+            continue
+        shown.append("%s: saved %s, now %s" % (".".join(path), _shown(have), _shown(want)))
+    if not shown:
+        return ""
+    more = " and %d more" % (len(shown) - limit) if len(shown) > limit else ""
+    return " (" + "; ".join(shown[:limit]) + more + ")"
+
+
 def evidence_gap(label, old, identity, plan, exact=False, source=None):
     """Why the saved outcome `old` cannot stand for check `label` whose inputs read `identity`
     now, or None. The one predicate reuse() and coverage() share."""
@@ -1976,7 +2023,7 @@ def evidence_gap(label, old, identity, plan, exact=False, source=None):
         # inputs (Record says why), and the input identity is what decides it.
         return "the checkout's commit changed during the original execution"
     if not stands_in(old.get("input"), identity):
-        return "declared execution inputs changed"
+        return "declared execution inputs changed" + identity_difference(old.get("input"), identity)
     return None
 
 
