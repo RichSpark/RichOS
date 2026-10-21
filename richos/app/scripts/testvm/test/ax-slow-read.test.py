@@ -87,7 +87,8 @@ class SlowRead(unittest.TestCase):
         self.assertEqual(json.loads(r.stdout.splitlines()[0])['error'], 'guest_deadline',
                          'the classification still comes first')
         self.assertIn('sample 4242 1 10 -mayDie', calls, 'the app under test is sampled')
-        self.assertIn('sample 777 1 10 -mayDie', calls, 'System Events (the AX client) is sampled')
+        self.assertIn('sample 777 1 10 -mayDie', calls, 'System Events (keystrokes, raw scripts) is sampled')
+        self.assertIn('--- AX client pid ', r.stderr, 'the read itself (ax.py, the AX client) is sampled')
         marker = next(json.loads(l) for l in r.stderr.splitlines() if l.startswith('{"ax_slow_read"'))
         self.assertGreaterEqual(marker['snapshot_started_at_seconds'], 1.0)
         self.assertLess(marker['snapshot_started_at_seconds'], 3.0, 'started at the line, not at the deadline')
@@ -111,7 +112,7 @@ class SlowRead(unittest.TestCase):
         self.assertEqual(r.returncode, 3)
         self.assertEqual(r.stdout.strip(), 'answered', 'the read is never retried or replaced')
         self.assertIn('ax_slow_read', r.stderr)
-        self.assertEqual(sum(c.startswith('sample ') for c in calls), 2)
+        self.assertEqual(sum(c.startswith('sample ') for c in calls), 3)
 
     def test_host_reading_is_taken_while_the_read_is_overdue(self):
         with tempfile.TemporaryDirectory(prefix='ax-slow-') as directory:

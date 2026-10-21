@@ -67,7 +67,8 @@ def timeout_record(host, err=b''):
 # the only evidence left was "deadline reached". Whether the app's main thread was
 # blocked or the guest was starved cannot be told after the kill, so a read still
 # running at SLOW_SECONDS starts, once and in parallel, what decides it: `sample`
-# of the app under test and of System Events (the AX client side), and the
+# of the app under test, of the read's own process (ax.py, the AX client) and of
+# System Events (which still carries keystrokes and raw scripts), and the
 # guest's own CPU and memory by `top`. The read itself is never retried and its
 # deadline never moves; the snapshot only describes the read it rides on.
 # 10 s, half the deadline: a `find` answers in 0.01-0.5 s, but a whole `tree` of
@@ -120,13 +121,17 @@ def _top_summary(text):
 
 
 class Snapshot:
-    def __init__(self, pid, at):
+    def __init__(self, pid, at, client=None):
         self.at = at
         self.dir = tempfile.mkdtemp(prefix='testvm-ax-slow-')
         self.jobs = []
         pids = {}
         if pid:
             pids['app under test'] = str(pid)
+        # The read's own process: ax.py calls the AX API itself, so it is the AX client.
+        # System Events stays sampled: keystrokes and the raw osascript reads still use it.
+        if client:
+            pids['AX client'] = str(client)
         # A web view's accessibility is answered by its WebContent process, not the app's.
         for label, pattern in (('System Events', ['-x', 'System Events']),
                                ('WebContent', ['-f', 'com.apple.WebKit.WebContent'])):
@@ -252,7 +257,7 @@ def run(command, source, seconds, host=False, pid=None):
                     if host:
                         reading = host_reading()
                     else:
-                        snapshot = Snapshot(pid, time.monotonic() - began)
+                        snapshot = Snapshot(pid, time.monotonic() - began, client=child.pid)
                     out, err = child.communicate(timeout=max(.01, began + allowance - time.monotonic()))
             else:
                 out, err = child.communicate(source, timeout=allowance)
