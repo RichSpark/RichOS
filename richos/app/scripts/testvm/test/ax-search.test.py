@@ -255,6 +255,22 @@ class Run(unittest.TestCase):
         self.assertEqual(exercise('find', text='Absent', dialog=True)[0][-1]['error'], 'blocked')
         self.assertEqual(exercise('find', text='Absent')[0][-1]['error'], 'notfound')
 
+    def test_an_unanswered_window_read_is_unresponsive_and_a_real_block_stays_blocked(self):
+        def answer(failure):
+            world = World({})
+            class Fake(FakeAX):
+                def get(self, el, attr):
+                    if attr == 'AXWindows':
+                        raise failure
+                    return super().get(el, attr)
+            P = {'mode': 'find', 'pid': 71, 'app': None, 'text': 'Open', 'value': None, 'first': True, 'nth': None,
+                 'max': 100, 'depth': 16, 'role': None, 'sub': None, 'id': None, 'scope': None, 'window': None,
+                 'windowTitle': None, 'contains': False, 'expect': None}
+            return json.loads(ax.respond(P, Fake(world), FakeHost(world)).split('\n')[-1])['error']
+        self.assertEqual(answer(TimeoutError('x did not answer for AXWindows (kAXErrorCannotComplete)')),
+                         'unresponsive')
+        self.assertEqual(answer(RuntimeError('a modal dialog blocks the read')), 'blocked')
+
     def test_the_press_is_timed_on_the_guest_clock(self):
         # A caller that reads the clock before ax.sh measures the SSH trip and the tree search
         # too (2.6-5.6 s, guest walk-0ddfdbf8ff00).

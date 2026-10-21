@@ -172,6 +172,33 @@ class Walk:
         self.wait_for('Company', role='AXPopUpButton')
         time.sleep(2)
 
+    def wait_open_enabled(self, seconds=15):
+        """Wait for the chooser's Open button to read as enabled, then return so the caller clicks
+        it once. Typing the path and Return makes the chooser load the folder; on a busy host
+        Open stays disabled for seconds (walk-9696d0b3a4f1: "matched element is disabled"). A read
+        the app did not answer is "not yet" (axwait.py); the click is never sent here."""
+        end = time.monotonic() + seconds
+        state = 'not found'
+        while True:
+            try:
+                nodes = [n for n in self.ax('find', '--title', 'Open', '--role', 'AXButton', '--in', 'dialog')
+                         if 'x' in n and not n.get('meta')]
+                if nodes:
+                    enabled = nodes[0].get('enabled')
+                    state = 'enabled=%s' % enabled
+                    if str(enabled).lower() in ('true', '1'):
+                        return
+                else:
+                    state = 'not found'
+            except StepFailed as exc:
+                if not axwait.not_yet(exc, 'find'):
+                    raise
+                state = 'no answer' if axwait.no_answer(exc) else 'not found'
+            if time.monotonic() >= end:
+                raise StepFailed('connect folder: the chooser\'s Open button was not enabled within %s s (%s)'
+                                 % (seconds, state))
+            time.sleep(1)
+
     def connect_folder(self):
         """Settings -> "Connected folders (repositories)" -> the company folder, the way the app
         asks for it since round 27: the row is a plain button (settings-button.js
@@ -196,7 +223,7 @@ class Walk:
         self.keys('tell application "System Events" to keystroke ' + json.dumps(self.company))
         time.sleep(1)
         self.keys('tell application "System Events" to key code 36')
-        time.sleep(2.5)
+        self.wait_open_enabled()
         self.ax('click', '--title', 'Open', '--role', 'AXButton', '--in', 'dialog', '--first')
         if not self.wait_chooser(False):
             raise StepFailed('the folder chooser did not close after Open')
