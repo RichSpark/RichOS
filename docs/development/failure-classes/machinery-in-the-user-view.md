@@ -19,9 +19,14 @@ passing all three:
 2. **Renderer** (`app/ui`): `main.js` `loadTimeline` asks for `get_machinery` only when the
    Technical view is on for that conversation and otherwise empties and hides the "Between
    turns" section; `timeline.js` `visible()` refuses a technical item on a model that is not
-   holding a technical snapshot, so even a widened live event cannot draw one. Tests:
-   `ui/tests/techy.js` checks 1 ("off: no technical row, no chip, no state line, no hint") and 11
-   ("on and back off leaves the conversation BYTE-IDENTICAL").
+   holding a technical snapshot, so even a widened live event cannot draw one. A reload's reply
+   is dropped when the view was switched since it asked (`loadTimeline`'s `stale()`); before
+   2026-10-21 a reload that asked for the technical view while it was being switched off could
+   answer after the switch-off reload and put the rows back with the switch off (review
+   rv-20261021T195352Z-f24b36ae-2380). Tests: `ui/tests/techy.js` checks 1 ("off: no technical
+   row, no chip, no state line, no hint") and 11 ("on and back off leaves the conversation
+   BYTE-IDENTICAL") and `ui/tests/techy-race.js` (the late reply after a switch-off, red
+   before that fix).
 3. **The real app**: a test-VM walk that reads the screen with the view off. The new-user walk
    (`richos/app/scripts/testvm/new-user-walk.py`, added 2026-10-21) refuses any frame showing
    `control_request`, `system:init`, `outcome not recorded` or `Between turns` (its
@@ -45,6 +50,11 @@ appear and none shows the switch after. Every way of turning it on asks where an
 confirm (the Settings switch, the rail switch, the header chip or Cmd-Shift-T then Enter).
 What would settle it: the person's `~/Library/Application Support/com.richos.app/config.json`,
 whose `techy_default`, `techy_entities` and `techy_threads` record every time it was turned on.
+One path that does put the rows on screen with the switch off was found by review on
+2026-10-21 and is fixed: switching the view off while a reload that had asked for it was still
+in flight (a turn ending during the switch) let that reload's late reply draw the machinery
+over the calm view. Whether that is what happened on the person's Mac needs the same file
+(a technical setting that was on and then turned off).
 
 ## Other places that could show machinery, as of 2026-10-21
 
