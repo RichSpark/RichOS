@@ -22,10 +22,12 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
               step fails (Approve is pressed as asked)
   idle        the lead file of the session that ran the job says his turn ended (`turn_ended`):
               the signal this walk is about
-  reminder    the reminder of the unfinished work that remains (the job's own review and land). PASS
-              needs a row from stall-watch, written at or after the minute the job settled, in THIS
-              conversation's inbox for Stu (<app state>/messages/<company>/<conversation>/stu.jsonl),
-              and its words in the transcript of THIS Stu session. Nothing is registered by hand.
+  reminder    the settled job left nothing unfinished, so a finished teammate of Stu's session,
+              waiting for its review, is registered in the app's own registry
+              (stu-reminder-guest.py). PASS needs a row from stall-watch, written at or after the
+              minute of that registration, in THIS conversation's inbox for Stu
+              (<app state>/messages/<company>/<conversation>/stu.jsonl), and its words in the
+              transcript of THIS Stu session.
   (`connect`, command-walk.py's, is not in the default run: its Settings menu path is stale on main.)
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
@@ -197,6 +199,15 @@ class StuReminderWalk(command_walk.CommandWalk):
         (self.out / 'lead-files.json').write_text(json.dumps(seen, indent=2) + '\n')
         raise StepFailed("no lead file of Stu's carried turn_ended within %g s (seen: %s)" % (self.a.idle_within, json.dumps(seen)))
 
+    def partition(self, session):
+        """The conversation's workspace registry (<app data>/engine-state/workspaces/<partition>), the
+        one holding Stu's session record. Lines, not words: the app data folder has a space in it."""
+        found = guest(self.vm, 'ls -d %s/engine-state/workspaces/*/sessions/%s.json 2>/dev/null || true' % (
+            shlex.quote(self.data), shlex.quote(session)), 60).splitlines()
+        if len(found) != 1:
+            raise StepFailed("no single workspace partition holds Stu's session %s (found: %s)" % (session, found))
+        return str(Path(found[0]).parent.parent)
+
     def found(self):
         """Stu's own inbox for THIS conversation (<app state>/messages/<company>/<conversation>/stu.jsonl,
         the messages `session_tools::observe_stall` saves for him): the rows from stall-watch that
@@ -234,6 +245,17 @@ class StuReminderWalk(command_walk.CommandWalk):
         session, settled = self.facts.get('stu_session'), self.facts.get('job_settled_s')
         if not session or not settled:
             raise StepFailed('job and idle must have run (no Stu session or settle time on record)')
+        # The settled job left nothing unfinished (its work is landed), so there is nothing to remind
+        # of until something is: a finished teammate of Stu's session, waiting for its review, is
+        # registered in the app's own registry, as spawn.sh registers one.
+        made = self.payload + '/stu-reminder'
+        guest(self.vm, 'mkdir -p ' + shlex.quote(made), 60)
+        command_walk.command([HERE / 'guest.sh', self.vm, '--push', HERE / 'stu-reminder-guest.py', made + '/'], 300)
+        partition = self.partition(session)
+        settled = self.clock() / 1000
+        mate = guest(self.vm, '/usr/bin/python3 %s finished %s %s %s' % (
+            shlex.quote(made + '/stu-reminder-guest.py'), shlex.quote(self.payload + '/engine'),
+            shlex.quote(partition), shlex.quote(session)), 60).strip()
         waited = self.a.reminder_seconds + 240
         end = time.monotonic() + waited
         fresh, transcript = [], []
@@ -243,7 +265,8 @@ class StuReminderWalk(command_walk.CommandWalk):
             if fresh and transcript:
                 break
             time.sleep(10)
-        evidence = {'session': session, 'job_settled_at_utc': time.strftime('%H:%M:%SZ', time.gmtime(settled)),
+        evidence = {'session': session, 'partition': partition, 'teammate': mate,
+                    'registered_at_utc': time.strftime('%H:%M:%SZ', time.gmtime(settled)),
                     'reminder_seconds': self.a.reminder_seconds, 'waited_up_to_s': waited,
                     'rows_at_or_after_the_settle': fresh, 'stu_session_transcript': transcript,
                     'all_rows': self.found(), 'lead_files': self.lead_files()}
