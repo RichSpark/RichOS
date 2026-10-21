@@ -1946,6 +1946,41 @@ MUTATION_SWITCHES = ("RICHOS_MUTATION_PASSES", "RICHOS_FOURTEEN_MUTANTS")
 _MUTATION_OFF = digest("0")
 
 
+# THE CARGO CACHE ROOT, NAMED OR NOT, IS THE ONE THE MACHINE'S SETTINGS GIVE (2026-10-21). The
+# land of cc/echo-opus-lease1x refused 55 of the author's unchanged passes as "declared execution
+# inputs changed (environment.CARGO_TARGET_DIR: saved 98224b0764c9..., now absent)": the author
+# exported the documented value (what `machine_settings.py cache cargo-target --key
+# CARGO_TARGET_DIR` prints), the land names none. With neither name set, the Cargo shim
+# (cargo_identity.target_dir), the shared build cache and the nightly (gate_environment) all take
+# exactly that root from the machine's settings; RICHOS_CARGO_CACHE_ROOT is the same setting's
+# other spelling (machine_settings.storage). So an environment whose every Cargo root name names
+# that root reads as one that names none. Any other root is a real difference and still counts.
+CARGO_ROOT_NAMES = ("CARGO_TARGET_DIR", "RICHOS_CARGO_CACHE_ROOT")
+
+
+def documented_cargo_root(environment=None):
+    """The Cargo cache root the machine's settings give `environment` (this process's by
+    default) when it sets no Cargo root name: what `machine_settings.py cache cargo-target --key
+    CARGO_TARGET_DIR` prints then. None when the settings cannot say (an unmounted volume)."""
+    env = {k: v for k, v in (os.environ if environment is None else environment).items()
+           if k not in CARGO_ROOT_NAMES}
+    try:
+        import machine_storage
+        return str(machine_storage.cache("cargo-target", key="CARGO_TARGET_DIR", environment=env))
+    except (ImportError, ValueError, OSError):
+        return None
+
+
+def cargo_root_as_documented(environment):
+    """An identity's `environment` (name: digest) without its Cargo root names when every one of
+    them names the documented root (above); otherwise unchanged."""
+    named = [environment[name] for name in CARGO_ROOT_NAMES if name in environment]
+    root = documented_cargo_root() if named else None
+    if root is None or any(value != digest(root) for value in named):
+        return environment
+    return {k: v for k, v in environment.items() if k not in CARGO_ROOT_NAMES}
+
+
 def stands_in(saved, wanted):
     """Does a pass saved under identity `saved` stand for one under `wanted` (above)?
 
@@ -1963,6 +1998,7 @@ def stands_in(saved, wanted):
     if saved.get("contract") == WHOLE_CHECKOUT == wanted.get("contract"):
         have = {k: v for k, v in have.items() if k not in RUN_SCOPED_ENVIRONMENT}
         want = {k: v for k, v in want.items() if k not in RUN_SCOPED_ENVIRONMENT}
+    have, want = cargo_root_as_documented(have), cargo_root_as_documented(want)
     if ({k: v for k, v in saved.items() if k != "environment"}
             != {k: v for k, v in wanted.items() if k != "environment"}):
         return False
@@ -2004,6 +2040,9 @@ def identity_difference(saved, wanted, limit=6):
         else:
             rows.append((path, have, want))
 
+    if isinstance(saved.get("environment"), dict) and isinstance(wanted.get("environment"), dict):
+        saved = {**saved, "environment": cargo_root_as_documented(saved["environment"])}
+        wanted = {**wanted, "environment": cargo_root_as_documented(wanted["environment"])}
     walk([], saved, wanted)
     whole = saved.get("contract") == WHOLE_CHECKOUT == wanted.get("contract")
     shown = []

@@ -294,8 +294,11 @@ fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot
     if let Some(lease)=slot.as_ref() {
         let account_changed=plan.factory.as_ref().and_then(|factory|factory.quota())
             .zip(lease.account()).is_some_and(|(quota,account)|quota.before_turn(account,lease.streamed_usage())!=account);
-        if account_changed && !crate::cognition::account_resume_blocked(lease.as_ref()) {
-            // The normal opener below resumes the same transcript under the chosen account.
+        // The user's own settings files changed since this lease read them (item 0).
+        let settings_changed=crate::cognition::user_settings_changed(plan.factory.as_deref(),lease.as_ref());
+        if (account_changed || settings_changed) && !crate::cognition::account_resume_blocked(lease.as_ref()) {
+            // The normal opener below resumes the same transcript under the chosen account
+            // and the user's current settings.
             drop(slot.take());
         }
     }
