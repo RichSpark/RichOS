@@ -8984,10 +8984,25 @@
     },
     "scripts/lib/publication-boundary.py": {
       "source": "scripts/lib/publication-boundary.py",
-      "sha256": "300d69515801694a7bbaefbc0099dde7f835f84f0f970a1e819839f4fa7b6f40",
-      "evidence": "AST inventory and every import, execution and I/O boundary reviewed. Only stdlib hashing, JSON, path and text operations; supplied corpus/item files and job limits are data. No configuration, engine imports or subprocess execution.",
+      "sha256": "4d9678e686a9470c7c44888ec677dd45b8f3944cd004c4868f52b592c5d3ee26",
+      "evidence": "AST inventory and every import, execution and I/O boundary reviewed. Stdlib hashing, JSON, path, text, marshal and mmap operations; supplied corpus/item files and job limits are data. No orchestration configuration. The kept-corpus cache (2026-10-21) reads RICHOS_PUBLICATION_CACHE_DIR, else machine_settings.cache('publication-boundary'), and stores per-file records, corpus text and window index there as data; it re-executes this same file with PYTHONHASHSEED=0 and no other subprocess.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
+    },
+    "scripts/lib/publication-boundary-cache.test.py": {
+      "source": "scripts/lib/publication-boundary-cache.test.py",
+      "sha256": "26e050d865dcc217075d8882f3b0b969c65124b038d9606bab945416b56a7d34",
+      "evidence": "Runs publication-boundary.py on generated private trees and invented text, without and with RICHOS_PUBLICATION_CACHE_DIR pointed at its own temporary directory, and imports the scanner once to call cache_root. No config is read.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/publication-boundary.py"
+        }
+      ]
     },
     "scripts/lib/device-identifiers.py": {
       "source": "scripts/lib/device-identifiers.py",
@@ -9061,7 +9076,7 @@
     },
     "scripts/hooks/publication-boundary.test.sh": {
       "source": "scripts/hooks/publication-boundary.test.sh",
-      "sha256": "46b76cd518b14769cc4f31fbda0e353c648cf753274c9ecedd9525e51b7d8dc0",
+      "sha256": "f003bfefd48ead5696670c3eca76cac1e759b09050e909feb0a3bb6495ba5299",
       "evidence": "Harness and executable call inventory reviewed. All publication declarations, corpus content and Git histories are generated fixtures. Real engine root remains the adoption seat. PUBLICATION_DECLARATION uses its unsourced environment/default value, not orchestration.config. Three literal source replacements mutate only the publication predicate and published-copy field; installer/probe reads are text assertions.",
       "keys": [],
       "edges": [
@@ -9085,6 +9100,9 @@
         },
         {
           "to": "scripts/lib/device-identifiers.py"
+        },
+        {
+          "to": "scripts/lib/publication-boundary-cache.test.py"
         }
       ],
       "nonconfig_eval": "The single eval applies exactly three literal s.replace expressions shown at the callsites to fixture copies. It does not evaluate a config value or change execution targets."
@@ -17449,7 +17467,7 @@
         "scripts/hooks/guard-publication-writes.sh"
       ],
       "sources": {
-        "scripts/hooks/publication-boundary.test.sh": "46b76cd518b14769cc4f31fbda0e353c648cf753274c9ecedd9525e51b7d8dc0",
+        "scripts/hooks/publication-boundary.test.sh": "f003bfefd48ead5696670c3eca76cac1e759b09050e909feb0a3bb6495ba5299",
         "scripts/lib/registered-hooks.sh": "73e390bacc85aef935d4da0f4b132ebb6790a83d55310a46c1c602614afe0a83",
         "scripts/hooks/guard-publication-writes.sh": "8d05dfb59a29be16bdcbd19aee71b0a402f58d928c82397f0a98da96f6f2531d",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
@@ -17458,10 +17476,12 @@
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
-        "scripts/lib/publication-boundary.py": "300d69515801694a7bbaefbc0099dde7f835f84f0f970a1e819839f4fa7b6f40",
+        "scripts/lib/publication-boundary.py": "4d9678e686a9470c7c44888ec677dd45b8f3944cd004c4868f52b592c5d3ee26",
         "scripts/hooks/guard-publication-commits.sh": "acc0b52bb6bb2a54af722b8a0e5782078fc97adca2767a6198dca32e354b2adf",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
-        "scripts/hooks/dispatch-pretooluse.manifest": "50818b9e68379300f0922b76a78f5c4d4b3d6e88f8aae6ed08271c95b498afbc"
+        "scripts/hooks/dispatch-pretooluse.manifest": "50818b9e68379300f0922b76a78f5c4d4b3d6e88f8aae6ed08271c95b498afbc",
+        "scripts/lib/publication-boundary-cache.test.py": "26e050d865dcc217075d8882f3b0b969c65124b038d9606bab945416b56a7d34",
+        "scripts/lib/machine_settings.py": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e"
       },
       "evidence": "Only the two publication guard registrations are queried on plugin and seated surfaces. Probe and installer source are assertion data. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [
