@@ -193,6 +193,7 @@ pub mod owned_process;
 pub mod lease_commands;
 pub mod provider_auth;
 pub mod engine_profile;
+pub mod user_settings;
 
 pub mod repositories;
 pub mod work_status;
