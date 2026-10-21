@@ -795,33 +795,84 @@ fn line_then_reply(mic: &[f32], reference: &[f32], reply: &[f32]) -> LineAndRepl
     o
 }
 
-/// **THE LINE THAT SAYS "SAY IT AGAIN NOW" IS SHOWN ONLY ONCE A REPLY WOULD BE HEARD.**
+/// **Every reply in `replies`, given on the frame after the line, at every residual level.**
+/// Each is `(what it is, its samples, whether it is shorter than the endpoint's minimum)`.
+/// One thread for all of them on purpose: each replay runs the real canceller over 25 s of
+/// audio, and run side by side as separate tests, four of them held one test process above
+/// the 3 cores the host's CPU guard allows for 10 s and it was stopped (proof run
+/// 20261021T225139Z, 2026-10-22).
+fn every_reply_to_the_line_is_kept(replies: &[(&str, Vec<f32>, bool)], who: &str) {
+    let mic0 = read(ECHO_ONLY_VOL60, "-mic.wav");
+    let reference = read(ECHO_ONLY_VOL60, "-reference.wav");
+    for &vol in VOLUMES {
+        let g = mic_gain_for_residual(&mic0, &reference, vol);
+        let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
+        for (what, reply, short) in replies {
+            let o = line_then_reply(&mic, &reference, reply);
+            println!(
+                "[measured] residual {vol:.2} dBFS: first tainted discard at {:?} s, line shown at {:?} s, \
+                 Rich audible until {:.3} s; {who} {what} after it: {} admitted (speech frames {:?}), \
+                 {} dropped as too short, {} discarded tainted",
+                o.first_tainted_discard.map(|f| frames_to_secs(f as u32)),
+                o.shown.map(|f| frames_to_secs(f as u32)),
+                frames_to_secs(o.last_audible as u32),
+                o.reply_admitted,
+                o.reply_speech_frames,
+                o.reply_short_discards,
+                o.reply_tainted_discards
+            );
+            let discarded = o.first_tainted_discard.expect("premise: Rich's echo raised no tainted discard here");
+            let at = o.shown.expect("the owed line was never shown");
+            assert!(at > o.last_audible, "the line was shown at frame {at}, Rich audible until {}", o.last_audible);
+            assert!(at > discarded);
+            assert_eq!(o.reply_tainted_discards, 0, "{who} {what} was discarded at residual {vol:.2}: {o:?}");
+            assert_eq!(o.reply_short_discards, 0, "{who} {what} was dropped as a cough at residual {vol:.2}: {o:?}");
+            assert_eq!(o.reply_admitted, 1, "{who} {what} was not passed on at residual {vol:.2}: {o:?}");
+            if *short {
+                assert!(
+                    o.reply_speech_frames[0] < richos_voice::endpoint::MIN_SPEECH_FRAMES,
+                    "premise: {who} {what} was not below the minimum it is meant to get past: {o:?}"
+                );
+            }
+        }
+    }
+}
+
+/// **THE LINE THAT SAYS "SAY IT AGAIN NOW" IS SHOWN ONLY ONCE A REPLY WOULD BE HEARD, AND THE
+/// REPLY IS KEPT HOWEVER SHORT.**
 ///
-/// Two reviews, one class. Review rv-20261021T175303Z-70f43b54-a22b: the supervisor showed the
-/// line at the first tainted discard, early in Rich's answer, inviting a reply into the window
-/// that had just discarded one. Review rv-20261021T205407Z-bcae8bd4-dcd6: Rich falling silent is
-/// not enough either: for `ECHO_LOOKBACK_FRAMES` = 19 + 7 = 26 frames x 256 / 16 000 = 0.416 s
-/// after it, an utterance carries his echo in its pre-roll and is tainted, and a tainted
-/// recording still open when he stops absorbs whatever is said until its 50-frame (0.800 s)
-/// hangover discards it whole.
+/// Three reviews, one class: a next step the user cannot take is a dead end.
+/// - rv-20261021T175303Z-70f43b54-a22b: the supervisor showed the line at the first tainted
+///   discard, early in Rich's answer, inviting a reply into the window that had just lost one.
+/// - rv-20261021T205407Z-bcae8bd4-dcd6: Rich falling silent is not enough either. For
+///   `ECHO_LOOKBACK_FRAMES` = 19 + 7 = 26 frames x 256 / 16 000 = 0.416 s after it, an utterance
+///   carries his echo in its pre-roll and is tainted, and a tainted recording still open when he
+///   stops absorbs whatever is said until its 50-frame (0.800 s) hangover discards it whole.
+/// - rv-20261021T215433Z-1979e6d9-40f2: a reply of a word or two was then dropped unheard by
+///   the endpoint's minimum (`MIN_SPEECH_FRAMES` = 19 frames x 256 / 16 000 = 0.304 s, "a cough
+///   is not a sentence"), with no notice at all.
 ///
 /// So over the echo-only recording at every residual level this requires that the line is
 /// shown, never while Rich is audible, and that a reply begun on the very next frame is
-/// admitted and not discarded. The reply is Rich's own synthetic voice from the public
-/// reference track (1.904 s of it, from its first active frame, at -18 dBFS, the CEO's recorded
-/// near-field level), summed into the microphone track after the far end has gone silent, so
-/// to the capture it is near-end speech; the test with the CEO's real voice is the next one.
+/// admitted (passed on to recognition) and neither discarded nor dropped: a 1.904 s reply and a
+/// 12-frame (0.192 s) one, which must also be under that minimum. Both are Rich's own synthetic
+/// voice from the public reference track, from its first active frame, at -18 dBFS (the CEO's
+/// recorded near-field level), summed into the microphone track after the far end has gone
+/// silent, so to the capture it is near-end speech; the next test uses the CEO's real voice.
 ///
-/// Run red on 2026-10-21 twice. With `HalfDuplexDelivery::due` ignoring Rich being audible
-/// (the show-at-once behavior) the line was shown at 2.592 s with Rich audible until 24.960 s.
-/// With `CaptureBrain::takes_a_reply` returning `true` (Rich falling silent the only
-/// condition) it was shown at 24.976 s, the first frame after his last audible one, and at
-/// residual -49.50 dBFS the reply begun on the next frame was discarded tainted (this test and
-/// the next one alike). Green: shown at 25.376 s, 26 frames (0.416 s) after 24.960 s, and the
-/// reply admitted at all six levels.
+/// Run red on 2026-10-21, once per fix:
+/// - `HalfDuplexDelivery::due` ignoring Rich being audible (show at once): the line was shown at
+///   2.592 s with Rich audible until 24.960 s.
+/// - `CaptureBrain::takes_a_reply` returning `true` (Rich falling silent the only condition):
+///   shown at 24.976 s, the first frame after his last audible one, and at residual -49.50 dBFS
+///   the long reply begun on the next frame was discarded tainted.
+/// - `CaptureBrain::invite_reply` a no-op (the minimum as before): at residual -52.00 dBFS the
+///   short reply was dropped as too short, 0 admitted.
+///
+/// Green: shown at 25.376 s, 26 frames (0.416 s) after 24.960 s; both replies admitted at all
+/// six levels, the short one with 9 or 10 speech frames.
 #[test]
 fn the_half_duplex_line_is_shown_only_once_a_reply_would_be_heard() {
-    let mic0 = read(ECHO_ONLY_VOL60, "-mic.wav");
     let reference = read(ECHO_ONLY_VOL60, "-reference.wav");
     let start = (0..reference.len() / VAD_FRAME_SAMPLES)
         .find(|b| {
@@ -830,32 +881,16 @@ fn the_half_duplex_line_is_shown_only_once_a_reply_would_be_heard() {
         })
         .expect("the reference is never active")
         * VAD_FRAME_SAMPLES;
-    let reply = at_dbfs(reference[start..start + (1.904 * SAMPLE_RATE as f32) as usize].to_vec(), -18.0);
-    for &vol in VOLUMES {
-        let g = mic_gain_for_residual(&mic0, &reference, vol);
-        let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
-        let o = line_then_reply(&mic, &reference, &reply);
-        println!(
-            "[measured] residual {vol:.2} dBFS: first tainted discard at {:?} s, line shown at {:?} s, \
-             Rich audible until {:.3} s; the reply after it: {} admitted, {} discarded tainted",
-            o.first_tainted_discard.map(|f| frames_to_secs(f as u32)),
-            o.shown.map(|f| frames_to_secs(f as u32)),
-            frames_to_secs(o.last_audible as u32),
-            o.reply_admitted,
-            o.reply_tainted_discards
-        );
-        let discarded = o.first_tainted_discard.expect("premise: Rich's echo raised no tainted discard here");
-        let at = o.shown.expect("the owed line was never shown");
-        assert!(at > o.last_audible, "the line was shown at frame {at}, Rich audible until {}", o.last_audible);
-        assert!(at > discarded);
-        assert_eq!(o.reply_tainted_discards, 0, "the reply the line invited was discarded at residual {vol:.2}: {o:?}");
-        assert_eq!(o.reply_admitted, 1, "the reply the line invited was not heard at residual {vol:.2}: {o:?}");
-        assert_eq!(o.reply_short_discards, 0, "the reply the line invited was dropped as too short: {o:?}");
-    }
+    let long = at_dbfs(reference[start..start + (1.904 * SAMPLE_RATE as f32) as usize].to_vec(), -18.0);
+    let word = at_dbfs(reference[start..start + 12 * VAD_FRAME_SAMPLES].to_vec(), -18.0);
+    every_reply_to_the_line_is_kept(&[("1.904 s reply", long, false), ("0.192 s reply", word, true)], "the");
 }
 
-/// The test above with the CEO's own recorded voice as the reply (private fixture): 1.904 s of
-/// his first marked interval of `-nearend2-mic.wav`, at its recorded near-field level.
+/// The test above with the CEO's own recorded voice as the replies (private fixture): his
+/// whole first marked interval of `-nearend2-mic.wav` (1.904 s, -17.8 dBFS) and the 0.192 s
+/// from its middle that `a_short_word_of_his_over_rich_is_lost_and_the_line_tells_him_to_say_it_again`
+/// uses (-19.7 dBFS), at their recorded near-field level. Red with each of the three mutations
+/// above alike; green: both admitted at all six levels, the word with 7 to 12 speech frames.
 #[test]
 #[cfg_attr(
     not(private_fixtures),
@@ -867,116 +902,15 @@ fn the_half_duplex_line_is_shown_only_once_a_reply_would_be_heard() {
 fn his_own_reply_to_the_half_duplex_line_is_heard() {
     let his_mic = read_his_mic();
     let (open, close) = HIS_INTERVALS[0];
-    let reply = his_mic[(open * SAMPLE_RATE as f32) as usize..(close * SAMPLE_RATE as f32) as usize].to_vec();
-    println!("[measured] his reply: {:.3} s at {:.1} dBFS", reply.len() as f32 / SAMPLE_RATE as f32, dbfs(&reply));
-    let mic0 = read(ECHO_ONLY_VOL60, "-mic.wav");
-    let reference = read(ECHO_ONLY_VOL60, "-reference.wav");
-    for &vol in VOLUMES {
-        let g = mic_gain_for_residual(&mic0, &reference, vol);
-        let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
-        let o = line_then_reply(&mic, &reference, &reply);
-        println!(
-            "[measured] residual {vol:.2} dBFS: line shown at {:?} s, Rich audible until {:.3} s; \
-             his reply after it: {} admitted, {} discarded tainted",
-            o.shown.map(|f| frames_to_secs(f as u32)),
-            frames_to_secs(o.last_audible as u32),
-            o.reply_admitted,
-            o.reply_tainted_discards
-        );
-        let at = o.shown.expect("the owed line was never shown");
-        assert!(at > o.last_audible);
-        assert_eq!(o.reply_tainted_discards, 0, "his reply was discarded at residual {vol:.2}: {o:?}");
-        assert_eq!(o.reply_admitted, 1, "his reply was not heard at residual {vol:.2}: {o:?}");
-        assert_eq!(o.reply_short_discards, 0, "his reply was dropped as too short: {o:?}");
-    }
-}
-
-/// **A SHORT REPLY TO "PLEASE SAY IT AGAIN NOW" IS KEPT AND PASSED ON, NOT DROPPED AS A COUGH.**
-///
-/// Review rv-20261021T215433Z-1979e6d9-40f2: the line now waits until a reply would be heard,
-/// but a reply of a word or two was still dropped unheard by the endpoint's minimum
-/// (`MIN_SPEECH_FRAMES` = 19 frames x 256 / 16 000 = 0.304 s, "a cough is not a sentence"),
-/// with no notice at all: his words lost a second time, right after being asked for them. This
-/// replies with 12 frames (12 x 256 / 16 000 = 0.192 s) of the public reference voice at
-/// -18 dBFS on the frame after the line is shown, at every residual level, and requires it to be
-/// admitted (handed on to recognition) with fewer speech frames than that minimum, and never
-/// dropped. The next test does the same with the CEO's own recorded word.
-///
-/// Run red on 2026-10-21 with `CaptureBrain::invite_reply` made a no-op (the minimum applied
-/// as before): at residual -52.00 dBFS the reply was dropped as too short, 0 admitted, in this
-/// test and the next. Green: admitted at all six levels with 9 or 10 speech frames here and
-/// 7 to 12 for his word, every one under the 19 it used to need.
-#[test]
-fn a_short_reply_to_the_half_duplex_line_is_kept_and_passed_on() {
-    let mic0 = read(ECHO_ONLY_VOL60, "-mic.wav");
-    let reference = read(ECHO_ONLY_VOL60, "-reference.wav");
-    let start = (0..reference.len() / VAD_FRAME_SAMPLES)
-        .find(|b| {
-            let lo = b * VAD_FRAME_SAMPLES;
-            rms(&reference[lo..lo + VAD_FRAME_SAMPLES]) > richos_voice::aec::FAR_END_ACTIVE_RMS
-        })
-        .expect("the reference is never active")
-        * VAD_FRAME_SAMPLES;
-    let reply = at_dbfs(reference[start..start + 12 * VAD_FRAME_SAMPLES].to_vec(), -18.0);
-    for &vol in VOLUMES {
-        let g = mic_gain_for_residual(&mic0, &reference, vol);
-        let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
-        let o = line_then_reply(&mic, &reference, &reply);
-        println!(
-            "[measured] residual {vol:.2} dBFS: line shown at {:?} s; a 0.192 s reply after it: {} admitted \
-             (speech frames {:?}), {} dropped as too short, {} discarded tainted",
-            o.shown.map(|f| frames_to_secs(f as u32)),
-            o.reply_admitted,
-            o.reply_speech_frames,
-            o.reply_short_discards,
-            o.reply_tainted_discards
-        );
-        assert!(o.shown.expect("the owed line was never shown") > o.last_audible);
-        assert_eq!(o.reply_short_discards, 0, "the short reply was dropped as a cough at residual {vol:.2}: {o:?}");
-        assert_eq!(o.reply_tainted_discards, 0, "the short reply was discarded at residual {vol:.2}: {o:?}");
-        assert_eq!(o.reply_admitted, 1, "the short reply was not passed on at residual {vol:.2}: {o:?}");
-        assert!(
-            o.reply_speech_frames[0] < richos_voice::endpoint::MIN_SPEECH_FRAMES,
-            "premise: the reply was not below the minimum it is meant to get past: {o:?}"
-        );
-    }
-}
-
-/// The test above with the CEO's own recorded word as the reply (private fixture): the same
-/// 0.192 s from the middle of his first marked interval of `-nearend2-mic.wav` that
-/// `a_short_word_of_his_over_rich_is_lost_and_the_line_tells_him_to_say_it_again` uses.
-#[test]
-#[cfg_attr(
-    not(private_fixtures),
-    ignore = "PRIVATE FIXTURE: ceo-rig-2026-09-18-nearend2-mic.wav is a recording of the CEO's \
-              own voice and is not committed to this public repository. It is in the private \
-              richos-hq repository at fixtures/echo-path/. Set RICHOS_PRIVATE_FIXTURES to that \
-              directory to run this."
-)]
-fn his_own_short_reply_to_the_half_duplex_line_is_kept_and_passed_on() {
-    let his_mic = read_his_mic();
-    let (open, close) = HIS_INTERVALS[0];
+    let long = his_mic[(open * SAMPLE_RATE as f32) as usize..(close * SAMPLE_RATE as f32) as usize].to_vec();
     let mid = (((open + close) / 2.0) * SAMPLE_RATE as f32) as usize;
-    let reply: Vec<f32> = his_mic[mid..mid + 12 * VAD_FRAME_SAMPLES].to_vec();
-    println!("[measured] his short reply: {:.3} s at {:.1} dBFS", reply.len() as f32 / SAMPLE_RATE as f32, dbfs(&reply));
-    let mic0 = read(ECHO_ONLY_VOL60, "-mic.wav");
-    let reference = read(ECHO_ONLY_VOL60, "-reference.wav");
-    for &vol in VOLUMES {
-        let g = mic_gain_for_residual(&mic0, &reference, vol);
-        let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
-        let o = line_then_reply(&mic, &reference, &reply);
-        println!(
-            "[measured] residual {vol:.2} dBFS: line shown at {:?} s; his 0.192 s reply after it: {} admitted \
-             (speech frames {:?}), {} dropped as too short, {} discarded tainted",
-            o.shown.map(|f| frames_to_secs(f as u32)),
-            o.reply_admitted,
-            o.reply_speech_frames,
-            o.reply_short_discards,
-            o.reply_tainted_discards
-        );
-        assert!(o.shown.expect("the owed line was never shown") > o.last_audible);
-        assert_eq!(o.reply_short_discards, 0, "his short reply was dropped as a cough at residual {vol:.2}: {o:?}");
-        assert_eq!(o.reply_tainted_discards, 0, "his short reply was discarded at residual {vol:.2}: {o:?}");
-        assert_eq!(o.reply_admitted, 1, "his short reply was not passed on at residual {vol:.2}: {o:?}");
-    }
+    let word: Vec<f32> = his_mic[mid..mid + 12 * VAD_FRAME_SAMPLES].to_vec();
+    println!(
+        "[measured] his replies: {:.3} s at {:.1} dBFS and {:.3} s at {:.1} dBFS",
+        long.len() as f32 / SAMPLE_RATE as f32,
+        dbfs(&long),
+        word.len() as f32 / SAMPLE_RATE as f32,
+        dbfs(&word)
+    );
+    every_reply_to_the_line_is_kept(&[("1.904 s reply", long, false), ("0.192 s reply", word, true)], "his");
 }

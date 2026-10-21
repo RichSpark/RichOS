@@ -64,10 +64,9 @@ discarded; `his_own_reply_to_the_half_duplex_line_is_heard` does the same with a
 recorded voice (private fixture). And once it is shown, what he says next is kept however
 short (`CaptureBrain::invite_reply`, set by `supervise` through `Shared::reply_invited`): like
 a fragment of an open turn it is admitted from the 7-frame (0.112 s) onset and passed on to
-recognition, where a cough instead meets that desk's own line with its next step. Tests:
-`a_short_reply_to_the_half_duplex_line_is_kept_and_passed_on` (0.192 s of the public reference
-voice) and `his_own_short_reply_to_the_half_duplex_line_is_kept_and_passed_on` (0.192 s of a
-real recorded word, private fixture), both red before that fix. The rule for anything new in
+recognition, where a cough instead meets that desk's own line with its next step. The same
+two tests reply with a 0.192 s word as well, required to be admitted with fewer speech frames
+than that minimum; red before that fix. The rule for anything new in
 this class: **a line that asks for a reply is shown only when the capture state says the reply
 would be kept and then keeps it however short** and its test replies at once, long and short,
 and checks it was kept. Its two
