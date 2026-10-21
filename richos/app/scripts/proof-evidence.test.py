@@ -794,6 +794,107 @@ class Evidence(unittest.TestCase):
         _on, rows, detail = invoke(self.root, "passes-on", "--reuse", str(gate), RICHOS_MUTATION_PASSES="1")
         self.assertEqual(sorted(counter.read_text().splitlines()[2:]), ["alpha", "beta"], detail)
 
+    def test_the_gate_reuses_the_authors_whole_checkout_passes_made_in_the_authors_checkout(self):
+        """2026-10-21, the land of cc/zach-opus-reuse3 (richos main 06d2ae7af): the readiness
+        preflight read the author's run as proving the branch, and the gate, offered that run,
+        executed all 23 checks again ("23 planned, 23 passed (0 of them reused)", 1238.9 s serial).
+        Every one had no reviewed contract, so its identity named the author's worktree: the
+        checkout path, the main checkout's Playwright install found by place, and for engine units
+        the checkout's own Cargo shim first on PATH. Real runner, ci-shard.sh and coverage verifier:
+        a plain check and two engine units pass in a linked worktree, and the main checkout's gate
+        run, offered that run, reuses all three. Not loosened: other content, a seat changed since
+        its run, or other dependency installs each still execute."""
+        app, engine = self.copy_runner_fixture()
+        counter = Path(self.tmp.name) / "executions"
+        for name in ("alpha", "beta"):
+            path = engine / "scripts" / (name + ".test.sh")
+            path.write_text('#!/bin/bash\nprintf "' + name + '\\n" >> "$FIXTURE_COUNTER"\n')
+            path.chmod(0o755)
+        (self.root / "gamma.test.sh").write_text('printf "gamma\\n" >> "$FIXTURE_COUNTER"\n')
+        (self.root / "LICENSE").write_text("fixture license\n")
+        (self.root / ".gitignore").write_text("node_modules/\n")
+        umask = os.umask(0)
+        os.umask(umask)
+        for written in self.root.rglob("*"):
+            if written.is_file() and not written.is_symlink():
+                written.chmod((0o777 if written.stat().st_mode & 0o100 else 0o666) & ~umask)
+        def git(*args, cwd=None):
+            return subprocess.check_output(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture",
+                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *args],
+                cwd=cwd or self.root, text=True, stderr=subprocess.PIPE).strip()
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "fixture")
+        worktree = Path(self.tmp.name) / "author-checkout"
+        git("worktree", "add", "-q", "-b", "cc/author", str(worktree))
+        # The main checkout's ignored Playwright install, which a worktree with none of its own loads.
+        def install(checkout, version):
+            package = checkout / "richos/app/ui/tests/node_modules/playwright"
+            package.mkdir(parents=True, exist_ok=True)
+            (package / "index.js").write_text("module.exports = {version: %r};\n" % version)
+        install(self.root, "1")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("RICHOS_", "GIT_"))}
+        env.update(RICHOS_MACHINE_WORKERS=str(Path(self.tmp.name) / "machine"),
+            RICHOS_ENGINE_PASS_DIR=str(Path(self.tmp.name) / "slot"),
+            RICHOS_PROOF_RUN_DIR=str(Path(self.tmp.name) / "history"),
+            RICHOS_PROOF_RUN_SLOTS_DIR=str(Path(self.tmp.name) / "proof-slots"),
+            CLAUDE_CONFIG_DIR=str(Path(self.tmp.name) / "config"),
+            FIXTURE_COUNTER=str(counter), PYTHONDONTWRITEBYTECODE="1")
+        commands = Path(self.tmp.name) / "commands"
+        both = ",".join("scripts/%s.test.sh" % name for name in ("alpha", "beta"))
+        commands.write_text("cd richos/engine && bash scripts/ci-shard.sh --only-units " + both + "\n"
+                            "cd . && bash gamma.test.sh\n")
+        def invoke(checkout, name, *options):
+            directory = Path(self.tmp.name) / name
+            # Each checkout's own directory first on PATH, as the runner's Cargo rule puts it.
+            path = str(checkout / "richos/app/scripts/bin") + os.pathsep + env["PATH"]
+            result = subprocess.run([*idle_proof_run(checkout / "richos/app/scripts/proof-run.py"),
+                "--commands", str(commands), "--log-dir", str(directory), *options], cwd=checkout,
+                env=dict(env, PATH=path), text=True, capture_output=True, timeout=120)
+            detail = result.stdout + result.stderr + "\n" + "\n".join(p.read_text() for p in directory.glob("*.log"))
+            self.assertEqual(result.returncode, 0, detail)
+            rows = {row["check"]: row for row in json.loads((directory / "summary.json").read_text())["checks"]}
+            self.assertEqual(rows["engine receipts"]["result"], "passed", detail)
+            return directory, rows, detail
+        checks = ("engine scripts/alpha.test.sh", "engine scripts/beta.test.sh", "gamma")
+        executed = lambda: sorted(counter.read_text().splitlines())
+        author, rows, detail = invoke(worktree, "author")
+        self.assertEqual(executed(), ["alpha", "beta", "gamma"], detail)
+        identities = json.loads((author / "plan.json").read_text())["identities"]
+        self.assertEqual({identities[check]["contract"] for check in checks}, {evidence.WHOLE_CHECKOUT})
+        _gate, rows, detail = invoke(self.root, "gate", "--reuse", str(author))
+        self.assertEqual(executed(), ["alpha", "beta", "gamma"],
+                         "the gate ran again what the author's run proved on the same content\n" + detail)
+        for check in checks:
+            self.assertEqual(rows[check]["reused_from"], str(author), detail)
+        def executes_all(name, author_run, why, because):
+            counter.write_text("")
+            # Only the offered run is under test: the input-owner pool would rightly join the
+            # gate's own earlier pass on unchanged content here.
+            shutil.rmtree(Path(env["RICHOS_PROOF_RUN_DIR"]) / "input-owners", ignore_errors=True)
+            _run, rows, detail = invoke(self.root, name, "--reuse", str(author_run))
+            self.assertEqual(executed(), ["alpha", "beta", "gamma"], why + "\n" + detail)
+            for check in checks:
+                self.assertIsNone(rows[check]["reused_from"], why)
+            self.assertIn("made in another checkout, where " + because, detail)
+        # Other content in the gate's checkout.
+        (self.root / "gamma.test.sh").write_text('printf "gamma\\n" >> "$FIXTURE_COUNTER"  # landed edit\n')
+        executes_all("other-content", author, "a pass of other content was reused",
+                     "the two checkouts' content differs")
+        git("checkout", "--", "gamma.test.sh")
+        # The author's checkout changed since its run: the pass no longer stands where it was made.
+        (worktree / "gamma.test.sh").write_text('printf "gamma\\n" >> "$FIXTURE_COUNTER"  # later edit\n')
+        executes_all("seat-changed", author, "a pass that no longer stands in its own checkout was reused",
+                     "it no longer stands in its own checkout")
+        git("checkout", "--", "gamma.test.sh", cwd=worktree)
+        # The author's checkout loads its own, different install.
+        install(worktree, "2")
+        counter.write_text("")
+        own, _rows, detail = invoke(worktree, "author-own-install")
+        self.assertEqual(executed(), ["alpha", "beta", "gamma"], detail)
+        executes_all("other-installs", own, "a pass made against another dependency install was reused",
+                     "the two checkouts load different dependency installs")
+
     def test_actual_cross_commit_coverage_rechecks_inputs_and_keeps_original_sha(self):
         self.cross_commit_coverage()
 

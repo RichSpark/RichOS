@@ -775,6 +775,14 @@ def input_identity(item, args, logdir, snapshot=None):
     return result
 
 
+def seat_reader(item, snapshot):
+    """How `item` reads in another checkout of this repository, so a pass made there (the
+    author's handover run, offered to the merge gate in the main checkout) is reused when it still
+    stands there on the same content (proof_evidence.seat_gap). 2026-10-21: the gate executed all
+    23 checks of a branch whose author run the preflight had just read as proving it."""
+    return proof_evidence.seat_reader(ROOT, item.argv, execution_environment(item), snapshot)
+
+
 # The runner settings that are part of a check's identity: those that change how it runs (its
 # worker budget, its engine shards, the CPU line it ran under, its deadline). Not the bounds on
 # how long it may WAIT to start (--admission-wait, --slot-wait, --engine-slot-wait): a check
@@ -2739,7 +2747,7 @@ def run_main(argv, run_state):
         args.evidence = proof_evidence.Record(ROOT, logdir, items, before,
             identities(items, baseline), args.resume, source_identity, identity, identities,
             explain=lambda item: describe_input_change(item, baseline, items), current_commit=head_commit,
-            selection=selected)
+            selection=selected, seat=seat_reader)
         args.pool = proof_evidence.Pool(proof_evidence.pool_directory(ROOT, hist_dir), args.evidence,
                                         args.retry_reason)
         started = time.monotonic()
