@@ -736,6 +736,26 @@ fn a_line_in_the_users_instructions_reaches_both_rich_and_stu() {
     assert_ne!(first.user.digest, next.user.digest, "the edit must renew a session at its next boundary");
 }
 
+/// **Rich knows where a standing order goes** (richos-hq
+/// `docs/plans/2026-10-21-switching-to-the-app.md` row W, section 1: the user's instructions file
+/// is edited "by hand, or Rich when he gives a new order"). On a first run the file is empty, so the
+/// app adds nothing about it to Rich's definition (the test above) and the only place Rich can learn
+/// where it is, is his own instructions. The path is built from the code's own names, so moving the
+/// file or the folder without the sentence breaks this.
+#[test]
+fn rich_s_own_instructions_name_the_file_a_standing_order_is_saved_in() {
+    use richos_core::user_settings::{RICH, INSTRUCTIONS};
+    let file = format!("~/{}/{INSTRUCTIONS}", richos_core::company::DEFAULT_CENTRAL_DIRNAME);
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    let first = prepare_for_user(&f, &folder);
+    assert_eq!(std::fs::read_to_string(folder.join(INSTRUCTIONS)).unwrap(), "", "a first run's instructions file is empty");
+    let loaded = std::fs::read_to_string(first.standing_plugin(&engine().join("app")).join("agents").join(RICH)).unwrap();
+    let says = loaded.split("\n\n").find(|paragraph| paragraph.contains(&file))
+        .unwrap_or_else(|| panic!("Rich's definition on a first run never names {file}"));
+    assert!(says.to_lowercase().contains("from now on"), "the paragraph naming {file} does not say a standing order goes there: {says}");
+}
+
 /// With no file of the user's, the generated config is the one every lease had before; with
 /// one, each key appears once: the user's value where the user set it, today's default where
 /// not, and the app's own key the app's, whatever the user's file says.
