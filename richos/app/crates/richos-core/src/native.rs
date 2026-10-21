@@ -2792,6 +2792,13 @@ impl NativeClient {
                 pending.awaiting_connection = false;
                 pending.continued_as = Some(id.clone());
                 pending.phase = TurnPhase::Unconfirmed;
+                // The failure this carries on from is over: an overload or a limit read off its
+                // frames must not end the continued turn (review rv-20261021T031711Z-3416839f-d2f2).
+                // The continuation's own frames set them again if it meets one.
+                if let TurnSink::Input { limit, overload, .. } = &mut pending.sink {
+                    *limit = None;
+                    *overload = None;
+                }
             }
         }
         Self::tell_connection_restored(stdin, &id, json!({"event":"connection_restored","error":said}))
@@ -6756,7 +6763,11 @@ while True:
     /// sent once, followed by one `connection_restored` message.
     #[test]
     fn a_turn_the_lost_connection_ended_waits_for_it_and_carries_on_once() {
-        for (case, kind, status, text) in [("refused", "server_error", None, REFUSED), ("edge-403", "authentication_failed", Some(403), EDGE_403)] {
+        // The third case: an overload message that arrives while the connection is down marks a live
+        // input overloaded; the continued turn must still end as its own (review
+        // rv-20261021T031711Z-3416839f-d2f2).
+        for (case, kind, status, text) in [("refused", "server_error", None, REFUSED), ("edge-403", "authentication_failed", Some(403), EDGE_403),
+            ("repeated-529-while-down", "server_error", None, "API Error: Repeated 529 Overloaded errors.")] {
             for live_input in [false, true] {
                 let (client, root, asked) = lease_failing_once(&format!("lost-connection-{case}"), kind, status, text, 3);
                 let mut said = String::new();
