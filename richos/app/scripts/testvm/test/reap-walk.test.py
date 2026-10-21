@@ -238,6 +238,16 @@ class Enter(unittest.TestCase):
         walk.adopt.time.sleep, walk.adopt.time.monotonic = self.sleep, self.mono
         walk.time.sleep = self.rsleep
 
+    def test_stop_opens_the_work_summary_by_the_chip_label_every_state_ends_with(self):
+        """walk-21f83423b356: "assignment running" is one state's words; the chip's label
+        always ends "Open the work summary." (main.js renderDrillChip)."""
+        source = (HERE / 'reap-walk.py').read_text()
+        body = source[source.index('    def stop(self'):source.index('    def quit(self')]
+        self.assertIn("self.wait_for('Open the work summary')", body)
+        self.assertNotIn("'assignment running'", body)
+        chip = (HERE.parent.parent / 'ui' / 'main.js').read_text()
+        self.assertIn('". Open the work summary."', chip)
+
     # The finds, in order: the home door, the conversation's composer, the conversation's
     # title in its crumb, and (only when another conversation opened) its row.
 

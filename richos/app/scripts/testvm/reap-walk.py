@@ -401,7 +401,12 @@ class Walk(adopt.Walk):
         target, why = stoppable(self.assignments_since(started['sent_ms']))
         if why:
             raise StepFailed(why)
-        self.press('waiting for you') if self.present('waiting for you') else self.press('assignment running')
+        # The work chip names the job's state ("1 assignment starting", "... running", "... waiting
+        # to start", "1 waiting for you"; main.js renderDrillChip) and always ends its label with
+        # "Open the work summary." Walk walk-21f83423b356 pressed the fixed words "assignment
+        # running" while the chip said another state; the chip's own ending is pressed instead.
+        self.wait_for('Open the work summary')
+        self.press('Open the work summary')
         # The row's Stop is labeled "Stop <its title>" (work-summary.js); name this one.
         label = 'Stop ' + (target.get('title') or '')[:60]
         press = pressed_at(self.press(label))
