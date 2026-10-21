@@ -1526,7 +1526,9 @@ class OutputWalk(command_walk.CommandWalk):
         """Round 36 screen 3 on the real app: Rich is asked to make a PDF and attach it with his
         `attach_file` tool. PASS when the record (`engine-state/rich-files/files.jsonl`) holds it for
         this conversation, its card is on screen by the name a person hears ("Open <name> in
-        Preview"), and pressing that card puts a Preview window named for the file on screen.
+        Preview") and says its pages ("· 1 page"), pressing that card puts a Preview window named for
+        the file on screen, and the card is still there after another turn, in the normal view and
+        with Techy Mode on.
         Preview is quit after the picture (CEO §54)."""
         target = self.company + '/' + RICH_FILE_NAME
         turn, sent = self.send(RICH_FILE_TASK % shlex.quote(target))
@@ -1565,6 +1567,24 @@ class OutputWalk(command_walk.CommandWalk):
         note(windows=listing, opened=opened, quit=[p for p, _ in opened])
         if not opened:
             raise StepFailed('pressing the card put no window named %s on screen: %s' % (RICH_FILE_NAME, listing))
+        # Round 36's card says a PDF's pages ("PDF · 2 KB · 1 page"): cupsfilter writes one page.
+        pages = [n.get('value') or n.get('title') for n in self.texts(' · 1 page')]
+        note(pages_line=pages)
+        # The normal view, another turn: the conversation is re-read when it ends, and the card stays.
+        self.front()
+        plain_turn, _ = self.send('Thanks. Reply with the single word noted.')
+        self.turn_end(plain_turn)
+        try:
+            self.wait_for(label, seconds=30)
+            plain_after_turn = True
+        except StepFailed:
+            plain_after_turn = False
+        self.shot('rich-file-after-turn.png')
+        note(plain_turn=plain_turn, card_after_another_turn=plain_after_turn)
+        if not pages:
+            raise StepFailed("the PDF's card does not say its pages (no text with ' · 1 page')")
+        if not plain_after_turn:
+            raise StepFailed('in the normal view the card was gone after another turn')
         # Techy Mode on (review rv-20261021T083350Z-8ca9bacf-e592): it re-reads the conversation
         # from get_machinery when a turn ends, which carried no cards. The shortcut asks where;
         # "For this conversation only" is chosen and confirmed, then one short turn runs to its end.

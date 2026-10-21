@@ -5,6 +5,8 @@ import { createRequire } from 'node:module';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { startMac } from '../dev/mac-server.mjs';
 const require = createRequire(import.meta.url);
 const { createScratch } = require('./storage.cjs');
@@ -20,7 +22,14 @@ test('actual mobile client pairs, signs, receives and resumes against the produc
   t.after(async () => { client?.close(); await server?.close(); rmSync(cache, { recursive: true, force: true }); });
   const remoteFile = process.env.RICHOS_MOBILE_REMOTE_STATE;
   if (remoteFile) validateStorage(remoteFile);
-  server = remoteFile ? null : await startMac(cache);
+  // A FILE RICH ATTACHED (round 36 screen 3): the owned lab attaches the round's two made-up files
+  // under each reply (RICHOS_MOBILE_LAB_ATTACH, mobile/dev/lab-files.py), as Rich's attach_file does.
+  const attach = remoteFile ? null : spawnSync('python3', [fileURLToPath(new URL('../dev/lab-files.py', import.meta.url)), join(cache, 'files')],
+    { encoding: 'utf8' });
+  if (attach) assert.equal(attach.status, 0, attach.stderr);
+  const attached = attach ? attach.stdout.trim().split(':') : [];
+  if (attach) process.env.RICHOS_MOBILE_LAB_ATTACH = attach.stdout.trim();
+  try { server = remoteFile ? null : await startMac(cache); } finally { delete process.env.RICHOS_MOBILE_LAB_ATTACH; }
   const publicRoute = !!remoteFile || process.env.RICHOS_MOBILE_USE_PUBLIC_ROUTE === '1';
   const state = remoteFile ? JSON.parse(readFileSync(remoteFile, 'utf8')) : server.state;
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -145,6 +154,22 @@ test('actual mobile client pairs, signs, receives and resumes against the produc
   assert.equal((await fetch(local(sent.url), { method: 'POST', body: sent.body, headers: headers(wrong) })).status, 404);
   const duplicate = await fetch(local(sent.url), { method: 'POST', body: sent.body, headers: headers(signed) });
   assert.equal(duplicate.status, 200); assert.equal((await duplicate.json()).duplicate, true);
+  if (attached.length) {
+    // Its card is in the conversation, with the PDF's pages as the Mac's own reader counts them,
+    // and its bytes come over on ONE signed GET of the production file route; unsigned, nothing.
+    const cards = () => { try { return JSON.parse(readFileSync(join(state.data, 'timeline.json'), 'utf8')).items.filter(i => i.kind === 'rich_file'); } catch { return []; } };
+    await wait(() => cards().length >= 2);
+    const pdf = cards().find(i => i.file.name === 'Acme-counteroffer.pdf');
+    assert(pdf && pdf.file.exists && pdf.file.meta.endsWith(' · 2 pages'), JSON.stringify(cards()));
+    const path = `/api/messages?kind=file&file_id=${encodeURIComponent(pdf.id)}&thread_id=${encodeURIComponent(pdf.threadId)}`;
+    const fileChallenge = (await fetch(local(state.origin + '/api/challenge'))).headers.get('x-richos-challenge');
+    // A GET has no body: its hash is the empty string (RequestSigning.bodyHashHex).
+    const fileSignature = await call('sign', { input: `${fileChallenge}\nGET\n${path}\n` });
+    const got = await fetch(local(state.origin + path), { headers: { Authorization: `RichOS-Device ${disk.api.deviceId}.${fileChallenge}.${fileSignature}` } });
+    assert.equal(got.status, 200);
+    assert.deepEqual(Buffer.from(await got.arrayBuffer()), readFileSync(attached[0]), 'the bytes of the attached file');
+    assert.equal((await fetch(local(state.origin + path))).status, 404, 'an unsigned ask gets nothing');
+  }
   client.close();
   if (server) {
     await server.restart();
