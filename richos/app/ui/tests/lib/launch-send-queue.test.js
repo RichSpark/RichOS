@@ -82,7 +82,7 @@ function makeShell() {
     const refreshActiveContext = noop, refreshTechy = noop, updateJumpButton = noop;
     const resetWaitBandForThread = noop, pollWorkerStatus = noop;
     const renderFirstRunNotice = noop, drainWorkNotices = noop;
-    const drainOperatorNotices = noop, reviveLiveTurns = noop;
+    const reviveLiveTurns = noop;
     const setMainView = view => { mainView = view; };
     const showConversationView = () => {mainView = 'conversation'; openingThread = null;};
     const shownPending = () => Array.from(timelineModel.items.values()).filter(i => i.pending).map(i => i.text);

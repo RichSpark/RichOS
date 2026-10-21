@@ -139,7 +139,6 @@ output-truth.js         @shell richos/app/ui/mock.js
 interruption.js         @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/ richos/app/crates/
 job-question.js         @shell richos/app/ui/timeline.js
 local-notice.js         @shell richos/app/ui/timeline.js
-operator-notice.js      @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 markdown.js             @shell richos/app/ui/timeline.js
 memory-strategy.js      @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
 outage.js               @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/ richos/app/crates/
