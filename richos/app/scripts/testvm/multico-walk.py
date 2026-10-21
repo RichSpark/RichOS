@@ -191,6 +191,19 @@ class Walk(cw.CommandWalk):
         self.ax('click', '--title', 'Company', '--role', 'AXPopUpButton', '--first')
         self.ax('click', '--title', company, '--role', 'AXMenuItem', '--first')
 
+    def close_sheet(self):
+        """Close the Connected folders sheet and see it gone: one press was not enough on a loaded
+        host (run of 2026-10-21: the sheet still stood and blocked the next menu click)."""
+        for _ in range(4):
+            try:
+                self.press('Close')
+            except StepFailed:
+                pass
+            time.sleep(2)
+            if not self.present('Project folder location', 'AXTextField'):
+                return
+        raise StepFailed('the Connected folders sheet would not close')
+
     def connect(self):
         self.open_sheet('Acme')
         self.type_into(self.company, '--role', 'AXTextField', '--title', 'Project folder location')
@@ -199,7 +212,7 @@ class Walk(cw.CommandWalk):
         while time.monotonic() < end:
             rows = {e['id']: e for e in self.registry().get('entities', [])}
             if self.real() in rows.get('acme', {}).get('connected_repositories', []):
-                self.press('Close')
+                self.close_sheet()
                 self.facts['connected'] = rows['acme']['connected_repositories']
                 self.save()
                 return {'connected': self.facts['connected']}
@@ -228,10 +241,7 @@ class Walk(cw.CommandWalk):
         time.sleep(2)
         shared['also_in_on_beta_row'] = self.on_screen('Also in Acme')
         self.shot('connect-shared-after.png')
-        try:
-            self.press('Close')
-        except StepFailed:
-            pass
+        self.close_sheet()
         acme, beta = rows.get('acme', {}), rows.get('beta', {})
         failures = []
         if folder not in beta.get('connected_repositories', []):
