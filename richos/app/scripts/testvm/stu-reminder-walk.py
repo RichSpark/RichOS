@@ -44,6 +44,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('command_walk', HERE / 'command-walk.py')
 command_walk = importlib.util.module_from_spec(_spec)
@@ -78,7 +79,7 @@ class StuReminderWalk(command_walk.CommandWalk):
                     time.sleep(1)
                     continue
             except StepFailed as exc:
-                if 'command failed (124)' not in str(exc):  # a read past the 20 s deadline: read again
+                if not axwait.no_answer(exc):  # a press with no answer: read the screen again
                     raise
                 continue
             presses += 1
@@ -86,25 +87,17 @@ class StuReminderWalk(command_walk.CommandWalk):
         return presses
 
     def ax(self, mode, *args, app=None, timeout=40):
-        """Walk.ax, read again after a read past ax.sh's own 20 s deadline (exit 124: a busy host,
-        not a missing grant). The presses this walk makes are each safe to repeat."""
+        """Walk.ax, a read (find, tree) asked again after it had no answer (axwait.ask_again: past
+        ax.sh's own 20 s deadline on a busy host, or the deadline helper itself failing to end an
+        overdue read). A click is sent once: its effect is unknown."""
         for attempt in range(1, 7):
             try:
                 return super().ax(mode, *args, app=app, timeout=timeout)
             except StepFailed as exc:
-                # 124, or the deadline helper itself failing to end an overdue read (ax-deadline.py)
-                if ('command failed (124)' not in str(exc) and 'ax-deadline.py' not in str(exc)) or attempt == 6:
+                if not axwait.ask_again(exc, mode) or attempt == 6:
                     raise
 
-    def present(self, title, role='AXButton', app=None):
-        """Walk.present, where a read past ax.sh's 20 s deadline on a busy host (exit 124: the
-        read's own deadline, not a missing grant) is "not seen yet", so the caller's loop reads again."""
-        try:
-            return super().present(title, role, app)
-        except StepFailed as exc:
-            if 'command failed (124)' in str(exc):
-                return False
-            raise
+    # present() is adopt-walk's, whose find with no answer is "not seen yet" (axwait.py).
 
     def wait_for(self, title, role='AXButton', app=None, seconds=30):
         """Walk.wait_for, with the room a busy host needs: a read can take its whole 20 s deadline."""
