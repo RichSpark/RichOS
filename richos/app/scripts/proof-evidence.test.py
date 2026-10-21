@@ -2377,6 +2377,52 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         recipe = {"contract": "recipe", "environment": {"RICHOS_AGENT_OWNER": evidence.digest("x")}}
         self.assertFalse(evidence.stands_in(recipe, {**recipe, "environment": {"RICHOS_AGENT_OWNER": None}}))
 
+    def test_a_cargo_root_named_as_the_machine_settings_give_it_reads_as_one_named_by_none(self):
+        """2026-10-21, the land of cc/echo-opus-lease1x at e596d7860: the author's handover run
+        20261021T120436Z-6sgk79rr exported the documented CARGO_TARGET_DIR (machine_settings.py cache
+        cargo-target --key CARGO_TARGET_DIR) and the land names none, so 55 unchanged passes read as
+        "declared execution inputs changed (environment.CARGO_TARGET_DIR: saved 98224b0764c9...,
+        now absent)". With no Cargo root named, the shim and the nightly take that same root from
+        the settings; RICHOS_CARGO_CACHE_ROOT (which the nightly's conditions add beside it) is its
+        other spelling. Either side may be the one that names it. Any other root still counts."""
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
+        bulk = Path(self.tmp.name) / "bulk"
+        bulk.mkdir()
+        settings = {"RICHOS_BULK_ROOT": str(bulk), "RICHOS_MACHINE_SETTINGS_RESOLVED": "1"}
+        names = ("CARGO_TARGET_DIR", "RICHOS_CARGO_CACHE_ROOT")
+        unset = {name: None for name in names}
+        documented = str(bulk / "caches/cargo-target")     # what machine_settings.py prints for these settings
+        with patch.dict(os.environ, settings):
+            for name in names:
+                os.environ.pop(name, None)
+            land = {"PATH": "/usr/bin:/bin", "HOME": self.tmp.name, **settings}
+            identity = lambda env: evidence.checkout_identity(self.root, ["bash", "suite.sh"],
+                                                              {k: v for k, v in {**land, **env}.items() if v})
+            plan = {"source": dict(self.source)}
+            gap = lambda saved, wanted: evidence.evidence_gap(
+                "cargo -p richos-core --lib", {"state": "passed", "exit": 0, "source": dict(self.source),
+                                               "input": saved}, wanted, plan)
+            wanted = identity(unset)
+            author = identity({"CARGO_TARGET_DIR": documented})
+            self.assertNotEqual(author, wanted)
+            self.assertIsNone(gap(author, wanted))     # the incident: named by the author, not by the land
+            self.assertIsNone(gap(wanted, author))     # and the other way round
+            self.assertIsNone(gap(identity({"CARGO_TARGET_DIR": documented, "RICHOS_CARGO_CACHE_ROOT": documented}),
+                                  wanted))
+            self.assertEqual(evidence.identity_difference(author, wanted), "")
+            # Not loosened: a root that is not the documented one is a real difference, named.
+            for env in ({"CARGO_TARGET_DIR": "/other/target"},
+                        {"RICHOS_CARGO_CACHE_ROOT": "/other/root"},
+                        {"CARGO_TARGET_DIR": documented, "RICHOS_CARGO_CACHE_ROOT": "/other/root"},
+                        {"CARGO_TARGET_DIR": "/other/target", "RICHOS_CARGO_CACHE_ROOT": documented}):
+                with self.subTest(env=env):
+                    self.assertTrue(gap(identity(env), wanted).startswith("declared execution inputs changed (environment."))
+                    self.assertTrue(gap(identity(env), author).startswith("declared execution inputs changed (environment."))
+            # Another machine-settings root is another documented root: the old one is no longer it.
+            with patch.dict(os.environ, {"RICHOS_BULK_ROOT": self.tmp.name}):
+                self.assertTrue(gap(author, wanted).startswith("declared execution inputs changed (environment."))
+            self.assertEqual(evidence.documented_cargo_root(), documented)
+
     def test_a_refused_pass_names_each_identity_field_that_differs(self):
         """2026-10-21: two lands in a row refused 21 unchanged passes as "declared execution inputs
         changed", naming no field, and the cause had to be guessed from a reproduction that was not

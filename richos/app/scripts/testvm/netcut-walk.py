@@ -40,6 +40,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('adopt_walk', HERE / 'adopt-walk.py')
 adopt_walk = importlib.util.module_from_spec(_spec)
@@ -57,14 +58,14 @@ PREFLIGHT = ('curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://api.
 
 class NetcutWalk(adopt_walk.Walk):
     def ax(self, mode, *args, app=None, timeout=40):
-        """A READ that hits the accessibility deadline on a busy host is asked again, twice at most
-        (ax.sh: exit 124 is the read's own deadline). Only `find`: it changes nothing, so asking
-        again cannot act twice; a click or a paste that timed out is still a failure."""
+        """A READ with no answer on a busy host is asked again, twice at most (axwait.ask_again).
+        Only a read: it changes nothing, so asking again cannot act twice; a click or a paste that
+        timed out is still a failure."""
         for attempt in range(3):
             try:
                 return super().ax(mode, *args, app=app, timeout=timeout)
             except StepFailed as exc:
-                if mode != 'find' or 'guest_deadline' not in str(exc) or attempt == 2:
+                if not axwait.ask_again(exc, mode) or attempt == 2:
                     raise
         raise AssertionError('unreachable')
 

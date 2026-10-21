@@ -61,6 +61,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest, relaunch  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('adopt_walk', HERE / 'adopt-walk.py')
 adopt_walk = importlib.util.module_from_spec(_spec)
@@ -366,7 +367,7 @@ class VoiceWalk(adopt_walk.Walk):
                 # relaunch() returns at the pid, not at a window, so the first read can land in
                 # that instant (walk-a75c409405c1, 2026-10-14: windows=0 at 7.7 s; the same
                 # bundle's first launch had shown its window a minute earlier).
-                if 'guest_deadline' not in str(exc) and '"nowindow"' not in str(exc):
+                if not axwait.no_answer(exc) and '"nowindow"' not in str(exc):
                     raise
                 last = exc
             time.sleep(1)
@@ -501,7 +502,7 @@ class VoiceWalk(adopt_walk.Walk):
             try:
                 return super().ax(mode, *args, app=app, timeout=timeout)
             except StepFailed as exc:
-                if mode != 'find' or 'guest_deadline' not in str(exc) or attempt == 2:
+                if not axwait.ask_again(exc, mode) or attempt == 2:
                     raise
 
     def by_id(self, dom_id):
@@ -509,8 +510,8 @@ class VoiceWalk(adopt_walk.Walk):
         try:
             nodes = self.ax('find', '--id', dom_id, '--first')
         except StepFailed as exc:
-            # A read that hit ax.sh's guest deadline is a read with no answer: the callers loop.
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc) or 'guest_deadline' in str(exc):
+            # A read with no answer (axwait.py) is not there yet: the callers loop.
+            if axwait.not_yet(exc, 'find'):
                 return None
             raise
         nodes = [n for n in nodes if not n.get('meta')]
@@ -523,7 +524,7 @@ class VoiceWalk(adopt_walk.Walk):
         try:
             return self.ax('click', '--id', dom_id)
         except StepFailed as exc:
-            if 'guest_deadline' not in str(exc):
+            if not axwait.no_answer(exc):
                 raise
             return None
 
