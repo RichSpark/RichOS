@@ -43,6 +43,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest, relaunch  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('adopt_walk', HERE / 'adopt-walk.py')
 adopt_walk = importlib.util.module_from_spec(_spec)
@@ -132,7 +133,7 @@ class FirstSendWalk(adopt_walk.Walk):
             return bool([n for n in self.ax('find', '--value', words[:40], '--contains', '--first') if not n.get('meta')
                          and n.get('role') != 'AXTextArea'])
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+            if axwait.not_yet(exc, 'find'):
                 return False
             raise
 

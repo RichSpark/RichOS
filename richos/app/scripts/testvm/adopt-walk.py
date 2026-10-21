@@ -44,6 +44,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
+import axwait  # noqa: E402
 
 STEPS = ['identity', 'first-run', 'watch', 'pair', 'phone-task', 'observe']
 TASK = ('Please add a file named hello.txt containing the single word hello to the Acme repository '
@@ -95,20 +96,26 @@ class Walk:
         return self.ax('click', *args, app=app)
 
     def present(self, title, role='AXButton', app=None):
+        """Whether it is on screen. A find the app did not answer is "not yet" (axwait.py), so
+        the caller's own wait asks again; its last such answer is kept for that wait's failure."""
         try:
             return bool(self.ax('find', '--title', title, '--role', role, '--contains', '--first', app=app))
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
-                return False
-            raise
+            if not axwait.not_yet(exc, 'find'):
+                raise
+            if axwait.no_answer(exc):
+                self.unanswered = str(exc).strip()[-300:]
+            return False
 
     def wait_for(self, title, role='AXButton', app=None, seconds=30):
         end = time.monotonic() + seconds
+        self.unanswered = None
         while time.monotonic() < end:
             if self.present(title, role, app):
                 return True
             time.sleep(1)
-        raise StepFailed(f'{role} "{title}" never appeared within {seconds} s')
+        why = f'; the last read had no answer: {self.unanswered}' if self.unanswered else ''
+        raise StepFailed(f'{role} "{title}" never appeared within {seconds} s{why}')
 
     def type_into(self, text, *selector, app=None):
         # ax.sh type pastes through the guest clipboard and refuses one that holds no text.
@@ -135,15 +142,18 @@ class Walk:
         command([HERE / 'ax.sh', self.vm, applescript], 90)
 
     def chooser_open(self):
-        """The system folder chooser is up: an AXSheet, or its own Open button (folders-walk.py)."""
+        """The system folder chooser is up: an AXSheet, or its own Open button (folders-walk.py).
+        None when a read had no answer: neither up nor gone, so wait_chooser() asks again."""
+        unknown = False
         for args in (('--role', 'AXSheet'), ('--title', 'Open', '--role', 'AXButton')):
             try:
                 if [n for n in self.ax('find', *args) if 'x' in n and not n.get('meta')]:
                     return True
             except StepFailed as exc:
-                if 'notfound' not in str(exc) and 'nothing matched' not in str(exc):
+                if not axwait.not_yet(exc, 'find'):
                     raise
-        return False
+                unknown = unknown or not axwait.absent(exc)
+        return None if unknown else False
 
     def wait_chooser(self, want, seconds=15):
         end = time.monotonic() + seconds
@@ -273,7 +283,12 @@ class Walk:
         url = None
         end = time.monotonic() + 30
         while time.monotonic() < end and not url:
-            text = command([HERE / 'ax.sh', self.vm, 'tree', '--in', 'dialog', '--max', '150'], 60)
+            try:
+                text = command([HERE / 'ax.sh', self.vm, 'tree', '--in', 'dialog', '--max', '150'], 60)
+            except StepFailed as exc:
+                if not axwait.ask_again(exc, 'tree'):  # a read with no answer: not drawn yet
+                    raise
+                text = ''
             m = re.search(r'https://[^\s\'"<>]+#pair=[A-Z0-9]+', text)
             url = m.group(0) if m else None
             if not url:
