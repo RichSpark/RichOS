@@ -92,7 +92,8 @@ class StuReminderWalk(command_walk.CommandWalk):
             try:
                 return super().ax(mode, *args, app=app, timeout=timeout)
             except StepFailed as exc:
-                if 'command failed (124)' not in str(exc) or attempt == 6:
+                # 124, or the deadline helper itself failing to end an overdue read (ax-deadline.py)
+                if ('command failed (124)' not in str(exc) and 'ax-deadline.py' not in str(exc)) or attempt == 6:
                     raise
 
     def present(self, title, role='AXButton', app=None):
