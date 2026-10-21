@@ -264,20 +264,18 @@ class Walk(adopt.Walk):
         guest(self.vm, 'mkdir -p {d} && printf "Docs for Acme\\n" > {d}/brief.md'.format(d=shlex.quote(self.docs)))
         self.press('Settings', role='AXPopUpButton')
         time.sleep(2)
-        rows = self.nodes('--title', 'Connected folders', '--role', 'AXMenuItem', '--contains')
+        rows = self.nodes('--title', 'Connected folders', '--role', 'AXButton', '--contains')
         ev = {'menu_row': [{k: r.get(k) for k in ('title', 'desc', 'x', 'y', 'w', 'h')} for r in rows[:2]]}
         self.shot('2-menu-light.png')
         problems = []
         if not rows:
-            raise StepFailed('the Settings menu has no "Connected folders" row')
+            raise StepFailed('the Settings dialog has no "Connected folders" row')
         if 'Connected folders (repositories)' not in (rows[0].get('title') or '') + ' ' + (rows[0].get('desc') or ''):
             problems.append('the row does not read "Connected folders (repositories)": ' + repr(rows[0].get('title')))
         self.appearance(True)
         self.shot('2-menu-dark.png')
         self.appearance(False)
-        self.press('Connected folders', role='AXMenuItem')
-        self.wait_for('Company', role='AXPopUpButton', seconds=30)
-        time.sleep(2)
+        self.open_connected_folders(settings_open=True)
         self.shot('2-sheet-light.png')
         copy = {}
         for key, words in SHEET_COPY.items():
