@@ -4268,7 +4268,7 @@ impl Drop for NativeCognition {
         if let Some(path)=self.client.reader_state.lock().unwrap().question_scope.as_ref(){drop(std::fs::remove_file(path));}
         let _ = self.client.child.kill();
         let _ = self.client.child.wait();
-        if let Some(profile) = &self.engine_profile { let _ = std::fs::remove_dir_all(&profile.plugin); }
+        if let Some(profile) = &self.engine_profile { profile.remove_session_files(); }
         if let Some((_, path)) = &self.continuity { let _ = std::fs::remove_file(path); }
         if let Some(path) = &self.assignments_scope { let _ = std::fs::remove_file(path); }
         if let Some(path) = &self.status_scope { let _ = std::fs::remove_file(path); }
@@ -4307,6 +4307,9 @@ impl Cognition for NativeCognition {
     }
     fn streamed_usage(&self) -> Option<crate::quota::StreamedReading> {
         self.client.reader_state.lock().unwrap().streamed_usage.clone()
+    }
+    fn user_settings_digest(&self) -> Option<String> {
+        self.engine_profile.as_ref()?.user.digest.clone()
     }
     fn set_input_channel(&mut self, channel: Option<&str>) -> Result<(), CognitionError> {
         self.pending_channel = channel.map(str::to_string);
@@ -5238,6 +5241,7 @@ send({"type":"result","stop_reason":"end_turn"})
                 versions: Default::default(),
             },
             work_scope: None,
+            user: Default::default(),
 
             operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default(),
         }
@@ -8062,7 +8066,7 @@ read -r keep_alive
                 _ => std::fs::write(folder.join("callbacks.jsonl"), log).unwrap(),
             }
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
-                engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(),
+                engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(), user: Default::default(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
                 work_scope:None,  operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
             });

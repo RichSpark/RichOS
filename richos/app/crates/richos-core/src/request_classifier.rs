@@ -251,6 +251,7 @@ pub(crate) mod tests {
         let engine=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../engine").canonicalize().unwrap();
         let profile=EngineProfile {
             engine,coordination:root.join("coordination"),plugin:root.join("plugin"),state:root.join("engine-state"),
+            user:Default::default(),
             runtime:crate::runtime::EngineRuntime {root:PathBuf::from("/usr"),python:PathBuf::from("/usr/bin/python3"),
                 node:PathBuf::from("/usr/bin/false"),git:PathBuf::from("/usr/bin/git"),versions:Default::default()},
             work_scope:None,
