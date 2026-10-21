@@ -212,6 +212,8 @@ def run(P, ax, host):
             pass
     try:
         wins = ax.get(app, 'AXWindows')
+    except TimeoutError:
+        raise  # the app did not answer: respond() reports 'unresponsive', which a wait asks again
     except Exception as e:
         return error('blocked', e)
     wins = wins if isinstance(wins, list) else []
