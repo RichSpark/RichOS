@@ -443,6 +443,45 @@ fn the_same_lost_connection_again_is_told_as_repeated_and_offers_no_retry() {
     let _best_effort = std::fs::remove_file(&path);
 }
 
+/// **A REFUSED SIGN-IN OR KEY IS TOLD AS ITSELF, WITH ITS ROUTE, NEVER AS AN OUTAGE** (review
+/// rv-20261021T163510Z-b612361c-0e62, finding 1). Both lines are Claude Code's own: the first
+/// measured on 2.1.306 (2026-10-21) for an OAuth token Anthropic refuses, the second read out of
+/// the bundle (`interruption_tests`). Each carries `API Error: 401`, which the upstream reader
+/// claimed first, so the person got the outage card and no sign-in route. Red before the
+/// upstream reader yielded to a recognized cause.
+#[test]
+fn a_refused_sign_in_or_key_is_classified_with_its_route_not_taken_for_an_outage() {
+    for (line, cause) in [
+        ("\"Failed to authenticate. API Error: 401 OAuth access token is invalid.\"", "not-signed-in"),
+        ("\"API Error: 401 Invalid API key \u{b7} Please run /login\"", "credential-rejected"),
+    ] {
+        let (path, ledger) = tmp_ledger("refused-auth");
+        let mut spine = support::spine(ledger);
+        spine.create_thread("General", &femcboost()).unwrap();
+        spine.attach_lease(Box::new(RefusingCognition { session_id: "sess-a".into(), line: line.into() }));
+        let turn_id = spine.submit_prompt("what do I do now?", Source::Text).unwrap_err_turn(&spine);
+        let turn = spine.ledger().turn(&turn_id).unwrap();
+        assert!(turn.upstream_failure.is_none(), "{line}: taken for an outage: {:?}", turn.upstream_failure);
+        let record = turn.interruption.clone().unwrap_or_else(|| panic!("{line}: not classified"));
+        assert_eq!((record.cause.as_str(), record.offers_retry), (cause, false), "{line}");
+        let _best_effort = std::fs::remove_file(&path);
+    }
+}
+
+/// A lease whose turn ends on Claude Code's own `result` line, as `native_result` passes it on.
+struct RefusingCognition {
+    session_id: String,
+    line: String,
+}
+impl Cognition for RefusingCognition {
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+    fn prompt(&mut self, _text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        Err(CognitionError::Protocol(self.line.clone()))
+    }
+}
+
 /// A lease that fails with a reason `interruption::classify` has no story for (`unknown`).
 struct UnexplainedCognition {
     session_id: String,

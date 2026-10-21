@@ -3073,7 +3073,20 @@ impl Spine {
         stop: &Result<String, CognitionError>,
     ) -> Option<crate::upstream::UpstreamFailure> {
         if let Err(e) = stop {
-            if let Some(f) = crate::upstream::UpstreamFailure::classify_lines(&e.to_string()) {
+            let reason = e.to_string();
+            // A CAUSE WITH A ROUTE IS NOT AN OUTAGE. Claude Code writes a refused sign-in as
+            // "Failed to authenticate. API Error: 401 OAuth access token is invalid." and a
+            // refused key as "API Error: 401 Invalid API key · Please run /login": both carry the
+            // vendor's `API Error:` prefix, so the upstream reader claimed them and the person got
+            // an outage card with no sign-in route (review rv-20261021T163510Z-b612361c-0e62,
+            // finding 1). What `interruption::classify` recognizes as somebody's to fix goes to
+            // `record_interruption`, whose card names the fix.
+            use crate::interruption::InterruptionCause as Cause;
+            if matches!(crate::interruption::classify(&reason),
+                Cause::NotSignedIn | Cause::CredentialRejected | Cause::ProviderMissing) {
+                return None;
+            }
+            if let Some(f) = crate::upstream::UpstreamFailure::classify_lines(&reason) {
                 return Some(f);
             }
         }

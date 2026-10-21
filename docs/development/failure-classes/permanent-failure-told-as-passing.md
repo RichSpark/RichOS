@@ -37,6 +37,7 @@ the `cognition io:` prefix, which every mid-turn exit of the Claude Code child d
 | `crates/richos-core/tests/interruption_tests.rs` `no_cause_promises_that_it_clears_by_itself` | any interruption sentence promising it clears; `Repeated` offering a retry |
 | `crates/richos-core/tests/spine_tests.rs` `the_same_lost_connection_again_is_told_as_repeated_and_offers_no_retry` | a retry-offering failure (lost connection or unexplained) following another one; covers every cause whose `offers_retry()` is true, not one arm |
 | `crates/richos-core/tests/interruption_tests.rs` `an_oauth_token_anthropic_refuses_is_a_sign_in_to_renew`, `a_child_exit_with_no_sign_in_is_not_signed_in` | a sign-in problem classified as unknown or as a lost connection |
+| `crates/richos-core/tests/spine_tests.rs` `a_refused_sign_in_or_key_is_classified_with_its_route_not_taken_for_an_outage` | a refused sign-in or key taken for an outage: both lines carry the vendor's `API Error: 401` and the upstream reader (`spine.rs` `detect_upstream_failure`) claimed them first, so the card named no sign-in route. A cause `interruption::classify` recognizes as somebody's to fix now goes to its own card. |
 | `scripts/testvm/new-user-walk.py`, step `signed-out` (two messages), dead end `retry loop on a permanent cause` | the sentence on a real first run, in a guest |
 | `nightly-local.py` phase `new-user-walk` (`NEW_USER_WALK_PHASE`) and `require_new_user_walk` at `publish` | a build whose new-user walk did not pass cannot be published |
 
