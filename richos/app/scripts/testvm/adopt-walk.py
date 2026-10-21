@@ -100,6 +100,13 @@ class Walk:
         except StepFailed as exc:
             if 'notfound' in str(exc) or 'nothing matched' in str(exc):
                 return False
+            # A find that reached the accessibility read's own deadline (ax.sh exit 124,
+            # `guest_deadline`) saw nothing: "not yet", and every caller that waits asks again
+            # within its own bound. A click is never retried this way (`press` is unchanged).
+            # Seen 2026-10-21 on a host at load 16: two reap walks ended at first-run on one
+            # slow read of "Add this company" (walk-d96ae96d3b68, walk-f6c9b88ae823).
+            if 'guest_deadline' in str(exc):
+                return False
             raise
 
     def wait_for(self, title, role='AXButton', app=None, seconds=30):
