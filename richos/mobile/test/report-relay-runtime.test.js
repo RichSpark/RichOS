@@ -139,7 +139,14 @@ test('the live A9 runner passes against the local stand-in and refuses a product
     accountId: '0'.repeat(32), databaseId: '00000000-0000-0000-0000-000000000000', appId: LOCAL.appId, installationId: LOCAL.installationId,
     botLogin: LOCAL.bot, label: 'richdoctor', bucket: 'richos-report-local' };
   // The runner's three destinations, routed to the stand-in: the relay, its D1 API and GitHub.
+  // The deployed relay allows five creates a minute per IP and a registration is one of them,
+  // so every other create or registration is answered "limited" here, as the limiter would.
+  let creates = 0, refused = 0;
   const fetchImpl = async (url, init = {}) => {
+    if (url === 'https://report-local.example.com/v1/reports' && creates++ % 2 === 0) {
+      refused++;
+      return new Response(JSON.stringify({ state: 'limited', retry_after_seconds: 0.01 }), { status: 429, headers: { 'Content-Type': 'application/json' } });
+    }
     // The full https URL is kept, so the relay sees the origin its screenshot links name.
     if (url.startsWith('https://report-local.example.com/')) return relay.fetch(url, init);
     if (url.startsWith('https://api.github.com/')) return relay.github.fetch(url, init);
@@ -150,6 +157,8 @@ test('the live A9 runner passes against the local stand-in and refuses a product
   await assert.rejects(run({ ...profile, stage: 'production', ...PRODUCTION, bucket: 'richos-report' }, { token: 't', fetchImpl }), /test relay and test repository only/);
   const record = await run(profile, { token: 't', fetchImpl });
   assert.equal(record.ok, true); assert(record.steps.every(step => step.ok));
+  // Every refused create and registration was sent again, protocol 2 registrations included.
+  assert(refused >= 12, `only ${refused} creates were refused`); assert.equal(record.throttledAndResent, refused);
   assert.equal(relay.github.created().length, 4);
   assert.equal((await relay.db.prepare('SELECT paused FROM control').first()).paused, 1, 'the run leaves the test relay switched off');
 });

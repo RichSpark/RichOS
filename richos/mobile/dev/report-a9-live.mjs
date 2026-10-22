@@ -38,9 +38,11 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
   };
   let resentAfterLimit = 0;
   // "limited" means this request was not processed: wait as told and send the same request again.
+  // A registration (a JSON string, the exact body) counts against the same create limit.
   const call = async (path, body, init = {}) => {
     for (let tries = 0; ; tries++) {
-      const response = await fetchImpl(base + path, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...init });
+      const response = await fetchImpl(base + path, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
+        body: typeof body === 'string' ? body : JSON.stringify(body), ...init });
       const answer = { status: response.status, body: await response.json().catch(() => null) };
       if (answer.body?.state !== 'limited' || response.status !== 429 || tries === 5) return answer;
       resentAfterLimit++; await pause(1000 * (answer.body.retry_after_seconds || 60));
@@ -107,8 +109,7 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
 
     // Screenshots (protocol 2): register, then uploads, then completion, on the real service.
     const shots = screenshotReport({ origin: base, files: [{ bytes: largePng(), type: 'image/png' }, { bytes: fixture('accept-baseline.jpg'), type: 'image/jpeg' }] });
-    const register = () => fetchImpl(base + '/v1/reports', { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' }, body: registerBody(shots) })
-      .then(async r => ({ status: r.status, body: await r.json().catch(() => null) }));
+    const register = () => call('/v1/reports', registerBody(shots));
     const put = (n, body) => fetchImpl(`${base}/v1/reports/${shots.report_id}/attachments/${n}`, { redirect: 'error', ...uploadInit(shots, n, body) })
       .then(async r => ({ status: r.status, body: await r.json().catch(() => null) }));
     const action = name => call(`/v1/reports/${shots.report_id}/${name}`, { receipt_secret: shots.receipt_secret });
@@ -131,8 +132,8 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
     const unseen = screenshotReport({ origin: base, files: [{ bytes: fixture('accept-rgb.png'), type: 'image/png' }] });
     const retireUnseen = () => call(`/v1/reports/${unseen.report_id}/retire`, { receipt_secret: unseen.receipt_secret });
     check('retiring an ID the relay never saw is acknowledged, and again', (await retireUnseen()).body?.state === 'retired' && (await retireUnseen()).body?.state === 'retired');
-    const delayed = await fetchImpl(base + '/v1/reports', { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' }, body: registerBody(unseen) }).then(r => r.json());
-    check('a delayed registration of a retired ID stays retired', delayed.state === 'retired');
+    const delayed = (await call('/v1/reports', registerBody(unseen))).body;
+    check('a delayed registration of a retired ID stays retired', delayed?.state === 'retired');
 
     const day = new Date().toISOString().slice(0, 10);
     const used = (await query('SELECT creates FROM daily WHERE day=?1', [day])).results?.[0]?.creates || 0;
