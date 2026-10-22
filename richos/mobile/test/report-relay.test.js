@@ -308,6 +308,44 @@ test('operator resolve accepts only an issue the relay bot made with this report
   assert.equal(statements.length, 1);
 });
 
+test('deploy applies the schema, uploads the exact modules, installs the key as a secret and reads back', async t => {
+  const { deploy, reportArtifact } = await import('../cli/report.mjs');
+  const { appKey } = await import('../dev/report-fake-github.mjs');
+  const key = (await appKey()).pkcs1;
+  const profile = { stage: 'test', worker: 'richos-report-test', hostname: 'richos-report-test.example-sub.workers.dev', repository: 'richos-test/report-relay-test',
+    accountId: 'a'.repeat(32), databaseId: '11111111-2222-3333-4444-555555555555', appId: '9', installationId: '8', botLogin: 'richos-reports-test[bot]', label: 'richdoctor' };
+  const artifact = reportArtifact(profile), seen = [];
+  let parts, secret, subdomain;
+  const ok = result => new Response(JSON.stringify({ success: true, result }));
+  const fake = async (url, init = {}) => {
+    const path = url.replace(`https://api.cloudflare.com/client/v4/accounts/${profile.accountId}`, ''), method = init.method || 'GET';
+    seen.push(`${method} ${path.startsWith('/d1/') ? '/d1/query' : path}`);
+    if (path === '/workers/subdomain') return ok({ subdomain: 'example-sub' });
+    if (path.endsWith('/query')) {
+      const { sql } = JSON.parse(init.body);
+      return ok([{ success: true, results: /sqlite_master/.test(sql) ? [{ name: 'control' }, { name: 'daily' }, { name: 'reports' }] : [], meta: { changes: 0 } }]);
+    }
+    if (method === 'PUT' && path === '/workers/scripts/richos-report-test') { parts = init.body; return ok({ id: 'deployment-1' }); }
+    if (path.endsWith('/secrets')) { secret = JSON.parse(init.body); return ok({}); }
+    if (path.endsWith('/subdomain')) { subdomain = JSON.parse(init.body); return ok({}); }
+    if (path.endsWith('/settings')) return ok({ bindings: [...artifact.metadata.bindings, { name: 'GITHUB_APP_PRIVATE_KEY', type: 'secret_text' }], logpush: false, tail_consumers: [] });
+    if (url === `https://${profile.hostname}/v1/health`) return new Response(JSON.stringify({ ok: true, service: 'richos-report', protocol: 1, accepting: false }));
+    return new Response('{}', { status: 404 });
+  };
+  const result = await deploy(profile, { token: 't', appKey: key, fetch: fake });
+  assert.deepEqual(seen.slice(0, 2), ['GET /workers/subdomain', 'POST /d1/query'], 'the schema goes first');
+  assert.deepEqual(seen.slice(-5), ['PUT /workers/scripts/richos-report-test', 'PUT /workers/scripts/richos-report-test/secrets',
+    'POST /workers/scripts/richos-report-test/subdomain', 'GET /workers/scripts/richos-report-test/settings', `GET https://${profile.hostname}/v1/health`]);
+  assert.deepEqual(JSON.parse(await parts.get('metadata').text()), artifact.metadata);
+  for (const module of artifact.modules) assert.equal(await parts.get(module.name).text(), module.source);
+  assert(!(await parts.get('metadata').text()).includes('PRIVATE KEY'), 'the key never goes into the upload');
+  assert.deepEqual(secret, { name: 'GITHUB_APP_PRIVATE_KEY', text: key, type: 'secret_text' });
+  assert.deepEqual(subdomain, { enabled: true, previews_enabled: false });
+  assert(!JSON.stringify(result).includes('PRIVATE KEY'));
+  assert.equal(result.health.accepting, false, 'a deployed relay starts switched off');
+  await assert.rejects(deploy({ ...profile, hostname: 'richos-report-test.other.workers.dev' }, { token: 't', appKey: key, fetch: fake }), /workers\.dev hostname is/);
+});
+
 test('the content checks take linear time on the largest adversarial body', async () => {
   const { contentProblem } = await import('../service/report/checks.mjs');
   const id = reportId(), footer = `\n\nSent with RichDoctor 1.0 · Report ID ${id}`, room = 60000 - Buffer.byteLength(footer);

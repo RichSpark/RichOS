@@ -89,7 +89,14 @@ RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mo
 
 A new database starts switched off with a cap of zero; Rich names the operator and the initial cap and `control on` records both. `pending` is the operator's review list. `resolve` records an issue the operator found: it re-reads the issue and accepts it only if the relay's bot made it and its footer names that report. The operator never marks an unconfirmed report as not created; only the authoritative cases above permit another create.
 
-Deploy as for the other Workers: create the D1 database, apply `report schema`, upload the artifact's `metadata` and `modules` with Cloudflare's Scripts API (`keep_bindings: ["secret_text"]` keeps the key across uploads), install the App's private key as the Worker secret `GITHUB_APP_PRIVATE_KEY` (GitHub's PKCS#1 download is accepted as is), disable workers.dev and previews, attach the Custom Domain, read back module hashes, bindings and `GET /v1/health`, then turn it on with `control on`. Create the moderation label in the repository first. Account identifiers and deployment receipts belong in the private operations record.
+Deploying is two commands with a short-lived Cloudflare token (Workers Scripts Edit and D1 Edit on the one account) and the GitHub App's private key, each in a mode-0600 file:
+
+```sh
+RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mobile.mjs report create-database <account ID> <Worker name>   # once; put the ID in the profile
+RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… RICHOS_REPORT_APP_KEY_FILE=… node richos/mobile/cli/mobile.mjs report deploy
+```
+
+`deploy` applies the schema, uploads the artifact's exact `metadata` and `modules` with Cloudflare's Scripts API (`keep_bindings: ["secret_text"]` keeps the key across uploads), installs the key as the Worker secret `GITHUB_APP_PRIVATE_KEY` (GitHub's PKCS#1 download is accepted as is), sets workers.dev (on only for a test relay whose hostname is its workers.dev name, which needs no DNS), reads back the bindings and the logging settings and waits for `GET /v1/health`. A production relay then gets its Custom Domain. Create the moderation label in the repository first, then turn the relay on with `control on`. Account identifiers and deployment receipts belong in the private operations record.
 
 ## Testing it
 

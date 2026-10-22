@@ -60,13 +60,14 @@ export function reportArtifact(profile) {
     },
     secrets: ['GITHUB_APP_PRIVATE_KEY'],
     modules: MODULES.map(name => { const source = read(name); return { name, type: 'application/javascript+module', source, sha256: sha256(source) }; }),
-    subdomain: { enabled: false, previews_enabled: false },
+    // Only a test relay may be served on workers.dev, which needs no DNS name.
+    subdomain: { enabled: p.stage === 'test' && p.hostname.endsWith('.workers.dev'), previews_enabled: false },
     schema: { sql: schema, sha256: sha256(schema) },
   };
 }
 
 export function readToken(path) {
-  if (!path) throw Error('Set RICHOS_REPORT_TOKEN_FILE to a private file holding a short-lived D1 token');
+  if (!path) throw Error('Set RICHOS_REPORT_TOKEN_FILE to a private file holding a short-lived Cloudflare token');
   if ((statSync(path).mode & 0o077) !== 0) throw Error('The report token file must be private (mode 0600)');
   const token = readFileSync(path, 'utf8').trim();
   if (!/^[A-Za-z0-9_-]{20,200}$/.test(token)) throw Error('The report token file does not hold a Cloudflare API token');
@@ -125,10 +126,70 @@ export async function operate(action, profile, args, { token, fetch: fetchImpl =
   throw Error('Unknown report operator action');
 }
 
+function cloudflare(accountId, token, fetchImpl) {
+  return async (method, path, body, type = 'application/json') => {
+    const response = await fetchImpl(`https://api.cloudflare.com/client/v4/accounts/${accountId}${path}`, { method, redirect: 'error',
+      headers: { Authorization: `Bearer ${token}`, ...(type && body !== undefined ? { 'Content-Type': type } : {}) },
+      body: body === undefined ? undefined : type === 'application/json' ? JSON.stringify(body) : body });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || data?.success !== true) {
+      const codes = (data?.errors || []).map(error => error?.code).filter(Number.isInteger).join(',');
+      throw Error(`Cloudflare ${method} ${path.split('/').slice(0, 4).join('/')} failed (HTTP ${response.status}${codes ? ', codes ' + codes : ''})`);
+    }
+    return data.result;
+  };
+}
+
+// The relay's own D1 database, named after its Worker. Prints only the new ID for the profile.
+export async function createDatabase(accountId, worker, { token, fetch: fetchImpl = fetch } = {}) {
+  if (!/^[a-f0-9]{32}$/.test(accountId || '') || !/^richos-report[a-z0-9-]*$/.test(worker || '')) throw Error('Expected: create-database <account ID> <Worker name>');
+  const result = await cloudflare(accountId, token, fetchImpl)('POST', '/d1/database', { name: worker });
+  return { name: result.name, databaseId: result.uuid };
+}
+
+// The whole deployment of one relay, in order: schema, exact upload, the App key secret, the
+// workers.dev setting, then readback of the bindings and the public health. It leaves the relay
+// switched off (a new database starts off; an existing one keeps its switch).
+export async function deploy(profile, { token, appKey, fetch: fetchImpl = fetch } = {}) {
+  const artifact = reportArtifact(profile), api = cloudflare(profile.accountId, token, fetchImpl);
+  if (!/-----BEGIN (RSA )?PRIVATE KEY-----/.test(appKey || '')) throw Error('The App key file does not hold a PEM private key');
+  if (profile.hostname.endsWith('.workers.dev')) {
+    const { subdomain } = await api('GET', '/workers/subdomain');
+    if (profile.hostname !== `${profile.worker}.${subdomain}.workers.dev`) throw Error(`The workers.dev hostname is ${profile.worker}.${subdomain}.workers.dev`);
+  }
+  const schema = await operate('schema', profile, [], { token, fetch: fetchImpl });
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(artifact.metadata)], { type: 'application/json' }));
+  for (const module of artifact.modules) form.append(module.name, new Blob([module.source], { type: module.type }), module.name);
+  const uploaded = await api('PUT', `/workers/scripts/${profile.worker}`, form, null);
+  await api('PUT', `/workers/scripts/${profile.worker}/secrets`, { name: 'GITHUB_APP_PRIVATE_KEY', text: appKey, type: 'secret_text' });
+  await api('POST', `/workers/scripts/${profile.worker}/subdomain`, artifact.subdomain);
+  const settings = await api('GET', `/workers/scripts/${profile.worker}/settings`);
+  const bindings = (settings.bindings || []).map(b => `${b.name}:${b.type}`).sort();
+  const expected = [...artifact.metadata.bindings.map(b => `${b.name}:${b.type}`), 'GITHUB_APP_PRIVATE_KEY:secret_text'].sort();
+  if (JSON.stringify(bindings) !== JSON.stringify(expected)) throw Error(`Bindings read back as ${bindings.join(', ')}`);
+  if (settings.logpush || (settings.tail_consumers || []).length || settings.observability?.enabled) throw Error('Logs, Logpush or tails are not off');
+  let health = null;
+  for (let i = 0; i < 10 && !health?.ok; i++) {
+    if (i) await new Promise(resolve => setTimeout(resolve, 3000));
+    health = await (await fetchImpl(`https://${profile.hostname}/v1/health`, { redirect: 'error' }).catch(() => null))?.json().catch(() => null) ?? null;
+  }
+  if (!health?.ok) throw Error('The relay health check did not answer ok');
+  return { worker: profile.worker, hostname: profile.hostname, repository: profile.repository, schema: schema.sha256, deployment: uploaded?.id || null,
+    modules: artifact.modules.map(m => ({ name: m.name, sha256: m.sha256 })), bindings, health };
+}
+
 export async function command(action, file, rest = []) {
   if (action === 'artifact') {
     if (!file) throw Error('Provide the private relay profile JSON file');
     return reportArtifact(JSON.parse(readFileSync(file, 'utf8')));
+  }
+  if (action === 'create-database') return createDatabase(file, rest[0], { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE) });
+  if (action === 'deploy') {
+    const keyFile = process.env.RICHOS_REPORT_APP_KEY_FILE;
+    if (!keyFile || (statSync(keyFile).mode & 0o077) !== 0) throw Error('Set RICHOS_REPORT_APP_KEY_FILE to the private (mode 0600) GitHub App key file');
+    return deploy(JSON.parse(readFileSync(process.env.RICHOS_REPORT_PROFILE || '', 'utf8')),
+      { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE), appKey: readFileSync(keyFile, 'utf8') });
   }
   const profile = JSON.parse(readFileSync(process.env.RICHOS_REPORT_PROFILE || '', 'utf8'));
   return operate(action, profile, [file, ...rest].filter(v => v !== undefined), { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE) });
