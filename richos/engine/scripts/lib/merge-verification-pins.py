@@ -25,7 +25,7 @@ So this driver merges the two documents as JSON, three ways, and then regenerate
      first, when each side only appended to the base note: a renewal appends its sentence, so two
      parallel renewals of one entry did exactly that (2026-10-22, cc/zach-opus-folderfiles2 and
      cc/zach-opus-landgate4 on nodes/mega-lander/app.py#land-lock-fixtures). A note either side
-     rewrote is a real conflict.
+     rewrote or shortened is a real conflict: a deleted sentence is never brought back.
   4. Anything else both sides changed differently is a real conflict: the driver leaves git's own
      conflict markers in the file (`git merge-file`) and exits 1, exactly as without it.
 
@@ -178,16 +178,18 @@ def appended_notes(base, ours, theirs):
     """Both notes kept when each side only appended to the base note, else None (a real conflict)."""
     if not all(isinstance(v, str) for v in (base, ours, theirs)):
         return None
+    # Both must extend the base: a side that shortened or rewrote the note made a decision the
+    # driver never overrides (one side deleting a sentence the other kept is a conflict).
+    if not (ours.startswith(base) and theirs.startswith(base)):
+        return None
     if theirs.startswith(ours):
         return theirs
     if ours.startswith(theirs):
         return ours
-    if ours.startswith(base) and theirs.startswith(base):
-        added = theirs[len(base):]
-        if base and not added[:1].isspace() and not ours[-1:].isspace():
-            added = " " + added
-        return ours + added
-    return None
+    added = theirs[len(base):]
+    if base and not added[:1].isspace() and not ours[-1:].isspace():
+        added = " " + added
+    return ours + added
 
 
 def pin_path_of(document, where):

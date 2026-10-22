@@ -20,6 +20,7 @@
 #   V4  two renewals that each changed one reader, renewed its pin, added an edge and appended a
 #       sentence to its evidence note merge by themselves, both sentences and both edges kept:
 #       the exact entry that stopped the folderfiles2 land on 2026-10-22.
+#   V5  a note one side shortened while the other appended to it is still a conflict.
 #   V3  install.sh --check names the driver, and --uninstall removes it.
 #
 # Exit 0 = all cases pass; exit 1 = at least one failure.
@@ -201,6 +202,35 @@ if [ "$V4RC" = 0 ] && [ -n "$WANT" ] && [ "$GOT" = "$WANT" ]; then
     ok "V4  two renewals that each appended a sentence to one note merge by themselves: both sentences and both edges kept, the pin equals the merged file (the 2026-10-22 folderfiles2 conflict)"
 else
     bad "V4  merge rc=$V4RC; note, edges and pin: ${GOT:0:60}" "$(tail -3 "$SANDBOX/v4.out" | tr '\n' ' ')"
+fi
+git -C "$R" merge --abort >/dev/null 2>&1
+
+# --- V5 --------------------------------------------------------------------
+# One side drops the note's last sentence while the other appends one (review
+# rv-20261022T111705Z-e8050296-c669): never merged, or the dropped sentence would come back.
+git -C "$R" checkout -q -f main
+git -C "$R" switch -q -c left5
+python3 - "$R/richos/engine/scripts/lib/verification-dependencies.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p)); row = d["nodes"]["scripts/a.sh"]
+row["evidence"] = row["evidence"] + " Renewed 2026-10-22 (left5): appended."
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+PY
+git -C "$R" commit -qam "left5: appends a sentence"
+git -C "$R" switch -q main
+python3 - "$R/richos/engine/scripts/lib/verification-dependencies.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p)); row = d["nodes"]["scripts/a.sh"]
+row["evidence"] = row["evidence"].rsplit(" Renewed ", 1)[0]
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+PY
+git -C "$R" commit -qam "main: drops the last sentence"
+( cd "$R" && git merge --no-ff --no-edit left5 ) >"$SANDBOX/v5.out" 2>&1
+V5RC=$?
+if [ "$V5RC" != 0 ] && grep -q '^<<<<<<<' "$R/richos/engine/scripts/lib/verification-dependencies.json"; then
+    ok "V5  a note one side shortened and the other extended is a conflict: the dropped sentence is not brought back"
+else
+    bad "V5  merge rc=$V5RC — a sentence one side deleted was merged back without a person" "$(tail -3 "$SANDBOX/v5.out" | tr '\n' ' ')"
 fi
 git -C "$R" merge --abort >/dev/null 2>&1
 
