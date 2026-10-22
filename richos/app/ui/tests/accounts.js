@@ -15,6 +15,11 @@ const win = (five, week, fiveAt = now + 2 * HOUR, weekAt = now + 2 * DAY) => [
   { id: "five_hour", label: "Five-hour", usedPercent: five, resetsAt: fiveAt, durationMs: 5 * HOUR },
   { id: "seven_day", label: "Weekly", usedPercent: week, resetsAt: weekAt, durationMs: 7 * DAY },
 ];
+// What quota.rs publishes once Claude Code's own `auth status` says nobody is signed in (2026-10-21).
+const signedOut = { state: "unavailable", checkedAt: null, retryAt: null, windows: [], signedIn: false,
+  message: "This Claude account is not signed in on this Mac." };
+// What quota.rs publishes when `auth status` says signed in but no limits come back (ReadError::SignedInNoLimits).
+const SIGNED_IN_NO_LIMITS = "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show.";
 const one = (week, five = 22) => ({ state: "fresh", checkedAt: now, retryAt: null, message: null, windows: win(five, week) });
 function two(home, work, opts = {}) {
   const working = opts.working || {};
@@ -23,6 +28,12 @@ function two(home, work, opts = {}) {
   const used = opts.inUse === "2" ? workAcct : homeAcct;
   return { state: "fresh", checkedAt: now, retryAt: null, message: null, windows: used.windows, accounts: [homeAcct, workAcct],
     changes: opts.changes || [{ at: now - DAY - 2 * HOUR, kind: "added", id: "2", label: "Work" }], lastSwitch: opts.lastSwitch || null };
+}
+// Two accounts, `idle` not in use, signed in without limits: no reading, `signedIn: true`.
+function idleSignedIn(inUse, idle) {
+  const quota = two([10, 20], [10, 20], { inUse });
+  Object.assign(quota.accounts.find(a => a.id === idle), { windows: [], checkedAt: null, signedIn: true, message: SIGNED_IN_NO_LIMITS });
+  return quota;
 }
 
 async function main() {
@@ -127,6 +138,65 @@ async function main() {
     assertEqual(await text(page, ".acc-how-title"), "How Rich uses your accounts");
     await page.close();
     return "one: Your Claude account + the slot; two: Home In use now, Work Next, the handover line";
+  });
+
+  // A new user's first run (2026-10-21): "In use now" over "No reading yet. If this account is not
+  // signed in on this Mac, sign in here." on a Mac where nobody had signed in. Red on main, where
+  // the card ignores the sign-in verdict.
+  await run.check("signed out: the card says Not signed in with Sign in, the row says it in gold, and nothing says No reading yet", async () => {
+    let page = await open("dark", signedOut);
+    await menu(page);
+    await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent === "Not signed in on this Mac");
+    assert(await page.locator("#set-accounts-state.is-attention").isVisible(), "the row says it in gold");
+    await page.click("#set-accounts-open");
+    await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
+    assertEqual(await texts(page, ".acc-pill"), ["Not signed in"]);
+    assertEqual(await text(page, ".acc-note"), "This account is not signed in on this Mac, so Rich cannot answer you yet. Sign in here.");
+    assert(await page.locator('#accounts-sheet [data-act="sign-one"]').isVisible(), "Sign in is on the card");
+    assert(!(await text(page, "#accounts-sheet")).includes("No reading yet"), "never No reading yet");
+    // An account known to be signed out has no limits to report: no meters saying "Not reported yet".
+    assertEqual(await page.locator("#accounts-sheet .acc-card .acc-meter").count(), 0, "no meters on a signed-out card");
+    await page.close();
+    // Before the first check has answered, the card says the check is under way.
+    page = await open("dark", { state: "unavailable", checkedAt: null, retryAt: null, windows: [], message: null });
+    await menu(page);
+    await page.click("#set-accounts-open");
+    await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
+    assertEqual(await text(page, ".acc-note"), "Checking whether this account is signed in on this Mac.");
+    await page.close();
+    return "signed out: Not signed in + Sign in on the card, gold row line; unchecked: the check is under way";
+  });
+
+  // Mid-job review rv-20261021T213648Z-b3f0990a-85f9: a signed-in verdict stands on its own.
+  // An account Claude Code says is signed in, but that reports no usage limits, is never
+  // offered "Sign in" and never shown empty meters. Red before: signedIn was lost (null), the
+  // card offered Sign in and drew two "Not reported yet" meters.
+  await run.check("signed in without limits: the card says so, with no Sign in and no empty meters", async () => {
+    const page = await open("dark", { state: "unavailable", checkedAt: null, retryAt: null, windows: [], signedIn: true,
+      message: SIGNED_IN_NO_LIMITS });
+    await menu(page);
+    await page.click("#set-accounts-open");
+    await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
+    assertEqual(await texts(page, ".acc-pill"), ["In use now"]);
+    assertEqual(await text(page, ".acc-note"), SIGNED_IN_NO_LIMITS);
+    assertEqual(await page.locator('#accounts-sheet [data-act="sign-one"], #accounts-sheet [data-act="sign"]').count(), 0, "no Sign in for a signed-in account");
+    assertEqual(await page.locator("#accounts-sheet .acc-card .acc-meter").count(), 0, "no empty meters");
+    await page.close();
+    // Handover review rv-20261021T234558Z-10df0b1f-03b0, finding 2: the same verdict on a card
+    // that is NOT in use, Work and then Home (Account 1, which has its own Sign in). Red before:
+    // the card said "Not signed in", offered Sign in and drew two empty meters.
+    for (const [inUse, idle] of [["1", "2"], ["2", "1"]]) {
+      const other = await open("dark", idleSignedIn(inUse, idle));
+      await sheet(other);
+      const card = `#accounts-sheet .acc-card[data-id="${idle}"]`;
+      await other.waitForSelector(card);
+      assertEqual(await text(other, `${card} .acc-pill`), "Signed in", `account ${idle} not in use: its pill`);
+      assertEqual(await text(other, `${card} .acc-note`), SIGNED_IN_NO_LIMITS, `account ${idle} not in use: its note`);
+      assertEqual(await other.locator(`${card} [data-act="sign-one"], ${card} [data-act="sign"]`).count(), 0, `account ${idle} not in use: no Sign in`);
+      assertEqual(await other.locator(`${card} .acc-meter`).count(), 0, `account ${idle} not in use: no empty meters`);
+      await other.close();
+    }
+    return "In use now, the signed-in sentence, no Sign in, no meters; not in use: Signed in, the same sentence, no Sign in, no meters";
   });
 
   await run.check("Use this one now: the cards trade places, Recent changes says so, Undo puts it back; a near-full account says when Rich switches again", async () => {
@@ -484,6 +554,8 @@ async function main() {
   // ---- every state, both themes: contrast, type size, fit, no dash ---------------------------
   const STATES = [
     ["menu-one", one(41), async p => { await menu(p); }],
+    ["signed-out", signedOut, sheet],
+    ["menu-signed-out", signedOut, async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["menu-near", one(86), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["one", one(86, 47), sheet],
     ["add", one(86, 47), async p => { await sheet(p); await p.click(".acc-slot"); await p.click("#acc-continue"); }],
@@ -494,6 +566,7 @@ async function main() {
     ["add-same", one(86, 47), async p => { await sheet(p); await p.click(".acc-slot"); await p.fill("#acc-nu", "Work"); await p.click("#acc-continue"); await p.click("#acc-open-signin"); await p.waitForSelector("#acc-try-again"); }, { signIn: ["same-account"] }],
     ["two", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click('[aria-label="Use Work now"]'); await p.waitForSelector(".acc-feedback"); }],
     ["remove", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click('[aria-label="Remove Work"]'); }],
+    ["idle-signed-in", idleSignedIn("1", "2"), sheet],
     ["switched", two([64, 99], [6, 4], { inUse: "2", homeGone: now + 2 * DAY, lastSwitch: { from: "1", to: "2", at: now - 3 * 60000, why: "weekly", used: 99 } }), sheet],
     ["both-near", two([71, 96], [18, 93]), sheet],
     ["moving", two([64, 99], [6, 4], { inUse: "2", working: { "1": ["team"], "2": ["rich"] } }), sheet],

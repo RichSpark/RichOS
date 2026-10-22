@@ -1151,6 +1151,16 @@ while True: time.sleep(.02)
             sentinel.kill()
             sentinel.wait()  # SIGKILL is certain; only the kernel's time is left
 
+    def test_a_release_candidate_requires_the_new_user_walk_too(self):
+        # Review rv-20261021T173525Z-f1f16a31-356b: only `build` wrote the requirement into the
+        # plan, so a `release` candidate skipped the walk and publish never asked for it.
+        r = self.runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("release")
+        plan = json.loads((self.root / "plan.json").read_text())
+        self.assertIs(plan.get("new_user_walk_required"), True)
+        self.assertNotIn("screen_suites_required", plan, "release keeps its own on-screen gate policy")
+
     def test_only_release_reaches_publisher(self):
         r = self.runner()
         r.perform("release")
@@ -1370,8 +1380,12 @@ while True: time.sleep(.02)
             "tag": "v1.2.0", "version": "1.2.0", "source_commit": source_commit or self.SOURCE}))
         r.env["RICHOS_NIGHTLY_RUN_ID"] = "20261019T120000Z-0000000f"
         r.vm_boot_proof = Mock(return_value=None)
+        r.new_user_walk = Mock(return_value=None)
         def completed(out):
-            info = {**self.CANDIDATE_INFO, **r.stable_plan.return_value[1],
+            # nightly.py copies the plan it was given into the candidate's info.
+            plan_file = r.stable_plan.return_value[0]
+            plan = json.loads(plan_file.read_text()) if plan_file.exists() else {}
+            info = {**self.CANDIDATE_INFO, **r.stable_plan.return_value[1], **plan,
                     "run_id": r.env["RICHOS_NIGHTLY_RUN_ID"], "channel": "stable"}
             out.mkdir(parents=True, exist_ok=True)
             (out / "candidate.json").write_text(json.dumps({"info": info}))
@@ -1434,9 +1448,13 @@ while True: time.sleep(.02)
         order = []
         r.command.side_effect = lambda *a, **k: order.append(str(a[2]))
         r.vm_boot_proof.side_effect = lambda run: order.append(f"boot {run}")
+        # And walked as a new user, as every new candidate is: the dead ends of 2026-10-21 were
+        # on stable 1.2.1 (review rv-20261021T173525Z-f1f16a31-356b).
+        r.new_user_walk.side_effect = lambda run, out, info: order.append(
+            f"walk {run} {info.get('new_user_walk_required')}")
         with contextlib.redirect_stdout(io.StringIO()):
             r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
-        self.assertEqual(order, ["build", "boot 20261019T120000Z-0000000f"])
+        self.assertEqual(order, ["build", "boot 20261019T120000Z-0000000f", "walk 20261019T120000Z-0000000f True"])
         pointer = json.loads(r.run_pointer("20261019T120000Z-0000000f").read_text())
         self.assertEqual(pointer["out"], str(r.state / "releases" / "v1.2.0"))
         # A boot that was not proven publishes nothing and asks for nothing.
@@ -1753,6 +1771,111 @@ while True: time.sleep(.02)
         with contextlib.redirect_stdout(io.StringIO()):
             publisher.perform("publish", run_id="fixture-run-id")
         self.assertEqual(publisher.command.call_args.args[2], "finish")
+
+    # ---- 2026-10-21: a new user's first run is a gate of its own -------------------------
+    def build_that_walks_as_a_new_user(self, steps):
+        """A build whose candidate carries the plan's `new_user_walk_required`, as nightly.py
+        copies the plan into it, and whose walk writes `steps` as its report."""
+        r, calls = self.build_that_takes_its_vm_proof("pass")
+        proof_and_build = r.command.side_effect
+
+        def fake_command(*args, **kwargs):
+            if str(args[1]).endswith("run-walk.py"):
+                calls.append((args, kwargs))
+                walk = Path(args[args.index("--out") + 1])
+                walk.mkdir(parents=True, exist_ok=True)
+                (walk / "report.json").write_text(json.dumps({
+                    "expect_sha": args[args.index("--expect-sha") + 1], "steps": steps,
+                    "complete": [s["step"] for s in steps] == list(m.NEW_USER_WALK_STEPS)}))
+                if any(s["outcome"] != "PASS" for s in steps):
+                    raise RuntimeError("python3 failed (exit 1); see the run log")
+                return
+            proof_and_build(*args, **kwargs)
+            if args[2] == "build":
+                plan = json.loads(Path(args[args.index("--plan") + 1]).read_text())
+                self.assertIs(plan.get("new_user_walk_required"), True, "a new build requires the new-user walk")
+                out = Path(args[args.index("--out") + 1])
+                candidate = json.loads((out / "candidate.json").read_text())
+                candidate["info"]["new_user_walk_required"] = True
+                (out / "candidate.json").write_text(json.dumps(candidate))
+        r.command = Mock(side_effect=fake_command)
+        return r, calls
+
+    def test_a_build_walks_its_candidate_as_a_new_user_after_the_boot_proof_and_publish_requires_it(self):
+        passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
+        r, calls = self.build_that_walks_as_a_new_user(passed)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            r.perform("build", no_host_screen=True)
+        order = [Path(str(a[1])).name for a, _ in calls if Path(str(a[1])).name in ("gui-proof-in-vm.sh", "run-walk.py")]
+        self.assertEqual(order, ["gui-proof-in-vm.sh", "run-walk.py"], "the walk follows the boot proof, one guest at a time")
+        args, kwargs = [(a, k) for a, k in calls if str(a[1]).endswith("run-walk.py")][0]
+        self.assertIn("--new-user", args)
+        self.assertEqual(Path(args[args.index("--bundle") + 1]).name,
+                         f"RichOS-{self.CANDIDATE_INFO['version']}-macos-aarch64.zip")
+        self.assertTrue(str(args[args.index("--") + 1]).endswith("new-user-walk.py"))
+        self.assertEqual(kwargs["env_extra"]["TESTVM_ROOT"], "/Volumes/E1TB/testvm") # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+        self.assertIn("New-user walk PASSED", buf.getvalue())
+        (self.root / "state" / "source").mkdir(parents=True, exist_ok=True)
+        publisher = self.runner()
+        publisher.command = Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            publisher.perform("publish", run_id="fixture-run-id")
+        self.assertEqual(publisher.command.call_args.args[2], "finish")
+
+    def test_a_walk_that_stopped_before_its_end_is_refused_however_its_steps_went(self):
+        # Review rv-20261021T163510Z-b612361c-0e62, finding 3: the walk rewrites report.json after
+        # every step, and publish accepted any nonempty all-PASS list, so a walk that stopped after
+        # `identity` published. Red before the gate required every step and the walk's own end.
+        r = self.runner()
+        info = {**self.CANDIDATE_INFO, "new_user_walk_required": True}
+        walk = r.new_user_walk_dir("fixture-run-id")
+        walk.mkdir(parents=True, exist_ok=True)
+        cases = (
+            ("identity only", [{"step": "identity", "outcome": "PASS"}], False),
+            ("every step, no recorded end", [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS], False),
+            ("a step missing, marked complete",
+             [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS if s != "accounts"], True),
+        )
+        for what, steps, complete in cases:
+            with self.subTest(what):
+                (walk / "report.json").write_text(json.dumps({"expect_sha": info["build_commit"], "steps": steps,
+                                                              **({"complete": True} if complete else {})}))
+                with self.assertRaisesRegex(ValueError, "did not walk to its end"):
+                    r.require_new_user_walk(info, "fixture-run-id")
+        (walk / "report.json").write_text(json.dumps({"expect_sha": info["build_commit"], "complete": True,
+            "steps": [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]}))
+        self.assertTrue(r.require_new_user_walk(info, "fixture-run-id")["complete"])
+
+    def test_the_gates_step_list_is_the_walks(self):
+        spec = importlib.util.spec_from_file_location(
+            "new_user_walk", Path(__file__).with_name("testvm") / "new-user-walk.py")
+        walk = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(walk)
+        self.assertEqual(list(m.NEW_USER_WALK_STEPS), walk.STEPS)
+
+    def test_a_new_user_walk_that_fails_fails_the_build_and_publish_refuses_the_candidate(self):
+        # The dead end a new user hit on 1.2.1, as the walk reports it.
+        steps = [{"step": "identity", "outcome": "PASS"}, {"step": "setup", "outcome": "PASS"},
+                 {"step": "signed-out", "outcome": "FAIL",
+                  "detail": "message 1: the turn ended as 'transient', not as \"not signed in\""}]
+        r, _ = self.build_that_walks_as_a_new_user(steps)
+        with contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaisesRegex(RuntimeError, "A NEW USER'S FIRST RUN OF IT FAILED"):
+            r.perform("build", no_host_screen=True)
+        (self.root / "state" / "source").mkdir(parents=True, exist_ok=True)
+        publisher = self.runner()
+        publisher.command = Mock()
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "signed-out: message 1"):
+            publisher.perform("publish", run_id="fixture-run-id")
+        publisher.command.assert_not_called()
+        # No walk at all is refused too; a candidate from before the requirement is not.
+        report = publisher.new_user_walk_dir("fixture-run-id") / "report.json"
+        report.unlink()
+        info = {**self.CANDIDATE_INFO, "new_user_walk_required": True}
+        with self.assertRaisesRegex(ValueError, "no new-user walk"):
+            publisher.require_new_user_walk(info, "fixture-run-id")
+        self.assertIsNone(publisher.require_new_user_walk(dict(self.CANDIDATE_INFO), "fixture-run-id"))
 
     def test_a_vm_proof_that_fails_fails_the_build_and_still_shows_the_candidate(self):
         r, _ = self.build_that_takes_its_vm_proof("fail:no-window")

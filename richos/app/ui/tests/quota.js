@@ -566,6 +566,25 @@ async function main() {
     assertEqual(await page.locator("#quota-policy-title").innerText(), "Automatic pause", "down to one account: round 14's sheet");
     await page.close();
   });
+  // Mid-job review rv-20261022T014956Z-56662dcd-dcc3, finding 1: the lane of an account Claude
+  // Code says is signed in, with no reading (signed in without limits, then a check that got no
+  // answer: quota.rs keeps `signedIn: true`), never offers Sign in or tells it to sign in.
+  // Red before: the lane offered "Sign in to Work" and, with no message, "Not read yet. Sign in, then refresh."
+  await run.check("a lane signed in without a reading offers no Sign in and never says to sign in", async () => {
+    for (const message of ["Claude Code did not answer just now.", null]) {
+      const q = twoAccounts();
+      Object.assign(q.accounts[1], { windows: [], checkedAt: null, signedIn: true, message });
+      const page = await open("dark", q, 100, null, true);
+      await enableTechnical(page); await page.click("#set-quota-open");
+      await page.waitForSelector('.quota-lane[data-id="2"]');
+      const lane = '.quota-lane[data-id="2"]';
+      assertEqual(await page.locator(`${lane} [aria-label="Sign in to Work"]`).count(), 0, `no Sign in (message ${message})`);
+      assertEqual(await page.locator(`${lane} .quota-lane-note`).innerText(),
+        message || "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show.");
+      assertEqual(await page.locator(`${lane} .quota-lane-remove`).count(), 1, "Remove stays");
+      await page.close();
+    }
+  });
   await run.check("round 16, the sheet after a switch and the hold when every account is used up", async () => {
     const switched = twoAccounts({ lastSwitch: { from: "1", to: "2", at: now - 4 * 60000, why: "fiveHour", used: 94 } });
     switched.accounts = switched.accounts.map(a => ({ ...a, inUse: a.id === "2", exhaustedUntil: a.id === "1" ? now + 2 * 3600000 : null }));

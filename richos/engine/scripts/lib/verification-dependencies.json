@@ -14987,12 +14987,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/engine/scripts/lib/proc_tree.py",
-          "sha256": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
           "path": "richos/engine/scripts/lib/operator_fences.py",
           "sha256": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
@@ -15000,14 +14994,14 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "cba87ed5ddb391098069d75405dbdeefe8a17883330a138bee02a5f964933bd9",
+          "sha256": "a09b35373397cbc7bf9932f53b99aeafe76d68204feccc6f68df2cf9dbbb3cb7",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/proof-run.py",
-          "sha256": "e1d2925c127e79ab8ed3c6ffce842fc99fd0b181de20308d588b054bcda00e10",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+          "path": "richos/app/scripts/lib/cargo_identity.py",
+          "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
+          "evidence": "Private-output dispatcher used by the bound app runner. Reads Cargo manifests only for its selected workspace or private fixture; fixture imports that do not enter main execute no Cargo command."
         },
         {
           "root": "repository",
@@ -15017,9 +15011,15 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/lib/cargo_identity.py",
-          "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
-          "evidence": "Private-output dispatcher used by the bound app runner. Reads Cargo manifests only for its selected workspace or private fixture; fixture imports that do not enter main execute no Cargo command."
+          "path": "richos/engine/scripts/lib/proc_tree.py",
+          "sha256": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/proof-run.py",
+          "sha256": "e1d2925c127e79ab8ed3c6ffce842fc99fd0b181de20308d588b054bcda00e10",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         }
       ]
     },
