@@ -251,6 +251,9 @@ fi
 # WHERE the command points is answered by richos_git_anchor and never here —
 # emitting a second answer is the divergent copy that put one hole in five
 # files.
+# dispatch-words: git
+#   (dispatch-pretooluse.sh skips this rule on a call that names none of these
+#   words: they are the words the filter below needs before it can do anything.)
 read -r -d '' _VG_CLASSIFIER <<'PYEOF' || true
 import json, os, re, shlex, sys
 
