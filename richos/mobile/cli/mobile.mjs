@@ -21,6 +21,7 @@ const usage = `Mobile development loop (JSON output; nonzero exit on failure)
   node richos/mobile/cli/mobile.mjs report artifact <private-report-profile.json>
   RICHOS_REPORT_APP_KEY_FILE=<0600 file> node richos/mobile/cli/mobile.mjs report app-identity <App ID> <owner/repository>
   RICHOS_REPORT_TOKEN_FILE=<0600 file> node richos/mobile/cli/mobile.mjs report create-database <account ID> <Worker name>
+  RICHOS_REPORT_TOKEN_FILE=<0600 file> node richos/mobile/cli/mobile.mjs report staff-access <account ID> <relay hostname> [staff email ...]
   RICHOS_REPORT_PROFILE=<profile.json> RICHOS_REPORT_TOKEN_FILE=<0600 file> RICHOS_REPORT_APP_KEY_FILE=<0600 file> node richos/mobile/cli/mobile.mjs report deploy
   RICHOS_REPORT_PROFILE=<profile.json> RICHOS_REPORT_TOKEN_FILE=<0600 file> node richos/mobile/cli/mobile.mjs report schema|pending
   RICHOS_REPORT_PROFILE=<profile.json> RICHOS_REPORT_TOKEN_FILE=<0600 file> node richos/mobile/cli/mobile.mjs report control off | control on '<operator>' <daily cap>

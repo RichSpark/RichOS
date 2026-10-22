@@ -188,6 +188,36 @@ export async function appIdentity(appId, repository, appKey, { fetch: fetchImpl 
   return { appId, botLogin: `${about.slug}[bot]`, installationId: String(installation.id), repository, permissions };
 }
 
+// The staff-only screenshot links: one Cloudflare Access application whose one path is the
+// image route, never the whole hostname (the app's own requests carry no sign-in), allowing only
+// the named staff emails, or the token owner's own email when none is named. Prints the team
+// domain and audience the profile needs. Re-running finds the same application and checks it.
+export const accessPath = hostname => `${hostname}/v1/reports/*/attachments/*`;
+export async function staffAccess(accountId, hostname, emails = [], { token, fetch: fetchImpl = fetch } = {}) {
+  if (!/^[a-f0-9]{32}$/.test(accountId || '') || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(hostname || '') || hostname.endsWith('.workers.dev')
+    || emails.some(e => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))) throw Error('Expected: staff-access <account ID> <relay hostname> [staff email ...]');
+  const api = cloudflare(accountId, token, fetchImpl);
+  const staff = emails.length ? emails : [await (async () => {
+    const response = await fetchImpl('https://api.cloudflare.com/client/v4/user', { redirect: 'error', headers: { Authorization: `Bearer ${token}` } });
+    const email = (await response.json().catch(() => null))?.result?.email;
+    if (!response.ok || !email) throw Error(`Name the staff emails: the token cannot read its owner's email (HTTP ${response.status})`);
+    return email;
+  })()];
+  const organization = await api('GET', '/access/organizations');
+  const team = `https://${organization?.auth_domain || ''}`;
+  if (!/^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/.test(team)) throw Error('Cloudflare Zero Trust has no team domain on this account yet');
+  const domain = accessPath(hostname), policy = { name: 'RichOS support staff', decision: 'allow', precedence: 1, include: staff.map(email => ({ email: { email } })) };
+  const existing = ((await api('GET', '/access/apps')) || []).find(app => app.domain === domain);
+  const app = existing || await api('POST', '/access/apps', { type: 'self_hosted', name: 'RichOS report screenshots', domain,
+    destinations: [{ type: 'public', uri: domain }], app_launcher_visible: false, session_duration: '24h', policies: [policy] });
+  const readback = await api('GET', `/access/apps/${app.id}`);
+  const allowed = (readback.policies || []).filter(p => p.decision === 'allow').flatMap(p => (p.include || []).map(rule => rule?.email?.email)).sort();
+  if (readback.domain !== domain || !/^[a-f0-9]{64}$/.test(readback.aud || '') || JSON.stringify(allowed) !== JSON.stringify([...staff].sort())
+    || (readback.policies || []).some(p => p.decision !== 'allow'))
+    throw Error(`The Access application for ${domain} does not allow exactly the named staff`);
+  return { accessTeamDomain: team, accessAud: readback.aud, path: domain, staff: allowed, created: !existing };
+}
+
 // The relay's own private R2 bucket for screenshots (public access stays off by default).
 export async function createBucket(accountId, bucket, { token, fetch: fetchImpl = fetch } = {}) {
   if (!/^[a-f0-9]{32}$/.test(accountId || '') || !/^richos-report[a-z0-9-]*$/.test(bucket || '')) throw Error('Expected: create-bucket <account ID> <bucket name>');
@@ -220,6 +250,9 @@ export async function deploy(profile, { token, appKey, fetch: fetchImpl = fetch 
   await api('PUT', `/workers/scripts/${profile.worker}/secrets`, { name: 'GITHUB_APP_PRIVATE_KEY', text: appKey, type: 'secret_text' });
   await api('POST', `/workers/scripts/${profile.worker}/subdomain`, artifact.subdomain);
   await api('PUT', `/workers/scripts/${profile.worker}/schedules`, artifact.schedules);
+  // A relay on its own name gets it as a Custom Domain (Cloudflare makes the DNS record and certificate).
+  if (!profile.hostname.endsWith('.workers.dev'))
+    await api('PUT', '/workers/domains', { hostname: profile.hostname, service: profile.worker, zone_name: profile.hostname.split('.').slice(-2).join('.') });
   const settings = await api('GET', `/workers/scripts/${profile.worker}/settings`);
   const bindings = (settings.bindings || []).map(b => `${b.name}:${b.type}`).sort();
   const expected = [...artifact.metadata.bindings.map(b => `${b.name}:${b.type}`), 'GITHUB_APP_PRIVATE_KEY:secret_text'].sort();
@@ -242,6 +275,7 @@ export async function command(action, file, rest = []) {
   }
   if (action === 'create-bucket') return createBucket(file, rest[0], { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE) });
   if (action === 'create-database') return createDatabase(file, rest[0], { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE) });
+  if (action === 'staff-access') return staffAccess(file, rest[0], rest.slice(1), { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE) });
   const appKey = () => {
     const keyFile = process.env.RICHOS_REPORT_APP_KEY_FILE;
     if (!keyFile || (statSync(keyFile).mode & 0o077) !== 0) throw Error('Set RICHOS_REPORT_APP_KEY_FILE to the private (mode 0600) GitHub App key file');

@@ -379,6 +379,77 @@ test('deploy applies the schema, uploads the exact modules, installs the key as 
   await assert.rejects(deploy({ ...profile, hostname: 'richos-report-test.other.workers.dev' }, { token: 't', appKey: key, fetch: fake }), /workers\.dev hostname is/);
 });
 
+test('a production deploy attaches report.richos.ceo as a Custom Domain before its health check', async () => {
+  const { deploy, reportArtifact, PRODUCTION } = await import('../cli/report.mjs');
+  const { appKey } = await import('../dev/report-fake-github.mjs');
+  const key = (await appKey()).pkcs1;
+  const profile = { stage: 'production', ...PRODUCTION, bucket: 'richos-report', accountId: 'a'.repeat(32), databaseId: '11111111-2222-3333-4444-555555555555',
+    appId: '9', installationId: '8', botLogin: 'richos-reports[bot]', label: 'richdoctor', accessTeamDomain: 'https://richos.cloudflareaccess.com', accessAud: 'b'.repeat(64) };
+  const artifact = reportArtifact(profile), seen = [];
+  let domain = null, subdomain;
+  const ok = result => new Response(JSON.stringify({ success: true, result }));
+  const fake = async (url, init = {}) => {
+    const path = url.replace(`https://api.cloudflare.com/client/v4/accounts/${profile.accountId}`, ''), method = init.method || 'GET';
+    seen.push(`${method} ${path.startsWith('/d1/') ? '/d1/query' : path}`);
+    if (path.endsWith('/query')) {
+      const { sql } = JSON.parse(init.body);
+      return ok([{ success: true, results: /sqlite_master/.test(sql) ? [{ name: 'attachments' }, { name: 'control' }, { name: 'daily' }, { name: 'reports' }] : [], meta: { changes: 0 } }]);
+    }
+    if (method === 'PUT' && path === '/workers/domains') { domain = JSON.parse(init.body); return ok({ id: 'domain-1' }); }
+    if (path.endsWith('/subdomain')) { subdomain = JSON.parse(init.body); return ok({}); }
+    if (path.endsWith('/settings')) return ok({ bindings: [...artifact.metadata.bindings, { name: 'GITHUB_APP_PRIVATE_KEY', type: 'secret_text' }], logpush: false, tail_consumers: [] });
+    if (url === 'https://report.richos.ceo/v1/health') return domain ? new Response(JSON.stringify({ ok: true, service: 'richos-report', protocol: 2, accepting: false })) : new Response('', { status: 522 });
+    if (method === 'PUT' || method === 'POST') return ok({ id: 'deployment-1' });
+    return new Response('{}', { status: 404 });
+  };
+  const result = await deploy(profile, { token: 't', appKey: key, fetch: fake });
+  assert.deepEqual(domain, { hostname: 'report.richos.ceo', service: 'richos-report', zone_name: 'richos.ceo' });
+  assert(seen.indexOf('PUT /workers/domains') < seen.indexOf('GET https://report.richos.ceo/v1/health'));
+  assert(!seen.includes('GET /workers/subdomain'), 'production is never served on workers.dev');
+  assert.deepEqual(subdomain, { enabled: false, previews_enabled: false });
+  assert(result.bindings.includes('ACCESS_AUD:plain_text') && result.bindings.includes('ACCESS_TEAM_DOMAIN:plain_text'));
+});
+
+test('staff-access guards only the screenshot links, for exactly the named staff, and finds its application again', async () => {
+  const { staffAccess, accessPath } = await import('../cli/report.mjs');
+  const account = 'a'.repeat(32), apps = [], calls = [];
+  let team = 'richos.cloudflareaccess.com', owner = 'owner@example.com', drop = false;
+  const ok = result => new Response(JSON.stringify({ success: true, result }));
+  const fake = async (url, init = {}) => {
+    const method = init.method || 'GET', path = url.replace(`https://api.cloudflare.com/client/v4/accounts/${account}`, '');
+    calls.push(`${method} ${path}`);
+    if (url === 'https://api.cloudflare.com/client/v4/user') return owner ? ok({ email: owner }) : new Response('{"success":false}', { status: 403 });
+    if (path === '/access/organizations') return ok({ auth_domain: team });
+    if (path === '/access/apps' && method === 'GET') return ok(apps);
+    if (path === '/access/apps' && method === 'POST') {
+      const body = JSON.parse(init.body), app = { id: 'app-' + (apps.length + 1), aud: 'c'.repeat(64), ...body, policies: body.policies.map(p => ({ id: 'p1', ...p })) };
+      apps.push(app); return ok(app);
+    }
+    const app = apps.find(a => path === `/access/apps/${a.id}`);
+    if (app) return ok(drop ? { ...app, policies: [] } : app);
+    return new Response('{}', { status: 404 });
+  };
+  await assert.rejects(staffAccess(account, 'richos-report-test.sub.workers.dev', [], { token: 't', fetch: fake }), /Expected/);
+  const first = await staffAccess(account, 'report.richos.ceo', ['staff@example.com', 'second@example.com'], { token: 't', fetch: fake });
+  assert.deepEqual(first, { accessTeamDomain: 'https://richos.cloudflareaccess.com', accessAud: 'c'.repeat(64), path: 'report.richos.ceo/v1/reports/*/attachments/*',
+    staff: ['second@example.com', 'staff@example.com'], created: true });
+  assert.equal(apps[0].domain, accessPath('report.richos.ceo'), 'never the whole hostname: the app itself signs in to nothing');
+  assert.deepEqual(apps[0].destinations, [{ type: 'public', uri: 'report.richos.ceo/v1/reports/*/attachments/*' }]);
+  // Run again: the same application is found and checked, nothing new is made.
+  assert.equal((await staffAccess(account, 'report.richos.ceo', ['second@example.com', 'staff@example.com'], { token: 't', fetch: fake })).created, false);
+  assert.equal(apps.length, 1);
+  await assert.rejects(staffAccess(account, 'report.richos.ceo', ['other@example.com'], { token: 't', fetch: fake }), /exactly the named staff/);
+  drop = true;
+  await assert.rejects(staffAccess(account, 'report.richos.ceo', ['staff@example.com', 'second@example.com'], { token: 't', fetch: fake }), /exactly the named staff/);
+  drop = false; apps.length = 0;
+  // No staff named: the token owner's own email.
+  assert.deepEqual((await staffAccess(account, 'report.richos.ceo', [], { token: 't', fetch: fake })).staff, ['owner@example.com']);
+  owner = null; apps.length = 0;
+  await assert.rejects(staffAccess(account, 'report.richos.ceo', [], { token: 't', fetch: fake }), /Name the staff emails/);
+  team = '';
+  await assert.rejects(staffAccess(account, 'report.richos.ceo', ['staff@example.com'], { token: 't', fetch: fake }), /no team domain/);
+});
+
 test('app-identity reads the bot login and installation from GitHub and refuses a broader App', async t => {
   const f = await fixture(t), { appIdentity } = await import('../cli/report.mjs');
   const fetch = (url, init) => f.github.fetch(url, init);
