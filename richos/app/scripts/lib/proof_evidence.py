@@ -2337,7 +2337,7 @@ def run_environment(run):
     which replace the caller's PATH among others). So of the names a whole-checkout identity
     binds, the caller held exactly those every whole-checkout pass holds (a name some pass lacks
     was set for other checks), each with its most common value among the files of checks run
-    outside the nightly's conditions. 20261022T131701Z-vjaoaa1d: 44 of its 54 whole-checkout
+    outside the nightly's conditions. 20261022T131701Z-vjaoaa1d: 23 of its 33 whole-checkout
     passes ran under them, with the build's PATH; the caller's PATH is the one the other 10 hold.
     Names no such identity binds come from the run's own file. Never a verdict: every input is
     still read under it, and a value that is not the run's only makes its passes read changed."""
@@ -2403,22 +2403,36 @@ def reuse(previous, items, record, exact=True):
         identity = record.identities[item.label]
         seat = getattr(record, "seat", None)
         read_seat = seat(item, snapshot) if seat is not None and not exact else None
-        reason = evidence_gap(item.label, old, identity, plan, exact, record.source, read_seat)
         as_recorded, by_record = getattr(record, "as_recorded", None), False
+        # A pass once accepted under a recorded environment is judged ever after by the identity
+        # and environment that produced it, which its provenance carries, never by the identity
+        # the accepting run saved (review rv-20261022T143750Z-fba13982-f9d7 #1: reused through a
+        # land, a pass whose author's tool had since changed was taken without reading it again).
+        produced = old.get("provenance") if isinstance(old.get("provenance"), dict) else None
+        produced = produced if produced and isinstance(produced.get("recorded"), dict) else None
+        judged = dict(old, input=produced["input"]) if produced else old
+        if produced:
+            reason = "made under the environment of the run that produced it"
+        else:
+            reason = evidence_gap(item.label, old, identity, plan, exact, record.source, read_seat)
         if reason and as_recorded is not None and not identity.get("fresh") and old.get("state") == "passed":
-            if recorded is _ABSENT:
-                recorded = run_environment(previous)
-            if recorded:
+            if produced:
+                environment, root = produced["recorded"], produced.get("root")
+            else:
+                if recorded is _ABSENT:
+                    recorded = run_environment(previous)
+                environment, root = recorded, plan["root"]
+            if environment and root:
                 # RECORDED ENVIRONMENT: the pass is judged as the run that made it started its checks.
                 try:
-                    identity, read_seat = as_recorded(item, recorded, plan["root"], snapshot)
+                    identity, read_seat = as_recorded(item, environment, root, snapshot)
                 except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
                     reason += "; unreadable under the environment its run recorded: %s" % exc
                 else:
-                    again = evidence_gap(item.label, old, identity, plan, exact, record.source,
+                    again = evidence_gap(item.label, judged, identity, plan, exact, record.source,
                                          read_seat if not exact else None)
                     reason, by_record = again and again + " (read under the environment its run recorded)", not again
-        elsewhere = reason is None and made_elsewhere(old.get("input"), identity)
+        elsewhere = reason is None and made_elsewhere(judged.get("input"), identity)
         if reason is None:
             try:
                 if file_digest(old["log"]) != old["log_sha256"]:
@@ -2438,15 +2452,16 @@ def reuse(previous, items, record, exact=True):
                 item.state, item.rc, item.log = "passed", 0, str(copied)
                 item.provenance = {"run": str(previous), "source": old["source"],
                                    "receipt": old.get("receipt"), "log_sha256": old["log_sha256"],
-                                   "input": old["input"], "earlier": old.get("provenance")}
+                                   "input": judged["input"], "earlier": old.get("provenance")}
                 if elsewhere:
-                    item.provenance["seat"] = old["input"]["checkout"]
+                    item.provenance["seat"] = judged["input"]["checkout"]
                 if by_record:
-                    # What verify_target_receipts reads again for itself.
-                    item.provenance["environment"] = "recorded"
+                    # The producing identity (`input`), environment and checkout, carried on to
+                    # every later reuse and read again by verify_target_receipts.
+                    item.provenance.update(recorded=environment, root=root)
                 item.reused_from = str(previous)
                 item.notes.append("validated evidence reused from " + str(previous) + (
-                    " (made in %s, where it still stands, on the same content and installs)" % old["input"]["checkout"]
+                    " (made in %s, where it still stands, on the same content and installs)" % judged["input"]["checkout"]
                     if elsewhere else "") + (" (read under the environment its run recorded)" if by_record else ""))
                 record.save(item, record.source)
             except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -2546,13 +2561,12 @@ def verify_target_receipts(directory, rows, root):
             # A pass reused under the environment its run recorded (THE RECORDED ENVIRONMENT):
             # read again here, under that environment, exactly as reuse() read it.
             recorded = False
-            if (provenance and provenance.get("environment") == "recorded" and not elsewhere
+            if (provenance and isinstance(provenance.get("recorded"), dict) and not elsewhere
                     and hasattr(runner, "identity_as_recorded")):
                 try:
-                    theirs = run_environment(provenance["run"])
-                    again, _seat = runner.identity_as_recorded(item, theirs, read_plan(provenance["run"])["root"],
+                    again, _seat = runner.identity_as_recorded(item, provenance["recorded"], provenance["root"],
                         snapshot, SimpleNamespace(**identity["settings"]), directory)
-                    recorded = bool(theirs) and stands_in(provenance.get("input"), again)
+                    recorded = stands_in(provenance.get("input"), again)
                 except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
                     recorded = False
             if (identity.get("fresh") or not provenance

@@ -1081,13 +1081,72 @@ class Evidence(unittest.TestCase):
         self.assertIsNone(rows["fixture-sh"]["reused_from"], detail)
         self.assertIn("(read under the environment its run recorded)", detail)
 
+    def test_a_pass_reused_under_a_recorded_environment_is_judged_by_its_producing_inputs_ever_after(self):
+        """Review rv-20261022T143750Z-fba13982-f9d7 #1, its fixture: a land reused the author's
+        pass under the author's recorded environment and saved its own input identity; the
+        author's tool then changed (it now fails). Reusing the author's run executed the check,
+        but reusing the land's run passed it: the producing inputs were never read again. A pass
+        accepted that way carries the identity and environment that produced it, and every later
+        reuse is judged against those, through any number of runs."""
+        top = Path(self.tmp.name)
+        app = self.root / "richos/app/scripts"
+        app.mkdir(parents=True)
+        recipe = {"paths": [], "tools": ["fixture-tool"], "environment": ["PATH"],
+                  "external": [], "qualification": "qualification.json"}
+        self.qualification("Fixture executes only fixture-tool.\n", tools=["fixture-tool"], environment=["PATH"])
+        evidence.atomic(app / "proof-inputs.json", {"schema": 1, "checks": {"fixture-tool": recipe}})
+        for name in ("author-tools", "lead-tools"):
+            (top / name).mkdir()
+            (top / name / "fixture-tool").write_text("#!/bin/sh\nprintf 'original tool passed\\n'\nexit 0\n")
+            (top / name / "fixture-tool").chmod(0o755)
+        author_env, lead_env = {"PATH": str(top / "author-tools")}, {"PATH": str(top / "lead-tools")}
+        source, args = dict(self.source), SimpleNamespace()
+
+        def attempt(name):
+            run = top / name
+            run.mkdir()
+            item = runner.Item("fixture-tool", str(self.root), ["fixture-tool"])
+            identity = lambda item: runner.input_identity(item, args, str(run))
+            record = evidence.Record(str(self.root), run, [item], source, {item.label: identity(item)},
+                current_identity=identity, environment=runner.recorded_environment(),
+                as_recorded=lambda item, env, seat, snapshot: runner.identity_as_recorded(
+                    item, env, seat, snapshot, args, str(run)))
+            self.addCleanup(record.close)
+            return item, record
+
+        with patch.object(runner, "ROOT", str(self.root)), patch.dict(os.environ, author_env, clear=True):
+            author, original = attempt("author")
+            author.log = str(original.logdir / "execution.log")
+            Path(author.log).write_text("original tool passed\n")
+            author.state, author.rc = "passed", 0
+            original.save(author, source)
+        with patch.object(runner, "ROOT", str(self.root)), patch.dict(os.environ, lead_env, clear=True):
+            gate, land = attempt("land")
+            evidence.reuse(original.logdir, [gate], land, exact=False)
+            land.finalize([gate])
+            self.assertEqual(gate.state, "passed", gate.notes)
+            # Chained while nothing changed: still reused, through the land and through a second run.
+            again, retry = attempt("retry")
+            evidence.reuse(land.logdir, [again], retry, exact=False)
+            retry.finalize([again])
+            self.assertEqual(again.state, "passed", again.notes)
+            (top / "author-tools/fixture-tool").write_text("#!/bin/sh\nprintf 'upgraded tool fails\\n'\nexit 1\n")
+            direct, control = attempt("direct")
+            evidence.reuse(original.logdir, [direct], control, exact=False)
+            self.assertEqual(direct.state, "waiting", direct.notes)
+            for name, run in (("push", land.logdir), ("push-again", retry.logdir)):
+                pushed, second = attempt(name)
+                evidence.reuse(run, [pushed], second, exact=False)
+                self.assertEqual(pushed.state, "waiting", "a pass whose producing tool changed was reused "
+                                 "through %s\n%s" % (run.name, pushed.notes))
+
     def test_a_run_saved_before_it_recorded_its_environment_is_read_under_the_one_its_rerun_files_hold(self):
         """The run that had to land (20261022T131701Z-vjaoaa1d) predates the recorded environment:
         its plan has none, and the one check it executed, `cargo --bin richos-tauri`, has the only
         rerun file in it; its other passes were reused from an earlier run, whose rerun files hold
         theirs. A rerun file is one check's whole environment, the caller's plus what the runner set
         for that check: the Cargo profile settings, and for a suite a nightly gate runs, the build's
-        PATH and cache root. 44 of its 54 whole-checkout passes were such suites, so the PATH most
+        PATH and cache root. 23 of its 33 whole-checkout passes were such suites, so the PATH most
         passes saved is the build's, not the caller's: the caller's is what every whole-checkout
         pass holds, each value the one the checks outside the nightly's conditions held."""
         d = evidence.digest
