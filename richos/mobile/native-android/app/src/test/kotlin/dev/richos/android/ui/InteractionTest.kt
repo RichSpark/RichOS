@@ -21,6 +21,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import dev.richos.android.core.Action
+import dev.richos.android.core.RichFile
 import dev.richos.android.core.Sheet
 import dev.richos.android.core.Theme
 import dev.richos.android.core.UpdateNotice
@@ -269,6 +270,25 @@ class InteractionTest {
         // The sheet covers the middle of the scrim; press the scrim itself, as TalkBack would.
         compose.onNodeWithContentDescription("Close").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         assertEquals(Action.CloseSheet, actions.last())
+    }
+
+    /**
+     * Found on the Honor: after a send the keyboard stayed up, and a tapped file card opened its
+     * viewer squeezed above it. The tap closes the keyboard, as the Settings button does.
+     */
+    @Test
+    fun `tapping a file from Rich closes the keyboard before its viewer opens`() {
+        val idle = screen("comp-idle")
+        val file = Row(
+            id = "r-file", threadId = "general", cursor = 202609220834, role = "rich", kind = "file",
+            createdAt = "2026-09-22T08:34:00.000Z",
+            file = RichFile(id = "f-lease", name = "Lease amendment.pdf", ext = "PDF", meta = "PDF · 184 KB"),
+        )
+        show(idle.copy(app = idle.app.copy(messages = idle.app.messages + file)))
+        compose.onNodeWithTag("message-field").performClick().assertIsFocused()
+        compose.onNodeWithTag("rich-file").performScrollTo().performClick()
+        compose.onNodeWithTag("message-field").assertIsNotFocused()
+        assertEquals(Action.OpenRichFile("f-lease"), actions.last())
     }
 
     @Test
