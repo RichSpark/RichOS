@@ -33,9 +33,10 @@ export function footerMatches(line, reportId) {
   return /^\d{1,4}\.\d{1,4}(\.\d{1,4})?$/.test(line.slice(FOOTER_PREFIX.length, line.length - tail.length));
 }
 export const hasFooterLine = (body, reportId) => String(body || '').replace(/\r\n/g, '\n').split('\n').some(line => footerMatches(line, reportId));
-// The lines a report with screenshots carries just before its footer. The links open only for staff.
-export const attachmentLines = (origin, reportId, count) => count ? [`Screenshots shared privately with RichOS support: ${count}`,
-  ...Array.from({ length: count }, (_, i) => `Screenshot ${i + 1} (RichOS support staff only): ${origin}/v1/reports/${reportId}/attachments/${i + 1}`)] : [];
+// The lines a report with screenshots carries just before its footer, in the CEO-approved wording
+// (richos-hq design round 40, README section 4). The links open only for staff.
+export const attachmentLines = (origin, reportId, count) => count ? [`Screenshots: ${count}, shared privately with RichOS support (staff sign-in required)`,
+  ...Array.from({ length: count }, (_, i) => `${i + 1}. ${origin}/v1/reports/${reportId}/attachments/${i + 1}`)] : [];
 
 const schemaError = detail => ({ status: 400, state: 'rejected', reason: 'schema', detail });
 const sizeError = detail => ({ status: 413, state: 'rejected', reason: 'size', detail });

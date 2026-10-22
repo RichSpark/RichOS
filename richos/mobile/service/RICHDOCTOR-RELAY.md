@@ -35,7 +35,7 @@ The receipt secret never appears in a URL, the issue or a log.
 | `body` | at most 60,000 UTF-8 bytes; no control characters except newline and tab |
 | `manifest` | 0 to 10 items `{"attachment_id": "n", "bytes", "filename": "screenshot-n.png" or ".jpg", "height", "media_type": "image/png" or "image/jpeg", "order": n, "sha256", "width"}`, n = 1..k in order. Each at most 5 MiB (5,242,880 bytes) and 40 megapixels, together at most 25 MiB |
 
-When k ≥ 1, the lines just before the footer are exactly `Screenshots shared privately with RichOS support: k` and, for each n, `Screenshot n (RichOS support staff only): <relay origin>/v1/reports/<report_id>/attachments/n`. The origin is the one the client posts to. The client persists the ID, receipt, exact text and exact image bytes before its first request.
+When k ≥ 1, the lines just before the footer are exactly `Screenshots: k, shared privately with RichOS support (staff sign-in required)` and, for each n, `n. <relay origin>/v1/reports/<report_id>/attachments/n` (the CEO-approved wording, design round 40). The origin is the one the client posts to. The client persists the ID, receipt, exact text and exact image bytes before its first request.
 
 ## Replies
 

@@ -45,7 +45,9 @@ test('register, upload, complete: one issue with every approved screenshot, link
   assert.equal(reply.body.images_expire_at, new Date(f.now() + 365 * DAY).toISOString());
   const [issue] = f.github.created();
   assert.equal(issue.body, payload.body, 'the exact approved words, links included');
-  assert(issue.body.includes(`Screenshot 2 (RichOS support staff only): ${f.origin}/v1/reports/${payload.report_id}/attachments/2`));
+  assert(issue.body.endsWith(['Screenshots: 2, shared privately with RichOS support (staff sign-in required)',
+    `1. ${f.origin}/v1/reports/${payload.report_id}/attachments/1`, `2. ${f.origin}/v1/reports/${payload.report_id}/attachments/2`,
+    `Sent with RichDoctor 1.0 \u00B7 Report ID ${payload.report_id}`].join('\n')), 'the round 40 wording, byte for byte');
   assert.equal(f.posts(), 1);
   // Repeats change nothing: complete, register and upload all answer delivered.
   for (const again of [() => f.complete(payload.report_id, payload.receipt_secret), () => f.create(payload), () => f.upload(payload, 1)])
@@ -113,8 +115,8 @@ test('uploads accept only the approved bytes in the shared profile; the manifest
 test('the screenshot lines before the footer must be exactly the generated ones', async t => {
   const f = await fixture(t), good = await f.report({}, ['accept-rgb.png']);
   const { contentHash } = await import('../service/report/checks.mjs');
-  for (const change of [l => l.replace('attachments/1', 'attachments/2'), l => l.replace(f.origin, 'https://evil.example'), l => l.replace(': 1', ': 2')]) {
-    const lines = good.body.split('\n'), at = lines.findIndex(l => l.startsWith('Screenshot'));
+  for (const change of [l => l.replace('attachments/1', 'attachments/2'), l => l.replace(f.origin, 'https://evil.example'), l => l.replace('Screenshots: 1', 'Screenshots: 2'), l => l.replace('(staff sign-in required)', '')]) {
+    const lines = good.body.split('\n'), at = lines.findIndex(l => l.startsWith('Screenshots:'));
     const changed = { ...good, body: lines.map((l, i) => (i === at || i === at + 1) ? change(l) : l).join('\n') };
     changed.content_sha256 = await contentHash(changed.title, changed.body, changed.manifest);
     const r = await f.answer(await f.create(changed));
