@@ -91,3 +91,48 @@ CPU-s, about 40 s); every scan after it is warm.
 `agent_hold.py wait` printed results of earlier, already finished or refused calls
 again as `TASK refused` (seen in this run, as Hank saw in his), so an agent waiting
 on a running command reads stale errors instead of that command's state.
+
+## Second round: Hank's after-measurement (2026-10-22, `cc/zach-opus-hookcost5`)
+
+Hank measured the Mac again with the four fixes above installed, "The Mac's CPU after the
+four fixes", kept in the private record (commit `e3a94991e` there; it is not part of this
+repository). In his busy
+window (02:03-02:08Z, 96.6% busy) four kinds of work that is not real work remained. This
+branch takes all four, one commit each. Every number below was measured on this branch by
+driving its code directly, with own plus child CPU from `getrusage` or `/usr/bin/time`.
+
+| # | What burned the CPU | Fix | Measured before | Measured after | Proof of same decisions |
+|---|---|---|---|---|---|
+| e | An engineer's handover `proof-run.py` left `RICHOS_MUTATION_PASSES` and `RICHOS_FOURTEEN_MUTANTS` unset, so every suite ran its own mutation harness (22.3% of the Mac in Hank's window) | `runner_environment()` gives an unset name the merge gate's `0`; a value the caller set is kept, so both nightlies (`1`) still run every pass | `release-land-leases.test.sh`, switches unset: 30.6 CPU-s (13.73 user + 16.88 sys) | the gate's switch: 5.5 CPU-s (3.05 + 2.44); the harness prints NOT RUN | `proof-evidence.test.py`: new test red on HEAD, green here (unset gives `0`, `1` is kept, a check gets `0`); the stands-in test still reuses an author run made with the passes on |
+| f | Every supervisor tick started a setuid `ps -ax -o pid=,ppid=,pgid=` (12.4% at 20 supervisors) | `process_rows()` reads the same rows from one `sysctl(KERN_PROC_ALL)` in-process, checked against its own row, `ps` only as a fallback; the native birth check of every member is unchanged | one `TrackedTree.refresh()`, 300 ticks: 13.58 ms CPU a tick, 6.8% of one core at 5 ticks/s | 0.48 ms a tick, 0.2% of one core | `proc_tree_pause.test.py`: new test red on HEAD (it saw the `ps -ax`), green here; the kernel rows equal `ps`'s for this process, a child and pid 1; the other 7 cases unchanged |
+| g1 | `notice-inflight-acks.sh` asked git the same questions about all 50 richos worktrees at every turn end | answers about two full commit ids are kept in the repository's git directory (`richos-inflight-answers.json`) and reused; a failed question is never kept | one assessment of the live repository: 16.42 CPU-s | 14.37 CPU-s on the first turn after a land, then 0.25 and 0.22 | verdicts identical before and after (30 CLEAN-LANDED, 2 CLEAN-NOT-BEHIND, 18 OWED-NO-NOTICE); `inflight-gaps.test.py` cases 7-9, case 7 red on HEAD |
+| g2 | `notice-waiver-repetition.py` re-read every engine script and re-clustered every ledger at every turn end | identical token sets are linked once; the source scan and each ledger's analysis are remembered while every file read is unchanged | the lead's seat: 7.18 CPU-s (7.04 + 0.14) | 1.38 CPU-s cold, 0.03 CPU-s warm | the whole `--json` report (190 KB) byte-identical to HEAD's, taken back to back; `waiver-repetition.test.sh` 36/36 with new case 14b, red on HEAD |
+| h | The mutation pool's throttle slept 0.05 s and recounted, starting a `sleep` plus a process per slot each time | every worker writes one byte to the pool's FIFO after its marker; the throttle blocks reading it, giving up after 1 s (a killed worker writes nothing) and recounting with builtins only | 12 mutants that each sleep 1.5 s, 2 at a time, `/bin/bash` 3.2: 1.67 CPU-s (0.53 user + 1.14 sys), wall 9.6 s | 0.46 CPU-s (0.19 + 0.27), wall 9.5 s; almost all of what is left is the twelve workers' own subshells and sleeps | `mutation-pool.test.sh` 22/22, new P12 red on HEAD: with a logging `sleep` first on PATH the throttle itself starts none; P3c (a SIGKILLed worker frees its slot) unchanged |
+
+Not done as Hank wrote it and why:
+
+- **(f)** He proposed one process-table read shared by a run's supervisors. In-process the
+  read costs 0.48 ms a tick, so 20 supervisors at five ticks a second spend about 0.05 of
+  a core; sharing it would need a file and its own staleness rules to save that. Not built.
+- **(g1)** He proposed re-checking only worktrees with an open notice. The same notice also
+  says NEVER TOLD for live worktrees that are owed a notice and have none (18 of 50 in the
+  measurement), which that would have dropped. The cost was in the git questions, so that
+  is where it was taken out; the decisions are the ones it made before.
+- **(e)** The merge check also drops the two engine units that are mutation passes in
+  themselves (`operator-fences-mutation.test.sh`, `scratch-reaper.test.sh`); a handover run
+  that selects one still runs it, as before.
+
+Commands (all re-runnable from the branch):
+
+- (e) `release-land-leases.test.sh` under `/usr/bin/time -l` through `testvm/reserve.py`,
+  once with both switches unset and once with both `0`.
+- (f) `TrackedTree(child).refresh()` 300 times for one sleeping child, HEAD's
+  `proc_tree.py` against this branch's.
+- (g1) `inflight.assess(<richos>, None, <teams dir>, 30)` under `getrusage`, the same
+  function before and after, then twice more warm.
+- (g2) `notice-waiver-repetition.py --engine-root <branch engine> --entity-root
+  <the lead's repository> --hook-summary` under `/usr/bin/time -p`, HEAD's copy and this branch's.
+- (h) a `/bin/bash` script that sources `stopwatch.sh` and each copy of `mutation-pool.sh` (no `worker_tokens.py` beside it, so no leases run), submits 12 mutants of `sleep 1.5` at degree 2 and drains, under `/usr/bin/time -p`.
+
+The live Mac-wide number after the land is Rich's, once the hooks are installed:
+`python3 richos/engine/scripts/host-busy-window.py 300`.
