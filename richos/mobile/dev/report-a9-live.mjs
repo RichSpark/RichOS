@@ -4,8 +4,8 @@
 //   RICHOS_REPORT_PROFILE=<test profile.json> RICHOS_REPORT_TOKEN_FILE=<0600 D1 token file> \
 //     node richos/mobile/dev/report-a9-live.mjs
 //
-// Optional RICHOS_REPORT_A9_GITHUB_TOKEN_FILE (0600) is a read-only token for a private test
-// repository's issue listing. What real GitHub cannot be made to do (lose an answer after
+// A private test repository is read with RICHOS_REPORT_A9_GITHUB_TOKEN_FILE (0600, read-only) or,
+// given RICHOS_REPORT_APP_KEY_FILE, a short-lived token of the test App itself. What real GitHub cannot be made to do (lose an answer after
 // creating, a relay restart mid-request) is proven in workerd by test/report-relay-runtime.test.js;
 // this run proves the same rules end to end on the real service: one issue per report, exact
 // words, replay, conflict, a client gone after acceptance, the size limit, the cap and the switch.
@@ -25,14 +25,23 @@ export function report({ title = 'RichDoctor A9 live test: harmless', body, id =
     app_version: '1.0.0', approved_at: Date.now(), title, body };
 }
 
-export async function run(profile, { token, githubToken, fetchImpl = fetch } = {}) {
+export async function run(profile, { token, githubToken, fetchImpl = fetch, settleMs = 60_000 } = {}) {
   checkProfile(profile);
   if (profile.stage !== 'test') throw Error('The live A9 run uses a test relay and test repository only');
   const base = `https://${profile.hostname}`, query = d1(profile, token, fetchImpl), started = new Date().toISOString();
-  const steps = [], check = (name, ok, detail = {}) => { steps.push({ name, ok: !!ok, ...detail }); if (!ok) throw Error(`A9 live step failed: ${name}`); };
+  const steps = [], check = (name, ok, detail = {}) => {
+    steps.push({ name, ok: !!ok, ...detail });
+    if (!ok) throw Error(`A9 live step failed: ${name} ${JSON.stringify(detail)}`);
+  };
+  let throttled = 0;
+  // "limited" means this request was not processed: wait as told and send the same request again.
   const call = async (path, body, init = {}) => {
-    const response = await fetchImpl(base + path, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...init });
-    return { status: response.status, body: await response.json().catch(() => null) };
+    for (let tries = 0; ; tries++) {
+      const response = await fetchImpl(base + path, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...init });
+      const answer = { status: response.status, body: await response.json().catch(() => null) };
+      if (answer.body?.state !== 'limited' || response.status !== 429 || tries === 5) return answer;
+      throttled++; await pause(1000 * (answer.body.retry_after_seconds || 60));
+    }
   };
   const create = (payload, init) => call('/v1/reports', payload, init);
   const status = payload => call(`/v1/reports/${payload.report_id}/status`, { receipt_secret: payload.receipt_secret });
@@ -57,7 +66,7 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
 
     const fresh = report({ started });
     check('disconnected before send: unknown', (await status(fresh)).body?.state === 'unknown_id');
-    const first = await create(fresh);
+    const first = await create(fresh), firstAt = Date.now();
     check('delivered with a real issue URL', first.body?.state === 'delivered'
       && first.body.issue_url === `https://github.com/${profile.repository}/issues/${first.body.issue_number}`, { issue: first.body?.issue_url });
     const issue = await (await gh(`/repos/${profile.repository}/issues/${first.body.issue_number}`)).json();
@@ -67,6 +76,7 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
     const edited = report({ started, id: fresh.report_id, title: 'RichDoctor A9 live test: edited' });
     check('changed bytes under the same ID are refused', (await create({ ...edited, receipt_secret: fresh.receipt_secret })).body?.state === 'conflict');
     check('a wrong receipt is refused', (await status({ ...fresh, receipt_secret: edited.receipt_secret })).body?.state === 'forbidden');
+
 
     // The client goes away 150 ms after sending. If the relay had already accepted it, the relay
     // finishes the exact attempt; if not, status says unknown_id and the app may send again.
@@ -81,22 +91,33 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
     const largest = report({ started, id, body: 'A9 maximum body\\. ' + 'x'.repeat(60000 - Buffer.byteLength(tail) - 18) + tail });
     check('the largest allowed body is delivered', (await create(largest)).body?.state === 'delivered');
     const over = await create(report({ started, body: 'x'.repeat(60001) }));
-    check('one byte more is refused for size', over.status === 413 && over.body?.reason === 'size');
+    check('one byte more is refused for size', over.status === 413 && over.body?.reason === 'size', { reply: over });
 
     const day = new Date().toISOString().slice(0, 10);
     const used = (await query('SELECT creates FROM daily WHERE day=?1', [day])).results?.[0]?.creates || 0;
     await query('UPDATE control SET daily_cap=CAST(?1 AS INTEGER) WHERE id=1', [String(used)]);
     const capped = await create(report({ started }));
-    check('the daily cap closes new reports honestly', capped.body?.state === 'closed' && capped.body.reason === 'daily_cap');
+    check('the daily cap closes new reports honestly', capped.body?.state === 'closed' && capped.body.reason === 'daily_cap', { reply: capped.body });
     await query('UPDATE control SET paused=1 WHERE id=1');
     const off = await create(report({ started }));
-    check('the switch closes new reports honestly', off.body?.state === 'closed' && off.body.reason === 'operator_off');
+    check('the switch closes new reports honestly', off.body?.state === 'closed' && off.body.reason === 'operator_off', { reply: off.body });
     check('known reports still answer while switched off', (await status(fresh)).body?.state === 'delivered');
+
+    // Reconciliation on real GitHub: the relay's record of an older report is gone (test database
+    // only), so before any create it must find the issue by its footer and create nothing. Run
+    // last: GitHub's issue listing showed a seconds-old issue late on 2026-10-22, and in real use
+    // an ID without a record was approved at least 15 minutes earlier.
+    await pause(Math.max(0, firstAt + settleMs - Date.now()));
+    await query('UPDATE control SET paused=0, daily_cap=1000 WHERE id=1');
+    await query('DELETE FROM reports WHERE report_id=?1', [fresh.report_id]);
+    const found = await create({ ...fresh, approved_at: Date.now() - 3600_000 });
+    check('a lost record is reconciled by the footer on GitHub, never recreated', found.body?.state === 'delivered'
+      && found.body.issue_url === first.body.issue_url, { reply: found.body });
 
     const issues = await botIssues();
     for (const payload of [fresh, gone, largest]) check(`exactly one issue for ${payload.report_id}`, count(issues, payload.report_id) === 1);
     check('nothing else was created', issues.length === 3, { created: issues.map(i => i.html_url) });
-    return { ok: true, started, finished: new Date().toISOString(), relay: base, repository: profile.repository, steps };
+    return { ok: true, started, finished: new Date().toISOString(), relay: base, repository: profile.repository, throttledAndResent: throttled, steps };
   } finally {
     await query('UPDATE control SET paused=1, updated_at=?1 WHERE id=1', [String(Date.now())]).catch(() => {});
   }
@@ -105,9 +126,15 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
     const profile = JSON.parse(readFileSync(process.env.RICHOS_REPORT_PROFILE || '', 'utf8'));
-    const file = process.env.RICHOS_REPORT_A9_GITHUB_TOKEN_FILE;
-    if (file && (statSync(file).mode & 0o077) !== 0) throw Error('The GitHub token file must be private (mode 0600)');
-    const githubToken = file ? readFileSync(file, 'utf8').trim() : undefined;
+    const file = process.env.RICHOS_REPORT_A9_GITHUB_TOKEN_FILE, keyFile = process.env.RICHOS_REPORT_APP_KEY_FILE;
+    for (const f of [file, keyFile]) if (f && (statSync(f).mode & 0o077) !== 0) throw Error('The GitHub credential files must be private (mode 0600)');
+    let githubToken = file ? readFileSync(file, 'utf8').trim() : undefined;
+    if (!githubToken && keyFile) {
+      // A private test repository is read with a short-lived token of the test App itself.
+      const { GitHub } = await import('../service/report/github.mjs');
+      githubToken = await new GitHub({ GITHUB_APP_ID: profile.appId, GITHUB_INSTALLATION_ID: profile.installationId,
+        GITHUB_APP_PRIVATE_KEY: readFileSync(keyFile, 'utf8'), GITHUB_REPOSITORY: profile.repository }).authorize();
+    }
     console.log(JSON.stringify(await run(profile, { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE), githubToken }), null, 2));
   } catch (error) { console.error(JSON.stringify({ ok: false, error: error.message })); process.exitCode = 1; }
 }

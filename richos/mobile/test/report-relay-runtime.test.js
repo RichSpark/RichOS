@@ -147,7 +147,7 @@ test('the live A9 runner passes against the local stand-in and refuses a product
     return new Response(JSON.stringify({ success: true, result: [{ success: true, results: result.results, meta: result.meta }] }));
   };
   await assert.rejects(run({ ...profile, stage: 'production', ...PRODUCTION }, { token: 't', fetchImpl }), /test relay and test repository only/);
-  const record = await run(profile, { token: 't', fetchImpl });
+  const record = await run(profile, { token: 't', fetchImpl, settleMs: 0 });
   assert.equal(record.ok, true); assert(record.steps.every(step => step.ok));
   assert.equal(relay.github.created().length, 3);
   assert.equal((await relay.db.prepare('SELECT paused FROM control').first()).paused, 1, 'the run leaves the test relay switched off');
