@@ -18,6 +18,10 @@ const usage = `Mobile development loop (JSON output; nonzero exit on failure)
   node richos/mobile/cli/mobile.mjs update worker-artifact <private-policy-profile.json>
   RICHOS_POLICY_PROFILE=<profile.json> RICHOS_POLICY_TOKEN_FILE=<0600 file> node richos/mobile/cli/mobile.mjs update schema-hosted
   RICHOS_POLICY_PROFILE=<profile.json> RICHOS_POLICY_TOKEN_FILE=<0600 file> node richos/mobile/cli/mobile.mjs update publish-hosted <request.json>
+  node richos/mobile/cli/mobile.mjs report artifact <private-report-profile.json>
+  RICHOS_REPORT_PROFILE=<profile.json> RICHOS_REPORT_TOKEN_FILE=<0600 file> node richos/mobile/cli/mobile.mjs report schema|pending
+  RICHOS_REPORT_PROFILE=<profile.json> RICHOS_REPORT_TOKEN_FILE=<0600 file> node richos/mobile/cli/mobile.mjs report control off | control on '<operator>' <daily cap>
+  RICHOS_REPORT_PROFILE=<profile.json> RICHOS_REPORT_TOKEN_FILE=<0600 file> node richos/mobile/cli/mobile.mjs report resolve <report ID> <issue number>
   node richos/mobile/cli/mobile.mjs release-config-check
   node richos/mobile/cli/mobile.mjs sim policy '<policy JSON>'
   node richos/mobile/cli/mobile.mjs doctor
@@ -70,6 +74,7 @@ try {
   catch { throw new Error(`Another mobile CLI command owns ${proposedLock}. If it crashed, verify its owner.json PID is gone before removing that directory.`); }
   let result;
   if (mode === 'connect') result = await (await import('./connect.mjs')).command(command, arg);
+  else if (mode === 'report') result = await (await import('./report.mjs')).command(command, arg, process.argv.slice(5));
   else if (mode === 'update') result = await (await import('../service/policy.mjs')).command(command, arg, cache);
   else if (mode === 'client' && command === 'scenario') result = await require('../dev/client-runtime.js').scenario(arg);
   else if (mode === 'lab' && command === 'updates') result = await (await import('../dev/policy-lab.mjs')).policyLab(cache);

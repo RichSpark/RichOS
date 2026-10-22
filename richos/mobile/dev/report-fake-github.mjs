@@ -43,7 +43,10 @@ export class FakeGitHub {
       const token = 'ghs_' + crypto.randomUUID().replace(/-/g, ''); this.tokens.add(token);
       return json(201, { token, expires_at: new Date(this.now() + 3600_000).toISOString() });
     }
-    if (!this.tokens.has((auth || '').replace(/^Bearer /, ''))) return json(401, { message: 'Bad credentials' });
+    // Reads of a public repository need no token, as on GitHub; a token that is sent must be valid.
+    if ((auth || request.method !== 'GET') && !this.tokens.has((auth || '').replace(/^Bearer /, ''))) return json(401, { message: 'Bad credentials' });
+    const single = new RegExp(`^/repos/${this.repository}/issues/(\\d+)$`).exec(url.pathname);
+    if (request.method === 'GET' && single) { const issue = this.issues[Number(single[1]) - 1]; return issue ? json(200, issue) : json(404, { message: 'Not Found' }); }
     if (request.method === 'POST' && url.pathname === `/repos/${this.repository}/issues`) {
       const { title, body, labels } = await request.json();
       const fault = this.take('create:');

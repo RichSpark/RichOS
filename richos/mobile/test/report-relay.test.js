@@ -248,6 +248,66 @@ test('a token failure is an authoritative non-creation; throttling says nothing 
   assert.equal((await f.send(new Request('https://report.example.com/v1/reports/RD-AAAA-AAAA/status', { method: 'GET' }))).status, 404);
 });
 
+test('plain HTTP is refused except on loopback, for the local stand-in only', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.send(new Request('http://report.example.com/v1/health'))).status, 400);
+  assert.equal((await f.send(new Request('http://127.0.0.1:8787/v1/health'))).status, 200);
+});
+
+test('the upload artifact is exact, carries no secret, and a test profile can never reach production', async () => {
+  const { reportArtifact, checkProfile, PRODUCTION, schemaStatements } = await import('../cli/report.mjs');
+  const { createHash } = require('node:crypto'), { readFileSync } = require('node:fs'), { join } = require('node:path');
+  const base = { accountId: 'a'.repeat(32), databaseId: '11111111-2222-3333-4444-555555555555', appId: '9', installationId: '8',
+    botLogin: 'richos-reports[bot]', label: 'richdoctor' };
+  const production = { ...base, stage: 'production', ...PRODUCTION };
+  const artifact = reportArtifact(production);
+  assert.deepEqual(artifact.modules.map(m => m.name), ['report-worker.mjs', 'report/checks.mjs', 'report/store.mjs', 'report/github.mjs']);
+  for (const module of artifact.modules) {
+    const source = readFileSync(join(__dirname, '../service', module.name), 'utf8');
+    assert.equal(module.source, source); assert.equal(module.sha256, createHash('sha256').update(source).digest('hex'));
+  }
+  assert.deepEqual(artifact.metadata.keep_bindings, ['secret_text']); assert.deepEqual(artifact.secrets, ['GITHUB_APP_PRIVATE_KEY']);
+  assert.equal(artifact.metadata.observability.enabled, false); assert.equal(artifact.metadata.logpush, false);
+  assert.deepEqual(artifact.subdomain, { enabled: false, previews_enabled: false });
+  const vars = Object.fromEntries(artifact.metadata.bindings.map(b => [b.name, b.text ?? b.id ?? b.simple]));
+  assert.equal(vars.GITHUB_REPOSITORY, 'WebDevBooster/richos'); assert.equal(vars.RECONCILE_SECONDS, undefined, 'production keeps the 2-minute window');
+  assert(!artifact.metadata.bindings.some(b => b.name === 'GITHUB_APP_PRIVATE_KEY'));
+  assert(!artifact.metadata.bindings.some(b => /connect/i.test(JSON.stringify(b))), 'nothing of Connect');
+  assert.throws(() => checkProfile({ ...production, repository: 'WebDevBooster/other' }), /production/);
+  for (const [key, value] of Object.entries(PRODUCTION)) {
+    const test = { ...base, stage: 'test', worker: 'richos-report-test', hostname: 'report-test.richos.ceo', repository: 'richos-test/report-relay-test', [key]: value };
+    assert.throws(() => checkProfile(test), /test profile/, key);
+  }
+  assert.equal(reportArtifact({ ...base, stage: 'test', worker: 'richos-report-test', hostname: 'report-test.richos.ceo', repository: 'richos-test/report-relay-test' }).repository, 'richos-test/report-relay-test');
+  // Three tables, one index and the switched-off control row.
+  assert.equal(schemaStatements().length, 5);
+});
+
+test('operator resolve accepts only an issue the relay bot made with this report footer', async t => {
+  const f = await fixture(t), payload = await f.report();
+  f.github.fault('create:lost'); for (let i = 0; i < 10; i++) f.github.fault('list:500');
+  await f.create(payload); f.github.faults.length = 0;
+  const { operate } = await import('../cli/report.mjs');
+  const profile = { stage: 'test', worker: 'richos-report-test', hostname: 'report-test.richos.ceo', repository: f.repository, accountId: 'a'.repeat(32),
+    databaseId: '11111111-2222-3333-4444-555555555555', appId: '123', installationId: '456', botLogin: f.bot, label: 'richdoctor' };
+  const statements = [];
+  const fake = async (url, init) => {
+    if (url.startsWith('https://api.github.com/')) {
+      const number = Number(url.split('/').pop()), issue = f.github.issues[number - 1];
+      return new Response(JSON.stringify(issue || {}), { status: issue ? 200 : 404 });
+    }
+    const { sql, params } = JSON.parse(init.body); statements.push(sql);
+    const changes = Number(f.db.raw.prepare(sql).run(...params).changes);
+    return new Response(JSON.stringify({ success: true, result: [{ success: true, results: [], meta: { changes } }] }));
+  };
+  f.github.addForeign(payload.title, payload.body);
+  await assert.rejects(operate('resolve', profile, [payload.report_id, '2'], { token: 't', fetch: fake }), /not made by the relay/);
+  const done = await operate('resolve', profile, [payload.report_id, '1'], { token: 't', fetch: fake });
+  assert.deepEqual(done, { reportId: payload.report_id, issueUrl: `https://github.com/${f.repository}/issues/1`, updated: true });
+  assert.equal((await f.answer(await f.status(payload.report_id, payload.receipt_secret))).body.issue_number, 1);
+  assert.equal(statements.length, 1);
+});
+
 test('the content checks take linear time on the largest adversarial body', async () => {
   const { contentProblem } = await import('../service/report/checks.mjs');
   const id = reportId(), footer = `\n\nSent with RichDoctor 1.0 · Report ID ${id}`, room = 60000 - Buffer.byteLength(footer);
