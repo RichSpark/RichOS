@@ -5952,8 +5952,7 @@ fn claude_account_discard(state: State<AppState>, id: String) -> Result<richos_c
 /// (`provider_auth::signed_in_as`), returned, and not kept anywhere.
 #[richos_command::command]
 fn claude_account_email(state: State<AppState>, id: String) -> Result<richos_core::provider_auth::SignedInAs, String> {
-    let folder = state.quota.accounts.sign_in_folder(&id).ok_or("That account is no longer on this Mac.")?;
-    Ok(richos_core::provider_auth::signed_in_as(&resolve_claude_bin(), folder.as_deref()))
+    state.quota.account_email(&resolve_claude_bin(), &id).map_err(|e| e.ceo_message().to_string())
 }
 
 /// **Not now** on Rich's one-time suggestion of a second account (round 18, `one-nudge`).
