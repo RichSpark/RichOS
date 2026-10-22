@@ -441,7 +441,16 @@ impl Engine {
             let mut inner = self.inner.lock().unwrap();
             inner.operation += 1;
             inner.last_message = Some(message.to_string());
-            (inner.operation, std::mem::take(&mut inner.pictures), inner.resumed)
+            let pictures = std::mem::take(&mut inner.pictures);
+            if !pictures.is_empty() {
+                if let Some(d) = inner.draft.as_mut() {
+                    for s in d.screenshots.iter_mut().filter(|s| pictures.iter().any(|p| p.0 == s.id)) {
+                        s.sent_to_claude = true;
+                    }
+                }
+                self.save(&mut inner);
+            }
+            (inner.operation, pictures, inner.resumed)
         };
         mcp::write_operation(&dir, op).ok();
         let pictures: Vec<richos_core::bug_report::Picture> = picture.into_iter().map(|(_, base64, media_type)| richos_core::bug_report::Picture { media_type, base64 }).collect();
@@ -784,13 +793,17 @@ impl Engine {
     }
 
     /// The exact reviewed text (for Copy report, Save report and Email support).
+    /// One current reviewed revision: Copy, Save and Email always carry the report as it is now,
+    /// with its current screenshots (an approval is only ever sent as it was approved, by Send
+    /// report or Try again, and only while nothing changed since).
     pub fn exact_text(&self) -> Option<(String, String)> {
         let inner = self.inner.lock().unwrap();
         let d = inner.draft.as_ref()?;
-        if let Some(del) = exported_approval(d) {
-            return Some((del.approved.report_id.clone(), format!("{}\n\n{}", del.approved.title, del.approved.body)));
+        match (&d.report, &d.delivery) {
+            (Some(r), _) => Some((r.report_id.clone(), r.exact())),
+            (None, Some(del)) => Some((del.approved.report_id.clone(), format!("{}\n\n{}", del.approved.title, del.approved.body))),
+            (None, None) => None,
         }
-        d.report.as_ref().map(|r| (r.report_id.clone(), r.exact()))
     }
 
     /// The approved screenshots with their neutral names (`screenshot-1.png`), in order: what an
@@ -798,15 +811,6 @@ impl Engine {
     pub fn image_files(&self) -> Vec<(String, Vec<u8>)> {
         let inner = self.inner.lock().unwrap();
         let Some(d) = inner.draft.as_ref() else { return Vec::new() };
-        if let Some(del) = exported_approval(d) {
-            // The approved text goes with exactly its approved images, in its manifest's order.
-            return del
-                .approved
-                .manifest
-                .iter()
-                .filter_map(|e| d.screenshots.iter().find(|s| s.sha256 == e.sha256).and_then(|s| self.env.store.shot_bytes(&d.id, s)).map(|b| (e.filename.clone(), b)))
-                .collect();
-        }
         d.screenshots
             .iter()
             .enumerate()
@@ -1129,6 +1133,11 @@ impl Engine {
             if !del.state.permits_try_again() {
                 return Err("This report cannot be sent again now.".into());
             }
+            // Any edit since the approval ends it: the earlier approval is never sent, and the
+            // changed report goes only through Send report, a fresh approval.
+            if !self.unchanged(inner.draft.as_ref().unwrap()) {
+                return Err("This report changed after you approved it. Review it, then choose Send report to send this version.".into());
+            }
             del.approved.clone()
         };
         let this = self.clone();
@@ -1249,7 +1258,7 @@ impl Engine {
             }
             let dir = self.env.store.draft_dir(&d.id).join("shots");
             util::write_private(&dir.join(&id), &clean).map_err(|e| e.to_string())?;
-            let shot = Shot { id: id.clone(), sha256: sha, covers, approved_at: util::now_millis(), media_type: shape.kind.media_type().into(), reduced };
+            let shot = Shot { id: id.clone(), sha256: sha, covers, approved_at: util::now_millis(), media_type: shape.kind.media_type().into(), reduced, sent_to_claude: false };
             let old = match replacing {
                 Some(i) => Some(std::mem::replace(&mut d.screenshots[i], shot)),
                 None => {
@@ -1335,7 +1344,20 @@ impl Engine {
 
     /// Round 39's Saved reports list.
     pub fn saved(&self) -> Value {
-        let rows: Vec<Value> = self.env.store.list().iter().map(saved_row).collect();
+        let rows: Vec<Value> = self
+            .env
+            .store
+            .list()
+            .iter()
+            .map(|d| {
+                let mut row = saved_row(d);
+                // A report changed since its approval is reviewed and approved again, never retried.
+                if d.delivery.as_ref().is_some_and(|x| x.state.permits_try_again()) && !self.unchanged(d) {
+                    row["action"] = json!("review");
+                }
+                row
+            })
+            .collect();
         let sent: Vec<Value> = self
             .env
             .store
@@ -1356,8 +1378,17 @@ impl Engine {
             inner.pending = Pending::None;
             inner.last_message = None;
             inner.operation = 0;
-            // Screenshots queued for the report that was open never go out with this one.
-            inner.pictures.clear();
+            // Screenshots queued for the report that was open never go out with this one; this
+            // report's own approved screenshots Claude has not been sent yet are queued again.
+            inner.pictures = if d.without_ai {
+                Vec::new()
+            } else {
+                d.screenshots
+                    .iter()
+                    .filter(|s| !s.sent_to_claude)
+                    .filter_map(|s| self.env.store.shot_bytes(&d.id, s).map(|b| (s.id.clone(), util::base64_std(&b), s.media_type.clone())))
+                    .collect()
+            };
             inner.upload.clear();
             inner.resumed = !d.conversation.is_empty();
             inner.draft = Some(d.clone());
@@ -1480,12 +1511,6 @@ fn left_words(state: &State) -> String {
         State::Submitted { at, .. } => format!("sent at {}", util::local_clock(*at)),
         State::NotSent { .. } => "approved, not sent yet".into(),
     }
-}
-
-/// The approval Copy, Save and Email carry: the one that was sent or may have been. After a
-/// definite "not sent" the person may revise, so the current reviewed report is what they carry.
-fn exported_approval(d: &Draft) -> Option<&Delivery> {
-    d.delivery.as_ref().filter(|del| !del.state.permits_revision())
 }
 
 pub fn review_view(d: &Draft, r: &Report) -> Value {
@@ -2046,6 +2071,58 @@ mod tests {
         let text = e.exact_text().unwrap().1;
         e.close();
         assert!(text.contains("database locked when opening a second conversation"), "{text}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    // ---- review rv-20261022T200039Z-ad2da0bb-a6df, its fixtures as tests ----------------------
+
+    #[test]
+    fn an_edit_after_approval_needs_a_fresh_approval_and_every_export_uses_the_current_revision() {
+        let root = scratch("one-revision");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let e2 = events.clone();
+        // A destination is configured, so only the rule can refuse Try again.
+        let env = Env { store: Store::at(&root), home: root.join("fixture-home"), exe: PathBuf::new(), claude: None, dest: Ok(Destination { relay: "http://127.0.0.1:9".into(), repository: "fixture/reports".into() }) };
+        let e = Engine::new(env, Arc::new(move |v| e2.lock().unwrap().push(v)));
+        let mut d = reviewed_draft("The confidential acquisition document should open");
+        let r = d.report.as_ref().unwrap();
+        let approved = delivery::approve(&r.report_id, &r.title, &r.render().1, vec![], delivery::RELAY, 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
+        d.delivery = Some(Delivery { approved, state: State::NotSent { why: NotSent::Unreachable, at: 2 }, completion_attempted: false, stored: vec![] });
+        e.env().store.save(&mut d, 2).unwrap();
+        e.open(&d.id).unwrap();
+        // The person removes the private detail after the failed send, then saves for later.
+        e.edit("what_happened", "RichOS fails opening a document").unwrap();
+        e.save_later();
+        let exported = e.exact_text().unwrap().1;
+        assert!(!exported.contains("confidential acquisition"), "Copy, Save and Email carry the current revision: {exported}");
+        let rows = e.saved();
+        assert_ne!(rows["rows"][0]["action"], "try", "the saved row does not offer Try again for a changed report");
+        assert!(e.try_again().is_err(), "the earlier approval is never sent once the report changed");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_screenshot_approved_before_the_window_closed_goes_with_the_next_answer_after_reopening() {
+        let root = scratch("reopen-images");
+        let (e, events) = engine_at(&root.join("store"), Some(fake_cli_asking(&root)));
+        e.start("RichOS closes before its window opens".into(), true, false).unwrap();
+        wait_for(&events, &["question"]);
+        events.lock().unwrap().clear();
+        e.answer("Just now".into());
+        wait_for(&events, &["question", "ai-failed"]);
+        events.lock().unwrap().clear();
+        e.use_image(&util::base64_std(&png(9)), 0, false).unwrap();
+        let id = e.env().store.list()[0].id.clone();
+        e.close();
+        e.open(&id).unwrap();
+        e.resume_pending();
+        e.answer("The screenshot shows the error".into());
+        wait_for(&events, &["question", "ai-failed"]);
+        let all = captured_all(&e);
+        e.close();
+        let last: Value = serde_json::from_str(all.lines().last().unwrap()).unwrap();
+        let images = last["message"]["content"].as_array().unwrap().iter().filter(|v| v["type"] == "image").count();
+        assert_eq!(images, 1, "the approved screenshot Claude had not seen goes with the next answer");
         std::fs::remove_dir_all(root).ok();
     }
 

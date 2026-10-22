@@ -84,6 +84,10 @@ pub struct Shot {
     /// Scaled down to fit the 5 MiB limit before it was approved (round 40: "reduced to fit").
     #[serde(default)]
     pub reduced: bool,
+    /// Claude has been sent this image. One approved while Claude waited and not yet sent goes
+    /// with the next message, also after the report is closed and reopened.
+    #[serde(default)]
+    pub sent_to_claude: bool,
 }
 
 fn png_type() -> String {

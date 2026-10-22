@@ -392,13 +392,30 @@ fn scrub_word(core: &str, previous_key: bool, home: &str, removed: &mut Removed)
         return PATH.to_string();
     }
     let core = if core.contains("://") { scrub_url(core, removed) } else { core.to_string() };
-    if let Some((s, e)) = is_email(&core) {
-        if !core[s..e].eq_ignore_ascii_case(SUPPORT_ADDRESS) {
-            removed.emails += 1;
-            return format!("{}{EMAIL}{}", &core[..s], &core[e..]);
+    // Every address in the span ("alice@example.com,bob@example.com"), not only the first; an @
+    // that is not an address does not shield the ones after it.
+    let mut out = String::with_capacity(core.len());
+    let mut rest = core.as_str();
+    while let Some(at) = rest.find('@') {
+        match is_email(rest) {
+            Some((s, e)) if !rest[s..e].eq_ignore_ascii_case(SUPPORT_ADDRESS) => {
+                out.push_str(&rest[..s]);
+                out.push_str(EMAIL);
+                removed.emails += 1;
+                rest = &rest[e..];
+            }
+            Some((_, e)) => {
+                out.push_str(&rest[..e]);
+                rest = &rest[e..];
+            }
+            None => {
+                out.push_str(&rest[..=at]);
+                rest = &rest[at + 1..];
+            }
         }
     }
-    core
+    out.push_str(rest);
+    out
 }
 
 /// `text` as alternating runs of non-space and space, every byte kept.
@@ -515,6 +532,22 @@ pub fn check_outgoing(title: &str, body: &str, receipt_secret: Option<&str>) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_address_in_one_span_is_removed() {
+        let c = Context::with("jdoe".into(), vec![]);
+        let (out, removed) = scrub("It failed emailing alice@example.com,bob@example.com;carol@example.org", &c);
+        for addr in ["alice@example.com", "bob@example.com", "carol@example.org"] {
+            assert!(!out.contains(addr), "{out}");
+        }
+        assert_eq!(removed.emails, 3, "{out}");
+        // An @ that is not an address does not shield the address after it.
+        let (out, _) = scrub("x@y,dave@example.com", &c);
+        assert!(!out.contains("dave@example.com"), "{out}");
+        // The support address is kept.
+        let (out, _) = scrub("support@richos.ceo,erin@example.com", &c);
+        assert!(out.contains("support@richos.ceo") && !out.contains("erin@example.com"), "{out}");
+    }
+
     #[test]
     fn a_quoted_password_value_is_removed_whole() {
         let c = Context::with("jdoe".into(), vec![]);
