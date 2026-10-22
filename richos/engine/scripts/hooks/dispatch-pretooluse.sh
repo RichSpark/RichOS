@@ -236,14 +236,18 @@ _DSP_INPUT="$(cat)"
 # decision from the root. Each module still calls resolve_entity_root itself and
 # still branches on its own status, exactly as it did as a separate process.
 _RR_MEMO_ENABLE=1
-resolve_entity_root "$_DSP_INPUT" || true
+_DSP_ROOT_OK=0
+if resolve_entity_root "$_DSP_INPUT" || [ "${RICHOS_ROOT_STATUS:-}" = "not-adopted" ]; then
+    _DSP_ROOT_OK=1
+fi
 
+_DSP_READABLE=0
 _DSP_UE_LIB="$_DSP_DIR/../lib/unevaluated-notice.sh"
 if [ -f "$_DSP_UE_LIB" ]; then
     # shellcheck source=../lib/unevaluated-notice.sh
     . "$_DSP_UE_LIB"
     _UE_MEMO_ENABLE=1
-    richos_payload_unreadable "$_DSP_INPUT" >/dev/null || true
+    richos_payload_unreadable "$_DSP_INPUT" >/dev/null || _DSP_READABLE=1
 fi
 
 # --- the modules -----------------------------------------------------------
@@ -252,6 +256,61 @@ _DSP_MODULES="$(grep -E "^${_DSP_CHAIN_KEY}\|" "$_DSP_MANIFEST" 2>/dev/null | cu
 if [ -z "$_DSP_MODULES" ]; then
     printf '%s\n' "ERROR: dispatch-pretooluse.sh: the manifest names NO rules for chain '${_DSP_CHAIN_KEY}'. This call was NOT checked by any rule in that chain. Manifest: $_DSP_MANIFEST $_DSP_TAG" >&2
     exit 2
+fi
+
+# --- rules this call cannot concern (2026-10-21) ---------------------------
+# Measured 2026-10-21: the Bash chain cost 1.33 CPU-s for a plain `ls`, ~6% of
+# the Mac at the team's call rate, and most of it was rules about commands the
+# call did not contain. A rule may name, in one `# dispatch-words:` line of its
+# own file, the words its own first filter needs: the exact words that filter
+# tests, so a call that contains none of them is a call the rule would answer
+# with a silent exit 0. Such a rule is not forked for that call.
+#
+# The words are looked for in the raw payload, in every string value it decodes
+# to, and in those strings with quotes, backslashes and line continuations
+# removed (what shlex and a shell would see), so a command that spells a word
+# in pieces still runs the rule. Nothing is skipped when the payload does not
+# parse, when its root did not resolve, or when this check itself fails: every
+# rule then runs exactly as before. The one difference from running it: a rule
+# whose own library is missing is reported on the next call that names its
+# words, not on every call.
+_DSP_SKIP=""
+if [ "$_DSP_ROOT_OK" = 1 ] && [ "$_DSP_READABLE" = 1 ]; then
+    IFS= read -r -d '' _DSP_WORDS_PY <<'PYWORDS' || true
+import json, os, re, sys
+raw = sys.stdin.read()
+try:
+    payload = json.loads(raw)
+except Exception:
+    sys.exit(0)
+texts = [raw]
+def walk(v):
+    if isinstance(v, str):
+        texts.append(v)
+        texts.append(re.sub(r"['\"\\]", "", v.replace("\\\n", "")))
+    elif isinstance(v, dict):
+        for x in v.values():
+            walk(x)
+    elif isinstance(v, list):
+        for x in v:
+            walk(x)
+walk(payload)
+text = "\0".join(texts)
+for module in sys.argv[2:]:
+    try:
+        with open(os.path.join(sys.argv[1], module), encoding="utf-8", errors="replace") as fh:
+            words = None
+            for line in fh:
+                if line.startswith("# dispatch-words:"):
+                    words = line.split(":", 1)[1].split()
+                    break
+    except OSError:
+        continue
+    if words and not any(w in text for w in words):
+        print(module)
+PYWORDS
+    # shellcheck disable=SC2086
+    _DSP_SKIP="$(printf '%s' "$_DSP_INPUT" | python3 -c "$_DSP_WORDS_PY" "$_DSP_DIR" $_DSP_MODULES 2>/dev/null)" || _DSP_SKIP=""
 fi
 
 _DSP_WORK="$(mktemp -d "${TMPDIR:-/tmp}/richos-dispatch.XXXXXX")" || {
@@ -279,6 +338,9 @@ for _dsp_m in $_DSP_MODULES; do
         printf '%s\n' "ERROR: dispatch-pretooluse.sh: rule module '$_dsp_m' is NOT PRESENT at $_DSP_DIR/$_dsp_m. THAT RULE DID NOT EVALUATE THIS CALL — every other rule in the ${_DSP_CHAIN_KEY} chain still ran. Run scripts/hooks/install.sh and check the manifest. $_DSP_TAG" > "$_dsp_slot.err"
         continue
     fi
+    case $'\n'"$_DSP_SKIP"$'\n' in
+        *$'\n'"$_dsp_m"$'\n'*) : > "$_dsp_slot.skipped"; continue ;;
+    esac
     (
         set +e +u +o pipefail
         . "$_DSP_DIR/$_dsp_m"
@@ -305,6 +367,8 @@ for _dsp_m in $_DSP_MODULES; do
         cat "$_dsp_slot.err" >&2
         continue
     fi
+    # Named none of the rule's own words: its answer is the silent allow.
+    [ -f "$_dsp_slot.skipped" ] && continue
 
     _dsp_pid="$(cat "$_dsp_slot.pid" 2>/dev/null || true)"
     if [ -z "$_dsp_pid" ]; then

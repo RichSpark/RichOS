@@ -1479,6 +1479,16 @@ fi
 
 rm -rf "$SB"
 
+# The kept corpus (publication-boundary.py, THE BUILT CORPUS IS KEPT ON DISK):
+# no cache, a cold cache and a warm cache give one answer, and an edited,
+# removed, new or unreadable private file is noticed.
+if python3 "$ENGINE_ROOT/scripts/lib/publication-boundary-cache.test.py" >"$SCRATCH/cache-test.log" 2>&1; then
+    ok "kept corpus: same verdict cold, warm and uncached; every private change noticed"
+else
+    sed 's/^/    /' "$SCRATCH/cache-test.log"
+    bad "kept corpus: publication-boundary-cache.test.py"
+fi
+
 echo ""
 TOTAL=$((PASS + FAIL))
 if [ "$FAIL" -eq 0 ]; then

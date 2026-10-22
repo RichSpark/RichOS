@@ -657,6 +657,75 @@ else
 fi
 
 echo
+echo "--- K. a rule's own words decide whether it is forked ---"
+
+# A rule that names its words is forked only for a call that contains one. Its
+# body records that it ran and refuses, so a skip and a run cannot look alike.
+w t-words.sh '# dispatch-words: zzbanana zzcherry
+INPUT="$(cat)"; : > "'"$SANDBOX"'/words-ran"; echo "WORDS-RULE refused this call" >&2; exit 2'
+mkmanifest 'Bash|t-words.sh' 'Bash|t-pass.sh'
+words_payload() { # <command> -> $PAYLOAD
+    python3 - "$SBE" "$1" > "$PAYLOAD" <<'PY'
+import json, sys
+print(json.dumps({"session_id": "t", "cwd": sys.argv[1], "hook_event_name": "PreToolUse",
+                  "tool_name": "Bash", "tool_input": {"command": sys.argv[2], "description": "d"}}))
+PY
+}
+words_case() { # <id> <command> <want: ran|skipped> <label>
+    rm -f "$SANDBOX/words-ran"
+    words_payload "$2"
+    run Bash
+    if [ "$3" = ran ] && [ "$RC" = 2 ] && [ -f "$SANDBOX/words-ran" ] \
+       && printf '%s' "$ERR" | grep -q 'WORDS-RULE refused'; then
+        ok "$1  $4"
+    elif [ "$3" = skipped ] && [ "$RC" = 0 ] && [ ! -f "$SANDBOX/words-ran" ] && [ -z "$ERR$OUT" ]; then
+        ok "$1  $4"
+    else
+        bad "$1  $4 (want $3; rc=$RC err=$ERR out=$OUT)"
+    fi
+}
+words_case K1 'echo hello'                skipped "a call naming none of the rule's words never forks it, and the chain is silent"
+words_case K2 'git add . && zzcherry pie' ran     "a call naming one of the words runs the rule, and its refusal stands"
+words_case K3 "zz'ban'ana split by quotes" ran    "a word spelled in quoted pieces still runs the rule (quotes are stripped first)"
+words_case K4 $'zzban\\\nana'              ran    "a word broken by a line continuation still runs the rule"
+# Nothing is skipped on a payload the dispatcher cannot read: every rule runs.
+rm -f "$SANDBOX/words-ran"
+printf 'not json at all' > "$PAYLOAD"
+run Bash
+if [ -f "$SANDBOX/words-ran" ] && [ "$RC" = 2 ]; then
+    ok "K5  an unreadable payload skips NOTHING: the rule ran on it"
+else
+    bad "K5  an unreadable payload skips NOTHING (rc=$RC ran=$([ -f "$SANDBOX/words-ran" ] && echo yes || echo no))"
+fi
+# A rule with no words line runs on every call, exactly as before.
+w t-nowords.sh 'INPUT="$(cat)"; : > "'"$SANDBOX"'/nowords-ran"; exit 0'
+mkmanifest 'Bash|t-nowords.sh'
+rm -f "$SANDBOX/nowords-ran"
+words_payload 'echo hello'
+run Bash
+if [ -f "$SANDBOX/nowords-ran" ] && [ "$RC" = 0 ]; then
+    ok "K6  a rule that names no words runs on every call"
+else
+    bad "K6  a rule that names no words runs on every call (rc=$RC)"
+fi
+# The shipped words: each must be a word that rule's own filter tests, so the
+# word list cannot quietly drift from the filter it stands for.
+K7_BAD=""
+for m in $(grep '^Bash|' "$MANIFEST" | cut -d'|' -f2); do
+    wl="$(sed -n 's/^# dispatch-words://p' "$SCRIPT_DIR/$m" | head -1)"
+    for word in $wl; do
+        n="$(grep -v '^#' "$SCRIPT_DIR/$m" | grep -c -- "$word" || true)"
+        [ "$n" -gt 0 ] || K7_BAD="$K7_BAD $m:$word"
+    done
+done
+if [ -z "$K7_BAD" ]; then
+    ok "K7  every shipped dispatch word appears in its rule's own code"
+else
+    bad "K7  every shipped dispatch word appears in its rule's own code (missing:$K7_BAD)"
+fi
+words_payload 'echo hello'
+
+echo
 echo "=== $PASS passed, $FAIL failed ==="
 
 MUT="$SCRIPT_DIR/dispatch-pretooluse.mutation.sh"

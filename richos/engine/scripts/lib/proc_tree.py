@@ -247,8 +247,35 @@ def native_processes(pids):
     return table
 
 
-def process_rows():
-    """Topology plus native birth generations, without a subprocess per identity."""
+def _tied(topology, seeds, groups):
+    """Every pid tied to `seeds` by parent links or process groups, read off the
+    one `ps` topology: the seeds, their descendants, members of their groups and
+    of `groups`, repeated until nothing new joins. The caller's own group, 0 and
+    1 never tie anything, the same exclusion TrackedTree.refresh applies."""
+    skip = {os.getpgrp(), 0, 1}
+    groups = set(groups) - skip
+    tied = {pid for pid in seeds if pid in topology}
+    while True:
+        groups |= {topology[pid][1] for pid in tied} - skip
+        more = {pid for pid, (parent, group, _) in topology.items()
+                if parent in tied or group in groups} - tied
+        if not more:
+            return tied
+        tied |= more
+
+
+def process_rows(seeds=None, groups=()):
+    """Topology plus native birth generations, without a subprocess per identity.
+
+    With `seeds`, only processes tied to them (see _tied) get a native identity
+    read; every other row keeps its `ps` topology and no generation (None), so it
+    can never pass a birth-identity check. A supervisor's tick asks this five
+    times a second, and reading all ~650 processes each time, plus a second `ps`
+    for the ~300 root processes it can never own, was ~8% of the Mac
+    (2026-10-21). The protection against a reused PID is unchanged: every process
+    the tree could claim is still read natively and compared with its recorded
+    birth, and a newcomer reached only through a native row is read again by
+    refresh's own reconciliation before it can be owned."""
     result = _ps(["ps", "-ax", "-o", "pid=,ppid=,pgid="])
     if result.returncode:
         raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
@@ -258,8 +285,14 @@ def process_rows():
         if len(fields) == 3 and all(field.isdigit() for field in fields):
             pid, parent, group = map(int, fields)
             topology[pid] = (parent, group, None)
-    return {pid: (row['ppid'], row['pgid'], row['start']) if row else topology[pid]
-            for pid, row in native_processes(topology).items()}
+    if seeds is None:
+        return {pid: (row['ppid'], row['pgid'], row['start']) if row else topology[pid]
+                for pid, row in native_processes(topology).items()}
+    tied = _tied(topology, seeds, groups)
+    table = {pid: row for pid, row in topology.items() if pid not in tied}
+    table.update({pid: (row['ppid'], row['pgid'], row['start']) if row else topology[pid]
+                  for pid, row in native_processes({p: topology[p] for p in tied}).items()})
+    return table
 
 
 def scoped_members(scope):
@@ -347,8 +380,13 @@ class TrackedTree:
         still alive when cleanup's hard deadline passes, finish_scope reports it as an
         unidentified survivor, which is the same verdict any surviving member gets.
         """
-        table = process_rows()
         tagged = scoped_members(self.scope) if tags else set()
+        # Only this tree's processes are read natively: everything it already
+        # holds, what it released, what carries its scope tag, and whatever is
+        # tied to those by parent or group (process_rows).
+        table = process_rows(seeds={self.root, *self.known, *self.unresolved, *self.released,
+                                    *self.groups, *tagged},
+                             groups=self.groups)
         clock = HeldClock(gap=0.5)
         deadline = clock.now() + 1.0
         carried = {pid: birth for pid, birth in self.unresolved.items() if birth is not None}
