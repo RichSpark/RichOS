@@ -415,6 +415,37 @@ fn scrub_word(core: &str, previous_key: bool, home: &str, removed: &mut Removed)
         }
     }
     out.push_str(rest);
+    secret_tokens_removed(&out, removed)
+}
+
+/// `span` with every credential-shaped token inside it replaced, whatever punctuation or key
+/// name surrounds it: `{"key":"ghp_…"}`, `x=sk-ant-…`, `(xoxb-…)` keep their punctuation and
+/// lose the token. A token is a run of ASCII letters, digits, `_`, `-` and `.` (a JSON Web
+/// Token's dots included); a dot or dash at either end is the sentence's, not the token's.
+fn secret_tokens_removed(span: &str, removed: &mut Removed) -> String {
+    let token = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.');
+    let mut out = String::with_capacity(span.len());
+    let mut copied = 0;
+    let mut start = None;
+    for (i, c) in span.char_indices().chain(std::iter::once((span.len(), ' '))) {
+        match (token(c), start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                start = None;
+                let run = &span[s..i];
+                let lead = run.len() - run.trim_start_matches(['.', '-']).len();
+                let body = run[lead..].trim_end_matches(['.', '-']);
+                if secret_shaped(body) {
+                    out.push_str(&span[copied..s + lead]);
+                    out.push_str(SECRET);
+                    removed.secrets += 1;
+                    copied = s + lead + body.len();
+                }
+            }
+            _ => {}
+        }
+    }
+    out.push_str(&span[copied..]);
     out
 }
 
@@ -617,6 +648,29 @@ mod tests {
         let (out, _) = scrub(&raw, &Context::default());
         assert!(!out.contains(&fake("value")) && !out.contains("AAAA"), "{out}");
         assert!(out.contains("529") && out.contains("after") && out.contains(KEY_BLOCK), "{out}");
+    }
+
+    /// Review rv-20261022T205540Z-920a9316-1a63#1: a token inside compact JSON, or after any
+    /// other punctuation or key name, is found inside its span, not only as a whole span.
+    #[test]
+    fn a_credential_inside_compact_json_or_punctuation_is_removed() {
+        let (github, anthropic) = (fake("github"), fake("anthropic"));
+        for input in [
+            format!(r#"RichOS fails with this JSON: {{"key":"{github}"}}"#),
+            format!(r#"{{"a":1,"b":["{anthropic}"]}}"#),
+            format!("value={github}&page=2"),
+            format!("auth({github})"),
+            format!("x:{anthropic}."),
+        ] {
+            let (out, removed) = scrub(&input, &Context::default());
+            assert!(!out.contains(&github) && !out.contains(&anthropic), "{input} -> {out}");
+            assert!(out.contains(SECRET) && removed.secrets >= 1, "{input} -> {out}");
+        }
+        // The punctuation and key around it are kept.
+        let (out, _) = scrub(&format!(r#"{{"key":"{github}"}}"#), &Context::default());
+        assert_eq!(out, format!(r#"{{"key":"{SECRET}"}}"#));
+        let (out, _) = scrub(&format!("x:{anthropic}."), &Context::default());
+        assert_eq!(out, format!("x:{SECRET}."));
     }
 
     #[test]

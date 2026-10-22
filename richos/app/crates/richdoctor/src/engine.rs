@@ -2126,6 +2126,26 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
+    // ---- review rv-20261022T205540Z-920a9316-1a63, its fixtures as tests ----------------------
+
+    #[test]
+    fn a_credential_inside_compact_json_in_the_description_never_reaches_claude() {
+        let root = scratch("json-credential");
+        let (e, events) = engine_at(&root.join("store"), Some(fake_cli_asking(&root)));
+        // Assembled at run time: the repository's secret scanner refuses a credential literal.
+        let token = format!("gh{}_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", "p");
+        e.start(format!(r#"RichOS fails with this JSON: {{"key":"{token}"}}"#), true, false).unwrap();
+        wait_for(&events, &["question"]);
+        events.lock().unwrap().clear();
+        e.answer("Just now".into());
+        wait_for(&events, &["question", "ai-failed"]);
+        let sent = captured_all(&e);
+        e.close();
+        assert!(sent.contains("RichOS fails with this JSON"), "the description reached the stand-in: {sent}");
+        assert!(!sent.contains(&token), "{sent}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
     #[test]
     fn progress_folds_into_one_soft_line() {
         assert_eq!(folded("Checking what happened when RichOS last opened…"), "Checked what happened when RichOS last opened");
