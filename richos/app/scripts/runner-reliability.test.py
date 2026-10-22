@@ -197,6 +197,34 @@ class Reliability(unittest.TestCase):
             self.assertEqual(run.call_args_list[1].args[0][-1], '100,101,102')
             self.assertEqual(run.call_args.args[0][-1], '100')
 
+    def test_seeded_rows_read_only_the_tree_and_never_a_foreign_root_process(self):
+        # 100 is the tree's root, 101 its child and 102 in its group with a foreign
+        # parent; 200 is someone else's, 300 is root's and unreadable. Only the tree
+        # is read natively, and no second ps is spent on 300.
+        rows = {pid: {'pid': pid, 'ppid': parent, 'pgid': group, 'start': 'born-%d' % pid, 'zombie': False}
+                for pid, parent, group in ((100, 1, 100), (101, 100, 100), (102, 1, 100), (200, 1, 200))}
+        with patch.object(proc_tree.operator_fences, 'proc', side_effect=lambda pid, precise=True: rows.get(pid)) as proc, \
+                patch.object(proc_tree.subprocess, 'run', return_value=SimpleNamespace(
+                    stdout='100 1 100\n101 100 100\n102 1 100\n200 1 200\n300 1 300\n', returncode=0)) as run:
+            table = proc_tree.process_rows(seeds={100})
+        self.assertEqual(sorted(call.args[0] for call in proc.call_args_list), [100, 101, 102])
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(table[101], (100, 100, 'born-101'))
+        self.assertEqual(table[200], (1, 200, None))      # topology only: no generation, never owned
+        self.assertEqual(table[300], (1, 300, None))
+
+    def test_seeded_rows_still_refuse_a_reused_pid(self):
+        # 101 was proven as 'old'; the process now at 101 was born later. The tree
+        # reads it natively (it is a seed) and does not claim it.
+        rows = {100: {'pid': 100, 'ppid': 1, 'pgid': 100, 'start': 'root', 'zombie': False},
+                101: {'pid': 101, 'ppid': 1, 'pgid': 101, 'start': 'new', 'zombie': False}}
+        with patch.object(proc_tree.operator_fences, 'proc', side_effect=lambda pid, precise=True: rows.get(pid)), \
+                patch.object(proc_tree.subprocess, 'run', return_value=SimpleNamespace(
+                    stdout='100 1 100\n101 1 101\n', returncode=0)):
+            tracker = proc_tree.TrackedTree(100, 'fixture-scope')
+            tracker.known[101] = 'old'
+            self.assertEqual(tracker.refresh(), {100})
+
     def test_native_generation_is_rechecked_after_a_live_status_observation(self):
         for zombie in (False, True):
             row = {'pid': 100, 'ppid': 2, 'pgid': 90, 'start': 'native-new', 'zombie': zombie}

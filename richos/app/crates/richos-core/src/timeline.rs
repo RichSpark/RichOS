@@ -2915,6 +2915,38 @@ mod tests {
         }
     }
 
+    /// THE FRAMES OF THE 2026-10-21 SCREENSHOTS, by name, never in the user's own view.
+    ///
+    /// A new user's failing first turn showed `control_request` and `system:init` as rows and
+    /// `system:hook_started` / `system:hook_response` under "Between turns". Those are drawn
+    /// only by the Technical view; this pins that the projection's own rule keeps every record
+    /// those exact frames produce out of the user's view (`ViewMode::Ceo`), in a turn and
+    /// between turns, while the Technical view still has them (the positive control). The
+    /// failure class: docs/development/failure-classes/machinery-in-the-user-view.md.
+    #[test]
+    fn the_incident_frames_never_reach_the_users_own_view() {
+        use crate::machinery::MachineryRecord;
+        let frames = [
+            json!({"type":"control_request","request_id":"r1","request":{"subtype":"hook_callback",
+                   "callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt":"what do I do now?"}}}),
+            json!({"type":"system","subtype":"init","model":"claude-opus-5","session_id":"s"}),
+            json!({"type":"system","subtype":"hook_started","hook_name":"SessionStart"}),
+            json!({"type":"system","subtype":"hook_response","hook_name":"SessionStart"}),
+        ];
+        let mut seen = 0;
+        for frame in &frames {
+            let in_turn = MachineryRecord::from_native_event(frame, "s", 1);
+            let between = MachineryRecord::from_native_between_turn(frame, "s", 1);
+            for row in in_turn.iter().chain(between.iter()) {
+                seen += 1;
+                let v = machinery_visibility(row, false);
+                assert!(!v.renders_in(ViewMode::Ceo), "{} reaches the user's own view as {v:?}", row.title);
+                assert!(v.renders_in(ViewMode::Technical) || v == Visibility::Internal, "{}: {v:?}", row.title);
+            }
+        }
+        assert!(seen >= frames.len(), "only {seen} records from {} frames: the premise moved", frames.len());
+    }
+
     #[test]
     fn a_tool_call_that_classifies_to_nothing_is_not_a_worked_row_in_his_view() {
         // Product hunt 2026-10-15, finding 13: "Worked" under "Worked for 15s", "Worked

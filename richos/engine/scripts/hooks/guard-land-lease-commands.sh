@@ -41,6 +41,9 @@ if [ -f "$_UE_LIB" ]; then
     unevaluated_or_continue "guard-land-lease-commands.sh" "$_gllc_in" "" \
         "whether a Git command aimed at a fenced main checkout holds that repository's land lease"
 fi
+# dispatch-words: git
+#   (dispatch-pretooluse.sh skips this rule on a call that names none of these
+#   words: they are the words the filter below needs before it can do anything.)
 case "$_gllc_in" in *git*) ;; *) exit 0 ;; esac
 case "$_gllc_in" in
     *cherry-pick*|*revert*|*" am"*|*rebase*|*stash*|*commit*|*reset*|*--abort*|*--quit*) ;;
