@@ -203,15 +203,16 @@ class AccountsVerdict(unittest.TestCase):
         clicks, settings = [], []
         def fail():
             raise walk.StepFailed('fixture browser failure')
-        stub = types.SimpleNamespace(report={}, sign_in_browser=fail,
+        stub = types.SimpleNamespace(vm='guest', report={}, sign_in_browser=fail,
             settings=lambda want, name: settings.append(want),
             ax=lambda *args: clicks.append(args), frame=lambda _: self.CARD,
             by_id=lambda name: {'enabled': True, 'title': 'Sign in'} if name != 'provider-cancel' else None)
-        with mock.patch.object(walk.time, 'sleep'):
+        with mock.patch.object(walk.time, 'sleep'), mock.patch.object(walk, 'guest', return_value='') as remote:
             with self.assertRaisesRegex(walk.StepFailed, 'fixture browser failure'):
                 walk.NewUserWalk.accounts(stub)
         self.assertIn(('click', '--id', 'setup-close', '--first'), clicks)
         self.assertEqual(settings, [True, False])
+        self.assertIn('activate', remote.call_args.args[1])
 
     def test_a_button_without_a_provider_browser_journey_cannot_pass(self):
         stub = types.SimpleNamespace(vm='guest', by_id=lambda _: {'enabled': True},
@@ -225,11 +226,31 @@ class AccountsVerdict(unittest.TestCase):
         address = {'value': 'https://claude.ai/login?state=private', 'desc': 'Address and Search'}
         for controls, accepted in [([{'title': 'Reload Page'}], False),
                                    ([{'title': 'Continue with Google'}], True)]:
-            stub = types.SimpleNamespace(ax=lambda mode, *args, **kwargs:
+            stub = types.SimpleNamespace(vm='guest', ax=lambda mode, *args, **kwargs:
                                          controls if args[1] == 'AXButton' else [address])
-            raw, safe = walk.NewUserWalk.browser_page(stub)
+            with mock.patch.object(walk, 'guest', return_value=address['value']):
+                raw, safe = walk.NewUserWalk.browser_page(stub)
             self.assertEqual(bool(raw), accepted)
             self.assertEqual(safe, {'host': 'claude.ai', 'path': '/login'} if accepted else None)
+
+    def test_browser_proof_uses_the_current_tab_instead_of_a_stale_ax_address(self):
+        stale = {'value': 'https://claude.ai/login?state=old', 'desc': 'Enter your email'}
+        stub = types.SimpleNamespace(vm='guest', ax=lambda *args, **kwargs: [stale])
+        fresh = 'https://claude.ai/login?state=new'
+        with mock.patch.object(walk, 'guest', return_value=fresh) as remote:
+            raw, safe = walk.NewUserWalk.browser_page(stub)
+        self.assertEqual(raw, fresh)
+        self.assertEqual(safe, {'host': 'claude.ai', 'path': '/login'})
+        self.assertIn('current tab of front window', remote.call_args.args[1])
+        with mock.patch.object(walk, 'guest', return_value='https://unrelated.invalid/login'):
+            self.assertEqual(walk.NewUserWalk.browser_page(stub), (None, None))
+
+    def test_settings_is_read_after_activating_the_owned_app(self):
+        events = []
+        stub = types.SimpleNamespace(vm='guest', frame=lambda _: events.append('frame') or 'closed')
+        with mock.patch.object(walk, 'guest', side_effect=lambda *args: events.append('activate')):
+            walk.NewUserWalk.settings(stub, False, 'closed')
+        self.assertEqual(events, ['activate', 'frame'])
 
     def test_his_card_fails(self):
         self.assertIn('account state unknown', walk.accounts_verdict(

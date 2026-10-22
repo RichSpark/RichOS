@@ -388,6 +388,7 @@ class NewUserWalk(setup_walk.SetupWalk):
         finally:
             original = sys.exc_info()[1]
             try:
+                guest(self.vm, "osascript -e 'tell application id \"com.richos.app\" to activate'")
                 for control in ('provider-cancel', 'setup-close', 'acc-close'):
                     if self.by_id(control):
                         self.ax('click', '--id', control, '--first')
@@ -402,28 +403,25 @@ class NewUserWalk(setup_walk.SetupWalk):
         return guest(self.vm, "python3 - <<'PY'\nimport subprocess\nrows = subprocess.check_output(['ps', '-axo', 'command'], text=True).splitlines()\nprint(any(r.split()[-3:] == ['auth', 'login', '--claudeai'] for r in rows))\nPY").strip() == 'True'
 
     def browser_page(self):
+        # Safari's AX address fields can retain the first tab's URL after a new login opens
+        # another tab. Ask the browser for its current page, keeping the query only in memory.
+        raw = guest(self.vm, "osascript -e 'tell application \"Safari\" to if (count windows) > 0 then get URL of current tab of front window'")
+        safe = provider_page(raw)
+        if not safe:
+            return None, None
         try:
             nodes = self.ax('find', '--role', 'AXTextField', app='Safari')
+            buttons = self.ax('find', '--role', 'AXButton', app='Safari')
         except StepFailed as exc:
             if axwait.not_yet(exc, 'find'):
                 return None, None
             raise
-        for n in nodes:
-            raw = str(n.get('value') or '')
-            safe = provider_page(raw)
-            if safe:
-                # A provider URL alone also appears on Safari's network-error page. Require
-                # the actual sign-in controls, not merely an address handed to the browser.
-                try:
-                    buttons = self.ax('find', '--role', 'AXButton', app='Safari')
-                except StepFailed as exc:
-                    if axwait.not_yet(exc, 'find'):
-                        return None, None
-                    raise
-                labels = ' '.join(str(node.get(k) or '') for node in nodes + buttons
-                                  for k in ('title', 'desc'))
-                if re.search(r'\b(email|log in|sign in|continue with (google|apple|email))\b', labels, re.I):
-                    return raw, safe
+        # A provider URL alone also appears on Safari's network-error page. Require actual
+        # sign-in controls as well, never merely the address handed to the browser.
+        labels = ' '.join(str(node.get(k) or '') for node in nodes + buttons
+                          for k in ('title', 'desc'))
+        if re.search(r'\b(email|log in|sign in|continue with (google|apple|email))\b', labels, re.I):
+            return raw, safe
         return None, None
 
     def sign_in_browser(self):
@@ -441,16 +439,20 @@ class NewUserWalk(setup_walk.SetupWalk):
                 raise StepFailed('a previous provider login is still running before attempt %d' % n)
             self.ax('click', '--id', 'provider-connect', '--first')
             end = time.monotonic() + 90
-            process_seen, safe = False, None
+            process_seen, page_seen, new_page_seen, safe = False, False, False, None
             while time.monotonic() < end:
                 process_seen = self.login_running() or process_seen
                 raw, page = self.browser_page()
+                page_seen = bool(page) or page_seen
+                new_page_seen = bool(raw and raw != previous_url) or new_page_seen
                 if process_seen and raw and raw != previous_url:
                     safe, previous_url = page, raw
                     break
                 time.sleep(1)
             if not safe:
-                raise StepFailed('Sign in attempt %d did not start provider login and open a new provider page' % n)
+                raise StepFailed('Sign in attempt %d did not start provider login and open a new provider page '
+                                 '(process observed: %s; provider page observed: %s; new URL observed: %s)'
+                                 % (n, process_seen, page_seen, new_page_seen))
             self.ax('click', '--id', 'provider-cancel', '--first')
             guest(self.vm, "osascript -e 'tell application id \"com.richos.app\" to activate'")
             end = time.monotonic() + 30
@@ -470,6 +472,7 @@ class NewUserWalk(setup_walk.SetupWalk):
         """Open or close Settings the way a person does, with its own button, and check the frame:
         Escape left it open on the guest walk of 2026-10-21, and the next message was typed into
         nothing. Returns the frame's text with Settings in the state asked for."""
+        guest(self.vm, "osascript -e 'tell application id \"com.richos.app\" to activate'")
         text = self.frame(name)
         for _ in range(2):
             if settings_open(text) == want_open:
