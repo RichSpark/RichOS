@@ -152,7 +152,8 @@ registered and no other open job could be running it (one waiting on the user,
 the screen or the allowance with no change since cannot); the rest are left to
 Stu. When Rich runs a job's commands himself in the turn that gave the job,
 the Stop also ends those his own model started after the job was registered,
-while that turn still runs. The Stop fact prevents subsequent preparation, dispatch and worker actions
+while that turn still runs: never one naming another job and one naming no job
+only when no other job came from the same turn. The Stop fact prevents subsequent preparation, dispatch and worker actions
 for that obligation. Stu receives typed user-control facts through the same inbox;
 other assignments and Rich's conversation keep their own execution ownership.
 

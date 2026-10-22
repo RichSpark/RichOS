@@ -1341,8 +1341,9 @@ impl WorkHost {
         let job_turn = format!("ledger:{thread}:");
         if let Some(desk) = front_desk.as_ref().filter(|desk| desk.turn.as_ref().is_some_and(|turn|
             record.instruction_ledger_ref.strip_prefix(job_turn.as_str()) == Some(turn.turn_id.as_str()))) {
-            for command in desk.handle.own_commands().iter().filter(|c| c.started_at_ms >= record.registered_at_ms) {
-                outcomes.push(desk.handle.stop_background_command(&command.task_id));
+            let records = assignment::read_all(&self.state, entity, thread).map_err(|e| e.to_string())?;
+            for task in desk_commands(&records, id, &desk.handle.own_commands()) {
+                outcomes.push(desk.handle.stop_background_command(&task));
             }
         }
         outcomes.extend(targets.iter().map(|(session, tool)| match &stopper {
@@ -1505,6 +1506,32 @@ pub fn for_him(row: &Assignment) -> bool {
     row.waiting_sentence || row.state.awaits_his_word()
 }
 
+/// Does the command's description name this job's obligation_id? The whole id, never a part
+/// of a longer one ("obligation-7" is not in "obligation-70").
+fn names_job(command: &crate::steering::OwnCommand, record: &assignment::Assignment) -> bool {
+    let (text, wanted) = (command.description.as_str(), record.obligation_id.as_str());
+    let part_of_id = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    !wanted.is_empty() && text.match_indices(wanted).any(|(at, _)| {
+        !part_of_id(text[..at].chars().next_back()) && !part_of_id(text[at + wanted.len()..].chars().next())
+    })
+}
+
+/// Which of Rich's own running commands are job `id`'s, while he runs the turn that gave it:
+/// those started after it was registered, unless one names another job, or names none while
+/// another job came from the same turn (`assignment_tools` records several from one turn).
+fn desk_commands(records: &[assignment::Assignment], id: &str, commands: &[crate::steering::OwnCommand]) -> Vec<String> {
+    let Some(job) = records.iter().find(|r| r.id == id) else { return Vec::new() };
+    let others: Vec<_> = records.iter().filter(|r| r.id != id).collect();
+    let same_turn = |at: u64| others.iter().any(|r| r.instruction_ledger_ref == job.instruction_ledger_ref && r.registered_at_ms <= at);
+    commands
+        .iter()
+        .filter(|c| c.started_at_ms >= job.registered_at_ms)
+        .filter(|c| names_job(c, job)
+            || (!others.iter().any(|r| names_job(c, r)) && !same_turn(c.started_at_ms)))
+        .map(|c| c.task_id.clone())
+        .collect()
+}
+
 /// Which of Stu's own running commands are job `id`'s. **The job travels with the command:**
 /// Stu names the job's `obligation_id` in the description of every command he runs for it
 /// (stu.md), so a command naming this job is its, and one naming another job is never its.
@@ -1516,14 +1543,7 @@ pub fn for_him(row: &Assignment) -> bool {
 fn job_commands(records: &[assignment::Assignment], id: &str, commands: &[crate::steering::OwnCommand]) -> Vec<String> {
     use AssignmentState::{Blocked, WaitingForQuota, WaitingForScreen};
     let Some(job) = records.iter().find(|r| r.id == id) else { return Vec::new() };
-    // The whole id, never a part of a longer one ("obligation-7" is not in "obligation-70").
-    let names = |command: &crate::steering::OwnCommand, record: &assignment::Assignment| {
-        let (text, wanted) = (command.description.as_str(), record.obligation_id.as_str());
-        let part_of_id = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-        !wanted.is_empty() && text.match_indices(wanted).any(|(at, _)| {
-            !part_of_id(text[..at].chars().next_back()) && !part_of_id(text[at + wanted.len()..].chars().next())
-        })
-    };
+    let names = names_job;
     let another_could_run = |at: u64| {
         records.iter().any(|r| {
             let waiting_since_before = matches!(r.reported_state(), Some(Blocked | WaitingForScreen | WaitingForQuota))
@@ -3691,6 +3711,59 @@ mod tests {
         h.host.stop_assignment_and_front_desk("depot", "thread-one", &second.id,
             Some(crate::steering::FrontDesk { handle: desk.clone(), turn: None })).unwrap();
         assert!(desk.0.lock().unwrap().is_empty(), "with no turn running, nothing of Rich's is this job's");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **Two jobs from one turn of Rich's** (review rv-20261022T113651Z-da8b9bfb-d4be): Stop on
+    /// A ends the command naming A and never B's, which names B. RED at da8b9bfbf: every command
+    /// Rich started after A was registered was stopped, b-background included.
+    #[test]
+    fn a_jobs_stop_on_the_front_desk_never_takes_the_other_jobs_command() {
+        struct Desk(Mutex<Vec<String>>);
+        impl TurnCancel for Desk {
+            fn cancel(&self) -> bool { panic!("a job's Stop must not interrupt Rich") }
+            fn shutdown(&self) {}
+            fn own_commands(&self) -> Vec<crate::steering::OwnCommand> {
+                [("a-foreground", "obligation-7: build the site"), ("b-background", "obligation-b: watch the logs")]
+                    .into_iter().map(|(task, description)| crate::steering::OwnCommand {
+                        task_id: task.into(), started_at_ms: u64::MAX, description: description.into() }).collect()
+            }
+            fn stop_background_command(&self, task: &str) -> CommandStop {
+                self.0.lock().unwrap().push(task.into());
+                CommandStop::Ended
+            }
+        }
+        let h = harness(0);
+        let a = assignment::register(&h.state, &registration(&h)).unwrap();
+        let b = assignment::register(&h.state, &Registration { obligation_id: "obligation-b".into(), ..registration(&h) }).unwrap();
+        let desk = Arc::new(Desk(Mutex::new(vec![])));
+        let turn = Some(crate::steering::ActiveTurn { turn_id: "turn-7".into(), thread_id: "thread-one".into(), entity_id: None, started_at: None });
+        h.host.stop_assignment_and_front_desk("depot", "thread-one", &a.id,
+            Some(crate::steering::FrontDesk { handle: desk.clone(), turn })).unwrap();
+        assert_eq!(*desk.0.lock().unwrap(), vec!["a-foreground".to_string()], "Stop on A took B's command");
+        assert_eq!(assignment::read(&h.state, "depot", "thread-one", &b.id).unwrap().user_stop_requested_at_ms, None);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// Rich's selector: a command naming a job is that job's; one naming none is the job's only
+    /// when no other job came from the same turn.
+    #[test]
+    fn the_front_desks_commands_go_to_the_job_they_name() {
+        let h = harness(0);
+        let a = assignment::register(&h.state, &registration(&h)).unwrap();
+        let read = |id: &str| assignment::read(&h.state, "depot", "thread-one", id).unwrap();
+        let command = |task: &str, description: &str| crate::steering::OwnCommand {
+            task_id: task.into(), started_at_ms: u64::MAX, description: description.into() };
+        let commands = vec![command("a-foreground", "obligation-7: build"), command("b-background", "obligation-b: watch"),
+            command("unnamed", "List the files")];
+        // A alone from this turn: its own command and the unnamed one; never one naming another job.
+        assert_eq!(desk_commands(&[read(&a.id)], &a.id, &commands), vec!["a-foreground".to_string(), "unnamed".to_string()]);
+        let b = assignment::register(&h.state, &Registration { obligation_id: "obligation-b".into(), ..registration(&h) }).unwrap();
+        let all = assignment::read_all(&h.state, "depot", "thread-one").unwrap();
+        assert_eq!(desk_commands(&all, &a.id, &commands), vec!["a-foreground".to_string()]);
+        assert_eq!(desk_commands(&all, &b.id, &commands), vec!["b-background".to_string()]);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
