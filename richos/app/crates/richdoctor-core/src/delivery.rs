@@ -378,7 +378,11 @@ pub type Images<'a> = &'a dyn Fn(&Entry) -> Option<Vec<u8>>;
 
 /// Upload every image in `missing`, in manifest order. `Ok(())` when the relay answers that
 /// none is missing; `Err(state)` for the state to show.
-fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, on_state: &mut dyn FnMut(&State)) -> Result<(), State> {
+/// How often one upload is resent after a "limited" answer, and the longest wait slept through.
+const UPLOAD_WAITS: u32 = 3;
+const UPLOAD_WAIT_MAX_MS: u64 = 30_000;
+
+fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State)) -> Result<(), State> {
     let total = approved.manifest.len() as u32;
     let mut missing = missing;
     // Twice at most: an identical retry of an image that was stored answers the same.
@@ -406,15 +410,27 @@ fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Dest
                 ("X-Content-SHA256".to_string(), entry.sha256.clone()),
             ];
             let url = format!("{}/v1/reports/{}/attachments/{}", dest.relay, approved.report_id, entry.attachment_id);
-            let t = relay.put(&url, &headers, bytes, &mut |_| {});
-            if let Transport::Stopped(why) = &t {
-                return Err(State::NotSent { why: NotSent::UploadStopped { item, why: why.clone() }, at: clock() });
-            }
-            match read(&t, &dest.repository, clock()) {
-                Reading::Receiving { missing: m } => missing = m,
-                Reading::Done(s) => return Err(s),
-                Reading::Pending(_) => return Err(State::Checking { since: clock() }),
-                Reading::Unclear => {} // asked again in the next round
+            let mut waits = 0;
+            loop {
+                let t = relay.put(&url, &headers, bytes.clone(), &mut |_| {});
+                if let Transport::Stopped(why) = &t {
+                    return Err(State::NotSent { why: NotSent::UploadStopped { item, why: why.clone() }, at: clock() });
+                }
+                match read(&t, &dest.repository, clock()) {
+                    Reading::Receiving { missing: m } => missing = m,
+                    // "limited": the upload met the receipt lock or a running cleanup. The same
+                    // upload is sent again after the short wait the relay asked for; a long one
+                    // is shown to the person instead of slept through.
+                    Reading::Done(State::NotSent { why: NotSent::Busy { until: Some(u) }, .. }) if waits < UPLOAD_WAITS && u.saturating_sub(clock()) <= UPLOAD_WAIT_MAX_MS => {
+                        waits += 1;
+                        sleep(u.saturating_sub(clock()));
+                        continue;
+                    }
+                    Reading::Done(s) => return Err(s),
+                    Reading::Pending(_) => return Err(State::Checking { since: clock() }),
+                    Reading::Unclear => {} // asked again in the next round
+                }
+                break;
             }
         }
     }
@@ -455,7 +471,7 @@ pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &
             _ => return reconcile(approved, dest, relay, clock, sleep, on_state, begun, CHECK_EVERY_MS),
         },
     };
-    if let Err(s) = upload(approved, missing, images, dest, relay, clock, on_state) {
+    if let Err(s) = upload(approved, missing, images, dest, relay, clock, sleep, on_state) {
         on_state(&s);
         return s;
     }
@@ -465,7 +481,7 @@ pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &
     // The relay found an image missing after all (a cleanup, a lost write): upload it once more.
     if let Reading::Receiving { missing } = read(&answer, &dest.repository, clock()) {
         if !missing.is_empty() {
-            if let Err(s) = upload(approved, missing, images, dest, relay, clock, on_state) {
+            if let Err(s) = upload(approved, missing, images, dest, relay, clock, sleep, on_state) {
                 on_state(&s);
                 return s;
             }
@@ -701,6 +717,30 @@ mod tests {
         assert!(matches!(s, State::Submitted { .. }));
         assert_eq!(again.count("/attachments/1"), 0);
         assert_eq!(again.count("/attachments/2"), 1);
+    }
+
+    #[test]
+    fn a_limited_upload_is_resent_after_the_wait_the_relay_asked_for() {
+        // The relay answers "limited" when an upload meets its receipt lock or a running
+        // cleanup (RICHDOCTOR-RELAY.md): the same upload is sent again after retry_after_seconds.
+        let (a, images) = approved_with(1);
+        let r = script(vec![
+            j(json!({"state":"receiving","stored":[],"missing":["1"]})),
+            Transport::Answer { status: 429, body: Some(json!({"state":"limited","retry_after_seconds":2})), retry_after: Some(2) },
+            j(json!({"state":"ready","stored":["1"],"missing":[]})),
+            j(json!({"state":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":1,"images_expected":1})),
+        ]);
+        let (s, _) = run(&a, &images, &r, false);
+        assert!(matches!(s, State::Submitted { .. }), "{s:?}");
+        assert_eq!(r.count("/attachments/1"), 2);
+        // A long wait is not slept through: the person sees when to try again.
+        let r = script(vec![
+            j(json!({"state":"receiving","stored":[],"missing":["1"]})),
+            Transport::Answer { status: 429, body: Some(json!({"state":"limited","retry_after_seconds":900})), retry_after: Some(900) },
+        ]);
+        let (s, _) = run(&a, &images, &r, false);
+        assert!(matches!(s, State::NotSent { why: NotSent::Busy { until: Some(_) }, .. }), "{s:?}");
+        assert_eq!(r.count("/complete"), 0);
     }
 
     #[test]
