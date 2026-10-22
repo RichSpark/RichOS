@@ -739,7 +739,6 @@ class InputSnapshot:
         self.contents = {}
         self.portables = {}
         self.browser_installs = {}
-        self.ignoreds = {}
 
     def checkout(self, root):
         key = str(root)
@@ -801,34 +800,6 @@ class InputSnapshot:
         if key not in self.inventories:
             self.inventories[key] = inventory_identity(path)
         return self.inventories[key]
-
-    def ignored(self, root, rels):
-        key = (str(root), tuple(rels))
-        if key not in self.ignoreds:
-            self.ignoreds[key] = ignored_identity(root, rels)
-        return self.ignoreds[key]
-
-
-def ignored_identity(root, rels):
-    """What git ignores under `rels` (excluded() output left out), each by path_identity, or None
-    when git cannot list it. A recipe's paths already bind these bytes; this names them apart,
-    because no selector sees what git ignores (selection_standing)."""
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    try:
-        listed = subprocess.run(["git", "-C", str(root), "ls-files", "--others", "--ignored", "--exclude-standard",
-                                 "--directory", "-z", "--", *rels], env=env, stdin=subprocess.DEVNULL,
-                                capture_output=True, timeout=120)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    output = getattr(listed, "stdout", None)
-    if listed.returncode != 0 or not isinstance(output, bytes):
-        return None
-    found = {}
-    for raw in sorted(p for p in output.split(b"\0") if p):
-        rel = os.fsdecode(raw).rstrip("/")
-        if not excluded(Path(root) / rel):
-            found[rel] = path_identity(Path(root) / rel)
-    return digest(found)
 
 
 def prepare_environment(item, root, logdir, environment, create=True):
@@ -1143,10 +1114,6 @@ def recipe_identity(root, recipe, environment, snapshot=None):
                 "git_inputs": git_input_identity(root, recipe.get("git_inputs"), environment),
                 "environment": values, "external": external,
                 "platform": [platform.system(), platform.release(), platform.machine(), platform.mac_ver()[0], os.cpu_count()]}
-    if not family:
-        ignored = snapshot.ignored(root, selected_paths)
-        if ignored is not None:
-            identity["ignored"] = ignored
     if family:
         # What the suite executes that git does not track, bound by what loads rather than by
         # where this checkout is (portable_dependencies).
@@ -1668,16 +1635,12 @@ VERIFIES_OWN_INPUTS = frozenset(("engine receipts", "engine scripts/verification
 class Record:
     def __init__(self, root, logdir, items, source, identities, previous=None,
                  current_source=None, current_identity=None, current_identities=None, explain=None,
-                 current_commit=None, selection=None, seat=None, unaffected=None):
+                 current_commit=None, selection=None, seat=None):
         refuse_duplicates(items)  # before anything is written: a saved plan never holds one
         self.root, self.logdir = str(root), Path(logdir)
         # seat(item, snapshot): the read_seat (seat_reader) for one check, so reuse() can accept
         # a pass made in another checkout that still stands there (seat_gap). None: never.
         self.seat = seat
-        # unaffected(a, b, label): None when neither the selector nor the dependency map says
-        # a..b reaches the check (proof-run.py selection_unaffected), so reuse() lets a pass
-        # saved at commit a stand at b (selection_standing). None: never.
-        self.unaffected = unaffected
         # What changed and who could have changed it, appended to an invalidation note, so a
         # check invalidated by another check's writes names the paths instead of only saying so.
         self.explain = explain or (lambda item: "")
@@ -2152,25 +2115,23 @@ def made_elsewhere(saved, wanted):
             and bool(saved.get("checkout")) and saved.get("checkout") != wanted.get("checkout"))
 
 
-def seat_difference(saved, wanted, content=True):
+def seat_difference(saved, wanted):
     """None when a pass saved under `saved` in another checkout may stand for `wanted` here as far
-    as the two identities alone say (above), else why not. Reads nothing; the rest is seat_gap's.
-    `content=False`: the content is judged by the selector instead (selection_standing)."""
+    as the two identities alone say (above), else why not. Reads nothing; the rest is seat_gap's."""
     if not made_elsewhere(saved, wanted):
         return "not a whole-checkout pass made in another checkout"
-    if content and saved.get("tree") != wanted.get("tree"):
+    if saved.get("tree") != wanted.get("tree"):
         return "the two checkouts' content differs"
     if saved.get("command") != wanted.get("command") or saved.get("settings") != wanted.get("settings"):
         return "another command or runner setting"
     return None
 
 
-def seat_gap(saved, wanted, read_seat, content=True):
+def seat_gap(saved, wanted, read_seat):
     """None when the whole-checkout pass saved under `saved` in another checkout stands for the
     check whose identity here is `wanted` (above), else why not. `read_seat(seat)` reads that
-    checkout now (seat_reader). `content=False`: the seat must still stand as it was made, but its
-    content may differ from this checkout's; the selector judges that (selection_standing)."""
-    gap = seat_difference(saved, wanted, content)
+    checkout now (seat_reader)."""
+    gap = seat_difference(saved, wanted)
     if gap:
         return gap
     seat, here = saved["checkout"], wanted["checkout"]
@@ -2181,74 +2142,12 @@ def seat_gap(saved, wanted, read_seat, content=True):
     made = {k: v for k, v in saved.items() if k not in ("command", "settings")}
     if not stands_in(made, there):
         return "it no longer stands in its own checkout %s%s" % (seat, identity_difference(made, there))
-    # The seat still holds what its pass was made on; only the comparison with this checkout
-    # leaves the content to the selector.
-    view = (lambda identity: identity) if content else beside_the_content
-    if _beside_the_place(view(placed(there, seat, here))) != _beside_the_place(view(wanted)):
+    if _beside_the_place(placed(there, seat, here)) != _beside_the_place(wanted):
         return "the two checkouts differ beyond their place%s" % identity_difference(
-            _beside_the_place(view(placed(there, seat, here))), _beside_the_place(view(wanted)))
+            _beside_the_place(placed(there, seat, here)), _beside_the_place(wanted))
     if installs_there != installs_here:
         return "the two checkouts load different dependency installs"
     return None
-
-
-# What of an identity is the checkout's content (git-landable bytes, inventories and the reviewed
-# declarations over them). selection_standing judges exactly these by the selector and the
-# dependency map instead of by digest, and every other field (tools, environment, profile,
-# installs, platform, outside paths, command, settings, a recipe's ignored files, which git cannot
-# see) by equality. Of `git_inputs` only the history and index readings are content
-# (GIT_CONTENT_INPUTS); a Git configuration observation (`quote_path`, core.quotepath) is no commit's
-# content, so it stays compared (review rv-20261022T062403Z-4b9d1c1f-03ee #2).
-CONTENT_FIELDS = ("tree", "paths", "inventories", "qualification", "exists")
-GIT_CONTENT_INPUTS = ("tracked", "last_change")
-EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
-
-
-def beside_the_content(identity):
-    """`identity` without its content fields (CONTENT_FIELDS, GIT_CONTENT_INPUTS); a recipe's
-    contract digest is content too (its declaration), so only the kind of contract is kept."""
-    if not isinstance(identity, dict):
-        return identity
-    rest = {k: v for k, v in identity.items() if k not in CONTENT_FIELDS}
-    if isinstance(rest.get("git_inputs"), dict):
-        rest["git_inputs"] = {k: v for k, v in rest["git_inputs"].items() if k not in GIT_CONTENT_INPUTS}
-    if rest.get("contract") not in (None, WHOLE_CHECKOUT):
-        rest["contract"] = "recipe"
-    return rest
-
-
-def clean_source(source):
-    """True for a source identity of a commit with no tracked change and no untracked file."""
-    return (isinstance(source, dict) and bool(source.get("commit"))
-            and source.get("tracked_diff_sha256") == EMPTY_SHA256 and source.get("untracked_sha256") == EMPTY_SHA256)
-
-
-def selection_standing(label, old, identity, source, unaffected, read_seat=None):
-    """None when the pass `old`, saved at commit A, stands for check `label` at commit B (the
-    current `source`) by the selector's standard (proof-run.py selection_unaffected), else why
-    not. Both trees clean, every non-content field unchanged (for a pass made in another checkout,
-    seat_gap's reading of it without the content), and `unaffected(A, B, label)` None. A recipe
-    identity saved before it bound its ignored files cannot stand: what git ignores, no selector
-    sees."""
-    saved = old.get("input")
-    if not isinstance(saved, dict) or not isinstance(identity, dict) or saved.get("fresh"):
-        return "no identity to compare"
-    if not clean_source(old.get("source")):
-        return "its run was not on a clean commit"
-    if not clean_source(source):
-        return "this checkout is not a clean commit"
-    if saved.get("contract") != WHOLE_CHECKOUT and "ignored" not in saved:
-        return "its identity predates the binding of ignored files"
-    if made_elsewhere(saved, identity):
-        if read_seat is None:
-            return "made in another checkout"
-        gap = seat_gap(saved, identity, read_seat, content=False)
-        if gap:
-            return gap
-    elif not stands_in(beside_the_content(saved), beside_the_content(identity)):
-        return "inputs other than the checkout's content changed" + identity_difference(
-            beside_the_content(saved), beside_the_content(identity))
-    return unaffected(old["source"]["commit"], source["commit"], label)
 
 
 def seat_reader(here, argv, environment, snapshot):
@@ -2265,13 +2164,10 @@ def seat_reader(here, argv, environment, snapshot):
     return read
 
 
-def evidence_gap(label, old, identity, plan, exact=False, source=None, read_seat=None, unaffected=None,
-                 standing=None):
+def evidence_gap(label, old, identity, plan, exact=False, source=None, read_seat=None):
     """Why the saved outcome `old` cannot stand for check `label` whose inputs read `identity`
     now, or None. The one predicate reuse() and coverage() share. `read_seat`: a pass saved in
-    another checkout may stand when it still stands there (seat_gap). `unaffected`: a pass saved
-    at another commit may stand where the selector says the change does not reach it
-    (selection_standing); `standing`, a dict, is then given the two commits."""
+    another checkout may stand when it still stands there (seat_gap)."""
     if label == "engine receipts":
         return "coverage verifier runs over the reconciled receipt set"
     if identity.get("fresh"):
@@ -2286,13 +2182,6 @@ def evidence_gap(label, old, identity, plan, exact=False, source=None, read_seat
         return "the checkout's commit changed during the original execution"
     if not stands_in(old.get("input"), identity):
         changed = "declared execution inputs changed" + identity_difference(old.get("input"), identity)
-        if unaffected is not None and not exact:
-            why = selection_standing(label, old, identity, source, unaffected, read_seat)
-            if why is None:
-                if standing is not None:
-                    standing.update({"from": old["source"]["commit"], "to": source["commit"]})
-                return None
-            changed += "; not left standing by the selector: " + why
         if read_seat is None or not made_elsewhere(old.get("input"), identity):
             return changed
         moved = seat_gap(old.get("input"), identity, read_seat)
@@ -2394,9 +2283,7 @@ def reuse(previous, items, record, exact=True):
         identity = record.identities[item.label]
         seat = getattr(record, "seat", None)
         read_seat = seat(item, snapshot) if seat is not None and not exact else None
-        standing = {}
-        reason = evidence_gap(item.label, old, identity, plan, exact, record.source, read_seat,
-                              getattr(record, "unaffected", None), standing)
+        reason = evidence_gap(item.label, old, identity, plan, exact, record.source, read_seat)
         elsewhere = reason is None and made_elsewhere(old.get("input"), identity)
         if reason is None:
             try:
@@ -2420,15 +2307,10 @@ def reuse(previous, items, record, exact=True):
                                    "input": old["input"], "earlier": old.get("provenance")}
                 if elsewhere:
                     item.provenance["seat"] = old["input"]["checkout"]
-                if standing:
-                    item.provenance["unaffected"] = standing
                 item.reused_from = str(previous)
                 item.notes.append("validated evidence reused from " + str(previous) + (
-                    " (made in %s, where it still stands, on %s)" % (old["input"]["checkout"],
-                        "the same installs" if standing else "the same content and installs")
-                    if elsewhere else "") + (
-                    " (saved at %s; neither the selector nor the dependency map reaches it from %s..%s)" % (
-                        standing["from"][:12], standing["from"][:12], standing["to"][:12]) if standing else ""))
+                    " (made in %s, where it still stands, on the same content and installs)" % old["input"]["checkout"]
+                    if elsewhere else ""))
                 record.save(item, record.source)
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 reason = "saved evidence failed validation: " + str(exc)
@@ -2524,24 +2406,8 @@ def verify_target_receipts(directory, rows, root):
             elsewhere = (provenance and provenance.get("seat")
                          and provenance.get("seat") == (provenance.get("input") or {}).get("checkout")
                          and seat_difference(provenance.get("input"), identity) is None)
-            # A pass left standing by the selector (selection_standing): re-derived here, never
-            # taken from the note. The selector is asked again, in this checkout, at the plan's commit.
-            unaffected = (provenance or {}).get("unaffected") or {}
-            made = (provenance or {}).get("input") or {}
-            standing = bool(
-                unaffected and not identity.get("fresh")
-                and unaffected.get("from") == ((provenance or {}).get("source") or {}).get("commit")
-                and unaffected.get("to") == plan["source"]["commit"]
-                and clean_source(provenance.get("source")) and clean_source(plan["source"])
-                and (made.get("contract") == WHOLE_CHECKOUT or "ignored" in made)
-                and ((provenance.get("seat") and provenance.get("seat") == made.get("checkout")
-                      and seat_difference(made, identity, content=False) is None
-                      and _beside_the_place(beside_the_content(made)) == _beside_the_place(beside_the_content(identity)))
-                     or (not made_elsewhere(made, identity)
-                         and stands_in(beside_the_content(made), beside_the_content(identity))))
-                and runner.selection_unaffected(unaffected["from"], plan["source"]["commit"], item.label) is None)
             if (identity.get("fresh") or not provenance
-                    or not (stands_in(provenance.get("input"), identity) or elsewhere or standing)
+                    or not (stands_in(provenance.get("input"), identity) or elsewhere)
                     or row.get("sha") != outcome.get("receipt_sha")
                     or row.get("schema") != 2 or row.get("execution_status") != "completed"
                     or row.get("verdict") != "PASS" or row.get("rc") != row.get("expected_rc")

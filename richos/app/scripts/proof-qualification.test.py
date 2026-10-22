@@ -157,8 +157,6 @@ class ProductionQualification(unittest.TestCase):
                 return {"unchanged_names": str(path)}
             def runtime(self, executable):
                 return {"unchanged_runtime": str(executable)}
-            def ignored(self, root, rels):
-                return {"unchanged_ignored": list(rels)}
 
         checks = json.loads((HERE / "proof-inputs.json").read_text())["checks"]
         subsets = [label for label, recipe in checks.items() if recipe.get("subset")]
