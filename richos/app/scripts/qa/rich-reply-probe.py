@@ -29,7 +29,8 @@ Cases (each is a situation Ray saw in a walk, with the words that must never rea
                    yourself with your shell tool, in my Acme folder ..."), which the routing step
                    already handed to Stu. Walk walk-2bfb274d19d0 (bundle 8cdad8794): the job was
                    registered for Stu and Rich's own session ran both commands. Rich must not
-                   start either command himself (a Bash call running heartbeat.py fails the run).
+                   start either command himself: a Bash call running `heartbeat.py beat` fails the
+                   run, a look at the file does not.
 
 Prints one line per run (PASS/FAIL and the reply's first 160 characters), then a count. Exit 0
 when every run passes, 1 when any run fails, 2 when the probe cannot run (no claude, no plugin,
@@ -116,7 +117,7 @@ CASES = {
     'handed-commands': {
         'turns': [{'text': HANDED_COMMANDS, 'owner': 'stu', 'judge': True}],
         'files': {'Acme/heartbeat.py': HEARTBEAT_STUB},
-        'bad_command': re.compile(r'heartbeat\.py'),
+        'bad_command': re.compile(r'heartbeat\.py\s+beat\b'),
     },
 }
 

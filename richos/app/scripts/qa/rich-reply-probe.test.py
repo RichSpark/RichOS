@@ -89,7 +89,7 @@ class Probe(unittest.TestCase):
         self.assertIn('[Bash] cd Acme && python3 heartbeat.py', ran.stdout)
         # A look around is not starting the job's command.
         looked = self.probe('handed-commands', "Stu is running both and I'll tell you when they finish.",
-                            bash='ls Acme')
+                            bash='ls Acme/heartbeat.py && cat Acme/heartbeat.py')
         self.assertEqual(looked.returncode, 0, looked.stderr)
         self.assertIn('handed-commands: 2 of 2 passed', looked.stdout)
 
