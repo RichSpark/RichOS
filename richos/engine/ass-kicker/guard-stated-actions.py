@@ -844,7 +844,20 @@ def third_subject(sentence):
     if lw in _NOT_THIRD or lw.endswith("ed") or lw.endswith("ing") or not w[0].isupper():
         return False
     return True
-PRIVATE_NOTES_RE = re.compile(r"\bprivate\s+(?:memory\s+)?notes?\b", re.I)
+PRIVATE_NOTES_RE = re.compile(r"\bprivate\s+(?:memory\s+|follow-?up\s+)?notes?\b", re.I)
+# "Noted." as a promise or follow-up, and "it's in my (private) notes" (CEO
+# 2026-10-21: "the 'noted' and 'private notes' need to be added to that hook").
+# Neither is a record until a committed repository file holds it, so the
+# claim is judged as kind "note": only a named, committed repository file
+# backs it; the memory directory and ECS do not. "Noted that ..." stays an
+# acknowledgment (R25), and a bare "Noted." with no later work promised is one too.
+NOTED_ONLY_RE = re.compile(r"^(?:(?:ok(?:ay)?|got\s+it|understood)\s*[,.—–-]?\s+)?noted\s*[.!]?\s*$", re.I)
+NOTED_LEAD_RE = re.compile(r"^noted\s*(?:[,:—–-]\s*|\s+(?=(?:for|as|on|in|re)\b))(?!that\b)(\S.*)$", re.I)
+FUTURE_RE = re.compile(r"\b(?:goes?\s+in|going\s+in|will|I'll|we'll|it'll|after|once|next|later|then|when|"
+                       r"before|follow-?ups?|queued|on\s+the\s+list|after\s+that)\b|'ll\b", re.I)
+NOTES_CLAIM_RE = re.compile(r"\b(?:it|this|that|they|these)(?:'s|\s+is|\s+are|'re)\s+(?:now\s+|also\s+|just\s+|only\s+)?"
+                            r"(?:in|on)\s+(?:my|the)\s+(?:private\s+)?(?:follow-?up\s+)?notes?\b", re.I)
+FOLLOWUPS_FILE = "richos-hq/docs/plans/follow-ups.md"
 RULE_NOUN_RE = re.compile(r"\b(?:rules?|rulings?|lessons?|doctrine|standing\s+(?:instruction|order)s?)\b", re.I)
 NOTES_POINTER_RE = re.compile(r"\b(?:in|to|into)\s+(?:my\s+|the\s+)?(?:notes|memory)\b", re.I)
 # From the corpus (ass-kicker/docs/stated-actions.corpus.md, ARM 3).
@@ -894,9 +907,26 @@ def record_claims(message):
     """[(kind, sentence)] — kind is 'act' (a record made in this turn) or
     'state' (a record said to exist already). One entry per sentence."""
     out = []
-    for s in SENTENCE_SPLIT_RE.split(clean_keep_lists(message)):
-        s = s.strip()
+    sents = [x.strip() for x in SENTENCE_SPLIT_RE.split(clean_keep_lists(message))]
+    for idx, s in enumerate(sents):
         if not s or QUESTION_RE.search(s) or ARM3_REPORTED_RE.search(s):
+            continue
+        note = None
+        if NOTED_ONLY_RE.match(s):
+            nxt = sents[idx + 1] if idx + 1 < len(sents) else ""
+            if nxt and FUTURE_RE.search(nxt) and not QUESTION_RE.search(nxt):
+                note = "%s %s" % (s, nxt)
+        else:
+            ml = NOTED_LEAD_RE.match(s)
+            if ml and FUTURE_RE.search(ml.group(1)):
+                note = s
+        if note is None:
+            mn = NOTES_CLAIM_RE.search(s)
+            if mn and not (_before(ARM3_NEG_RE, s, mn.start()) or _before(ARM3_MODAL_RE, s, mn.start())
+                           or _before(ARM3_SUBORD_RE, s, mn.start())):
+                note = s
+        if note is not None:
+            out.append(("note", note[:300]))
             continue
         third = third_subject(s)
         kind = None
@@ -944,6 +974,11 @@ def record_claims(message):
             else:
                 k = "act"
             kind = "act" if (kind == "act" or k == "act") else "state"
+        if kind and PRIVATE_NOTES_RE.search(s) and not RULE_NOUN_RE.search(s):
+            # "Saved it in my private notes" is a note claim like "Noted.":
+            # saying "private" no longer excuses a memory-only write (CEO
+            # 2026-10-21). A RULE keeps its own, stricter judgment.
+            kind = "note"
         if kind:
             out.append((kind, s[:300]))
     return out
@@ -1167,6 +1202,46 @@ def raw_window(raw, sentence):
     return sentence
 
 
+def note_window(raw, sentence):
+    """The paragraph a note claim sits in: the file and commit that back a
+    claim are named WITH it, never in another paragraph of the reply."""
+    first = re.split(r"\s{2,}", sentence.strip())[0]
+    probes = [first[:40].strip()]
+    if ". " in first:
+        probes.append(first.split(". ", 1)[1][:40].strip())
+    for probe in probes:
+        if len(probe) >= 8:
+            for para in re.split(r"\n\s*\n", raw):
+                if probe in EMPH_RE.sub("", para).replace("`", ""):
+                    return para
+    return sentence
+
+
+GIT_ADD_RE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?add\b([^\n;&|]*)")
+GIT_COMMIT_ALL_RE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?commit\b[^\n;&|]*\s-[a-z]*a")
+
+
+def _staged_in_commit(path, traffic):
+    """True unless the turn staged explicit paths and this file is not one of
+    them. Without a `git add` in view (commit -a, staging done elsewhere) the
+    commit flag stands. `traffic` is lowercase."""
+    adds = GIT_ADD_RE.findall(traffic)
+    if not adds or GIT_COMMIT_ALL_RE.search(traffic):
+        return True
+    p = path.lower()
+    for a in adds:
+        toks = a.split()
+        if any(t in ("-a", "--all", "-u", "--update") for t in toks):
+            return True
+        for t in toks:
+            t = t.strip("'\"")
+            if t.startswith("-") or not t:
+                continue
+            if t in (".", "./", "*") or t in p or p in t:
+                return True
+    return False
+
+
 def judge_record_claims(claims, writes, raw):
     """[(sentence, code, problem)] for every claim this turn does not back.
     code is one of: nothing, private, where, sha, state. Pure: claims from
@@ -1199,6 +1274,21 @@ def judge_record_claims(claims, writes, raw):
         return "; ".join(parts) or "nothing"
 
     for kind, sentence in claims:
+        if kind == "note":
+            # A promise or follow-up said to be "noted", or "in my notes": only
+            # a committed repository file the reply names backs it. The
+            # memory directory and ECS do not.
+            win = note_window(raw, sentence)
+            wl = win.lower()
+            here = [s for s in cited if s in wl]
+            repo_named = [p for p, k in durable if k == "repo" and _named(p, win)]
+            if not (here and writes["committed"]
+                    and any(_staged_in_commit(p, traffic) for p in repo_named)):
+                failing.append((sentence, "followup", "a promise or follow-up is called noted or in the "
+                                                      "notes, and this turn wrote %s. Only a committed "
+                                                      "repository file the reply names, with its commit, "
+                                                      "backs it" % wrote()))
+            continue
         if kind == "state":
             # A citation names its place where it is made, not somewhere else
             # in the reply: "it is written in the three places I read: the
@@ -1318,7 +1408,7 @@ def _arm3_log(payload, v):
         pass
 
 
-ALERT_CODES = ("nothing", "private", "rule")
+ALERT_CODES = ("nothing", "private", "rule", "followup")
 
 
 def unbacked_claims(v):
@@ -1346,6 +1436,10 @@ def arm3_alert_line(v):
                     "memory holds no rules")
             rule_tail = (". Lead: put the rule in CLAUDE.md or richos-hq/wiki/ceo-decisions.md, "
                          "committed, in this turn")
+        elif code == "followup":
+            what = ("a promise or follow-up called noted is in no committed repository file the reply "
+                    "names (memory and ECS do not count). Lead: write it to %s, commit it, and name "
+                    "the file and the commit" % FOLLOWUPS_FILE)
         elif code == "private":
             what = ("this turn wrote only a private memory note, and the reply never said "
                     "\"in my private notes\"")

@@ -26,6 +26,9 @@ pr = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pr)
 
 
+FED_BY_PS = patch.object(proc_tree, '_kernel_topology', new=lambda: None)
+
+
 class Reliability(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='runner-faults.')
@@ -165,6 +168,11 @@ class Reliability(unittest.TestCase):
             tracker.refresh()
             self.assertEqual(tracker.groups, {})
 
+    # FED_BY_PS: these tests hand proc_tree its process table as `ps` output. Since
+    # 2026-10-22 the table is read from the kernel in-process (_kernel_topology) and `ps`
+    # is the fallback, so each of them turns the kernel read off; what is decided from the
+    # table is the same code either way (proc_tree_pause.test.py checks the two tables agree).
+    @FED_BY_PS
     def test_exit_between_topology_and_native_read_is_not_unreadable(self):
         with patch.object(proc_tree.subprocess, 'run', side_effect=[
                 SimpleNamespace(stdout='100 1 100\n', returncode=0),
@@ -172,6 +180,7 @@ class Reliability(unittest.TestCase):
                 patch.object(proc_tree.operator_fences, 'proc', return_value=None):
             self.assertEqual(proc_tree.process_rows(), {})
 
+    @FED_BY_PS
     def test_zombie_owner_is_dead_even_before_its_parent_reaps_it(self):
         zombie = {'pid': 100, 'ppid': 1, 'pgid': 100, 'start': 'old', 'zombie': True}
         with patch.object(proc_tree.operator_fences, 'proc', return_value=zombie), \
@@ -179,6 +188,7 @@ class Reliability(unittest.TestCase):
             self.assertIsNone(proc_tree.identity(100))
             self.assertEqual(proc_tree.process_rows(), {})
 
+    @FED_BY_PS
     def test_native_esrch_on_unreaped_zombie_is_not_unreadable_live_process(self):
         with patch.object(proc_tree.operator_fences, 'proc', return_value=None), \
                 patch.object(proc_tree.subprocess, 'run', side_effect=[
@@ -186,6 +196,7 @@ class Reliability(unittest.TestCase):
                     SimpleNamespace(stdout='100 Z\n', returncode=0)]):
             self.assertEqual(proc_tree.process_rows(), {})
 
+    @FED_BY_PS
     def test_unreadable_states_are_batched_without_hiding_live_unknowns(self):
         with patch.object(proc_tree.operator_fences, 'proc', return_value=None), \
                 patch.object(proc_tree.subprocess, 'run', side_effect=[
@@ -197,6 +208,37 @@ class Reliability(unittest.TestCase):
             self.assertEqual(run.call_args_list[1].args[0][-1], '100,101,102')
             self.assertEqual(run.call_args.args[0][-1], '100')
 
+    @FED_BY_PS
+    def test_seeded_rows_read_only_the_tree_and_never_a_foreign_root_process(self):
+        # 100 is the tree's root, 101 its child and 102 in its group with a foreign
+        # parent; 200 is someone else's, 300 is root's and unreadable. Only the tree
+        # is read natively, and no second ps is spent on 300.
+        rows = {pid: {'pid': pid, 'ppid': parent, 'pgid': group, 'start': 'born-%d' % pid, 'zombie': False}
+                for pid, parent, group in ((100, 1, 100), (101, 100, 100), (102, 1, 100), (200, 1, 200))}
+        with patch.object(proc_tree.operator_fences, 'proc', side_effect=lambda pid, precise=True: rows.get(pid)) as proc, \
+                patch.object(proc_tree.subprocess, 'run', return_value=SimpleNamespace(
+                    stdout='100 1 100\n101 100 100\n102 1 100\n200 1 200\n300 1 300\n', returncode=0)) as run:
+            table = proc_tree.process_rows(seeds={100})
+        self.assertEqual(sorted(call.args[0] for call in proc.call_args_list), [100, 101, 102])
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(table[101], (100, 100, 'born-101'))
+        self.assertEqual(table[200], (1, 200, None))      # topology only: no generation, never owned
+        self.assertEqual(table[300], (1, 300, None))
+
+    @FED_BY_PS
+    def test_seeded_rows_still_refuse_a_reused_pid(self):
+        # 101 was proven as 'old'; the process now at 101 was born later. The tree
+        # reads it natively (it is a seed) and does not claim it.
+        rows = {100: {'pid': 100, 'ppid': 1, 'pgid': 100, 'start': 'root', 'zombie': False},
+                101: {'pid': 101, 'ppid': 1, 'pgid': 101, 'start': 'new', 'zombie': False}}
+        with patch.object(proc_tree.operator_fences, 'proc', side_effect=lambda pid, precise=True: rows.get(pid)), \
+                patch.object(proc_tree.subprocess, 'run', return_value=SimpleNamespace(
+                    stdout='100 1 100\n101 1 101\n', returncode=0)):
+            tracker = proc_tree.TrackedTree(100, 'fixture-scope')
+            tracker.known[101] = 'old'
+            self.assertEqual(tracker.refresh(), {100})
+
+    @FED_BY_PS
     def test_native_generation_is_rechecked_after_a_live_status_observation(self):
         for zombie in (False, True):
             row = {'pid': 100, 'ppid': 2, 'pgid': 90, 'start': 'native-new', 'zombie': zombie}
@@ -656,6 +698,25 @@ class Reliability(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(sentinel.read_text(), 'evidence')
+
+
+# THE SAME DECISIONS THROUGH THE IN-PROCESS READ (2026-10-22). Each FED_BY_PS test above runs a
+# second time with process_rows taking its table from _kernel_topology, the path that runs on
+# macOS. The stand-in hands back the very table the test's fake `ps` prints, read through the
+# test's own patched subprocess.run, so every fake response, call count and assertion is the
+# original's; only the branch of process_rows that builds the topology differs. That the real
+# kernel table equals `ps`'s is proc_tree_pause.test.py test_the_kernel_table_is_the_table_ps_prints.
+def _kernel_table_from_fake_ps():
+    out = proc_tree._ps(["ps", "-ax", "-o", "pid=,ppid=,pgid="]).stdout
+    return [tuple(int(f) for f in fields) for fields in (line.split() for line in out.splitlines())
+            if len(fields) == 3 and all(f.isdigit() for f in fields)]
+
+
+FED_BY_KERNEL = patch.object(proc_tree, '_kernel_topology', new=_kernel_table_from_fake_ps)
+for _name in [n for n, f in list(vars(Reliability).items()) if getattr(f, 'patchings', None)
+              and any(p.attribute == '_kernel_topology' for p in f.patchings)]:
+    setattr(Reliability, _name + '_through_the_kernel_read',
+            FED_BY_KERNEL(getattr(Reliability, _name).__wrapped__))
 
 
 if __name__ == '__main__':

@@ -316,6 +316,9 @@ fi
 # scan in the wrong place and the file dies with "unexpected EOF while looking
 # for matching `)'". `read -r -d ''` has no such scan. Found by running this
 # guard's own suite under /bin/bash rather than the login shell.
+# dispatch-words: merge push
+#   (dispatch-pretooluse.sh skips this rule on a call that names none of these
+#   words: they are the words the filter below needs before it can do anything.)
 IFS= read -r -d '' _CI_CLASSIFIER <<'PY' || true
 import json, re, shlex, sys
 
