@@ -7,7 +7,7 @@
                                                    a list its allowance cannot hold (XCUITest stops there
                                                    and every later step, shot and tree is lost)
     phone-ios.py run STEPS.json --out DIR [--allowance S] [--prebuilt --stamp STAMP.json] [--as-installed]
-                 [--approval-announced] [--screen-recording]
+                 [--approval-announced] [--screen-recording] [--syslog FILE]
                                                    run the steps through XCUITest on the phone
                                                    (`rios device verify script`), then write
                                                    DIR/steps.jsonl (one line per step, phone clock)
@@ -1026,10 +1026,28 @@ def run(args):
     if switches_wifi(steps):
         require_cable(os.environ.get("RICHOS_IOS_DEVICE"))
     summary, failure = None, None
+    # --syslog FILE: the phone's own log (RichConnect's lines only, as `syslog` keeps them) for exactly
+    # the walk's length, so a step that fails says why from the phone's side.
+    tap, stop, kept = None, None, {}
+    if getattr(args, "syslog", None):
+        import threading
+        stop = threading.Event()
+        log_path = storage_path(Path(args.syslog))
+        device = os.environ.get("RICHOS_IOS_DEVICE", "")
+        relay = syslog_relay(device, False)
+        tap = threading.Thread(target=lambda: kept.update(capture_syslog(
+            device, log_path, SYSLOG_KEEP, False, stop.is_set, relay)), daemon=True)
+        tap.start()
     try:
         summary = _run(args)
     except BaseException as error:  # noqa: BLE001: the Wi-Fi is put back first, then the error goes on
         failure = error
+    finally:
+        if tap is not None:
+            stop.set()
+            tap.join(timeout=15)
+    if summary is not None and tap is not None:
+        summary["syslog"] = kept or {"error": "the log relay did not finish within 15 s of the walk's end"}
     wifi = None
     if touches_wifi(steps) and args.phone_touched:
         wifi = ensure_wifi_on(Path(args.out).resolve() / "wifi-restore")
@@ -1759,18 +1777,33 @@ def syslog(args):
     if short:
         raise CannotAnswer(f"--keep needs at least 6 characters (got {short[0]!r}): a short key keeps the whole log")
     keys = SYSLOG_KEEP + extra
-    relay = spawn_owned(["idevicesyslog", "-u", libimobile_id(args.device), *(["-n"] if args.network else []), "--no-colors"],
-                             stdout=subprocess.PIPE,
-                          stderr=subprocess.DEVNULL, text=True, errors="replace")
-    kept = total = 0
     deadline = time.monotonic() + args.seconds
+    result = capture_syslog(args.device, out, keys, args.network, lambda: time.monotonic() >= deadline)
+    if result["read"] == 0:
+        raise CannotAnswer("the phone's log relay produced nothing (is the hardware UDID attached?)")
+    return emit(result)
+
+
+def syslog_relay(device, network):
+    """The phone's log relay, owned. Started on the main thread: `spawn_owned` installs signal
+    handlers, which Python allows only there."""
+    return spawn_owned(["idevicesyslog", "-u", libimobile_id(device), *(["-n"] if network else []), "--no-colors"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="replace")
+
+
+def capture_syslog(device, out, keys, network, done, relay=None):
+    """The relay, filtered line by line to `keys` before anything reaches disk, until `done()` says
+    stop or the relay ends. `syslog` stops it at its deadline; `run --syslog` when the walk ends,
+    reading on a thread a relay it started on the main thread."""
+    relay = relay or syslog_relay(device, network)
+    kept = total = 0
     try:
         import selectors
         sel = selectors.DefaultSelector()
         sel.register(relay.stdout, selectors.EVENT_READ)
         with open(out, "w") as f:
-            while time.monotonic() < deadline:
-                if not sel.select(timeout=max(0.0, min(1.0, deadline - time.monotonic()))):
+            while not done():
+                if not sel.select(timeout=1.0):
                     if relay.poll() is not None:
                         break
                     continue
@@ -1788,10 +1821,8 @@ def syslog(args):
         except subprocess.TimeoutExpired:
             relay.kill()
             relay.wait()
-    if total == 0:
-        raise CannotAnswer("the phone's log relay produced nothing (is the hardware UDID attached?)")
-    return emit({"out": str(out), "kept": kept, "read": total, "keys": list(keys), "relayPid": relay.pid,
-                 "relayExit": relay.returncode})
+    return {"out": str(out), "kept": kept, "read": total, "keys": list(keys), "relayPid": relay.pid,
+            "relayExit": relay.returncode}
 
 
 SYSLOG_ENTRY = re.compile(r"^\w{3} +\d+ (\d\d):(\d\d):(\d\d)(?:\.\d+)? (\S+)\[(\d+)\]")
@@ -1850,6 +1881,9 @@ def main(argv):
     r.add_argument("--screen-recording", action="store_true",
                    help="keep XCTest's recording of the phone's screen for the whole session (recorded on the "
                         "phone); the summary names it under screenRecordings, and its absence fails the run")
+    r.add_argument("--syslog", metavar="FILE",
+                   help="keep the phone's own log for the walk's length (RichConnect's lines only, as `syslog` "
+                        "keeps them); the summary names it under syslog")
     r.add_argument("--as-installed", action="store_true",
                    help="act on the test copy already installed (e.g. by `rios device install --push production`): "
                         "the test runner alone is handed to the phone, never an app, so that build stays as it is")
