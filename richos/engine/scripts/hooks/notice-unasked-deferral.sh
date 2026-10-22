@@ -286,6 +286,25 @@ try:
     d=json.load(sys.stdin); print(str(d.get("quote","") or ""))
 except Exception: print("")' 2>/dev/null || true)"
 
+# THE HOLD IT OPENED (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-
+# holds.md): the analyzer records every finding as a hold in the workspace
+# registry, which every turn end shows from 30 min on until the work runs,
+# lands or the CEO decides. This one-time notice names it; the repeat is the
+# workspace gate's (workspaces.py hold_lines), never this ledger's.
+HOLD="$(printf '%s' "$FINDING" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin); print(str(d.get("hold","") or ""))
+except Exception: print("")' 2>/dev/null || true)"
+HOLD_ERROR="$(printf '%s' "$FINDING" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin); print(str(d.get("hold_error","") or ""))
+except Exception: print("")' 2>/dev/null || true)"
+if [ -n "$HOLD" ]; then
+    HOLD_SENTENCE=" Recorded as the hold $HOLD: it is shown at every turn end from 30 minutes on until the work runs, lands, or you decide. A false catch: workspaces.sh release $HOLD --not-a-hold '<why>'."
+else
+    HOLD_SENTENCE=" NO HOLD WAS RECORDED for it (${HOLD_ERROR:-the analyzer named none}), so nothing will bring it back: start it or ask him now."
+fi
+
 # Same rule one level down: a finding that carries no quote is a broken
 # analyzer contract, not a clean turn, and it must not borrow the clean
 # turn's sentence.
@@ -296,5 +315,5 @@ except Exception: print("")' 2>/dev/null || true)"
 KEY="deferral:${CONSTRUCTION}:$(printf '%s' "$QUOTE" | cksum | tr -d ' ')"
 
 stop_notice_abnormal "$KEY" \
-    "YOU WERE NOT ASKED — THIS TURN DEFERS WORK: \"${QUOTE}\". A deferral you did not choose is a decision taken on your behalf: the reasoning is the orchestrator's, the consequence is yours. Deferring may well be right — but it is YOUR call, so it goes to you as a question or the work starts now. $HOOK_TAG"
+    "YOU WERE NOT ASKED — THIS TURN DEFERS WORK: \"${QUOTE}\". A deferral you did not choose is a decision taken on your behalf: the reasoning is the orchestrator's, the consequence is yours. Deferring may well be right — but it is YOUR call, so it goes to you as a question or the work starts now.${HOLD_SENTENCE} $HOOK_TAG"
 exit 0

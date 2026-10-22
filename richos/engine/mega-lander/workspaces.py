@@ -1792,8 +1792,12 @@ def register_spawn(payload, entity, dry=False):
              if continues else [])
     items = [i for i in items if not i.get("would_land") and not i.get("unregistered")]
     continuation_keys = []
+    held_work = []
     for c in continues:
         match = [i for i in items if i["name"] == c or i["key"] == c]
+        if not match and os.path.isfile(_hold_path(c)):
+            held_work.append(c)          # held work with no teammate yet: this spawn runs it
+            continue
         if not match:
             raise SpecError("continues: %s - there is no pending finished agent of that name to continue "
                             "(point 7)" % c)
@@ -1875,6 +1879,8 @@ def register_spawn(payload, entity, dry=False):
         save_agent(rec)
         if entity:
             _remember_repo(entity)
+    for c in held_work:
+        _hold_runs(c, name)
     for recovery_job in recovery_jobs:
         scheduled = recovery.schedule(recovery_job, engine_root())
         if scheduled and scheduled.get("observation_gap"):
@@ -2852,6 +2858,17 @@ def _generated(kind, text):
         return False
 
 
+def _generated_end(text):
+    """A generated pause's checkable end (a quota reset), or ''."""
+    try:
+        _agent_hold()
+        import pause_protocol
+        value = pause_protocol.validate_text(text)
+        return pause_protocol.end_of(value["reason"], value["reset"])
+    except Exception:
+        return ""
+
+
 def hold_running_work(rec, notes=None):
     """A pause takes effect at once: the agent's running commands are suspended and its
     new ones wait (agent_hold.py). The message alone reaches it only at its next tool
@@ -2945,18 +2962,21 @@ def release_session_holds(session_id, notes=None):
             notes.append("RELEASE after a session ended FAILED (%s): agent_hold.py status." % str(e)[:200])
 
 
-def pause(ref, until, session_id="", notes=None, control=False):
+def pause(ref, until, session_id="", notes=None, control=False, end=""):
     """`control`: the pause came as the unchanged generated message (pause_protocol.py).
     Only the generated RESUME, a resume command, a stop or the session's end ends
-    such a pause; any other message leaves it waiting (Sage's catch 3)."""
+    such a pause; any other message leaves it waiting (Sage's catch 3).
+    A pause is a hold (HOLDS): `end` is its checkable end (a quota pause's
+    at:<reset>); else an `until` written as one; else it has none."""
+    end = hold_end(end) if end else hold_end(until, strict=False)
     with Lock():
         rec = _resolve(ref, session_id)
         fin, _p_, why = finished_state(rec)
         if fin:
             raise SpecError("%s is already finished (%s); a finished agent is not paused" % (rec["name"], why))
-        rec["pause"] = {"at": now(), "until": (until or "").strip(), "control": bool(control)}
+        rec["pause"] = {"at": now(), "until": (until or "").strip(), "control": bool(control), "end": end}
         save_agent(rec)
-    event("pause", key=rec["key"], until=until, control=bool(control))
+    event("pause", key=rec["key"], until=until, control=bool(control), end=end)
     hold_running_work(rec, notes)
     return rec
 
@@ -3001,24 +3021,471 @@ def stop(ref, why, session_id="", notes=None):
     return rec
 
 
-def wait(ref, kind, on, todo="", session_id=""):
-    """Point 5's allowances for ending a turn, recorded by Rich."""
-    if kind not in ("started", "outside", "ceo-discard"):
+def wait(ref, kind, on, todo="", session_id="", until=""):
+    """Point 5's allowances for ending a turn, recorded by Rich. Every wait is a
+    hold (see HOLDS below): `until` is its checkable end, and without one the
+    free text keeps nothing quiet."""
+    if kind not in ("started", "outside", "ceo-discard", "held"):
         raise SpecError("unknown wait kind %r" % kind)
     if not (on or "").strip():
         raise SpecError("say what it is waiting on")
     if kind in ("outside", "ceo-discard") and not (todo or "").strip():
         raise SpecError("an item waiting on something outside Rich's reach goes on the CEO's TODO list; "
                         "pass --todo with where it is (point 5)")
+    end = hold_end(until)
     with Lock():
         rec = _resolve(ref, session_id)
         if kind == "ceo-discard" and not rec.get("ceo_ordered"):
             raise SpecError("%s was not recorded as ordered by the CEO, so its discard does not need his word"
                             % rec["name"])
-        rec["waiting"] = {"kind": kind, "on": on.strip(), "todo": (todo or "").strip(), "at": now()}
+        # A REPEATED WAIT KEEPS ITS AGE (second review rv-20261022T002958Z-2ac46e09-fa4e,
+        # finding 2): the work has been held since the first one, until the hold ends.
+        held_since = (rec.get("waiting") or {}).get("at") or now()
+        rec["waiting"] = {"kind": kind, "on": on.strip(), "todo": (todo or "").strip(), "at": held_since,
+                          "end": end}
         save_agent(rec)
-    event("wait", key=rec["key"], kind=kind, on=on, todo=todo)
+    event("wait", key=rec["key"], kind=kind, on=on, todo=todo, end=end)
     return rec
+
+
+# ---------------------------------------------------------------------------
+# HOLDS: a hold on his work stays in sight until it runs, lands or he decides
+# ---------------------------------------------------------------------------
+# The CEO, 2026-10-22, after his 2026-09-27 order sat held for weeks: "WHEN WILL
+# [THIS] STOP ONCE AND FOR ALL???" Plan: richos-hq docs/plans/2026-10-22-no-
+# silent-holds.md. Every hold counts as a hold on his work (nothing marks his
+# orders). A hold is:
+#   - a finished agent's `waiting` (workspaces.sh wait), or a live one's
+#     `waiting` of kind "held" (a SendMessage telling it to wait);
+#   - an agent's `pause`;
+#   - holds/<name>.json, for held work with no teammate yet (workspaces.sh
+#     hold, or a deferral the Stop hook found in a reply).
+# Only an END the engine can check keeps it quiet, from a fixed list:
+#   agent:<name>   a live teammate does it      review:<id>  a second review runs
+#   at:<UTC time>  e.g. a quota reset            ceo:<item>   his decision, on CEO-TODOs
+# Free text is the WHY and keeps nothing quiet: a hold with no end is one line
+# at every turn end (gate_stop) once it is 30 min old, and a stall-watch wake
+# every 30 min; an end that comes true wakes Rich once (RELEASE DUE).
+# Three ways it ends: the work runs (a live `agent:`, a continuation spawn,
+# the agent resumed), it is done (landed or discarded), or his words
+# (`release --ceo-word`). `release --not-a-hold` takes back a false catch and
+# is shown to him once at the next turn end.
+HOLD_END_KINDS = ("agent", "review", "at", "ceo")
+HOLD_REPORT_SECONDS = 30 * 60
+HOLD_LINES = 6
+REVIEW_RUN_SECONDS = 90 * 60
+
+
+def _hold_go(text):
+    _hold_words()                        # puts scripts/lib on the path
+    import hold_words
+    return hold_words.is_go(text)
+
+
+def _hold_words():
+    """scripts/lib/hold_words.py: the one list of words that hold work, shared with
+    the deferral analyzer."""
+    _agent_hold()                        # puts scripts/lib on the path
+    import hold_words
+    return hold_words.HOLD_WORDS_RE
+
+
+def _holds_dir():
+    return _p("holds")
+
+
+def _hold_path(name):
+    return os.path.join(_holds_dir(), _key_segment(name) + ".json")
+
+
+def hold_end(text, strict=True):
+    """The normalized end ('kind:value') of `text`, or '' for none. Strict (the
+    commands): anything given that is not on the list is refused. Lenient (a
+    pause's free `until` text): what is not on the list is no end."""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    kind, _, value = t.partition(":")
+    kind, value = kind.strip().lower(), value.strip()
+    ok = kind in HOLD_END_KINDS and value
+    if ok and kind == "at":
+        value = _hold_time(value)
+        ok = bool(value)
+    if ok:
+        return "%s:%s" % (kind, value)
+    if strict:
+        raise SpecError("a hold's end is one of agent:<name>, review:<id>, at:<UTC time, e.g. "
+                        "2026-10-22T23:00:00Z or 23:00Z>, ceo:<CEO-TODOs item>; %r is none of them. Say why it "
+                        "is held with --why/--started; free text keeps nothing quiet" % t)
+    return ""
+
+
+def _hold_time(value):
+    """An ISO UTC time, or HH:MMZ taken as its occurrence nearest to now; '' if neither."""
+    v = value.strip().upper()
+    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?Z", v)
+    if m:
+        try:
+            t = calendar.timegm(time.strptime("%sT%s:%s:%s" % (m.group(1), m.group(2), m.group(3),
+                                                                 m.group(4) or "00"), "%Y-%m-%dT%H:%M:%S"))
+        except ValueError:
+            return ""
+        return iso(t)
+    m = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)Z", v)
+    if not m:
+        return ""
+    t0 = now()
+    day = calendar.timegm(time.gmtime(t0)[:3] + (0, 0, 0, 0, 0, 0))
+    t = day + int(m.group(1)) * 3600 + int(m.group(2)) * 60
+    t = min((t - 86400, t, t + 86400), key=lambda c: abs(c - t0))
+    return iso(t)
+
+
+def _review_ended(review_id):
+    """None while review <id> runs; else why it counts as ended."""
+    base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(
+        (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
+        "state")
+    try:
+        with open(os.path.join(base, "reviews.jsonl"), encoding="utf-8") as f:
+            for line in f:
+                if review_id in line and ('"%s"' % review_id) in line:
+                    return "review %s has its verdict" % review_id
+    except OSError:
+        pass
+    d = os.path.join(base, "reviews", _key_segment(review_id))
+    try:
+        newest = max([os.path.getmtime(os.path.join(d, n)) for n in os.listdir(d)] + [os.path.getmtime(d)])
+    except OSError:
+        return "no review %s is running" % review_id
+    if now() - newest > REVIEW_RUN_SECONDS:
+        return "review %s wrote nothing for %d min and has no verdict" % (review_id, (now() - newest) // 60)
+    return None
+
+
+def hold_end_state(end, at=None, cache=None):
+    """('none' | 'pending' | 'due' | 'ceo', why) of a hold's end, at time `at`."""
+    if not end:
+        return "none", "nothing checkable ends it"
+    kind, _, value = end.partition(":")
+    if kind == "ceo":
+        # HIS ONLY WHEN IT IS ON HIS LIST (second review rv-20261022T002958Z-2ac46e09-fa4e,
+        # finding 3): the reference must name an item the CEO-TODOs page shows as waiting
+        # on him. Any other reference keeps nothing quiet.
+        item = _ceo_item(value)
+        if item:
+            return "ceo", "his decision (CEO-TODOs %s)" % item
+        return "none", "%s names no item waiting on him in CEO-TODOs" % value
+    if kind == "at":
+        t = calendar.timegm(time.strptime(value, "%Y-%m-%dT%H:%M:%SZ"))
+        if (now() if at is None else at) >= t:
+            return "due", "its time %s has passed" % value
+        return "pending", "until %s" % value
+    if kind == "review":
+        why = _review_ended(value)
+        return ("due", why) if why else ("pending", "review %s is running" % value)
+    live = [r for r in all_agents() if r.get("name") == value and not r.get("disposition")]
+    if any(not finished_state(r, cache)[0] for r in live):
+        return "pending", "agent %s is working on it" % value
+    return "due", ("agent %s has finished" % value) if live else ("no agent %s is registered" % value)
+
+
+def _ceo_items():
+    """The ids of the items the CEO-TODOs page shows waiting on him (`### <id> - <title>`),
+    from every known repository whose `.ceo-todos` declares a TODO_VIEW, and
+    RICHOS_CEO_TODOS_VIEW (a page path) where set. Only ids: the page is generated from
+    the record with the CEO's own sections only (scripts/lib/ceo-todos.py)."""
+    pages = [p for p in (os.environ.get("RICHOS_CEO_TODOS_VIEW") or "").split(os.pathsep) if p]
+    for repo in known_repos():
+        try:
+            with open(os.path.join(repo, ".ceo-todos"), encoding="utf-8") as f:
+                decl = f.read()
+        except OSError:
+            continue
+        m = re.search(r'(?m)^TODO_VIEW="?([^"\n]+)"?\s*$', decl)
+        if m:
+            pages.append(os.path.join(repo, m.group(1).strip()))
+    ids = set()
+    for page in pages:
+        try:
+            with open(page, encoding="utf-8") as f:
+                ids.update(re.findall(r"(?m)^###\s+(\S+)\s+[\u2014-]", f.read()))
+        except OSError:
+            continue
+    return ids
+
+
+def _ceo_item(ref):
+    """The CEO-TODOs item a reference names ('CEO-TODOs 2.6', '2.6'), when it is on his page; else ''."""
+    ids = _ceo_items()
+    for token in re.findall(r"\d+(?:\.\d+)*", ref or ""):
+        if token in ids:
+            return token
+    return ""
+
+
+def _in_scope(rec_session, claimed, me, cache):
+    """A hold is this session's to report when it was made here, claimed here,
+    or its session is not running (ended or unknown: told, never dropped)."""
+    if not me or rec_session == me or claimed == me or not rec_session:
+        return True
+    return session_state(rec_session, None, cache)[0] != "running"
+
+
+def _continued_by(rec, cache):
+    """A live agent doing this record's work (a continuation), or ''."""
+    for a in all_agents():
+        if a.get("key") == rec.get("key"):
+            continue
+        if rec["key"] in (a.get("continues") or []) or rec.get("name") in (a.get("lands_pending") or []):
+            if not finished_state(a, cache)[0]:
+                return a.get("name") or a["key"]
+    return ""
+
+
+def holds(me="", at=None, cache=None):
+    """Every hold this session must keep in sight: a list of dicts with name,
+    what, why, since (epoch), end, state, detail, source, key."""
+    cache = {} if cache is None else cache
+    if (os.environ.get("RICHOS_APP_ENTITY") or "").strip() and (os.environ.get("RICHOS_APP_THREAD") or "").strip():
+        # THE APP'S REGISTRY IS ONE CONVERSATION'S OWN PARTITION (engine_profile.rs
+        # workspace_state), so every hold in it is this conversation's, Rich's lease's
+        # and Stu's alike: Stu's watcher must not drop a hold of Rich's running lease
+        # (second review rv-20261022T013056Z-12c77c90-1291, finding 4).
+        me = ""
+    out = []
+    try:
+        names = sorted(os.listdir(_holds_dir()))
+    except OSError:
+        names = []
+    for n in names:
+        h = read_json(os.path.join(_holds_dir(), n)) if n.endswith(".json") else None
+        if not h or h.get("released") or not _in_scope(h.get("session_id"), "", me, cache):
+            continue
+        st, why = hold_end_state(h.get("end") or "", at, cache)
+        out.append({"name": h.get("name"), "what": h.get("what") or h.get("name"), "why": h.get("why") or "",
+                    "since": float(h.get("at") or now()), "end": h.get("end") or "", "state": st,
+                    "detail": why, "source": "hold", "key": ""})
+    reviews = None
+    for rec in all_agents():
+        if rec.get("disposition") or not _in_scope(rec.get("session_id"), rec.get("claimed_by"), me, cache):
+            continue
+        fin, paused_, _why = finished_state(rec, cache)
+        w, p = rec.get("waiting") or {}, rec.get("pause") or {}
+        name = rec.get("name") or rec["key"]
+        found = []                       # (source, what, why, since, end)
+        # A PAUSE OUTLIVES ITS SESSION (second review rv-20261022T013056Z-12c77c90-1291,
+        # finding 5): once the session ends the agent counts as finished, but the work
+        # it was paused on never ran; only a hand-in after it ends the pause.
+        if p and (paused_ or (fin and not rec.get("handed_in"))):
+            found.append(("pause" if paused_ else "pause-ended", "the work of %s" % name,
+                          p.get("until") or "(nothing named)", p.get("at"),
+                          p.get("end") or hold_end(p.get("until"), strict=False)))
+        elif w and (fin or w.get("kind") == "held"):
+            found.append(("wait", "the work of %s" % name, w.get("on") or "", w.get("at"),
+                          w.get("end") or ("ceo:" + w["todo"] if w.get("todo") else "")))
+        if fin:
+            # A CORRECTION ITS RUN NEVER ACTED ON (2026-10-21 23:45Z, echo-opus-andreas2:
+            # the fix for a review finding was sent, its run ended at 23:45:14Z, and the
+            # branch sat at 10df0b1fc with the hole open). Open until a commit lands
+            # after it, a continuation runs, the work lands, or his words.
+            tips = [(repo, t) for repo, b in sorted(_branch_targets([rec])) for t in [branch_tip(repo, b)] if t]
+            c = rec.get("correction") or {}
+            if c and tips and not any(_commit_time(repo, t) > float(c.get("at") or 0) for repo, t in tips):
+                found.append(("correction", "the correction sent to %s" % name,
+                              "its run ended before it acted on it: %s" % (c.get("text") or ""), c.get("at"), ""))
+            # A REVIEW ASKING FOR CHANGES ON THE TIP IT HANDED OVER (a mid-job or handover
+            # CHANGES-REQUESTED verdict, then a hand-over without the fix).
+            if tips and reviews is None:
+                reviews = _reviews_by_tip()
+            for _repo, t in tips:
+                row = (reviews or {}).get(t)
+                if row and row.get("verdict") == "changes-requested" \
+                        and row.get("id") not in (rec.get("reviews_released") or []):
+                    found.append(("review", "the fixes review %s asked of %s" % (row.get("id"), name),
+                                  "it handed over %s without them (%s finding(s))" % (t[:10], row.get("findings")),
+                                  parse_iso_epoch(row.get("finished_at")) or now(), "", ))
+                    found[-1] = found[-1] + (row.get("id"),)
+        if not found or _continued_by(rec, cache):
+            continue                     # nothing held, or the work runs: a continuation does it
+        for f in found:
+            src, what, why, since, end = f[:5]
+            st, detail = hold_end_state(end, at, cache)
+            out.append({"name": name, "what": what, "why": why, "since": float(since or now()), "end": end,
+                        "state": st, "detail": detail, "source": src, "key": rec["key"],
+                        "review": f[5] if len(f) > 5 else ""})
+    return out
+
+
+def _commit_time(repo, tip):
+    rc, out, _e = git(repo, "log", "-1", "--format=%ct", tip)
+    try:
+        return float(out.strip()) if rc == 0 else 0.0
+    except ValueError:
+        return 0.0
+
+
+def parse_iso_epoch(text):
+    try:
+        return float(calendar.timegm(time.strptime(str(text), "%Y-%m-%dT%H:%M:%SZ")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _reviews_by_tip():
+    """{tip: the newest second-review verdict row for it} from second-review's ledger."""
+    base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(
+        (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
+        "state")
+    out = {}
+    try:
+        with open(os.path.join(base, "reviews.jsonl"), encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get("tip") and r.get("verdict"):
+                    prev = out.get(r["tip"])
+                    if prev is None or str(r.get("finished_at") or "") >= str(prev.get("finished_at") or ""):
+                        out[r["tip"]] = r
+    except OSError:
+        pass
+    return out
+
+
+def hold_command(h):
+    """What makes held work run: the one command for Rich."""
+    if h["source"] == "pause":
+        return "workspaces.sh resume %s" % h["name"]
+    # Anything else, a pause whose session ended included: its run cannot resume.
+    return "spawn the teammate that does it with the line  continues: %s" % h["name"]
+
+
+def _span(seconds):
+    m = int(max(0, seconds) // 60)
+    return "%d h %d min" % (m // 60, m % 60) if m >= 60 else "%d min" % m
+
+
+def hold_lines(me="", at=None):
+    """The turn-end lines: one per hold with no checkable end older than 30 min,
+    at most six and then '+N', plus each `--not-a-hold` release once."""
+    t = now() if at is None else at
+    quiet = float(os.environ.get("RICHOS_HOLD_REPORT_SECONDS") or HOLD_REPORT_SECONDS)
+    loud = [h for h in holds(me, t) if h["state"] == "none" and t - h["since"] >= quiet]
+    loud.sort(key=lambda h: h["since"])
+    lines = ["HELD BY RICH, NOT BY YOU: %s since %s (%s). Why: %s. Your call: go, or hold until a date or event."
+             % (h["what"], time.strftime("%H:%MZ", time.gmtime(h["since"])), _span(t - h["since"]),
+                " ".join((h["why"] or "not said").split())[:200].rstrip(".")) for h in loud[:HOLD_LINES]]
+    if len(loud) > HOLD_LINES:
+        lines.append("+%d more held: workspaces.sh holds" % (len(loud) - HOLD_LINES))
+    try:
+        names = sorted(os.listdir(_holds_dir()))
+    except OSError:
+        names = []
+    for n in names:
+        p = os.path.join(_holds_dir(), n)
+        h = read_json(p) if n.endswith(".json") else None
+        r = (h or {}).get("released") or {}
+        if not r.get("not_a_hold") or not _in_scope(h.get("session_id"), "", me, {}):
+            continue
+        lines.append("RELEASED AS NOT A HOLD: %s. Rich's reason: %s." % (h.get("what") or h.get("name"),
+                                                                          r["not_a_hold"]))
+        try:
+            os.unlink(p)                 # shown once
+        except OSError:
+            pass
+    return lines
+
+
+def hold(name, what, until="", why="", session_id="", by="rich"):
+    """`workspaces.sh hold`: held work with no teammate yet. A name that is a live
+    registered agent records the hold on that agent instead (kind held)."""
+    if not NAME_RE.match(name or ""):
+        raise SpecError("a hold needs a name (letters, digits, . _ -): %r" % name)
+    if not (what or "").strip():
+        raise SpecError("say what work is held (--what)")
+    end = hold_end(until)
+    try:
+        rec = _resolve_record(name, session_id)
+    except SpecError:
+        rec = None
+    if rec and not rec.get("disposition"):
+        return wait(rec["key"], "held", (why or what).strip(), "", session_id, end)
+    with Lock():
+        os.makedirs(_holds_dir(), exist_ok=True)
+        prev = read_json(_hold_path(name)) or {}
+        h = {"name": name, "what": what.strip(), "why": (why or "").strip(), "end": end,
+             "at": prev.get("at") if prev and not prev.get("released") else now(),
+             "session_id": session_id, "by": by}
+        write_json(_hold_path(name), h)
+    event("hold-opened", name=name, work=what, end=end, why=why, by=by)
+    return h
+
+
+def release(name, ceo_word="", not_a_hold="", session_id=""):
+    """The three ends of a hold that a command makes: his words, a false catch
+    taken back (shown to him once), or the work running. Rich saying so is none."""
+    found = [h for h in holds("", None) if h["name"] == name]
+    if not found:
+        raise SpecError("no hold named %r (workspaces.sh holds lists them)" % name)
+    for h in found[1:]:
+        _release_one(h, name, ceo_word, not_a_hold, session_id)
+    return _release_one(found[0], name, ceo_word, not_a_hold, session_id)
+
+
+def _release_one(h, name, ceo_word, not_a_hold, session_id):
+    runs = h["state"] == "pending" and h["end"].startswith(("agent:", "review:"))
+    if not (ceo_word or "").strip() and len((not_a_hold or "").strip()) < 10 and not runs:
+        raise SpecError("%s is held work he ordered, and Rich cannot end a hold by saying so. It ends when "
+                        "the work runs (%s), when it lands or is discarded, or by his words: --ceo-word "
+                        "'<his words>'. A false catch is --not-a-hold '<why it is not a hold>'."
+                        % (name, hold_command(h)))
+    how = {"at": now(), "ceo_word": (ceo_word or "").strip() or None,
+           "not_a_hold": (not_a_hold or "").strip() or None, "work_runs": h["detail"] if runs else None,
+           "by_session": session_id}
+    with Lock():
+        if h["source"] == "hold":
+            rec = read_json(_hold_path(name)) or {"name": name}
+            rec["released"] = how
+            if how["not_a_hold"]:
+                write_json(_hold_path(name), rec)   # shown once at the next turn end, then gone
+            else:
+                try:
+                    os.unlink(_hold_path(name))
+                except OSError:
+                    pass
+        elif h["source"] == "review":
+            rec = load_agent(h["key"])
+            rec["reviews_released"] = (rec.get("reviews_released") or []) + [h["review"]]
+            rec.setdefault("history", []).append({"at": iso(), "fact": "hold released", "review": h["review"],
+                                                  "how": how})
+            save_agent(rec)
+        else:
+            rec = load_agent(h["key"])
+            field = {"pause": "pause", "pause-ended": "pause", "correction": "correction"}.get(h["source"], "waiting")
+            rec.setdefault("history", []).append({"at": iso(), "fact": "hold released", field: rec.get(field),
+                                                  "how": how})
+            rec[field] = None
+            save_agent(rec)
+    event("hold-released", name=name, **{k: v for k, v in how.items() if k != "at"})
+    if h["source"] == "pause":
+        release_held_work(load_agent(h["key"]) or {"name": name})
+    return how
+
+
+def _hold_runs(name, by):
+    """A spawn carrying `continues: <name>` for held work with no teammate: the work runs."""
+    with Lock():
+        h = read_json(_hold_path(name))
+        if not h or h.get("released"):
+            return False
+        try:
+            os.unlink(_hold_path(name))
+        except OSError:
+            pass
+    event("hold-released", name=name, work_runs="spawn %s continues it" % by)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -3321,7 +3788,7 @@ def _item(rec, why, cache, me):
     return {"key": rec["key"], "name": rec.get("name") or rec["key"], "why": why,
             "waiting": kind, "waiting_on": waiting.get("on", ""),
             "blocks_new_work": False,
-            "blocks_turn_end": kind not in ("ceo-discard", "started", "outside"),
+            "blocks_turn_end": kind not in ("ceo-discard", "started", "outside", "held"),
             "workspaces": [(w.get("path") or "(branch only)", w.get("branch")) for w in live_workspaces(rec)]}
 
 
@@ -7626,6 +8093,12 @@ def gate_stop(payload, entity):
         d = r["deletion"]
         notes.append("TELL THE CEO: deleting %s has failed %d times since %s: %s" % (
             r.get("name"), d.get("attempts"), iso(d.get("first_failed_at")), d.get("last_error")))
+    # THE HOLDS, AT EVERY TURN END (HOLDS above): never shown just once.
+    try:
+        notes = hold_lines(sid) + notes
+    except Exception as e:  # noqa: BLE001: an unread hold list is said, never silence
+        notes.insert(0, "HOLDS NOT READ this turn (%s: %s): held work may be out of sight; "
+                        "workspaces.sh holds" % (e.__class__.__name__, str(e)[:160]))
     blocking = [i for i in items if i["blocks_turn_end"]]
     if not blocking:
         msg = "\n".join(notes)
@@ -7783,10 +8256,40 @@ def lifecycle(payload, entity):
                     if prompt_lines(text, "pause-until") or re.search(r"(?m)^\s*pause-until:\s*$", text):
                         try:
                             pause(rec["key"], until[0] if until else "", sid, notices,
-                                  control=_generated("pause", text))
+                                  control=_generated("pause", text), end=_generated_end(text))
+                        except SpecError as e:
+                            notices.append(str(e))
+                    elif _hold_words().search(text) and not finished_state(rec)[0]:
+                        # Told to wait, in any words on the list: recorded as a hold on
+                        # that agent, never refused; the message has already gone out.
+                        m = _hold_words().search(text)
+                        a, b = text.rfind(".", 0, m.start()) + 1, text.find(".", m.end())
+                        quote = " ".join(text[a:b if b >= 0 else len(text)].split())[:200]
+                        try:
+                            wait(rec["key"], "held", "told to wait: " + quote, "", sid)
+                            notices.append("HOLD RECORDED on %s: %s. It is shown at every turn end from 30 min "
+                                           "on until it runs or he decides." % (rec["name"], quote))
                         except SpecError as e:
                             notices.append(str(e))
                     else:
+                        if not rec.get("disposition") and not _generated("resume", text) and text.strip():
+                            # A correction: kept until a commit lands after it (HOLDS, correction).
+                            with Lock():
+                                fresh = load_agent(rec["key"])
+                                fresh["correction"] = {"at": now(), "text": " ".join(text.split())[:200]}
+                                save_agent(fresh)
+                                rec = fresh
+                        # ONLY THE GO ENDS IT (second review rv-20261022T002958Z-2ac46e09-fa4e,
+                        # finding 1): a status question or a note leaves the teammate held.
+                        if (rec.get("waiting") or {}).get("kind") == "held" and _hold_go(text):
+                            with Lock():
+                                fresh = load_agent(rec["key"])
+                                fresh.setdefault("history", []).append(
+                                    {"at": iso(), "fact": "hold released", "waiting": fresh.get("waiting"),
+                                     "how": {"work_runs": "a later message to it"}})
+                                fresh["waiting"] = None
+                                save_agent(fresh)
+                            event("hold-released", key=rec["key"], work_runs="a later message to it")
                         st = finished_state(rec)
                         if st[1] and (rec.get("pause") or {}).get("control") and not _generated("resume", text):
                             # Sage's catch 3: a land's in-flight notice or any other message
@@ -8033,6 +8536,20 @@ def main(argv):
     g.add_argument("--outside")
     g.add_argument("--ceo")
     x.add_argument("--todo", default="")
+    x.add_argument("--until", default="", help="its checkable end: agent:<name> | review:<id> | at:<UTC> | "
+                                              "ceo:<CEO-TODOs item>; without one the hold is reported")
+    x = sub.add_parser("hold", help="held work with no teammate yet; reported until it runs, lands or he decides")
+    x.add_argument("name")
+    x.add_argument("--what", required=True)
+    x.add_argument("--until", default="")
+    x.add_argument("--why", default="")
+    x.add_argument("--by", default="rich")
+    x = sub.add_parser("release", help="end a hold: his words, or a false catch taken back")
+    x.add_argument("name")
+    g = x.add_mutually_exclusive_group()
+    g.add_argument("--ceo-word", default="")
+    g.add_argument("--not-a-hold", default="")
+    sub.add_parser("holds")
     sub.add_parser("retry")
     x = sub.add_parser("integration-branch")
     x.add_argument("--repo", default="")
@@ -8194,8 +8711,21 @@ def main(argv):
                 print(_l)
         elif a.cmd == "wait":
             kind, on = ("started", a.started) if a.started else (("outside", a.outside) if a.outside else ("ceo-discard", a.ceo))
-            wait(a.agent, kind, on, a.todo, me)
-            print("recorded: %s waits (%s) on %s" % (a.agent, kind, on))
+            wait(a.agent, kind, on, a.todo, me, a.until)
+            print("recorded: %s waits (%s) on %s%s" % (a.agent, kind, on, (" until " + a.until) if a.until else
+                                                     "; nothing checkable ends it, so it is reported until it runs"))
+        elif a.cmd == "hold":
+            h = hold(a.name, a.what, a.until, a.why, me, a.by)
+            print("held: %s%s" % (a.name, (" until " + (h.get("end") or (h.get("waiting") or {}).get("end") or ""))
+                                  if a.until else "; nothing checkable ends it, so it is reported until it runs"))
+        elif a.cmd == "release":
+            release(a.name, a.ceo_word, a.not_a_hold, me)
+            print("released: %s" % a.name)
+        elif a.cmd == "holds":
+            for h in holds(me):
+                print("%-8s %-10s %s  since %s  end=%s (%s)  why: %s" % (
+                    h["state"].upper(), h["source"], h["name"], iso(h["since"]), h["end"] or "-", h["detail"],
+                    " ".join(h["why"].split())[:160]))
         elif a.cmd == "integration-branch":
             # THE ONE ANSWER, FOR A SHELL CONSUMER. "Every part of the system
             # that needs to know whether work has landed asks the same
