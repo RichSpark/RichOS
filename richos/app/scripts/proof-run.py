@@ -2584,8 +2584,18 @@ def runner_environment(environ):
     rule itself (cargo_identity.enable_environment, idempotent), so both launches agree. Like
     reserve.py, only where the tree holds the Cargo helpers (a test fixture's runner may not).
     And git's exec-path, which a land's hook has on PATH and a shell does not, is taken out
-    (without_git_exec_path)."""
+    (without_git_exec_path).
+
+    MUTATION PASSES ARE OFF UNLESS THE CALLER TURNS THEM ON (2026-10-22). An engineer's handover
+    run left RICHOS_MUTATION_PASSES and RICHOS_FOURTEEN_MUTANTS as the shell had them, unset, so
+    every suite's own mutation harness ran in full: 22.3% of the Mac in Hank's busy window
+    (richos-hq docs/research/2026-10-22-mac-system-cpu-after.md), work the land never asks for.
+    A name the caller has not set takes the merge gate's value (autocheck MUTATION_SWITCH, "0");
+    a value the caller set is kept, so the nightlies (nightly-engine.py PASSES_ON, nightly-local
+    mutation_units, both "1") still run every pass."""
     env = dict(environ)
+    for name in proof_evidence.MUTATION_SWITCHES:
+        env.setdefault(name, "0")
     if "PATH" in env:
         env["PATH"] = without_git_exec_path(env["PATH"])
     if all(os.path.isfile(os.path.join(HERE, "lib", name)) for name in ("cargo_identity.py", "machine_storage.py")):
