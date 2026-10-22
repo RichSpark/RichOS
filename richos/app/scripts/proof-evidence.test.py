@@ -897,22 +897,42 @@ class Evidence(unittest.TestCase):
         executes_all("other-installs", own, "a pass made against another dependency install was reused",
                      "the two checkouts load different dependency installs")
 
-    def test_a_pass_stands_at_a_later_commit_only_where_the_selector_does_not_select_it(self):
+    def test_a_pass_stands_at_a_later_commit_only_where_neither_selector_nor_dependency_map_reaches_it(self):
         """2026-10-22, zach-opus-holds3: after a three-file change the fourth handover run reused
         0 of the 94 checks its third run had passed 92 of, because a check with no reviewed read
         list is keyed by the whole checkout (richos-hq docs/research/2026-10-22-mac-system-cpu-
-        round2.md). Lead's answer to esc-20261022T054303Z-e2b6f41e: a pass saved at commit A
-        stands at B when the rest of its identity is unchanged and the selector, mapping A..B
-        cleanly, would not select it; where it cannot map A..B cleanly, the check runs. Real
-        runner, ci-shard.sh and coverage verifier, with a stand-in selector that maps each
-        changed path through a fixed table: a selected check still runs, an unselected one is
-        reused, and an unmapped path, an uncommitted change or a changed environment runs all."""
+        round2.md). The lead's answers to esc-20261022T054303Z-e2b6f41e and review
+        rv-20261022T062403Z-4b9d1c1f-03ee #1: a pass saved at commit A stands at B when the rest
+        of its identity is unchanged, the selector maps A..B cleanly without selecting it, and the
+        dependency map covers it with no changed path among what it executes; otherwise it runs.
+        Real runner, ci-shard.sh and coverage verifier, a stand-in selector that maps each changed
+        path through a fixed table and a fixture dependency map: a selected check runs, an
+        unselected covered one is reused, a check the map does not cover runs, a helper the
+        selector misses but the map lists runs its reader, and an unmapped path, an uncommitted
+        change or a changed environment runs all."""
         app, engine = self.copy_runner_fixture()
         counter = Path(self.tmp.name) / "executions"
         for name in ("alpha", "beta"):
             path = engine / "scripts" / (name + ".test.sh")
-            path.write_text('#!/bin/bash\nprintf "' + name + '\\n" >> "$FIXTURE_COUNTER"\n')
+            path.write_text('#!/bin/bash\n' + ('. "$(dirname "$0")/beta-helper.sh"\n' if name == "beta" else "")
+                            + 'printf "' + name + '\\n" >> "$FIXTURE_COUNTER"\n')
             path.chmod(0o755)
+        (engine / "scripts/beta-helper.sh").write_text("# sourced by beta.test.sh\n")
+        dependency_map = engine / "scripts/lib/verification-dependencies.json"
+
+        def write_map():
+            """The fixture map: each suite a node, beta's edge to the helper it sources, each pin the
+            bytes on disk now (the commit hook renews a pin in the commit that changes its file)."""
+            def node(rel, *edges):
+                return {"source": rel, "sha256": evidence.file_digest(engine / rel), "evidence": "fixture",
+                        "keys": [], "edges": [{"to": edge} for edge in edges]}
+            evidence.atomic(dependency_map, {"schema": 1, "nodes": {
+                "scripts/alpha.test.sh": node("scripts/alpha.test.sh"),
+                "scripts/beta.test.sh": node("scripts/beta.test.sh", "scripts/beta-helper.sh"),
+                "scripts/beta-helper.sh": node("scripts/beta-helper.sh")},
+                "units": {"scripts/alpha.test.sh": "scripts/alpha.test.sh",
+                          "scripts/beta.test.sh": "scripts/beta.test.sh"}})
+        write_map()
         (engine / "scripts/alpha-input.txt").write_text("alpha reads this\n")
         (self.root / "gamma.test.sh").write_text('printf "gamma\\n" >> "$FIXTURE_COUNTER"\n')
         (self.root / "notes.txt").write_text("read by no check\n")
@@ -920,8 +940,11 @@ class Evidence(unittest.TestCase):
         shard = "cd %s && bash scripts/ci-shard.sh --only-units " % "richos/engine"
         units = {name: "scripts/%s.test.sh" % name for name in ("alpha", "beta")}
         table = Path(self.tmp.name) / "selector-table.json"
+        # The helper beta sources is mapped to nothing: the selector's gap the review found (a
+        # changed helper no suite names), which the dependency map closes.
         table.write_text(json.dumps({"richos/engine/scripts/alpha-input.txt": [shard + units["alpha"]],
-                                    "notes.txt": []}))
+                                    "notes.txt": [], "richos/engine/scripts/beta-helper.sh": [],
+                                    "richos/engine/scripts/lib/verification-dependencies.json": []}))
         # The stand-in selector: proof-for.sh's contract (the lines on stdout, exit 1 for a changed
         # path no suite covers), over `git diff --name-only <range>` exactly as proof-for.sh reads it.
         selector = app / "proof-for.sh"
@@ -979,29 +1002,41 @@ class Evidence(unittest.TestCase):
         (self.root / "notes.txt").write_text("read by no check, changed\n")
         git("commit", "-qam", "B")
         second, executed, rows, detail = invoke("B", first)
-        self.assertEqual(executed, ["alpha"], "a check the selector does not select ran again, or alpha "
-                         "(selected) did not\n" + detail)
-        for check in ("engine scripts/beta.test.sh", "gamma"):
-            self.assertEqual(rows[check]["reused_from"], str(first), detail)
-        self.assertIn("the selector maps", detail)
+        self.assertEqual(executed, ["alpha", "gamma"], "alpha (selected) or gamma (no dependency map row) "
+                         "did not run, or beta (unselected, covered) ran again\n" + detail)
+        self.assertEqual(rows["engine scripts/beta.test.sh"]["reused_from"], str(first), detail)
+        self.assertIn("neither the selector nor the dependency map reaches it", detail)
+        self.assertIn("the dependency map does not cover it", detail)
         self.assertIsNone(rows["engine scripts/alpha.test.sh"]["reused_from"], detail)
         # A pass that stood stands again at the next commit, from the run it stood in.
         (self.root / "notes.txt").write_text("read by no check, changed twice\n")
         git("commit", "-qam", "C")
         third, executed, rows, detail = invoke("C", second)
-        self.assertEqual(executed, [], detail)
+        self.assertEqual(executed, ["gamma"], detail)
+        # H: the helper beta sources changes, its pin renewed with it. The selector maps it to
+        # nothing; the dependency map lists it under beta, so beta runs.
+        (engine / "scripts/beta-helper.sh").write_text("# sourced by beta.test.sh, changed\n")
+        write_map()
+        git("commit", "-qam", "H")
+        helper, executed, rows, detail = invoke("H", third)
+        self.assertEqual(executed, ["beta", "gamma"], "a pass stood over a change to a file its suite "
+                         "executes\n" + detail)
+        self.assertIn("changes richos/engine/scripts/beta-helper.sh, which it executes (dependency map)", detail)
+        self.assertEqual(rows["engine scripts/alpha.test.sh"]["reused_from"], str(third), detail)
         # D: a changed path the selector cannot map. Everything runs.
         (self.root / "orphan.sh").write_text("#!/bin/sh\n")
         git("add", "orphan.sh")
         git("commit", "-qm", "D")
-        _run, executed, _rows, detail = invoke("D", third)
+        _run, executed, _rows, detail = invoke("D", helper)
         self.assertEqual(executed, ["alpha", "beta", "gamma"], "a pass stood over a change the selector "
                          "cannot map\n" + detail)
         self.assertIn("cannot map", detail)
         git("rm", "-q", "orphan.sh")
         git("commit", "-qm", "E")
-        fifth, executed, _rows, detail = invoke("E", third)
-        self.assertEqual(executed, [], "removing the unmapped file returned the tree to C's content\n" + detail)
+        fifth, executed, _rows, detail = invoke("E", helper)
+        # The same content as H, so every identity is H's: even gamma, which the map does not
+        # cover, is reused exactly, as before this rule.
+        self.assertEqual(executed, [], "removing the unmapped file returned the tree to H's content\n" + detail)
         # An uncommitted change: no commit range describes it. Everything runs.
         (self.root / "notes.txt").write_text("uncommitted\n")
         _run, executed, _rows, detail = invoke("dirty", fifth)
@@ -1039,6 +1074,13 @@ class Evidence(unittest.TestCase):
         self.assertEqual(evidence.selection_standing("u", old, now, dict(later, untracked_sha256="x"), unaffected),
                          "this checkout is not a clean commit")
         self.assertEqual(len(asked), 1, "the selector was asked where the identities already refused")
+        # Review rv-20261022T062403Z-4b9d1c1f-03ee #2: of its Git inputs, the index and history
+        # readings are content the selector judges; a Git configuration observation is not.
+        gitted = dict(old, input=dict(recipe, git_inputs={"tracked": "t1", "quote_path": "q1"}))
+        self.assertIsNone(evidence.selection_standing(
+            "u", gitted, dict(now, git_inputs={"tracked": "t2", "quote_path": "q1"}), later, unaffected))
+        self.assertIn("inputs other than the checkout's content changed", evidence.selection_standing(
+            "u", gitted, dict(now, git_inputs={"tracked": "t1", "quote_path": "q2"}), later, unaffected))
 
     def test_actual_cross_commit_coverage_rechecks_inputs_and_keeps_original_sha(self):
         self.cross_commit_coverage()

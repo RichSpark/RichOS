@@ -1674,9 +1674,9 @@ class Record:
         # seat(item, snapshot): the read_seat (seat_reader) for one check, so reuse() can accept
         # a pass made in another checkout that still stands there (seat_gap). None: never.
         self.seat = seat
-        # unaffected(a, b, label): None when the selector maps a..b cleanly without selecting the
-        # check (proof-run.py selection_unaffected), so reuse() lets a pass saved at commit a
-        # stand at b (selection_standing). None: never.
+        # unaffected(a, b, label): None when neither the selector nor the dependency map says
+        # a..b reaches the check (proof-run.py selection_unaffected), so reuse() lets a pass
+        # saved at commit a stand at b (selection_standing). None: never.
         self.unaffected = unaffected
         # What changed and who could have changed it, appended to an invalidation note, so a
         # check invalidated by another check's writes names the paths instead of only saying so.
@@ -2193,19 +2193,25 @@ def seat_gap(saved, wanted, read_seat, content=True):
 
 
 # What of an identity is the checkout's content (git-landable bytes, inventories and the reviewed
-# declarations over them). selection_standing judges exactly these by the selector instead of by
-# digest, and every other field (tools, environment, profile, installs, platform, outside paths,
-# command, settings, and a recipe's ignored files, which git cannot see) by equality.
-CONTENT_FIELDS = ("tree", "paths", "inventories", "qualification", "git_inputs", "exists")
+# declarations over them). selection_standing judges exactly these by the selector and the
+# dependency map instead of by digest, and every other field (tools, environment, profile,
+# installs, platform, outside paths, command, settings, a recipe's ignored files, which git cannot
+# see) by equality. Of `git_inputs` only the history and index readings are content
+# (GIT_CONTENT_INPUTS); a Git configuration observation (`quote_path`, core.quotepath) is no commit's
+# content, so it stays compared (review rv-20261022T062403Z-4b9d1c1f-03ee #2).
+CONTENT_FIELDS = ("tree", "paths", "inventories", "qualification", "exists")
+GIT_CONTENT_INPUTS = ("tracked", "last_change")
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
 def beside_the_content(identity):
-    """`identity` without its content fields (CONTENT_FIELDS); a recipe's contract digest is
-    content too (its declaration), so only the kind of contract is kept."""
+    """`identity` without its content fields (CONTENT_FIELDS, GIT_CONTENT_INPUTS); a recipe's
+    contract digest is content too (its declaration), so only the kind of contract is kept."""
     if not isinstance(identity, dict):
         return identity
     rest = {k: v for k, v in identity.items() if k not in CONTENT_FIELDS}
+    if isinstance(rest.get("git_inputs"), dict):
+        rest["git_inputs"] = {k: v for k, v in rest["git_inputs"].items() if k not in GIT_CONTENT_INPUTS}
     if rest.get("contract") not in (None, WHOLE_CHECKOUT):
         rest["contract"] = "recipe"
     return rest
@@ -2421,7 +2427,7 @@ def reuse(previous, items, record, exact=True):
                     " (made in %s, where it still stands, on %s)" % (old["input"]["checkout"],
                         "the same installs" if standing else "the same content and installs")
                     if elsewhere else "") + (
-                    " (saved at %s; the selector maps %s..%s without selecting it)" % (
+                    " (saved at %s; neither the selector nor the dependency map reaches it from %s..%s)" % (
                         standing["from"][:12], standing["from"][:12], standing["to"][:12]) if standing else ""))
                 record.save(item, record.source)
             except (OSError, ValueError, KeyError, TypeError) as exc:

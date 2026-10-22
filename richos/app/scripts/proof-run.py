@@ -469,105 +469,130 @@ def supply_speech_models(items):
     return "RICHOS_GUI_SPEECH_MODELS=%s (the nightly's)" % models
 
 
-def suite_label(suite):
-    """The check label of a `run-tests.sh --only <suite>` suite."""
-    return suite[:-len(".test.sh")] if suite.endswith(".test.sh") else suite
-
-
-def command_label(cwd, argv, command):
-    """The check label of a selection line that is not an engine unit, a run-tests suite or cargo."""
-    first = argv[0]
-    if first in ("bash", "node", "python3"):
-        first = next((a for a in argv[1:] if not a.startswith("-")), first)
-    base = os.path.basename(first)
-    label = re.sub(r"\.test\.sh$|\.sh$", "", base)
-    if (base.endswith(".sh") and not base.endswith(".test.sh")
-            and os.path.isfile(os.path.join(cwd, "scripts", label + ".test.sh"))):
-        # A script named like a run-tests suite is not that suite. The land's `lint.sh
-        # --changed` (about a second) was "lint", the label of lint.test.sh (`lint.sh
-        # --all`, about 100 s), and its seconds pulled the suite's median to 1.7 s, so
-        # the commit gate ran lint.test.sh as a fast check under a 120 s cap and refused
-        # every richos/app/ui commit (2026-10-15). Its whole name and arguments label it.
-        label = " ".join([base] + argv[argv.index(first) + 1:])
-    if argv[:2] == ["node", "--test"]:
-        label = "web-app"
-    elif "testvm/test/run-tests.sh" in command:
-        label = "testvm"
-    elif base == "run-tests.sh" and "/test/" in first:
-        # Every `<dir>/test/run-tests.sh` would otherwise be labeled "run-tests", the same
-        # as the `--only run-tests.test.sh` suite: two checks under one label share one
-        # identity, so the second's fingerprint made the first "changed during the check"
-        # (INVALID, land of zach-sonnet-vmvalid1, 2026-09-30).
-        label = os.path.basename(first.split("/test/")[0])
-    return label
-
-
-def selected_labels(lines):
-    """The check labels plan() makes of these selection lines, and the cargo targets they name.
-
-    plan() collapses a cargo filter a shorter one on the same target already matches, so a cargo
-    check counts as selected when ANY selected cargo line names its target (selection_unaffected)."""
-    labels, cargo_targets = set(), set()
-    for line in lines:
-        m = re.match(r"^cd (\S+) && (.+)$", line.strip())
-        if not m:
-            raise ValueError("cannot read selection line %r" % line)
-        cwd, argv = os.path.join(ROOT, m.group(1)), shlex.split(m.group(2))
-        if argv[:2] == ["bash", "scripts/ci-shard.sh"] and "--only-units" in argv:
-            labels.update("engine " + u for u in argv[argv.index("--only-units") + 1].split(","))
-        elif argv and argv[0] == "scripts/run-tests.sh" and "--only" in argv:
-            labels.update(suite_label(argv[i + 1]) for i, a in enumerate(argv) if a == "--only")
-        elif argv[:2] == ["cargo", "test"]:
-            labels.add("cargo " + " ".join(argv[2:]))
-            cargo_targets.add((cargo_key(argv) or (" ".join(argv[2:]), ""))[0])
-        else:
-            labels.add(command_label(cwd, argv, m.group(2)))
-    return labels, cargo_targets
-
-
-# A PASS STANDS WHERE THE SELECTOR SAYS A CHANGE DOES NOT REACH IT (2026-10-22, lead's answer to
-# esc-20261022T054303Z-e2b6f41e). A check keyed by the whole checkout or a whole folder ran again
+# A PASS STANDS WHERE NEITHER THE SELECTOR NOR THE DEPENDENCY MAP SAYS A CHANGE REACHES IT
+# (2026-10-22, the lead's answers to esc-20261022T054303Z-e2b6f41e and to review
+# rv-20261022T062403Z-4b9d1c1f-03ee). A check keyed by the whole checkout or a whole folder ran again
 # after any change: zach-opus-holds3's fourth handover run, after a three-file change, reused 0 of
 # the 94 checks its third run had passed 92 of (richos-hq docs/research/2026-10-22-mac-system-cpu-
-# round2.md). The engine's dependency graph cannot give a suite its read list (its edges are what
-# runs, not every file read), but the selector already decides what a land runs: a land of A..B
-# executes only what proof-for.sh selects for A..B and skips the rest. So a pass saved at commit A
-# stands at commit B when both trees are clean, every other part of its identity is unchanged
-# (proof_evidence.selection_standing) and proof-for.sh maps A..B cleanly without selecting it: the
-# same standard, applied between two runs. Where the selector cannot map A..B (exit 1: changed
-# code no suite covers; 2; 3) the check runs. The answer is read in THIS checkout, at B.
+# round2.md). A pass saved at commit A stands at commit B only when both trees are clean, every
+# other part of its identity is unchanged (proof_evidence.selection_standing) and ALL of these hold:
+#   * proof-for.sh maps A..B cleanly (exit 0) and does not select it: what a land of A..B skips;
+#   * it is an engine unit the dependency map (richos/engine/scripts/lib/verification-
+#     dependencies.json) lists, whose whole reader closure resolves, every pin in it current and
+#     every external reader inside this repository;
+#   * no path A..B changes is in that closure (a reader the selector's basename rule misses:
+#     the review's helper a Python test imports).
+# Anything else runs: a check the map does not cover (app, cargo and UI checks, an unlisted unit),
+# a stale pin, an unreadable map, a selector that cannot map A..B. Read in THIS checkout, at B.
+DEPENDENCY_MAP = "richos/engine/scripts/lib/verification-dependencies.json"
 _UNAFFECTED = {}
 
 
-def selection_unaffected(a, b, label):
-    """None when proof-for.sh maps a..b cleanly and does not select `label`, else why not."""
-    if head_commit() != b:
-        return "the checkout is not at %s" % b[:12]
-    key = (a, b)
-    if key not in _UNAFFECTED:
+def _git_lines(*argv):
+    r = subprocess.run(["git", "-C", ROOT, *argv], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    if r.returncode != 0:
+        raise ValueError("git %s failed: %s" % (" ".join(argv[:2]), r.stderr.strip()[:200]))
+    return [line for line in r.stdout.splitlines() if line]
+
+
+def _range_reading(a, b):
+    """(engine units proof-for.sh selects for a..b, paths a..b changes, the dependency map), or why
+    not, read once per pair."""
+    if (a, b) not in _UNAFFECTED:
         try:
             r = subprocess.run([os.path.join(HERE, "proof-for.sh"), "--quiet", "%s..%s" % (a, b)], cwd=ROOT,
                                capture_output=True, text=True, stdin=subprocess.DEVNULL)
         except OSError as exc:
             r = subprocess.CompletedProcess([], 127, "", str(exc))
         if r.returncode != 0:
-            _UNAFFECTED[key] = "the selector cannot map %s..%s cleanly (proof-for.sh exit %d)" % (
+            _UNAFFECTED[(a, b)] = "the selector cannot map %s..%s cleanly (proof-for.sh exit %d)" % (
                 a[:12], b[:12], r.returncode)
-        else:
-            try:
-                _UNAFFECTED[key] = selected_labels([l for l in r.stdout.splitlines() if l.strip()])
-            except ValueError as exc:
-                _UNAFFECTED[key] = "the selector's answer for %s..%s cannot be read: %s" % (a[:12], b[:12], exc)
-    found = _UNAFFECTED[key]
-    if isinstance(found, str):
-        return found
-    labels, cargo_targets = found
-    if label in labels:
+            return _UNAFFECTED[(a, b)]
+        units = set()
+        for line in r.stdout.splitlines():
+            m = re.match(r"^cd (\S+) && (.+)$", line.strip())
+            if line.strip() and not m:
+                _UNAFFECTED[(a, b)] = "the selector's answer for %s..%s cannot be read" % (a[:12], b[:12])
+                return _UNAFFECTED[(a, b)]
+            argv = shlex.split(m.group(2)) if m else []
+            if argv[:2] == ["bash", "scripts/ci-shard.sh"] and "--only-units" in argv:
+                units.update(argv[argv.index("--only-units") + 1].split(","))
+        try:
+            # Both sides of a rename: a reader of the old path is a reader of a changed path.
+            changed = set(_git_lines("diff", "--name-only", "--no-renames", a, b))
+            with open(os.path.join(ROOT, DEPENDENCY_MAP)) as fh:
+                dependencies = json.load(fh)
+        except (OSError, ValueError) as exc:
+            _UNAFFECTED[(a, b)] = "the change %s..%s or the dependency map cannot be read: %s" % (a[:12], b[:12], exc)
+            return _UNAFFECTED[(a, b)]
+        _UNAFFECTED[(a, b)] = (units, changed, dependencies)
+    return _UNAFFECTED[(a, b)]
+
+
+def dependency_closure(dependencies, unit):
+    """(repository paths, directory prefixes) the dependency map says engine `unit` executes or
+    lists, every pin checked against the bytes here; or why the map does not cover it."""
+    nodes, units = dependencies.get("nodes") or {}, dependencies.get("units") or {}
+    if unit not in units:
+        return None, "the dependency map does not list it"
+    seen, stack, paths, prefixes = set(), [units[unit]], set(), set()
+
+    def pinned(path, sha):
+        try:
+            with open(os.path.join(ROOT, path), "rb") as fh:
+                return hashlib.sha256(fh.read()).hexdigest() == sha
+        except OSError:
+            return False
+
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        row = nodes.get(name)
+        if not isinstance(row, dict) or not isinstance(row.get("source"), str):
+            return None, "the dependency map has no node %s" % name
+        path = "richos/engine/" + row["source"]
+        if not pinned(path, row.get("sha256")):
+            return None, "the dependency map's pin of %s is not current" % path
+        paths.add(path)
+        for external in row.get("external", []):
+            if (not isinstance(external, dict) or external.get("root") != "repository"
+                    or not isinstance(external.get("path"), str)):
+                return None, "%s reads a file outside this repository" % path
+            if not pinned(external["path"], external.get("sha256")):
+                return None, "the dependency map's pin of %s is not current" % external["path"]
+            paths.add(external["path"])
+        inventory = row.get("source_inventory")
+        if isinstance(inventory, dict) and isinstance(inventory.get("directory"), str):
+            prefixes.add("richos/engine/" + inventory["directory"].rstrip("/") + "/")
+        for edge in row.get("edges", []):
+            if not isinstance(edge, dict) or not isinstance(edge.get("to"), str):
+                return None, "the dependency map has a malformed edge in %s" % name
+            stack.append(edge["to"])
+    return (paths, prefixes), None
+
+
+def selection_unaffected(a, b, label):
+    """None when a pass of `label` saved at commit a stands at commit b (above), else why not."""
+    if head_commit() != b:
+        return "the checkout is not at %s" % b[:12]
+    if not label.startswith("engine ") or label == "engine receipts":
+        return "the dependency map does not cover it"
+    reading = _range_reading(a, b)
+    if isinstance(reading, str):
+        return reading
+    units, changed, dependencies = reading
+    unit = label[len("engine "):]
+    if unit in units:
         return "%s..%s selects it" % (a[:12], b[:12])
-    if label.startswith("cargo "):
-        argv = ["cargo", "test"] + shlex.split(label[len("cargo "):])
-        if (cargo_key(argv) or (" ".join(argv[2:]), ""))[0] in cargo_targets:
-            return "%s..%s selects a check of its cargo target" % (a[:12], b[:12])
+    covered, why = dependency_closure(dependencies, unit)
+    if why:
+        return why
+    paths, prefixes = covered
+    reached = sorted(p for p in changed if p in paths or any(p.startswith(x) for x in prefixes))
+    if reached:
+        return "%s..%s changes %s, which it executes (dependency map)" % (a[:12], b[:12], reached[0])
     return None
 
 
@@ -590,7 +615,7 @@ def plan(lines, args, logdir, hist):
                     lane = "gradle" if uses_gradle(path) else None
                     if os.environ.get("RICHOS_GUI_HOST") and is_host_screen(path):
                         lane = "guest"
-                    label = suite_label(suite)
+                    label = suite[:-len(".test.sh")] if suite.endswith(".test.sh") else suite
                     # Its per-suite states (passed, notrun, gap, skipped), read when it ends: exit 0
                     # alone cannot tell a suite that passed from one that never ran (not_run()).
                     # Resolved, so the saved plan names it $RUN/... and identities stay stable.
@@ -600,7 +625,29 @@ def plan(lines, args, logdir, hist):
         elif argv[:2] == ["cargo", "test"]:
             cargo.append((cwd, argv))
         else:
-            label = command_label(cwd, argv, m.group(2))
+            first = argv[0]
+            if first in ("bash", "node", "python3"):
+                first = next((a for a in argv[1:] if not a.startswith("-")), first)
+            base = os.path.basename(first)
+            label = re.sub(r"\.test\.sh$|\.sh$", "", base)
+            if (base.endswith(".sh") and not base.endswith(".test.sh")
+                    and os.path.isfile(os.path.join(cwd, "scripts", label + ".test.sh"))):
+                # A script named like a run-tests suite is not that suite. The land's `lint.sh
+                # --changed` (about a second) was "lint", the label of lint.test.sh (`lint.sh
+                # --all`, about 100 s), and its seconds pulled the suite's median to 1.7 s, so
+                # the commit gate ran lint.test.sh as a fast check under a 120 s cap and refused
+                # every richos/app/ui commit (2026-10-15). Its whole name and arguments label it.
+                label = " ".join([base] + argv[argv.index(first) + 1:])
+            if argv[:2] == ["node", "--test"]:
+                label = "web-app"
+            elif "testvm/test/run-tests.sh" in m.group(2):
+                label = "testvm"
+            elif base == "run-tests.sh" and "/test/" in first:
+                # Every `<dir>/test/run-tests.sh` would otherwise be labeled "run-tests", the same
+                # as the `--only run-tests.test.sh` suite: two checks under one label share one
+                # identity, so the second's fingerprint made the first "changed during the check"
+                # (INVALID, land of zach-sonnet-vmvalid1, 2026-09-30).
+                label = os.path.basename(first.split("/test/")[0])
             items.append(Item(label, cwd, argv, None, default_weight(label, hist)))
     # cargo: one target and filter is one check however many changed files selected it, and a
     # filter a shorter filter on the same target already matches is dropped. proof-for.sh prints
