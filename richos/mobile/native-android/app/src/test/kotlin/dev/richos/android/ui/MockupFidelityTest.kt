@@ -238,6 +238,20 @@ class MockupFidelityTest {
         assertTrue(textsIn("pairing-blocked-dialog").any { "paired with now" in it })
     }
 
+    /** The refused Forget dialog's sentence agrees with its count: one message is "it", more are "them". */
+    @Test
+    fun `the refused Forget dialog says it for one message and them for two`() {
+        val two = screen("settings-forget-blocked")
+        show(two)
+        assertTrue(textsIn("forget-blocked-dialog").contains(
+            "Two messages are still waiting to be sent. Send them or discard them first, then this phone can forget the pairing.",
+        ))
+        show(two.copy(app = two.app.copy(outbox = two.app.outbox.take(1))))
+        assertTrue(textsIn("forget-blocked-dialog").contains(
+            "One message is still waiting to be sent. Send it or discard it first, then this phone can forget the pairing.",
+        ))
+    }
+
     /**
      * G13: the disabled orb (`comp-disabled`, `conn-incompatible`) is round 12.1's gold circle dimmed
      * to 45% over the capsule, not an outlined ring, and stays disabled for TalkBack.

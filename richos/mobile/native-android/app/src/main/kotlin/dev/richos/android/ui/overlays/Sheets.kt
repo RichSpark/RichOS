@@ -279,7 +279,8 @@ fun ForgetDialog(onEvent: (UiEvent) -> Unit) = Dialog("Forget this pairing?", "f
  */
 @Composable
 fun ForgetBlockedDialog(waiting: Int, onEvent: (UiEvent) -> Unit) = Dialog("Not yet", "forget-blocked-dialog") {
-    DialogText("${countWord(waiting)} still waiting to be sent. Send them or discard them first, then this phone can forget the pairing.")
+    val them = if (waiting == 1) "it" else "them"
+    DialogText("${countWord(waiting)} still waiting to be sent. Send $them or discard $them first, then this phone can forget the pairing.")
     DialogActions {
         RichButton("Show the waiting messages", { onEvent(UiEvent.ShowWaiting) }, wide = true)
         RichButton("Discard and forget", { onEvent(UiEvent.DiscardAndForget) }, kind = ButtonKind.GHOST, wide = true)
