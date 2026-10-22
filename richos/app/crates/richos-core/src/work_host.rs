@@ -3832,7 +3832,8 @@ mod tests {
 
     /// With `before_its_task`, Stop is pressed after the call and before its `task_started`,
     /// which the stand-in sends 1 s later (Claude Code's foreground task comes seconds after
-    /// the call).
+    /// the call). Without it the task still comes 0.2 s after the call: on a loaded Mac
+    /// (2026-10-23) the test read the call before its task and failed with task_id "".
     fn stop_ends_the_command(h: &Harness, job: &str, description: &str, front_desk: bool, before_its_task: bool) {
         let (client, dir) = crate::native::native_driver_tests::fixture_client("stop-foreground-command", &r#"
 here=$(dirname "$0")
@@ -3856,15 +3857,19 @@ printf '%s\n' "{\"type\":\"control_response\",\"response\":{\"subtype\":\"succes
 printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"bforeground","tool_use_id":"toolu_fg","status":"stopped"}'
 printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn"}'
 read -r keep_alive
-"#.replace("DESCRIPTION", description).replace("TASK_DELAY", if before_its_task { "sleep 1" } else { ":" }));
+"#.replace("DESCRIPTION", description).replace("TASK_DELAY", if before_its_task { "sleep 1" } else { "sleep 0.2" }));
         let handle = client.cancel_handle();
         let turn = std::thread::spawn(move || {
             let ended = client.prompt("run the job's commands", &mut |_| {});
             (client, ended)
         });
-        until("Stu's foreground command never started", || handle.own_commands().len() == 1);
+        // The call is seen before its task_started is read, so wait for the task too.
+        let task = if before_its_task { "" } else { "bforeground" };
+        until("Stu's foreground command never started", || {
+            let own = handle.own_commands();
+            own.len() == 1 && own[0].task_id == task
+        });
         assert_eq!(handle.own_commands()[0].tool_use_id, "toolu_fg", "a helper's command is not Stu's own");
-        assert_eq!(handle.own_commands()[0].task_id, if before_its_task { "" } else { "bforeground" });
         assert_eq!(handle.own_commands()[0].description, description, "the job travels in the call's own description");
         let pid: i32 = std::fs::read_to_string(dir.join("command.pid")).unwrap().trim().parse().unwrap();
         let alive = || unsafe { libc::kill(pid, 0) } == 0;
