@@ -291,6 +291,23 @@ VM_PROOF_PHASE = "vm-boot-proof"
 # minutes, so the one thing that can end it is a guest that never answers.
 VM_PROOF_BUDGET = 3600 + 1200
 
+# THE NEW-USER WALK, A GATE OF ITS OWN (2026-10-21). A new user's first run of stable 1.2.1 hit
+# dead ends no gate could see, because every guest walk and the boot proof above launch the app
+# with the harness's Claude Code, login and engine handed in: none of them is a first run as a
+# customer has it. `testvm/new-user-walk.py`, under `run-walk.py --new-user`, is one: HOME and
+# nothing else, the app installing Claude Code and its engine itself, a message sent signed out
+# (twice), an update check, then a sign-in and Rich's answer, every frame read for the dead ends
+# (docs/development/failure-classes/). It takes its own guest slot after the boot proof's is
+# released, never two at once. Its budget is the slot wait plus a measured run: the guest walk
+# of 2026-10-21 took 595 s from slot to clean (setup 253 s, of which the app's own download of
+# Claude Code and the 178 MB engine is most), so 40 minutes covers a slow network twice over.
+NEW_USER_WALK_PHASE = "new-user-walk"
+# The whole walk, in its order: testvm/new-user-walk.py STEPS (nightly-local.test.py asserts the
+# two are the same list). A report is accepted only when it walked exactly these, to its end.
+NEW_USER_WALK_STEPS = ("identity", "setup", "signed-out", "accounts", "update", "signed-in")
+NEW_USER_WALK_WAIT = 3600
+NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
+
 # A SETTING GIVEN TO THE BUILD IS NEVER SILENTLY DROPPED (2026-09-29). Attempt 2 that day was
 # started as `RICHOS_GUI_HOST=richos-test-1 nightly-local.py build --no-host-screen`; every
 # gate runs in the allowlisted environment below (GATE_PASSTHROUGH), the variable never
@@ -2699,6 +2716,75 @@ class Runner:
         self.announce(f"VM boot proof PASSED: {proof}. `publish --run {run_id}` uses it without --gui-proof.")
         return None
 
+    def new_user_walk_dir(self, run_id):
+        """Where the build keeps its new-user walk's evidence (report.json, frames, app.log)."""
+        return self.state / "new-user-walks" / run_id
+
+    def new_user_walk(self, run_id, out, info):
+        """Walk the candidate's own first-install archive as a new user, in its own guest
+        (NEW_USER_WALK_PHASE). None on a pass, else the sentence that says what failed, where
+        the evidence is and how to walk it again without a rebuild."""
+        bundle = Path(out) / f"RichOS-{info['version']}-macos-aarch64.zip"
+        walk = self.new_user_walk_dir(run_id)
+        home = walk.parent / f"{run_id}.home"
+        shutil.rmtree(walk, ignore_errors=True)
+        shutil.rmtree(home, ignore_errors=True)
+        home.mkdir(parents=True)
+        testvm = self.source / SCRIPTS / "testvm"
+        args = [sys.executable, testvm / "run-walk.py", "--new-user", "--wait", str(NEW_USER_WALK_WAIT),
+                "--bundle", bundle, "--home", home, "--engine", "none", "--report", walk.parent / f"{run_id}.run.json",
+                "--", testvm / "new-user-walk.py", "--out", walk,
+                "--expect-sha", info.get("build_commit") or info["source_commit"], "--keep-going"]
+        self.announce("Walking the candidate as a new user in a fresh guest on the test VM "
+                      "(first install, signed out, update check, signed in)...")
+        try:
+            with self.phase(NEW_USER_WALK_PHASE):
+                self.command(*args, env_extra=dict(self.vm_settings), timeout=NEW_USER_WALK_BUDGET)
+        except RuntimeError as error:
+            return (f"THE CANDIDATE IS BUILT, AND A NEW USER'S FIRST RUN OF IT FAILED: {error}. "
+                    f"Each step's verdict is in {walk / 'report.json'}, with its frames and app.log "
+                    f"beside it. `publish` refuses this candidate until the walk passes; walk it again "
+                    f"with the command above (no rebuild needed).")
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+        self.announce(f"New-user walk PASSED: {walk / 'report.json'}.")
+        return None
+
+    def require_new_user_walk(self, info, run_id):
+        """Refuse to publish a candidate a new user's first run has not passed on (2026-10-21).
+        A candidate built before the requirement carries no `new_user_walk_required` and keeps
+        the contract it was built under, as `screen_suites_required` does."""
+        if not info.get("new_user_walk_required"):
+            return None
+        report = self.new_user_walk_dir(run_id or info.get("run_id") or "none") / "report.json"
+        try:
+            walked = json.loads(report.read_text())
+        except (OSError, ValueError) as error:
+            raise ValueError(f"no new-user walk of this candidate can be read at {report} ({error}). "
+                             "A new user's first run is a gate: walk it with nightly-local.py's "
+                             "new-user walk (testvm/run-walk.py --new-user ... new-user-walk.py).") from None
+        failed = [s for s in walked.get("steps", []) if s.get("outcome") != "PASS"]
+        if failed:
+            raise ValueError(f"the new-user walk of this candidate did not pass ({report}): "
+                             + "; ".join(f"{s.get('step')}: {s.get('detail')}" for s in failed))
+        # EVERY STEP, WALKED TO THE END. The report is rewritten after each step, so passes alone
+        # can be a walk that stopped after its first step (review
+        # rv-20261021T163510Z-b612361c-0e62, finding 3): the step list must be the whole walk and
+        # the walk must have written its own end (`complete`).
+        walked_steps = [s.get("step") for s in walked.get("steps", [])]
+        if walked_steps != list(NEW_USER_WALK_STEPS) or walked.get("complete") is not True:
+            never = [s for s in NEW_USER_WALK_STEPS if s not in walked_steps]
+            raise ValueError(f"the new-user walk at {report} did not walk to its end: walked "
+                             f"{', '.join(walked_steps) or 'nothing'}"
+                             + (f"; never ran: {', '.join(never)}" if never else "")
+                             + ("" if walked.get("complete") is True else "; it did not record its own end")
+                             + ". Walk this candidate again.")
+        accepted = [s for s in (info.get("build_commit"), info.get("source_commit")) if s]
+        if walked.get("expect_sha") not in accepted:
+            raise ValueError(f"the new-user walk at {report} walked {walked.get('expect_sha') or '<no commit>'}, "
+                             f"not this candidate ({' / '.join(accepted)}); walk this candidate.")
+        return walked
+
     def require_gui_proof(self, info, gui_proof, run_id=None):
         """Refuse to publish a candidate whose boot nobody has seen.
 
@@ -3091,6 +3177,10 @@ class Runner:
                     self.skip(name, f"passed in run {passed['run_id']} on {passed['source_commit']}")
             else:
                 self.gates(no_host_screen=no_host_screen)
+            # The stable bundle is the one a new user downloads first (the dead ends of
+            # 2026-10-21 were on stable 1.2.1), so it carries the walk's requirement too.
+            info = {**info, "new_user_walk_required": True}
+            Path(plan_path).write_text(json.dumps(info, indent=2) + "\n")
             out = self.state / "releases" / info["tag"]
             self.announce(f"Building and publishing {info['tag']} from "
                           f"{info['source_commit'][:12]}...")
@@ -3105,6 +3195,8 @@ class Runner:
             self.prepare_changelog(info, out)
             run = info["run_id"]
             proof_error = self.vm_boot_proof(run)
+            if not proof_error and info.get("new_user_walk_required"):
+                proof_error = self.new_user_walk(run, out, info)
             if proof_error:
                 raise RuntimeError(f"{info['tag']} IS NOT PUBLISHED. {proof_error}")
             self.announce(f"{info['tag']} built, not published. The lead will publish run {run} "
@@ -3129,6 +3221,8 @@ class Runner:
             if proof:
                 print(f"gui-boot proof accepted: {proof.get('result')} at {proof.get('where')}, "
                       f"commit {proof.get('commit')}, taken {proof.get('at')}", flush=True)
+            if self.require_new_user_walk(info, run_id):
+                print(f"New-user walk accepted: every step passed on {info.get('build_commit')}", flush=True)
             # A `check` or another `build` since this candidate was built moved the worktree
             # that `finish` runs from; put its build commit back rather than refuse.
             self.restore_build_commit(info)
@@ -3195,6 +3289,11 @@ class Runner:
         if command == "build":
             info = {**info, "screen_suites_required": True}
             plan_path.write_text(json.dumps(info, indent=2) + "\n")
+        # A NEW USER'S FIRST RUN GATES EVERY NEW CANDIDATE, whichever command made it: `release`
+        # builds and is published by the same `publish` (review rv-20261021T173525Z-f1f16a31-356b:
+        # with the flag on `build` alone, a release candidate skipped the walk and its check).
+        info = {**info, "new_user_walk_required": True}
+        plan_path.write_text(json.dumps(info, indent=2) + "\n")
         if no_host_screen or isinstance(suites, dict):
             # Into the plan for the same reason the land proof is: nightly.py copies the
             # plan verbatim into build-info.json and the candidate's committed provenance,
@@ -3259,6 +3358,9 @@ class Runner:
         proof_error = None
         if self.needs_gui_proof(candidate_info):
             proof_error = self.vm_boot_proof(self.env["RICHOS_NIGHTLY_RUN_ID"])
+        # Then a new user's first run of the same archive, in its own guest (NEW_USER_WALK_PHASE).
+        if not proof_error and candidate_info.get("new_user_walk_required"):
+            proof_error = self.new_user_walk(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
         self.summary()
         print("", flush=True)
         self.print_candidate(candidate_info, out)

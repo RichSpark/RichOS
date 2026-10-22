@@ -192,6 +192,23 @@ impl Source for ClaudeSource {
         if result.is_err() {
             self.connection = None;
         }
+        // **NO LIMITS REPORTED IS NOT A VERDICT ON ITS OWN.** A signed-out Claude Code answers
+        // `get_usage` exactly as an account without subscription limits does
+        // (`rate_limits_available: false`; measured on 2.1.306, 2026-10-21), so the card said
+        // "No reading yet" to a person who had never signed in and could not tell that from a
+        // slow check (`docs/development/failure-classes/unknown-state-shown-as-pending.md`).
+        // Claude Code's own `auth status` decides which one this is, and BOTH answers are kept:
+        // a signed-in verdict stands on its own and is never lost because no usage reading
+        // came with it (mid-job review rv-20261021T213648Z-b3f0990a-85f9: a signed-in account
+        // without limits was offered "Sign in").
+        if result == Err(ReadError::Unsupported) {
+            use crate::provider_auth::AuthState;
+            match crate::provider_auth::status_in(bin, self.folder.as_deref()).state {
+                AuthState::SignedOut => return Err(ReadError::SignedOut),
+                AuthState::Connected => return Err(ReadError::SignedInNoLimits),
+                _ => {}
+            }
+        }
         result
     }
     fn disconnect(&mut self) {
@@ -245,6 +262,34 @@ for line in sys.stdin:
             .unwrap();
         source.disconnect();
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    }
+    /// **A signed-out account is told apart from one with no limits** (a new user's first run,
+    /// 2026-10-21: the card said "No reading yet" to somebody who had never signed in). Both
+    /// answer `get_usage` with `rate_limits_available: false`, exactly as Claude Code 2.1.306
+    /// does signed out; only `claude auth status --json` separates them. And a signed-in verdict
+    /// stands on its own: it is never lost because no usage reading came with it (mid-job
+    /// review rv-20261021T213648Z-b3f0990a-85f9: the card offered "Sign in" to it).
+    #[test]
+    fn no_limits_from_a_signed_out_account_is_reported_as_signed_out() {
+        for (logged_in, want) in [("False", ReadError::SignedOut), ("True", ReadError::SignedInNoLimits)] {
+            let root = Scratch::new();
+            let bin = script(
+                root.path(),
+                &format!(
+                    r#"import sys, json
+if sys.argv[1:4] == ['auth','status','--json']:
+    print(json.dumps({{'loggedIn': {logged_in}}}))
+    sys.exit(0 if {logged_in} else 1)
+for line in sys.stdin:
+    v=json.loads(line)
+    kind=v['request']['subtype']
+    payload={{}} if kind=='initialize' else {{'subscription_type':None,'rate_limits_available':False,'rate_limits':None}}
+    print(json.dumps({{'type':'control_response','response':{{'subtype':'success','request_id':v['request_id'],'response':payload}}}}), flush=True)
+"#
+                ),
+            );
+            assert_eq!(ClaudeSource::default().read(&bin, root.path()), Err(want), "loggedIn {logged_in}");
+        }
     }
     #[test]
     fn eof_and_oversized_frames_fail_without_a_hung_reader() {
