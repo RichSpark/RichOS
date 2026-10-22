@@ -819,9 +819,19 @@ pub trait TurnCancel: Send + Sync {
     fn stop_worker(&self, _tool_use_id: &str) -> CommandStop { CommandStop::NotDelivered }
 
     /// The shell commands this session's own model started that are still running, foreground
-    /// or background, by the provider's task id with when each started (ms since the epoch).
-    /// [`Self::stop_background_command`] stops one by that id.
-    fn own_commands(&self) -> Vec<(String, u64)> { Vec::new() }
+    /// or background. [`Self::stop_background_command`] stops one by its task id.
+    fn own_commands(&self) -> Vec<OwnCommand> { Vec::new() }
+}
+
+/// One shell command a session's own model started, as its stream reported it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnCommand {
+    /// The provider's task id.
+    pub task_id: String,
+    /// When its `task_started` was read (ms since the epoch).
+    pub started_at_ms: u64,
+    /// The call's own `description`, where Stu names the job the command is for (stu.md).
+    pub description: String,
 }
 
 /// What became of a request to stop one background command, from the provider's own frames.

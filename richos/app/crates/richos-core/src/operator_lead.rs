@@ -169,8 +169,9 @@ pub struct TaskBook {
     /// Native agents in start order. A named agent started twice keeps both rows.
     agents: Vec<AgentTask>,
     /// `Bash` tool_use ids the session's own model called (`parent_tool_use_id` null), never a
-    /// helper's: the commands a job's Stop may end on this session's behalf.
-    own_bash: HashSet<String>,
+    /// helper's: the commands a job's Stop may end on this session's behalf. → the call's own
+    /// `description`, where Stu names the job the command is for (stu.md).
+    own_bash: HashMap<String, String>,
     /// task id → when its `task_started` was read (ms since the epoch, `assignment::now_ms`).
     started_at_ms: HashMap<String, u64>,
 }
@@ -187,7 +188,8 @@ impl TaskBook {
                     if own && block.get("type").and_then(Value::as_str) == Some("tool_use")
                         && block.get("name").and_then(Value::as_str) == Some("Bash") {
                         if let Some(id) = block.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) {
-                            self.own_bash.insert(id.to_string());
+                            let description = block.pointer("/input/description").and_then(Value::as_str).unwrap_or("");
+                            self.own_bash.insert(id.to_string(), description.to_string());
                         }
                     }
                     let is_agent = block.get("type").and_then(Value::as_str) == Some("tool_use")
@@ -281,13 +283,17 @@ impl TaskBook {
     }
 
     /// The session's own shell commands still running, foreground or background, oldest first:
-    /// `(task id, when its task_started was read)`. A helper's commands are its own, not these.
-    pub fn own_running_commands(&self) -> Vec<(String, u64)> {
-        let mut out: Vec<(String, u64)> = self.task_tool.iter()
-            .filter(|(task, tool)| self.own_bash.contains(*tool) && !self.task_ended(task))
-            .filter_map(|(task, _)| Some((task.clone(), *self.started_at_ms.get(task)?)))
+    /// A helper's commands are its own, not these.
+    pub fn own_running_commands(&self) -> Vec<crate::steering::OwnCommand> {
+        let mut out: Vec<crate::steering::OwnCommand> = self.task_tool.iter()
+            .filter(|(task, _)| !self.task_ended(task))
+            .filter_map(|(task, tool)| Some(crate::steering::OwnCommand {
+                task_id: task.clone(),
+                started_at_ms: *self.started_at_ms.get(task)?,
+                description: self.own_bash.get(tool)?.clone(),
+            }))
             .collect();
-        out.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+        out.sort_by(|a, b| (a.started_at_ms, &a.task_id).cmp(&(b.started_at_ms, &b.task_id)));
         out
     }
 

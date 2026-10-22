@@ -3585,7 +3585,7 @@ impl TurnCancel for NativeCancelHandle {
         task.map_or(crate::steering::CommandStop::NotDelivered, |task| self.stop_background_command(&task))
     }
 
-    fn own_commands(&self) -> Vec<(String, u64)> {
+    fn own_commands(&self) -> Vec<crate::steering::OwnCommand> {
         self.reader_state.lock().unwrap().agent_tasks.own_running_commands()
     }
 

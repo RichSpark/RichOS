@@ -1484,19 +1484,43 @@ pub fn for_him(row: &Assignment) -> bool {
     row.waiting_sentence || row.state.awaits_his_word()
 }
 
-/// Which of Stu's own running commands are job `id`'s: those started after it was registered
-/// while no other job of this conversation was open. Stu's commands carry no job, so one that
-/// started while another job was open could be that job's; it is left to Stu, who is told of
-/// the Stop, rather than guessed. A closed job counts as open until its last update.
-fn job_commands(records: &[assignment::Assignment], id: &str, commands: &[(String, u64)]) -> Vec<String> {
+/// Which of Stu's own running commands are job `id`'s. **The job travels with the command:**
+/// Stu names the job's `obligation_id` in the description of every command he runs for it
+/// (stu.md), so a command naming this job is its, and one naming another job is never its.
+/// A command that names no job is this job's only when it started after the job was
+/// registered and no other job could be running it: another job counts when it is still
+/// open, was registered before the command started, and was not already waiting (on the user,
+/// the screen or the allowance) with no change since. Anything else is left to Stu, who is
+/// told of the Stop, rather than guessed.
+fn job_commands(records: &[assignment::Assignment], id: &str, commands: &[crate::steering::OwnCommand]) -> Vec<String> {
+    use AssignmentState::{Blocked, WaitingForQuota, WaitingForScreen};
     let Some(job) = records.iter().find(|r| r.id == id) else { return Vec::new() };
-    let other_open = |at: u64| {
-        records.iter().any(|r| r.id != id && r.registered_at_ms <= at && (r.accepts_input() || at <= r.updated_at_ms))
+    // The whole id, never a part of a longer one ("obligation-7" is not in "obligation-70").
+    let names = |command: &crate::steering::OwnCommand, record: &assignment::Assignment| {
+        let (text, wanted) = (command.description.as_str(), record.obligation_id.as_str());
+        let part_of_id = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        !wanted.is_empty() && text.match_indices(wanted).any(|(at, _)| {
+            !part_of_id(text[..at].chars().next_back()) && !part_of_id(text[at + wanted.len()..].chars().next())
+        })
+    };
+    let another_could_run = |at: u64| {
+        records.iter().any(|r| {
+            let waiting_since_before = matches!(r.reported_state(), Some(Blocked | WaitingForScreen | WaitingForQuota))
+                && r.updated_at_ms <= at;
+            r.id != id && r.accepts_input() && r.registered_at_ms <= at && !waiting_since_before
+        })
     };
     commands
         .iter()
-        .filter(|(_, at)| *at >= job.registered_at_ms && !other_open(*at))
-        .map(|(task, _)| task.clone())
+        .filter(|command| {
+            if names(command, job) {
+                return true;
+            }
+            !records.iter().any(|r| r.id != id && names(command, r))
+                && command.started_at_ms >= job.registered_at_ms
+                && !another_could_run(command.started_at_ms)
+        })
+        .map(|command| command.task_id.clone())
         .collect()
 }
 
@@ -3584,7 +3608,49 @@ mod tests {
     fn a_jobs_stop_ends_the_foreground_command_stu_runs_for_it() {
         let h = harness(0);
         let job = assignment::register(&h.state, &registration(&h)).unwrap();
-        let (client, dir) = crate::native::native_driver_tests::fixture_client("stop-foreground-command", r#"
+        stop_ends_stus_foreground_command(&h, &job.id, "Run the heartbeat");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **Two jobs running at once: the job travels with its command.** Job B is running when
+    /// A's foreground command starts, and the command's description names A's obligation_id
+    /// (stu.md). Stop on A ends it; B is left as it was. RED at 9b7b70f64: with B open, the
+    /// command was nobody's, and it outlived the bound.
+    #[test]
+    fn a_jobs_stop_ends_the_command_naming_it_while_another_job_runs() {
+        let h = harness(0);
+        let running = assignment::register(&h.state, &Registration { obligation_id: "obligation-b".into(), ..registration(&h) }).unwrap();
+        assignment::advance(&h.state, "depot", "thread-one", &running.id, AssignmentState::Running, "Working.").unwrap();
+        let job = assignment::register(&h.state, &registration(&h)).unwrap();
+        stop_ends_stus_foreground_command(&h, &job.id, "obligation-7: run the heartbeat");
+        let other = assignment::read(&h.state, "depot", "thread-one", &running.id).unwrap();
+        assert_eq!((other.state, other.user_stop_requested_at_ms), (AssignmentState::Running, None), "the other job is not touched");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// The review of 9b7b70f64 (rv-20261022T093512Z-9b7b70f6-d496, finding 1): job B, open but
+    /// only waiting for his decision since before A's command started, kept A's command out of
+    /// A's Stop ("A foreground still running after 2015 ms: true"), even a command naming no
+    /// job. B is left as it was. RED at 9b7b70f64: any other open job made the command nobody's.
+    #[test]
+    fn a_jobs_stop_ends_its_foreground_command_while_another_job_waits_for_a_decision() {
+        let h = harness(0);
+        let waiting = assignment::register(&h.state, &Registration { obligation_id: "waiting-for-him".into(), ..registration(&h) }).unwrap();
+        assignment::advance(&h.state, "depot", "thread-one", &waiting.id, AssignmentState::Blocked, "Which branch first?").unwrap();
+        let job = assignment::register(&h.state, &registration(&h)).unwrap();
+        stop_ends_stus_foreground_command(&h, &job.id, "Run the heartbeat");
+        let other = assignment::read(&h.state, "depot", "thread-one", &waiting.id).unwrap();
+        assert_eq!((other.state, other.user_stop_requested_at_ms), (AssignmentState::Blocked, None), "the waiting job is not touched");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// Stu runs one foreground command (a real `sleep`) beside a helper's; Stop on `job` must
+    /// end Stu's within the reap walk's bound, with only that command's `stop_task`.
+    fn stop_ends_stus_foreground_command(h: &Harness, job: &str, description: &str) {
+        let (client, dir) = crate::native::native_driver_tests::fixture_client("stop-foreground-command", &r#"
 here=$(dirname "$0")
 read -r init
 printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
@@ -3592,7 +3658,7 @@ read -r prompt
 sleep 300 &
 command=$!
 echo "$command" > "$here/command.pid"
-printf '%s\n' '{"type":"assistant","message":{"id":"msg_stu","model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_fg","name":"Bash","input":{"command":"python3 heartbeat.py beat stop-fg /tmp/reap-walk --seconds 300"}}],"usage":{"input_tokens":0,"output_tokens":1}},"parent_tool_use_id":null}'
+printf '%s\n' '{"type":"assistant","message":{"id":"msg_stu","model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_fg","name":"Bash","input":{"command":"python3 heartbeat.py beat stop-fg /tmp/reap-walk --seconds 300","description":"DESCRIPTION"}}],"usage":{"input_tokens":0,"output_tokens":1}},"parent_tool_use_id":null}'
 printf '%s\n' '{"type":"assistant","message":{"id":"msg_helper","model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_helper","name":"Bash","input":{"command":"sleep 1"}}],"usage":{"input_tokens":0,"output_tokens":1}},"parent_tool_use_id":"toolu_worker"}'
 printf '%s\n' '{"type":"system","subtype":"task_started","task_type":"local_bash","task_id":"bhelper","tool_use_id":"toolu_helper","is_backgrounded":false}'
 printf '%s\n' '{"type":"system","subtype":"task_started","task_type":"local_bash","task_id":"bforeground","tool_use_id":"toolu_fg","is_backgrounded":false}'
@@ -3605,14 +3671,15 @@ printf '%s\n' "{\"type\":\"control_response\",\"response\":{\"subtype\":\"succes
 printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"bforeground","tool_use_id":"toolu_fg","status":"stopped"}'
 printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn"}'
 read -r keep_alive
-"#);
+"#.replace("DESCRIPTION", description));
         let handle = client.cancel_handle();
         let turn = std::thread::spawn(move || {
             let ended = client.prompt("run the job's commands", &mut |_| {});
             (client, ended)
         });
         until("Stu's foreground command never started", || handle.own_commands().len() == 1);
-        assert_eq!(handle.own_commands()[0].0, "bforeground", "a helper's command is not Stu's own");
+        assert_eq!(handle.own_commands()[0].task_id, "bforeground", "a helper's command is not Stu's own");
+        assert_eq!(handle.own_commands()[0].description, description, "the job travels in the call's own description");
         let pid: i32 = std::fs::read_to_string(dir.join("command.pid")).unwrap().trim().parse().unwrap();
         let alive = || unsafe { libc::kill(pid, 0) } == 0;
         assert!(alive(), "the stand-in command must be running before Stop");
@@ -3625,7 +3692,7 @@ read -r keep_alive
         }
         h.host.backends.lock().unwrap().insert("thread-one".into(), backend);
         let pressed = std::time::Instant::now();
-        h.host.stop_assignment("depot", "thread-one", &job.id).unwrap();
+        h.host.stop_assignment("depot", "thread-one", job).unwrap();
         // The reap walk's bound (reap-walk.py BOUND_MS), from the press.
         while alive() && pressed.elapsed() < std::time::Duration::from_millis(2000) {
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -3637,34 +3704,48 @@ read -r keep_alive
         }
         let (_client, ended) = turn.join().unwrap();
         assert_eq!(ended.unwrap(), "end_turn", "Stu's turn goes on past the stopped command; it is not interrupted");
-        let stopped = assignment::read(&h.state, "depot", "thread-one", &job.id).unwrap();
+        let stopped = assignment::read(&h.state, "depot", "thread-one", job).unwrap();
         assert_eq!(stopped.state, AssignmentState::Interrupted);
         assert_eq!(stopped.detail, "The job's recorded work stopped. Stu has been notified.");
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
     }
 
-    /// Stu's commands carry no job, so a Stop takes only those that can be no other job's:
-    /// started after this job was registered, while no other job of the conversation was open.
+    /// Which commands a job's Stop takes. A command naming the job is its, one naming another
+    /// job never is, whatever else is open; one naming no job is its only when no other job
+    /// could be running it.
     #[test]
-    fn a_jobs_stop_takes_only_the_commands_no_other_job_could_own() {
+    fn a_jobs_stop_takes_its_own_commands_and_never_another_jobs() {
         let h = harness(0);
-        let earlier = assignment::register(&h.state, &Registration { obligation_id: "earlier".into(), ..registration(&h) }).unwrap();
+        let other = assignment::register(&h.state, &Registration { obligation_id: "obligation-70".into(), ..registration(&h) }).unwrap();
+        assignment::advance(&h.state, "depot", "thread-one", &other.id, AssignmentState::Running, "Working.").unwrap();
         let job = assignment::register(&h.state, &registration(&h)).unwrap();
         let read = |id: &str| assignment::read(&h.state, "depot", "thread-one", id).unwrap();
         let all = || assignment::read_all(&h.state, "depot", "thread-one").unwrap();
-        let job_at = read(&job.id).registered_at_ms;
-        assert!(read(&earlier.id).registered_at_ms <= job_at);
-        let mut commands = vec![("before-the-job".to_string(), job_at.saturating_sub(1)), ("while-both-open".to_string(), job_at)];
-        // Both jobs open: neither command can be told to be this job's.
-        assert!(job_commands(&all(), &job.id, &commands).is_empty());
-        // The earlier job has since closed: a command started after its last update is this job's.
-        assignment::record_user_stop(&h.state, "depot", "thread-one", &earlier.id).unwrap();
-        commands.push(("after-it-closed".to_string(), read(&earlier.id).updated_at_ms + 1));
-        assert_eq!(job_commands(&all(), &job.id, &commands), vec!["after-it-closed".to_string()]);
-        // The only job there is: everything started once it was registered.
-        assert_eq!(job_commands(&[read(&job.id)], &job.id, &commands),
-            vec!["while-both-open".to_string(), "after-it-closed".to_string()]);
+        let at = read(&job.id).registered_at_ms;
+        let command = |task: &str, started_at_ms: u64, description: &str| crate::steering::OwnCommand {
+            task_id: task.into(), started_at_ms, description: description.into() };
+        let commands = vec![
+            command("names-this-job", at, "obligation-7: build the site"),
+            command("names-the-other-job", at, "Tests for obligation-70"),
+            command("names-no-job", at, "List the files"),
+            command("before-this-job", at.saturating_sub(1), "List the files"),
+        ];
+        let taken = |records: &[assignment::Assignment]| job_commands(records, &job.id, &commands);
+        // The other job runs: only the command naming this job ("obligation-7" is not in "obligation-70").
+        assert_eq!(taken(&all()), vec!["names-this-job".to_string()]);
+        // Its Stop takes its own command, and the unnamed one from before this job existed,
+        // when it was the only job open; none of this job's.
+        assert_eq!(job_commands(&all(), &other.id, &commands), vec!["names-the-other-job".to_string(), "before-this-job".to_string()],
+            "the other job's Stop takes its own commands and none of this job's");
+        // The other job waits for his decision since before the commands: it runs none of them.
+        assignment::advance(&h.state, "depot", "thread-one", &other.id, AssignmentState::Blocked, "Which branch first?").unwrap();
+        let since = read(&other.id).updated_at_ms;
+        let later = vec![command("names-no-job", since, "List the files"), command("names-the-other-job", since, "Tests for obligation-70")];
+        assert_eq!(job_commands(&all(), &job.id, &later), vec!["names-no-job".to_string()]);
+        // A command naming no job that started while the other job still ran stays with Stu.
+        assert!(!taken(&all()).contains(&"names-no-job".to_string()));
+        // The other job has closed: its command is still never this job's.
+        assignment::record_user_stop(&h.state, "depot", "thread-one", &other.id).unwrap();
+        assert_eq!(job_commands(&all(), &job.id, &later), vec!["names-no-job".to_string()]);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
