@@ -181,4 +181,16 @@ mutant this-conversations-own-seat-not-kept "test_his_orphan_thread_seat_is_reco
     '                if False:' \
     "this conversation's OWN thread seat would be decided by a file instead of by the fact that it is the one calling, so an unreadable ledger would report the running thread's own seat as unreconciled -- and a ledger that had lost that one record would release it."
 
+# --- 17. AN APP LAND GETS THE REPOSITORY'S OWN CHECKS (plan item 6, 2026-10-21) ----
+mutant land-skips-the-repositorys-hooks "test_an_app_land_runs_the_repositorys_own_merge_check_and_a_refusal_lands_nothing" "$A" \
+    '    result = subprocess.run(["git", "-c", "commit.gpgSign=false", "-C", str(repo), "merge", "--no-ff", "--no-edit",' \
+    '    result = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-C", str(repo), "merge", "--no-ff", "--no-edit",' \
+    "an app land would again run with no hook of the repository, so a merge its own check refuses would land anyway -- the before-state itself."
+
+# --- 18. AND TAKES THE LAND LEASE WHERE THE FENCE IS ON -----------------
+mutant land-takes-no-lease "test_an_app_land_into_a_fenced_repository_takes_the_land_lease_and_lands" "$A" \
+    '        lease = _take_fence_lease(repo, path)' \
+    '        lease = None' \
+    "the land would meet the repository's fence holding no lease, and the fence would refuse every app land into a fenced repository."
+
 mutation_end

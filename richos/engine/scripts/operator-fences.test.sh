@@ -44,8 +44,9 @@
 #        live starter's is never aborted (G1 point 4, G5, G6)
 #   F14  refusals are recorded; the forensic recorder runs on refused
 #        transactions and still names Git as the writer
-#   F15  `git -c core.hooksPath=/dev/null` is not fenced: stated, and asserted,
-#        so nobody believes the engine's own integrate is (G2)
+#   F15  `git -c core.hooksPath=/dev/null` is not fenced: stated, and asserted
+#        (G2). The engine's own integrate no longer uses it: since 2026-10-21 it
+#        merges with the repository's hooks and takes the lease (mega-lander app.test.py)
 #   F16  a declared non-Claude holder (the Codex stand-in) acquires, lands and
 #        releases from a tree with no claude in it; a lead waits on it; a
 #        --holder-pid that is not an ancestor is refused (F1)
@@ -536,7 +537,7 @@ M2="$(rev "$R" main)"
 ofx_in B "git -C '$R' -c core.hooksPath=/dev/null update-ref refs/heads/main $M2~1"; rc=$?
 after="$(grep -c . "$OFX/forensics/ref-transactions.jsonl")"; rafter="$(grep -c . "$REF")"
 [ $rc = 0 ] && [ "$(rev "$R" main)" != "$M2" ] && [ "$before" = "$after" ] && [ "$rbefore" = "$rafter" ]
-expect "F15" "[git $G] core.hooksPath=/dev/null (the engine's own integrate) moves main with NO hook call: not fenced, by design" "$?"
+expect "F15" "[git $G] core.hooksPath=/dev/null moves main with NO hook call: not fenced, by design (the engine's own integrate runs the hooks and takes the lease since 2026-10-21)" "$?"
 git -C "$R" -c core.hooksPath=/dev/null update-ref refs/heads/main "$M2" >/dev/null 2>&1
 
 # ---- F16/F17: the declared non-Claude holder (F1, e1, G5) -------------------------------

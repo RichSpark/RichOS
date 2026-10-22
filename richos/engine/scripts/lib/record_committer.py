@@ -40,8 +40,8 @@ touches anything:
 
 A skipped tick is not an error: the next one commits what this one left.
 
-WITH THE OPERATOR FENCE ON, the committer runs Git with core.hooksPath=/dev/null,
-exactly as the app's lander does (app.py, _live_fence_lease): step 2 is then the
+WITH THE OPERATOR FENCE ON, the committer runs Git with core.hooksPath=/dev/null:
+step 2 (the same live-lease check as app.py's _live_fence_lease) is then the
 only thing that serializes it against a lease holder, and it is race-free for
 the reason given there. With the fence off, Git's hooks run as usual.
 

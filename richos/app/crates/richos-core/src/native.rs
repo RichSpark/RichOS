@@ -481,6 +481,16 @@ pub enum NativeError {
     Json(#[from] serde_json::Error),
     #[error("claude channel closed (child exited?)")]
     Closed,
+    /// **The child ended in the middle of a turn without a `result` — WITH ITS OWN WORDS.**
+    /// Until 2026-10-21 this was [`NativeError::Closed`], which carries nothing, so the turn's
+    /// reason said "claude channel closed" whatever the child had printed on its way out, and
+    /// `interruption.rs` could only call it a passing hiccup. A new user's every message ended
+    /// "This usually fixes itself" in a loop and nothing on his Mac recorded why
+    /// (`docs/development/failure-classes/cause-discarded-at-the-failure-boundary.md`). `said`
+    /// is the child's last stderr lines and, when Claude Code's own `auth status` says nobody
+    /// is signed in, [`CHILD_EXIT_SIGNED_OUT`]: the classifier reads both.
+    #[error("claude stopped before answering; {said}")]
+    Exited { said: String },
     #[error("claude protocol error: {0}")]
     Protocol(String),
     /// **LOUD, and deliberately not recoverable here.** The `claude` binary is not where we
@@ -579,12 +589,57 @@ pub fn stop_reason_of(result: &Value) -> String {
     result.get("subtype").and_then(|v| v.as_str()).unwrap_or("unknown").to_string()
 }
 
+/// RichOS's own words, added to [`NativeError::Exited`] when Claude Code's `auth status` says
+/// nobody is signed in to the account the lease ran under. First-party, so `interruption.rs`
+/// matches it as its own structure (`OUR_CHILD_EXIT_SIGNED_OUT`), never as a vendor string.
+pub const CHILD_EXIT_SIGNED_OUT: &str = "Claude Code says no account is signed in on this Mac";
+
+/// How long the turn's end waits for the child's last stderr lines once its stdout has closed.
+/// The two pipes close together when it exits; this only covers the drain thread's last read.
+const CHILD_EXIT_STDERR_WITHIN: Duration = Duration::from_millis(500);
+
+/// How long the turn's end asks Claude Code whether the account is signed in. It runs only on
+/// a turn that already failed, and the person is waiting on that turn's card.
+const CHILD_EXIT_AUTH_WITHIN: Duration = Duration::from_secs(5);
+
+/// The child's last stderr lines kept in a turn's reason: enough for an error and its cause.
+const CHILD_EXIT_LINES: usize = 6;
+
+/// **What a child that ended mid-turn left behind**, for [`NativeError::Exited`]: its last
+/// stderr lines (waited for up to [`CHILD_EXIT_STDERR_WITHIN`]) and, when `signed_out` says
+/// so, [`CHILD_EXIT_SIGNED_OUT`]. Pure but for the wait, so a test drives it with a tail and
+/// a closure and no child at all.
+fn child_exit_said(done: &AtomicBool, tail: &Mutex<std::collections::VecDeque<String>>, signed_out: impl FnOnce() -> bool) -> String {
+    let deadline = std::time::Instant::now() + CHILD_EXIT_STDERR_WITHIN;
+    while !done.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let lines: Vec<String> = {
+        let t = tail.lock().unwrap();
+        t.iter().filter(|l| !l.trim().is_empty()).cloned().collect()
+    };
+    let start = lines.len().saturating_sub(CHILD_EXIT_LINES);
+    let mut said = if lines.is_empty() {
+        "it wrote nothing on stderr".to_string()
+    } else {
+        format!("the child said: {}", lines[start..].join(" / "))
+    };
+    if signed_out() {
+        said.push_str("; ");
+        said.push_str(CHILD_EXIT_SIGNED_OUT);
+    }
+    said
+}
+
 pub(crate) fn native_result(result: &Value) -> Result<String, NativeError> {
     let reason = stop_reason_of(result);
     if let Some(reset) = usage_limit_signal(result) {
         return Err(NativeError::Protocol(crate::claude_accounts::usage_limit_error(reset, &result.to_string())));
     }
-    if reason == "child_exited" { return Err(NativeError::Closed); }
+    if reason == "child_exited" {
+        let said = result.get("child_said").and_then(Value::as_str).unwrap_or("it wrote nothing on stderr");
+        return Err(NativeError::Exited { said: said.to_string() });
+    }
     if result.get("is_error").and_then(Value::as_bool) == Some(true) && reason != STOP_REASON_CANCELLED {
         let detail = result.get("errors").or_else(|| result.get("result"))
             .map(Value::to_string).unwrap_or(reason);
@@ -2070,6 +2125,10 @@ impl NativeClient {
         // machinery — they NEVER reach the CEO; the tail is for the error message and for
         // developer debugging.
         let tail = Arc::clone(&stderr_tail);
+        // Set when the child's stderr reaches EOF, so a turn that ends because stdout did can
+        // wait (bounded) for the last lines the child wrote on its way out (`child_exit_said`).
+        let stderr_done = Arc::new(AtomicBool::new(false));
+        let stderr_done_flag = Arc::clone(&stderr_done);
         let stderr_handle = std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
@@ -2082,7 +2141,12 @@ impl NativeClient {
                 }
                 t.push_back(line);
             }
+            stderr_done_flag.store(true, Ordering::SeqCst);
         });
+        // What the turn's end needs to say WHY the child went (`NativeError::Exited`): its own
+        // stderr, and Claude Code's own answer about the sign-in this lease runs under.
+        let exit_tail = Arc::clone(&stderr_tail);
+        let exit_auth = (bin.to_path_buf(), profile.and_then(|p| p.claude_account.as_ref()).and_then(|a| a.folder.clone()));
 
         let reader_closed = Arc::new(AtomicBool::new(false));
         let reader_closed_flag = Arc::clone(&reader_closed);
@@ -2121,7 +2185,14 @@ impl NativeClient {
             reader_pending.lock().unwrap().clear();
             reader_closed_flag.store(true, Ordering::SeqCst);
             let waiting = std::mem::take(&mut *reader_current.lock().unwrap());
-            finish_native_turn(waiting, json!({"stop_reason":"child_exited"}));
+            // Only a turn that was waiting is owed a reason; an idle lease ending says nothing.
+            let said = if waiting.is_empty() { String::new() } else {
+                child_exit_said(&stderr_done, &exit_tail, || {
+                    crate::provider_auth::status_within(&exit_auth.0, exit_auth.1.as_deref(), CHILD_EXIT_AUTH_WITHIN).state
+                        == crate::provider_auth::AuthState::SignedOut
+                })
+            };
+            finish_native_turn(waiting, json!({"stop_reason":"child_exited","child_said":said}));
         });
 
         // A supervised leader gets SIGTERM first and reaps its tree; only a bare child (no
@@ -2796,7 +2867,14 @@ impl NativeClient {
             between.lock().unwrap().offer_frame(result);
             return;
         }
-        if let (Some(text), Some(input)) = (text, ready.last_mut()) {
+        // **NOT HIS WORDS WHEN THE TURN FAILS ON IT.** A `result` that is an error ends the turn
+        // as a failure, whose card says what happened in the app's own words and whose reason
+        // keeps the vendor's line for Technical view (`native_result`). Delivered as text too, a
+        // new user's first message showed "Rich: Not logged in · Please run /login" above the
+        // sign-in card, and the card counted it as "33 characters of the answer" (guest walk of
+        // 1.2.1, 2026-10-21; `docs/development/failure-classes/machine-words-as-richs-words.md`).
+        let failed = result.get("is_error").and_then(Value::as_bool) == Some(true);
+        if let (Some(text), Some(input), false) = (text, ready.last_mut(), failed) {
             input.send(ChunkMsg::Text(text), &Value::Null);
         }
         finish_native_turn(ready, result);
@@ -6931,14 +7009,21 @@ while True:
 
     /// The control: the same `403` while the API answers is a real answer from the API, so the
     /// turn ends exactly as it did before, on the one message the user sent.
+    ///
+    /// **The vendor's line is the failure's reason, never Rich's reply** (2026-10-21): a new
+    /// user's first message, signed out, showed "Rich: Not logged in · Please run /login" above
+    /// the sign-in card on 1.2.1. Red before `end_turn` stopped delivering it on a failed turn.
     #[test]
     fn an_api_failure_while_the_connection_is_up_ends_the_turn_as_before() {
-        let (client, root, _) = lease_failing_once("edge-403-up", "authentication_failed", Some(403), EDGE_403, 0);
-        let mut said = String::new();
-        let outcome = client.prompt("Draft the plan", &mut |item| if let TurnItem::Text { text, .. } = item { said.push_str(text) });
-        assert!(outcome.expect_err("a 403 with the connection up must still fail").to_string().contains("Error 1034"));
-        assert_eq!(said, EDGE_403);
-        assert_eq!(received_texts(&root), ["Draft the plan"]);
+        const NOT_SIGNED_IN: &str = "Not logged in \u{b7} Please run /login";
+        for (case, status, text, reason) in [("edge-403-up", Some(403), EDGE_403, "Error 1034"), ("signed-out", None, NOT_SIGNED_IN, "Not logged in")] {
+            let (client, root, _) = lease_failing_once(case, "authentication_failed", status, text, 0);
+            let mut said = String::new();
+            let outcome = client.prompt("Draft the plan", &mut |item| if let TurnItem::Text { text, .. } = item { said.push_str(text) });
+            assert!(outcome.expect_err("an API failure with the connection up must still fail").to_string().contains(reason), "{case}");
+            assert_eq!(said, "", "{case}: the vendor's line reached Rich's reply");
+            assert_eq!(received_texts(&root), ["Draft the plan"], "{case}");
+        }
     }
 
     /// **A teammate the lost connection ended is carried on too** (review
@@ -7095,7 +7180,7 @@ sys.stdin.read()
         assert!(stopping.join().unwrap());
         assert_eq!(first.wait(&mut |_|{}).unwrap(),STOP_REASON_CANCELLED);
         assert!(std::fs::read_to_string(script.with_extension("history")).unwrap().contains("[Request interrupted by user]"));
-        assert!(matches!(queued.wait(&mut |_|{}),Err(NativeError::Closed)),"pre-Stop queued input ran after interruption");
+        assert!(matches!(queued.wait(&mut |_|{}),Err(NativeError::Closed | NativeError::Exited { .. })),"pre-Stop queued input ran after interruption");
         assert!(client.reader_closed.load(Ordering::SeqCst),"next input must use the ordinary resume path");
     }
 
@@ -8635,11 +8720,54 @@ cat '{frames}'
         assert!(items.iter().all(|(_, t)| t.as_deref() != Some("")), "an empty text item was delivered");
     }
 
+    /// **A CHILD THAT ENDS MID-TURN TAKES ITS OWN WORDS TO THE TURN'S REASON** (a new user's
+    /// first run, 2026-10-21: every message ended "RichOS lost its connection to Claude Code
+    /// ... This usually fixes itself", the turn's reason was "claude channel closed (child
+    /// exited?)" and nothing on his Mac said why). Red on main, where the turn ends
+    /// [`NativeError::Closed`] with nothing in it. The child here writes its error on stderr
+    /// and exits after `system:init`, as his did; asked `auth status`, it says signed out. The
+    /// reason carries both, and `interruption::classify` then tells him to sign in.
+    #[test]
+    fn a_child_that_ends_mid_turn_names_why_in_the_turns_reason() {
+        let script = write_script("exits-mid-turn", r#"
+if [ "$1" = auth ]; then echo '{"loggedIn": false}'; exit 1; fi
+exec python3 -u -c '
+import json,sys
+init=json.loads(sys.stdin.readline())
+print(json.dumps({"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}),flush=True)
+prompt=json.loads(sys.stdin.readline())
+print(json.dumps({"type":"system","subtype":"init"}),flush=True)
+sys.stderr.write("Error: the request could not be authenticated\n"); sys.stderr.flush()
+sys.exit(1)
+'
+"#);
+        let client = NativeClient::spawn(&script, fixture_root(), &doctrine_fixture(), &skills_fixture()).unwrap();
+        let result = client.prompt("what do I do now?", &mut |_| {});
+        let Err(error) = result else { panic!("a child that exited mid-turn answered: {result:?}") };
+        assert!(matches!(error, NativeError::Exited { .. }), "{error:?}");
+        let reason = CognitionError::from(error).to_string();
+        assert!(reason.contains("the child said: Error: the request could not be authenticated"), "{reason}");
+        assert!(reason.contains(CHILD_EXIT_SIGNED_OUT), "{reason}");
+        assert_eq!(crate::interruption::classify(&reason), crate::interruption::InterruptionCause::NotSignedIn, "{reason}");
+    }
+
+    /// The same end, with nothing on stderr and a sign-in that is fine: the reason says so
+    /// plainly, and it is the one case left to the lost-connection arm.
+    #[test]
+    fn child_exit_said_reports_an_empty_stderr_and_no_sign_in_verdict_plainly() {
+        let done = AtomicBool::new(true);
+        let tail = Mutex::new(std::collections::VecDeque::new());
+        assert_eq!(child_exit_said(&done, &tail, || false), "it wrote nothing on stderr");
+        let tail = Mutex::new((1..=9).map(|n| format!("line {n}")).collect::<std::collections::VecDeque<_>>());
+        assert_eq!(child_exit_said(&done, &tail, || true),
+            format!("the child said: line 4 / line 5 / line 6 / line 7 / line 8 / line 9; {CHILD_EXIT_SIGNED_OUT}"));
+    }
+
     #[test]
     fn a_child_that_dies_mid_reply_still_delivers_its_held_word_fixed() {
         let third = british_deltas("drain-deltas-3");
         let BritishTurn { items, result, .. } = a_british_turn("crash", "go on", std::slice::from_ref(&third), "exit");
-        assert!(matches!(result, Err(NativeError::Closed)), "a vanished child is Closed: {result:?}");
+        assert!(matches!(result, Err(NativeError::Exited { .. })), "a vanished child ends the turn with its own words: {result:?}");
         assert_eq!(said_in(&items), crate::american_spelling::fix(&third.concat()), "the partial reply must be kept, fixed");
         assert_ne!(said_in(&items), third.concat());
     }
