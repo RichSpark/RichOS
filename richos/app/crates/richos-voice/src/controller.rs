@@ -6046,10 +6046,9 @@ mod tests {
         assert_eq!(SILENT_DISCARD_RUN, 3);
     }
 
-    /// INVARIANT: the notice states a condition and invents no control. The ◉ that ends
-    /// voice is already on screen with its own footnote, so a sentence pointing at a
-    /// control would be a request wearing a status's clothes — and the affordance suite
-    /// classifies this string INFORMATIONAL on exactly that reading.
+    /// The notice explains the condition, keeps listening and asks for a repeat without
+    /// inventing a control or exposing recognition machinery. The affordance suite treats
+    /// the spoken repeat as the action, through the existing voice control.
     #[test]
     fn the_silent_discard_notice_names_no_control_and_no_machinery() {
         let m = VoiceNotice::SoundButNoWords.ceo_message();
@@ -6060,7 +6059,8 @@ mod tests {
         // What it DOES say: sound arrived, words did not, and voice was not switched off
         // behind his back.
         assert!(m.contains("hear sound"), "{m}");
-        assert!(m.contains("Voice is still on"), "{m}");
+        assert!(m.contains("I'm still listening"), "{m}");
+        assert!(m.contains("Please say it again"), "{m}");
     }
 
     /// INVARIANT: the diagnostics line reports MEASURED device facts and the exact barge-in
