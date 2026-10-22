@@ -43,6 +43,31 @@ class DesktopHooks(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
         self.assertIn("dispatch", result.stderr.lower())
 
+    def _wait_on_file(self):
+        import time
+        holds = self.root / "workspaces" / "holds"
+        holds.mkdir(parents=True)
+        (holds / "stream-b.json").write_text(json.dumps({"name": "stream-b", "what": "Stream B of his order",
+            "why": "on hold, deliberately", "end": "", "at": time.time() - 31 * 60, "session_id": "a-stu-session"}))
+
+    def test_richs_turn_opens_with_every_hold_nothing_checkable_ends(self):
+        """No silent holds (2026-10-22): the app's Rich is told in his own turn what the
+        terminal's turn end shows, including a hold Stu's lease made."""
+        self._wait_on_file()
+        result = self.hook("UserPromptSubmit", prompt="How is it going?")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("HELD BY RICH, NOT BY YOU: Stream B of his order since", context)
+        self.assertIn("Why: on hold, deliberately.", context)
+
+    def test_stus_turn_carries_no_hold_lines(self):
+        self._wait_on_file()
+        (self.root / "state/evidence/fictional-session").mkdir(parents=True)
+        (self.root / "state/evidence/fictional-session/binding.json").write_text('{"role": "stu"}')
+        result = self.hook("UserPromptSubmit", prompt="Carry on.")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn("HELD BY RICH", result.stdout)
+
     def test_native_response_formatting_records_evidence_without_opening_a_work_grant(self):
         self.scope.write_text('{"version":1,"actions_allowed":false}')
         for event in ("PreToolUse", "PostToolUse"):

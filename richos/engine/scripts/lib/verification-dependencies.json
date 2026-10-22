@@ -1379,7 +1379,7 @@
     },
     "scripts/app-engine-hook.py#pause-rejection": {
       "source": "scripts/app-engine-hook.py",
-      "sha256": "6dc959bfebdf57a126c1857907a16b95d63ca69c6d17523a2deae4921870aa19",
+      "sha256": "b9d555c27520791d8a18ac098ae3a5c15ef621c41ca03e98d4c69747dc5e80fb",
       "evidence": "The fixture loads the standard-library-only module, supplies explicit roots and calls handle with PreToolUse SendMessage. Invalid pause fails before scope; valid pause reaches the mocked scope exception. No evidence/workspace helper is loaded. Renewed 2026-10-09 (second review slice 4): the scope bound is 256 KiB, and a new mid_job_notice (loads scripts/lib/app_review.py) runs only after worker_context on PreToolUse, outside this fixture's path, which fails before scope. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): outside this fixture's region: on PreToolUse after worker_context, the mid-job notice is written and flushed by an emit closure and then recorded delivered; the region from handle to the evidence load is unchanged.",
       "keys": [],
       "edges": [
@@ -14037,8 +14037,8 @@
     },
     "scripts/app-engine-hook.py": {
       "source": "scripts/app-engine-hook.py",
-      "sha256": "6dc959bfebdf57a126c1857907a16b95d63ca69c6d17523a2deae4921870aa19",
-      "evidence": "Added 2026-10-09 (second review slice 4; app.test.py's edge to it came with 8a433f70e and had no row). This row is what app.test.py reaches: it loads the module (standard-library imports; the module level only computes ENGINE from its own path) and calls only mid_job_notice, never handle, scope or main. mid_job_notice returns for a call without agent_id, loads scripts/lib/app_review.py by fixed path, stats the app's review ledger under the root it is given, calls worker_spaces on the work module it is passed (the fixture's own loaded mega-lander/app.py) and returns app_review.mid_job_notice's text; any exception is printed to stderr and yields empty text. No orchestration.config read, environment variable, subprocess or guard runs on this path. handle(), which reads RICHOS_APP_SCOPE/RICHOS_APP_STATE/RICHOS_ENTITY_ROOT and runs the guards, workspaces.py, app-evidence.py and guard-stated-actions.py, is bound separately by scripts/app-engine-hook.py#pause-rejection for its pause path and is not covered by this row. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): mid_job_notice takes emit and returns True once app_review.mid_job_notice called it; app.test.py passes a list's append as emit. An exception raised after emit was called is re-raised instead of printed (an output failure); any other still prints to stderr and returns False. Nothing new is read.",
+      "sha256": "b9d555c27520791d8a18ac098ae3a5c15ef621c41ca03e98d4c69747dc5e80fb",
+      "evidence": "Added 2026-10-09 (second review slice 4; app.test.py's edge to it came with 8a433f70e and had no row). This row is what app.test.py reaches: it loads the module (standard-library imports; the module level only computes ENGINE from its own path) and calls only mid_job_notice, never handle, scope or main. mid_job_notice returns for a call without agent_id, loads scripts/lib/app_review.py by fixed path, stats the app's review ledger under the root it is given, calls worker_spaces on the work module it is passed (the fixture's own loaded mega-lander/app.py) and returns app_review.mid_job_notice's text; any exception is printed to stderr and yields empty text. No orchestration.config read, environment variable, subprocess or guard runs on this path. handle(), which reads RICHOS_APP_SCOPE/RICHOS_APP_STATE/RICHOS_ENTITY_ROOT and runs the guards, workspaces.py, app-evidence.py and guard-stated-actions.py, is bound separately by scripts/app-engine-hook.py#pause-rejection for its pause path and is not covered by this row. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): mid_job_notice takes emit and returns True once app_review.mid_job_notice called it; app.test.py passes a list's append as emit. An exception raised after emit was called is re-raised instead of printed (an output failure); any other still prints to stderr and returns False. Nothing new is read. No silent holds (2026-10-22): on UserPromptSubmit it reads <RICHOS_APP_STATE>/evidence/<session>/binding.json for the lease's role and calls the loaded workspaces module's hold_lines() over RICHOS_WORKSPACES_DIR, printing one additionalContext answer.",
       "keys": [],
       "edges": [
         {
@@ -14046,6 +14046,9 @@
         },
         {
           "to": "mega-lander/app.py#desktop-work-fixtures"
+        },
+        {
+          "to": "mega-lander/workspaces.py#lifecycle-fixtures"
         }
       ]
     },
