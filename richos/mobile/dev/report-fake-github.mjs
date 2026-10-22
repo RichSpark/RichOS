@@ -30,7 +30,8 @@ export class FakeGitHub {
     return ok && payload.iss === this.appId && payload.exp > Math.floor(this.now() / 1000) - 600;
   }
   fetch = async (input, init = {}) => {
-    const request = input instanceof Request ? input : new Request(input, init);
+    // Miniflare's outbound requests are its own Request class, not this realm's.
+    const request = typeof input === 'string' || input instanceof URL ? new Request(input, init) : input;
     const url = new URL(request.url), auth = request.headers.get('authorization');
     this.calls.push(request.method + ' ' + url.pathname);
     if (url.origin !== 'https://api.github.com') return json(404, { message: 'Not Found' });

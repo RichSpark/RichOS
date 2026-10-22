@@ -66,7 +66,9 @@ class Relay {
     this.sleep = ports.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     this.store = ports.store || new Store(env.DB, this.now);
     this.github = ports.github || new GitHub(env, { fetch: ports.fetch, now: this.now, footer: hasFooterLine });
-    this.window = windowMs(env); this.lease = this.window / 2;
+    // Every timing follows the window: the lease holds the create request's own time (token 10 s,
+    // create 20 s), the owner keeps a grace before others list, and listings are spaced.
+    this.window = windowMs(env); this.lease = this.window / 2; this.grace = this.window / 5;
   }
   async throttled(binding, key) { return !(await binding.limit({ key: await sha256(key) })).success; }
 
@@ -87,7 +89,7 @@ class Relay {
     else {
       // The response was lost. Never create again: look for the footer, a few times, briefly.
       const record = await store.get(r.reportId);
-      for (const delay of [0, 2000, 5000]) {
+      for (const delay of [0, this.window / 60, this.window / 24]) {
         await this.sleep(delay);
         const found = await github.find(token, r.reportId, record.attempt_at - 300_000);
         if (found.kind === 'found') { await store.deliver(r.reportId, found.issue); break; }
@@ -108,8 +110,8 @@ class Relay {
     }
     if (record.state !== 'pending' && record.state !== 'unconfirmed') return record;
     // Leave the owner its create request's own time, then list at most once per interval.
-    if (record.state === 'pending' && now < record.attempt_at + 25_000) return record;
-    if (await store.claimCheck(record.report_id, record.state === 'pending' ? 10_000 : 60_000)) {
+    if (record.state === 'pending' && now < record.attempt_at + this.grace) return record;
+    if (await store.claimCheck(record.report_id, record.state === 'pending' ? this.window / 12 : this.window / 2)) {
       let found = { kind: 'incomplete' };
       try { found = await this.github.find(await this.github.authorize(), record.report_id, record.attempt_at - 300_000); } catch { /* incomplete */ }
       if (found.kind === 'found') { await store.deliver(record.report_id, found.issue); return store.get(record.report_id); }
@@ -191,7 +193,9 @@ class Relay {
 
 export async function handle(request, env, ctx, ports = {}) {
   const url = new URL(request.url);
-  if (url.protocol !== 'https:') return reply(400, { error: 'https_required' });
+  // Plain HTTP only for the loopback stand-in (dev/report-relay-local.mjs); never on Cloudflare.
+  const loopback = url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !loopback) return reply(400, { error: 'https_required' });
   if (url.search) return reply(404, { error: 'not_found' });
   try {
     if (request.method === 'GET' && url.pathname === '/v1/health') {

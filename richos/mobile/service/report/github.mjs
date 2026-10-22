@@ -35,7 +35,8 @@ function retryAfter(response, now) {
 
 export class GitHub {
   constructor(env, { fetch: fetchImpl = fetch, now = Date.now, footer } = {}) {
-    this.env = env; this.fetch = fetchImpl; this.now = now; this.footer = footer;
+    // Called unbound: workerd's fetch throws "Illegal invocation" when called as a method of this.
+    this.env = env; this.fetch = (...args) => fetchImpl(...args); this.now = now; this.footer = footer;
     this.repository = env.GITHUB_REPOSITORY;
   }
   headers(token) {

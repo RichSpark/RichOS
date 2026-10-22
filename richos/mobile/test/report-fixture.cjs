@@ -36,7 +36,9 @@ async function fixture(t, options = {}) {
     GITHUB_APP_PRIVATE_KEY: options.pkcs1 ? key.pkcs1 : key.pkcs8, GITHUB_REPOSITORY: repository, GITHUB_BOT_LOGIN: bot, MODERATION_LABEL: 'richdoctor' };
   db.raw.exec(`UPDATE control SET paused=0, daily_cap=${options.cap ?? 100}, operator='test'`);
   const waits = [], ctx = { waitUntil: promise => waits.push(promise) };
-  const ports = { now, sleep: async ms => { time += ms; }, fetch: github.fetch };
+  // Like workerd's fetch, this one refuses to be called as a method of another object.
+  const unbound = function (input, init) { 'use strict'; if (this !== undefined) throw new TypeError('Illegal invocation'); return github.fetch(input, init); };
+  const ports = { now, sleep: async ms => { time += ms; }, fetch: unbound };
   const send = request => handle(request, env, ctx, ports);
   async function report(overrides = {}) {
     const id = overrides.report_id || reportId();
