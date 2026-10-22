@@ -199,6 +199,39 @@ async function main() {
     return "In use now, the signed-in sentence, no Sign in, no meters; not in use: Signed in, the same sentence, no Sign in, no meters";
   });
 
+  await run.check("an unknown sign-in is never labelled signed out, on either account or theme", async () => {
+    for (const theme of ["light", "dark"]) {
+      for (const [inUse, unknown] of [["1", "2"], ["2", "1"], ["1", "1"], ["2", "2"]]) {
+        for (const message of [null, "Claude Code did not answer just now."]) {
+          const quota = two([10, 20], [10, 20], { inUse });
+          Object.assign(quota.accounts.find(a => a.id === unknown), { windows: [], checkedAt: null, signedIn: null, message });
+          const page = await open(theme, quota);
+          await sheet(page);
+          const card = `#accounts-sheet .acc-card[data-id="${unknown}"]`;
+          assert(!(await text(page, card)).includes("Not signed in"), "unknown is not signed out");
+          assertEqual(await page.locator(`${card} .acc-meter`).count(), 0, "no empty meters for an unknown account");
+          const note = await text(page, `${card} .acc-note`);
+          assert(message ? note.includes(message) && note.includes("not confirmed") : note.includes("Checking whether"), "say what is known about the check");
+          await page.close();
+        }
+      }
+    }
+    return "both accounts, active and idle, before a check and after a failed check, in both themes";
+  });
+
+  await run.check("auth status alone never claims subscription limits are absent", async () => {
+    for (const inUse of ["1", "2"]) {
+      const quota = two([10, 20], [10, 20], { inUse });
+      for (const a of quota.accounts) Object.assign(a, { windows: [], checkedAt: null, signedIn: true, message: null });
+      const page = await open("dark", quota);
+      await sheet(page);
+      assertEqual(await texts(page, ".acc-note"), ["This account is signed in on this Mac.", "This account is signed in on this Mac."]);
+      assertEqual(await page.locator(".acc-meter").count(), 0);
+      assertEqual(await page.locator('#accounts-sheet [data-act="sign-one"], #accounts-sheet [data-act="sign"]').count(), 0);
+      await page.close();
+    }
+  });
+
   await run.check("Use this one now: the cards trade places, Recent changes says so, Undo puts it back; a near-full account says when Rich switches again", async () => {
     let page = await open("dark", two([58, 72], [0, 12]));
     await sheet(page);
@@ -493,6 +526,24 @@ async function main() {
     assertEqual(await texts(page, ".acc-who"), ["Show email", "Show email"], "reopened: all hidden");
     await page.close();
     return "closed by × and by Escape; reopened hidden";
+  });
+
+  await run.check("Show email updates the card's sign-in verdict immediately", async () => {
+    let page = await open("dark", signedOut, { emails: { "1": "reader@fixture.invalid" } });
+    await sheet(page);
+    await page.click('[data-act="email-show"]');
+    await page.waitForSelector(".acc-who-addr");
+    assertEqual(await text(page, ".acc-note"), "This account is signed in on this Mac.");
+    assertEqual(await page.locator('[data-act="sign-one"]').count(), 0);
+    await page.close();
+    page = await open("dark", two([20, 30], [10, 20]), { emails: { "2": null } });
+    await sheet(page);
+    await page.click('.acc-card[data-id="2"] [data-act="email-show"]');
+    await page.waitForSelector('.acc-card[data-id="2"] .acc-who-label');
+    assertEqual(await text(page, '.acc-card[data-id="2"] .acc-pill'), "Not signed in");
+    assertEqual(await page.locator('.acc-card[data-id="2"] .acc-meter').count(), 0);
+    assert(await page.locator('.acc-card[data-id="2"] [data-act="sign"]').isVisible());
+    await page.close();
   });
 
   await run.check("Show email: when an account's email cannot be read, the line says so plainly and guesses nothing", async () => {

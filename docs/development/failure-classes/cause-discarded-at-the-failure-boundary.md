@@ -36,13 +36,20 @@ A failure carries what the failing party said, at the point it is caught:
 | `native.rs` `native_driver_tests::child_exit_said_reports_an_empty_stderr_and_no_sign_in_verdict_plainly` | an empty or overlong tail said wrongly |
 | `interruption_tests.rs` `a_child_exit_with_no_sign_in_is_not_signed_in` | the carried cause not being read by the classifier |
 
+The usage-reader checks `usage_failures_keep_the_stage_and_bounded_stderr_then_clear_on_recovery`
+and `a_missing_usage_reader_keeps_the_spawn_error_and_a_refusal_keeps_its_reason` exercise
+failure during initialization, failure during the usage request, a missing executable,
+a provider refusal, an oversized stderr line and recovery. The stderr reader drains the pipe
+and is reaped with the process on every path. Local diagnostics may contain provider details;
+keep incident logs private and use the existing report review before sharing them.
+
 ## Other places in the app that belong to this class
 
 | Place | Status |
 |---|---|
 | `native.rs` `NativeError::Startup` (handshake failures) | Already right: quotes the child's stderr. The model for the rest. |
 | `native.rs` `NativeError::Closed` where a turn's channel closes with no frame at all and `spine.rs` after a restart | Left as is: there is no child to ask (the process is gone or the app restarted) and the sentence says only what is known. |
-| `quota/probe.rs` `Connection::start`: the usage reader's child runs with stderr discarded, so a failed read is only "Claude Code did not answer just now" | Open. The account card no longer depends on it for the sign-in (it asks `claude auth status`, see [unknown-state-shown-as-pending.md](unknown-state-shown-as-pending.md)); the reason for a failed reading is still not kept. |
+| `quota/probe.rs` usage reader startup and requests | Guarded: a failed read retains its stage, exit observation, request failure and the final 4096 bytes of stderr. `Source::diagnostic()` carries this technical evidence to the local app log for both the first and added accounts. It never becomes the card message. A successful read clears the old diagnostic. |
 | `provider_auth.rs` `status_in`: stderr discarded | Deliberate: that file's rule is never to retain provider output or account details; it reads one boolean. |
 
 ## What would settle the original Mac's cause
