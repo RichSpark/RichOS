@@ -358,8 +358,14 @@ fn ids(v: &Value) -> Vec<String> {
     v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string).or_else(|| x.as_u64().map(|n| n.to_string()))).collect()).unwrap_or_default()
 }
 
-/// Read one relay answer. `now` stamps the state.
-pub fn read(t: &Transport, repository: &str, now: u64) -> Reading {
+/// Read one relay answer about `expect`. `now` stamps the state.
+///
+/// Every reply names its report (RICHDOCTOR-RELAY.md): one that names another report ID is
+/// never this report's answer, and a success must name this one. "Report submitted" needs the
+/// issue link AND the relay's confirmed and expected counts both equal to this approval's own
+/// screenshot count; anything less is "created, checking screenshots" against that count
+/// (Codex audit of 0881b5f8f #3).
+pub fn read(t: &Transport, expect: &Approved, repository: &str, now: u64) -> Reading {
     let not_sent = |why: NotSent| Reading::Done(State::NotSent { why, at: now });
     let until = |s: Option<u64>| s.map(|s| now + s * 1000);
     match t {
@@ -369,19 +375,26 @@ pub fn read(t: &Transport, repository: &str, now: u64) -> Reading {
         Transport::Answer { body: None, .. } => Reading::Unclear,
         Transport::Answer { body: Some(b), retry_after, .. } => {
             let secs = b["retry_after_seconds"].as_u64().or(*retry_after);
+            let named = b["report_id"].as_str();
+            if named.is_some_and(|id| id != expect.report_id) {
+                return Reading::Unclear;
+            }
+            let ours = named.is_some();
+            let k = expect.manifest.len() as u32;
             let link = || b["issue_url"].as_str().and_then(|u| issue_link_ok(u, b["issue_number"].as_u64(), repository).map(|n| (u.to_string(), n)));
-            let count = |k: &str| b[k].as_u64().map(|n| n as u32);
+            let count = |key: &str| b[key].as_u64().map(|n| n as u32);
+            let checking = |(u, n): (String, u64)| Reading::Done(State::CreatedCheckingImages { issue_url: u, issue_number: n, confirmed: count("images_confirmed").unwrap_or(0).min(k), expected: k, at: now });
             match b["state"].as_str() {
-                Some("delivered") => match (link(), count("images_confirmed"), count("images_expected")) {
-                    // Every approved image is confirmed (or there were none).
-                    (Some((u, n)), c, e) if c == e => Reading::Done(State::Submitted { issue_url: u, issue_number: n, at: now }),
-                    (Some((u, n)), c, e) => Reading::Done(State::CreatedCheckingImages { issue_url: u, issue_number: n, confirmed: c.unwrap_or(0), expected: e.unwrap_or(0), at: now }),
-                    // A "delivered" without a link on the right repository is not a success.
-                    (None, ..) => Reading::Unclear,
+                Some("delivered") => match (ours, link(), count("images_confirmed"), count("images_expected")) {
+                    // This report, and every screenshot of this approval confirmed (or none approved).
+                    (true, Some((u, n)), Some(c), Some(e)) if c == k && e == k => Reading::Done(State::Submitted { issue_url: u, issue_number: n, at: now }),
+                    (true, Some(issue), ..) => checking(issue),
+                    // Not named as this report, or no link on the right repository: not a success.
+                    _ => Reading::Unclear,
                 },
-                Some("created_checking_images") => match link() {
-                    Some((u, n)) => Reading::Done(State::CreatedCheckingImages { issue_url: u, issue_number: n, confirmed: count("images_confirmed").unwrap_or(0), expected: count("images_expected").unwrap_or(0), at: now }),
-                    None => Reading::Unclear,
+                Some("created_checking_images") => match (ours, link()) {
+                    (true, Some(issue)) => checking(issue),
+                    _ => Reading::Unclear,
                 },
                 Some("receiving") | Some("ready") => Reading::Receiving { missing: ids(&b["missing"]) },
                 Some("pending") | Some("creating") => Reading::Pending(b["check_after_seconds"].as_u64().map(|s| s * 1000).unwrap_or(CHECK_EVERY_MS)),
@@ -460,7 +473,7 @@ fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Dest
                     }
                     return Err(State::NotSent { why: NotSent::UploadStopped { item, why: why.clone() }, at: clock() });
                 }
-                match read(&t, &dest.repository, clock()) {
+                match read(&t, approved, &dest.repository, clock()) {
                     Reading::Receiving { missing: m } => {
                         for id in missing.iter().filter(|id| !m.contains(id)) {
                             relay.heard(Upload::Received { id: id.clone() });
@@ -501,7 +514,7 @@ pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &
     let begun = clock();
     on_state(&State::Sending);
     let registered = relay.post(&format!("{}/v1/reports", dest.relay), &approved.register_body());
-    let missing = match read(&registered, &dest.repository, clock()) {
+    let missing = match read(&registered, approved, &dest.repository, clock()) {
         Reading::Receiving { missing } => missing,
         Reading::Done(State::NotSent { why, .. }) if retry && matches!(why, NotSent::Refused { .. } | NotSent::Closed { .. } | NotSent::Busy { .. }) => match &registered {
             Transport::Answer { body: Some(b), .. } => ids(&b["missing"]),
@@ -542,7 +555,7 @@ pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &
     let complete = |relay: &dyn Relay| relay.post(&format!("{}/v1/reports/{}/complete", dest.relay, approved.report_id), &approved.secret_body());
     let mut answer = complete(relay);
     // The relay found an image missing after all (a cleanup, a lost write): upload it once more.
-    if let Reading::Receiving { missing } = read(&answer, &dest.repository, clock()) {
+    if let Reading::Receiving { missing } = read(&answer, approved, &dest.repository, clock()) {
         if !missing.is_empty() {
             if let Err(s) = upload(approved, missing, images, dest, relay, clock, sleep, on_state) {
                 on_state(&s);
@@ -551,7 +564,7 @@ pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &
         }
         answer = complete(relay);
     }
-    match read(&answer, &dest.repository, clock()) {
+    match read(&answer, approved, &dest.repository, clock()) {
         Reading::Done(s) => {
             on_state(&s);
             s
@@ -598,7 +611,7 @@ fn reconcile(approved: &Approved, dest: &Destination, relay: &dyn Relay, clock: 
 /// **CHECK STATUS** once, for the same report and ID. Never creates.
 pub fn check(approved: &Approved, dest: &Destination, relay: &dyn Relay, now: u64) -> Reading {
     let t = relay.post(&format!("{}/v1/reports/{}/status", dest.relay, approved.report_id), &approved.secret_body());
-    read(&t, &dest.repository, now)
+    read(&t, approved, &dest.repository, now)
 }
 
 /// What a status check during "could not be confirmed" or "checking screenshots" leaves: a
@@ -620,7 +633,7 @@ pub fn after_check(reading: Reading, current: &State, now: u64) -> State {
 /// instead of the revision being sent.
 pub fn retire(approved: &Approved, dest: &Destination, relay: &dyn Relay, now: u64) -> Result<(), State> {
     let t = relay.post(&format!("{}/v1/reports/{}/retire", dest.relay, approved.report_id), &approved.secret_body());
-    match read(&t, &dest.repository, now) {
+    match read(&t, approved, &dest.repository, now) {
         Reading::Done(State::NotSent { why: NotSent::Retired, .. }) => Ok(()),
         Reading::Done(s) => Err(s),
         // Lost or unclear: the earlier report's state is checked, never assumed.
@@ -704,7 +717,11 @@ mod tests {
     fn script(answers: Vec<Transport>) -> Script {
         Script { answers: RefCell::new(answers), log: RefCell::new(vec![]), events: RefCell::new(vec![]), cancel_after: None }
     }
-    fn j(v: Value) -> Transport {
+    /// A relay reply; like every real one it names its report (the fixtures' RD-7K3M-Q9VX).
+    fn j(mut v: Value) -> Transport {
+        if v.get("report_id").is_none() {
+            v["report_id"] = json!("RD-7K3M-Q9VX");
+        }
         Transport::Answer { status: 200, body: Some(v), retry_after: None }
     }
     fn run(a: &Approved, images: &[Vec<u8>], relay: &Script, retry: bool) -> (State, Vec<State>) {
@@ -788,6 +805,34 @@ mod tests {
         assert_eq!(r.count("/complete"), 0, "no completion request without its saved proof");
         assert!(matches!(s, State::NotSent { why: NotSent::NotSaved, .. }), "{s:?}");
         assert!(s.permits_try_again());
+    }
+
+    /// Codex audit of 0881b5f8f #3: "delivered" is "Report submitted" only for this report's ID
+    /// and every screenshot of this approval, never for another ID, a missing ID or absent counts.
+    #[test]
+    fn a_receipt_counts_only_for_this_report_and_its_exact_screenshots() {
+        let raw = |v: Value| Transport::Answer { status: 200, body: Some(v), retry_after: None };
+        let ready = |a: &Approved| raw(json!({"report_id": a.report_id, "state": "ready", "stored": a.manifest.iter().map(|e| e.attachment_id.clone()).collect::<Vec<_>>(), "missing": []}));
+        let submitted = |s: &State| matches!(s, State::Submitted { .. });
+        // Another report's success.
+        let (a, images) = approved_with(1);
+        let r = script(vec![ready(&a), raw(json!({"report_id": "RD-2222-2222", "state": "delivered", "issue_url": LINK, "issue_number": 42, "images_confirmed": 1, "images_expected": 1}))]);
+        let (s, _) = run(&a, &images, &r, false);
+        assert!(!submitted(&s), "another report's receipt: {s:?}");
+        // No report ID, and no counts (None == None) for a report without screenshots.
+        let (a, images) = approved_with(0);
+        let r = script(vec![ready(&a), raw(json!({"state": "delivered", "issue_url": LINK, "issue_number": 42}))]);
+        let (s, _) = run(&a, &images, &r, false);
+        assert!(!submitted(&s), "a receipt that names no report and counts nothing: {s:?}");
+        // This report, but counts for a different screenshot set.
+        let (a, images) = approved_with(2);
+        let r = script(vec![ready(&a), raw(json!({"report_id": a.report_id, "state": "delivered", "issue_url": LINK, "issue_number": 42, "images_confirmed": 1, "images_expected": 1}))]);
+        let (s, _) = run(&a, &images, &r, false);
+        assert!(matches!(s, State::CreatedCheckingImages { confirmed: 1, expected: 2, .. }), "one of two approved screenshots: {s:?}");
+        // This report and both of its screenshots: submitted.
+        let r = script(vec![ready(&a), raw(json!({"report_id": a.report_id, "state": "delivered", "issue_url": LINK, "issue_number": 42, "images_confirmed": 2, "images_expected": 2}))]);
+        let (s, _) = run(&a, &images, &r, false);
+        assert!(submitted(&s), "{s:?}");
     }
 
     #[test]
@@ -912,7 +957,7 @@ mod tests {
         assert!(matches!(s, State::Unconfirmed { .. }));
         assert_eq!(r.count("/complete"), 1);
         assert!(r.log.borrow().len() <= 2 + 24, "{}", r.log.borrow().len());
-        let r = script(vec![j(json!({"state":"ready","missing":[]})), Transport::Unclear, j(json!({"state":"pending"})), j(json!({"state":"delivered","issue_url":LINK}))]);
+        let r = script(vec![j(json!({"state":"ready","missing":[]})), Transport::Unclear, j(json!({"state":"pending"})), j(json!({"state":"delivered","issue_url":LINK,"images_confirmed":0,"images_expected":0}))]);
         let (s, _) = run(&a, &images, &r, false);
         assert!(matches!(s, State::Submitted { .. }), "{s:?}");
     }
@@ -954,14 +999,14 @@ mod tests {
     fn retirement_must_be_acknowledged() {
         let (a, _) = approved_with(0);
         assert_eq!(retire(&a, &dest(), &script(vec![j(json!({"state":"retired"}))]), 5), Ok(()));
-        assert!(matches!(retire(&a, &dest(), &script(vec![j(json!({"state":"delivered","issue_url":LINK}))]), 5), Err(State::Submitted { .. })));
+        assert!(matches!(retire(&a, &dest(), &script(vec![j(json!({"state":"delivered","issue_url":LINK,"images_confirmed":0,"images_expected":0}))]), 5), Err(State::Submitted { .. })));
         assert!(matches!(retire(&a, &dest(), &script(vec![Transport::Unclear]), 5), Err(State::Checking { .. })));
     }
 
     #[test]
     fn a_status_check_keeps_the_uncertain_state_unless_the_answer_is_definite() {
         assert!(matches!(after_check(Reading::Unclear, &State::Unconfirmed { checked_at: 1 }, 5), State::Unconfirmed { checked_at: 5 }));
-        assert!(matches!(after_check(read(&j(json!({"state":"unknown_id"})), "a/b", 5), &State::Unconfirmed { checked_at: 1 }, 5), State::NotSent { why: NotSent::NotReceived, .. }));
+        assert!(matches!(after_check(read(&j(json!({"state":"unknown_id"})), &approved_with(0).0, "a/b", 5), &State::Unconfirmed { checked_at: 1 }, 5), State::NotSent { why: NotSent::NotReceived, .. }));
         let created = State::CreatedCheckingImages { issue_url: LINK.into(), issue_number: 42, confirmed: 0, expected: 1, at: 1 };
         assert_eq!(after_check(Reading::Unclear, &created, 5), created);
     }
