@@ -264,6 +264,54 @@ def _tied(topology, seeds, groups):
         tied |= more
 
 
+# THE PROCESS TABLE IS READ IN-PROCESS, NOT BY STARTING `ps` (2026-10-22). Every supervisor
+# tick started a setuid `ps -ax`; at 20 supervisors that was about 100 new processes a second
+# and 12.4% of the Mac in Hank's busy window (richos-hq
+# docs/research/2026-10-22-mac-system-cpu-after.md). `ps` itself gets these three numbers
+# from one sysctl(KERN_PROC_ALL); reading it here gives the same rows (every process, zombies
+# included) without a process. struct kinfo_proc: kp_proc.p_pid at 40, kp_eproc.e_ppid at 560,
+# e_pgid at 564, 648 bytes a row on 64-bit macOS. The layout is checked against this process's
+# own row on every read, and anything unexpected falls back to `ps`.
+_KINFO_SIZE, _PID_AT, _PPID_AT, _PGID_AT = 648, 40, 560, 564
+_libc = []
+
+
+def _kernel_topology():
+    """[(pid, ppid, pgid)] for every process from one sysctl, or None when not available."""
+    if sys.platform != "darwin":
+        return None
+    import ctypes
+    import struct
+    try:
+        if not _libc:
+            _libc.append(ctypes.CDLL(None, use_errno=True))
+        libc = _libc[0]
+        mib = (ctypes.c_int * 4)(1, 14, 0, 0)       # CTL_KERN, KERN_PROC, KERN_PROC_ALL
+        for _ in range(5):
+            size = ctypes.c_size_t(0)
+            if libc.sysctl(mib, 4, None, ctypes.byref(size), None, 0):
+                return None
+            size.value += size.value // 4 + _KINFO_SIZE * 32   # processes born in between
+            buf = ctypes.create_string_buffer(size.value)
+            if libc.sysctl(mib, 4, buf, ctypes.byref(size), None, 0) == 0:
+                break
+            if ctypes.get_errno() != 12:            # ENOMEM: the table grew; ask again
+                return None
+        else:
+            return None
+    except (OSError, AttributeError, ValueError):
+        return None
+    if size.value % _KINFO_SIZE:
+        return None
+    raw = buf.raw[:size.value]
+    rows = [struct.unpack_from("i", raw, at + _PID_AT) + struct.unpack_from("ii", raw, at + _PPID_AT)
+            for at in range(0, len(raw), _KINFO_SIZE)]
+    me = os.getpid()
+    if (me, os.getppid(), os.getpgrp()) not in rows:
+        return None
+    return rows
+
+
 def process_rows(seeds=None, groups=()):
     """Topology plus native birth generations, without a subprocess per identity.
 
@@ -275,16 +323,23 @@ def process_rows(seeds=None, groups=()):
     (2026-10-21). The protection against a reused PID is unchanged: every process
     the tree could claim is still read natively and compared with its recorded
     birth, and a newcomer reached only through a native row is read again by
-    refresh's own reconciliation before it can be owned."""
-    result = _ps(["ps", "-ax", "-o", "pid=,ppid=,pgid="])
-    if result.returncode:
-        raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+    refresh's own reconciliation before it can be owned. The table comes from the kernel
+    in-process (_kernel_topology), `ps` only where that is unavailable."""
     topology = {}
-    for line in result.stdout.splitlines():
-        fields = line.split()
-        if len(fields) == 3 and all(field.isdigit() for field in fields):
-            pid, parent, group = map(int, fields)
-            topology[pid] = (parent, group, None)
+    kernel = _kernel_topology()
+    if kernel is not None:
+        for pid, parent, group in kernel:
+            if pid > 0:                     # `ps -ax` never lists pid 0 (kernel_task)
+                topology[pid] = (parent, group, None)
+    else:
+        result = _ps(["ps", "-ax", "-o", "pid=,ppid=,pgid="])
+        if result.returncode:
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 3 and all(field.isdigit() for field in fields):
+                pid, parent, group = map(int, fields)
+                topology[pid] = (parent, group, None)
     if seeds is None:
         return {pid: (row['ppid'], row['pgid'], row['start']) if row else topology[pid]
                 for pid, row in native_processes(topology).items()}

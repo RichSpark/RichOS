@@ -367,7 +367,33 @@ def cluster(signatures, threshold):
     """Indices grouped so that any two entries linked by >= threshold overlap
     land in one group. Single linkage, deliberately: a reason restated a dozen
     ways forms a chain, and pairwise-to-a-representative clustering splits that
-    chain by the accident of which entry it met first."""
+    chain by the accident of which entry it met first.
+
+    IDENTICAL SIGNATURES ARE LINKED ONCE (2026-10-22). Two entries with the same token set
+    overlap 1.0, so they always share a group; the pairwise pass runs over the distinct sets
+    only and every entry takes its set's group. ceo-todos-defers.log's 4,946 lines carry 858
+    distinct sets, and comparing every pair of lines was most of the Stop hook's 6-9 CPU-s a
+    turn (Hank's after-measurement). The groups, their members and their order are unchanged:
+    each group lists its entries in index order, groups in order of their first entry."""
+    if threshold > 1.0:
+        return _cluster_distinct(signatures, threshold)   # nothing links, not even equal sets
+    distinct = {}
+    for sig in signatures:
+        if sig:
+            distinct.setdefault(sig, len(distinct))
+    keys = list(distinct)
+    group_of = {}
+    for members in _cluster_distinct(keys, threshold):
+        for k in members:
+            group_of[keys[k]] = members[0]
+    groups = collections.defaultdict(list)
+    for i, sig in enumerate(signatures):
+        groups[("set", group_of[sig]) if sig else ("entry", i)].append(i)
+    return list(groups.values())
+
+
+def _cluster_distinct(signatures, threshold):
+    """cluster()'s single-linkage pass itself, over signatures that are all distinct."""
     n = len(signatures)
     parent = list(range(n))
 
@@ -408,6 +434,22 @@ def cluster(signatures, threshold):
 # ==========================================================================
 # discovery — SOURCE SIDE
 # ==========================================================================
+def source_files(engine_root):
+    """The engine scripts discover_from_source reads, sorted."""
+    files = []
+    for dirpath, _dirs, filenames in os.walk(os.path.join(engine_root, "scripts")):
+        for fn in sorted(filenames):
+            if not (fn.endswith(".sh") or fn.endswith(".py")):
+                continue
+            if fn.endswith(".test.sh") or fn.endswith(".mutation.sh"):
+                continue
+            if fn.endswith(".selftest.sh"):
+                continue
+            files.append(os.path.join(dirpath, fn))
+    files.sort()
+    return files
+
+
 def discover_from_source(engine_root):
     """{ledger basename: {"writers": [...], "hatch": bool, "evidence": str}}
 
@@ -418,17 +460,7 @@ def discover_from_source(engine_root):
     if not os.path.isdir(scripts_dir):
         return {}, ["scripts/ not found under %s" % engine_root]
 
-    files = []
-    for dirpath, _dirs, filenames in os.walk(scripts_dir):
-        for fn in sorted(filenames):
-            if not (fn.endswith(".sh") or fn.endswith(".py")):
-                continue
-            if fn.endswith(".test.sh") or fn.endswith(".mutation.sh"):
-                continue
-            if fn.endswith(".selftest.sh"):
-                continue
-            files.append(os.path.join(dirpath, fn))
-    files.sort()
+    files = source_files(engine_root)
 
     # Pass 1 — variable -> ledger basename, per file and engine-wide. The
     # engine-wide map exists for exactly one real shape: guard-ceo-ask-first.sh
@@ -761,8 +793,76 @@ def is_repeated(cls, has_subject_field):
     return True
 
 
+# WHAT DID NOT CHANGE IS NOT READ AGAIN (2026-10-22). The Stop hook re-read every engine script
+# and re-clustered every ledger at every turn end, 6-9 CPU-s a turn (Hank's after-measurement,
+# richos-hq docs/research/2026-10-22-mac-system-cpu-after.md), while between two turns most of
+# them had not changed by a byte. So the source scan and each ledger's analysis are remembered
+# beside the machine's other state, keyed by every file they read (path, inode, size, mtime in
+# nanoseconds) and by this file itself, and reused only while all of those are unchanged. A
+# ledger that grew is analyzed again in full; nothing is ever merged into an old answer. The
+# only thing that depends on the day, a class's idle days, is worked out fresh each time.
+# One file per engine and seat, so two sessions seated in different repositories do not keep
+# replacing each other's answers.
+MEMO_NAME = "waiver-repetition-memo-%s.json"
+
+
+def _stamp(paths):
+    out = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+            out.append([p, st.st_ino, st.st_size, st.st_mtime_ns])
+        except OSError:
+            out.append([p, None])
+    return out
+
+
+class Memo:
+    def __init__(self, engine_root, entity_root, teams_root, config_root=None):
+        import hashlib
+        root = config_root or os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+        seat = hashlib.sha256(json.dumps([engine_root, entity_root, teams_root]).encode()).hexdigest()[:16]
+        self.path = os.path.join(root, "state", MEMO_NAME % seat) if root else ""
+        self.entries, self.used, self.dirty = {}, {}, False
+        try:
+            with open(self.path) as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict) and isinstance(loaded.get("entries"), dict):
+                self.entries = loaded["entries"]
+        except (OSError, ValueError):
+            pass
+
+    def get(self, key, paths, compute):
+        """compute()'s answer, or the remembered one while every file in `paths` is unchanged."""
+        name = json.dumps([key, _stamp(list(paths) + [os.path.abspath(__file__)])])
+        if name in self.entries:
+            self.used[name] = self.entries[name]
+            return json.loads(json.dumps(self.entries[name]))
+        answer = compute()
+        self.used[name] = json.loads(json.dumps(answer))
+        self.dirty = True
+        return answer
+
+    def save(self):
+        if not self.path or not (self.dirty or set(self.entries) != set(self.used)):
+            return
+        tmp = "%s.%d.tmp" % (self.path, os.getpid())
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(tmp, "w") as fh:
+                json.dump({"schema": 1, "entries": self.used}, fh)
+            os.replace(tmp, self.path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
 def run(engine_root, entity_root, teams_root, today, jaccard=JACCARD):
-    source, notes = discover_from_source(engine_root)
+    memo = Memo(engine_root, entity_root, teams_root)
+    source, notes = memo.get(["source", engine_root], source_files(engine_root),
+                             lambda: list(discover_from_source(engine_root)))
     dirs = state_dirs_for(entity_root, teams_root)
     on_disk = discover_on_disk(dirs)
 
@@ -797,7 +897,10 @@ def run(engine_root, entity_root, teams_root, today, jaccard=JACCARD):
         if not paths:
             report["unused"].append(name)
             continue
-        analysis = analyze_ledger(name, paths, today, jaccard)
+        analysis = memo.get(["ledger", name, jaccard, MAX_LINES], paths,
+                            lambda: analyze_ledger(name, paths, today, jaccard))
+        for c in analysis["classes"]:
+            c["idle_days"] = _days_since(c["last_day"], today) if c["last_day"] else None
         analysis["writers"] = source[name]["writers"]
         analysis["evidence"] = source[name]["evidence"]
         repeated = [c for c in analysis["classes"]
@@ -843,6 +946,7 @@ def run(engine_root, entity_root, teams_root, today, jaccard=JACCARD):
     report["flagged"].sort(
         key=lambda f: (f["largest"]["idle_days"] // RECENCY_BUCKET,
                        -f["largest"]["size"]))
+    memo.save()
     return report
 
 
