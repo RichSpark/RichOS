@@ -577,6 +577,28 @@ else
     bad "14. the state key is stable while the situation is, and moves when it doubles" "K1=$K1 K2=$K2 K3=$K3"
 fi
 
+# ===========================================================================
+# 14b — WHAT DID NOT CHANGE IS NOT READ AGAIN (2026-10-22). The Stop hook spent
+#       6-9 CPU-s a turn re-reading and re-clustering ledgers that had not
+#       changed. An unchanged ledger is not opened at all: made unreadable
+#       after one run, the next run still reports it as it was (before the
+#       memo it read as empty). A ledger that grows is read again.
+# ===========================================================================
+write_repeated_class
+R1="$(run_py --json)"
+chmod 000 "$LEDGER"
+R2="$(run_py --json)"
+chmod 644 "$LEDGER"
+add 2026-08-29 delta "recipient is a currently-running teammate spawned this session with native isolation:worktree; background agents never appear in the session roster, so every write still lands in its own existing isolated worktree"
+R3="$(run_py --one-liner)"
+if [ "$R1" = "$R2" ] && printf '%s' "$R1" | grep -q '"size": 3' \
+   && printf '%s' "$R3" | grep -q "4x one reason" \
+   && ls "$CLAUDE_CONFIG_DIR"/state/waiver-repetition-memo-*.json >/dev/null 2>&1; then
+    ok "14b. an unchanged ledger is not read again, and a grown one is"
+else
+    bad "14b. an unchanged ledger is not read again, and a grown one is" "R3=$R3"
+fi
+
 # From here to the end of 15d the driver is run_hook, which cannot be told what
 # day it is — so the fixture is dated against the real clock. See
 # write_repeated_class_now.

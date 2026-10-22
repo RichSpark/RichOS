@@ -31,8 +31,10 @@ CMD="$*"
 STUB_LOG="${STUB_LOG:-/dev/null}"
 STUB_MODE="${STUB_MODE:-ok}"
 STUB_DNSNAME="${STUB_DNSNAME:-richos-test-a.tail1a2b3c.ts.net}"
-# One log record per call, including multi-line supervisor source.
-printf '%s\t%s\n' "$VM" "${CMD//$'\n'/ }" >> "$STUB_LOG"
+# One log record per call, including multi-line supervisor source. `tr`, not
+# "${CMD//$'\n'/ }": in bash 3.2 that substitution grows with the square of
+# the text, and a 16 KB supervisor source took 7.4 s of CPU per call.
+{ printf '%s\t' "$VM"; printf '%s' "$CMD" | tr '\n' ' '; printf '\n'; } >> "$STUB_LOG"
 
 # A REDIRECTION INSIDE THE COMMAND STRING IS EXECUTED BY THE GUEST, so what ssh
 # hands back already has it applied. Honored here, because getting it wrong

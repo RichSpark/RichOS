@@ -173,6 +173,22 @@ def names_nobody(who):
     first = re.split(r"[\s,;.:]+", norm, 1)[0]
     return first in NOTHING_NAMED or norm in NOTHING_NAMED
 
+
+# ONLY THE CEO QUIETS A ROW (2026-10-22, richos-hq docs/plans/2026-10-22-no-
+# silent-holds.md). A blocker that names Rich, or work that must come first,
+# is a hold on his work like any other, and 36 of 82 rows sat quiet behind one
+# while he asked "WHEN WILL [THIS] STOP ONCE AND FOR ALL???". Such a row is
+# swept as unstarted. A blocker naming the CEO (his decision, on CEO-TODOs)
+# still declares it.
+# OWNED BY HIM, NOT MENTIONING HIM (second review rv-20261022T023129Z-cefd17cf-7c77, finding
+# 2): the blocker opens with the CEO as its owner ("CEO — his Railway credentials", "the CEO —
+# he has to decide"). "Rich needs to prepare the CEO brief" waits on Rich, and stays loud.
+CEO_RE = re.compile(r"(?:the\s+)?CEO\b", re.I)
+
+
+def names_ceo(who):
+    return bool(CEO_RE.match(strip_markdown(who or "").strip()))
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -304,11 +320,13 @@ def parse_queue(text, label):
                 else "struck through; residual: %s" % strip_markdown(blocker)
         elif names_nobody(blocker):
             state, detail = "OPEN", ""
-        else:
+        elif names_ceo(blocker):
             state, detail = "DECLARED", strip_markdown(blocker)
+        else:
+            state, detail = "OPEN", "held behind: %s" % strip_markdown(blocker)
 
         bm = BLOCKED_RE.search(item)
-        if state == "OPEN" and bm and not names_nobody(bm.group("who")):
+        if state == "OPEN" and bm and names_ceo(bm.group("who")):
             state, detail = "DECLARED", strip_markdown(bm.group("who"))
 
         rows.append({"id": ident, "where": label, "state": state,
@@ -364,10 +382,11 @@ def parse_section(rc, text, label, sections, status_tokens, terminal, actionable
         bm = BLOCKED_RE.search(body.split(WARRANT_MARK)[0])
         if tok in terminal:
             state, detail = "CLOSED", tok
-        elif bm and not names_nobody(bm.group("who")):
+        elif bm and names_ceo(bm.group("who")):
             state, detail = "DECLARED", strip_markdown(bm.group("who"))
         elif tok in actionable:
-            state, detail = "OPEN", tok
+            state, detail = "OPEN", tok + ("; held behind: %s" % strip_markdown(bm.group("who"))
+                                           if bm and not names_nobody(bm.group("who")) else "")
         else:
             state, detail = "OTHER", tok
 

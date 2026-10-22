@@ -54,6 +54,11 @@
 #        running (and its parent shell); the agent's own idle loop is ended
 #   T04  a long honest run (transcript written 5 min ago, no commit for an
 #        hour), a paused teammate and a finished one: none is SILENT
+#   T2   NO SILENT HOLDS (2026-10-22): "wait for my go" to a live teammate is a hold, told at +31 min
+#   T3   a free-text --started on a finished agent is told at +31 min; agent:Y is quiet
+#        while Y is live and is RELEASE DUE when Y finishes
+#   T4   a manual pause is told at +31 min; a quota pause is quiet until its at: passes
+#   HD0-HD3  nothing before 30 min; the 30-min repeat; --once lists holds
 #   E01  THE 2026-10-01 INCIDENT: a teammate of this session raises a proceeding,
 #        for=lead escalation after the session started; the next look prints
 #        ONE ESCALATION-WATCH block, FIRST, with its key, sender and question
@@ -746,6 +751,105 @@ write_steps a0000000000fixw "git status" "ok" 5 3
 tick 120; tick 180
 check "L03  three 10-min run-tests.sh steps are exempt; the fast teammate clears once" \
     "$( [ "$(count "$OUT" "STALL-CLEARED")" -eq 1 ] && has "$OUT" "papa-opus-w1" && ! has "$OUT" "[SLOW-STEPS]"; echo $?)" "out=$OUT"
+
+# --- HD: no silent holds (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-holds.md) ----
+# The CEO: "WHEN WILL [THIS] STOP ONCE AND FOR ALL???". Every hold is in sight
+# until its work runs, lands or he decides, paused agents included.
+new_registry hd; new_state hd
+add_agent papa-opus-w1 a0000000000fixw "$SID" 600 600 30
+add_agent quebec-opus-s1 a0000000000fixs "$SID" 3600 3500 3000 end
+add_agent romeo-opus-y1 a0000000000fixy "$SID" 600 600 30
+add_agent sierra-opus-f1 a0000000000fixf "$SID" 3600 3500 3000 end
+add_agent tango-opus-p1 a0000000000fixt "$SID" 600 600 30
+add_agent uniform-opus-q1 a0000000000fixu "$SID" 600 600 30
+hold_fixture() { python3 - "$ENGINE" "$@" <<'PY2'
+import json, os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "mega-lander"))
+import workspaces as ws
+sid = os.environ["RICHOS_SESSION_ID"]
+what = sys.argv[2]
+def edit(name, **kw):
+    p = os.path.join(os.environ["RICHOS_WORKSPACES_DIR"], "agents", "%s--%s.json" % (sid, name))
+    rec = json.load(open(p)); rec.update(kw); json.dump(rec, open(p, "w"))
+if what == "setup":
+    # T2: a message telling a live teammate to wait, through the real SendMessage parser.
+    _ctx, notes = ws.lifecycle({"hook_event_name": "PostToolUse", "tool_name": "SendMessage", "session_id": sid,
+                                "tool_input": {"to": "papa-opus-w1", "message":
+                                               "Commit what you have. Then wait for my go before the walk."}}, "")
+    assert any(n.startswith("HOLD RECORDED on papa-opus-w1") for n in notes), notes
+    # T3: free text on a finished agent; and one whose end is a live agent.
+    ws.wait("quebec-opus-s1", "started", "code done, real-app and phone checks left", "", sid)
+    ws.wait("sierra-opus-f1", "started", "romeo carries the rest", "", sid, "agent:romeo-opus-y1")
+    # T4: the generated manual pause (no end) and a quota pause (at: its reset).
+    import pause_protocol
+    now = time.time()
+    edit("tango-opus-p1", pause={"at": now, "until": pause_protocol.until_text("manual"), "control": True,
+                                 "end": pause_protocol.end_of("manual")})
+    reset = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 3600))
+    edit("uniform-opus-q1", pause={"at": now, "until": "the weekly quota reset at " + reset, "control": True,
+                                   "end": pause_protocol.end_of("weekly-quota", reset)})
+elif what == "romeo-done":
+    edit("romeo-opus-y1", end={"at": time.time(), "signal": "SubagentStop", "detail": "fixture"},
+         handed_in={"at": time.time()})
+PY2
+}
+PYTHONPATH="$ENGINE/scripts/lib" hold_fixture setup; RC=$?
+check "HD0  the fixture: a 'wait for my go' message is recorded as a hold on papa-opus-w1" "$RC" "setup failed"
+tick 0
+check "HD1  nothing is told before a hold is 30 min old" \
+    "$( ! has "$OUT" "[HELD]" && ! has "$OUT" "[RELEASE DUE]"; echo $?)" "out=$OUT"
+tick 1860
+check "T2   'wait for my go' sent to a live teammate: a stall-watch tick at +31 min reports it" \
+    "$( has "$OUT" "[HELD] papa-opus-w1: held by Rich with nothing checkable to end it" \
+        && has "$OUT" "why: told to wait: Then wait for my go before the walk"; echo $?)" "out=$OUT"
+check "T3a  a free-text --started on a finished agent is reported at +31 min" \
+    "$( has "$OUT" "[HELD] quebec-opus-s1" && has "$OUT" "code done, real-app and phone checks left"; echo $?)" "out=$OUT"
+check "T3b  agent:Y is quiet while Y is live" "$( ! has "$OUT" "sierra-opus-f1"; echo $?)" "out=$OUT"
+check "T4a  a manual pause is reported at +31 min (its end is Rich's resume)" \
+    "$( has "$OUT" "[HELD] tango-opus-p1" && has "$OUT" "why: Rich's resume" \
+        && has "$OUT" "workspaces.sh resume tango-opus-p1"; echo $?)" "out=$OUT"
+check "T4b  a quota pause is quiet until its at: passes" "$( ! has "$OUT" "uniform-opus-q1"; echo $?)" "out=$OUT"
+tick 1920
+check "HD2  told again only after the 30-min repeat" "$( ! has "$OUT" "[HELD]"; echo $?)" "out=$OUT"
+hold_fixture romeo-done
+tick 1980
+check "T3c  Y finishes: RELEASE DUE for the work it was holding, with the command" \
+    "$( has "$OUT" "[RELEASE DUE] sierra-opus-f1: its end came true: agent romeo-opus-y1 has finished" \
+        && has "$OUT" "continues: sierra-opus-f1"; echo $?)" "out=$OUT"
+tick 3700
+check "T4c  the quota reset passes: RELEASE DUE for the quota pause" \
+    "$( has "$OUT" "[RELEASE DUE] uniform-opus-q1" && has "$OUT" "workspaces.sh resume uniform-opus-q1" \
+        && has "$OUT" "[HELD] papa-opus-w1"; echo $?)" "out=$OUT"
+OUT="$(STALL_WATCH_NOW=$(( $(date +%s) + 1860 )) bash "$SW" --once 2>&1)"; RC=$?
+check "HD3  --once lists the holds too" "$( has "$OUT" "[HELD] quebec-opus-s1"; echo $?)" "out=$OUT"
+
+# Second review rv-20261022T013056Z-12c77c90-1291, finding 4: in the app the watcher runs in Stu's
+# lease, and a hold of Rich's lease (another RUNNING session of the same conversation partition)
+# must still be told; in a terminal another running session's holds stay that session's.
+new_registry hd4; new_state hd4
+SID_RICH="beadfeed-0000-4000-8000-0000000rich1"
+python3 - "$RICHOS_WORKSPACES_DIR" "$SID" "$SID_RICH" <<'PY2'
+import json, os, shutil, sys
+reg, sid, rich = sys.argv[1:4]
+shutil.copy(os.path.join(reg, "sessions", sid + ".json"), os.path.join(reg, "sessions", rich + ".json"))
+PY2
+add_agent victor-opus-a1 a0000000000fixv "$SID_RICH" 3600 3500 3000 end
+python3 - "$ENGINE" "$SID_RICH" <<'PY2'
+import os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "mega-lander"))
+import workspaces as ws
+ws.wait("%s--victor-opus-a1" % sys.argv[2], "started", "code done, real-app checks left", "", sys.argv[2])
+rec = ws.load_agent("%s--victor-opus-a1" % sys.argv[2])
+rec["waiting"]["at"] = time.time() - 40 * 60
+ws.save_agent(rec)
+PY2
+tick 0
+check "HD4  a terminal session does not tell another running session's hold" \
+    "$( ! has "$OUT" "victor-opus-a1: held by Rich"; echo $?)" "out=$OUT"
+new_state hd4b
+OUT="$(RICHOS_APP_ENTITY=acme RICHOS_APP_THREAD=thread-1 STALL_WATCH_NOW=$(date +%s) bash "$SW" --tick 2>&1)"
+check "HD5  in the app (one conversation's partition) Stu's watcher tells the hold of Rich's running lease" \
+    "$( has "$OUT" "[HELD] victor-opus-a1: held by Rich"; echo $?)" "out=$OUT"
 
 # --- E: a teammate's escalation wakes an idle lead (2026-10-01) ---------------
 # richos-hq docs/operations/2026-10-01-escalation-wakes-the-lead.md, built past

@@ -303,6 +303,7 @@ impl ClaimLock {
             {
                 use std::os::unix::io::AsRawFd;
                 // SAFETY: flock on a descriptor this struct owns; released when it closes.
+                // lock-busy: one poll inside the caller's `wait`; busy past it says in words that the claim lock stayed busy.
                 if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
                     return Ok(ClaimLock { _file: file });
                 }

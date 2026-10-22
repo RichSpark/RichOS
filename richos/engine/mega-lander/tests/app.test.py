@@ -898,6 +898,23 @@ class DesktopWork(unittest.TestCase):
         self.assertTrue(any(second.name in l for l in lines))
         self.assertEqual(self.call("inspect")["records"][0]["request"]["repos"],[str(self.repo),str(second)])
 
+    def test_a_repository_connected_to_two_companies_is_listed_and_dispatched_for_the_second(self):
+        """Plan item 11 (CEO 2026-10-21): the shared repository is in ONE company's roots
+        (roots stay exclusive) and connected by both. The second company, "depot", has it only
+        in connected_repositories; listing and a job in it must work, as in the first company."""
+        shared=str(self.repo)
+        def registry(owner_connects):
+            self.registry.write_text(json.dumps({"version":2,"entities":[
+                {"id":"first","roots":[shared],"connected_repositories":[shared] if owner_connects else []},
+                {"id":"depot","roots":[],"connected_repositories":[shared]}]}))
+        registry(True)
+        self.assertEqual(self.call("repositories")["repositories"],[shared])
+        ready=self.call("prepare",{**self.args,"request_id":"prepare-shared"})
+        self.assertEqual(ready["status"],"prepared")
+        # A repository its owner has not connected is still refused: sharing is the owner's say.
+        registry(False)
+        with self.assertRaises(ValueError):self.call("repositories")
+
     def second_repository(self):
         second=self.root/"second project";second.mkdir()
         subprocess.run(["git","init","--template=","-q","-b","main",str(second)],check=True)

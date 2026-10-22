@@ -113,6 +113,29 @@ def mid_job_notice(work, active, payload, root, emit):
         return False
 
 
+def held_work_context(work, root, payload):
+    """NO SILENT HOLDS in the app (richos-hq docs/plans/2026-10-22-no-silent-holds.md):
+    every turn of the app's Rich opens with the hold lines the terminal's workspace gate
+    shows at a turn end, as context in his own turn, and his instruction file (app/agents/
+    rich.md) has him tell the user. Only the conversation lease: Stu's turns carry none.
+    The registry is this conversation's own partition (RICHOS_WORKSPACES_DIR), so every
+    hold in it is this conversation's, whichever lease made it."""
+    session = str(payload.get("session_id") or "")
+    try:
+        role = json.loads((root / "evidence" / session / "binding.json").read_text()).get("role")
+    except (OSError, ValueError, AttributeError):
+        role = None
+    if role not in (None, "rich"):
+        return
+    try:
+        lines = work.W.hold_lines("")
+    except Exception as error:  # noqa: BLE001 -- an unread list is said, never silence
+        lines = [f"HOLDS NOT READ this turn ({type(error).__name__}: {str(error)[:160]})"]
+    if lines:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+                                                 "additionalContext": "\n".join(lines)}}))
+
+
 def handle(payload):
     root = Path(os.environ["RICHOS_APP_STATE"])
     # Recovery, independent reviews and both admission paths share this ledger.
@@ -146,6 +169,8 @@ def handle(payload):
         return
     ws = [sys.executable, str(ENGINE / "mega-lander/workspaces.py"), "--entity", str(coordination)]
     work = load("richos_desktop_work", ENGINE / "mega-lander/app.py")
+    if event == "UserPromptSubmit":
+        held_work_context(work, root, payload)
     if event == "PreToolUse":
         run(["/bin/bash", str(ENGINE / "scripts/hooks/guard-sealed-worktree.sh")], payload)
         work.validate_shell_target(payload)
@@ -209,6 +234,15 @@ def handle(payload):
     if event in ("SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure"):
         work.observe(scope(), payload)
     if event == "Stop":
+        # A REPLY THAT HOLDS WORK OPENS A HOLD here too (second review
+        # rv-20261022T013056Z-12c77c90-1291, finding 1): the same analyzer as the terminal's
+        # deferral notice, writing into this conversation's registry, whose lines open Rich's
+        # next turn. Its notice text is the terminal's; nothing of it is printed here.
+        held = subprocess.run([sys.executable, str(ENGINE / "scripts/hooks/guard-unasked-deferral.py")],
+                              input=json.dumps(payload), text=True, capture_output=True, timeout=20)
+        if held.returncode not in (0, 3, 4):
+            print(f"RichOS desktop engine: the hold check failed (exit {held.returncode}): "
+                  f"{held.stderr.strip()[-300:]}", file=sys.stderr)
         # Context-only priming is host machinery, not a new assignment or promise.
         # The same host grant controls mutation tools and the visible-turn analyzer.
         active = scope()

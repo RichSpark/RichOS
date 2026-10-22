@@ -102,14 +102,14 @@
 # WORKING record and knows nothing about the lead's own ordered backlog.
 UR_DEFAULT_QUEUE="RICH-TODOs.md"
 
-# Which warrant tokens describe work somebody could pick up now. OPEN, BUILT
-# and BOUNDED are the three the brief names. BLOCKED-ON-RICH is deliberately
-# NOT here and that is a judgment worth stating: by the record's own contract
-# it means "Rich has not prepared this for the CEO yet", which is arguably the
-# most unstarted state of all — but it is also the token the record uses for
-# work that has been consciously parked, and widening the set is one word in a
-# declaration rather than an edit here.
-UR_DEFAULT_ACTIONABLE="OPEN BUILT BOUNDED"
+# Which warrant tokens describe work somebody could pick up now: OPEN, BUILT,
+# BOUNDED, and BLOCKED-ON-RICH. By the record's own contract that last one
+# means "Rich has not prepared this for the CEO yet", and the record also uses
+# it for work Rich consciously parked: a hold on his work by Rich, which stays
+# in sight (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-holds.md; the
+# CEO: "WHEN WILL [THIS] STOP ONCE AND FOR ALL???"). Until then it was left out
+# as "consciously parked", which is how such rows went quiet.
+UR_DEFAULT_ACTIONABLE="OPEN BUILT BOUNDED BLOCKED-ON-RICH"
 
 _UR_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _UR_RC_LIB="$_UR_LIB_DIR/row-currency.sh"

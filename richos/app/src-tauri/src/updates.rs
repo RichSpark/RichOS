@@ -323,15 +323,38 @@ impl Drop for UpdateOperation<'_> {
         self.0.store(false, Ordering::Release);
     }
 }
-fn install_failure(app: &AppHandle, detail: String) -> UpdateView {
+/// The headline when the update record stayed busy for the updater's whole wait.
+const BUSY_HEADLINE: &str = "RichOS is busy with another update task. Try again in a minute.";
+/// The headline for every other update-record or staging error.
+const INSTALL_HEADLINE: &str = "RichOS could not prepare this update.";
+
+/// AN ERROR FROM THE UPDATE RECORD (`~/Applications/.richos-updater`), as the CEO reads it.
+///
+/// `WouldBlock` is the record being BUSY: another part of RichOS (the launch check, the
+/// window's own read, another copy of the app, a staging) held its lock for the whole of
+/// `richos_user_update`'s wait. Nothing failed and nothing was being prepared, so it is said
+/// as busy, with the same Try again control. Until 2026-10-21 every error here became
+/// "RichOS could not prepare this update." with "Resource temporarily unavailable (os error
+/// 35)" behind it, which a new user saw on a plain check. Every other error is still the
+/// install failure it always was: the `failed` state with kind `install`.
+fn journal_failure(app: &AppHandle, error: std::io::Error) -> UpdateView {
+    let failure = Failure::of_journal(&error);
     transition(app, |v| {
         v.state = "failed";
-        v.failure = Some(Failure {
-            kind: "install",
-            headline: "RichOS could not prepare this update.".into(),
-            detail,
-        });
+        v.failure = Some(failure);
     })
+}
+
+impl Failure {
+    /// [`journal_failure`]'s decision, pure so it is testable without a running app.
+    fn of_journal(error: &std::io::Error) -> Self {
+        let (kind, headline) = if error.kind() == std::io::ErrorKind::WouldBlock {
+            ("busy", BUSY_HEADLINE)
+        } else {
+            ("install", INSTALL_HEADLINE)
+        };
+        Failure { kind, headline: headline.into(), detail: error.to_string() }
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -432,7 +455,7 @@ pub async fn check(app: &AppHandle) -> UpdateView {
             // A shared startup cannot retire an obsolete prepared receipt. It must
             // still query the server for releases newer than its actual running build.
             Ok(Some(_)) | Ok(None) => {}
-            Err(e) => return install_failure(app, e.to_string()),
+            Err(e) => return journal_failure(app, e),
         }
     }
     let (endpoint, placeholder) = resolve_endpoint(app);
@@ -650,22 +673,19 @@ pub async fn install(app: &AppHandle) -> UpdateView {
     let result = app
         .path()
         .home_dir()
-        .map_err(|e| e.to_string())
-        .and_then(|home| {
-            richos_user_update::stage_verified(&home, &bytes, &update.version)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        });
+        .map_err(std::io::Error::other)
+        .and_then(|home| richos_user_update::stage_verified(&home, &bytes, &update.version).map(|_| ()));
     #[cfg(not(target_os = "macos"))]
-    let result: Result<(), String> =
-        Err("Password-free application updates are not implemented on this platform.".into());
+    let result: std::io::Result<()> = Err(std::io::Error::other(
+        "Password-free application updates are not implemented on this platform.",
+    ));
     match result {
         Ok(()) => transition(app, |v| {
             v.state = "ready";
             v.percent = Some(100);
             v.ready_is_rollback = false;
         }),
-        Err(detail) => install_failure(app, detail),
+        Err(error) => journal_failure(app, error),
     }
 }
 
@@ -920,16 +940,16 @@ pub async fn rollback(app: &AppHandle) -> UpdateView {
     let result = app
         .path()
         .home_dir()
-        .map_err(|e| e.to_string())
+        .map_err(std::io::Error::other)
         .and_then(|home| {
-            richos_user_update::stage_rollback_verified(&home, &bytes, &update.version)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
+            richos_user_update::stage_rollback_verified(&home, &bytes, &update.version).map(|_| ())
         });
     #[cfg(not(target_os = "macos"))]
-    let result: Result<(), String> = {
+    let result: std::io::Result<()> = {
         let _ = bytes;
-        Err("Going back to an earlier version is not implemented on this platform.".into())
+        Err(std::io::Error::other(
+            "Going back to an earlier version is not implemented on this platform.",
+        ))
     };
     match result {
         Ok(()) => transition(app, |v| {
@@ -938,7 +958,7 @@ pub async fn rollback(app: &AppHandle) -> UpdateView {
             v.ready_is_rollback = true;
             v.ready_since = Some(now_millis());
         }),
-        Err(detail) => install_failure(app, detail),
+        Err(error) => journal_failure(app, error),
     }
 }
 
@@ -1416,6 +1436,28 @@ mod tests {
         }
         let fresh = UpdateView::new("0.1.0".into(), "https://example.com/u".into(), false);
         assert!(!fresh.restarts_when_idle, "nothing is armed before a download");
+    }
+
+    /// THE 2026-10-21 FIRST-RUN DEAD END, at the surface: a busy update record is said as
+    /// busy, never as "could not prepare this update" over a bare OS error, and every other
+    /// record error is still the install failure it was.
+    #[test]
+    fn a_busy_update_record_is_busy_and_never_a_failure_to_prepare() {
+        let busy = std::io::Error::new(std::io::ErrorKind::WouldBlock, richos_user_update::PUBLICATION_BUSY);
+        let f = Failure::of_journal(&busy);
+        assert_eq!(f.kind, "busy");
+        assert_eq!(f.headline, BUSY_HEADLINE);
+        assert!(!f.headline.contains("could not prepare"), "{}", f.headline);
+        // The OS's own words for the same kind are never the only thing he is shown either.
+        let raw = Failure::of_journal(&std::io::Error::from_raw_os_error(libc::EWOULDBLOCK));
+        assert_eq!(raw.kind, "busy");
+        assert_eq!(raw.headline, BUSY_HEADLINE);
+
+        let broken = std::io::Error::new(std::io::ErrorKind::InvalidData, "pending update no longer matches its verified receipt");
+        let f = Failure::of_journal(&broken);
+        assert_eq!(f.kind, "install");
+        assert_eq!(f.headline, INSTALL_HEADLINE);
+        assert!(f.detail.contains("no longer matches"));
     }
 
     #[test]

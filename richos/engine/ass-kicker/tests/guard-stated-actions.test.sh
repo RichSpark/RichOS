@@ -513,7 +513,7 @@ run_hook "$TR_MEM_WRITE" "Recorded."
 alerted 'only a private memory note' && ok "R7. a memory-only write with an unqualified 'Recorded.' is ALERTED" || bad "R7. memory unqualified" "rc=$RC out=$OUT"
 
 run_hook "$TR_MEM_WRITE" "Saved in my private notes: phone testing goes through the command line."
-silent && ok "R8. a memory-only write described as 'in my private notes' is SILENT" || bad "R8. private notes" "rc=$RC out=$OUT"
+alerted 'follow-ups.md' && ok "R8. (CEO 2026-10-21, was SILENT) a memory-only write described as 'in my private notes' is ALERTED" || bad "R8. private notes" "rc=$RC out=$OUT"
 
 # 2026-10-02 ~23:13Z: "private notes" turned the alert off for a RULE. A rule is
 # a line in CLAUDE.md or the decisions record, never a memory note.
@@ -587,6 +587,60 @@ alerted 'only a private memory note' && ok "R27. a claim backed only by an ECS c
 
 run_hook "$TR_ECS" "I've saved the missing end-of-turn record."
 silent && ok "R28. an ECS checkpoint named as what it is ('end-of-turn record'): SILENT" || bad "R28. ecs named" "rc=$RC out=$OUT"
+
+# CEO 2026-10-21: "noted" as a promise and "private (follow-up) notes" are record
+# claims too; only a committed repository file the reply names backs them.
+run_hook "$TR_ECS" "Noted. The numbering goes in right after the next nightly."
+alerted 'follow-ups.md' && ok "R34. 'Noted.' promising later work, only an ECS write: ALERTED, names the follow-up list" || bad "R34. noted ecs" "rc=$RC out=$OUT"
+
+run_hook "$TR_MEM_WRITE" "It's in my private notes."
+alerted 'follow-ups.md' && ok "R35. 'it's in my private notes', memory-directory write only: ALERTED" || bad "R35. private notes memory" "rc=$RC out=$OUT"
+
+run_hook "$TR_MEM_WRITE" "It's in my private follow-up notes, not filed in a repository."
+alerted 'follow-ups.md' && ok "R36. the 2026-10-21 slip 'my private follow-up notes', memory write only: ALERTED" || bad "R36. private follow-up notes" "rc=$RC out=$OUT"
+
+run_hook "$TR_REPO_COMMIT" "Noted. The numbering goes in after the next nightly: it is in \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
+silent && ok "R37. 'Noted.' promise with a committed repository file named and its commit: SILENT" || bad "R37. noted backed" "rc=$RC out=$OUT"
+
+run_hook "$TR_REPO_COMMIT" "It's in my private follow-up notes: \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
+silent && ok "R38. 'in my private follow-up notes' with the committed file and commit named: SILENT" || bad "R38. notes backed" "rc=$RC out=$OUT"
+
+run_hook "$TR_MEM_WRITE" "I've saved it in my private notes."
+alerted 'follow-ups.md' && ok "R40. review 1: 'I've saved it in my private notes', memory write only: ALERTED" || bad "R40. saved private" "rc=$RC out=$OUT"
+
+run_hook "$TR_MEM_WRITE" "Saved in my private follow-up notes: number the next nightly."
+alerted 'follow-ups.md' && ok "R41. review 1: 'private follow-up notes' with a 'Saved' lead, memory write only: ALERTED" || bad "R41. saved private followup" "rc=$RC out=$OUT"
+
+run_hook "$TR_MEM_WRITE" "Noted in my private notes for the next nightly."
+alerted 'follow-ups.md' && ok "R42. review 1: 'Noted in my private notes', memory write only: ALERTED" || bad "R42. noted private" "rc=$RC out=$OUT"
+
+run_hook "$TR_ECS" "Noted: I'll add the numbering after the next nightly."
+alerted 'follow-ups.md' && ok "R43. review 2: 'Noted: I'll ...' promise, ECS write only: ALERTED" || bad "R43. noted colon" "rc=$RC out=$OUT"
+
+run_hook "$TR_ECS" "Noted for the next nightly."
+alerted 'follow-ups.md' && ok "R44. review 2: 'Noted for the next nightly.', ECS write only: ALERTED" || bad "R44. noted for" "rc=$RC out=$OUT"
+
+TR_EDIT_OLDSHA="$SANDBOX/edit-oldsha.jsonl"
+mk_tr "$TR_EDIT_OLDSHA" "[{\"prompt\":\"go\"},{\"edit\":$(js "$ENTITY/wiki/ceo-decisions.md")},{\"bashout\":[$(js "git log -1 --oneline"),\"cf7e16b7 an older commit\"]}]"
+run_hook "$TR_EDIT_OLDSHA" "Noted. The numbering goes in after the next nightly: \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
+alerted 'follow-ups.md' && ok "R45. review 3: the named file was edited, never committed, and an OLDER commit is cited: ALERTED" || bad "R45. uncommitted edit" "rc=$RC out=$OUT"
+
+run_hook "$TR_REPO_COMMIT" "The ruling is in \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`.
+
+Noted. The numbering goes in after the next nightly."
+alerted 'follow-ups.md' && ok "R46. review 4: an unrelated paragraph's file and commit do not back the 'Noted.' promise: ALERTED" || bad "R46. unrelated commit" "rc=$RC out=$OUT"
+
+run_hook "$TR_REPO_COMMIT" "Noted.
+The numbering goes in after the next nightly: \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
+silent && ok "R47. the file and commit sit in the claim's own paragraph (next line): SILENT" || bad "R47. same paragraph" "rc=$RC out=$OUT"
+
+TR_ADD_U="$SANDBOX/add-u.jsonl"
+mk_tr "$TR_ADD_U" "[{\"prompt\":\"go\"},{\"bash\":$(js "cd $ENTITY && echo x >> wiki/ceo-decisions.md")},{\"bashout\":[$(js "cd $ENTITY && git add -u && git commit -m 'decisions 101'"),\"[main cf7e16b7] decisions 101\"]}]"
+run_hook "$TR_ADD_U" "Noted. The numbering goes in after the next nightly: \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
+silent && ok "R48. review 5: a tracked note file committed after 'git add -u': SILENT" || bad "R48. add -u" "rc=$RC out=$OUT"
+
+run_hook "$TR_MEM_WRITE" "Noted that the build is green."
+silent && ok "R39. 'Noted that the build is green.' stays an acknowledgment: SILENT" || bad "R39. noted that" "rc=$RC out=$OUT"
 
 # The misread classes the corpus replay found: none is a claim of THIS turn.
 run_hook "$TR_BASH" "I recorded it wrong. The version is 1.0.0, not 0.1.0."

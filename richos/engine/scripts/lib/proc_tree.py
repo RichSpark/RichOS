@@ -247,19 +247,107 @@ def native_processes(pids):
     return table
 
 
-def process_rows():
-    """Topology plus native birth generations, without a subprocess per identity."""
-    result = _ps(["ps", "-ax", "-o", "pid=,ppid=,pgid="])
-    if result.returncode:
-        raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+def _tied(topology, seeds, groups):
+    """Every pid tied to `seeds` by parent links or process groups, read off the
+    one `ps` topology: the seeds, their descendants, members of their groups and
+    of `groups`, repeated until nothing new joins. The caller's own group, 0 and
+    1 never tie anything, the same exclusion TrackedTree.refresh applies."""
+    skip = {os.getpgrp(), 0, 1}
+    groups = set(groups) - skip
+    tied = {pid for pid in seeds if pid in topology}
+    while True:
+        groups |= {topology[pid][1] for pid in tied} - skip
+        more = {pid for pid, (parent, group, _) in topology.items()
+                if parent in tied or group in groups} - tied
+        if not more:
+            return tied
+        tied |= more
+
+
+# THE PROCESS TABLE IS READ IN-PROCESS, NOT BY STARTING `ps` (2026-10-22). Every supervisor
+# tick started a setuid `ps -ax`; at 20 supervisors that was about 100 new processes a second
+# and 12.4% of the Mac in Hank's busy window (richos-hq
+# docs/research/2026-10-22-mac-system-cpu-after.md). `ps` itself gets these three numbers
+# from one sysctl(KERN_PROC_ALL); reading it here gives the same rows (every process, zombies
+# included) without a process. struct kinfo_proc: kp_proc.p_pid at 40, kp_eproc.e_ppid at 560,
+# e_pgid at 564, 648 bytes a row on 64-bit macOS. The layout is checked against this process's
+# own row on every read, and anything unexpected falls back to `ps`.
+_KINFO_SIZE, _PID_AT, _PPID_AT, _PGID_AT = 648, 40, 560, 564
+_libc = []
+
+
+def _kernel_topology():
+    """[(pid, ppid, pgid)] for every process from one sysctl, or None when not available."""
+    if sys.platform != "darwin":
+        return None
+    import ctypes
+    import struct
+    try:
+        if not _libc:
+            _libc.append(ctypes.CDLL(None, use_errno=True))
+        libc = _libc[0]
+        mib = (ctypes.c_int * 4)(1, 14, 0, 0)       # CTL_KERN, KERN_PROC, KERN_PROC_ALL
+        for _ in range(5):
+            size = ctypes.c_size_t(0)
+            if libc.sysctl(mib, 4, None, ctypes.byref(size), None, 0):
+                return None
+            size.value += size.value // 4 + _KINFO_SIZE * 32   # processes born in between
+            buf = ctypes.create_string_buffer(size.value)
+            if libc.sysctl(mib, 4, buf, ctypes.byref(size), None, 0) == 0:
+                break
+            if ctypes.get_errno() != 12:            # ENOMEM: the table grew; ask again
+                return None
+        else:
+            return None
+    except (OSError, AttributeError, ValueError):
+        return None
+    if size.value % _KINFO_SIZE:
+        return None
+    raw = buf.raw[:size.value]
+    rows = [struct.unpack_from("i", raw, at + _PID_AT) + struct.unpack_from("ii", raw, at + _PPID_AT)
+            for at in range(0, len(raw), _KINFO_SIZE)]
+    me = os.getpid()
+    if (me, os.getppid(), os.getpgrp()) not in rows:
+        return None
+    return rows
+
+
+def process_rows(seeds=None, groups=()):
+    """Topology plus native birth generations, without a subprocess per identity.
+
+    With `seeds`, only processes tied to them (see _tied) get a native identity
+    read; every other row keeps its `ps` topology and no generation (None), so it
+    can never pass a birth-identity check. A supervisor's tick asks this five
+    times a second, and reading all ~650 processes each time, plus a second `ps`
+    for the ~300 root processes it can never own, was ~8% of the Mac
+    (2026-10-21). The protection against a reused PID is unchanged: every process
+    the tree could claim is still read natively and compared with its recorded
+    birth, and a newcomer reached only through a native row is read again by
+    refresh's own reconciliation before it can be owned. The table comes from the kernel
+    in-process (_kernel_topology), `ps` only where that is unavailable."""
     topology = {}
-    for line in result.stdout.splitlines():
-        fields = line.split()
-        if len(fields) == 3 and all(field.isdigit() for field in fields):
-            pid, parent, group = map(int, fields)
-            topology[pid] = (parent, group, None)
-    return {pid: (row['ppid'], row['pgid'], row['start']) if row else topology[pid]
-            for pid, row in native_processes(topology).items()}
+    kernel = _kernel_topology()
+    if kernel is not None:
+        for pid, parent, group in kernel:
+            if pid > 0:                     # `ps -ax` never lists pid 0 (kernel_task)
+                topology[pid] = (parent, group, None)
+    else:
+        result = _ps(["ps", "-ax", "-o", "pid=,ppid=,pgid="])
+        if result.returncode:
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 3 and all(field.isdigit() for field in fields):
+                pid, parent, group = map(int, fields)
+                topology[pid] = (parent, group, None)
+    if seeds is None:
+        return {pid: (row['ppid'], row['pgid'], row['start']) if row else topology[pid]
+                for pid, row in native_processes(topology).items()}
+    tied = _tied(topology, seeds, groups)
+    table = {pid: row for pid, row in topology.items() if pid not in tied}
+    table.update({pid: (row['ppid'], row['pgid'], row['start']) if row else topology[pid]
+                  for pid, row in native_processes({p: topology[p] for p in tied}).items()})
+    return table
 
 
 def scoped_members(scope):
@@ -347,8 +435,13 @@ class TrackedTree:
         still alive when cleanup's hard deadline passes, finish_scope reports it as an
         unidentified survivor, which is the same verdict any surviving member gets.
         """
-        table = process_rows()
         tagged = scoped_members(self.scope) if tags else set()
+        # Only this tree's processes are read natively: everything it already
+        # holds, what it released, what carries its scope tag, and whatever is
+        # tied to those by parent or group (process_rows).
+        table = process_rows(seeds={self.root, *self.known, *self.unresolved, *self.released,
+                                    *self.groups, *tagged},
+                             groups=self.groups)
         clock = HeldClock(gap=0.5)
         deadline = clock.now() + 1.0
         carried = {pid: birth for pid, birth in self.unresolved.items() if birth is not None}
