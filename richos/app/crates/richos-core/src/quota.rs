@@ -1509,23 +1509,36 @@ impl Service {
         Ok(self.view())
     }
 
-    /// **A sign-in that just completed is recorded where the card reads it** (review
-    /// rv-20261022T035101Z-dd8cd796-0c4b, finding 1): Claude Code's browser sign-in came back
-    /// connected for `id`, so its quota record says signed in (`Snapshot::signed_in`) from now,
-    /// not from the next usage read, and a read that then fails cannot take it back. Account 1's
-    /// record has just been cleared by the changed connection (`set_connecting`); an added
-    /// account's is made here if no read has made it yet.
-    pub fn signed_in(&self, id: &str) {
+    /// **Claude Code's own `auth status` answered for `id`: its record says so** (reviews
+    /// rv-20261022T035101Z-dd8cd796-0c4b and rv-20261022T045201Z-01ee03b2-84d0, finding 1).
+    /// The one way the app's sign-in checks write the verdict the card reads
+    /// (`Snapshot::signed_in`): the startup check (`provider_auth_status`), Account 1's browser
+    /// sign-in (`provider_auth_poll`) and an added account's (`claude_account_sign_in_poll`).
+    /// `Connected` is signed in and `SignedOut` is signed out; any other answer (`Connecting`,
+    /// `Cancelled`, `Failed`, `Unavailable`) says nothing and leaves the record as it was. The
+    /// usage reads write the same field themselves (`Snapshot::accept`, `observe`, `empty`).
+    /// Account 1's record may just have been cleared by a changed connection
+    /// (`set_connecting`); an added account's is made here if no read has made it yet.
+    pub fn sign_in_known(&self, id: &str, auth: &crate::provider_auth::AuthState) {
+        use crate::provider_auth::AuthState;
+        let known = match auth { AuthState::Connected => true, AuthState::SignedOut => false, _ => return };
         if id == crate::claude_accounts::ACCOUNT_ONE {
-            self.snapshot.lock().unwrap().signed_in = Some(true);
+            self.snapshot.lock().unwrap().signed_in = Some(known);
         } else if let Some(folder) = self.accounts.folder(id) {
             let mut extra = self.extra.lock().unwrap();
             let (_, snapshot) = extra.entry(id.to_string()).or_insert_with(|| self.reader(folder));
-            snapshot.signed_in = Some(true);
+            snapshot.signed_in = Some(known);
         }
         if let Err(error) = self.publish() {
             eprintln!("[richos] quota snapshot: {error}");
         }
+    }
+    /// A used weekly reset ends Account 1's READING (`refresh`), not its sign-in: the account
+    /// is still signed in as it was, so the verdict is kept with the new, empty record.
+    fn forget_reading(&self) {
+        self.source.lock().unwrap().disconnect();
+        let mut snapshot = self.snapshot.lock().unwrap();
+        *snapshot = Snapshot { signed_in: snapshot.signed_in, ..Snapshot::default() };
     }
     /// An added account's own probe and an empty record, made on first use.
     fn reader(&self, folder: std::path::PathBuf) -> AccountReader {
@@ -1620,8 +1633,7 @@ impl Service {
             if marker != *last { *last = marker; true } else { false }
         };
         if changed {
-            self.source.lock().unwrap().disconnect();
-            *self.snapshot.lock().unwrap() = Snapshot::default();
+            self.forget_reading();
             // The reset was used on Account 1's sign-in (the reset reader's), so its
             // usage-limit hold goes with its old reading (hunt part 1 v3, finding 49).
             if let Err(error) = self.accounts.reset_used(crate::claude_accounts::ACCOUNT_ONE) {
@@ -2395,33 +2407,88 @@ pub(crate) mod tests {
             "98% after the burst: {:?}", service.view().act_at);
     }
 
-    /// **A sign-in that just completed is the account's sign-in verdict at once** (review
-    /// rv-20261022T035101Z-dd8cd796-0c4b, finding 1): the browser sign-in came back connected,
-    /// but only the account list heard it, so until a usage read answered, and for good if that
-    /// read failed, the card still said "Not signed in" or offered Sign in. Account 1 (a new
-    /// user's own sign-in: a changed connection first clears its record, `set_connecting`) and an
-    /// added account both carry `Some(true)` from the moment it completes, and a failed read
-    /// after it does not erase it.
+    /// **EVERY PLACE THE APP LEARNS WHETHER AN ACCOUNT IS SIGNED IN WRITES IT, AND A FAILED READ
+    /// AFTER IT NEVER ERASES IT** (Andreas issues 1-2; reviews rv-20261021T233844Z-10df0b1f-1846,
+    /// rv-20261022T035101Z-dd8cd796-0c4b and rv-20261022T045201Z-01ee03b2-84d0 found the places
+    /// one at a time). One row per place, run for Account 1 and for an added account (Work)
+    /// where it applies, each on a fresh service whose record first says `prior`. After the
+    /// place's event the card's verdict is `want`, and it is still `want` after a usage read
+    /// that got no answer. Every failing row is named, not only the first.
     #[test]
-    fn a_completed_sign_in_is_the_verdict_at_once_and_a_failed_read_after_it_keeps_it() {
-        let root = Scratch::new();
-        let service = Service::open(root.path()).unwrap();
-        let now = crate::util::now_millis();
-        service.snapshot.lock().unwrap().empty(ReadError::SignedOut, now);
-        assert_eq!(service.view().signed_in, Some(false), "signed out before the sign-in");
-        service.set_connecting(true);
-        service.set_connecting(false);
-        service.signed_in(crate::claude_accounts::ACCOUNT_ONE);
-        assert_eq!(service.view().signed_in, Some(true), "Account 1 right after its sign-in");
-        service.snapshot.lock().unwrap().empty(ReadError::Failed, now + 1);
-        assert_eq!(service.view().signed_in, Some(true), "Account 1 after a failed read");
-
-        let work = service.accounts.add("Work").unwrap();
-        service.signed_in(&work.id);
-        let row = |service: &Service| service.view().accounts.into_iter().find(|a| a.id == work.id).unwrap().signed_in;
-        assert_eq!(row(&service), Some(true), "an added account right after its sign-in");
-        service.extra.lock().unwrap().get_mut(&work.id).unwrap().1.empty(ReadError::Failed, now + 2);
-        assert_eq!(row(&service), Some(true), "an added account after a failed read");
+    fn every_place_the_sign_in_becomes_known_writes_it_and_a_failed_read_never_erases_it() {
+        use crate::provider_auth::AuthState;
+        #[derive(Clone, Copy, PartialEq)]
+        enum Who { Both, AccountOne, Added }
+        fn record(s: &Service, id: &str, f: impl FnOnce(&mut Snapshot)) {
+            if id == crate::claude_accounts::ACCOUNT_ONE {
+                f(&mut s.snapshot.lock().unwrap());
+            } else {
+                let folder = s.accounts.folder(id).unwrap();
+                let mut extra = s.extra.lock().unwrap();
+                f(&mut extra.entry(id.to_string()).or_insert_with(|| s.reader(folder)).1);
+            }
+        }
+        fn verdict(s: &Service, id: &str) -> Option<bool> {
+            s.view().accounts.into_iter().find(|a| a.id == id).and_then(|a| a.signed_in)
+        }
+        fn other(s: &Service, id: &str) -> String {
+            s.accounts.list().into_iter().find(|a| a.id != id).unwrap().id
+        }
+        fn read_as(error: ReadError) -> impl Fn(&Service, &str, u64) {
+            move |s, id, at| record(s, id, |r| r.empty(error, at))
+        }
+        type Event = Box<dyn Fn(&Service, &str, u64)>;
+        // (place, whose record, the record before, the place's event, the record after)
+        type Row = (&'static str, Who, Option<bool>, Event, Option<bool>);
+        let rows: Vec<Row> = vec![
+            ("startup check: signed in", Who::Both, Some(false), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Connected)), Some(true)),
+            ("startup check: signed out", Who::Both, Some(true), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::SignedOut)), Some(false)),
+            ("startup check: no answer", Who::Both, Some(true), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Failed)), Some(true)),
+            ("startup check: Claude Code missing", Who::Both, Some(false), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Unavailable)), Some(false)),
+            ("browser sign-in: the connection changes, then Connected", Who::AccountOne, Some(false),
+                Box::new(|s, id, _| { s.set_connecting(true); s.set_connecting(false); s.sign_in_known(id, &AuthState::Connected) }), Some(true)),
+            ("browser sign-in: Connected, no record yet", Who::Added, None, Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Connected)), Some(true)),
+            ("browser sign-in: Connected after signed out", Who::Added, Some(false), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Connected)), Some(true)),
+            ("browser sign-in: stopped before it finished", Who::Both, Some(false), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Cancelled)), Some(false)),
+            ("usage read: a reading", Who::Both, Some(false), Box::new(|s, id, at| record(s, id, |r| r.accept(live(10.).windows, at))), Some(true)),
+            ("usage read: streamed by the lease", Who::Both, Some(false), Box::new(|s, id, at| record(s, id, |r| r.observe(&live(10.).windows, at))), Some(true)),
+            ("usage read: signed out", Who::Both, Some(true), Box::new(read_as(ReadError::SignedOut)), Some(false)),
+            ("usage read: signed in without limits", Who::Both, Some(false), Box::new(read_as(ReadError::SignedInNoLimits)), Some(true)),
+            ("usage read: no answer", Who::Both, Some(true), Box::new(read_as(ReadError::Failed)), Some(true)),
+            ("usage read: unreadable", Who::Both, Some(true), Box::new(read_as(ReadError::Malformed)), Some(true)),
+            ("usage read: no figures", Who::Both, Some(false), Box::new(read_as(ReadError::NoReading)), Some(false)),
+            ("usage read: no limits, auth status silent", Who::Both, Some(true), Box::new(read_as(ReadError::Unsupported)), Some(true)),
+            ("account switch: the other account is put in use", Who::Both, Some(true),
+                Box::new(|s, id, at| { let o = other(s, id); record(s, &o, |r| r.accept(live(10.).windows, at)); s.use_account_first(&o).unwrap(); }), Some(true)),
+            ("weekly reset used: the reading is forgotten", Who::AccountOne, Some(true), Box::new(|s, _, _| s.forget_reading()), Some(true)),
+            ("sign-out: Remove", Who::Added, Some(true), Box::new(|s, id, _| { s.remove_account(id).unwrap(); }), None),
+        ];
+        let mut failures = Vec::new();
+        for (place, who, prior, event, want) in &rows {
+            for one in [true, false] {
+                if (*who == Who::AccountOne && !one) || (*who == Who::Added && one) { continue; }
+                let root = Scratch::new();
+                let service = Service::open(root.path()).unwrap();
+                let work = service.accounts.add("Work").unwrap();
+                let id = if one { crate::claude_accounts::ACCOUNT_ONE.to_string() } else { work.id.clone() };
+                let now = crate::util::now_millis();
+                match prior {
+                    Some(false) => record(&service, &id, |r| r.empty(ReadError::SignedOut, now)),
+                    Some(true) => record(&service, &id, |r| r.empty(ReadError::SignedInNoLimits, now)),
+                    None => {}
+                }
+                event(&service, &id, now + 1);
+                let after = verdict(&service, &id);
+                let after_failed = if service.accounts.folder(&id).is_some() || one {
+                    record(&service, &id, |r| r.empty(ReadError::Failed, now + 2));
+                    verdict(&service, &id)
+                } else { after };
+                if after != *want || after_failed != *want {
+                    failures.push(format!("{place} (account {id}): from {prior:?}, want {want:?}, got {after:?}, then {after_failed:?} after a failed read"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{} place(s) do not keep the sign-in:\n{}", failures.len(), failures.join("\n"));
     }
 
     #[test]
