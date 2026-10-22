@@ -1533,14 +1533,34 @@ fn stop_own(handle: &dyn TurnCancel, commands: &[crate::steering::OwnCommand], k
     outcomes
 }
 
-/// Does the command's description name this job's obligation_id? The whole id, never a part
-/// of a longer one ("obligation-7" is not in "obligation-70").
-fn names_job(command: &crate::steering::OwnCommand, record: &assignment::Assignment) -> bool {
+/// Where the command's description first names this job's obligation_id: the whole id, never
+/// a part of a longer one ("obligation-7" is not in "obligation-70").
+fn first_mention(command: &crate::steering::OwnCommand, record: &assignment::Assignment) -> Option<usize> {
     let (text, wanted) = (command.description.as_str(), record.obligation_id.as_str());
     let part_of_id = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    !wanted.is_empty() && text.match_indices(wanted).any(|(at, _)| {
+    if wanted.is_empty() {
+        return None;
+    }
+    text.match_indices(wanted).map(|(at, _)| at).find(|&at| {
         !part_of_id(text[..at].chars().next_back()) && !part_of_id(text[at + wanted.len()..].chars().next())
     })
+}
+
+/// The job whose obligation_id the command's description names FIRST, the one rich.md and
+/// stu.md tell the model to begin it with; a job it mentions later ("check A's output") is
+/// not its owner (review rv-20261022T155431Z-bc0b2065-3075#1). None when it names no job.
+fn owner<'a>(command: &crate::steering::OwnCommand, records: &'a [assignment::Assignment]) -> Option<&'a assignment::Assignment> {
+    records.iter().filter_map(|r| first_mention(command, r).map(|at| (at, r))).min_by_key(|(at, _)| *at).map(|(_, r)| r)
+}
+
+/// Is this job the command's owner (see [`owner`])?
+fn names_job(command: &crate::steering::OwnCommand, records: &[assignment::Assignment], job: &assignment::Assignment) -> bool {
+    owner(command, records).is_some_and(|r| r.obligation_id == job.obligation_id)
+}
+
+/// Does the command name another job than this one first?
+fn names_other(command: &crate::steering::OwnCommand, records: &[assignment::Assignment], job: &assignment::Assignment) -> bool {
+    owner(command, records).is_some_and(|r| r.obligation_id != job.obligation_id)
 }
 
 /// Which of Rich's own running commands are job `id`'s, while he runs the turn that gave it:
@@ -1553,8 +1573,8 @@ fn desk_commands(records: &[assignment::Assignment], id: &str, commands: &[crate
     commands
         .iter()
         .filter(|c| c.started_at_ms >= job.registered_at_ms)
-        .filter(|c| names_job(c, job)
-            || (!others.iter().any(|r| names_job(c, r)) && !same_turn(c.started_at_ms)))
+        .filter(|c| names_job(c, records, job)
+            || (!names_other(c, records, job) && !same_turn(c.started_at_ms)))
         .map(|c| c.key().to_string())
         .collect()
 }
@@ -1570,7 +1590,6 @@ fn desk_commands(records: &[assignment::Assignment], id: &str, commands: &[crate
 fn job_commands(records: &[assignment::Assignment], id: &str, commands: &[crate::steering::OwnCommand]) -> Vec<String> {
     use AssignmentState::{Blocked, WaitingForQuota, WaitingForScreen};
     let Some(job) = records.iter().find(|r| r.id == id) else { return Vec::new() };
-    let names = names_job;
     let another_could_run = |at: u64| {
         records.iter().any(|r| {
             let waiting_since_before = matches!(r.reported_state(), Some(Blocked | WaitingForScreen | WaitingForQuota))
@@ -1581,10 +1600,10 @@ fn job_commands(records: &[assignment::Assignment], id: &str, commands: &[crate:
     commands
         .iter()
         .filter(|command| {
-            if names(command, job) {
+            if names_job(command, records, job) {
                 return true;
             }
-            !records.iter().any(|r| r.id != id && names(command, r))
+            !names_other(command, records, job)
                 && command.started_at_ms >= job.registered_at_ms
                 && !another_could_run(command.started_at_ms)
         })
@@ -3792,6 +3811,26 @@ mod tests {
         let all = assignment::read_all(&h.state, "depot", "thread-one").unwrap();
         assert_eq!(desk_commands(&all, &a.id, &commands), vec!["a-foreground".to_string()]);
         assert_eq!(desk_commands(&all, &b.id, &commands), vec!["b-background".to_string()]);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A command is the job's whose ID its description names first** (review
+    /// rv-20261022T155431Z-bc0b2065-3075#1): B's command, begun with B's ID as rich.md and
+    /// stu.md say, that mentions A's ID later ("check A's output") is B's, in both selectors.
+    #[test]
+    fn a_command_mentioning_another_job_later_stays_with_the_job_it_begins_with() {
+        let h = harness(0);
+        let a = assignment::register(&h.state, &registration(&h)).unwrap();
+        let b = assignment::register(&h.state, &Registration { obligation_id: "obligation-b".into(), ..registration(&h) }).unwrap();
+        let all = assignment::read_all(&h.state, "depot", "thread-one").unwrap();
+        let commands = vec![crate::steering::OwnCommand { tool_use_id: String::new(), task_id: "B-foreground".into(),
+            started_at_ms: u64::MAX, description: "obligation-b: validate the output produced by obligation-7".into() }];
+        for (who, selector) in [("Stu", job_commands as fn(&[assignment::Assignment], &str, &[crate::steering::OwnCommand]) -> Vec<String>),
+            ("Rich", desk_commands)] {
+            assert_eq!(selector(&all, &a.id, &commands), Vec::<String>::new(), "{who}: Stop A took B's command");
+            assert_eq!(selector(&all, &b.id, &commands), vec!["B-foreground".to_string()], "{who}: Stop B missed its own command");
+        }
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
