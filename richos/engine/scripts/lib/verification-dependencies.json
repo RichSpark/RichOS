@@ -16141,8 +16141,8 @@
     },
     "scripts/lib/merge-verification-pins.test.sh": {
       "source": "scripts/lib/merge-verification-pins.test.sh",
-      "sha256": "84279a45ed2a4da86eaa233aec553c7927f231ec57ef1b99870b031c576920e8",
-      "evidence": "Reviewed 2026-10-05: builds a private repository under TMPDIR with its own fixture maps, readers and git configuration (GIT_CONFIG_GLOBAL in the sandbox, no system config), runs the repository's install.sh and the merge driver there, and reads nothing from orchestration.config.",
+      "sha256": "7222077f5782f6bbba56e9ea01a7cbc1f630a33a29a9642bfafc9ef7d9b4ecb2",
+      "evidence": "Reviewed 2026-10-05: builds a private repository under TMPDIR with its own fixture maps, readers and git configuration (GIT_CONFIG_GLOBAL in the sandbox, no system config), runs the repository's install.sh and the merge driver there, and reads nothing from orchestration.config. Renewed 2026-10-22 (zach-opus-folderfiles3): case V4 adds literal fixture notes and edges to the same sandbox map and merges two more sandbox branches; nothing new is read.",
       "keys": [],
       "edges": []
     },

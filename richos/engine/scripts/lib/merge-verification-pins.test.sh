@@ -17,6 +17,9 @@
 #       sides changed and git merged by content (neither side's pin is right for it).
 #   V2  a real conflict (a non-pin value both sides changed differently) is still a conflict,
 #       with git's markers: the driver never decides between two reviews.
+#   V4  two renewals that each changed one reader, renewed its pin, added an edge and appended a
+#       sentence to its evidence note merge by themselves, both sentences and both edges kept:
+#       the exact entry that stopped the folderfiles2 land on 2026-10-22.
 #   V3  install.sh --check names the driver, and --uninstall removes it.
 #
 # Exit 0 = all cases pass; exit 1 = at least one failure.
@@ -140,6 +143,64 @@ if [ "$V2RC" != 0 ] && grep -q '^<<<<<<<' "$R/richos/engine/scripts/lib/verifica
     ok "V2  a non-pin value both sides changed differently is still a conflict, with git's markers"
 else
     bad "V2  merge rc=$V2RC — two reviews were decided between without a person" "$(tail -3 "$SANDBOX/v2.out" | tr '\n' ' ')"
+fi
+git -C "$R" merge --abort >/dev/null 2>&1
+
+# --- V4 --------------------------------------------------------------------
+# The conflict that stopped the land of cc/zach-opus-folderfiles2 on 2026-10-22, entry
+# nodes/mega-lander/app.py#land-lock-fixtures: each branch changed the pinned reader, renewed its
+# pin, added an edge and appended its own renewal sentence to the same evidence note. The three
+# notes and edge lists below are that entry's merge base, ours and theirs, verbatim.
+note() {
+    python3 - "$R/richos/engine/scripts/lib/verification-dependencies.json" "$1" <<'PY'
+import json, sys
+BASE = ("Fixture calls only land_lock and _live_fence_lease. Full local closure reviewed: lock metadata, flock, process liveness and repository lease/history reads. Workspaces and ECS imports are bound; ECS runtime operations are not invoked. Renewed 2026-10-15 (echo-opus-hire57): the team tool's description text only; nothing read changed. Renewed 2026-10-18: retired-execution reconciliation and two desktop dispatch cases changed elsewhere in these files; this selected fixture closure and setUp are unchanged.")
+OURS = BASE + (" Renewed 2026-10-21 (zach-opus-folderfiles1): module load now also loads instruction_files.py by fixed path (edge added); prepare changed, outside this fixture closure.")
+THEIRS = BASE + (" Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): land_lock also calls _take_fence_lease and _release_fence_lease, which load scripts/lib/operator_fences.py by fixed path and, where the fixture repository's launcher has the fence on, write and remove the lease file in the launcher's home under the same flock. No configuration read is added. Renewed 2026-10-21 (zach-opus-landgate1, review rv-20261021T072931Z-a4453faa-ffff finding 1): where the fixture repository's launcher names a lease home other than this land's lock home (another Claude account's CLAUDE_CONFIG_DIR, RICHOS_LAND_LOCKS_DIR in the fixture), _take_fence_lease also takes the launcher's own lock file and reads its lease there, within RICHOS_LAND_LOCK_TIMEOUT; both homes are private to the fixture. No configuration key is added. Renewed 2026-10-21 (zach-opus-landgate1, review f79aeabf finding 1): land_merge's Git environment changed; this closure does not reach it.")
+EDGES = [{"to": "mega-lander/workspaces.py#land-record-readers"}, {"to": "mega-lander/workspaces.py#liveness-readers"},
+         {"to": "ecs/core/ecs_core.py#load"}, {"to": "ecs/adapters/app.py#load"}]
+side = sys.argv[2]
+p = sys.argv[1]; d = json.load(open(p)); row = d["nodes"]["scripts/a.sh"]
+row["evidence"] = {"base": BASE, "ours": OURS, "theirs": THEIRS, "expected": OURS + THEIRS[len(BASE):]}[side]
+row["edges"] = EDGES + {"base": [], "ours": [{"to": "scripts/lib/instruction_files.py"}],
+                        "theirs": [{"to": "scripts/lib/operator_fences.py#runtime"}],
+                        "expected": [{"to": "scripts/lib/instruction_files.py"}, {"to": "scripts/lib/operator_fences.py#runtime"}]}[side]
+if side == "expected":
+    print(json.dumps({"evidence": row["evidence"], "edges": row["edges"]}, sort_keys=True))
+else:
+    open(p, "w").write(json.dumps(d, indent=2) + "\n")
+PY
+}
+git -C "$R" checkout -q -f main
+note base
+git -C "$R" commit -qam "main: the note both branches extend"
+git -C "$R" switch -q -c left4
+sed -i.bak 's/^line three$/line three, left4/' "$R/richos/engine/scripts/a.sh"
+rm -f "$R"/richos/engine/scripts/*.bak
+write_maps; note theirs
+git -C "$R" commit -qam "left4: a.sh, its pin, an edge and a renewal sentence"
+git -C "$R" switch -q main
+sed -i.bak 's/^line five$/line five, main4/' "$R/richos/engine/scripts/a.sh"
+rm -f "$R"/richos/engine/scripts/*.bak
+write_maps; note ours
+git -C "$R" commit -qam "main: a.sh, its pin, another edge and another renewal sentence"
+# As on 2026-10-22, the checked-out side (main here, the folderfiles2 branch then) carries the
+# "ours" note and the merged-in side the "theirs" note: ours first, then theirs' addition.
+WANT="$(note expected)"
+( cd "$R" && git merge --no-ff --no-edit left4 ) >"$SANDBOX/v4.out" 2>&1
+V4RC=$?
+GOT="$(python3 - "$R" 2>/dev/null <<'PY'
+import hashlib, json, os, sys
+root = sys.argv[1]
+row = json.load(open(os.path.join(root, "richos/engine/scripts/lib/verification-dependencies.json")))["nodes"]["scripts/a.sh"]
+fresh = row["sha256"] == hashlib.sha256(open(os.path.join(root, "richos/engine/scripts/a.sh"), "rb").read()).hexdigest()
+print(json.dumps({"evidence": row["evidence"], "edges": row["edges"]}, sort_keys=True) if fresh else "stale pin")
+PY
+)" || GOT="not JSON (conflict markers left)"
+if [ "$V4RC" = 0 ] && [ -n "$WANT" ] && [ "$GOT" = "$WANT" ]; then
+    ok "V4  two renewals that each appended a sentence to one note merge by themselves: both sentences and both edges kept, the pin equals the merged file (the 2026-10-22 folderfiles2 conflict)"
+else
+    bad "V4  merge rc=$V4RC; note, edges and pin: ${GOT:0:60}" "$(tail -3 "$SANDBOX/v4.out" | tr '\n' ' ')"
 fi
 git -C "$R" merge --abort >/dev/null 2>&1
 
