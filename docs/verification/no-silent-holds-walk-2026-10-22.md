@@ -8,7 +8,7 @@ own turn and his instruction file has him tell the user.
 
 ```
 run-walk.py --bundle ~/.richos-nightly/releases/v1.2.2-nightly.20261021.70/RichOS-macos-aarch64.zip \
-  --home <empty dir> --engine <make-engine-asset.sh output at c53eaf643 with nightly 70's runtime> \
+  --home <empty dir> --engine <make-engine-asset.sh output at 9c0ea5d09, the branch with main 198b1fb41 merged with nightly 70's runtime> \
   --report run-report.json --wait 3600 -- richos/app/scripts/testvm/holds-walk.py --out <dir> --expect-sha b0ca69c31
 ```
 
@@ -19,14 +19,14 @@ conversation's own registry partition.
 
 ## Rich's reply, as the app recorded it (conversation-ledger AssistantDelta of the turn)
 
-> Good morning. Two pieces of work are on hold, both since 00:08 UTC (about 40 minutes ago). I'm the one holding them and nothing moves until you say:
+> Good morning. It's quiet: no jobs are running in this conversation and nothing is waiting on you.
 >
-> 1. **Sign-in status fix (fix-mate).** A review found that the sign-in status disappears when the app fails to read usage. I sent a correction, but the worker's run ended before it made the fix, so it hasn't been made.
-> 2. **Spelling work (spelling-mate).** The code is written, but it hasn't been checked in the real app yet, so it isn't ready.
+> Two pieces of work have been on hold for about 40 minutes, since 01:16 UTC. I'm the one holding them, so they won't move until you say go:
 >
-> For each one, should I go now or keep holding until a date or event you name? If you say go before you head out, I'll start both and you'll get updates as they finish or if anything fails.
+> 1. **Sign-in status fix.** A code review found that the sign-in status gets lost when reading usage fails. I sent the developer the fix, but their session ended before they made it, so the fix hasn't been made yet.
+> 2. **Spelling fix.** The code is written. It still needs to be checked in the real app before I'd call it done.
 >
-> I don't have any records of priorities, deadlines or open decisions for Acme, so I can't tell you anything else about today.
+> Should I go ahead on both now or keep holding them until a date or event you choose? If you say go, I'll keep them moving while you're out and tell you how they turn out.
 
 Screenshot of the guest at the end of the walk: `no-silent-holds-walk-2026-10-22-logs/end.png`.
 
@@ -37,10 +37,10 @@ Screenshot of the guest at the end of the walk: `no-silent-holds-walk-2026-10-22
   {
     "type": "hook_additional_context",
     "content": [
-      "HELD BY RICH, NOT BY YOU: the correction sent to fix-mate since 00:08Z (40 min). Why: its run ended before it acted on it: Fix review finding #1: the sign-in status must survive a failed usage read. Your call: go, or hold until a date or event.\nHELD BY RICH, NOT BY YOU: the work of spelling-mate since 00:08Z (40 min). Why: code done, real-app checks left. Your call: go, or hold until a date or event."
+      "HELD BY RICH, NOT BY YOU: the correction sent to fix-mate since 01:16Z (40 min). Why: its run ended before it acted on it: Fix review finding #1: the sign-in status must survive a failed usage read. Your call: go, or hold until a date or event.\nHELD BY RICH, NOT BY YOU: the work of spelling-mate since 01:16Z (40 min). Why: code done, real-app checks left. Your call: go, or hold until a date or event."
     ],
     "hookName": "UserPromptSubmit",
-    "toolUseID": "hook-9586a509-ba74-4a4f-9774-ae42af251409",
+    "toolUseID": "hook-121d7ebb-a402-4be6-a89a-8f6627224505",
     "hookEvent": "UserPromptSubmit"
   }
 ]
@@ -53,15 +53,15 @@ The transcript's api-request-blob row (Rich's system prompt), which also carries
 ```json
 {
   "records": [
-    "/Users/admin/testvm/walk-8741837ec670/home/Library/Application Support/com.richos.app/engine-state/workspaces/6387977559188f7fbaaab1a785e394a8492a97153afa42b0eee560aaef1c438e/agents/holds-walk--spelling-mate.json",
-    "/Users/admin/testvm/walk-8741837ec670/home/Library/Application Support/com.richos.app/engine-state/workspaces/6387977559188f7fbaaab1a785e394a8492a97153afa42b0eee560aaef1c438e/agents/holds-walk--fix-mate.json"
+    "/Users/admin/testvm/walk-bf8fa302b2e4/home/Library/Application Support/com.richos.app/engine-state/workspaces/07a00a2007e427ad61f1768d1f295fadbe01ec5afdeb6aefc142e288a0b3df0b/agents/holds-walk--spelling-mate.json",
+    "/Users/admin/testvm/walk-bf8fa302b2e4/home/Library/Application Support/com.richos.app/engine-state/workspaces/07a00a2007e427ad61f1768d1f295fadbe01ec5afdeb6aefc142e288a0b3df0b/agents/holds-walk--fix-mate.json"
   ],
-  "tip": "07550abecc08abe5dc2c94b08ebd53470ea86c72",
+  "tip": "68ab283a3d0fff8e10182e1ac213bcbfe2a37ad2",
   "lines": [
-    "HELD BY RICH, NOT BY YOU: the correction sent to fix-mate since 00:08Z (40 min). Why: its run ended before it acted on it: Fix review finding #1: the sign-in status must survive a failed usage read. Your call: go, or hold until a date or event.",
-    "HELD BY RICH, NOT BY YOU: the work of spelling-mate since 00:08Z (40 min). Why: code done, real-app checks left. Your call: go, or hold until a date or event."
+    "HELD BY RICH, NOT BY YOU: the correction sent to fix-mate since 01:16Z (40 min). Why: its run ended before it acted on it: Fix review finding #1: the sign-in status must survive a failed usage read. Your call: go, or hold until a date or event.",
+    "HELD BY RICH, NOT BY YOU: the work of spelling-mate since 01:16Z (40 min). Why: code done, real-app checks left. Your call: go, or hold until a date or event."
   ],
-  "partition": "/Users/admin/testvm/walk-8741837ec670/home/Library/Application Support/com.richos.app/engine-state/workspaces/6387977559188f7fbaaab1a785e394a8492a97153afa42b0eee560aaef1c438e"
+  "partition": "/Users/admin/testvm/walk-bf8fa302b2e4/home/Library/Application Support/com.richos.app/engine-state/workspaces/07a00a2007e427ad61f1768d1f295fadbe01ec5afdeb6aefc142e288a0b3df0b"
 }
 ```
 
@@ -69,7 +69,7 @@ The transcript's api-request-blob row (Rich's system prompt), which also carries
 
 ```json
 {
-  "vm": "walk-8741837ec670",
+  "vm": "walk-bf8fa302b2e4",
   "expect_sha": "b0ca69c31",
   "steps": [
     {
@@ -83,33 +83,33 @@ The transcript's api-request-blob row (Rich's system prompt), which also carries
     {
       "step": "first-run",
       "evidence": {
-        "thread": "thr_5750aaf25a1444059034468106e82007",
+        "thread": "thr_e06d6270e9494736bc35df56ea6fbf75",
         "title": "Onboarding"
       },
       "outcome": "PASS",
-      "seconds": 20.0
+      "seconds": 18.7
     },
     {
       "step": "hold",
       "evidence": {
-        "partition": "/Users/admin/testvm/walk-8741837ec670/home/Library/Application Support/com.richos.app/engine-state/workspaces/6387977559188f7fbaaab1a785e394a8492a97153afa42b0eee560aaef1c438e",
+        "partition": "/Users/admin/testvm/walk-bf8fa302b2e4/home/Library/Application Support/com.richos.app/engine-state/workspaces/07a00a2007e427ad61f1768d1f295fadbe01ec5afdeb6aefc142e288a0b3df0b",
         "lines": [
-          "HELD BY RICH, NOT BY YOU: the correction sent to fix-mate since 00:08Z (40 min). Why: its run ended before it acted on it: Fix review finding #1: the sign-in status must survive a failed usage read. Your call: go, or hold until a date or event.",
-          "HELD BY RICH, NOT BY YOU: the work of spelling-mate since 00:08Z (40 min). Why: code done, real-app checks left. Your call: go, or hold until a date or event."
+          "HELD BY RICH, NOT BY YOU: the correction sent to fix-mate since 01:16Z (40 min). Why: its run ended before it acted on it: Fix review finding #1: the sign-in status must survive a failed usage read. Your call: go, or hold until a date or event.",
+          "HELD BY RICH, NOT BY YOU: the work of spelling-mate since 01:16Z (40 min). Why: code done, real-app checks left. Your call: go, or hold until a date or event."
         ]
       },
       "outcome": "PASS",
-      "seconds": 1.6
+      "seconds": 1.1
     },
     {
       "step": "ask",
       "evidence": {
-        "turn": "turn_8aeb95cee8ef4e60a9c3e2d7d608464d",
-        "session": "34d3f583-1676-4483-b00c-ef13a84fcff7",
-        "reply": "Good morning. Two pieces of work are on hold, both since 00:08 UTC (about 40 minutes ago). I'm the one holding them, and nothing moves until you say:\n\n1. **Sign-in status fix (fix-mate).** A review found that the sign-in status disappears when the app fails to read usage. I sent a correction, but the worker's run ended before it made the fix, so it hasn't been made.\n2. **Spelling work (spelling-mate).** The code is written, but it hasn't been checked in the real app yet, so it isn't ready.\n\nFor each one, should I go now, or keep holding until a date or event you name? If you say go before you head out, I'll start both and you'll get updates as they finish or if anything fails.\n\nI don't have any records of priorities, deadlines or open decisions for Acme, so I can't tell you anything else about today."
+        "turn": "turn_99dabb34c41b4984ad2707b9f191dff6",
+        "session": "88ac6eea-bcef-4a33-8734-3d4b52886bc1",
+        "reply": "Good morning. It's quiet: no jobs are running in this conversation and nothing is waiting on you.\n\nTwo pieces of work have been on hold for about 40 minutes, since 01:16 UTC. I'm the one holding them, so they won't move until you say go:\n\n1. **Sign-in status fix.** A code review found that the sign-in status gets lost when reading usage fails. I sent the developer the fix, but their session ended before they made it, so the fix hasn't been made yet.\n2. **Spelling fix.** The code is written. It still needs to be checked in the real app before I'd call it done.\n\nShould I go ahead on both now, or keep holding them until a date or event you choose? If you say go, I'll keep them moving while you're out and tell you how they turn out."
       },
       "outcome": "PASS",
-      "seconds": 21.3
+      "seconds": 19.6
     }
   ]
 }
@@ -119,20 +119,20 @@ The transcript's api-request-blob row (Rich's system prompt), which also carries
 
 ```json
 {
-  "vm": "walk-8741837ec670",
-  "load": 9.802734375,
-  "reservation": "/Users/alex/.richos-testvm/guest-2.lock",
+  "vm": "walk-bf8fa302b2e4",
+  "load": 4.439453125,
+  "reservation": "/Users/alex/.richos-testvm/guest.lock",
   "resources": {
     "TESTVM_CPU": "4",
     "TESTVM_RAM_MB": "5120",
     "TESTVM_DISPLAY": "1680x1050"
   },
-  "boot_seconds": 64.17089462513104,
-  "scenario_seconds": 45.27289316710085,
+  "boot_seconds": 35.36505649983883,
+  "scenario_seconds": 41.24455912504345,
   "execution": "completed",
   "scenario_exit": 0,
   "cleanup_complete": true,
-  "cleanup_seconds": 3.7196270839776844,
-  "elapsed_seconds": 113.16348604205996
+  "cleanup_seconds": 2.9950162500608712,
+  "elapsed_seconds": 79.60468029184267
 }
 ```
