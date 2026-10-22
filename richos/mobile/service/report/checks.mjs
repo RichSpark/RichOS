@@ -84,49 +84,13 @@ export async function checkCreate(data, now) {
     installationId: installation_id.toLowerCase(), appVersion: app_version, approvedAt: approved_at, title, body, manifest: manifest || [] } };
 }
 
-// The words GitHub shows: each backslash escape read as its mark, and the zero-width space after
-// every @ removed, so the secret, email and path checks see what a reader sees.
-const shown = text => text.replace(/\\([\\`*_[\]<>#|~&+=.)!-])/g, '$1').replace(/​/g, '');
-
-const SECRETS = [
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/, /\bgithub_pat_[A-Za-z0-9_]{20,}/, /\bxox[abposr]-[A-Za-z0-9-]{10,}/,
-  /\b(AKIA|ASIA)[0-9A-Z]{16}\b/, /\bsk-ant-[A-Za-z0-9_-]{10,}/, /\bsk-[A-Za-z0-9_-]{20,}/,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\./,
-  /\b(authorization|proxy-authorization|cookie|set-cookie)\s*:\s*(?!\[)\S/i, /\bbearer\s+[A-Za-z0-9._~+/-]{16,}/i,
-  /\b(api[_-]?key|access[_-]?token|secret|password|passwd)\s*[=:]\s*(?!\[)[^\s]{8,}/i,
-];
-const EMAIL_DOMAIN = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/;
-const LOCAL_CHAR = /[A-Za-z0-9._%+-]/;
-// Each @ is examined in a bounded window, so a 60,000-byte line costs linear time.
-function* emails(words) {
-  for (let at = words.indexOf('@'); at >= 0; at = words.indexOf('@', at + 1)) {
-    let start = at;
-    while (start > 0 && at - start < 64 && LOCAL_CHAR.test(words[start - 1])) start--;
-    const domain = EMAIL_DOMAIN.exec(words.slice(at + 1, at + 254));
-    if (start < at && domain) yield words.slice(start, at + 1) + domain[0];
-  }
-}
-const ALLOWED_EMAILS = new Set(['support@richos.ceo']);
-const HOME_PATH = /\/Users\/(?!Shared(\/|\b)|\[)[^/\s]+/;
-
 const DETAILS = {
   control: 'It contains an invisible control character.',
   footer: 'Its last line is not the RichDoctor footer with this report ID.',
   links: 'Its screenshot lines before the footer do not match its screenshots.',
   markup: 'It contains a link, picture or formatting mark that was not made safe.',
   mention: 'It contains an @ mention.',
-  secret: 'It contains something that looks like a password, key or token.',
-  email: 'It contains an email address.',
-  home_path: 'It contains a folder path that shows a user name.',
 };
-
-function privateKind(text, secret) {
-  const words = shown(text);
-  if (words.includes(secret) || SECRETS.some(pattern => pattern.test(words))) return 'secret';
-  for (const email of emails(words)) if (!ALLOWED_EMAILS.has(email.toLowerCase())) return 'email';
-  if (HOME_PATH.test(words)) return 'home_path';
-  return null;
-}
 
 // An unescaped <, [ or ] (an even number of backslashes before it) can start HTML, a link or a
 // picture. An @ without the zero-width space after it is a mention.
@@ -143,12 +107,11 @@ function markupKind(line) {
 }
 
 // The first problem, as { kind, item, detail }, or null. `item` names a place, never the words.
+// Only structure: privacy is the user's Claude's review and the user's approval, never vetoed here.
 // `count` screenshots need their exact lines, linking to `origin`, just before the footer.
-export function contentProblem({ title, body, reportId, secret, origin = '', count = 0 }) {
+export function contentProblem({ title, body, reportId, origin = '', count = 0 }) {
   const reject = (kind, item) => ({ kind, item, detail: DETAILS[kind] });
   if (/[\u0000-\u001F\u007F]/.test(title)) return reject('control', 'title');
-  const titleKind = privateKind(title, secret);
-  if (titleKind) return reject(titleKind, 'title');
   const lines = body.split('\n');
   for (let n = 0; n < lines.length; n++) {
     const line = lines[n];
@@ -161,11 +124,8 @@ export function contentProblem({ title, body, reportId, secret, origin = '', cou
     if (lines[n] !== links[i]) return reject('links', `line ${Math.max(n, 0) + 1}`);
   }
   for (let n = 0; n < lines.length; n++) {
-    const kind = markupKind(lines[n]) || privateKind(lines[n], secret);
+    const kind = markupKind(lines[n]);
     if (kind) return reject(kind, `line ${n + 1}`);
   }
-  // A token split across lines is still a token: the whole body is checked once more.
-  const whole = privateKind(body, secret);
-  if (whole) return reject(whole, 'body');
   return null;
 }
