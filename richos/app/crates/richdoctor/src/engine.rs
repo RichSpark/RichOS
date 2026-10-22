@@ -434,26 +434,47 @@ impl Engine {
     }
 
     /// `Err(None)`: canceled. `Err(Some(f))`: Claude Code could not help.
+    ///
+    /// The queued screenshots go with this operation, and Claude has them only once it
+    /// completed: an operation that fails or is canceled ends its process, so they are queued
+    /// again for the retried or resumed investigation (review rv-20261022T205540Z-920a9316-1a63#2).
     fn operation(&self, message: &str) -> Result<String, Option<Failure>> {
+        let pictures = std::mem::take(&mut self.inner.lock().unwrap().pictures);
+        let outcome = self.operation_with(message, &pictures);
+        let mut inner = self.inner.lock().unwrap();
+        let inner = &mut *inner;
+        // A screenshot removed or replaced meanwhile, or one of another report (ids are unique),
+        // is not in this draft: it is neither marked nor queued again.
+        let Some(d) = inner.draft.as_mut() else { return outcome };
+        let ours: Vec<(String, String, String)> = pictures.into_iter().filter(|p| d.screenshots.iter().any(|s| s.id == p.0)).collect();
+        if ours.is_empty() {
+            return outcome;
+        }
+        if outcome.is_ok() {
+            for s in d.screenshots.iter_mut().filter(|s| ours.iter().any(|p| p.0 == s.id)) {
+                s.sent_to_claude = true;
+            }
+            self.save(inner);
+        } else if !d.without_ai {
+            // Ahead of any approved while it ran, in their order.
+            let mut queued: Vec<(String, String, String)> = ours.into_iter().filter(|p| !inner.pictures.iter().any(|q| q.0 == p.0)).collect();
+            queued.append(&mut inner.pictures);
+            inner.pictures = queued;
+        }
+        outcome
+    }
+
+    fn operation_with(&self, message: &str, picture: &[(String, String, String)]) -> Result<String, Option<Failure>> {
         let Some(dir) = self.draft_dir() else { return Err(Some(Failure::Ended)) };
         let Some(bin) = self.env.claude.clone() else { return Err(Some(Failure::NotInstalled)) };
-        let (op, picture, resumed) = {
+        let (op, resumed) = {
             let mut inner = self.inner.lock().unwrap();
             inner.operation += 1;
             inner.last_message = Some(message.to_string());
-            let pictures = std::mem::take(&mut inner.pictures);
-            if !pictures.is_empty() {
-                if let Some(d) = inner.draft.as_mut() {
-                    for s in d.screenshots.iter_mut().filter(|s| pictures.iter().any(|p| p.0 == s.id)) {
-                        s.sent_to_claude = true;
-                    }
-                }
-                self.save(&mut inner);
-            }
-            (inner.operation, pictures, inner.resumed)
+            (inner.operation, inner.resumed)
         };
         mcp::write_operation(&dir, op).ok();
-        let pictures: Vec<richos_core::bug_report::Picture> = picture.into_iter().map(|(_, base64, media_type)| richos_core::bug_report::Picture { media_type, base64 }).collect();
+        let pictures: Vec<richos_core::bug_report::Picture> = picture.iter().map(|(_, base64, media_type)| richos_core::bug_report::Picture { media_type: media_type.clone(), base64: base64.clone() }).collect();
         let mut slot = self.session.lock().unwrap();
         // A process stopped since its last turn (another report opened, the window closed, Cancel)
         // has no stopper any more: it is gone, and this operation starts a fresh one.
@@ -2143,6 +2164,35 @@ mod tests {
         e.close();
         assert!(sent.contains("RichOS fails with this JSON"), "the description reached the stand-in: {sent}");
         assert!(!sent.contains(&token), "{sent}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_screenshot_sent_with_a_failed_operation_goes_with_the_retry() {
+        let root = scratch("retry-images");
+        let (e, events) = engine_at(&root.join("store"), Some(fake_cli_asking(&root)));
+        e.start("RichOS closes before its window opens".into(), true, false).unwrap();
+        wait_for(&events, &["question"]);
+        events.lock().unwrap().clear();
+        e.answer("Just now".into());
+        wait_for(&events, &["question", "ai-failed"]);
+        events.lock().unwrap().clear();
+        e.use_image(&util::base64_std(&png(9)), 0, false).unwrap();
+        // Claude Code fails the turn that carries the screenshot (a provider 503).
+        let fail = e.env().store.work_dir().join("fail-next");
+        std::fs::write(&fail, "").unwrap();
+        e.answer("The screenshot shows it".into());
+        wait_for(&events, &["ai-failed"]);
+        std::fs::remove_file(&fail).unwrap();
+        events.lock().unwrap().clear();
+        e.retry();
+        wait_for(&events, &["question", "ai-failed"]);
+        let all = captured_all(&e);
+        e.close();
+        let images: Vec<usize> = all.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()["message"]["content"].as_array().map_or(0, |c| c.iter().filter(|v| v["type"] == "image").count())).collect();
+        assert_eq!(images.len(), 3, "first message, failed answer, retry: {images:?}");
+        assert_eq!(images[1], 1, "the failed attempt carried the screenshot");
+        assert_eq!(images[2], 1, "the retried investigation receives it again");
         std::fs::remove_dir_all(root).ok();
     }
 
