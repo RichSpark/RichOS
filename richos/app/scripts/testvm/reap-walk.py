@@ -414,15 +414,22 @@ class Walk(adopt.Walk):
             (folder / 'evidence.json').write_text(json.dumps(found, indent=2) + '\n')
         except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
             (folder / 'evidence.failed.txt').write_text('%s\n' % exc)
+        self.save_screen(folder)
+        return 'saved in %s: %s' % (folder, summarize(found, sent_ms))
+
+    def save_screen(self, folder):
+        """The guest's screen (screen.png) and its accessibility tree (ax-tree.txt) into folder.
+        A piece that cannot be read is written down as <piece>.failed.txt and never changes the
+        step's outcome."""
+        folder.mkdir(parents=True, exist_ok=True)
         try:
             command([HERE / 'shot.sh', self.vm, folder / 'screen.png'], 60)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
             (folder / 'screen.failed.txt').write_text('%s\n' % exc)
         try:
             (folder / 'ax-tree.txt').write_text(command([HERE / 'ax.sh', self.vm, 'tree'], 90))
         except Exception as exc:  # noqa: BLE001
             (folder / 'ax-tree.failed.txt').write_text('%s\n' % exc)
-        return 'saved in %s: %s' % (folder, summarize(found, sent_ms))
 
     def verdict(self, names, trigger_ms, bound_ms):
         time.sleep(bound_ms / 1000 + 1)
@@ -435,7 +442,18 @@ class Walk(adopt.Walk):
         model = self.a.model
         return relaunch(self.vm, environment={'ANTHROPIC_MODEL': model} if model else None)
 
-    def enter(self):
+    def enter(self, step):
+        """Into the walk's conversation after a relaunch. When a wait fails, the screen and its
+        tree are saved in OUT/<step>-enter-failed/ before the guest is gone: walk-8a771b3e8dee's
+        crash step failed in here after "Quit and stop the work" and kept neither."""
+        try:
+            self.enter_conversation()
+        except StepFailed as exc:
+            folder = self.out / ('%s-enter-failed' % step)
+            self.save_screen(folder)
+            raise StepFailed('%s\nthe screen and its tree are saved in %s' % (exc, folder)) from exc
+
+    def enter_conversation(self):
         # Every caller has just relaunched the app, and a launch with a company opens on the HOME
         # screen (asked-again-walk.py waits up to 90 s for it). Its door is waited for, not
         # checked once: checked before home was drawn, it was skipped, and the walk then waited
@@ -468,7 +486,7 @@ class Walk(adopt.Walk):
         # Leases started before the connection carry the old --add-dir list; start fresh ones.
         self.facts['app'] = self.relaunched()
         self.save()
-        self.enter()
+        self.enter('connect')
         return {'connected': self.company}
 
     def seed(self):
@@ -588,7 +606,7 @@ class Walk(adopt.Walk):
     def crash(self):
         self.facts['app'] = self.relaunched()
         self.save()
-        self.enter()
+        self.enter('crash')
         started = self.start('crash')
         names = started['names']
         pid = self.facts['app']['pid']
@@ -598,7 +616,7 @@ class Walk(adopt.Walk):
     def claude_crash(self):
         self.facts['app'] = self.relaunched()
         self.save()
-        self.enter()
+        self.enter('claude-crash')
         started = self.start('claude')
         names = started['names']
         mine = {r['name']: r['pgid'] for r in self.rows()

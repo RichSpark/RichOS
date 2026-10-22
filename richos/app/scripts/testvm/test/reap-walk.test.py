@@ -376,5 +376,75 @@ class NotStarted(unittest.TestCase):
             self.assertTrue((folder / 'ax-tree.txt').exists())
 
 
+class EnterFailed(unittest.TestCase):
+    """walk-8a771b3e8dee: after "Quit and stop the work" the crash step's relaunch failed inside
+    enter() ('AXButton "Onboarding" never appeared within 30 s') and kept no screen and no tree."""
+
+    def the_walk(self, root, on_screen):
+        """A walk whose screen shows exactly the (role, title) pairs in on_screen. The crumb read
+        (ax find --value) finds nothing; wait_for raises its own failure line at once."""
+        w = object.__new__(walk.Walk)
+        w.vm, w.out, w.facts = 'walk-test', root / 'out', {'thread_title': 'Onboarding'}
+        w.out.mkdir()
+        w.pressed = []
+        w.press = lambda title, role='AXButton', **k: w.pressed.append(title) or [{'clicked': True}]
+        w.ax = lambda *a, **k: []
+
+        def wait_for(title, role='AXButton', app=None, seconds=30):
+            if (role, title) not in on_screen:
+                raise walk.StepFailed(f'{role} "{title}" never appeared within {seconds} s')
+            return True
+        w.wait_for = wait_for
+        return w
+
+    def enter(self, w, step, shot_breaks=False):
+        def command(argv, timeout=30):
+            argv = list(map(str, argv))
+            if argv[0].endswith('shot.sh'):
+                if shot_breaks:
+                    raise walk.StepFailed('a black frame')
+                Path(argv[2]).write_bytes(b'\x89PNG')
+                return ''
+            self.assertEqual(argv[1:], ['walk-test', 'tree'])
+            return 'AXWindow "RichOS"\n  AXStaticText value="Acme / New conversation"\n'
+        saved, walk.command = walk.command, command
+        try:
+            with self.assertRaises(walk.StepFailed) as failed:
+                w.enter(step)
+        finally:
+            walk.command = saved
+        return str(failed.exception)
+
+    def test_the_row_never_appearing_saves_the_screen_and_tree_and_names_the_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            # Its door and composer appear; the conversation's crumb and row never do.
+            w = self.the_walk(Path(d), {('AXButton', 'Talk to Rich'), ('AXTextArea', 'Message to Rich')})
+            message = self.enter(w, 'crash')
+            folder = w.out / 'crash-enter-failed'
+            self.assertTrue(message.startswith('AXButton "Onboarding" never appeared within 30 s'), message)
+            self.assertIn(str(folder), message)
+            self.assertEqual((folder / 'screen.png').read_bytes(), b'\x89PNG')
+            self.assertIn('New conversation', (folder / 'ax-tree.txt').read_text())
+            self.assertEqual(sorted(p.name for p in folder.iterdir()), ['ax-tree.txt', 'screen.png'])
+            self.assertEqual(w.pressed, ['Talk to Rich'])
+
+    def test_the_first_wait_failing_saves_too_and_a_shot_that_breaks_is_written_down(self):
+        with tempfile.TemporaryDirectory() as d:
+            w = self.the_walk(Path(d), set())
+            message = self.enter(w, 'claude-crash', shot_breaks=True)
+            folder = w.out / 'claude-crash-enter-failed'
+            self.assertTrue(message.startswith('AXButton "Talk to Rich" never appeared within 90 s'), message)
+            self.assertIn('black frame', (folder / 'screen.failed.txt').read_text())
+            self.assertIn('New conversation', (folder / 'ax-tree.txt').read_text())
+
+    def test_an_entry_that_finds_its_conversation_saves_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            w = self.the_walk(Path(d), {('AXButton', 'Talk to Rich'), ('AXTextArea', 'Message to Rich')})
+            w.ax = lambda *a, **k: [{'role': 'AXStaticText', 'value': 'Onboarding'}]
+            w.enter('connect')
+            self.assertEqual(list(w.out.iterdir()), [])
+            self.assertEqual(w.pressed, ['Talk to Rich'])
+
+
 if __name__ == '__main__':
     unittest.main()
