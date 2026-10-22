@@ -147,12 +147,13 @@ class Walk:
         overdue snapshot starts, so nothing told a blocked app from a starved guest
         (esc-20261021T212321Z-0d63eb9f). The same instruments, taken here: `sample` of the
         recorded app pid and of the web view's process, and the guest's `top`. The full text goes
-        to the walk's out folder; the main threads' heaviest paths go into the failure."""
-        spec = importlib.util.spec_from_file_location('ax_deadline', HERE / 'ax-deadline.py')
-        deadline = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(deadline)
-        state = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / self.vm
+        to the walk's out folder; the main threads' heaviest paths go into the failure. Every
+        step of it is inside the try, so the wait's own failure is what a caller always gets."""
         try:
+            spec = importlib.util.spec_from_file_location('ax_deadline', HERE / 'ax-deadline.py')
+            deadline = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(deadline)
+            state = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / self.vm
             pid = (state / 'app.pid').read_text().strip()
             pids = [('app pid ' + pid, pid)] if pid.isdigit() else []
             pids += [('WebContent pid ' + p, p) for p in
