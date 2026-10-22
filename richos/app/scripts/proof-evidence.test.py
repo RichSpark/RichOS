@@ -897,6 +897,65 @@ class Evidence(unittest.TestCase):
         executes_all("other-installs", own, "a pass made against another dependency install was reused",
                      "the two checkouts load different dependency installs")
 
+    def test_the_gate_reuses_an_authors_pass_whatever_order_its_shell_gave_the_runners_tool_dirs(self):
+        """2026-10-22, the land of cc/zach-opus-holds3 at e8e06b8e1: the author's run on that tip
+        passed 94 of 95 on the same content, and the gate reused none of its whole-checkout passes
+        ("it no longer stands in its own checkout (environment.PATH)"). Same 21 PATH entries: the
+        agent's shell had ~/.cargo/bin second, the lead's had it last. Real runner, ci-shard.sh and
+        coverage verifier: the author runs in a linked worktree with ~/.cargo/bin second, the gate
+        in the main checkout with it last, and the gate reuses every pass."""
+        app, engine = self.copy_runner_fixture()
+        counter = Path(self.tmp.name) / "executions"
+        path = engine / "scripts/alpha.test.sh"
+        path.write_text('#!/bin/bash\nprintf "alpha\\n" >> "$FIXTURE_COUNTER"\n')
+        path.chmod(0o755)
+        (self.root / "gamma.test.sh").write_text('printf "gamma\\n" >> "$FIXTURE_COUNTER"\n')
+        (self.root / "LICENSE").write_text("fixture license\n")
+        umask = os.umask(0)
+        os.umask(umask)
+        for written in self.root.rglob("*"):
+            if written.is_file() and not written.is_symlink():
+                written.chmod((0o777 if written.stat().st_mode & 0o100 else 0o666) & ~umask)
+
+        def git(*args, cwd=None):
+            return subprocess.check_output(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture",
+                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *args],
+                cwd=cwd or self.root, text=True, stderr=subprocess.PIPE).strip()
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "fixture")
+        worktree = Path(self.tmp.name) / "author-checkout"
+        git("worktree", "add", "-q", "-b", "cc/author", str(worktree))
+        cargo_bin = os.path.join(os.path.expanduser("~"), ".cargo", "bin")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("RICHOS_", "GIT_"))}
+        env.update(RICHOS_MACHINE_WORKERS=str(Path(self.tmp.name) / "machine"),
+            RICHOS_ENGINE_PASS_DIR=str(Path(self.tmp.name) / "slot"),
+            RICHOS_PROOF_RUN_DIR=str(Path(self.tmp.name) / "history"),
+            RICHOS_PROOF_RUN_SLOTS_DIR=str(Path(self.tmp.name) / "proof-slots"),
+            CLAUDE_CONFIG_DIR=str(Path(self.tmp.name) / "config"),
+            FIXTURE_COUNTER=str(counter), PYTHONDONTWRITEBYTECODE="1")
+        others = [p for p in env["PATH"].split(os.pathsep) if p and p != cargo_bin]
+        commands = Path(self.tmp.name) / "commands"
+        commands.write_text("cd %s && bash scripts/ci-shard.sh --only-units scripts/alpha.test.sh\n" % "richos/engine"
+                            + "cd . && bash gamma.test.sh\n")
+
+        def invoke(checkout, name, path_entries, *options):
+            counter.write_text("")
+            directory = Path(self.tmp.name) / name
+            path = os.pathsep.join([str(checkout / "richos/app/scripts/bin"), *path_entries])
+            result = subprocess.run([*idle_proof_run(checkout / "richos/app/scripts/proof-run.py"),
+                "--commands", str(commands), "--log-dir", str(directory), *options], cwd=checkout,
+                env=dict(env, PATH=path), text=True, capture_output=True, timeout=120)
+            detail = result.stdout + result.stderr + "\n" + "\n".join(p.read_text() for p in directory.glob("*.log"))
+            self.assertEqual(result.returncode, 0, detail)
+            return directory, sorted(counter.read_text().splitlines()), detail
+
+        author, executed, detail = invoke(worktree, "author", [cargo_bin, *others])
+        self.assertEqual(executed, ["alpha", "gamma"], detail)
+        _gate, executed, detail = invoke(self.root, "gate", [*others, cargo_bin], "--reuse", str(author))
+        self.assertEqual(executed, [], "the gate ran again what the author proved on the same content, "
+                         "because the two shells ordered PATH differently\n" + detail)
+
     def test_a_pass_stands_at_a_later_commit_only_where_neither_selector_nor_dependency_map_reaches_it(self):
         """2026-10-22, zach-opus-holds3: after a three-file change the fourth handover run reused
         0 of the 94 checks its third run had passed 92 of, because a check with no reviewed read
