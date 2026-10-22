@@ -207,5 +207,40 @@ class DesktopHooks(unittest.TestCase):
         self.assertNotIn("updatedInput", rich_output, "§129 applies to Stu's commands")
 
 
+    def test_an_agent_dispatch_answers_with_one_envelope_so_its_updated_input_reaches_the_teammate(self):
+        """Claude Code acts on a hook's stdout only when it is ONE JSON object (measured on 2.1.306:
+        an Agent hook that printed a context object before its answer left the prompt unchanged).
+        The canonical guards forward their own output, so a dispatch printed several, and the
+        repository's own instruction file never reached the worker (folder-instructions walk of
+        2026-10-21). The hook now answers an Agent call with one merged envelope."""
+        import importlib.util, io
+        spec = importlib.util.spec_from_file_location("app_engine_hook_one", ENGINE / "scripts/app-engine-hook.py")
+        hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)
+        delivered = {"subagent_type": "richos-app-engine:norm", "prompt": "the full prompt", "name": "norm-sonnet-1"}
+        def handle(payload):
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "a guard's note"}}))
+            print("a guard's plain line")
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": delivered}}))
+        hook.handle = handle
+        out = io.StringIO()
+        hook.main(io.StringIO(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Agent"})), out)
+        lines = [line for line in out.getvalue().splitlines() if line.strip()]
+        self.assertEqual(len(lines), 1, out.getvalue())
+        answer = json.loads(lines[0])["hookSpecificOutput"]
+        self.assertEqual(answer["updatedInput"], delivered)
+        self.assertEqual(answer["additionalContext"], "a guard's note")
+        self.assertNotIn("permissionDecision", answer, "merging decides nothing a guard did not")
+        # A refusal among them is never softened by a later answer.
+        def refusing(payload):
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                     "permissionDecisionReason": "refused"}}))
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                                     "updatedInput": delivered}}))
+        hook.handle = refusing
+        out = io.StringIO()
+        hook.main(io.StringIO(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Agent"})), out)
+        self.assertEqual(json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], "deny")
+
+
 if __name__ == "__main__":
     unittest.main()

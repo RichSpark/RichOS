@@ -31,6 +31,7 @@ def load(name, path):
     return module
 ECS = load("richos_ecs_app", ENGINE / "ecs/adapters/app.py")
 W = load("richos_app_workspaces", ENGINE / "mega-lander/workspaces.py")
+INSTRUCTIONS = load("richos_instruction_files", ENGINE / "scripts/lib/instruction_files.py")
 
 
 def bounded(path, limit=1024 * 1024):
@@ -789,6 +790,36 @@ def build_spawn_command(repo_dests, name, teammate, model, brief_path, title, in
     return command
 
 
+def starting_commits(repos_all, record, args):
+    """{repository: the commit its workspace for this preparation starts at}, in the order
+    `spawn.py` decides it: a reviewer's or continuation's exact commit, else `base`, else the
+    branch the work lands on, else the main checkout's HEAD (create-teammate-worktree.sh's
+    default). It is read before the workspace exists, because the brief is written first."""
+    started = record.get("review_target", record.get("continuation", {}))
+    primary = str(repos_all[0])
+    fixed = started.get("commits") or ({primary: started["commit"]} if started.get("commit") else {})
+    out = {}
+    for repo in map(str, repos_all):
+        recorded = (W.integration_record(repo) or {}).get("branch")
+        own = [args.get("base"), args.get("integration")] if repo == primary else []
+        for ref in [fixed.get(repo), *own, recorded, "HEAD"]:
+            if not ref: continue
+            found = _git_answer(repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}")
+            if found.returncode == 0:
+                out[repo] = found.stdout.strip()
+                break
+        else:
+            raise ValueError("%s has no commit to start this work at" % repo)
+    return out
+
+
+def repository_instructions(repos_all, record, args):
+    """The brief section holding each repository's own instruction file (instruction_files.py),
+    or "" when none of this work's repositories has one."""
+    return INSTRUCTIONS.section([(repo, commit, INSTRUCTIONS.for_repository(repo, commit))
+                                 for repo, commit in starting_commits(repos_all, record, args).items()])
+
+
 SPAWN_EVIDENCE = ("agent_id", "tool_use_id", "spawned_at", "started_at", "end", "disposition")
 
 
@@ -1293,16 +1324,26 @@ def prepare(scope_path, scope, args):
                     "explain uncertainty and defects before that line.")
         elif args.get("review_of") is not None:
             raise ValueError("only a reviewer may have review_of")
+        # The repository's own CLAUDE.md or AGENTS.md, read before the receipt is saved so a
+        # file that cannot be read refuses this preparation and leaves nothing behind
+        # (richos-hq docs/plans/2026-10-21-folder-instruction-files.md §5.3 item 1).
+        instructions = "" if role == "consult" else repository_instructions(repos_all, record, args)
         save(path,record)
         brief_path = root / (identity + ".brief")
         fd = os.open(brief_path,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
-        # The duty's app mechanics first, then the assignment (plan §3). A REVIEWER's brief
-        # starts one step earlier, with the user's own turn verbatim (second review, slice 4):
-        # the brief below is the coordinator's account of the job, and the reviewer judges the
-        # work against what the user actually said.
+        # The duty's app mechanics first, then the repository's own instructions, then the
+        # assignment (plan §3). A REVIEWER's brief starts one step earlier, with the user's own
+        # turn verbatim (second review, slice 4): the brief below is the coordinator's account of
+        # the job, and the reviewer judges the work against what the user actually said.
+        # The instructions themselves never pass through Stu: Stu reads and resubmits this
+        # brief, so it holds INSTRUCTIONS.PLACEHOLDER, and the section waits beside the receipt
+        # for `dispatch_intent` to put in its place once the dispatch is admitted.
         duty = DUTIES[role].read_text(encoding="utf-8").strip()
         head = reviewer_words_block(words) + "\n\n" if role == "reviewer" else ""
-        with os.fdopen(fd,"w") as out: out.write(head + duty + "\n\n" + brief); out.flush(); os.fsync(out.fileno())
+        body = head + duty + "\n\n" + (INSTRUCTIONS.PLACEHOLDER + "\n\n" if instructions else "") + brief
+        with os.fdopen(fd,"w") as out: out.write(body); out.flush(); os.fsync(out.fileno())
+        if instructions:
+            save_words(root / (identity + ".instructions"), instructions)
         if words is not None and role != "consult":
             # The same words beside the receipt, for the app's own review-watch: a mid-job
             # review of this worker reads them from here (review_watch.py, app mode).
@@ -1472,9 +1513,18 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
             record["pierce_refused"] = True
             save(path,record)
             return
+        # The repository's own instruction file joins the prompt here, and only here: the
+        # admitted call's input is what the hook hands Agent as `updatedInput`, so the worker
+        # gets the file in full and Stu, who prepared and submitted the call, never read it.
+        kept = root / (record["id"] + ".instructions")
+        if kept.is_file() and not kept.is_symlink():
+            if ti["prompt"].count(INSTRUCTIONS.PLACEHOLDER) != 1:
+                raise ValueError("the prepared brief has lost the place for the repository's own instructions")
+            ti = {**ti, "prompt": ti["prompt"].replace(INSTRUCTIONS.PLACEHOLDER, kept.read_text(encoding="utf-8"), 1)}
         record.pop("pierce_refused", None)
         record.update(status="dispatching",tool_use_id=payload["tool_use_id"])
         save(path,record)
+        payload["tool_input"] = ti
 
 
 def validate_shell_target(payload):
