@@ -240,13 +240,19 @@
     } else if (kind === "next") { pill = `<span class="acc-pill is-next"><i></i>Next</span>`; note = "Its week is fresh again soonest, so it goes next."; }
     else if (kind === "resting") { pill = `<span class="acc-pill is-resting"><i></i>Resting</span>`; note = "Rich can use it again once its week is fresh."; }
     else if (kind === "ready") { pill = `<span class="acc-pill"><i></i>Ready</span>`; note = "Waiting its turn."; }
+    // The same signed-in verdict on a card that is not in use (handover review
+    // rv-20261021T234558Z-10df0b1f-03b0, finding 2): no reading, but Claude Code says it is
+    // signed in, so it says so and what the last check said, never "Not signed in". Signed in
+    // with no reading is only ever reached through a check that reported no limits (quota.rs
+    // `Snapshot::signed_in`), so with no message since, that is still the sentence.
+    else if (a.signedIn === true) { pill = `<span class="acc-pill"><i></i>Signed in</span>`; note = esc(a.message || "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show."); }
     else { pill = `<span class="acc-pill is-resting"><i></i>Not signed in</span>`; note = signingId === a.id ? "Finish signing in in your browser, then come back here." : "Sign in to this account and Rich can use it."; }
     let acts = "";
     if (multi() && kind !== "inuse" && kind !== "arriving" && kind !== "unread" && kind !== "resting") acts += `<button class="acc-btn" type="button" data-act="use" data-id="${esc(a.id)}" aria-label="Use ${esc(a.label)} now">${ICON.swap}Use this one now</button>`;
     // A signed-in verdict stands on its own: an account Claude Code says is signed in is never
     // offered "Sign in" because no usage reading came with it (review rv-20261021T213648Z).
     if (!read(a) && a.id === "1" && a.signedIn !== true) acts += `<button class="acc-btn" type="button" id="acc-sign-one" data-act="sign-one">Sign in</button>`;
-    else if ((kind === "unread" || a.signedIn === false) && signingId !== a.id) acts += `<button class="acc-btn" type="button" data-act="sign" data-id="${esc(a.id)}">Sign in</button>`;
+    else if (((kind === "unread" && a.signedIn !== true) || a.signedIn === false) && signingId !== a.id) acts += `<button class="acc-btn" type="button" data-act="sign" data-id="${esc(a.id)}">Sign in</button>`;
     // Account 1 is this Mac's own Claude sign-in and is never removed here (claude_accounts.rs).
     if (multi() && a.id !== "1") acts += `<button class="acc-btn acc-btn-quiet" type="button" data-act="remove" data-id="${esc(a.id)}" aria-label="Remove ${esc(a.label)}">Remove</button>`;
     let confirm = "";
@@ -257,7 +263,7 @@
     const look = kind === "leaving" ? "inuse" : kind === "arriving" ? "next" : kind;
     return `<article class="acc-card is-${look}" data-id="${esc(a.id)}" aria-label="${esc(nameOf(a))}"><span class="acc-spine"></span>
       <header class="acc-head"><h3 class="acc-name">${esc(nameOf(a))}</h3>${pill}<span class="acc-acts">${acts}</span></header>
-      ${who(a)}<p class="acc-note">${note}</p>${a.signedIn === false || (a.inUse && a.signedIn === true && !read(a)) ? "" : `<div class="acc-meters">${meter(a, "week")}${meter(a, "five")}</div>`}${confirm}</article>`;
+      ${who(a)}<p class="acc-note">${note}</p>${a.signedIn === false || (a.signedIn === true && !read(a)) ? "" : `<div class="acc-meters">${meter(a, "week")}${meter(a, "five")}</div>`}${confirm}</article>`;
   }
   // The card's one line under its name: "Show email" at rest, the email while it shows.
   function who(a) {

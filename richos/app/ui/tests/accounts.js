@@ -29,6 +29,12 @@ function two(home, work, opts = {}) {
   return { state: "fresh", checkedAt: now, retryAt: null, message: null, windows: used.windows, accounts: [homeAcct, workAcct],
     changes: opts.changes || [{ at: now - DAY - 2 * HOUR, kind: "added", id: "2", label: "Work" }], lastSwitch: opts.lastSwitch || null };
 }
+// Two accounts, `idle` not in use, signed in without limits: no reading, `signedIn: true`.
+function idleSignedIn(inUse, idle) {
+  const quota = two([10, 20], [10, 20], { inUse });
+  Object.assign(quota.accounts.find(a => a.id === idle), { windows: [], checkedAt: null, signedIn: true, message: SIGNED_IN_NO_LIMITS });
+  return quota;
+}
 
 async function main() {
   const run = createRun("Claude accounts for everyone (round 18)");
@@ -176,7 +182,21 @@ async function main() {
     assertEqual(await page.locator('#accounts-sheet [data-act="sign-one"], #accounts-sheet [data-act="sign"]').count(), 0, "no Sign in for a signed-in account");
     assertEqual(await page.locator("#accounts-sheet .acc-card .acc-meter").count(), 0, "no empty meters");
     await page.close();
-    return "In use now, the signed-in sentence, no Sign in, no meters";
+    // Handover review rv-20261021T234558Z-10df0b1f-03b0, finding 2: the same verdict on a card
+    // that is NOT in use, Work and then Home (Account 1, which has its own Sign in). Red before:
+    // the card said "Not signed in", offered Sign in and drew two empty meters.
+    for (const [inUse, idle] of [["1", "2"], ["2", "1"]]) {
+      const other = await open("dark", idleSignedIn(inUse, idle));
+      await sheet(other);
+      const card = `#accounts-sheet .acc-card[data-id="${idle}"]`;
+      await other.waitForSelector(card);
+      assertEqual(await text(other, `${card} .acc-pill`), "Signed in", `account ${idle} not in use: its pill`);
+      assertEqual(await text(other, `${card} .acc-note`), SIGNED_IN_NO_LIMITS, `account ${idle} not in use: its note`);
+      assertEqual(await other.locator(`${card} [data-act="sign-one"], ${card} [data-act="sign"]`).count(), 0, `account ${idle} not in use: no Sign in`);
+      assertEqual(await other.locator(`${card} .acc-meter`).count(), 0, `account ${idle} not in use: no empty meters`);
+      await other.close();
+    }
+    return "In use now, the signed-in sentence, no Sign in, no meters; not in use: Signed in, the same sentence, no Sign in, no meters";
   });
 
   await run.check("Use this one now: the cards trade places, Recent changes says so, Undo puts it back; a near-full account says when Rich switches again", async () => {
@@ -546,6 +566,7 @@ async function main() {
     ["add-same", one(86, 47), async p => { await sheet(p); await p.click(".acc-slot"); await p.fill("#acc-nu", "Work"); await p.click("#acc-continue"); await p.click("#acc-open-signin"); await p.waitForSelector("#acc-try-again"); }, { signIn: ["same-account"] }],
     ["two", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click('[aria-label="Use Work now"]'); await p.waitForSelector(".acc-feedback"); }],
     ["remove", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click('[aria-label="Remove Work"]'); }],
+    ["idle-signed-in", idleSignedIn("1", "2"), sheet],
     ["switched", two([64, 99], [6, 4], { inUse: "2", homeGone: now + 2 * DAY, lastSwitch: { from: "1", to: "2", at: now - 3 * 60000, why: "weekly", used: 99 } }), sheet],
     ["both-near", two([71, 96], [18, 93]), sheet],
     ["moving", two([64, 99], [6, 4], { inUse: "2", working: { "1": ["team"], "2": ["rich"] } }), sheet],
