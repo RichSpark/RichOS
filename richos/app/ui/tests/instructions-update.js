@@ -241,6 +241,59 @@ async function main() {
     return "the refusal is said, Close closes";
   });
 
+  await run.check("engine setup finishing asks again, so an upgrade's first start gets the question", async () => {
+    // Second review rv-20261022T112835Z-4fb29728-8541, finding 1, with its fixture's shape: the
+    // window opens with the previous engine (nothing to ask), then the app's own `runSetup`
+    // (main.js, as shipped) installs the new one. Before the fix the question never came:
+    // after_actual_runSetup question_shown:false.
+    const fs = require("fs");
+    const vm = require("vm");
+    const main = fs.readFileSync(path.join(UI_DIR, "main.js"), "utf8");
+    const from = main.indexOf("async function runSetup() {");
+    const to = main.indexOf("/// The finished sheet's heading", from);
+    assert(from > 0 && to > from, "runSetup is not where this check reads it");
+    let installed = false;
+    const calls = [];
+    const built = [];
+    const element = () => {
+      const children = new Map();
+      return { hidden: true, disabled: false, textContent: "", dataset: {}, style: {}, innerHTML: "",
+        querySelector(s) { if (!children.has(s)) children.set(s, element()); return children.get(s); },
+        querySelectorAll() { return []; }, addEventListener() {}, focus() {}, replaceChildren() {},
+        getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0 }; } };
+    };
+    const bridge = { async invoke(name) {
+      calls.push(name);
+      if (name === "instructions_update_question") return installed ? ASKED.slice(0, 1) : [];
+      if (name === "run_setup") { installed = true; return { complete: true, status: { media_tools: { present: true } } }; }
+      return null;
+    } };
+    const document = {
+      activeElement: element(), querySelector() { return null; }, querySelectorAll() { return []; },
+      createElement() { const node = element(); built.push(node); return { content: { firstChild: node } }; },
+      body: { appendChild() {} }, addEventListener() {},
+    };
+    const context = { window: { RichBridge: bridge }, document, Bridge: bridge, setTimeout, clearTimeout, console,
+      addEventListener() {}, setupDictation: () => false, refreshVoiceReadiness() {},
+      invokeQuiet: (...args) => bridge.invoke(...args), paintSetupOutcome() {}, renderProviderAuth() {},
+      setupRows: null, setupState: {}, setupRunning: false, videoToolsHeard: null, videoToolsLine: "",
+      setupDoneWaitsForVideoTools: false };
+    for (const name of ["setupGoEl", "setupLaterEl", "setupErrorEl", "setupProgressEl", "setupCloseEl",
+      "setupNoteEl", "setupItemsEl", "setupAccountEl"]) context[name] = element();
+    vm.createContext(context);
+    vm.runInContext(fs.readFileSync(path.join(UI_DIR, "instructions-update.js"), "utf8"), context);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    assertEqual(built.length, 0, "the old engine had nothing to ask, yet a sheet was built");
+    vm.runInContext(main.slice(from, to), context);
+    await vm.runInContext("runSetup()", context);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    const asked = calls.filter((c) => c === "instructions_update_question").length;
+    const shown = built.some((n) => !n.hidden);
+    assertEqual(JSON.stringify({ asked, shown }), JSON.stringify({ asked: 2, shown: true }),
+      "after the new engine was set up the waiting question was not shown");
+    return `asked when the window opened and again after run_setup; the question is up (${asked} asks)`;
+  });
+
   for (const theme of ["dark", "light"]) {
     await run.check(`every word of the question and the before and after clears WCAG AA in ${theme} mode`, async () => {
       const page = await openPage(browser, theme);

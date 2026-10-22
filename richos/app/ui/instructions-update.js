@@ -332,7 +332,10 @@
   }
   function closeResult() { rOverlay.hidden = true; restoreFocus(); }
 
+  // Asked when the window opens and again when engine setup finishes (main.js `runSetup`): the
+  // second ask changes nothing while the question, the update or the before and after is up.
   async function ask() {
+    if ((qOverlay && !qOverlay.hidden) || (rOverlay && !rOverlay.hidden)) return;
     try {
       const files = await invoke("instructions_update_question");
       if (Array.isArray(files) && files.length) show(files);
