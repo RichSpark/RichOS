@@ -132,12 +132,22 @@ fn distance(a: &str, b: &str) -> usize {
 }
 
 /// The shipped text a copy with no record was made from: the version it is exactly, or else the
-/// one nearest to it (the later one of two as near).
+/// one nearest to it (the later one of two as near). The current version is taken only when it
+/// alone is the nearest: a copy as near to an earlier version as to the current one may be that
+/// earlier version with the user's edits, so it is not guessed to be up to date, and the user
+/// is asked (second review rv-20261022T102758Z-81c4f463-539d, finding 1).
 fn starting_point(yours: &str, new: &str, earlier: Vec<String>) -> String {
-    let mut versions = earlier;
-    versions.push(new.to_string());
-    if let Some(exact) = versions.iter().find(|version| version.as_str() == yours) { return exact.clone(); }
-    versions.into_iter().rev().min_by_key(|version| distance(version, yours)).unwrap_or_else(|| new.to_string())
+    if yours == new { return new.to_string(); }
+    if let Some(exact) = earlier.iter().find(|version| version.as_str() == yours) { return exact.clone(); }
+    let to_new = distance(new, yours);
+    // The current version is often among the earlier ones too (the set is frozen as of the
+    // version that introduced the record); it is the current one, not an earlier one.
+    let nearest_earlier = earlier.into_iter().rev().filter(|version| version != new)
+        .map(|version| (distance(&version, yours), version)).min_by_key(|(d, _)| *d);
+    match nearest_earlier {
+        Some((d, version)) if d <= to_new => version,
+        _ => new.to_string(),
+    }
 }
 
 /// **Record a copy the app just made from the shipped text** (`user_settings::provision`).
@@ -450,6 +460,11 @@ mod tests {
         assert_eq!(starting_point("one\n", "one\ntwo\nthree\n", earlier.clone()), "one\n");
         assert_eq!(starting_point("one\ntwo\nthree\n", "one\ntwo\nthree\n", earlier.clone()), "one\ntwo\nthree\n");
         assert_eq!(starting_point("one\ntwo\nmine\n", "one\ntwo\nthree\nfour\n", earlier), "one\ntwo\n");
+        // As near to the current version as to an earlier one: the earlier one, so it is asked.
+        let earlier = vec!["a\nold\n".to_string()];
+        assert_eq!(starting_point("a\nmine\n", "a\nnew\n", earlier.clone()), "a\nold\n");
+        // Nearer to the current version alone: the user edited the current version.
+        assert_eq!(starting_point("a\nnew\nmine\n", "a\nnew\n", earlier), "a\nnew\n");
     }
 
     /// The before and after the round-37 screen draws: the front matter, paragraphs kept, a user's
@@ -527,6 +542,47 @@ for line in sys.stdin:
         assert_eq!(kept, [".richos", "instructions.md", "rich.md", "stu.md"], "OK left a file beside the user's");
         assert!(check(&folder, &shipped).unwrap().is_empty(), "the question came back after OK");
         assert!(std::fs::read_dir(&session).unwrap().flatten().all(|entry| entry.path().is_file()), "the session's work folder was left behind");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **A conflict is with what the update changed, never with a line it left alone** (second
+    /// review rv-20261022T102758Z-81c4f463-539d, finding 2, as the lead scoped it: the update's
+    /// text wins over a user's change only where the update changed something). The rule lives
+    /// in the skill (§124); this pins that the skill says it.
+    #[test]
+    fn the_skill_counts_a_conflict_only_against_what_the_update_changed() {
+        let skill = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine").join(SKILL)).unwrap();
+        assert!(skill.contains("A conflict is only with what the update changed"), "{skill}");
+        assert!(skill.contains("to a part the update left exactly as it was is never a conflict"), "{skill}");
+        assert!(skill.contains("is edited out: the update's text wins"), "the CEO's rule for a real conflict is gone: {skill}");
+    }
+
+    /// **The same rule, on the real model** (one live session; `#[ignore]` because it spends a
+    /// real turn on the signed-in `claude` and needs the network):
+    ///
+    /// `cargo test -p richos-core --lib instructions_update::tests::live -- --ignored --nocapture`
+    ///
+    /// The user changed paragraph A ("English" to "German"); the update changed only paragraph
+    /// B. A keeps the user's text and B gets the update's.
+    #[test]
+    #[ignore]
+    fn live_a_users_change_to_a_paragraph_the_update_left_alone_is_kept() {
+        let (root, _, profile, _) = crate::request_classifier::tests::fixture("");
+        let bin = std::env::var_os("PATH").and_then(|path| std::env::split_paths(&path).map(|dir| dir.join("claude")).find(|bin| bin.is_file()))
+            .expect("no claude on PATH; nothing was verified");
+        let head = "---\nname: rich\ndescription: Fixture chief of staff.\n---\n\nYou are Rich.\n\n";
+        let update = Update {
+            name: RICH,
+            started_from: format!("{head}Always answer in English.\n\nKeep replies short.\n"),
+            yours: format!("{head}Always answer in German.\n\nKeep replies short.\n"),
+            new: format!("{head}Always answer in English.\n\nKeep replies short and lead with the answer, then the detail.\n"),
+        };
+        let (text, said) = rewrite_with_rich(&bin, &profile, &update).unwrap();
+        eprintln!("--- written ---\n{text}--- said ---\n{said}");
+        assert!(text.contains("German"), "the user's change to a paragraph the update did not touch was edited out:\n{text}");
+        assert!(!text.contains("answer in English"), "the shipped wording the user changed came back:\n{text}");
+        assert!(text.contains("lead with the answer"), "the update's change is missing:\n{text}");
+        assert!(text.starts_with("---\nname: rich"), "the front matter was not kept first:\n{text}");
         std::fs::remove_dir_all(root).unwrap();
     }
 

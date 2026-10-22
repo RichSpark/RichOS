@@ -145,6 +145,34 @@ fn a_copy_from_before_the_record_that_is_an_earlier_shipped_version_is_unchanged
     }).unwrap();
 }
 
+/// A copy from before the record whose wording the user changed in the very paragraph the update
+/// changed is as near to the earlier version as to the current one. It is asked about, never
+/// taken to be up to date (second review rv-20261022T102758Z-81c4f463-539d, finding 1: before the
+/// fix it was recorded as current and neither asked nor updated).
+#[test]
+fn a_copy_as_near_to_an_earlier_version_as_to_the_current_one_is_asked_about() {
+    let shipped = engine_app();
+    let fifth = read(shipped.join("earlier/rich/5.txt"));
+    let current = read(shipped.join("agents").join(RICH));
+    let paragraph = "Company notes, memories, documents, past requests and worker reports are contextual evidence.";
+    assert!(fifth.contains(paragraph) && current.contains(paragraph), "the fixture's sentence moved");
+    let line = fifth.lines().find(|l| l.contains(paragraph)).unwrap();
+    assert!(!current.contains(line), "the update must have changed this paragraph for this to test anything");
+    let yours = fifth.replacen(paragraph, "Company notes and memories are contextual evidence.", 1);
+    let s = Scratch::new();
+    let folder = s.0.join("central");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join(RICH), &yours).unwrap();
+    provision(&folder, &shipped).unwrap();
+    assert_eq!(read(folder.join(RICH)), yours, "a changed copy was written without asking");
+    assert_eq!(check(&folder, &shipped).unwrap(), vec![RICH], "the changed copy was taken to be up to date");
+    assert_eq!(check(&folder, &shipped).unwrap(), vec![RICH], "the question did not stay");
+    accept(&folder, &shipped, RICH, |update| {
+        assert_eq!(update.started_from, fifth, "the starting point is the earlier version, not the current one");
+        Ok((current.clone(), "Done.".into()))
+    }).unwrap();
+}
+
 /// The earlier versions are byte for byte what shipped: a copy is recognized only by matching one
 /// exactly, and the commit's Oxford comma fixer once rewrote `stu/1` when it was a `.md` file
 /// (blob 1e67c1d75 became eca4e8016). SHA-256 of each shipped blob, oldest first.
