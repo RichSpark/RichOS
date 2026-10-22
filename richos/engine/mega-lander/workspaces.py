@@ -3038,7 +3038,11 @@ def wait(ref, kind, on, todo="", session_id="", until=""):
         if kind == "ceo-discard" and not rec.get("ceo_ordered"):
             raise SpecError("%s was not recorded as ordered by the CEO, so its discard does not need his word"
                             % rec["name"])
-        rec["waiting"] = {"kind": kind, "on": on.strip(), "todo": (todo or "").strip(), "at": now(), "end": end}
+        # A REPEATED WAIT KEEPS ITS AGE (second review rv-20261022T002958Z-2ac46e09-fa4e,
+        # finding 2): the work has been held since the first one, until the hold ends.
+        held_since = (rec.get("waiting") or {}).get("at") or now()
+        rec["waiting"] = {"kind": kind, "on": on.strip(), "todo": (todo or "").strip(), "at": held_since,
+                          "end": end}
         save_agent(rec)
     event("wait", key=rec["key"], kind=kind, on=on, todo=todo, end=end)
     return rec
@@ -3070,6 +3074,12 @@ HOLD_END_KINDS = ("agent", "review", "at", "ceo")
 HOLD_REPORT_SECONDS = 30 * 60
 HOLD_LINES = 6
 REVIEW_RUN_SECONDS = 90 * 60
+
+
+def _hold_go(text):
+    _hold_words()                        # puts scripts/lib on the path
+    import hold_words
+    return hold_words.is_go(text)
 
 
 def _hold_words():
@@ -3159,7 +3169,13 @@ def hold_end_state(end, at=None, cache=None):
         return "none", "nothing checkable ends it"
     kind, _, value = end.partition(":")
     if kind == "ceo":
-        return "ceo", "his decision (CEO-TODOs: %s)" % value
+        # HIS ONLY WHEN IT IS ON HIS LIST (second review rv-20261022T002958Z-2ac46e09-fa4e,
+        # finding 3): the reference must name an item the CEO-TODOs page shows as waiting
+        # on him. Any other reference keeps nothing quiet.
+        item = _ceo_item(value)
+        if item:
+            return "ceo", "his decision (CEO-TODOs %s)" % item
+        return "none", "%s names no item waiting on him in CEO-TODOs" % value
     if kind == "at":
         t = calendar.timegm(time.strptime(value, "%Y-%m-%dT%H:%M:%SZ"))
         if (now() if at is None else at) >= t:
@@ -3172,6 +3188,40 @@ def hold_end_state(end, at=None, cache=None):
     if any(not finished_state(r, cache)[0] for r in live):
         return "pending", "agent %s is working on it" % value
     return "due", ("agent %s has finished" % value) if live else ("no agent %s is registered" % value)
+
+
+def _ceo_items():
+    """The ids of the items the CEO-TODOs page shows waiting on him (`### <id> - <title>`),
+    from every known repository whose `.ceo-todos` declares a TODO_VIEW, and
+    RICHOS_CEO_TODOS_VIEW (a page path) where set. Only ids: the page is generated from
+    the record with the CEO's own sections only (scripts/lib/ceo-todos.py)."""
+    pages = [p for p in (os.environ.get("RICHOS_CEO_TODOS_VIEW") or "").split(os.pathsep) if p]
+    for repo in known_repos():
+        try:
+            with open(os.path.join(repo, ".ceo-todos"), encoding="utf-8") as f:
+                decl = f.read()
+        except OSError:
+            continue
+        m = re.search(r'(?m)^TODO_VIEW="?([^"\n]+)"?\s*$', decl)
+        if m:
+            pages.append(os.path.join(repo, m.group(1).strip()))
+    ids = set()
+    for page in pages:
+        try:
+            with open(page, encoding="utf-8") as f:
+                ids.update(re.findall(r"(?m)^###\s+(\S+)\s+[\u2014-]", f.read()))
+        except OSError:
+            continue
+    return ids
+
+
+def _ceo_item(ref):
+    """The CEO-TODOs item a reference names ('CEO-TODOs 2.6', '2.6'), when it is on his page; else ''."""
+    ids = _ceo_items()
+    for token in re.findall(r"\d+(?:\.\d+)*", ref or ""):
+        if token in ids:
+            return token
+    return ""
 
 
 def _in_scope(rec_session, claimed, me, cache):
@@ -3315,7 +3365,7 @@ def hold_lines(me="", at=None):
     loud.sort(key=lambda h: h["since"])
     lines = ["HELD BY RICH, NOT BY YOU: %s since %s (%s). Why: %s. Your call: go, or hold until a date or event."
              % (h["what"], time.strftime("%H:%MZ", time.gmtime(h["since"])), _span(t - h["since"]),
-                " ".join((h["why"] or "not said").split())[:200]) for h in loud[:HOLD_LINES]]
+                " ".join((h["why"] or "not said").split())[:200].rstrip(".")) for h in loud[:HOLD_LINES]]
     if len(loud) > HOLD_LINES:
         lines.append("+%d more held: workspaces.sh holds" % (len(loud) - HOLD_LINES))
     try:
@@ -8218,7 +8268,9 @@ def lifecycle(payload, entity):
                                 fresh["correction"] = {"at": now(), "text": " ".join(text.split())[:200]}
                                 save_agent(fresh)
                                 rec = fresh
-                        if (rec.get("waiting") or {}).get("kind") == "held":
+                        # ONLY THE GO ENDS IT (second review rv-20261022T002958Z-2ac46e09-fa4e,
+                        # finding 1): a status question or a note leaves the teammate held.
+                        if (rec.get("waiting") or {}).get("kind") == "held" and _hold_go(text):
                             with Lock():
                                 fresh = load_agent(rec["key"])
                                 fresh.setdefault("history", []).append(

@@ -7273,6 +7273,12 @@ class NoSilentHolds(Base):
     [THIS] STOP ONCE AND FOR ALL???" A hold ends only when the work runs, when it
     lands or is discarded, or by his words; Rich saying so ends nothing."""
 
+    def _pending_one(self):
+        aid, npath = self.spawn("zach-opus-p5")
+        self.commit(npath)
+        self.finish(aid)
+        return aid, npath
+
     def test_holds_t5_release_without_his_word_or_running_work_is_refused(self):
         ws.hold("stream-b", "Stream B of his spelling order", "", "on hold, deliberately", self.sid)
         self.assertEqual([h["name"] for h in ws.holds(self.sid)], ["stream-b"])
@@ -7310,8 +7316,38 @@ class NoSilentHolds(Base):
         _ctx, notes = send("Commit what you have. Then wait for my go before the walk.")
         self.assertTrue(any(n.startswith("HOLD RECORDED on zach-opus-w7") for n in notes), notes)
         self.assertEqual([(h["name"], h["source"]) for h in ws.holds(self.sid)], [("zach-opus-w7", "wait")])
+        # Review rv-20261022T002958Z-2ac46e09-fa4e finding 1: a status question is not the go.
+        send("What is your current status?")
+        self.assertEqual([(h["name"], h["source"]) for h in ws.holds(self.sid)], [("zach-opus-w7", "wait")])
         send("Go: run the walk now.")
         self.assertEqual(ws.holds(self.sid), [])
+
+    def test_holds_a_repeated_wait_keeps_the_age_of_the_hold(self):
+        """Review rv-20261022T002958Z-2ac46e09-fa4e finding 2: repeating an unresolved wait every
+        20 minutes must not make a 2-hour hold look new."""
+        self._pending_one()
+        ws.wait("zach-opus-p5", "started", "real-app checks left", "", self.sid)
+        rec = self.rec("zach-opus-p5")
+        rec["waiting"]["at"] -= 139 * 60
+        ws.save_agent(rec)
+        ws.wait("zach-opus-p5", "started", "real-app checks left (still)", "", self.sid)
+        held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-p5"]
+        self.assertGreaterEqual(ws.now() - held[0]["since"], 139 * 60)
+        self.assertTrue(any("(2 h 19 min)" in l or "(2 h 20 min)" in l for l in ws.hold_lines(self.sid)))
+
+    def test_holds_a_todo_reference_is_his_only_when_it_is_on_his_page(self):
+        """Review rv-20261022T002958Z-2ac46e09-fa4e finding 3: a GitHub outage with a TODO
+        reference is not his decision; only an item his CEO-TODOs page shows waiting on him is."""
+        self._pending_one()
+        ws.wait("zach-opus-p5", "outside", "GitHub is down, the merge cannot be pushed", "CEO-TODOs 7.1", self.sid)
+        held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-p5"]
+        self.assertEqual(held[0]["state"], "none")                 # reported: not on his page
+        page = os.path.join(self.env.root, "CEO-TODOs.md")
+        with open(page, "w") as f:
+            f.write("# Your TODOs\n\n## Waiting on the CEO - his hands\n\n### 7.1 \u2014 GitHub billing\n")
+        with patch.dict(os.environ, {"RICHOS_CEO_TODOS_VIEW": page}):
+            held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-p5"]
+            self.assertEqual(held[0]["state"], "ceo")              # on his page: his decision, quiet
 
     def test_holds_t6_a_correction_its_run_never_acted_on_stays_in_sight(self):
         """2026-10-21 23:45Z, echo-opus-andreas2: Rich sent the fix for review finding

@@ -16,6 +16,19 @@ HOLD_WORDS_RE = re.compile(
     r"wait\s+for\s+my\s+(?:go|word|signal|ok|okay|green\s+light))\b", re.I)
 
 
+# The words that end such a hold: the go itself. A later message without them (a status
+# question, a note) leaves the teammate held, and the hold reported (second review
+# rv-20261022T002958Z-2ac46e09-fa4e, finding 1).
+GO_WORDS_RE = re.compile(
+    r"\b(?:go(?:\s+ahead)?|proceed|carry\s+on|continue|resume|start\s+(?:it|now|the)|you\s+can\s+start|"
+    r"unblocked|green\s+light)\b", re.I)
+
+
 def find(text):
     """The first hold-word match in text, or None."""
     return HOLD_WORDS_RE.search(text or "")
+
+
+def is_go(text):
+    """True when a message gives the go that ends a teammate's hold."""
+    return bool(GO_WORDS_RE.search(text or ""))
