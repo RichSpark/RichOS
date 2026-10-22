@@ -150,9 +150,18 @@ impl Report {
             let own = clean(input.description.trim(), "your description");
             what_happened = format!("{what_happened}\n\nIn the person's words: \"{own}\"");
         }
-        let expected = clean(d.map(|d| d.expected.as_str()).unwrap_or(""), "your answers");
+        // Without Claude's draft, the built-in questions' answers fill their own sections: what
+        // the person expected, and what they were doing just before (the steps).
+        let answered = |q: &str| input.answers.iter().find(|(question, _)| question == q).and_then(|(_, a)| a.as_deref()).map(str::trim).filter(|a| !a.is_empty());
+        let expected = match d {
+            Some(d) => clean(&d.expected, "your answers"),
+            None => clean(answered(WITHOUT_AI_QUESTIONS[1]).unwrap_or(""), "your answers"),
+        };
         let when = clean(if d.is_some_and(|d| !d.when.is_empty()) { &d.unwrap().when } else { input.when }, "your answers");
-        let steps: Vec<String> = d.map(|d| d.steps.iter().map(|s| clean(s, "your answers")).collect()).unwrap_or_default();
+        let steps: Vec<String> = match d {
+            Some(d) => d.steps.iter().map(|s| clean(s, "your answers")).collect(),
+            None => answered(WITHOUT_AI_QUESTIONS[2]).map(|a| vec![format!("Just before it happened: {}", clean(a, "your answers"))]).unwrap_or_default(),
+        };
 
         let installation = input.evidence.iter().find(|i| i.category == crate::collect::Category::Installation && i.status.has_text());
         let versions = installation.map(|i| i.text.clone()).unwrap_or_else(|| format!("RichDoctor {}\nRichOS: the installation could not be checked.", crate::VERSION));
@@ -441,6 +450,32 @@ pub fn status_words(status: Status) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answers_given_without_ai_are_kept_in_the_report() {
+        let ctx = Context::with("jdoe".into(), vec![]);
+        let answers: Vec<(String, Option<String>)> = vec![
+            (WITHOUT_AI_QUESTIONS[0].into(), Some("Earlier today".into())),
+            (WITHOUT_AI_QUESTIONS[1].into(), Some("The window opens with my conversations".into())),
+            (WITHOUT_AI_QUESTIONS[2].into(), Some("I had just updated macOS".into())),
+        ];
+        let r = Report::build(&Input {
+            report_id: "RD-7K3M-Q9VX",
+            description: "RichOS closes before its window opens.",
+            answers: &answers,
+            when: "Earlier today",
+            evidence: &[],
+            drafted: None,
+            provenance: Provenance::WithoutAi,
+            screenshots: &[],
+            relay: "https://report.richos.ceo",
+            ctx: &ctx,
+        });
+        assert!(r.expected.contains("The window opens with my conversations"), "{:?}", r.expected);
+        assert!(r.steps.iter().any(|s| s.contains("I had just updated macOS")), "{:?}", r.steps);
+        let (_, body) = r.render();
+        assert!(body.contains("I had just updated macOS"));
+    }
     use crate::collect::Category;
     use crate::evidence::Item;
 
