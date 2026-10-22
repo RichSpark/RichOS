@@ -14,7 +14,9 @@
 pub mod adapter;
 pub mod collect;
 pub mod delivery;
+pub mod email;
 pub mod evidence;
+pub mod image_profile;
 pub mod install;
 pub mod mcp;
 pub mod report;

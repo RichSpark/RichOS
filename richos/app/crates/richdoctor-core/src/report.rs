@@ -22,6 +22,22 @@ pub fn footer(report_id: &str) -> String {
     format!("Sent with RichDoctor {} · Report ID {report_id}", crate::footer_version())
 }
 
+/// **THE BODY'S LAST LINES** (relay protocol 2, byte for byte): with `k` screenshots, the count
+/// line and one staff-only link per image (PRD §6: "numbered support-only links to each stored
+/// image, tied to the report ID"), then the footer. With none, the footer alone. Written by this
+/// file only, never escaped, so the relay finds exactly these bytes.
+pub fn ending(relay: &str, report_id: &str, k: usize) -> String {
+    let mut out = String::new();
+    if k > 0 {
+        out.push_str(&format!("Screenshots shared privately with RichOS support: {k}\n"));
+        for n in 1..=k {
+            out.push_str(&format!("Screenshot {n} (RichOS support staff only): {}\n", crate::delivery::attachment_link(relay, report_id, n as u32)));
+        }
+    }
+    out.push_str(&footer(report_id));
+    out
+}
+
 /// The gap RichDoctor can never fill, named rather than reconstructed (PRD §5).
 pub const RUNTIME_LOG_GAP: &str = "RichOS's own runtime log is not written when RichOS is opened from Finder, the Dock or Spotlight, so it is not included.";
 
@@ -56,13 +72,15 @@ pub struct Report {
     pub steps: Vec<String>,
     pub versions: String,
     pub excerpts: Vec<Excerpt>,
-    /// The approved, covered screenshots that go with this report, by their local IDs
-    /// ([`crate::store::Shot`]). The CEO's 2026-10-22 14:22Z change supersedes PRD v4's
-    /// text-only rule: approved images are delivered with the report. Their delivery shape is the
-    /// screenshot contract still being written, so the body names how many there are and
-    /// nothing about where they are.
+    /// The approved screenshots that go with this report, by their local IDs
+    /// ([`crate::store::Shot`]), in order. PRD version 6 (C3): they are delivered privately to
+    /// RichOS support with the report, and the body carries their count and staff-only links
+    /// ([`ending`]).
     #[serde(default)]
     pub screenshots: Vec<String>,
+    /// The reporting relay's base the screenshot links are built from.
+    #[serde(default)]
+    pub relay: String,
     pub causes: String,
     pub missing: Vec<String>,
     pub provenance: Provenance,
@@ -89,6 +107,8 @@ pub struct Input<'a> {
     pub provenance: Provenance,
     /// The draft's approved screenshots, by local ID.
     pub screenshots: &'a [String],
+    /// The reporting relay's base (the screenshot links' origin).
+    pub relay: &'a str,
     pub ctx: &'a Context,
 }
 
@@ -201,6 +221,7 @@ impl Report {
             versions,
             excerpts,
             screenshots: input.screenshots.to_vec(),
+            relay: input.relay.to_string(),
             causes,
             missing,
             provenance: input.provenance,
@@ -292,10 +313,6 @@ impl Report {
                 b.push('\n');
             }
         }
-        if !self.screenshots.is_empty() {
-            let n = self.screenshots.len();
-            section(&mut b, "Screenshots", &format!("The person added {} screenshot{}, reviewed with private areas covered before anything else saw {}.", number_word(n), if n == 1 { "" } else { "s" }, if n == 1 { "it" } else { "them" }));
-        }
         section(&mut b, "Possible cause (not confirmed)", &self.causes);
         b.push_str("\n## Missing information\n\n");
         for m in &self.missing {
@@ -304,7 +321,7 @@ impl Report {
             b.push('\n');
         }
         b.push('\n');
-        b.push_str(&footer(&self.report_id));
+        b.push_str(&ending(&self.relay, &self.report_id, self.screenshots.len()));
         (self.title.clone(), b)
     }
 
@@ -399,10 +416,6 @@ impl Report {
     }
 }
 
-fn number_word(n: usize) -> String {
-    ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"].get(n).map(|w| w.to_string()).unwrap_or_else(|| n.to_string())
-}
-
 /// The no-AI path's questions (round 39: "Questions Claude would have asked are listed as
 /// unknown so you can fill them in").
 pub const WITHOUT_AI_QUESTIONS: [&str; 3] = ["About what time did it happen?", "What did you expect to happen?", "What were you doing just before it happened?"];
@@ -450,6 +463,7 @@ mod tests {
             drafted,
             provenance: if drafted.is_some() { Provenance::Claude } else { Provenance::WithoutAi },
             screenshots: &[],
+            relay: "https://report.richos.ceo",
             ctx: &ctx,
         })
     }
@@ -528,6 +542,16 @@ mod tests {
         assert!(body.contains("## What happened") && body.contains("## Versions"));
         assert!(!r.shortened.is_empty() && r.shortened[0].starts_with("Shortened to fit the size limit"), "{:?}", r.shortened);
         assert!(body.contains("line 19999"), "the newest lines are kept");
+    }
+
+    #[test]
+    fn screenshots_end_the_body_with_their_count_and_staff_links_then_the_footer() {
+        let mut r = sample(&[], None);
+        r.screenshots = vec!["shot-1".into(), "shot-2".into()];
+        let (_, body) = r.render();
+        assert!(body.ends_with("Screenshots shared privately with RichOS support: 2\nScreenshot 1 (RichOS support staff only): https://report.richos.ceo/v1/reports/RD-7K3M-Q9VX/attachments/1\nScreenshot 2 (RichOS support staff only): https://report.richos.ceo/v1/reports/RD-7K3M-Q9VX/attachments/2\nSent with RichDoctor 1.0 · Report ID RD-7K3M-Q9VX"), "{body}");
+        assert_eq!(r.problems(), vec![], "the links pass the last check");
+        assert_eq!(ending("https://report.richos.ceo", "RD-7K3M-Q9VX", 0), footer("RD-7K3M-Q9VX"));
     }
 
     #[test]

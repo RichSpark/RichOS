@@ -21,6 +21,9 @@ sha2 = "0.10"
 # richos-user-update and the Tauri shell resolve.
 plist = "1"
 libc = "0.2"
+# A screenshot's final bytes (image_profile.rs): decoded to pixels and written again as a new
+# PNG, so nothing of the original file survives. The version the Tauri shell's lockfile holds.
+png = "0.17"
 
 [dev-dependencies]
 

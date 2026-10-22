@@ -70,20 +70,56 @@ pub enum Stage {
     Approved,
 }
 
-/// One approved screenshot: the flattened, metadata-free image the person approved with its
-/// covers burned in (PRD §6), stored as `shots/<id>.png` in the draft's folder.
+/// One approved screenshot: the final, metadata-free image the person approved with its covers
+/// burned in (PRD §6, [`crate::image_profile::finalize`]), stored as `shots/<id>` in the draft's
+/// folder (owner-only). Its bytes are what is shown, hashed, delivered and attached to email.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Shot {
     pub id: String,
     pub sha256: String,
     pub covers: u32,
     pub approved_at: u64,
+    #[serde(default = "png_type")]
+    pub media_type: String,
+}
+
+fn png_type() -> String {
+    "image/png".into()
+}
+
+impl Store {
+    /// The approved screenshot's bytes, checked against the hash it was approved with.
+    pub fn shot_bytes(&self, draft_id: &str, shot: &Shot) -> Option<Vec<u8>> {
+        let bytes = std::fs::read(self.draft_dir(draft_id).join("shots").join(&shot.id)).ok()?;
+        (crate::util::sha256_hex(&bytes) == shot.sha256).then_some(bytes)
+    }
+
+    /// The manifest of a draft's approved screenshots, numbered 1..k in their order.
+    pub fn manifest(&self, d: &Draft) -> Result<Vec<crate::image_profile::Entry>, String> {
+        let entries: Result<Vec<_>, String> = d
+            .screenshots
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let bytes = self.shot_bytes(&d.id, s).ok_or_else(|| format!("screenshot {} is missing on this Mac", i + 1))?;
+                crate::image_profile::Entry::of(i as u32 + 1, &bytes)
+            })
+            .collect();
+        let entries = entries?;
+        crate::image_profile::check_set(&entries)?;
+        Ok(entries)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delivery {
     pub approved: Approved,
     pub state: State,
+    /// Whether a completion request (the one that can create the issue) was ever made for this
+    /// approval: set and saved before it is sent ([`State::Creating`]). `false` is the app's own
+    /// durable proof that no issue can exist under this ID.
+    #[serde(default)]
+    pub completion_attempted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -299,7 +335,7 @@ impl Store {
     pub fn expire(&self, now: u64) -> usize {
         let mut n = 0;
         for d in self.list() {
-            if let Some(Delivery { approved, state: State::Submitted { issue_url, at, .. } }) = &d.delivery {
+            if let Some(Delivery { approved, state: State::Submitted { issue_url, at, .. }, .. }) = &d.delivery {
                 if now.saturating_sub(*at) >= SUBMITTED_KEPT_MS {
                     let sent = Sent { report_id: approved.report_id.clone(), title: approved.title.clone(), issue_url: issue_url.clone(), sent_at: *at };
                     if crate::util::write_private(&self.root.join("sent").join(format!("{}.json", approved.report_id)), &serde_json::to_vec(&sent).expect("serializes")).is_ok() && self.delete(&d.id).is_ok() {
@@ -359,11 +395,11 @@ mod tests {
     fn a_revision_waits_for_a_definite_non_creation_and_retires_the_old_id() {
         let mut d = Draft::new(1).unwrap();
         let body = crate::report::footer("RD-7K3M-Q9VX");
-        let approved = crate::delivery::approve("RD-7K3M-Q9VX", "t", &body, 1, "i").unwrap();
-        d.delivery = Some(Delivery { approved: approved.clone(), state: State::Unconfirmed { checked_at: 2 } });
+        let approved = crate::delivery::approve("RD-7K3M-Q9VX", "t", &body, vec![], "https://report.richos.ceo", 1, "i").unwrap();
+        d.delivery = Some(Delivery { approved: approved.clone(), state: State::Unconfirmed { checked_at: 2 }, completion_attempted: true });
         assert!(!d.may_send_revision());
         assert!(d.retire_for_revision().is_err());
-        d.delivery = Some(Delivery { approved, state: State::NotSent { why: crate::delivery::NotSent::NotReceived, at: 3 } });
+        d.delivery = Some(Delivery { approved, state: State::NotSent { why: crate::delivery::NotSent::NotReceived, at: 3 }, completion_attempted: true });
         d.retire_for_revision().unwrap();
         assert_eq!(d.retired_ids, ["RD-7K3M-Q9VX"]);
         assert!(d.delivery.is_none());
@@ -374,8 +410,8 @@ mod tests {
         let (root, s) = store();
         let mut d = Draft::new(1).unwrap();
         let body = crate::report::footer("RD-7K3M-Q9VX");
-        let approved = crate::delivery::approve("RD-7K3M-Q9VX", "Title", &body, 1, "i").unwrap();
-        d.delivery = Some(Delivery { approved, state: State::Submitted { issue_url: "https://github.com/a/b/issues/1".into(), issue_number: 1, at: 10 } });
+        let approved = crate::delivery::approve("RD-7K3M-Q9VX", "Title", &body, vec![], "https://report.richos.ceo", 1, "i").unwrap();
+        d.delivery = Some(Delivery { approved, state: State::Submitted { issue_url: "https://github.com/a/b/issues/1".into(), issue_number: 1, at: 10 }, completion_attempted: true });
         s.save(&mut d, 10).unwrap();
         assert_eq!(s.expire(10 + SUBMITTED_KEPT_MS - 1), 0);
         assert_eq!(s.expire(10 + SUBMITTED_KEPT_MS), 1);
