@@ -139,14 +139,16 @@ A user Stop is recorded durably before cancellation. For independent Stu, the ho
 persists revocation before waiting for the existing receipt lock, takes its launch
 snapshot under that lock, then sends the existing native per-task stop control only to that work's observed
 tool calls on their owning session. Missing delivery or ending evidence stays
-unknown. Direct Stu shell calls retain their original instruction in the existing
-hook evidence. The canonical hook uses the native background-task option for
-Stu's own Bash calls, preserving the command and its other arguments. Foreground
-Bash has no independently stoppable native task; interrupting the session also
-stops unrelated workers. Using the existing background-task option gives those
-commands the same native per-task Stop without interrupting the session. The Stop fact revokes that request's subsequent direct tools as well
-as its preparation, dispatch and worker actions. Read-only status and peer
-communication remain available. Stu receives typed user-control facts through the same inbox;
+unknown. The canonical hook uses the native background-task option for Stu's own
+Bash calls, preserving the command and its other arguments; interrupting the
+session would also stop unrelated workers. Every shell command Stu's own model
+starts, foreground or background, is a native task with its own id (Claude Code
+2.1.307 answers `stop_task` for a foreground one and ends only that command; the
+turn goes on). Stu's calls carry no job, so the host also stops those of his
+running commands that started after the stopped job was registered while no other
+job of the conversation was open; one started while another job was open is left
+to Stu. The Stop fact prevents subsequent preparation, dispatch and worker actions
+for that obligation. Stu receives typed user-control facts through the same inbox;
 other assignments and Rich's conversation keep their own execution ownership.
 
 ## Lifecycle
@@ -160,14 +162,14 @@ Workers must settle before the reasoning turn ends. If a provider returns while
 workers remain open, the host stops its owned processes and retains workspaces
 and receipts for reconciliation. Work registered with the CEO continues while the
 window is closed, on the process that started it; nothing survives quit, a force
-quit or a logout, and no persistent job is created for it.
+quit or a logout and no persistent job is created for it.
 Recovery never converts interrupted execution into verified completion.
 
 A lease working outside the visible turn names its own ECS seat on every request,
 one seat per assignment, so its frozen binding survives whatever is said in the
 conversation meanwhile. Seats are reconciled in the same sweep as receipts: a
 seat whose assignment is settled or absent is released, a seat whose assignment
-is merely waiting for a decision is kept, and a seat that could not be released
+is merely waiting for a decision is kept and a seat that could not be released
 is reported rather than skipped. An assignment whose workers have all stopped is
 not settled -- that is the state where it is waiting for approval.
 
@@ -195,7 +197,7 @@ still use live input. Neither agent is the other's provider teammate.
 A queued execution request does not block later live communication. The existing
 inbox cursor retains out-of-order acceptance receipts and advances only across
 consecutively accepted frames. A correction can be accepted while an earlier new
-job stays queued, and restarting cannot lose the job or replay the correction.
+job stays queued and restarting cannot lose the job or replay the correction.
 
 Recovered deliveries retain the initial user turn's ledger reference for request
 authority and execution handoff. The continuation's own turn ID still identifies
