@@ -38,7 +38,7 @@
           <span class="quota-muted">Claude Code signs in through your browser.</span></div></div>
       <p id="quota-account-feedback" class="quota-account-feedback" role="status" aria-live="polite"></p>
       <div id="quota-windows" aria-label="Claude Code quota windows"></div>
-      <div id="quota-empty" hidden><h3>Nothing to show yet.</h3><p>RichOS asks Claude Code for its own usage figures and shows exactly what comes back. <span id="quota-empty-why">Claude Code has not answered yet</span>, so there is no number here: <b>not zero, not full, nothing guessed.</b></p><p id="quota-empty-next">If this stays empty after a refresh, Claude Code may not be signed in on this Mac.</p></div>
+      <div id="quota-empty" hidden><h3>Nothing to show yet.</h3><p>RichOS asks Claude Code for its own usage figures and shows exactly what comes back. <span id="quota-empty-why">Claude Code has not answered yet.</span> There is no number here: <b>not zero, not full, nothing guessed.</b></p><p id="quota-empty-next">If this stays empty after a refresh, Claude Code may not be signed in on this Mac.</p></div>
       <p class="quota-legend">The gold bar is what you have used; the tick is how far the clock has run. <b>Bar past the tick means you are spending faster than the window is passing.</b></p>
       <section id="quota-reset-offers" class="quota-reset-offers" aria-label="Weekly quota resets" hidden><button id="quota-usage-open" class="quota-btn" type="button" title="claude.ai/new#settings/usage">Open Claude Usage</button></section>
       <p id="quota-reset-feedback" role="status" aria-live="polite"></p>
@@ -294,7 +294,7 @@
     const answered = !windows.length && view.emptyAt && !view.message;
     field("quota-empty-why").textContent = view.message || (view.signedIn === true ? "This account is signed in on this Mac."
       : view.signedIn === false ? "This account is not signed in on this Mac."
-      : answered ? "Claude Code answered without its usage figures this time" : "Claude Code has not answered yet");
+      : answered ? "Claude Code answered without its usage figures this time." : "Claude Code has not answered yet.");
     const nextAsk = view.nextCheckAt > Date.now() ? duration(view.nextCheckAt - Date.now()) : null;
     field("quota-empty-next").textContent = view.signedIn === false ? "Close this panel, choose Claude accounts and sign in, then refresh."
       : answered && nextAsk ? `RichOS asks again in ${nextAsk}; Ask Claude Code asks now.`

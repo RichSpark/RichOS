@@ -226,11 +226,15 @@ async function main() {
     await page.close();
   });
   await run.check("Technical view keeps sign-in separate from missing usage figures", async () => {
-    for (const signedIn of [false, true, null]) {
-      const page = await open("dark", { state: "unavailable", windows: [], checkedAt: null, retryAt: null, signedIn, message: null });
+    for (const input of [{ signedIn: false }, { signedIn: true }, { signedIn: null },
+      { signedIn: null, message: "Claude Code did not answer just now." }, { signedIn: null, emptyAt: Date.now() }]) {
+      const { signedIn, message = null, emptyAt = null } = input;
+      const page = await open("dark", { state: "unavailable", windows: [], checkedAt: null, retryAt: null, signedIn, message, emptyAt });
       await enableTechnical(page); await page.click("#set-quota-open");
       await page.waitForSelector("#quota-empty:not([hidden])");
       const text = await page.locator("#quota-empty").innerText();
+      assert(!text.includes(".,") && !text.includes(".."), text);
+      assert(text.includes(". There is no number here:"), text);
       const freshness = await page.locator("#quota-freshness").innerText();
       if (signedIn === false) {
         assert(text.includes("not signed in on this Mac"));
@@ -242,7 +246,7 @@ async function main() {
         assert(freshness.includes("Signed in; no usage reading"));
       } else {
         assert(!text.includes("This account is not signed in"));
-        assertEqual(freshness.trim(), "No usage reading yet.");
+        if (!message && !emptyAt) assertEqual(freshness.trim(), "No usage reading yet.");
       }
       await page.close();
     }
