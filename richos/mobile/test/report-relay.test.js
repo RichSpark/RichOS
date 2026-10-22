@@ -246,15 +246,35 @@ test('the off switch and the daily cap close new reports honestly and never bloc
   assert.equal(f.posts(), 1);
 });
 
-test('an older unknown ID is reconciled by its footer before any create; a copied footer from another account is ignored', async t => {
+test('an older unknown ID is reconciled by its footer before any create; without a match it stays unconfirmed and is never created', async t => {
   const f = await fixture(t), old = await f.report();
   f.github.add(old.title, old.body);
   f.advance(3600_000);
   const reply = await f.answer(await f.create(old));
   assert.equal(reply.body.state, 'delivered'); assert.equal(reply.body.issue_number, 1); assert.equal(f.posts(), 0);
+  // A copied footer from another account is ignored, and no match is not proof of non-creation.
   const copied = await f.report(); f.github.addForeign(copied.title, copied.body); f.advance(3600_000);
-  assert.equal((await f.answer(await f.create(copied))).body.issue_number, 3);
-  assert.equal(f.posts(), 1);
+  const held = await f.answer(await f.create(copied));
+  assert.equal(held.body.state, 'unconfirmed'); assert.equal(held.body.issue_number, undefined);
+  assert.equal((await f.answer(await f.complete(copied.report_id, copied.receipt_secret))).body.state, 'unconfirmed');
+  f.advance(61_000);
+  assert.equal((await f.answer(await f.status(copied.report_id, copied.receipt_secret))).body.state, 'unconfirmed');
+  assert.equal((await f.answer(await f.retire(copied.report_id, copied.receipt_secret))).body.state, 'unconfirmed', 'nor can it be retired');
+  assert.deepEqual((await f.store.unconfirmed()).map(row => row.report_id), [copied.report_id], 'on the operator list');
+  assert.equal(f.posts(), 0);
+  // A delivered report whose receipt was lost, asked again with a listing that cannot see its issue.
+  const lost = await f.report({}, []);
+  await f.create(lost);
+  assert.equal((await f.answer(await f.complete(lost.report_id, lost.receipt_secret))).body.state, 'delivered'); assert.equal(f.posts(), 1);
+  f.db.raw.prepare('DELETE FROM reports WHERE report_id=?').run(lost.report_id);
+  f.advance(3600_000); f.github.fault('list:empty');
+  assert.equal((await f.answer(await f.create(lost))).body.state, 'unconfirmed');
+  assert.equal((await f.answer(await f.complete(lost.report_id, lost.receipt_secret))).body.state, 'unconfirmed');
+  assert.equal(f.posts(), 1, 'never a second issue');
+  // A delayed listing that finds it returns the existing issue.
+  f.advance(61_000);
+  const later = await f.answer(await f.status(lost.report_id, lost.receipt_secret));
+  assert.equal(later.body.state, 'delivered'); assert.equal(later.body.issue_number, 3);
   const blind = await f.report(); f.advance(3600_000); f.github.fault('list:500');
   const unsure = await f.answer(await f.create(blind));
   assert.equal(unsure.body.state, 'limited', 'an incomplete listing permits no create'); assert.equal(f.posts(), 1);

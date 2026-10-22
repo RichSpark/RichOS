@@ -212,18 +212,20 @@ class Relay {
     if (!control) return unavailable();
     if (control.paused) return reply(503, { state: 'closed', stage: 'not_sent', reason: 'operator_off' });
     if (r.approvedAt < now - OLD_UNKNOWN_MS) {
-      // An older unknown ID: its footer is looked for before any create (PRD §7).
+      // An older unknown ID: its footer is looked for before any create (PRD §7). Its receipt may
+      // have been lost after an issue was created, and no match is not proof of non-creation, so
+      // without a match it stays unconfirmed, on the operator's list, and is never created.
+      const since = Math.min(r.approvedAt, now) - DAY_MS;
       let found;
-      try { found = await this.github.find(await this.github.authorize(), r.reportId, Math.min(r.approvedAt, now) - DAY_MS); }
+      try { found = await this.github.find(await this.github.authorize(), r.reportId, since); }
       catch { found = { kind: 'incomplete' }; }
       if (found.kind === 'incomplete') return reply(503, { state: 'limited', retry_after_seconds: 60 }, 60);
-      if (found.kind === 'found') {
-        // Its approved screenshots come back with it; view() counts only those in the bucket.
-        const stored = [];
-        for (const item of r.manifest) if (await this.present(r.reportId, item)) stored.push(item.attachment_id);
-        await store.adopt(r, found.issue, this.retain, stored);
-        return this.view(await store.get(r.reportId));
-      }
+      // Its approved screenshots come back with it; view() counts only those in the bucket.
+      const stored = [];
+      for (const item of r.manifest) if (await this.present(r.reportId, item)) stored.push(item.attachment_id);
+      if (found.kind === 'found') await store.adopt(r, found.issue, this.retain, stored);
+      else await store.holdUnknown(r, since, stored);
+      return known(await store.get(r.reportId));
     }
     if (!await store.register(r)) return known(await store.get(r.reportId));
     const record = await store.get(r.reportId);
