@@ -167,6 +167,12 @@ pub fn check(folder: &Path, shipped: &Path) -> Result<Vec<&'static str>, Runtime
     for name in [RICH, STU] {
         let Some(yours) = own_copy(folder, name) else { continue };
         let new = shipped_text(shipped, name)?;
+        // A copy with no record is placed against the shipped history, and an engine without
+        // that history (the one an upgrade starts on, before setup puts the new one in place) can
+        // only guess: nothing is recorded or asked until the engine that carries it is installed
+        // (second review rv-20261022T143030Z-c953badd-7eab, finding 1: the guess was saved and
+        // an untouched copy was then asked about instead of updated).
+        if !record.contains_key(name) && !shipped.join(EARLIER).is_dir() { continue; }
         let entry = record.entry(name.to_string())
             .or_insert_with(|| Entry { from: starting_point(&yours, &new, earlier(shipped, name)), declined: None });
         if entry.from == new { continue; }

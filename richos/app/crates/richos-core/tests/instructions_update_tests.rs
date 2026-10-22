@@ -173,6 +173,35 @@ fn a_copy_as_near_to_an_earlier_version_as_to_the_current_one_is_asked_about() {
     }).unwrap();
 }
 
+/// The ordinary upgrade (second review rv-20261022T143030Z-c953badd-7eab, finding 1, its fixture
+/// legacy-startup.py): an install from before the record, its rich.md untouched since it was
+/// copied, starts the new app while the previous engine (no earlier/ history) is still in place;
+/// the window checks then, and again once setup has put the new engine in. Before the fix the first
+/// check saved a guess and the second asked: old-then-new-engine asked=["rich.md"], untouched
+/// rich.md updated=false.
+#[test]
+fn an_untouched_copy_checked_first_against_the_previous_engine_is_still_updated_silently() {
+    let new_engine = engine_app();
+    let s = Scratch::new();
+    let old_engine = s.0.join("old-engine/app");
+    std::fs::create_dir_all(old_engine.join("agents")).unwrap();
+    std::fs::copy(new_engine.join("earlier/rich/5.txt"), old_engine.join("agents").join(RICH)).unwrap();
+    std::fs::copy(new_engine.join("earlier/stu/2.txt"), old_engine.join("agents").join(STU)).unwrap();
+    let untouched = read(new_engine.join("earlier/rich/1.txt"));
+    let folder = s.0.join("central");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join(RICH), &untouched).unwrap();
+    std::fs::write(folder.join(STU), read(old_engine.join("agents").join(STU))).unwrap();
+
+    assert!(check(&folder, &old_engine).unwrap().is_empty(), "the previous engine cannot place the copy, so it asks nothing");
+    assert!(!folder.join(RECORD).exists(), "a guess against the previous engine was recorded");
+    assert_eq!(read(folder.join(RICH)), untouched, "the previous engine wrote the user's file");
+
+    assert!(check(&folder, &new_engine).unwrap().is_empty(), "an untouched copy was asked about instead of updated");
+    assert_eq!(read(folder.join(RICH)), read(new_engine.join("agents").join(RICH)), "the untouched rich.md was not updated");
+    assert_eq!(read(folder.join(STU)), read(new_engine.join("agents").join(STU)), "the untouched stu.md was not updated");
+}
+
 /// The earlier versions are byte for byte what shipped: a copy is recognized only by matching one
 /// exactly, and the commit's Oxford comma fixer once rewrote `stu/1` when it was a `.md` file
 /// (blob 1e67c1d75 became eca4e8016). SHA-256 of each shipped blob, oldest first.
