@@ -59,11 +59,35 @@ use richos_voice::bargein::{
     BargeInMode, AEC_BARGE_IN_REQUIRED_FRAMES, AEC_BARGE_IN_WINDOW_FRAMES,
     BARGE_IN_DEBOUNCE_FRAMES,
 };
-use richos_voice::controller::{CapMsg, CaptureBrain};
+use richos_voice::controller::{AdmittedUtterance, CapMsg, CaptureBrain, RecognizerDesk, RefusalNotices};
+use richos_voice::{VoiceEvent, VoiceObserver};
+use std::sync::{Arc, Mutex};
 use richos_voice::private_fixtures;
 use richos_voice::vad::{frames_to_secs, SAMPLE_RATE, VAD_FRAME_SAMPLES};
 use richos_voice::wav;
 use std::path::{Path, PathBuf};
+
+/// **ONE REPLAY AT A TIME IN THIS TEST PROCESS, OR THE HOST'S CPU GUARD STOPS IT.**
+///
+/// Every test below that replays a recording runs the real canceller frame by frame over 9.5 to
+/// 25.6 s of audio, on one thread. libtest runs the tests of a file side by side, so with the
+/// private fixture present six of them start at once, and the one process holds a core per
+/// test. The host's CPU circuit breaker stops any process above `JOB_CORES` = 3.0 cores for
+/// `WINDOW` = 10 s (`cpu_guard.py`), and it did, with SIGTERM, in the land's merge check:
+/// 4.02 cores at 01:51Z and 3.91 at 01:56Z on 2026-10-22 (`cpu-guard/events.jsonl`, binary
+/// `barge_in_on_the_ceos_rig-293b0af695e6b9e6`), after 3 of 7 tests had printed `ok`. Folding
+/// replies into one test per voice (bc8866111) did not cure it: it still left four replaying
+/// tests running together, and that build was never run with the fixture.
+///
+/// So each replaying test holds this lock for its whole body: one canceller thread works at a
+/// time, about 1 core, whatever `--test-threads` is. Nothing it measures changes; only the
+/// order the tests run in does. A test that fails poisons the lock, and the next one takes it
+/// anyway, so one red test is reported as itself and never turns the rest red.
+static ONE_REPLAY_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+fn one_replay_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    ONE_REPLAY_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 const ECHO_ONLY_MORNING: &str = "tests/fixtures/echo-path/ceo-rig-2026-09-17";
 const ECHO_ONLY_VOL60: &str = "tests/fixtures/echo-path/ceo-rig-2026-09-18-nearend";
@@ -312,6 +336,7 @@ const VOLUMES: &[f32] = &[-52.00, -49.50, -47.00, -45.25, -43.00, -41.00];
 /// failing to drive it.
 #[test]
 fn richs_own_echo_never_interrupts_him_at_any_volume() {
+    let _one = one_replay_at_a_time();
     for prefix in [ECHO_ONLY_MORNING, ECHO_ONLY_VOL60] {
         let mic0 = read(prefix, "-mic.wav");
         let reference = read(prefix, "-reference.wav");
@@ -405,6 +430,7 @@ fn richs_own_echo_never_interrupts_him_at_any_volume() {
               directory to run this."
 )]
 fn the_ceos_own_voice_over_rich_interrupts_him_and_his_words_are_kept() {
+    let _one = one_replay_at_a_time();
     let mic = read_his_mic();
     let reference = read(HIS_VOICE, "-reference.wav");
     // The pair shares one index (`-nearend2-session.json`: "reference[i] is what went to the
@@ -611,4 +637,347 @@ fn every_duration_in_this_file_is_the_frame_math() {
              index). Everything else in this test is frame math and needs no fixture at all."
         );
     }
+}
+
+/// **WHAT MADE THE APP SAY "I COULDN'T TELL YOUR VOICE FROM MY OWN" — and what it now tells him.**
+///
+/// On 2026-10-21 a new user on 1.2.1 got `VoiceNotice::CouldNotListenWhileSpeaking` right after
+/// Rich spoke a cut-off notice through his Mac's speakers. This replays the shipped `CaptureBrain`
+/// over the committed echo-path fixtures to show the two ways that line is reached and what it
+/// says, with no sound played anywhere (CEO §53):
+///
+/// 1. **Rich's own echo, nobody speaking.** Over the echo-only recordings at the six volumes, an
+///    utterance opened by Rich's residual is discarded tainted, which is the one thing that
+///    raises the line (`supervise`, `CapMsg::Discarded { tainted: true }`). Measured and printed
+///    per condition; at least one condition must reach it, or this is not the incident's path.
+/// 2. **A short word of his own over Rich** (private fixture): 0.192 s of the CEO's recorded
+///    voice from `-nearend2-mic.wav`, at its recorded near-field level (about -18 dBFS, see
+///    `the_ceos_own_voice_over_rich_interrupts_him_and_his_words_are_kept`), summed into the
+///    echo-only track while Rich speaks, at a volume where the echo alone raises nothing. 0.192 s
+///    is 12 frames, under the 15 a barge-in needs, so the word cannot stop Rich and is discarded:
+///    this is the case where he DID say something and lost it.
+///
+/// In both, the line he is shown must say what to do: say it again now.
+#[test]
+fn richs_own_echo_raises_the_half_duplex_line_and_it_says_what_to_do() {
+    let _one = one_replay_at_a_time();
+    use richos_voice::controller::VoiceNotice;
+    let line = VoiceNotice::CouldNotListenWhileSpeaking.ceo_message();
+    assert!(line.contains("please say it again now"), "the line gives no next step: {line}");
+
+    let (mut raised, mut conditions) = (0, 0);
+    for prefix in [ECHO_ONLY_MORNING, ECHO_ONLY_VOL60] {
+        let mic0 = read(prefix, "-mic.wav");
+        let reference = read(prefix, "-reference.wav");
+        for &vol in VOLUMES {
+            let g = mic_gain_for_residual(&mic0, &reference, vol);
+            let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
+            let o = replay(&mic, &reference, None, 0);
+            conditions += 1;
+            // `supervise` claims the line on the first tainted discard of a voice session.
+            let mut notices = RefusalNotices::new();
+            let said = (0..o.tainted_discards).find_map(|_| notices.half_duplex());
+            println!(
+                "[measured] {prefix} at residual {vol:.2} dBFS, nobody speaking: {} tainted \
+                 discard(s) -> {}",
+                o.tainted_discards,
+                said.map_or("no line".to_string(), |n| n.ceo_message().to_string())
+            );
+            if let Some(n) = said {
+                assert_eq!(n, VoiceNotice::CouldNotListenWhileSpeaking);
+                raised += 1;
+            }
+        }
+    }
+    assert!(raised >= 1, "Rich's own echo raised the line in no condition: this is not the incident's path");
+    println!("[measured] Rich's own echo alone raised the line in {raised} of {conditions} conditions");
+}
+
+/// The second case of the test above, on the private recording of the CEO's own voice.
+#[test]
+#[cfg_attr(
+    not(private_fixtures),
+    ignore = "PRIVATE FIXTURE: ceo-rig-2026-09-18-nearend2-mic.wav is a recording of the CEO's \
+              own voice and is not committed to this public repository. It is in the private \
+              richos-hq repository at fixtures/echo-path/. Set RICHOS_PRIVATE_FIXTURES to that \
+              directory to run this."
+)]
+fn a_short_word_of_his_over_rich_is_lost_and_the_line_tells_him_to_say_it_again() {
+    let _one = one_replay_at_a_time();
+    use richos_voice::controller::VoiceNotice;
+    let his_mic = read_his_mic();
+    // 12 frames from the middle of his first marked interval: under the 15 a barge-in needs.
+    let (open, close) = HIS_INTERVALS[0];
+    let mid = (((open + close) / 2.0) * SAMPLE_RATE as f32) as usize;
+    let word: Vec<f32> = his_mic[mid..mid + 12 * VAD_FRAME_SAMPLES].to_vec();
+    println!("[measured] his word: {:.3} s at {:.1} dBFS", word.len() as f32 / SAMPLE_RATE as f32, dbfs(&word));
+
+    // The morning recording at Ray's walk volume: measured 2026-10-21, its echo alone opens no
+    // utterance at any of the six volumes, so a discard here is his word's and nothing else's.
+    let mic0 = read(ECHO_ONLY_MORNING, "-mic.wav");
+    let reference = read(ECHO_ONLY_MORNING, "-reference.wav");
+    let g = mic_gain_for_residual(&mic0, &reference, VOLUMES[3]);
+    let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
+    let alone = replay(&mic, &reference, None, 0);
+    assert_eq!(alone.tainted_discards, 0, "the echo alone already raises the line here: {alone:?}");
+    let at = (4.0 * SAMPLE_RATE as f32 / VAD_FRAME_SAMPLES as f32) as usize;
+    let o = replay(&mic, &reference, Some(&word), at);
+    println!("[measured] his word over Rich at 4.0 s: {o:?}");
+    assert_eq!(o.barge_ins, 0, "a 12-frame word stopped Rich; the premise moved: {o:?}");
+    assert!(o.tainted_discards >= 1, "his word was not discarded, so it is not the lost-word case: {o:?}");
+    let said = RefusalNotices::new().half_duplex().expect("the first tainted discard of a session says the line");
+    assert_eq!(said, VoiceNotice::CouldNotListenWhileSpeaking);
+    assert!(said.ceo_message().contains("please say it again now"), "{}", said.ceo_message());
+}
+
+/// What one replay of Rich's echo, the half-duplex line and the reply it invites observed.
+#[derive(Debug, Default)]
+struct LineAndReply {
+    first_tainted_discard: Option<usize>,
+    /// The frame the line was shown on, as the supervisor's tick shows it.
+    shown: Option<usize>,
+    /// Rich's last audible frame (the reference's last active frame plus the device tail).
+    last_audible: usize,
+    /// After the line: utterances admitted, and recordings discarded tainted.
+    reply_admitted: usize,
+    reply_tainted_discards: usize,
+    /// After the line: recordings dropped unheard as too short (a cough, or a short reply).
+    reply_short_discards: usize,
+    /// The speech frames of each reply admitted after the line.
+    reply_speech_frames: Vec<u32>,
+}
+
+/// **DRIVE THE SHIPPED CAPTURE AND THE SHIPPED LINE TOGETHER, AND REPLY THE MOMENT IT IS SHOWN.**
+///
+/// The shipped `CaptureBrain` runs frame by frame over an echo-path pair, followed by silence
+/// (the app keeps listening after Rich stops). Every tainted discard is fed to the same
+/// `RefusalNotices` + `HalfDuplexDelivery` pair `supervise` uses, and the line is asked for on
+/// every frame exactly as the supervisor's tick asks for it: `due(rich_audible,
+/// capture_takes_a_reply)`, the second being what the capture callback publishes after each
+/// frame. From the frame after the line is shown, `reply` is summed into the microphone track:
+/// the person does what the line says, at once, which is the earliest and therefore the hardest
+/// reply the line can invite. When the line is shown it calls `CaptureBrain::invite_reply`,
+/// as the capture callback does on the frame after `supervise` shows it, and
+/// `RefusalNotices::reply_invited`, as `supervise` does. Then it counts what became of that
+/// reply, and returns the replies it admitted and the budget, shared the way `supervise` and the
+/// recognizer desk share it.
+fn line_then_reply(
+    mic: &[f32],
+    reference: &[f32],
+    reply: &[f32],
+) -> (LineAndReply, Vec<AdmittedUtterance>, Arc<Mutex<RefusalNotices>>) {
+    use richos_voice::controller::{HalfDuplexDelivery, VoiceNotice};
+    let n = mic.len().min(reference.len());
+    let frames = n / VAD_FRAME_SAMPLES;
+    let active: Vec<bool> = (0..frames)
+        .map(|b| {
+            let lo = b * VAD_FRAME_SAMPLES;
+            rms(&reference[lo..lo + VAD_FRAME_SAMPLES]) > richos_voice::aec::FAR_END_ACTIVE_RMS
+        })
+        .collect();
+    let first = active.iter().position(|a| *a).expect("the reference is never active");
+    let last = frames - 1 - active.iter().rev().position(|a| *a).unwrap();
+    let mut o = LineAndReply { last_audible: last + 1, ..LineAndReply::default() };
+    let (aec, ring) = EchoCanceller::new();
+    let mut brain = CaptureBrain::with_aec(aec);
+    let notices = Arc::new(Mutex::new(RefusalNotices::new()));
+    let mut admitted = Vec::new();
+    let mut delivery = HalfDuplexDelivery::default();
+    let reply_frames = reply.len().div_ceil(VAD_FRAME_SAMPLES);
+    // Room after the recording for the longest wait the line can have (a tainted recording
+    // closing on its 50-frame hangover, then the 26-frame lookback), the whole reply and the
+    // hangover that closes it, with margin: 200 + reply frames of silence.
+    for b in 0..frames + 200 + reply_frames {
+        let speaking = b >= first && b <= last + 1;
+        let mut frame = [0.0f32; VAD_FRAME_SAMPLES];
+        if b < frames {
+            let lo = b * VAD_FRAME_SAMPLES;
+            ring.push(&reference[lo..lo + VAD_FRAME_SAMPLES]);
+            frame.copy_from_slice(&mic[lo..lo + VAD_FRAME_SAMPLES]);
+        } else {
+            ring.push(&[0.0; VAD_FRAME_SAMPLES]);
+        }
+        if let Some(s) = o.shown.filter(|s| b > *s) {
+            let lo = (b - s - 1) * VAD_FRAME_SAMPLES;
+            for (i, x) in reply.iter().skip(lo).take(VAD_FRAME_SAMPLES).enumerate() {
+                frame[i] += x;
+            }
+        }
+        for m in brain.push_frame(&frame, speaking, false) {
+            match (m, o.shown) {
+                (CapMsg::Discarded { tainted: true }, None) => {
+                    o.first_tainted_discard.get_or_insert(b);
+                    if let Some(n) = notices.lock().unwrap().half_duplex() {
+                        delivery.owe(n);
+                    }
+                }
+                (CapMsg::Discarded { tainted: true }, Some(_)) => o.reply_tainted_discards += 1,
+                (CapMsg::Discarded { tainted: false }, Some(_)) => o.reply_short_discards += 1,
+                (CapMsg::Utterance(u), Some(_)) => {
+                    o.reply_admitted += 1;
+                    o.reply_speech_frames.push(u.utterance.speech_frames);
+                    admitted.push(*u);
+                }
+                _ => {}
+            }
+        }
+        if let Some(n) = delivery.due(speaking, brain.takes_a_reply()) {
+            assert_eq!(n, VoiceNotice::CouldNotListenWhileSpeaking);
+            assert!(o.shown.is_none(), "the line was shown twice");
+            o.shown = Some(b);
+            brain.invite_reply();
+            notices.lock().unwrap().reply_invited();
+        }
+    }
+    (o, admitted, notices)
+}
+
+/// Every line the recognizer desk shows him, in order.
+#[derive(Default)]
+struct Lines(Mutex<Vec<String>>);
+
+impl VoiceObserver for Lines {
+    fn on_voice_event(&self, e: &VoiceEvent) {
+        if let VoiceEvent::Notice { message, .. } | VoiceEvent::Error { message, .. } = e {
+            self.0.lock().unwrap().push(message.clone());
+        }
+    }
+}
+
+/// **Every reply in `replies`, given on the frame after the line, at every residual level.**
+/// Each is `(what it is, its samples, whether it is shorter than the endpoint's minimum)`.
+/// One test for all of them: each replay runs the real canceller over 25 s of audio. That
+/// alone did not keep the process under the host's CPU guard (see [`ONE_REPLAY_AT_A_TIME`],
+/// which does), but it keeps the replies of one voice in one place.
+fn every_reply_to_the_line_is_kept(replies: &[(&str, Vec<f32>, bool)], who: &str) {
+    let mic0 = read(ECHO_ONLY_VOL60, "-mic.wav");
+    let reference = read(ECHO_ONLY_VOL60, "-reference.wav");
+    for &vol in VOLUMES {
+        let g = mic_gain_for_residual(&mic0, &reference, vol);
+        let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
+        for (what, reply, short) in replies {
+            let (o, admitted, budget) = line_then_reply(&mic, &reference, reply);
+            println!(
+                "[measured] residual {vol:.2} dBFS: first tainted discard at {:?} s, line shown at {:?} s, \
+                 Rich audible until {:.3} s; {who} {what} after it: {} admitted (speech frames {:?}), \
+                 {} dropped as too short, {} discarded tainted",
+                o.first_tainted_discard.map(|f| frames_to_secs(f as u32)),
+                o.shown.map(|f| frames_to_secs(f as u32)),
+                frames_to_secs(o.last_audible as u32),
+                o.reply_admitted,
+                o.reply_speech_frames,
+                o.reply_short_discards,
+                o.reply_tainted_discards
+            );
+            let discarded = o.first_tainted_discard.expect("premise: Rich's echo raised no tainted discard here");
+            let at = o.shown.expect("the owed line was never shown");
+            assert!(at > o.last_audible, "the line was shown at frame {at}, Rich audible until {}", o.last_audible);
+            assert!(at > discarded);
+            assert_eq!(o.reply_tainted_discards, 0, "{who} {what} was discarded at residual {vol:.2}: {o:?}");
+            assert_eq!(o.reply_short_discards, 0, "{who} {what} was dropped as a cough at residual {vol:.2}: {o:?}");
+            assert_eq!(o.reply_admitted, 1, "{who} {what} was not passed on at residual {vol:.2}: {o:?}");
+            if *short {
+                assert!(
+                    o.reply_speech_frames[0] < richos_voice::endpoint::MIN_SPEECH_FRAMES,
+                    "premise: {who} {what} was not below the minimum it is meant to get past: {o:?}"
+                );
+            }
+            // **AND IF WHAT HE SAID AGAIN IS REFUSED, HE IS TOLD, WITH THE NEXT STEP.** The reply
+            // goes to the recognizer desk sharing the budget `supervise` spent on the line, and
+            // recognition returns `[BLANK_AUDIO]`, the decoder's documented answer for no words.
+            // Before `RefusalNotices::reply_invited` the line's card outranked that refusal and
+            // nothing at all was shown (review rv-20261021T225454Z-d47fcfe5-d9e7).
+            let lines = Lines::default();
+            let mut desk = RecognizerDesk::sharing(budget);
+            desk.handle(&admitted[0], &lines, |_| Ok(("[BLANK_AUDIO]".to_string(), 1)), |text, _| {
+                panic!("a blank transcript was sent as his words: {text:?}")
+            });
+            let said = lines.0.lock().unwrap().clone();
+            println!("[measured]   {who} {what} refused by recognition: shown {said:?}");
+            assert_eq!(said.len(), 1, "{who} {what} was refused and he was told nothing at residual {vol:.2}: {said:?}");
+            assert!(said[0].contains("say it again"), "the refusal gives no next step: {}", said[0]);
+        }
+    }
+}
+
+/// **THE LINE THAT SAYS "SAY IT AGAIN NOW" IS SHOWN ONLY ONCE A REPLY WOULD BE HEARD, AND THE
+/// REPLY IS KEPT HOWEVER SHORT.**
+///
+/// Three reviews, one class: a next step the user cannot take is a dead end.
+/// - rv-20261021T175303Z-70f43b54-a22b: the supervisor showed the line at the first tainted
+///   discard, early in Rich's answer, inviting a reply into the window that had just lost one.
+/// - rv-20261021T205407Z-bcae8bd4-dcd6: Rich falling silent is not enough either. For
+///   `ECHO_LOOKBACK_FRAMES` = 19 + 7 = 26 frames x 256 / 16 000 = 0.416 s after it, an utterance
+///   carries his echo in its pre-roll and is tainted, and a tainted recording still open when he
+///   stops absorbs whatever is said until its 50-frame (0.800 s) hangover discards it whole.
+/// - rv-20261021T215433Z-1979e6d9-40f2: a reply of a word or two was then dropped unheard by
+///   the endpoint's minimum (`MIN_SPEECH_FRAMES` = 19 frames x 256 / 16 000 = 0.304 s, "a cough
+///   is not a sentence"), with no notice at all.
+///
+/// So over the echo-only recording at every residual level this requires that the line is
+/// shown, never while Rich is audible, and that a reply begun on the very next frame is
+/// admitted (passed on to recognition) and neither discarded nor dropped: a 1.904 s reply and a
+/// 12-frame (0.192 s) one, which must also be under that minimum. Both are Rich's own synthetic
+/// voice from the public reference track, from its first active frame, at -18 dBFS (the CEO's
+/// recorded near-field level), summed into the microphone track after the far end has gone
+/// silent, so to the capture it is near-end speech; the next test uses the CEO's real voice.
+///
+/// Run red on 2026-10-21, once per fix:
+/// - `HalfDuplexDelivery::due` ignoring Rich being audible (show at once): the line was shown at
+///   2.592 s with Rich audible until 24.960 s.
+/// - `CaptureBrain::takes_a_reply` returning `true` (Rich falling silent the only condition):
+///   shown at 24.976 s, the first frame after his last audible one, and at residual -49.50 dBFS
+///   the long reply begun on the next frame was discarded tainted.
+/// - `CaptureBrain::invite_reply` a no-op (the minimum as before): at residual -52.00 dBFS the
+///   short reply was dropped as too short, 0 admitted.
+/// - `RefusalNotices::reply_invited` a no-op (the line's card left standing): the reply
+///   refused by recognition showed nothing at all, here and in the next test, at -52.00 dBFS.
+///
+/// Green: shown at 25.376 s, 26 frames (0.416 s) after 24.960 s; both replies admitted at all
+/// six levels, the short one with 9 or 10 speech frames, and each refused one shown "I didn't
+/// catch that, so I haven't sent anything. Please say it again. I'm still listening."
+#[test]
+fn the_half_duplex_line_is_shown_only_once_a_reply_would_be_heard() {
+    let _one = one_replay_at_a_time();
+    let reference = read(ECHO_ONLY_VOL60, "-reference.wav");
+    let start = (0..reference.len() / VAD_FRAME_SAMPLES)
+        .find(|b| {
+            let lo = b * VAD_FRAME_SAMPLES;
+            rms(&reference[lo..lo + VAD_FRAME_SAMPLES]) > richos_voice::aec::FAR_END_ACTIVE_RMS
+        })
+        .expect("the reference is never active")
+        * VAD_FRAME_SAMPLES;
+    let long = at_dbfs(reference[start..start + (1.904 * SAMPLE_RATE as f32) as usize].to_vec(), -18.0);
+    let word = at_dbfs(reference[start..start + 12 * VAD_FRAME_SAMPLES].to_vec(), -18.0);
+    every_reply_to_the_line_is_kept(&[("1.904 s reply", long, false), ("0.192 s reply", word, true)], "the");
+}
+
+/// The test above with the CEO's own recorded voice as the replies (private fixture): his
+/// whole first marked interval of `-nearend2-mic.wav` (1.904 s, -17.8 dBFS) and the 0.192 s
+/// from its middle that `a_short_word_of_his_over_rich_is_lost_and_the_line_tells_him_to_say_it_again`
+/// uses (-19.7 dBFS), at their recorded near-field level. Red with each of the three mutations
+/// above alike; green: both admitted at all six levels, the word with 7 to 12 speech frames.
+#[test]
+#[cfg_attr(
+    not(private_fixtures),
+    ignore = "PRIVATE FIXTURE: ceo-rig-2026-09-18-nearend2-mic.wav is a recording of the CEO's \
+              own voice and is not committed to this public repository. It is in the private \
+              richos-hq repository at fixtures/echo-path/. Set RICHOS_PRIVATE_FIXTURES to that \
+              directory to run this."
+)]
+fn his_own_reply_to_the_half_duplex_line_is_heard() {
+    let _one = one_replay_at_a_time();
+    let his_mic = read_his_mic();
+    let (open, close) = HIS_INTERVALS[0];
+    let long = his_mic[(open * SAMPLE_RATE as f32) as usize..(close * SAMPLE_RATE as f32) as usize].to_vec();
+    let mid = (((open + close) / 2.0) * SAMPLE_RATE as f32) as usize;
+    let word: Vec<f32> = his_mic[mid..mid + 12 * VAD_FRAME_SAMPLES].to_vec();
+    println!(
+        "[measured] his replies: {:.3} s at {:.1} dBFS and {:.3} s at {:.1} dBFS",
+        long.len() as f32 / SAMPLE_RATE as f32,
+        dbfs(&long),
+        word.len() as f32 / SAMPLE_RATE as f32,
+        dbfs(&word)
+    );
+    every_reply_to_the_line_is_kept(&[("1.904 s reply", long, false), ("0.192 s reply", word, true)], "his");
 }
