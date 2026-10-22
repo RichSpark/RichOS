@@ -9,8 +9,10 @@
 //!
 //! - [`RICH`] and [`STU`]: Rich's and Stu's instructions. On first run the app copies its
 //!   shipped `rich.md` and `stu.md` here ([`provision`]); from then on every session of Rich
-//!   and Stu starts from these copies ([`standing_plugin`]), never from the shipped ones, and
-//!   the app never writes them again. The user's files ARE what runs.
+//!   and Stu starts from these copies ([`standing_plugin`]), never from the shipped ones. The
+//!   user's files ARE what runs. When a new version ships improved ones, a copy the user never
+//!   changed is updated, and a changed one only when the user says OK
+//!   (`instructions_update.rs`).
 //! - [`INSTRUCTIONS`]: the user's own standing instructions, created empty on first run.
 //! - [`ORCHESTRATION_CONFIG`]: the user's values for the engine's checks. The coordination
 //!   folder's generated config is that file plus the app's own keys ([`orchestration_config`]).
@@ -58,9 +60,10 @@ fn create_once(path: &Path, body: &[u8]) -> Result<bool, RuntimeError> {
 }
 
 /// **First run: copy the shipped `rich.md` and `stu.md`, and an empty `instructions.md`, into
-/// the user's folder**, each only when the user has none. `shipped` is the shipped plugin root
-/// (`<engine>/app`). Returns the names it created. Nothing the user has is ever written; a
-/// newer shipped file is never applied over the user's copy.
+/// the user's folder**, each only when the user has none, and record what each copy was made
+/// from. `shipped` is the shipped plugin root (`<engine>/app`). Returns the names it created.
+/// Then a copy the user never changed is brought to a newer shipped version
+/// (`instructions_update::check`); a changed one is never written here.
 pub fn provision(folder: &Path, shipped: &Path) -> Result<Vec<&'static str>, RuntimeError> {
     std::fs::create_dir_all(folder).map_err(|e| RuntimeError(format!("{} could not be created: {e}", folder.display())))?;
     let mut created = Vec::new();
@@ -68,9 +71,16 @@ pub fn provision(folder: &Path, shipped: &Path) -> Result<Vec<&'static str>, Run
         if std::fs::symlink_metadata(folder.join(name)).is_ok() { continue; }
         let body = std::fs::read(shipped.join("agents").join(name))
             .map_err(|e| RuntimeError(format!("the shipped {name} could not be read: {e}")))?;
-        if create_once(&folder.join(name), &body)? { created.push(name); }
+        if create_once(&folder.join(name), &body)? {
+            crate::instructions_update::record_copy(folder, name, &String::from_utf8_lossy(&body))?;
+            created.push(name);
+        }
     }
     if create_once(&folder.join(INSTRUCTIONS), b"")? { created.push(INSTRUCTIONS); }
+    // A failed check never stops a session: the user's files are used as they are.
+    if let Err(e) = crate::instructions_update::check(folder, shipped) {
+        eprintln!("[richos] the newer shipped instructions could not be checked: {}", e.0);
+    }
     Ok(created)
 }
 

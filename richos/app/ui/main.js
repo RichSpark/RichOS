@@ -6897,6 +6897,11 @@ async function runSetup() {
   // THE ENGINE BRINGS THE DECODER (`whisper-cli` is in its runtime), so voice is asked again now:
   // with the models already downloaded in the background, voice switches on without a relaunch.
   refreshVoiceReadiness();
+  // AND THE NEW VERSION'S RICH AND STU INSTRUCTIONS (CEO, 2026-10-22). The window asked when it
+  // opened, which on an upgrade can be before this setup put the new engine in place; asked
+  // again now, a changed rich.md/stu.md gets its question on this first start, not the next one
+  // (second review rv-20261022T112835Z-4fb29728-8541, finding 1).
+  if (next && next.complete && window.RichInstructionsUpdate) window.RichInstructionsUpdate.ask();
   // -------------------------------------------------------------------------------------
   // THE ACCOUNT ANSWER IS IN HAND BEFORE ANYTHING MOVES — audit-9 row 4.
   //

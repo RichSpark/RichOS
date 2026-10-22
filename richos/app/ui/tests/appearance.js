@@ -1526,6 +1526,9 @@ async function main() {
     // checked rather than believed.
     const rules = SOURCES.cssRules("font-size");
     assert(rules.length >= 150, "only " + rules.length + " font-size declarations found — that is not this tree");
+    // SEVEN SINCE THE INSTRUCTIONS UPDATE (`instructions-update.css`, round 37: every font-size
+    // in `rem`, none below 1rem, so no px declaration and no floor exception; the walk below
+    // reads it like the rest).
     // SIX SINCE THE DICTATION OVERLAY (`dictation-overlay.css`: 11 font-sizes, all `1rem`, so no
     // px declaration and no floor exception; the walk below reads it like the rest). FIVE SINCE 2026-09-29, AND NAMED RATHER THAN COUNTED. `speckle.css` is the design
     // system's speckled-ground stylesheet, copied byte for byte from richos-hq design/system
@@ -1534,8 +1537,8 @@ async function main() {
     // list is compared by NAME, so a swap of one file for another cannot pass as "still five".
     assertEqual(
       SOURCES.styleSources(),
-      ["fonts/fonts.css", "style.css", "speckle.css", "splash.css", "home.css", "dictation-overlay.css"],
-      "the shell links a different set of stylesheets from the six this check was measured against"
+      ["fonts/fonts.css", "style.css", "speckle.css", "splash.css", "home.css", "instructions-update.css", "dictation-overlay.css"],
+      "the shell links a different set of stylesheets from the seven this check was measured against"
     );
     // THE TWO DERIVATIONS ARE JOINED, the way `lib/harness.js` joins its two PNG decoders: a
     // brace-counting walk and the property regex must see the same declarations, or the walk

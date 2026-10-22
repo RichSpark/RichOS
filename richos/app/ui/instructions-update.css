@@ -1,0 +1,219 @@
+/* IMPROVED RICH AND STU INSTRUCTIONS: the question, the update, and the before and after.
+   Built as drawn from the CEO's chosen design, richos-hq design/mockups/rounds/round-37/
+   updated-instructions.html (5126e1391), its round-37 stylesheet with the mockup strip and the
+   mockup's click notes left out. Every color is one of the app's tokens (style.css) or a tint of
+   one. Contrast, both themes, as that round's README computes it and ui/tests/
+   instructions-update.js re-measures it under WebKit: nothing here is below 4.5:1 for text or
+   3:1 for an indicator, nothing is below 16px and nothing is declared exempt. */
+
+:root {
+  /* The two highlights: the app's own --success and --danger at a low alpha, over the sunk well. */
+  --iu-add-bg: rgba(127, 184, 148, 0.16);
+  --iu-del-bg: rgba(232, 131, 124, 0.16);
+  --iu-hatch: rgba(223, 228, 238, 0.05);
+}
+:root[data-theme="light"] {
+  --iu-add-bg: rgba(58, 92, 70, 0.13);
+  --iu-del-bg: rgba(138, 47, 40, 0.12);
+  --iu-hatch: rgba(12, 19, 34, 0.045);
+}
+
+/* ---------- shared ---------------------------------------------------------------------------- */
+/* 240, as `.home-prefs`: above the home screen (150) and the held opening screen (200), so the
+   question is over whatever is on screen when the new version opens; below the Bust a bug panel
+   (#bugdock, 298) and Settings (300), so a report started over it is on top and Settings stays
+   above every overlay (review rv-20261022T132946Z-3284b71e-753a: at 299 its scrim covered the
+   report panel). */
+.iu-overlay { z-index: 240; align-items: center; padding: 24px; }
+.iu-overlay code, .iu-mono { font-family: var(--mono); }
+.iu-icon { width: 20px; height: 20px; flex-shrink: 0; }
+@keyframes iu-spin { to { transform: rotate(360deg); } }
+.iu-spin { animation: iu-spin 0.9s linear infinite; }
+.iu-link {
+  font: inherit; font-size: 1rem; font-weight: 500; color: var(--accent-text); background: none; border: 0; padding: 2px 2px;
+  border-radius: 4px; cursor: pointer; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px;
+}
+.iu-link:hover { text-decoration-thickness: 2px; background: var(--tint-soft); }
+.iu-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- 1. THE QUESTION ------------------------------------------------------------------- */
+.iu-q {
+  width: min(620px, 92vw); padding: 30px 34px 26px; max-height: none; overflow: visible;
+  transform-origin: 50% 50%;
+}
+.iu-q-mark { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.iu-q-mark svg { width: 34px; height: 34px; }
+.iu-q-text {
+  margin: 0 0 20px; font-family: var(--font-serif); font-weight: 400; font-size: 1.375rem; line-height: 1.42;
+  color: var(--ink); letter-spacing: -0.003em;
+}
+.iu-q-text code { font-size: 1.1875rem; padding: 1px 3px; border-radius: 6px; background: var(--tint-soft); white-space: nowrap; }
+.iu-files { list-style: none; margin: 0 0 24px; padding: 0; border-top: 1px solid var(--line); }
+.iu-files li {
+  display: flex; align-items: center; gap: 12px; padding: 11px 2px; border-bottom: 1px solid var(--line);
+  font-size: 1rem; color: var(--ink);
+}
+.iu-files li .iu-icon { color: var(--gold-text); }
+.iu-files code { font-size: 1rem; color: var(--ink); }
+.iu-files .iu-file-status {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 1rem; white-space: nowrap;
+}
+.iu-files .iu-file-status svg { width: 18px; height: 18px; }
+.iu-files li[data-s="working"] .iu-file-status svg { color: var(--gold-text); }
+.iu-files li[data-s="done"] .iu-file-status svg { color: var(--success); }
+.iu-files li[data-s="done"] .iu-file-status { color: var(--ink); }
+.iu-q-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.iu-q-actions .desk-btn { min-width: 92px; padding: 8px 18px; font-weight: 500; }
+.iu-q-actions .desk-btn:not(.desk-btn--confirm) { color: var(--ink); }
+
+/* The update, in the same panel: the question gives way to the work. */
+.iu-q[data-s="working"] .iu-q-ask, .iu-q[data-s="ask"] .iu-q-work { display: none; }
+.iu-q-work-head { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; }
+.iu-q-work-head h2 { margin: 0; font-family: var(--font-serif); font-weight: 400; font-size: 1.375rem; line-height: 1.3; color: var(--ink); }
+.iu-q-work-head svg { width: 22px; height: 22px; color: var(--gold-text); }
+.iu-q-lede { margin: 0 0 16px; font-size: 1rem; line-height: 1.5; color: var(--ink-soft); }
+.iu-q-progress { height: 3px; border-radius: 3px; background: var(--line); overflow: hidden; margin: 0 0 6px; }
+.iu-q-progress i { display: block; height: 100%; width: 0; background: var(--gold); transition: width .5s var(--out-quint); }
+.iu-q-error { margin: 0 0 16px; font-size: 1rem; line-height: 1.5; color: var(--ink); }
+
+/* ---------- 2. BEFORE AND AFTER --------------------------------------------------------------- */
+.iu-sheet {
+  width: min(1260px, 94vw); height: calc(100vh - 48px); max-height: none; padding: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.iu-head { padding: 24px 32px 0; }
+.iu-head-row { display: flex; align-items: center; gap: 18px; }
+.iu-title { margin: 0; font-family: var(--font-serif); font-weight: 400; font-size: 1.75rem; line-height: 1.15; color: var(--ink); }
+.iu-done-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 1rem; color: var(--ink); }
+.iu-done-chip svg { width: 18px; height: 18px; color: var(--success); }
+.iu-lede { margin: 8px 0 0; font-size: 1rem; line-height: 1.5; color: var(--ink-soft); }
+
+.iu-tabs { margin-left: auto; display: flex; gap: 8px; }
+.iu-tab {
+  display: inline-flex; align-items: baseline; gap: 8px; padding: 7px 14px; border-radius: 999px; cursor: pointer;
+  font: 500 1rem/1.2 var(--font); color: var(--ink); background: transparent; border: 1px solid var(--line-control);
+}
+.iu-tab code { font-size: 1rem; font-weight: 600; }
+.iu-tab .iu-tab-n { color: var(--ink-soft); }
+.iu-tab:hover { border-color: var(--accent); }
+.iu-tab[aria-selected="true"] { background: var(--tint-gold-strong); border-color: var(--gold); }
+.iu-tab[aria-selected="true"] .iu-tab-n { color: var(--ink); }
+.iu-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.iu-tab--static { cursor: default; }
+.iu-tab--static:hover { border-color: var(--gold); }
+
+.iu-fileline {
+  margin: 14px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+  font-size: 1rem; color: var(--ink-soft);
+}
+.iu-fileline code { font-size: 1rem; color: var(--ink); }
+.iu-legend { margin-left: auto; display: flex; align-items: center; gap: 18px; color: var(--ink); }
+.iu-legend > span { display: inline-flex; align-items: center; gap: 8px; }
+.iu-key {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px;
+  font: 700 1rem/1 var(--mono);
+}
+.iu-key--add { background: var(--iu-add-bg); color: var(--success); box-shadow: inset 0 -2px 0 var(--success); }
+.iu-key--del { background: var(--iu-del-bg); color: var(--danger); box-shadow: inset 0 -2px 0 var(--danger); }
+
+/* The well holding the two versions. */
+.iu-well {
+  position: relative; flex: 1; min-height: 0; margin: 14px 32px 0; border: 1px solid var(--line-control);
+  border-radius: var(--radius); background: var(--surface-sunk); overflow: hidden;
+}
+.iu-scroll { position: absolute; inset: 0 18px 0 0; overflow-y: auto; scroll-behavior: smooth; overscroll-behavior: contain; }
+.iu-cols-head {
+  position: sticky; top: 0; z-index: 2; display: grid; grid-template-columns: 1fr 1fr;
+  background: var(--surface-sunk); border-bottom: 1px solid var(--line-control);
+}
+.iu-cols-head div {
+  padding: 11px 24px 10px 40px; font-size: 1rem; font-weight: 600; color: var(--ink);
+  display: flex; align-items: baseline; gap: 10px;
+}
+.iu-cols-head div + div { border-left: 1px solid var(--line-control); }
+.iu-cols-head small { font-size: 1rem; font-weight: 400; color: var(--ink-soft); }
+
+.iu-rows { display: grid; grid-template-columns: 1fr 1fr; }
+.iu-cell {
+  position: relative; padding: 9px 24px 9px 40px; font: 400 1rem/1.62 var(--font); color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere; transition: background-color .5s;
+}
+.iu-cell.iu-after { border-left: 1px solid var(--line-control); }
+.iu-row-first { padding-top: 16px; }
+.iu-row-last { padding-bottom: 28px; }
+.iu-cell code { font-size: 1rem; }
+.iu-cell code, .iu-cell .iu-fm { font-family: var(--mono); }
+.iu-cell .iu-fm { font-size: 1rem; line-height: 1.55; color: var(--ink); }
+/* The edit's mark in the gutter: a bar (the indicator) and its sign. */
+.iu-bar { position: absolute; left: 0; top: 6px; bottom: 6px; width: 4px; border-radius: 0 3px 3px 0; }
+.iu-bar--add { background: var(--success); }
+.iu-bar--del { background: var(--danger); }
+.iu-sign {
+  position: absolute; left: 14px; top: 9px; font: 700 1rem/1.62 var(--mono); user-select: none;
+}
+.iu-sign--add { color: var(--success); }
+.iu-sign--del { color: var(--danger); }
+/* Nothing here before: a paragraph that is new in the update. */
+.iu-cell.is-empty {
+  background-image: repeating-linear-gradient(135deg, var(--iu-hatch) 0 2px, transparent 2px 9px);
+}
+.iu-ins, .iu-del { border-radius: 3px; padding: 1px 1px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.iu-ins { background: var(--iu-add-bg); border-bottom: 2px solid var(--success); }
+.iu-del {
+  background: var(--iu-del-bg); text-decoration-line: line-through; text-decoration-color: var(--danger);
+  text-decoration-thickness: 2px;
+}
+.iu-yours {
+  display: inline-block; margin: 0 6px 0 0; padding: 0 9px; border-radius: 999px; border: 1px solid var(--danger);
+  font: 600 1rem/1.45 var(--font); color: var(--ink); white-space: nowrap; text-decoration: none; vertical-align: 1px;
+}
+/* The edits arrive one after another when the result opens. */
+.iu-rows.is-arriving .iu-ins, .iu-rows.is-arriving .iu-del, .iu-rows.is-arriving .iu-bar,
+.iu-rows.is-arriving .iu-sign, .iu-rows.is-arriving .iu-yours {
+  animation: iu-arrive .7s var(--out-quint) both; animation-delay: calc(var(--i, 0) * 260ms + 250ms);
+}
+@keyframes iu-arrive {
+  from { background-color: transparent; border-color: transparent; text-decoration-color: transparent; opacity: .35; }
+}
+.iu-rows.is-arriving .iu-bar, .iu-rows.is-arriving .iu-sign { animation-name: iu-arrive-mark; }
+@keyframes iu-arrive-mark { from { opacity: 0; transform: scaleY(.3); } }
+/* The edit being looked at. */
+.iu-cell.is-current::after {
+  content: ""; position: absolute; inset: 2px 2px; border-radius: 6px; pointer-events: none;
+  box-shadow: inset 0 0 0 2px var(--gold); animation: iu-ring 1.6s var(--out-quint) 1 forwards;
+}
+@keyframes iu-ring { 0% { opacity: 0; } 15% { opacity: 1; } 100% { opacity: 0; } }
+
+/* The map of where the edits are, down the right edge. */
+.iu-map { position: absolute; top: 0; right: 0; bottom: 0; width: 18px; border-left: 1px solid var(--line-control); }
+.iu-map button {
+  position: absolute; left: 3px; width: 11px; min-height: 6px; padding: 0; border: 0; border-radius: 3px; cursor: pointer;
+}
+.iu-map button.is-add { background: var(--success); }
+.iu-map button.is-del { background: var(--danger); }
+.iu-map button.is-mix { background: linear-gradient(var(--danger) 0 50%, var(--success) 50% 100%); }
+.iu-map button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.iu-map-view {
+  position: absolute; left: 0; right: 0; border-radius: 2px; background: var(--tint-soft); pointer-events: none;
+}
+
+.iu-foot { display: flex; align-items: center; gap: 12px; padding: 14px 32px 18px; }
+.iu-nav { display: inline-flex; align-items: center; gap: 8px; font-size: 1rem; color: var(--ink); }
+.iu-nav-btn {
+  display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; cursor: pointer;
+  background: transparent; border: 1px solid var(--line-control); color: var(--ink); padding: 0;
+}
+.iu-nav-btn svg { width: 18px; height: 18px; }
+.iu-nav-btn:hover { border-color: var(--accent); color: var(--accent-text); }
+.iu-nav-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.iu-nav-label { min-width: 104px; }
+.iu-foot .desk-btn--confirm { margin-left: auto; min-width: 92px; padding: 8px 18px; font-weight: 500; }
+
+/* The sheet grows out of the question's panel. */
+.iu-sheet.is-entering { animation: iu-grow .55s var(--out-quint) both; }
+@keyframes iu-grow { from { clip-path: inset(var(--iu-from)); opacity: .2; } to { clip-path: inset(0 0 0 0 round 12px); opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .iu-sheet.is-entering, .iu-rows.is-arriving *, .iu-cell.is-current::after { animation: none !important; }
+  .iu-scroll { scroll-behavior: auto; }
+}
