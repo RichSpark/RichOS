@@ -82,10 +82,16 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch, sett
     // finishes the exact attempt; if not, status says unknown_id and the app may send again.
     const gone = report({ started });
     await create(gone, { signal: AbortSignal.timeout(150) }).catch(() => null);
-    let late = await status(gone), resent = false;
+    // A definitive "rejected" (the attempt stopped before anything was sent) allows Try again with
+    // the same ID, as the app does; the step records which path it took.
+    let late = await status(gone), resent = false, triedAgain = false;
     if (late.body?.state === 'unknown_id') { resent = true; late = await create(gone); }
-    for (let i = 0; i < 40 && late?.body?.state !== 'delivered'; i++) { await pause(3000); late = await status(gone); }
-    check('a client gone after sending still gets exactly one issue', late?.body?.state === 'delivered', { issue: late?.body?.issue_url, resent });
+    for (let i = 0; i < 40 && late?.body?.state !== 'delivered'; i++) {
+      if (late?.body?.state === 'rejected' && !triedAgain) { triedAgain = true; late = await create(gone); continue; }
+      await pause(3000); late = await status(gone);
+    }
+    check('a client gone after sending still gets exactly one issue', late?.body?.state === 'delivered',
+      { issue: late?.body?.issue_url, resent, triedAgain, last: late?.body?.state });
 
     const id = reportId(), tail = `\n\n${footer(id)}`;
     const largest = report({ started, id, body: 'A9 maximum body\\. ' + 'x'.repeat(60000 - Buffer.byteLength(tail) - 18) + tail });

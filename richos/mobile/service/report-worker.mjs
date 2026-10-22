@@ -72,8 +72,8 @@ class Relay {
   }
   async throttled(binding, key) { return !(await binding.limit({ key: await sha256(key) })).success; }
 
-  // One attempt, owned by whoever wrote its pending record. Registered with waitUntil, so a client
-  // that disconnects or quits does not stop the exact approved attempt from finishing.
+  // One attempt, owned by whoever wrote its pending record. The create that runs it is registered
+  // with waitUntil (see handle), so a client that disconnects or quits does not stop it.
   async attempt(r, attemptId) {
     const { store, github } = this;
     let token;
@@ -172,9 +172,7 @@ class Relay {
       if (existing.content_hash !== r.contentHash) return reply(409, { state: 'conflict' });
       return view(existing, this.now());
     }
-    const work = this.attempt(r, attemptId);
-    this.ctx?.waitUntil?.(work.catch(() => {}));
-    return view(await work, this.now(), true);
+    return view(await this.attempt(r, attemptId), this.now(), true);
   }
 
   async status(request, id) {
@@ -206,7 +204,13 @@ export async function handle(request, env, ctx, ports = {}) {
     if (request.method !== 'POST' || !(url.pathname === '/v1/reports' || (status && REPORT_ID.test(status[1])))) return reply(404, { error: 'not_found' });
     if (!configured(env)) return unavailable();
     const relay = new Relay(env, ctx, ports);
-    return status ? await relay.status(request, status[1]) : await relay.create(request);
+    if (status) return await relay.status(request, status[1]);
+    // The whole create is handed to waitUntil before its first await: a client that disconnects
+    // or quits after sending cannot stop it between its pending record and its GitHub call
+    // (seen live on 2026-10-22, when that gap left an accepted report "not posted").
+    const work = relay.create(request);
+    ctx?.waitUntil?.(work.catch(() => {}));
+    return await work;
   } catch { return unavailable(); }
 }
 

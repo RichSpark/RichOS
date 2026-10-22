@@ -38,6 +38,19 @@ test('an approved report becomes exactly one issue with its exact words; replay 
   assert(!issue.body.includes(payload.receipt_secret));
 });
 
+test('a create is handed to waitUntil before its first await, so a client gone after acceptance cannot strand it', async t => {
+  // Live on 2026-10-22: the client went away 150 ms after sending; the pending record had been
+  // written but the attempt never started, so the report ended "not posted" instead of posted.
+  const f = await fixture(t), payload = await f.report();
+  const reply = f.create(payload);
+  assert.equal(f.waits.length, 1, 'registered synchronously, before any database or GitHub call');
+  assert.equal((await f.answer(await reply)).body.state, 'delivered');
+  assert.equal((await f.waits[0]).status, 201);
+  // Status requests create nothing, so they are not kept alive.
+  await f.status(payload.report_id, payload.receipt_secret);
+  assert.equal(f.waits.length, 1);
+});
+
 test('the schema, sizes and fingerprint are checked and nothing is stored for a refused request', async t => {
   const f = await fixture(t);
   const cases = [
