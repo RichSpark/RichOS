@@ -1033,10 +1033,16 @@ def run(args):
         import threading
         stop = threading.Event()
         log_path = storage_path(Path(args.syslog))
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         device = os.environ.get("RICHOS_IOS_DEVICE", "")
         relay = syslog_relay(device, False)
-        tap = threading.Thread(target=lambda: kept.update(capture_syslog(
-            device, log_path, SYSLOG_KEEP, False, stop.is_set, relay)), daemon=True)
+
+        def keep_log():
+            try:
+                kept.update(capture_syslog(device, log_path, SYSLOG_KEEP, False, stop.is_set, relay))
+            except Exception as error:  # noqa: BLE001: said in the summary, never swallowed
+                kept["error"] = f"the log capture failed: {type(error).__name__}: {error}"
+        tap = threading.Thread(target=keep_log, daemon=True)
         tap.start()
     try:
         summary = _run(args)
@@ -1047,7 +1053,14 @@ def run(args):
             stop.set()
             tap.join(timeout=15)
     if summary is not None and tap is not None:
-        summary["syslog"] = kept or {"error": "the log relay did not finish within 15 s of the walk's end"}
+        if tap.is_alive():
+            kept.setdefault("error", "the log relay did not finish within 15 s of the walk's end")
+        elif not kept.get("error") and kept.get("read", 0) == 0:
+            kept["error"] = "the phone's log relay produced nothing (is the hardware UDID attached?)"
+        summary["syslog"] = kept
+        # The log was asked for: a walk without it is not the walk that was asked for.
+        if kept.get("error"):
+            summary["passed"] = False
     wifi = None
     if touches_wifi(steps) and args.phone_touched:
         wifi = ensure_wifi_on(Path(args.out).resolve() / "wifi-restore")

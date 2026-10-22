@@ -98,6 +98,40 @@ class OnePhone(Fixture):
         self.assertEqual(after, "PHONE-B")
 
 
+class KeptLog(Fixture):
+    """`run --syslog FILE`: a log that was asked for and could not be kept fails the run, and says why
+    (review rv-20261022T114506Z-e7a2531d-27fc: an empty capture and a thread's error read as passed)."""
+
+    def run_with_log(self, capture):
+        listing = self.root / "steps.json"
+        listing.write_text(json.dumps([{"do": "launch"}]))
+        log = self.root / "logs" / "phone.txt"
+        args = SimpleNamespace(steps=str(listing), out=str(self.root / "out"), syslog=str(log))
+        out = io.StringIO()
+        with patch.dict(os.environ, ENV), patch.object(phone_ios, "_run", return_value={"passed": True}), \
+                patch.object(phone_ios, "syslog_relay", return_value=object()), \
+                patch.object(phone_ios, "capture_syslog", side_effect=capture), contextlib.redirect_stdout(out):
+            code = phone_ios.run(args)
+        return code, json.loads(out.getvalue()), log
+
+    def test_a_kept_log_leaves_the_verdict_alone(self):
+        code, summary, log = self.run_with_log(lambda *a: {"out": "x", "kept": 3, "read": 9})
+        self.assertEqual((code, summary["passed"]), (0, True))
+        self.assertTrue(log.parent.is_dir(), "the log's folder is made before the capture starts")
+
+    def test_an_empty_capture_is_not_a_pass(self):
+        code, summary, _ = self.run_with_log(lambda *a: {"out": "x", "kept": 0, "read": 0, "relayExit": 1})
+        self.assertEqual((code, summary["passed"]), (1, False))
+        self.assertIn("produced nothing", summary["syslog"]["error"])
+
+    def test_a_capture_that_raised_says_so(self):
+        def boom(*_a):
+            raise FileNotFoundError("no such folder")
+        code, summary, _ = self.run_with_log(boom)
+        self.assertEqual((code, summary["passed"]), (1, False))
+        self.assertIn("FileNotFoundError", summary["syslog"]["error"])
+
+
 if __name__ == "__main__":
     result = unittest.main(exit=False, verbosity=1).result
     print("OK" if result.wasSuccessful() else "FAILED")
