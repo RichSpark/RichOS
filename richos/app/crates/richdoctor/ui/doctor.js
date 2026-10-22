@@ -243,7 +243,8 @@
   function fromSaved(f) {
     return { n: f.n, name: f.name, file: f.name, note: fmtDims(f.width, f.height), covers: new Array(f.covers).fill(null), approved: true, reducedFlag: f.reduced, final: { src: f.url, w: f.width, h: f.height, bytes: f.bytes } };
   }
-  function refreshShots() { return invoke("images").then(function (list) { S.shots = (list || []).map(fromSaved); return S.shots; }); }
+  // A saved screenshot that cannot be read is named (the app's error), never dropped silently.
+  function refreshShots() { return invoke("images").then(function (list) { S.shots = (list || []).map(fromSaved); return S.shots; }, function (err) { fail(err); return S.shots; }); }
   function shotsBytes() { return S.shots.reduce(function (a, s) { return a + s.final.bytes; }, 0); }
   // Flatten the covers into new pixels, have the app make the final bytes, and reduce until the
   // file fits 5 MiB (no narrower than 30% of the original: past that there is no legible fit).
@@ -825,6 +826,7 @@
     const b = $("em-body"), f = $("em-foot");
     const id = (S.delivery && S.delivery.report_id) || (S.review && S.review.report_id) || "";
     Promise.all([invoke("mail_available"), invoke("email_plan")]).then(function (got) {
+      if (got[1].error) { fail(got[1].error); return; }
       const mail = got[0], plan = got[1], n = plan.count, big = plan.parts > 1;
       if (mail) {
         b.innerHTML = '<h2 id="em-h">Email support</h2><p class="lead"></p>' + (big ? '<div class="note">' + G.info + '<p class="big"></p></div>' : "") + '<p class="soft" style="margin:0">Emailing is not the same as the public report: it does not create a GitHub report or change this report’s delivery state.</p>';
@@ -845,6 +847,7 @@
   }
   function openSave() {
     invoke("email_plan").then(function (plan) {
+      if (plan.error) { fail(plan.error); return; }
       const n = plan.count, big = plan.parts > 1;
       $("sv-h").textContent = n ? "Save report and screenshots" : "Save report as a text file";
       $("sv-p").textContent = n

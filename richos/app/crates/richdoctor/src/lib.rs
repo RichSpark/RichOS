@@ -365,7 +365,7 @@ fn mail_available() -> bool {
 #[tauri::command]
 fn open_mail(engine: State<Engine>, anyway: Option<bool>) -> Result<(), String> {
     let (id, text) = engine.exact_text().ok_or("There is no reviewed report yet.")?;
-    let files = engine.image_files();
+    let files = engine.image_files()?;
     let sizes: Vec<u64> = files.iter().map(|(_, b)| b.len() as u64).collect();
     // Round 40 §7: above 10 MiB the sheet offers the numbered packages, and Open in Mail anyway.
     if richdoctor_core::email::needs_parts(&sizes) && !anyway.unwrap_or(false) {
@@ -470,7 +470,7 @@ fn remove_image(engine: State<Engine>, index: usize) -> Result<(), String> {
 
 /// The approved screenshots' final bytes, in order.
 #[tauri::command]
-fn images(engine: State<Engine>) -> Vec<Value> {
+fn images(engine: State<Engine>) -> Result<Vec<Value>, String> {
     engine.images()
 }
 

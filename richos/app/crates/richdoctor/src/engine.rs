@@ -755,17 +755,25 @@ impl Engine {
         v
     }
 
+    /// Screenshot `i + 1`'s saved bytes and facts, checked against its approval, or the sentence
+    /// that names it (Codex audit of 0881b5f8f #2: never a silent omission).
+    fn shot_checked(&self, d: &Draft, i: usize, s: &richdoctor_core::store::Shot) -> Result<(Vec<u8>, richdoctor_core::image_profile::Entry), String> {
+        let named = || format!("Screenshot {} could not be read on this Mac: its saved copy is missing or is not the image you approved. Remove it from the report and add it again.", i + 1);
+        let bytes = self.env.store.shot_bytes(&d.id, s).ok_or_else(named)?;
+        let entry = richdoctor_core::image_profile::Entry::of(i as u32 + 1, &bytes).map_err(|_| named())?;
+        Ok((bytes, entry))
+    }
+
     /// Each approved screenshot's facts, read from its saved bytes: number, neutral name, size,
-    /// dimensions, covers, whether it was reduced to fit.
+    /// dimensions, covers, whether it was reduced to fit. One that cannot be read keeps its
+    /// place and number and says why (`problem`).
     fn shot_facts(&self, d: &Draft) -> Vec<Value> {
-        use richdoctor_core::image_profile::Entry;
         d.screenshots
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| {
-                let bytes = self.env.store.shot_bytes(&d.id, s)?;
-                let e = Entry::of(i as u32 + 1, &bytes).ok()?;
-                Some(json!({"n": i + 1, "name": e.filename, "width": e.width, "height": e.height, "bytes": e.bytes, "covers": s.covers, "reduced": s.reduced}))
+            .map(|(i, s)| match self.shot_checked(d, i, s) {
+                Ok((_, e)) => json!({"n": i + 1, "name": e.filename, "width": e.width, "height": e.height, "bytes": e.bytes, "covers": s.covers, "reduced": s.reduced}),
+                Err(problem) => json!({"n": i + 1, "name": format!("screenshot-{}", i + 1), "bytes": 0, "covers": s.covers, "reduced": s.reduced, "problem": problem}),
             })
             .collect()
     }
@@ -829,15 +837,17 @@ impl Engine {
 
     /// The approved screenshots with their neutral names (`screenshot-1.png`), in order: what an
     /// email or a saved package carries (never an original filename or path).
-    pub fn image_files(&self) -> Vec<(String, Vec<u8>)> {
+    /// `Err` names the first screenshot that cannot be read: Email support and Save never go
+    /// out with fewer images than the report has.
+    pub fn image_files(&self) -> Result<Vec<(String, Vec<u8>)>, String> {
         let inner = self.inner.lock().unwrap();
-        let Some(d) = inner.draft.as_ref() else { return Vec::new() };
+        let Some(d) = inner.draft.as_ref() else { return Ok(Vec::new()) };
         d.screenshots
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| {
+            .map(|(i, s)| {
                 let ext = if s.media_type == "image/jpeg" { "jpg" } else { "png" };
-                self.env.store.shot_bytes(&d.id, s).map(|b| (format!("screenshot-{}.{ext}", i + 1), b))
+                self.shot_checked(d, i, s).map(|(b, _)| (format!("screenshot-{}.{ext}", i + 1), b))
             })
             .collect()
     }
@@ -848,7 +858,7 @@ impl Engine {
     pub fn export(&self, dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
         use richdoctor_core::email;
         let (id, text) = self.exact_text().ok_or("There is no reviewed report yet.")?;
-        let files = self.image_files();
+        let files = self.image_files()?;
         let sizes: Vec<u64> = files.iter().map(|(_, b)| b.len() as u64).collect();
         let parts = if email::needs_parts(&sizes) { email::packages(text.len() as u64, &sizes)? } else { vec![email::Part { number: 1, images: (0..files.len()).collect(), bytes: 0 }] };
         let mut written = Vec::new();
@@ -1243,7 +1253,10 @@ impl Engine {
     /// of at most 10 MiB they need (computed from the real sizes, PRD §7).
     pub fn email_plan(&self) -> Value {
         use richdoctor_core::email;
-        let files = self.image_files();
+        let files = match self.image_files() {
+            Ok(f) => f,
+            Err(problem) => return json!({"error": problem}),
+        };
         let sizes: Vec<u64> = files.iter().map(|(_, b)| b.len() as u64).collect();
         let text = self.exact_text().map(|(_, t)| t.len() as u64).unwrap_or(0);
         let parts = if email::needs_parts(&sizes) { email::packages(text, &sizes).map(|p| p.len()).unwrap_or(0) } else { 1 };
@@ -1347,18 +1360,17 @@ impl Engine {
         Ok(())
     }
 
-    /// The approved screenshots' final bytes, as the window shows them.
-    pub fn images(&self) -> Vec<Value> {
+    /// The approved screenshots' final bytes, as the window shows them, each with its own
+    /// number. `Err` names one that cannot be read.
+    pub fn images(&self) -> Result<Vec<Value>, String> {
         let inner = self.inner.lock().unwrap();
-        let Some(d) = inner.draft.as_ref() else { return Vec::new() };
-        let facts = self.shot_facts(d);
+        let Some(d) = inner.draft.as_ref() else { return Ok(Vec::new()) };
         d.screenshots
             .iter()
-            .zip(facts)
-            .filter_map(|(s, mut f)| {
-                let b = self.env.store.shot_bytes(&d.id, s)?;
-                f["url"] = json!(format!("data:{};base64,{}", s.media_type, util::base64_std(&b)));
-                Some(f)
+            .enumerate()
+            .map(|(i, s)| {
+                let (b, e) = self.shot_checked(d, i, s)?;
+                Ok(json!({"n": i + 1, "name": e.filename, "width": e.width, "height": e.height, "bytes": e.bytes, "covers": s.covers, "reduced": s.reduced, "url": format!("data:{};base64,{}", s.media_type, util::base64_std(&b))}))
             })
             .collect()
     }
@@ -1973,7 +1985,7 @@ mod tests {
         let sent: Value = serde_json::from_str(&std::fs::read_to_string(e.env().store.work_dir().join("captured.json")).unwrap()).unwrap();
         e.close();
         let images = sent["message"]["content"].as_array().unwrap().iter().filter(|v| v["type"] == "image").count();
-        assert_eq!(e.images().len(), 0);
+        assert_eq!(e.images().unwrap().len(), 0);
         assert_eq!(images, 0, "report A's screenshot never goes out with report B");
         std::fs::remove_dir_all(root).ok();
     }
@@ -2406,6 +2418,36 @@ mod tests {
         assert!(!saved.delivery.unwrap().completion_attempted);
         assert_eq!(relay.st.0.lock().unwrap().created, 0, "and nothing was created");
         drop(e);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// Codex audit of 0881b5f8f #2: a saved screenshot that is missing, damaged or not the
+    /// approved image stops Email support and Save with an error naming it, and every list keeps
+    /// its number; nothing is left out silently.
+    #[test]
+    fn an_unreadable_screenshot_is_named_and_never_left_out() {
+        let (e, _, root) = engine_with_shots();
+        {
+            let mut inner = e.inner.lock().unwrap();
+            let d = inner.draft.as_mut().unwrap();
+            let mut r = reviewed_draft("").report.unwrap();
+            r.screenshots = d.screenshots.iter().map(|s| s.id.clone()).collect();
+            d.report = Some(r);
+            let first = d.screenshots[0].id.clone();
+            std::fs::write(e.env().store.draft_dir(&d.id).join("shots").join(first), b"not the approved image").unwrap();
+        }
+        let plan = e.email_plan();
+        assert!(plan["error"].as_str().is_some_and(|w| w.contains("Screenshot 1")), "Email support names the screenshot: {plan}");
+        let out = scratch("unreadable-export");
+        let saved = e.export(&out);
+        assert!(saved.as_ref().is_err_and(|w| w.contains("Screenshot 1")), "Save names it instead of saving one fewer: {saved:?}");
+        let shots = e.review()["shots"].as_array().unwrap().clone();
+        assert_eq!(shots.len(), 2, "the review still lists both: {shots:?}");
+        assert_eq!(shots[1]["n"], 2);
+        assert!(shots[0]["problem"].as_str().is_some_and(|w| w.contains("Screenshot 1")), "{shots:?}");
+        assert!(e.images().is_err_and(|w| w.contains("Screenshot 1")), "the previews name it");
+        assert!(e.image_files().is_err_and(|w| w.contains("Screenshot 1")));
+        std::fs::remove_dir_all(out).ok();
         std::fs::remove_dir_all(root).ok();
     }
 
