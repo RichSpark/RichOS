@@ -150,7 +150,9 @@ of his running commands that name the stopped job, never one that names another
 job. A command that names no job is stopped only when it started after the job was
 registered and no other open job could be running it (one waiting on the user,
 the screen or the allowance with no change since cannot); the rest are left to
-Stu. The Stop fact prevents subsequent preparation, dispatch and worker actions
+Stu. When Rich runs a job's commands himself in the turn that gave the job,
+the Stop also ends those his own model started after the job was registered,
+while that turn still runs. The Stop fact prevents subsequent preparation, dispatch and worker actions
 for that obligation. Stu receives typed user-control facts through the same inbox;
 other assignments and Rich's conversation keep their own execution ownership.
 
