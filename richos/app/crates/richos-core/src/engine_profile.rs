@@ -456,8 +456,10 @@ impl EngineProfile {
                 .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
             user.git = crate::user_git::discover(path, home.as_deref(), &runtime.root);
         }
+        let shipped_config = std::fs::read_to_string(engine.join("orchestration.config"))
+            .map_err(|e| RuntimeError(format!("the engine's orchestration.config could not be read: {e}")))?;
         write(&coordination.join("orchestration.config"),
-              &crate::user_settings::orchestration_config(user.folder.as_deref(), &quote(&state.join("teams")))?)?;
+              &crate::user_settings::orchestration_config(user.folder.as_deref(), &shipped_config, &quote(&state.join("teams")))?)?;
         write(&coordination.join(".gitignore"), ".claude/\norchestration.config\napp-owned-coordination.json\n")?;
         write(&plugin.join("gitconfig"), &crate::user_git::system_layer(&user.git))?;
         let command = format!("{} {}", quote(&runtime.python), quote(&engine.join("scripts/app-engine-hook.py")));

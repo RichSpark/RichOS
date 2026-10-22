@@ -58,6 +58,32 @@ fn a_folder_without_git_gets_git_and_its_files_become_the_first_commit(){
  assert_eq!(std::fs::read_to_string(dir.join("secret.env")).unwrap(),"TOKEN=placeholder\n");
  assert_eq!(reg.get(&id("alpha")).unwrap().connected_repositories,vec![dir.clone()]);
 }
+/// Every file under `dir`, outside `.git`, by its path relative to `dir`.
+fn files_under(dir:&std::path::Path)->Vec<PathBuf>{
+ let mut out=vec![];let mut todo=vec![dir.to_path_buf()];
+ while let Some(d)=todo.pop(){for e in std::fs::read_dir(&d).unwrap().flatten(){
+  let p=e.path();if p.file_name().is_some_and(|n|n==".git"){continue;}
+  if p.is_dir(){todo.push(p);}else{out.push(p.strip_prefix(dir).unwrap().to_path_buf());}
+ }}
+ out.sort();out
+}
+#[test]
+fn connecting_leaves_the_folders_own_instruction_files_exactly_as_they_were(){
+ // A connected folder's own CLAUDE.md, AGENTS.md and CLAUDE.local.md are the user's, for the
+ // terminal as much as for the app (richos-hq docs/plans/2026-10-21-folder-instruction-files.md
+ // §3 item 1): connecting never writes, moves, renames or deletes one, and adds none anywhere.
+ let f=Fixture::new();let dir=f.dir("their project");
+ let files=[("CLAUDE.md","# House rules\nEvery commit message ends with [house-rule].\n"),
+            ("AGENTS.md","Agents: keep changes small.\n"),("CLAUDE.local.md","My own notes, never shared.\n")];
+ for (name,text) in files {std::fs::write(dir.join(name),text).unwrap();}
+ std::fs::write(dir.join("plan.md"),"the plan\n").unwrap();
+ let before=files_under(&dir);
+ let (_,repo)=connect(&f.registry(),&id("alpha"),&dir,&f.runtime(),&[]).unwrap();
+ assert!(repo.initialized,"the folder had no Git, so this connect set it up");
+ for (name,text) in files {assert_eq!(std::fs::read_to_string(dir.join(name)).unwrap(),text,"{name} changed");}
+ assert_eq!(files_under(&dir),before,"connecting added, moved or removed a file outside .git");
+ assert!(!dir.join(".claude").exists(),"connecting made a .claude folder");
+}
 #[test]
 fn an_empty_folder_gets_git_with_an_empty_first_commit(){
  let f=Fixture::new();let dir=f.dir("fresh");

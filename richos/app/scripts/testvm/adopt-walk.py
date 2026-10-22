@@ -199,8 +199,9 @@ class Walk:
                                  % (seconds, state))
             time.sleep(1)
 
-    def connect_folder(self):
-        """Settings -> "Connected folders (repositories)" -> the company folder, the way the app
+    def connect_folder(self, path=None):
+        """Settings -> "Connected folders (repositories)" -> the company folder (or `path`, a
+        further folder: then the wait is for that folder itself, by its real path), the way the app
         asks for it since round 27: the row is a plain button (settings-button.js
         buildDisclosureRow: "no `menuitem` role"), so pressing it as an AXMenuItem waits out the
         guest's 20 s accessibility deadline (exit 124, guest_deadline). The sheet pre-selects the
@@ -220,7 +221,7 @@ class Walk:
                 raise StepFailed('the folder field did not open the folder chooser')
         self.keys('tell application "System Events" to keystroke "g" using {command down, shift down}')
         time.sleep(2)
-        self.keys('tell application "System Events" to keystroke ' + json.dumps(self.company))
+        self.keys('tell application "System Events" to keystroke ' + json.dumps(path or self.company))
         time.sleep(1)
         self.keys('tell application "System Events" to key code 36')
         self.wait_open_enabled()
@@ -230,11 +231,13 @@ class Walk:
         time.sleep(1)
         self.ax('click', '--title', 'Connect folder', '--role', 'AXButton', '--in', 'dialog', '--first')
         registry = self.data + '/entities.json'
+        real = path and guest(self.vm, 'python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" '
+                              + shlex.quote(path))
         end, value = time.monotonic() + 30, {}
         while time.monotonic() < end:
             value = json.loads(guest(self.vm, 'cat ' + shlex.quote(registry)))
             connected = [r for e in value.get('entities', []) for r in e.get('connected_repositories', [])]
-            if connected:
+            if (real in connected) if path else connected:
                 self.press('Close')
                 return connected
             time.sleep(1)
