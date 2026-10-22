@@ -290,3 +290,24 @@ test('the daily stored-bytes cap closes uploads honestly and stores nothing', as
   assert.equal(f.r2.objects.size, 0);
   assert.equal((await f.answer(await f.status(payload.report_id, payload.receipt_secret))).body.state, 'receiving');
 });
+
+test('a recovered report keeps its approved screenshots: an older unknown ID adopted by its footer restores the manifest', async t => {
+  const f = await fixture(t), kept = await f.report({}, ['accept-rgb.png']), lost = await f.report({}, ['accept-rgb.png', 'accept-palette.png']);
+  for (const p of [kept, lost]) { await f.create(p); for (let n = 1; n <= p.manifest.length; n++) await f.upload(p, n); await f.complete(p.report_id, p.receipt_secret); }
+  // The relay's receipt and manifest rows are gone; the issues and the stored objects remain,
+  // except one of `lost`'s objects.
+  for (const p of [kept, lost]) for (const table of ['attachments', 'reports']) f.db.raw.prepare(`DELETE FROM ${table} WHERE report_id=?`).run(p.report_id);
+  f.r2.objects.delete(keys(f).find(k => k.startsWith(lost.report_id + '/2-')));
+  f.advance(3600_000);
+  const posts = f.posts();
+  let reply = await f.answer(await f.create(kept));
+  assert.deepEqual([reply.body.state, reply.body.images_expected, reply.body.images_confirmed], ['delivered', 1, 1]);
+  assert.equal((await f.read(kept.report_id, 1, await f.accessToken())).status, 200, 'staff can open the recovered screenshot');
+  reply = await f.answer(await f.create(lost));
+  assert.deepEqual([reply.body.state, reply.body.images_expected, reply.body.images_confirmed], ['created_checking_images', 2, 1], 'a missing object is never claimed delivered');
+  assert.equal(f.posts(), posts, 'nothing was created again');
+  // The restored manifest carries the one-year retention like any delivery.
+  f.advance(366 * DAY); await f.cleanup();
+  assert.equal(f.r2.objects.size, 0);
+  assert.equal((await f.read(kept.report_id, 1, await f.accessToken())).status, 410);
+});

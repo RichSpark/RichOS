@@ -217,7 +217,13 @@ class Relay {
       try { found = await this.github.find(await this.github.authorize(), r.reportId, Math.min(r.approvedAt, now) - DAY_MS); }
       catch { found = { kind: 'incomplete' }; }
       if (found.kind === 'incomplete') return reply(503, { state: 'limited', retry_after_seconds: 60 }, 60);
-      if (found.kind === 'found') { await store.adopt(r, found.issue, this.retain); return this.view(await store.get(r.reportId)); }
+      if (found.kind === 'found') {
+        // Its approved screenshots come back with it; view() counts only those in the bucket.
+        const stored = [];
+        for (const item of r.manifest) if (await this.present(r.reportId, item)) stored.push(item.attachment_id);
+        await store.adopt(r, found.issue, this.retain, stored);
+        return this.view(await store.get(r.reportId));
+      }
     }
     if (!await store.register(r)) return known(await store.get(r.reportId));
     const record = await store.get(r.reportId);

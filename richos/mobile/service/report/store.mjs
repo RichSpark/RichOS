@@ -90,12 +90,19 @@ export class Store {
     await this.statement(`UPDATE reports SET state='delivered', issue_number=?, issue_url=?, reason=NULL, retry_at=NULL, title=NULL, body=NULL,
       delivered_at=?, expires_at=?, updated_at=? WHERE report_id=? AND state IN ('pending','unconfirmed')`, issue.number, issue.url, now, now + retain, now, id).run();
   }
-  // A delivered record for an older unknown ID whose footer was found before any create.
-  async adopt(r, issue, retain) {
+  // A delivered record for an older unknown ID whose footer was found before any create, with its
+  // approved manifest in the same transaction, so its screenshots are counted, served and expire.
+  // `stored` names the attachment IDs whose objects are in the bucket; the count is re-verified on view.
+  async adopt(r, issue, retain, stored = []) {
     const now = this.now();
-    await this.statement(`INSERT INTO reports (report_id, secret_hash, content_hash, protocol, state, issue_number, issue_url, approved_at,
-      delivered_at, expires_at, active_at, created_at, updated_at) VALUES (?,?,?,?,'delivered',?,?,?,?,?,?,?,?) ON CONFLICT(report_id) DO NOTHING`,
-    r.reportId, r.secretHash, r.contentHash, r.schema, issue.number, issue.url, r.approvedAt, now, now + retain, now, now, now).run();
+    await this.db.batch([
+      this.statement(`INSERT INTO reports (report_id, secret_hash, content_hash, protocol, state, issue_number, issue_url, approved_at,
+        delivered_at, expires_at, active_at, created_at, updated_at) VALUES (?,?,?,?,'delivered',?,?,?,?,?,?,?,?) ON CONFLICT(report_id) DO NOTHING`,
+      r.reportId, r.secretHash, r.contentHash, r.schema, issue.number, issue.url, r.approvedAt, now, now + retain, now, now, now),
+      ...r.manifest.map(item => this.statement(`INSERT INTO attachments (report_id, attachment_id, ord, media_type, width, height, bytes, sha256, stored)
+        SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9 WHERE EXISTS (SELECT 1 FROM reports WHERE report_id=?1 AND content_hash=?10) ON CONFLICT DO NOTHING`,
+      r.reportId, item.attachment_id, item.order, item.media_type, item.width, item.height, item.bytes, item.sha256, stored.includes(item.attachment_id) ? 1 : 0, r.contentHash)),
+    ]);
   }
   // Authoritative non-creation: GitHub refused (sent=1 allowed), or the attempt never sent.
   async notCreated(id, attemptId, reason, retryAt, requireUnsent = false) {
