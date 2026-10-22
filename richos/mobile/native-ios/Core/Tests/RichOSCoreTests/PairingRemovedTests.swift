@@ -69,6 +69,20 @@ import Testing
         #expect(effects.contains { if case .pair = $0 { return true } else { return false } })
     }
 
+    /// Android's fault of 2026-10-22 (cc/andy-opus-honorfile1 e76bb7887): a stored REVOKED reason
+    /// outlived the new pairing and kept "This phone was removed from your Mac" over the six words.
+    /// Here the removed screen is derived from `pairing` alone, so a pasted link and the Mac's answer
+    /// bring the words up, and nothing of the removal is left to cover them.
+    @Test func aRemovedPhonePairedAgainByLinkShowsTheSixWords() throws {
+        var s = try Fixture.named("conn-revoked").state
+        #expect(s.screen == .connectionRevoked)
+        s = Reducer.reduce(s, .submitPairingLink(text: "https://mm2.tail1a2b3c.ts.net:8443/#pair=K7M2QX9H")).state
+        #expect(s.screen == .pairProgress)
+        s = Reducer.reduce(s, .pairingAnswered(Scenario.answer)).state
+        #expect(s.screen == .pairWords)
+        #expect(s.fingerprintWords.count == 6)
+    }
+
     @Test func discardAndPairDoesNothingWithoutTheQuestion() {
         let s = removedWithWork()
         #expect(Reducer.reduce(s, .discardUnsentAndPair).state == s)
