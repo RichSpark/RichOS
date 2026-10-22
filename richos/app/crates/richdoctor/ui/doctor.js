@@ -366,13 +366,15 @@
   function useCurrent() {
     const e = cur();
     const covers = e.covers.filter(Boolean).length;
-    const replacing = Q.mode === "edit" || Q.mode === "reduce";
+    // A file already approved in this queue (revisited through the strip) is replaced, never
+    // added a second time beside its less-covered version.
+    const replacing = Q.mode === "edit" || Q.mode === "reduce" || (e.approved && e.n > 0);
     const call = replacing
       ? invoke("replace_image", { index: e.n - 1, imageBase64: e.final.b64, covers: covers, reduced: !!e.reduced || !!e.reducedFlag })
       : invoke("use_image", { imageBase64: e.final.b64, covers: covers, reduced: !!e.reduced });
     call.then(function (f) {
       e.approved = true; e.n = f.n; e.name = f.name; e.final = { src: f.url, w: f.width, h: f.height, bytes: f.bytes };
-      if (replacing) { const at = S.shots.findIndex(function (s) { return s.n === e.n; }); if (at >= 0) S.shots[at] = e; S.changedAfterApproval = true; }
+      if (replacing) { const at = S.shots.findIndex(function (s) { return s.n === e.n; }); if (at >= 0) S.shots[at] = e; else if (S.shots.indexOf(e) < 0) S.shots.push(e); S.changedAfterApproval = true; }
       else S.shots.push(e);
       Q.i++; openQueueItem();
     }).catch(function (err) { toast(String(err)); });

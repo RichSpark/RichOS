@@ -159,6 +159,20 @@ impl Report {
             None => clean(answered(WITHOUT_AI_QUESTIONS[1]).unwrap_or(""), "your answers"),
         };
         let when = clean(if d.is_some_and(|d| !d.when.is_empty()) { &d.unwrap().when } else { input.when }, "your answers");
+        // Without Claude's draft, the answers the person gave to Claude's own questions stay in the
+        // report (the built-in questions above have their own sections, the time its own).
+        if d.is_none() {
+            let own = [WITHOUT_AI_QUESTIONS[0], WITHOUT_AI_QUESTIONS[1], WITHOUT_AI_QUESTIONS[2], crate::when::QUESTION, crate::when::ROUGH_QUESTION, crate::when::WHICH_QUESTION];
+            let given: Vec<String> = input
+                .answers
+                .iter()
+                .filter(|(q, _)| !own.contains(&q.as_str()))
+                .filter_map(|(q, a)| a.as_deref().map(str::trim).filter(|a| !a.is_empty()).map(|a| format!("{} {}", clean(q.trim(), "your answers"), clean(a, "your answers"))))
+                .collect();
+            if !given.is_empty() {
+                what_happened = format!("{what_happened}\n\nAnswers the person gave:\n{}", given.join("\n"));
+            }
+        }
         let steps: Vec<String> = match d {
             Some(d) => d.steps.iter().map(|s| clean(s, "your answers")).collect(),
             None => answered(WITHOUT_AI_QUESTIONS[2]).map(|a| vec![format!("Just before it happened: {}", clean(a, "your answers"))]).unwrap_or_default(),

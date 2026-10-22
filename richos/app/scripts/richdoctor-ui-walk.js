@@ -196,6 +196,29 @@ async function run() {
       check(`${theme} conversation: the person's line with its thumbnail`, (await T("#log")).includes("1 screenshot added (1 area covered)") && (await page.locator("#log .me .thumbs img").count()) === 1);
       check(`${theme} conversation: the refused file is named, nothing else changed`, (await T("#log .notadded")).includes("IMG_4471.HEIC (not a PNG or JPEG)"));
       await contrast(page, "conversation-shots", theme);
+      // Re-approving a file already approved in this queue replaces it (the reviewer's queue case).
+      await page.setInputFiles("#img-file", [
+        { name: "first.png", mimeType: "image/png", buffer: PNG },
+        { name: "second.png", mimeType: "image/png", buffer: PNG },
+      ]);
+      await page.waitForSelector("#sheet-image:not([hidden]) #img-cover:not([hidden])");
+      await page.click('[data-act="img-next"]');
+      await page.waitForSelector("#img-check:not([hidden])");
+      await page.click('[data-act="img-use"]');
+      await page.waitForSelector('#img-queue [data-i="1"][aria-current="true"]');
+      await page.click('#img-queue [data-act="queue-go"][data-i="0"]');
+      await page.waitForSelector("#img-cover:not([hidden])");
+      await page.focus("#img-stage");
+      await page.keyboard.press("c");
+      await page.click('[data-act="img-next"]');
+      await page.waitForSelector("#img-check:not([hidden])");
+      const before = (await calls()).length;
+      await page.click('[data-act="img-use"]');
+      await settle();
+      const after = (await calls()).slice(before).map((c) => c[0]);
+      check(`${theme} image: approving a revisited queue item again replaces it`, after.includes("replace_image") && !after.includes("use_image"), after.join(","));
+      await page.keyboard.press("Escape");
+      await settle();
       check(`${theme} conversation: progress names the action`, (await T("#log .progress-wrap")).includes("Checking what happened when RichOS last opened"));
       await contrast(page, "progress", theme);
       await emit({ t: "done", text: "Checked what happened when RichOS last opened" });

@@ -323,7 +323,9 @@ impl Engine {
                     inner.pending = Pending::None;
                     if let Some(d) = inner.draft.as_mut() {
                         d.window = Some(window);
-                        d.when = words;
+                        // A typed time can carry private details ("after emailing ..."): cleaned here,
+                        // so the first message, the replay and the report all get the clean words.
+                        d.when = scrub::scrub(&words, &ctx(&self.env)).0;
                     }
                     self.save(&mut inner);
                 }
@@ -444,6 +446,11 @@ impl Engine {
         mcp::write_operation(&dir, op).ok();
         let pictures: Vec<richos_core::bug_report::Picture> = picture.into_iter().map(|(_, base64, media_type)| richos_core::bug_report::Picture { media_type, base64 }).collect();
         let mut slot = self.session.lock().unwrap();
+        // A process stopped since its last turn (another report opened, the window closed, Cancel)
+        // has no stopper any more: it is gone, and this operation starts a fresh one.
+        if slot.is_some() && self.inner.lock().unwrap().stopper.is_none() {
+            *slot = None;
+        }
         let fresh = slot.is_none();
         if fresh {
             let spec = Spec { server_exe: self.env.exe.clone(), draft_dir: dir.clone() };
@@ -1935,6 +1942,110 @@ mod tests {
         let (e, _) = engine_at(&root, None);
         let failure = e.prepare_image(&util::base64_std(&big)).unwrap_err();
         assert!(failure.starts_with("too-large:"), "the window reduces it instead of calling it unreadable: {failure}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    // ---- review rv-20261022T190021Z-6fe468bd-6b85, its fixtures as tests ----------------------
+
+    /// A stand-in Claude Code that asks a question every turn, appends every message it is given
+    /// to captured.jsonl, and fails a turn while `fail-next` exists.
+    fn fake_cli_asking(root: &std::path::Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(root).unwrap();
+        let p = root.join("fake-claude-asking");
+        let init = json!({"type":"system","subtype":"init","tools":["mcp__richdoctor__collect_diagnostics","mcp__richdoctor__read_evidence"],"mcp_servers":[{"name":"richdoctor","status":"connected"}],"permissionMode":"dontAsk","slash_commands":[],"skills":[],"plugins":[]});
+        let result = json!({"type":"result","is_error":false,"result":"{\"say\":\"ok\",\"question\":\"What happened next?\",\"choices\":[],\"ready\":false}"});
+        let failure = json!({"type":"result","is_error":true,"result":"503 service unavailable"});
+        std::fs::write(&p, format!("#!/bin/sh\nIFS= read -r first\nprintf '%s\\n' \"$first\" >> captured.jsonl\nprintf '%s\\n' '{init}' '{result}'\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> captured.jsonl; if [ -f fail-next ]; then printf '%s\\n' '{failure}'; else printf '%s\\n' '{result}'; fi; done\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    fn wait_for(events: &Arc<Mutex<Vec<Value>>>, names: &[&str]) {
+        // load-bound: a bound on a local shell stand-in answering one line; only a hang reaches it.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if events.lock().unwrap().iter().any(|v| names.iter().any(|n| v["t"] == *n)) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "the stand-in did not answer");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn captured_all(e: &Engine) -> String {
+        std::fs::read_to_string(e.env().store.work_dir().join("captured.jsonl")).unwrap_or_default()
+    }
+
+    fn investigating() -> Draft {
+        let mut d = Draft::new(1).unwrap();
+        d.stage = Stage::Investigating;
+        d.description = "RichOS closes before its window opens".into();
+        d.conversation.push(Entry::Person { text: d.description.clone() });
+        d
+    }
+
+    #[test]
+    fn after_another_report_is_opened_the_next_answer_reaches_a_fresh_claude_code() {
+        let root = scratch("session-switch");
+        let (e, events) = engine_at(&root.join("store"), Some(fake_cli_asking(&root)));
+        let mut a = investigating();
+        let mut b = investigating();
+        e.env().store.save(&mut a, 1).unwrap();
+        e.env().store.save(&mut b, 1).unwrap();
+        e.open(&a.id).unwrap();
+        e.answer("The first problem happens every time".into());
+        wait_for(&events, &["question", "ai-failed"]);
+        assert!(!events.lock().unwrap().iter().any(|v| v["t"] == "ai-failed"));
+        events.lock().unwrap().clear();
+        e.open(&b.id).unwrap();
+        e.answer("The second problem happens every time".into());
+        wait_for(&events, &["question", "ai-failed"]);
+        let failed = events.lock().unwrap().iter().any(|v| v["t"] == "ai-failed");
+        let sent = captured_all(&e);
+        e.close();
+        assert!(!failed && sent.contains("second problem"), "the answer reached a live process: {sent}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_typed_incident_time_is_cleaned_before_claude_sees_it() {
+        let root = scratch("private-time");
+        let (e, events) = engine_at(&root.join("store"), Some(fake_cli_asking(&root)));
+        let mut d = investigating();
+        d.questions.push((when::QUESTION.to_string(), None));
+        d.conversation.push(Entry::Question { text: when::QUESTION.to_string(), choices: vec![] });
+        e.env().store.save(&mut d, 1).unwrap();
+        e.open(&d.id).unwrap();
+        e.resume_pending();
+        e.answer("After emailing alice@example.com this morning".into());
+        wait_for(&events, &["question", "ai-failed"]);
+        let sent = captured_all(&e);
+        e.close();
+        assert!(!sent.is_empty());
+        assert!(!sent.contains("alice@example.com"), "{sent}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn answers_claude_got_before_it_failed_are_in_the_fallback_report() {
+        let root = scratch("fallback");
+        let (e, events) = engine_at(&root.join("store"), Some(fake_cli_asking(&root)));
+        e.start("RichOS closes before its window opens".into(), true, false).unwrap();
+        wait_for(&events, &["question"]);
+        events.lock().unwrap().clear();
+        e.answer("Just now".into());
+        wait_for(&events, &["question", "ai-failed"]);
+        events.lock().unwrap().clear();
+        std::fs::write(e.env().store.work_dir().join("fail-next"), "").unwrap();
+        e.answer("The visible error was database locked when opening a second conversation".into());
+        wait_for(&events, &["ai-failed"]);
+        events.lock().unwrap().clear();
+        e.prepare();
+        wait_for(&events, &["review"]);
+        let text = e.exact_text().unwrap().1;
+        e.close();
+        assert!(text.contains("database locked when opening a second conversation"), "{text}");
         std::fs::remove_dir_all(root).ok();
     }
 
