@@ -47,12 +47,15 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch, sett
   const status = payload => call(`/v1/reports/${payload.report_id}/status`, { receipt_secret: payload.receipt_secret });
   const gh = (path) => fetchImpl(`https://api.github.com${path}`, { redirect: 'error', headers: { Accept: 'application/vnd.github+json',
     'User-Agent': 'richos-report-a9', 'X-GitHub-Api-Version': '2022-11-28', ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}) } });
+  // The bot's issues created since the run started, newest first. Not GitHub's `since` filter,
+  // which answered [] for minutes-old issues on 2026-10-22.
   async function botIssues() {
-    const all = [];
+    const all = [], from = Date.parse(started);
     for (let page = 1; page <= 10; page++) {
-      const response = await gh(`/repos/${profile.repository}/issues?creator=${encodeURIComponent(profile.botLogin)}&state=all&since=${encodeURIComponent(started)}&per_page=100&page=${page}`);
+      const response = await gh(`/repos/${profile.repository}/issues?creator=${encodeURIComponent(profile.botLogin)}&state=all&sort=created&direction=desc&per_page=100&page=${page}`);
       if (!response.ok) throw Error(`GitHub listing failed (HTTP ${response.status})`);
-      const items = await response.json(); all.push(...items);
+      const items = await response.json();
+      for (const item of items) { if (Date.parse(item.created_at) < from - 2000) return all; all.push(item); }
       if (items.length < 100) return all;
     }
     throw Error('More than 1000 issues since the run started');

@@ -133,11 +133,13 @@ test('A9: GitHub created the issue but its answer was lost; the footer reconcile
 
 test('A9: an incomplete or failing listing never permits recreation; the bound ends in operator review, and a late find delivers', async t => {
   const f = await fixture(t, { pageSize: 1 }), payload = await f.report();
-  // Two earlier bot issues fill page 1 and 2, so the match is on page 3 behind a failing page 2.
-  f.github.add('earlier', 'one'); f.github.add('earlier', 'two');
-  f.github.fault('create:lost'); for (let i = 0; i < 3; i++) f.github.fault('list:page2');
+  // The answer is lost and the relay's own three listings fail.
+  f.github.fault('create:lost'); for (let i = 0; i < 3; i++) f.github.fault('list:500');
   let reply = await f.answer(await f.create(payload));
   assert.equal(reply.status, 202); assert.deepEqual(reply.body, { report_id: payload.report_id, state: 'pending', check_after_seconds: 5 });
+  // Two newer bot issues fill pages 1 and 2 of the newest-first listing, so the match is on
+  // page 3 behind a failing page 2.
+  f.github.add('later', 'one'); f.github.add('later', 'two'); f.github.fault('list:page2');
   // Retries during uncertainty, including edited bytes, never create.
   assert.equal((await f.answer(await f.create(payload))).body.state, 'pending');
   const edited = await f.report({ report_id: payload.report_id, title: 'Edited' });
@@ -153,7 +155,7 @@ test('A9: an incomplete or failing listing never permits recreation; the bound e
   f.github.faults.length = 0; f.advance(61_000);
   reply = await f.answer(await f.status(payload.report_id, payload.receipt_secret));
   assert.equal(reply.body.state, 'delivered', 'a delayed success returns the existing issue');
-  assert.equal(reply.body.issue_number, 3);
+  assert.equal(reply.body.issue_number, 1);
   assert.equal(f.posts(), 1); assert.equal(f.github.created().length, 3);
 });
 

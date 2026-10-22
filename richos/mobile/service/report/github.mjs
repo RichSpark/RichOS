@@ -77,11 +77,12 @@ export class GitHub {
     return issue ? { kind: 'created', issue } : { kind: 'unknown' };
   }
   // Reconciliation (PRD §7): page through the fixed repository's issues created by the reporting
-  // identity since `since`, and match the exact footer. Never search indexing. A failed or
-  // incomplete listing is { kind: 'incomplete' }, never proof that nothing was created.
+  // identity, newest first, back to `since` (the attempt-time look-back), and match the exact
+  // footer. Never search indexing, and never GitHub's own `since` filter: on 2026-10-22 it
+  // answered an empty list for issues minutes old that the same listing without it returned.
+  // A failed or incomplete listing is { kind: 'incomplete' }, never proof nothing was created.
   async find(token, reportId, since, maxPages = 10) {
-    const query = new URLSearchParams({ creator: this.env.GITHUB_BOT_LOGIN, state: 'all', since: new Date(since).toISOString(),
-      per_page: '100', sort: 'created', direction: 'asc' });
+    const query = new URLSearchParams({ creator: this.env.GITHUB_BOT_LOGIN, state: 'all', per_page: '100', sort: 'created', direction: 'desc' });
     let url = `${API}/repos/${this.repository}/issues?${query}`, found = null;
     for (let page = 0; url; page++) {
       if (page === maxPages) return { kind: 'incomplete' };
@@ -91,11 +92,16 @@ export class GitHub {
         items = response.status === 200 ? await response.json() : null;
       } catch { return { kind: 'incomplete' }; }
       if (!Array.isArray(items)) { await response.body?.cancel().catch(() => {}); return { kind: 'incomplete' }; }
+      let covered = false;
       for (const item of items) {
-        if (item?.pull_request || item?.user?.login !== this.env.GITHUB_BOT_LOGIN || !this.footer(item.body, reportId)) continue;
+        const created = Date.parse(item?.created_at);
+        if (!Number.isFinite(created)) return { kind: 'incomplete' };
+        if (created < since) { covered = true; break; }
+        if (item.pull_request || item.user?.login !== this.env.GITHUB_BOT_LOGIN || !this.footer(item.body, reportId)) continue;
         const issue = issueOf(this.repository, item);
         if (issue && (!found || issue.number < found.number)) found = issue;
       }
+      if (covered) break;
       const next = /<([^>]+)>;\s*rel="next"/.exec(response.headers.get('link') || '')?.[1] || null;
       if (next && !next.startsWith(API + '/')) return { kind: 'incomplete' };
       url = next;

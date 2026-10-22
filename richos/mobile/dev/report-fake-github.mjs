@@ -76,8 +76,11 @@ export class FakeGitHub {
       const page = Number(url.searchParams.get('page') || 1), fault = this.take('list:');
       if (fault === 'list:500' || (fault === 'list:page2' && page === 2)) return json(500, { message: 'error' });
       if (fault === 'list:page2' && page !== 2) this.faults.unshift(fault);
-      const since = Date.parse(url.searchParams.get('since') || 0), creator = url.searchParams.get('creator');
-      const all = this.issues.filter(i => (!creator || i.user.login === creator) && Date.parse(i.updated_at) >= since);
+      // GitHub's `since` filter answered [] for minutes-old issues on 2026-10-22; this stand-in
+      // answers [] whenever it is used, so nothing can come to rely on it.
+      if (url.searchParams.has('since')) return json(200, []);
+      const creator = url.searchParams.get('creator'), desc = url.searchParams.get('direction') === 'desc';
+      const mine = this.issues.filter(i => !creator || i.user.login === creator), all = desc ? [...mine].reverse() : mine;
       const items = all.slice((page - 1) * this.pageSize, page * this.pageSize);
       const headers = {};
       if (page * this.pageSize < all.length) { url.searchParams.set('page', String(page + 1)); headers.Link = `<${url}>; rel="next"`; }
