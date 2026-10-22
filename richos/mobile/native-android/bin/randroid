@@ -57,7 +57,12 @@
 #                                       One user per phone: each command holds the phone's lock for
 #                                       its whole length; another holder means a refusal naming it,
 #                                       or a wait of at most --wait seconds (RICHOS_DEVICE_WAIT).
+#   randroid device list                the wired phones and their adb state (names no phone, contacts none)
 #       status                          free or held, and by whom (never waits, never locks)
+#       net                             READ ONLY: what the phone itself reaches, shown before any claim
+#                                       about its network: its default network's transport, whether
+#                                       Android validated it, a ping by address and by name; exit 1
+#                                       when it reaches no internet
 #       hold -- <command>               run <command> (a walker's script) holding the phone, so its
 #                                       many device commands are one use
 #       build                           the installed build: version, debuggable, configuration
@@ -461,10 +466,12 @@ device() {
     esac
   done
   set -- ${rest[@]+"${rest[@]}"}
-  [ -n "$serial" ] || fail "name the phone: randroid device --serial SERIAL <command> (or RANDROID_DEVICE); never a bare adb"
-  local sub="${1:-}"; shift || true
   local phys="$HERE/../physical.py" qa="$HERE/../../app/scripts/qa" perf="$HERE/../perf/perf.py"
   export RICHOS_DEVICE_VERB=randroid PYTHONDONTWRITEBYTECODE=1
+  # The one command that names no phone: which are wired (adb's list; no phone is contacted).
+  [ "${1:-}" = list ] && exec python3 "$phys" android-list --adb "$ADB"
+  [ -n "$serial" ] || fail "name the phone: randroid device --serial SERIAL <command> (or RANDROID_DEVICE); never a bare adb (randroid device list names the wired ones)"
+  local sub="${1:-}"; shift || true
   local hold=(python3 "$phys" hold --platform android --phone "$serial" --wait "$wait" --)
   case "$sub" in
     status) exec python3 "$phys" status --platform android --phone "$serial" ;;
@@ -519,6 +526,7 @@ PY
       # The build and the stamp above need no phone; only the install holds it.
       exec "${hold[@]}" python3 "$phys" android-install --adb "$ADB" --serial "$serial" --apk "$apk" \
         --aapt2 "${RANDROID_AAPT2:-$ANDROID_HOME/build-tools/36.0.0/aapt2}" ;;
+    net) exec "${hold[@]}" python3 "$phys" android-net --adb "$ADB" --serial "$serial" ;;
     condition) exec "${hold[@]}" python3 "$phys" android-condition --adb "$ADB" --serial "$serial" --seconds 30 "$@" ;;
     record) exec "${hold[@]}" python3 "$phys" android-record --adb "$ADB" --serial "$serial" --out "${1:?record FILE.mp4}" "${@:2}" ;;
     perf|seed)

@@ -1153,6 +1153,45 @@ def _():
     assert "python3 {PHYSICAL_CHECK} scan" not in land, "not the bare form proof-run refuses"
 
 
+NET_ONLINE = ("Active default network: 100\n"
+              "  NetworkAgentInfo{network{100}  handle{430} ni{WIFI CONNECTED} nc{[ Transports: WIFI Capabilities: "
+              "INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VPN&VALIDATED&NOT_ROAMING ]}}\n"
+              "  NetworkAgentInfo{network{101}  handle{431} ni{MOBILE CONNECTED} nc{[ Transports: CELLULAR Capabilities: INTERNET ]}}\n"
+              "--richos--\n0\n0")
+
+
+@case("D36 device list names the wired phones and their adb state without a serial, and contacts no phone")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        ph = Phone(tmp, sha="a" * 64)
+        code, out = ph.randroid("device", "list")
+        assert code == 0, (code, out)
+        assert json.loads(out)["result"] == [{"serial": "PHONE1", "state": "device"}], out
+        assert ph.calls == ["devices"], ph.calls
+
+
+@case("D37 device net: what the phone itself reaches (transport, Android's validation, a ping by address and by name), "
+      "read only; no internet exits 1 with the sentence; an emulator is refused")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        ph = Phone(tmp, sha="a" * 64, replies={"dumpsys connectivity": NET_ONLINE})
+        code, out = ph.randroid("device", "--serial", "PHONE1", "net")
+        assert code == 0, (code, out)
+        got = json.loads(out[out.index("{"):])["result"]
+        assert got["defaultTransport"] == "WIFI" and got["validatedByAndroid"] is True, got
+        assert got["internet"] is True and "reaches the internet over WIFI" in got["verdict"], got
+        assert touched(ph.calls) == [] and not any(" put " in c or "svc " in c for c in ph.calls), ph.calls
+        ph.file.write_text(json.dumps({**ph.state, "replies": {"dumpsys connectivity": NET_ONLINE.replace("0\n0", "0\n1")}}))
+        code, out = ph.randroid("device", "--serial", "PHONE1", "net")
+        assert code == 1 and "cannot resolve a name" in out, (code, out)
+        ph.file.write_text(json.dumps({**ph.state, "replies": {"dumpsys connectivity": "--richos--\n1\n1"}}))
+        code, out = ph.randroid("device", "--serial", "PHONE1", "net")
+        assert code == 1 and "no default network" in out, (code, out)
+        ph.file.write_text(json.dumps({**ph.state, "emulator": True}))
+        code, out = ph.randroid("device", "--serial", "PHONE1", "net")
+        assert code == 3 and "is an emulator" in out, (code, out)
+
+
 @case("D14 the test copy's install builds through the Firebase wrapper, so the copy carries notification settings (CEO 2026-10-03)")
 def _():
     with tempfile.TemporaryDirectory() as tmp:

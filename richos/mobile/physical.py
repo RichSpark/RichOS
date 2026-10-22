@@ -14,6 +14,9 @@ So a physical phone is touched ONLY through the two command lines, `randroid dev
     physical.py android-gate    --adb ADB --serial S        exit 0 (the installed build as JSON) or 3
     physical.py android-install --adb ADB --serial S --apk APK --aapt2 AAPT2
     physical.py android-record  --adb ADB --serial S --out FILE.mp4 [--seconds N]
+    physical.py android-list    --adb ADB                   the wired phones (adb's list; none contacted)
+    physical.py android-net     --adb ADB --serial S        READ ONLY: what the phone itself reaches;
+                                                            exit 0 online, 1 not
     physical.py android-condition --adb ADB --serial S [--seconds N] [--out DIR]
                                                             READ ONLY: what automation left running or
                                                             changed on the phone, and its log flood
@@ -132,6 +135,66 @@ def probe(adb_path, serial):
             "lastUpdateTime": updated.group(1).strip() if updated else None,
             "debuggable": debuggable if installed else None,
             "configuration": ("debug" if debuggable else "release") if installed else None}
+
+
+def android_phones(adb_path):
+    """The Android phones wired to this Mac, from adb's own list (no phone is contacted). A phone that
+    is listed but not usable (unauthorized, offline) is listed with that state, never left out."""
+    try:
+        p = subprocess.run([adb_path, "devices"], capture_output=True, text=True, timeout=15)
+    except FileNotFoundError:
+        raise CannotAnswer(f"no adb at {adb_path}")
+    except subprocess.TimeoutExpired:
+        raise CannotAnswer("adb devices did not answer in 15 s")
+    if p.returncode != 0:
+        raise CannotAnswer(f"adb devices exited {p.returncode}: {(p.stderr or p.stdout).strip()[:200]}")
+    rows = [line.split() for line in p.stdout.splitlines()[1:]]
+    return [{"serial": r[0], "state": r[1]} for r in rows if len(r) >= 2 and not r[0].startswith("emulator-")]
+
+
+# What the phone itself reaches (CLAUDE.md: before any claim about a phone's network, check its internet
+# through the CLI and show the output). READ ONLY: the default network as the phone's own connectivity
+# service holds it (its transport and whether Android VALIDATED it reaches the internet), one ping by
+# address and one by name (the name needs the phone's DNS). Nothing is switched, reset or opened.
+NET_READ = ("dumpsys connectivity | grep -E 'Active default network|NetworkAgentInfo'; echo '--richos--'; "
+            "ping -c 2 -W 3 1.1.1.1 >/dev/null 2>&1; echo $?; ping -c 1 -W 5 www.google.com >/dev/null 2>&1; echo $?")
+
+
+def net_reading(text):
+    """(transport, validated, address reached, name reached) from NET_READ's output."""
+    head, _, tail = text.replace("\r", "").partition("--richos--")
+    default = re.search(r"Active default network:\s*(\d+)", head)
+    transport = validated = None
+    if default:
+        for line in head.splitlines():
+            if re.search(r"network\{%s\}" % default.group(1), line):
+                found = re.search(r"Transports:\s*([A-Z_|]+)", line)
+                transport = found.group(1) if found else None
+                validated = "VALIDATED" in line
+                break
+    codes = tail.split()
+    reached = [c == "0" for c in codes[:2]] + [None] * (2 - len(codes[:2]))
+    return transport, validated, reached[0], reached[1]
+
+
+def net(adb_path, serial):
+    info = probe(adb_path, serial)
+    physical(info)
+    p = adb(adb_path, serial, "shell", NET_READ, timeout=60)
+    if p.returncode != 0 or "--richos--" not in p.stdout:
+        raise CannotAnswer(f"{serial} did not answer the network read: {(p.stderr or p.stdout).strip()[:200]}")
+    transport, validated, by_address, by_name = net_reading(p.stdout)
+    internet = bool(by_address and by_name)
+    if internet:
+        verdict = f"the phone reaches the internet over {transport or 'its default network'}"
+    elif transport is None:
+        verdict = "the phone has no default network: it reaches nothing"
+    elif by_address and not by_name:
+        verdict = f"the phone reaches an internet address over {transport} but cannot resolve a name (its DNS)"
+    else:
+        verdict = f"the phone is on {transport} but reaches no internet address"
+    return {"serial": serial, "defaultTransport": transport, "validatedByAndroid": validated,
+            "pingAddress": by_address, "pingName": by_name, "internet": internet, "verdict": verdict}
 
 
 def physical(info):
@@ -979,7 +1042,8 @@ def main(argv):
             return 2
     p = argparse.ArgumentParser(prog="physical.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=["android-build", "android-condition", "android-gate", "android-install",
-                                       "android-record", "ios-app", "ios-automation-end", "scan", "status"])
+                                       "android-list", "android-net", "android-record", "ios-app",
+                                       "ios-automation-end", "scan", "status"])
     p.add_argument("--platform")
     p.add_argument("--device")
     p.add_argument("--phone", default="")
@@ -1014,6 +1078,12 @@ def main(argv):
         elif a.command == "ios-automation-end":
             require_verb("rios")
             result = end_automation_ui(a.device)
+        elif a.command == "android-list":
+            result = android_phones(a.adb)
+        elif a.command == "android-net":
+            result = net(a.adb, a.serial)
+            print(json.dumps({"ok": result["internet"], "result": result}, indent=2))
+            return 0 if result["internet"] else 1
         else:
             if a.command != "android-condition":  # condition only reads: it lists what is pending and restores nothing
                 put_back_leftovers(a.adb, a.serial)
