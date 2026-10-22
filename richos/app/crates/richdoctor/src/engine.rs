@@ -48,8 +48,9 @@ struct Inner {
     /// The message the last Claude operation sent, for Retry and Resume investigation.
     last_message: Option<String>,
     stopper: Option<adapter::Stopper>,
-    /// The screenshots approved since Claude's last message, for its next one: (media type, base64).
-    pictures: Vec<(String, String)>,
+    /// The screenshots approved since Claude's last message, for its next one: (shot id, base64,
+    /// media type). A screenshot replaced or removed before then leaves this queue with it.
+    pictures: Vec<(String, String, String)>,
     unsaved: Option<SaveError>,
     /// The per-image list of the Send report in progress (round 40 §5), in manifest order.
     upload: Vec<UploadRow>,
@@ -437,7 +438,7 @@ impl Engine {
             (inner.operation, std::mem::take(&mut inner.pictures))
         };
         mcp::write_operation(&dir, op).ok();
-        let pictures: Vec<richos_core::bug_report::Picture> = picture.into_iter().map(|(media_type, base64)| richos_core::bug_report::Picture { media_type, base64 }).collect();
+        let pictures: Vec<richos_core::bug_report::Picture> = picture.into_iter().map(|(_, base64, media_type)| richos_core::bug_report::Picture { media_type, base64 }).collect();
         let mut slot = self.session.lock().unwrap();
         let fresh = slot.is_none();
         if fresh {
@@ -1185,30 +1186,17 @@ impl Engine {
     /// **USE THIS IMAGE** again for screenshot `index` (Edit covers, or Reduce after the
     /// five-minute cap): a fresh approval replacing that one, same number.
     pub fn replace_image(&self, index: usize, image_base64: &str, covers: u32, reduced: bool) -> Result<Value, String> {
-        {
-            let inner = self.inner.lock().unwrap();
-            let d = inner.draft.as_ref().ok_or("no report")?;
-            if index >= d.screenshots.len() {
-                return Err("no such screenshot".into());
-            }
-        }
-        let v = self.use_image(image_base64, covers, reduced)?;
-        let mut inner = self.inner.lock().unwrap();
-        let d = inner.draft.as_mut().ok_or("no report")?;
-        let new = d.screenshots.pop().ok_or("no report")?;
-        let old = std::mem::replace(&mut d.screenshots[index], new);
-        std::fs::remove_file(self.env.store.draft_dir(&d.id).join("shots").join(&old.id)).ok();
-        if let Some(r) = d.report.as_mut() {
-            r.screenshots = d.screenshots.iter().map(|s| s.id.clone()).collect();
-            r.fit();
-        }
-        self.save(&mut inner);
-        let mut v = v;
-        v["n"] = json!(index + 1);
-        Ok(v)
+        self.keep_image(image_base64, covers, reduced, Some(index))
     }
 
     pub fn use_image(&self, image_base64: &str, covers: u32, reduced: bool) -> Result<Value, String> {
+        self.keep_image(image_base64, covers, reduced, None)
+    }
+
+    /// Keep an approved image: added at the end, or in place of screenshot `replacing`. The limits
+    /// (10 images, 25 MiB together) are checked on the set this makes, so the image being replaced
+    /// is not counted, and it leaves Claude's queue with its file.
+    fn keep_image(&self, image_base64: &str, covers: u32, reduced: bool, replacing: Option<usize>) -> Result<Value, String> {
         use richdoctor_core::image_profile as ip;
         let bytes = util::base64_decode(image_base64).ok_or("RichDoctor could not read that image.")?;
         if bytes.len() as u64 > 4 * ip::MAX_IMAGE_BYTES {
@@ -1226,26 +1214,46 @@ impl Engine {
         {
             let mut inner = self.inner.lock().unwrap();
             let d = inner.draft.as_mut().ok_or("no report")?;
-            if d.screenshots.len() >= ip::MAX_IMAGES {
+            if replacing.is_some_and(|i| i >= d.screenshots.len()) {
+                return Err("no such screenshot".into());
+            }
+            if replacing.is_none() && d.screenshots.len() >= ip::MAX_IMAGES {
                 return Err(format!("A report can carry {} screenshots at most.", ip::MAX_IMAGES));
             }
-            let total: u64 = d.screenshots.iter().filter_map(|s| self.env.store.shot_bytes(&d.id, s)).map(|b| b.len() as u64).sum();
+            let total: u64 = d.screenshots.iter().enumerate().filter(|(i, _)| Some(*i) != replacing).filter_map(|(_, s)| self.env.store.shot_bytes(&d.id, s)).map(|b| b.len() as u64).sum();
             if total + clean.len() as u64 > ip::MAX_TOTAL_BYTES {
                 return Err("The screenshots together would be more than 25 MiB. Remove one first.".into());
             }
             let dir = self.env.store.draft_dir(&d.id).join("shots");
             util::write_private(&dir.join(&id), &clean).map_err(|e| e.to_string())?;
-            d.screenshots.push(Shot { id, sha256: sha, covers, approved_at: util::now_millis(), media_type: shape.kind.media_type().into(), reduced });
+            let shot = Shot { id: id.clone(), sha256: sha, covers, approved_at: util::now_millis(), media_type: shape.kind.media_type().into(), reduced };
+            let old = match replacing {
+                Some(i) => Some(std::mem::replace(&mut d.screenshots[i], shot)),
+                None => {
+                    d.screenshots.push(shot);
+                    None
+                }
+            };
+            if let Some(old) = &old {
+                std::fs::remove_file(dir.join(&old.id)).ok();
+            }
             if let Some(r) = d.report.as_mut() {
                 r.screenshots = d.screenshots.iter().map(|s| s.id.clone()).collect();
                 r.fit();
             }
-            if !d.without_ai {
-                inner.pictures.push((shape.kind.media_type().to_string(), util::base64_std(&clean)));
+            let without_ai = d.without_ai;
+            if let Some(old) = &old {
+                inner.pictures.retain(|p| p.0 != old.id);
+            }
+            if !without_ai {
+                inner.pictures.push((id, util::base64_std(&clean), shape.kind.media_type().to_string()));
             }
             self.save(&mut inner);
         }
-        let n = self.inner.lock().unwrap().draft.as_ref().map(|d| d.screenshots.len()).unwrap_or(0);
+        let n = match replacing {
+            Some(i) => i + 1,
+            None => self.inner.lock().unwrap().draft.as_ref().map(|d| d.screenshots.len()).unwrap_or(0),
+        };
         let entry = richdoctor_core::image_profile::Entry::of(n as u32, &clean)?;
         Ok(json!({
             "url": format!("data:{};base64,{}", shape.kind.media_type(), util::base64_std(&clean)),
@@ -1266,6 +1274,8 @@ impl Engine {
             r.screenshots = d.screenshots.iter().map(|s| s.id.clone()).collect();
             r.fit();
         }
+        // A removed screenshot is not sent to Claude either.
+        inner.pictures.retain(|p| p.0 != shot.id);
         self.save(&mut inner);
         Ok(())
     }
@@ -1690,6 +1700,42 @@ mod tests {
         assert_eq!(shown["url"], kept["url"]);
         assert_eq!(kept["n"], 3);
         assert_eq!(kept["name"], "screenshot-3.png");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    fn queued(engine: &Engine) -> Vec<String> {
+        engine.inner.lock().unwrap().pictures.iter().map(|p| p.1.clone()).collect()
+    }
+
+    #[test]
+    fn a_replaced_or_removed_screenshot_never_reaches_claude() {
+        let (engine, _, root) = engine_with_shots();
+        engine.inner.lock().unwrap().pictures.clear();
+        let first = util::base64_std(&png(7));
+        engine.use_image(&first, 0, false).unwrap();
+        assert_eq!(queued(&engine), [first.clone()]);
+        // More covers on it, approved again: only the new image is queued.
+        let edited = util::base64_std(&png(8));
+        engine.replace_image(2, &edited, 1, false).unwrap();
+        assert_eq!(queued(&engine), [edited.clone()], "the superseded image is not sent to Claude");
+        // Removed: nothing of it is sent.
+        engine.remove_image(2).unwrap();
+        assert!(queued(&engine).is_empty(), "a removed screenshot is not sent to Claude");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_replacement_is_checked_against_the_set_it_makes() {
+        let (engine, _, root) = engine_with_shots();
+        for seed in 3u8..=10 {
+            engine.use_image(&util::base64_std(&png(seed)), 0, false).unwrap();
+        }
+        assert_eq!(engine.inner.lock().unwrap().draft.as_ref().unwrap().screenshots.len(), 10);
+        assert!(engine.use_image(&util::base64_std(&png(11)), 0, false).is_err(), "an eleventh is refused");
+        // Editing covers or reducing the tenth keeps the set at ten: allowed.
+        let v = engine.replace_image(9, &util::base64_std(&png(12)), 1, true).unwrap();
+        assert_eq!(v["n"], 10);
+        assert_eq!(engine.inner.lock().unwrap().draft.as_ref().unwrap().screenshots.len(), 10);
         std::fs::remove_dir_all(root).ok();
     }
 
