@@ -214,7 +214,8 @@ sub "H1.1b native call returned and its wait delivered WAIT promptly while the s
 sub "H1.2 it uses no CPU and makes no progress while held (cpu $C1 -> $C2, progress $P1 -> $P2)" "[ '$C1' = '$C2' ] && [ '$P1' = '$P2' ]"
 sub "H1.3 the lead is told, measured, in its own context" \
     "python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d[\"hookSpecificOutput\"][\"additionalContext\"]; sys.exit(0 if \"HOLD zach-opus-hold1:\" in c and \"suspended in\" in c else 1)' '$T/pause.out'" "$(cat "$T/pause.out")"
-sub "H1.4 the registry records the pause" "grep -q '\"until\": \"the user' \"\$(ls $STORE/agents/*--zach-opus-hold1.json)\""
+# Rich made the pause, so Rich's resume ends it (no silent holds, 2026-10-22: pause_protocol.py).
+sub "H1.4 the registry records the pause, ended by Rich's resume" "grep -q '\"until\": \"Rich' \"\$(ls $STORE/agents/*--zach-opus-hold1.json)\""
 printf '  measured: pause hook returned %.2f s after the send began; %s\n' "$(python3 -c "print($T1 - $T0)")" \
     "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["hookSpecificOutput"]["additionalContext"])' "$T/pause.out" 2>/dev/null)"
 

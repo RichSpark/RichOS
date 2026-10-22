@@ -333,6 +333,13 @@ run_hook
 if spoke && names '12'; then
     ok "3h  the queue's cell reading 'nothing — <why>' names nobody by its first word, so row 12 is unstarted and NAMED"
 else bad "3h  a queue cell of 'nothing — …' must not silence the row" "$HOUT"; fi
+# Review rv-20261022T023129Z-cefd17cf-7c77 finding 2 (fixtures/hold_edges.py): a blocker that
+# MENTIONS the CEO is not one the CEO owns; only a blocker naming him as its owner quiets a row.
+write_queue 'Rich needs to prepare the CEO brief'
+run_hook
+if spoke && names '12'; then
+    ok "3k  a blocker that only mentions the CEO ('Rich needs to prepare the CEO brief') does not silence row 12"
+else bad "3k  a mention of the CEO is not his ownership" "$HOUT"; fi
 write_queue 'Rich — after the dialect land'
 run_hook
 if spoke && names '12'; then

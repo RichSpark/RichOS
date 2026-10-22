@@ -16,12 +16,17 @@ HOLD_WORDS_RE = re.compile(
     r"wait\s+for\s+my\s+(?:go|word|signal|ok|okay|green\s+light))\b", re.I)
 
 
-# The words that end such a hold: the go itself. A later message without them (a status
-# question, a note) leaves the teammate held, and the hold reported (second review
-# rv-20261022T002958Z-2ac46e09-fa4e, finding 1).
+# The go that ends such a hold: an imperative that OPENS a sentence ("Go: run the walk
+# now.", "Please continue.", "You can go ahead."). A word inside a question or a negation
+# is not one: "What do you need before you can proceed?", "Do not resume yet" (second
+# reviews rv-20261022T002958Z-2ac46e09-fa4e #1 and rv-20261022T023129Z-cefd17cf-7c77).
 GO_WORDS_RE = re.compile(
-    r"\b(?:go(?:\s+ahead)?|proceed|carry\s+on|continue|resume|start\s+(?:it|now|the)|you\s+can\s+start|"
-    r"unblocked|green\s+light)\b", re.I)
+    r"(?:^|(?<=[.!;:\n])\s*)(?:ok(?:ay)?[,:]?\s+|please\s+)?(?:go(?:\s+ahead)?|proceed|carry\s+on|continue|"
+    r"resume|start(?:\s+(?:it|now|the\b))?|you\s+can\s+(?:go|start|proceed|continue|resume))\b", re.I)
+
+
+def _sentences(text):
+    return [s for s in re.split(r"(?<=[.!?;\n])", text or "") if s.strip()]
 
 
 def find(text):
@@ -30,5 +35,5 @@ def find(text):
 
 
 def is_go(text):
-    """True when a message gives the go that ends a teammate's hold."""
-    return bool(GO_WORDS_RE.search(text or ""))
+    """True when a sentence of the message opens with the go and is not a question."""
+    return any(GO_WORDS_RE.match(s.strip()) and not s.strip().endswith("?") for s in _sentences(text))

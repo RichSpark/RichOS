@@ -7316,9 +7316,13 @@ class NoSilentHolds(Base):
         _ctx, notes = send("Commit what you have. Then wait for my go before the walk.")
         self.assertTrue(any(n.startswith("HOLD RECORDED on zach-opus-w7") for n in notes), notes)
         self.assertEqual([(h["name"], h["source"]) for h in ws.holds(self.sid)], [("zach-opus-w7", "wait")])
-        # Review rv-20261022T002958Z-2ac46e09-fa4e finding 1: a status question is not the go.
-        send("What is your current status?")
-        self.assertEqual([(h["name"], h["source"]) for h in ws.holds(self.sid)], [("zach-opus-w7", "wait")])
+        # Review rv-20261022T002958Z-2ac46e09-fa4e finding 1, rechecked in
+        # rv-20261022T023129Z-cefd17cf-7c77 (fixtures/hold_edges.py): none of these is the go.
+        for text in ["What is your current status?", "What do you need before you can proceed?",
+                     "Do not resume yet; the review is still running."]:
+            send(text)
+            self.assertEqual([(h["name"], h["source"]) for h in ws.holds(self.sid)], [("zach-opus-w7", "wait")],
+                             text)
         send("Go: run the walk now.")
         self.assertEqual(ws.holds(self.sid), [])
 

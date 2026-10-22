@@ -180,11 +180,14 @@ def names_nobody(who):
 # while he asked "WHEN WILL [THIS] STOP ONCE AND FOR ALL???". Such a row is
 # swept as unstarted. A blocker naming the CEO (his decision, on CEO-TODOs)
 # still declares it.
-CEO_RE = re.compile(r"\bCEO\b")
+# OWNED BY HIM, NOT MENTIONING HIM (second review rv-20261022T023129Z-cefd17cf-7c77, finding
+# 2): the blocker opens with the CEO as its owner ("CEO — his Railway credentials", "the CEO —
+# he has to decide"). "Rich needs to prepare the CEO brief" waits on Rich, and stays loud.
+CEO_RE = re.compile(r"(?:the\s+)?CEO\b", re.I)
 
 
 def names_ceo(who):
-    return bool(CEO_RE.search(strip_markdown(who or "")))
+    return bool(CEO_RE.match(strip_markdown(who or "").strip()))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
