@@ -9,12 +9,17 @@ use std::{io::{BufRead, BufReader, Read, Write}, path::{Path, PathBuf}, process:
 const WAIT: Duration = Duration::from_secs(5);
 const WARMUP: Duration = Duration::from_secs(30);
 const MAX_BYTES: usize = 64 * 1024;
+const HAIKU: &str = "claude-haiku-5-5";
 
 pub(crate) struct Live {
     child: OwnedChild,
     input: Option<Sender<String>>,
     frames: Receiver<Result<Value,String>>,
     readers: Vec<JoinHandle<()>>,
+    /// The model every answer must come from, when the launch named an exact one.
+    model: Option<String>,
+    /// Whether this launch may use tools (only [`Provider::writing`] gives it any).
+    tools: bool,
 }
 impl Drop for Live {
     fn drop(&mut self) {
@@ -51,12 +56,17 @@ impl Drop for RequestClassifier {
 
 /// A tool-free Haiku launch: the instruction file it is given (relative to the engine) and
 /// the private folder it runs in. The classifier and the conversation titler
-/// (`thread_title.rs`) start the same way and differ only in these two.
+/// (`thread_title.rs`) start the same way and differ only in these two. The update of the
+/// user's own instructions (`instructions_update.rs`) starts the same launch on another model
+/// with the Write tool ([`Provider::writing`]).
 pub(crate) struct Provider {
     bin: PathBuf,
     profile: EngineProfile,
     instructions: &'static str,
     folder: &'static str,
+    model: String,
+    effort: &'static str,
+    tools: &'static str,
 }
 
 impl RequestClassifier {
@@ -130,7 +140,16 @@ impl RequestClassifier {
 
 impl Provider {
     pub(crate) fn new(bin:&Path, profile:&EngineProfile, instructions:&'static str, folder:&'static str)->Self {
-        Provider {bin:bin.to_path_buf(),profile:profile.clone(),instructions,folder}
+        Provider {bin:bin.to_path_buf(),profile:profile.clone(),instructions,folder,
+            model:HAIKU.into(),effort:"low",tools:""}
+    }
+
+    /// The same launch on `model` (a CLI alias) at high effort, with only the `tools` named.
+    pub(crate) fn writing(mut self, model:&str, tools:&'static str)->Self {
+        self.model=model.into();
+        self.effort="high";
+        self.tools=tools;
+        self
     }
 
     pub(crate) fn start(&self)->Result<Live,String> {
@@ -143,9 +162,9 @@ impl Provider {
         command.args(crate::lease_commands::supervisor_args(&self.profile.engine,&state,&log)).arg(&self.bin);
         self.profile.configure(&mut command,&self.bin,&id,&folder.join("no-action-scope.json"));
         command.env_remove("CLAUDECODE");
-        command.args(["-p","--model","claude-haiku-5-5","--effort","low",
+        command.args(["-p","--model",&self.model,"--effort",self.effort,
             "--input-format","stream-json","--output-format","stream-json","--verbose",
-            "--system-prompt",&standing,"--tools","","--strict-mcp-config","--mcp-config",
+            "--system-prompt",&standing,"--tools",self.tools,"--strict-mcp-config","--mcp-config",
             "{\"mcpServers\":{}}","--setting-sources","","--no-session-persistence",
             "--settings","{\"disableAllHooks\":true,\"autoMemoryEnabled\":false,\"claudeMdExcludes\":[\"**/CLAUDE.md\",\"**/CLAUDE.local.md\",\"**/.claude/rules/**\"]}",
             "--permission-mode","bypassPermissions"])
@@ -179,7 +198,8 @@ impl Provider {
                 if send.send(frame).is_err() || failed {break}
             }
         });
-        Ok(Live {child,input:Some(input),frames,readers:vec![writer,reader]})
+        Ok(Live {child,input:Some(input),frames,readers:vec![writer,reader],
+            model:(self.model==HAIKU).then(||self.model.clone()),tools:!self.tools.is_empty()})
     }
 
 }
@@ -200,11 +220,11 @@ impl Live {
                 Ok(frame)=>frame?,Err(mpsc::RecvTimeoutError::Timeout)=>continue,
                 Err(_)=>return Err("Classifier disconnected".into()),
             };
-            if frame["type"]=="system" && frame["subtype"]=="init" && frame["tools"].as_array().is_some_and(|tools|!tools.is_empty()) {
+            if !self.tools && frame["type"]=="system" && frame["subtype"]=="init" && frame["tools"].as_array().is_some_and(|tools|!tools.is_empty()) {
                 return Err("Classifier unexpectedly has tools".into())
             }
             if frame["type"]=="assistant" {
-                if frame["message"]["model"]!="claude-haiku-5-5" || frame["message"]["content"].as_array()
+                if self.model.as_ref().is_some_and(|model|frame["message"]["model"]!=model.as_str()) || !self.tools && frame["message"]["content"].as_array()
                     .is_some_and(|blocks|blocks.iter().any(|b|b["type"]=="tool_use")) {return Err("Invalid classifier model or action".into())}
                 model_seen=true;
             }
