@@ -1509,6 +1509,29 @@ impl Service {
         Ok(self.view())
     }
 
+    /// **A sign-in that just completed is recorded where the card reads it** (review
+    /// rv-20261022T035101Z-dd8cd796-0c4b, finding 1): Claude Code's browser sign-in came back
+    /// connected for `id`, so its quota record says signed in (`Snapshot::signed_in`) from now,
+    /// not from the next usage read, and a read that then fails cannot take it back. Account 1's
+    /// record has just been cleared by the changed connection (`set_connecting`); an added
+    /// account's is made here if no read has made it yet.
+    pub fn signed_in(&self, id: &str) {
+        if id == crate::claude_accounts::ACCOUNT_ONE {
+            self.snapshot.lock().unwrap().signed_in = Some(true);
+        } else if let Some(folder) = self.accounts.folder(id) {
+            let mut extra = self.extra.lock().unwrap();
+            let (_, snapshot) = extra.entry(id.to_string()).or_insert_with(|| self.reader(folder));
+            snapshot.signed_in = Some(true);
+        }
+        if let Err(error) = self.publish() {
+            eprintln!("[richos] quota snapshot: {error}");
+        }
+    }
+    /// An added account's own probe and an empty record, made on first use.
+    fn reader(&self, folder: std::path::PathBuf) -> AccountReader {
+        (std::sync::Arc::new(Mutex::new(Box::new(probe::ClaudeSource::for_folder(self.control.clone(), folder)) as Box<dyn Source>)),
+            Snapshot::default())
+    }
     pub fn remove_account(&self, id: &str) -> io::Result<View> {
         self.accounts.remove(id)?;
         self.extra.lock().unwrap().remove(id);
@@ -1555,9 +1578,7 @@ impl Service {
             let now = crate::util::now_millis();
             let (reader, current) = {
                 let mut extra = self.extra.lock().unwrap();
-                let (reader, snapshot) = extra.entry(account.id.clone()).or_insert_with(|| (
-                    std::sync::Arc::new(Mutex::new(Box::new(probe::ClaudeSource::for_folder(self.control.clone(), folder)) as Box<dyn Source>)),
-                    Snapshot::default()));
+                let (reader, snapshot) = extra.entry(account.id.clone()).or_insert_with(|| self.reader(folder));
                 (reader.clone(), snapshot.view(policy.clone(), now))
             };
             if !due(&current, force, now) { continue; }
@@ -2372,6 +2393,35 @@ pub(crate) mod tests {
         }
         assert_eq!(service.before_turn("1", Some((week(98.), start + 125 * 60_000))), work.id,
             "98% after the burst: {:?}", service.view().act_at);
+    }
+
+    /// **A sign-in that just completed is the account's sign-in verdict at once** (review
+    /// rv-20261022T035101Z-dd8cd796-0c4b, finding 1): the browser sign-in came back connected,
+    /// but only the account list heard it, so until a usage read answered, and for good if that
+    /// read failed, the card still said "Not signed in" or offered Sign in. Account 1 (a new
+    /// user's own sign-in: a changed connection first clears its record, `set_connecting`) and an
+    /// added account both carry `Some(true)` from the moment it completes, and a failed read
+    /// after it does not erase it.
+    #[test]
+    fn a_completed_sign_in_is_the_verdict_at_once_and_a_failed_read_after_it_keeps_it() {
+        let root = Scratch::new();
+        let service = Service::open(root.path()).unwrap();
+        let now = crate::util::now_millis();
+        service.snapshot.lock().unwrap().empty(ReadError::SignedOut, now);
+        assert_eq!(service.view().signed_in, Some(false), "signed out before the sign-in");
+        service.set_connecting(true);
+        service.set_connecting(false);
+        service.signed_in(crate::claude_accounts::ACCOUNT_ONE);
+        assert_eq!(service.view().signed_in, Some(true), "Account 1 right after its sign-in");
+        service.snapshot.lock().unwrap().empty(ReadError::Failed, now + 1);
+        assert_eq!(service.view().signed_in, Some(true), "Account 1 after a failed read");
+
+        let work = service.accounts.add("Work").unwrap();
+        service.signed_in(&work.id);
+        let row = |service: &Service| service.view().accounts.into_iter().find(|a| a.id == work.id).unwrap().signed_in;
+        assert_eq!(row(&service), Some(true), "an added account right after its sign-in");
+        service.extra.lock().unwrap().get_mut(&work.id).unwrap().1.empty(ReadError::Failed, now + 2);
+        assert_eq!(row(&service), Some(true), "an added account after a failed read");
     }
 
     #[test]

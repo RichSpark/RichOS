@@ -5778,6 +5778,8 @@ fn provider_auth_poll(state: State<AppState>) -> richos_core::provider_auth::Aut
     // A sign-in has just completed (the window polls only while one runs): a queue held for
     // sign-in starts its first held job now, not at its next look (T3 idea 1, finished).
     if view.state == richos_core::provider_auth::AuthState::Connected {
+        // Signed in from this moment, not from the next usage read (quota.rs `Service::signed_in`).
+        state.quota.signed_in(richos_core::claude_accounts::ACCOUNT_ONE);
         state.work.signed_in();
     }
     view
@@ -5913,6 +5915,8 @@ fn claude_account_sign_in_poll(state: State<AppState>) -> Option<(String, richos
                 if let Err(error) = state.quota.accounts.signed_in(&id, richos_core::util::now_millis()) {
                     eprintln!("[richos] claude accounts: the adding could not be recorded ({error})");
                 }
+                // Signed in from this moment, not from the next usage read (quota.rs `Service::signed_in`).
+                state.quota.signed_in(&id);
                 // As for Account 1's sign-in: a queue held for sign-in tries its first job now.
                 state.work.signed_in();
             }
