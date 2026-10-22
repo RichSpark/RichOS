@@ -192,7 +192,12 @@ def evidence(data, home, since_ms):
         except (OSError, ValueError) as exc:
             role = None
             unreadable.append('%s: %s' % (binding, exc))
-        found = sorted(home.glob('.claude/projects/*/%s.jsonl' % session))
+        # The transcript the session's own hooks name first: a session on another Claude
+        # account writes under that account's folder, never HOME/.claude (review
+        # rv-20261022T222750Z-aae6dfac-ab10); HOME/.claude is the fallback.
+        named = [c.get('transcript_path') for c in (r.get('callback') for r in _jsonl(binding.parent / 'callbacks.jsonl', []))
+                 if isinstance(c, dict) and c.get('transcript_path')]
+        found = [Path(p) for p in named if Path(p).is_file()][:1] or sorted(home.glob('.claude/projects/*/%s.jsonl' % session))
         row = {'session': session, 'role': role, 'transcript': str(found[0]) if found else None}
         if found:
             row.update(_session(found[0], unreadable))
