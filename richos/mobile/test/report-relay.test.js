@@ -258,6 +258,19 @@ test('an older unknown ID is reconciled by its footer before any create; a copie
   assert.equal(unsure.body.state, 'limited', 'an incomplete listing permits no create'); assert.equal(f.posts(), 1);
 });
 
+test('a report sent offline and retried an hour later is filed exactly once', async t => {
+  // The user pressed Send with no connection, so the first send never reached the relay; an hour
+  // later Try again sends the same approved report, which the relay has never seen.
+  const f = await fixture(t), offline = await f.report();
+  f.advance(3600_000);
+  const retried = await f.answer(await f.create(offline));
+  assert.equal(retried.body.state, 'delivered'); assert.equal(retried.body.issue_number, 1);
+  assert.equal(f.github.created()[0].body, offline.body); assert.equal(f.posts(), 1);
+  assert.equal((await f.answer(await f.create(offline))).body.issue_number, 1, 'a second Try again returns the same issue');
+  assert.equal((await f.answer(await f.status(offline.report_id, offline.receipt_secret))).body.state, 'delivered');
+  assert.equal(f.posts(), 1, 'filed once');
+});
+
 test('a token failure is an authoritative non-creation; throttling says nothing about the report; a PKCS#1 App key works', async t => {
   const f = await fixture(t, { pkcs1: true }), payload = await f.report();
   f.github.fault('token:500');
