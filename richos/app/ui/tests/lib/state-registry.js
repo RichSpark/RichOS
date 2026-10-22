@@ -539,10 +539,17 @@ module.exports = [
   },
   {
     s:
-      "That didn't come through as speech, so I haven't sent anything. I'm still " +
-      "listening.",
-    c: "INFORMATIONAL",
+      "That didn't come through as speech, so I haven't sent anything. If you said " +
+      "something, please say it again. I'm still listening.",
+    c: "ACTIONABLE",
+    control: "#talk-toggle",
+    fixture: "shell",
     why:
+      "ACTIONABLE SINCE 2026-10-21, with its two siblings: a line saying his words may not " +
+      "have gone anywhere now says what to do, conditionally (a cough reaches this path " +
+      "too), and the open microphone (◉, #talk-toggle) is the control. The class and its " +
+      "check: docs/development/failure-classes/lost-input-without-a-next-step.md. The " +
+      "history before that change follows. " +
       "`VoiceNotice::HeardNoVoice`, added 2026-09-05. The audio-grounded gate in " +
       "`crates/richos-voice/src/voiced.rs` measured the recording and found no voice in " +
       "it, so whisper was never called and nothing was submitted. It exists because the " +
@@ -561,9 +568,18 @@ module.exports = [
   {
     s:
       "While I was speaking, I couldn't tell your voice from my own, so if you said " +
-      "something just then, it didn't reach me and I haven't sent anything. I'm listening now.",
-    c: "INFORMATIONAL",
+      "something just then, it didn't reach me and I haven't sent anything. If you did, " +
+      "please say it again now. I'm listening.",
+    c: "ACTIONABLE",
+    control: "#talk-toggle",
+    fixture: "shell",
     why:
+      "ACTIONABLE SINCE 2026-10-21. A new user on 1.2.1 got this line right after a failed " +
+      "answer (Rich had just spoken the cut-off notice through his speakers) and it ended " +
+      "with a status, so it explained a loss and gave no next step. It now says the step, " +
+      "conditionally: say it again now. The microphone is open (◉, #talk-toggle, is on " +
+      "while voice is on), so the step needs nothing else. What follows is the history of " +
+      "the sentence before that change. " +
       "`VoiceNotice::CouldNotListenWhileSpeaking`, added 2026-09-17 for audit-3 §4 #1 and " +
       "REWRITTEN the same day after Ray's candidate-.4 walk proved the first wording false " +
       "on the CEO's own rig. It used to read \"You started talking while I was still " +
@@ -589,11 +605,11 @@ module.exports = [
       "path is committed as a test fixture and replays under `cargo test` without reaching " +
       "confidence, so every spoken answer through the speakers produces one of these " +
       "discards. " +
-      "INFORMATIONAL, and it still makes NO capability claim: \"I can't hear you while I'm " +
+      "It still makes NO capability claim: \"I can't hear you while I'm " +
       "speaking\" would be false twice, because talking over him for 5.008 s cuts him off " +
       "today and a confident canceller admits the utterance outright. It still states the " +
       "consequence, because the failure it explains is the app sending the TAIL of his " +
-      "sentence as though it were the whole of it. It ends with a status rather than \"wait " +
+      "sentence as though it were the whole of it. Its step is \"say it again now\", never \"wait " +
       "until I finish\", which would be an instruction to use the product more carefully to " +
       "work around a limitation. Latched ONCE PER VOICE SESSION (`RefusalNotices`), not " +
       "per run: cleared-on-heard would mean one line after every single spoken answer, " +
@@ -606,9 +622,16 @@ module.exports = [
       "themselves on top of it.",
   },
   {
-    s: "I didn't catch that, so I haven't sent anything. I'm still listening.",
-    c: "INFORMATIONAL",
+    s: "I didn't catch that, so I haven't sent anything. Please say it again. I'm still listening.",
+    c: "ACTIONABLE",
+    control: "#talk-toggle",
+    fixture: "shell",
     why:
+      "ACTIONABLE SINCE 2026-10-21, with its two siblings: a voice WAS measured, so his words " +
+      "are lost unless he says them again, and the line now says so; the open microphone " +
+      "(◉, #talk-toggle) is the control. The class and its check: " +
+      "docs/development/failure-classes/lost-input-without-a-next-step.md. The history " +
+      "before that change follows. " +
       "`VoiceNotice::DidNotCatchThat`, added 2026-09-17 for audit-3 §4 #4. Whisper RAN and " +
       "returned non-speech noise — `(clears throat)` — which `stt::is_meaningful` refuses. " +
       "It closes an ASYMMETRY between the two refusal paths that sit side by side in " +
@@ -2939,13 +2962,27 @@ module.exports = [
     control: "#update-check",
     fixture: "updates-install-failed",
     why:
-      "`install_failure()`'s headline at updates.rs:271 — the `failed` state with kind " +
-      "`install`, which is every staging failure that is not a refused signature. He can " +
+      "`INSTALL_HEADLINE` in updates.rs (`Failure::of_journal`) — the `failed` state with kind " +
+      "`install`, which is every update-record or staging failure that is not a refused " +
+      "signature and not a busy record (the row below). He can " +
       "act, and the control is the same one the network failure names: `isSignature(v)` is " +
       "false here, so `paint()` keeps `#update-check` visible and relabels it 'Try again'. " +
       "It gets its OWN fixture rather than borrowing `updates-failed`, because the row " +
       "claims this headline renders with that control and the network fixture renders a " +
       "different headline.",
+  },
+  {
+    s: "RichOS is busy with another update task. Try again in a minute.",
+    c: "ACTIONABLE",
+    control: "#update-check",
+    fixture: "updates-busy",
+    why:
+      "`BUSY_HEADLINE` in updates.rs, the `failed` state with kind `busy`: the update record's " +
+      "lock stayed held for the updater's whole wait (`richos_user_update::PUBLICATION_WAIT`, " +
+      "5 s) by another part of RichOS. Nothing failed, so it is said as busy; until 2026-10-21 " +
+      "this was 'RichOS could not prepare this update.' over 'Resource temporarily unavailable " +
+      "(os error 35)' on a plain check. He can act: `isSignature(v)` is false, so `paint()` " +
+      "keeps `#update-check` visible as 'Try again', which the sentence names.",
   },
   {
     s: "Password-free application updates are not implemented on this platform.",
@@ -3693,6 +3730,31 @@ module.exports = [
     "s": "Folder connected. Git was set up to track its files.",
     "c": "INFORMATIONAL",
     "why": "Confirms a connection that also set up Git, because every connected folder gets Git tracking (CEO, 2026-10-06): the folder had none, so its files became the first commit. Nothing was pushed and nothing is left to do."
+  },
+  {
+    "s": "Already connected to",
+    "c": "FRAGMENT",
+    "why": "Head of the shared-folder notice on the connected folders sheet (plan item 11, round 36 screen 2), completed by the company names that already have the folder. The button beside it, Connect to <company> too, is the action."
+  },
+  {
+    "s": "Connect it here too and Rich can work in it from",
+    "c": "FRAGMENT",
+    "why": "First part of the shared-folder notice's second sentence (round 36 screen 2), completed by the company names around 'chats as well as'."
+  },
+  {
+    "s": "chats as well as",
+    "c": "FRAGMENT",
+    "why": "Middle of the shared-folder notice's second sentence (round 36 screen 2), between the two company names."
+  },
+  {
+    "s": "Nothing in the folder moves and each company keeps its own chats and notes.",
+    "c": "INFORMATIONAL",
+    "why": "Third sentence of the shared-folder notice (round 36 screen 2): says what does not change when a folder is in two companies. Nothing is left to do."
+  },
+  {
+    "s": "Folder connected. It is now in",
+    "c": "FRAGMENT",
+    "why": "Confirmation after a folder is connected to a second company (plan item 11), completed by the company names. Nothing is left to do."
   },
   {
     "s": "No project folders connected yet.",

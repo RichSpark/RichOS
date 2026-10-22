@@ -2862,6 +2862,65 @@ class AuthorRuns(unittest.TestCase):
             self.assertNotIn(name, checks)
         self.assertEqual(seen[0]["RICHOS_BULK_ROOT"], "/fixture/bulk")    # a real setting still reaches it
 
+    def test_the_readiness_preflight_names_the_documented_cargo_root_as_the_author_run_named_it(self):
+        """2026-10-21, the land of cc/echo-opus-lease1x at e596d7860: its author exported the
+        documented CARGO_TARGET_DIR (machine_settings.py cache cargo-target --key CARGO_TARGET_DIR)
+        and the land names none, so the author checkout's runner, which compares the names as
+        written, read 55 unchanged passes as "declared execution inputs changed (environment.
+        CARGO_TARGET_DIR: saved 98224b0764c9..., now absent)". The land resolves the root from the
+        settings and names it as the run did; a run that named another root, or none, gets nothing."""
+        import types
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        digest = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        repo = types.SimpleNamespace(top=HERE.parents[2])
+        with tempfile.TemporaryDirectory(dir=os.path.realpath(tempfile.gettempdir())) as top:
+            root, bulk = Path(top) / "checkout", Path(top) / "bulk"
+            (root / module.PROOF_RUN).parent.mkdir(parents=True)
+            (root / module.PROOF_RUN).write_text("# fixture: takes --coverage\n")
+            bulk.mkdir()
+            documented = str(bulk / "caches/cargo-target")
+
+            def run_named(name, cargo_roots):
+                run = Path(top) / name
+                run.mkdir()
+                (run / "plan.json").write_text(json.dumps({"root": str(root)}))
+                rows = {f"check {i}": {"state": "passed", "exit": 0, "input": {
+                    "contract": "whole-checkout-v2", "environment": {"PATH": digest("/usr/bin"), **roots}}}
+                    for i, roots in enumerate(cargo_roots)}
+                rows["recipe"] = {"state": "passed", "exit": 0, "input": {"contract": "a" * 64, "environment": {}}}
+                (run / "outcomes.json").write_text(json.dumps(rows))
+                return str(run)
+
+            # The incident's shape: every whole-checkout pass names the root; the nightly's
+            # conditions add RICHOS_CARGO_CACHE_ROOT beside it on some checks only.
+            named = {"CARGO_TARGET_DIR": digest(documented)}
+            incident = run_named("incident", [named, named, {**named, "RICHOS_CARGO_CACHE_ROOT": digest(documented)}])
+            other = run_named("other", [{"CARGO_TARGET_DIR": digest("/other/target")}])
+            none = run_named("none", [{}, {}])
+            seen = []
+
+            def preflight(argv, **kwargs):
+                seen.append(kwargs["env"])
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            land = {"RICHOS_BULK_ROOT": str(bulk), "RICHOS_MACHINE_SETTINGS_RESOLVED": "1"}
+            with mock.patch.dict(os.environ, land), mock.patch.object(module.subprocess, "run", side_effect=preflight):
+                for name in ("CARGO_TARGET_DIR", "RICHOS_CARGO_CACHE_ROOT"):
+                    os.environ.pop(name, None)
+                for run in (incident, other, none):
+                    module.coverage_of(run, repo)
+                os.environ["CARGO_TARGET_DIR"] = "/the/landers/own"
+                module.coverage_of(incident, repo)
+        self.assertEqual(len(seen), 4)
+        self.assertEqual(seen[0].get("CARGO_TARGET_DIR"), documented)
+        self.assertNotIn("RICHOS_CARGO_CACHE_ROOT", seen[0])    # named on some checks only: not the run's own
+        for env in seen[1:3]:
+            self.assertNotIn("CARGO_TARGET_DIR", env)
+            self.assertNotIn("RICHOS_CARGO_CACHE_ROOT", env)
+        self.assertEqual(seen[3]["CARGO_TARGET_DIR"], "/the/landers/own")    # a land that names one keeps it
+
     def test_the_land_releases_only_the_handover_holds_of_the_candidates_it_merged(self):
         """PRD A11: the final consumer releases the handover's `retain` marker once its own
         evidence is written; a hold for anything else, or for a candidate it did not merge, stays."""

@@ -86,9 +86,19 @@ def render(reason, reset=None):
     else:
         if reset is not None:
             raise ValueError("manual holds have no automatic reset")
-        until = "the user's explicit instruction to resume"
+        # Rich made this pause, so it is Rich's resume that ends it (no silent holds,
+        # 2026-10-22): it is a hold on his work, reported until it runs or he decides.
+        until = "Rich's resume"
     metadata = json.dumps({"version": 1, "reason": reason, "reset": reset}, separators=(",", ":"))
     return BODY + "\n" + MARKER + metadata + "\npause-until: " + until
+
+
+def end_of(reason, reset=None):
+    """The pause's checkable end for the registry (workspaces.py HOLDS): a quota
+    reset is at:<time>; a manual pause, or a weekly one with no reset time, has none."""
+    if reason in ("quota", "weekly-quota") and reset:
+        return "at:" + reset
+    return ""
 
 
 def render_resume(reason="manual"):
@@ -270,7 +280,7 @@ def take_effect(to, reason="manual", reset=None, resume=False):
         if resume:
             rec = ws.resume(to, me, notes)
         else:
-            rec = ws.pause(to, until_text(reason, reset), me, notes, control=True)
+            rec = ws.pause(to, until_text(reason, reset), me, notes, control=True, end=end_of(reason, reset))
         ah = ws._agent_hold()
         sid, aid = str(rec.get("session_id") or ""), str(rec.get("agent_id") or "")
         mine = [r for r in ah.records() if r.get("session_id") == sid and r.get("agent_id") == aid]

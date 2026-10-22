@@ -49,6 +49,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest, relaunch  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('adopt_walk', HERE / 'adopt-walk.py')
 adopt = importlib.util.module_from_spec(_spec)
@@ -71,27 +72,20 @@ class Walk(adopt.Walk):
         self.dest = self.home + '/Applications/RichOS.app'
 
     def ax(self, mode, *args, app=None, timeout=150):
-        # An accessibility read that hits ax.sh's own guest deadline (exit 124, "guest_deadline")
-        # on a busy host is asked again, at most three times in all; any other failure, and a
-        # deadline that persists, is raised as before. First run of this walk: a single
+        # An accessibility read (find, tree) with no answer on a busy host is asked again, at most
+        # three times in all (axwait.ask_again); a click is sent once; any other failure, and a
+        # read that never answers, is raised as before. First run of this walk: a single
         # deadline on "Start the questions" ended it at first-run with the app healthy.
         for attempt in range(3):
             try:
                 return super().ax(mode, *args, app=app, timeout=timeout)
             except StepFailed as exc:
-                if 'guest_deadline' not in str(exc) or attempt == 2:
+                if not axwait.ask_again(exc, mode) or attempt == 2:
                     raise
                 time.sleep(2)
 
-    def present(self, title, role='AXButton', app=None):
-        # Inside a bounded wait, a read that keeps hitting the guest deadline is "not seen yet",
-        # so the wait's own bound decides, not one slow read on a loaded host.
-        try:
-            return super().present(title, role, app)
-        except StepFailed as exc:
-            if 'guest_deadline' in str(exc):
-                return False
-            raise
+    # present() is adopt-walk's: inside a bounded wait a find with no answer is "not seen yet"
+    # (axwait.py), so the wait's own bound decides, not one slow read on a loaded host.
 
     def wait_for(self, title, role='AXButton', app=None, seconds=30):
         # adopt-walk.py's own waits are 30 s; on a loaded host one accessibility read can take
@@ -286,7 +280,7 @@ class Walk(adopt.Walk):
                         on_thread = True
                         break
                 except StepFailed as exc:
-                    if 'notfound' not in str(exc) and 'nothing matched' not in str(exc):
+                    if not axwait.absent(exc):
                         raise
         self.shot('3-after-relaunch.png')
         problems = []

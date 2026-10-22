@@ -70,6 +70,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('command_walk', HERE / 'command-walk.py')
 command_walk = importlib.util.module_from_spec(_spec)
@@ -342,20 +343,12 @@ class HireWalk(command_walk.CommandWalk):
             try:
                 return super().type_into(text, *selector, app=app)
             except StepFailed as exc:
-                if 'guest_deadline' not in str(exc) or attempt == 3:
+                if not axwait.no_answer(exc) or attempt == 3:
                     raise
                 time.sleep(10)
 
-    def present(self, title, role='AXButton', app=None):
-        """A read-only presence check whose accessibility read hit its own deadline counts as "not
-        seen yet" (walk 3 of 2026-10-13: `find --title Start the questions` exited 124 after 16.3 s
-        in the guest, host at 100% CPU), so the caller's own wait polls again until its limit."""
-        try:
-            return super().present(title, role, app)
-        except StepFailed as exc:
-            if '(124)' not in str(exc) and 'guest_deadline' not in str(exc):
-                raise
-            return False
+    # present() is adopt-walk's, whose find with no answer is "not seen yet" (axwait.py; walk 3 of
+    # 2026-10-13: `find --title Start the questions` exited 124 after 16.3 s, host at 100% CPU).
 
     def approve_if_asked(self, title):
         """command-walk.py's one Approve press, searched by the start of the title, and a poll the
@@ -365,7 +358,7 @@ class HireWalk(command_walk.CommandWalk):
         try:
             return super().approve_if_asked(title[:40])
         except StepFailed as exc:
-            if '(124)' not in str(exc) and 'guest_deadline' not in str(exc):
+            if not axwait.no_answer(exc):
                 raise
             return False
 
@@ -649,7 +642,7 @@ class HireWalk(command_walk.CommandWalk):
             try:
                 found = [n for n in self.ax('find', '--id', dom_id, '--first') if not n.get('meta')]
             except StepFailed as exc:
-                if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+                if axwait.not_yet(exc, 'find'):
                     return None
                 raise
             return found[0] if found else None

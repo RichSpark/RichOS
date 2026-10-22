@@ -149,7 +149,8 @@ scale.js                @shell richos/app/ui/timeline.js richos/app/src-tauri/sr
 escape.js               @shell @home @splash
 steering.js             @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 techy.js                @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/machinery-payload.json richos/app/src-tauri/src/machinery_view.rs richos/app/src-tauri/src/main.rs
-workers.js              @shell richos/app/ui/timeline.js
+techy-race.js           richos/app/ui/main.js richos/app/ui/timeline.js richos/app/ui/tests/fixtures/machinery-payload.json
+workers.js             @shell richos/app/ui/timeline.js
 
 # ---- the home screen and the window's chrome ---------------------------------------------
 chrome-align.js         @shell @home richos/app/ui/settings-button.js richos/app/ui/splash.css

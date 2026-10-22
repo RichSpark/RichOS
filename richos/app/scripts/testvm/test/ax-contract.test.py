@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """AX shell/deadline contracts against owned stub processes, never a VM."""
+import ast
 import json
 import importlib.util
 from unittest.mock import patch
@@ -12,6 +13,13 @@ import unittest
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
+
+
+def ax_params(program):
+    """The parameter line ax.sh puts in front of ax.py, decoded as the guest decodes it."""
+    name, _, literal = program.read_text().splitlines()[0].partition(' = ')
+    assert name == 'AX_PARAMS_JSON', name
+    return json.loads(ast.literal_eval(literal))
 
 
 # Run the actual CLI and scratch lifecycle with a controlled subprocess boundary.
@@ -213,14 +221,14 @@ exec(compile(code,'<ax-shell-fixture>','exec'),{'__name__':'__main__'})
             r = subprocess.run(args, capture_output=True, text=True, env=env, timeout=300)
             self.assertEqual(r.returncode, 1, r.stdout+r.stderr)
             self.assertEqual(json.loads(r.stdout.splitlines()[0])['error'], 'notfound')
-            params = json.loads((root/'program').read_text().splitlines()[0][len('var AX_PARAMS = '):-1])
+            params = ax_params(root/'program')
             self.assertEqual(params['id'], 'route-choice')
             self.assertEqual(params['expect'], {'value':'1'})
             self.assertFalse(params['first'])
             self.assertFalse(list(root.glob('testvm-ax-*')))
             legacy = subprocess.run(args[:-3]+['--json'], capture_output=True, text=True, env=env, timeout=300)
             self.assertEqual(legacy.returncode, 1, legacy.stdout+legacy.stderr)
-            legacy_params = json.loads((root/'program').read_text().splitlines()[0][len('var AX_PARAMS = '):-1])
+            legacy_params = ax_params(root/'program')
             self.assertIsNone(legacy_params['expect'])
             (root/'program').unlink()
             bad = subprocess.run(args[:-3]+['--expect','unknown=1','--json'],

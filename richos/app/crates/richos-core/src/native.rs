@@ -432,6 +432,10 @@ pub const STOP_REASON_CANCEL_UNACKNOWLEDGED: &str = "cancel_unacknowledged";
 /// The `terminal_reason` the binary sets on a turn the client interrupted.
 pub const TERMINAL_REASON_ABORTED: &str = "aborted_streaming";
 
+/// The `terminal_reason` the binary sets on a turn an API failure ended (2.1.305, captured: a
+/// refused connection and a `403`; `crate::connection` has both shapes).
+pub const TERMINAL_REASON_API_ERROR: &str = "api_error";
+
 /// How long `prompt` waits for the agent to answer the cancelled turn.
 ///
 /// **`acp.rs:49` asked whoever ran the first live stop to replace this bound with a measured
@@ -874,9 +878,22 @@ struct PendingTurn {
     /// fold path) before any `result` can be its own. So a `result` that arrives first ends a
     /// turn that was already running, and the count on it is not consulted.
     child_names_turns: bool,
+    /// **The lost connection ended this input's turn and it waits for the connection**
+    /// ([`NativeClient::after_api_error`]). Nothing that arrives meanwhile is its: not a frame,
+    /// not a `result`, not the child's `cancelled` for the message that failed.
+    awaiting_connection: bool,
+    /// The uuid of the message that carries this input's turn on after a lost connection. The
+    /// child names that message, not ours, so from then on only this id is matched against its
+    /// lifecycle; `command_uuid` stays the input's own id for everything else.
+    continued_as: Option<String>,
 }
 
 impl PendingTurn {
+    /// Is `command` the message the child is running this input under?
+    fn named(&self, command: &str) -> bool {
+        self.continued_as.as_deref().unwrap_or(&self.command_uuid) == command
+    }
+
     fn send(&mut self, chunk: ChunkMsg, frame: &Value) -> bool {
         match &mut self.sink {
             TurnSink::Prompt(sink) => sink.send(chunk).is_ok(),
@@ -928,6 +945,7 @@ impl PendingTurn {
     /// this one question, so the result, the streamed frames, the permission records and the
     /// background-command reading cannot disagree about whose turn is running.
     fn not_yet_ours(&self) -> bool {
+        if self.awaiting_connection { return true; }
         match self.phase {
             TurnPhase::Queued => true,
             TurnPhase::Unconfirmed => self.child_names_turns,
@@ -938,6 +956,8 @@ impl PendingTurn {
     /// **Does this `result` belong to a turn that is not ours?** The whole decision, in one
     /// place, from the child's own words and nothing else.
     fn result_is_another_turns(&self, result: &Value) -> bool {
+        // Waiting for the connection: no turn of ours is running at all.
+        if self.awaiting_connection { return true; }
         // Our message is in the turn that is running: whatever is queued behind it, this
         // result ends OUR turn. Tested first, because `queued_turn_count` counts what is
         // WAITING and says nothing about what is running.
@@ -1203,10 +1223,60 @@ impl ActionGrant {
     }
 }
 
+/// **The turn-end signal of Stu's lease, for stall-watch's unfinished-work reminder.** The lease
+/// runs with `--print`, whose transcript never records a turn's end (0 of 794 `sdk-cli`
+/// transcripts did, richos-hq `6864034d0`), so the monitor takes the host's word instead
+/// (`engine/scripts/lib/host_child.py` `idle`/`started`, read from the file `RICHOS_WATCH_LEAD`
+/// names): `{"session", "started", "turn_ended"}`. `turn_ended` is present only while a turn has
+/// ended with nothing awaited, and is removed when input is given or a turn begins. Written only
+/// on a change; removed with the lease.
+pub(crate) struct LeadSignal {
+    path: std::path::PathBuf,
+    session: String,
+    started: u64,
+    idle: Mutex<bool>,
+}
+
+impl LeadSignal {
+    pub(crate) fn path_for(state: &Path, session: &str) -> std::path::PathBuf {
+        state.join("stall-watch-lead").join(format!("{session}.json"))
+    }
+    pub(crate) fn new(path: std::path::PathBuf, session: &str) -> std::io::Result<Self> {
+        let signal=Self {path,session:session.to_string(),started:crate::util::now_millis()/1000,idle:Mutex::new(false)};
+        signal.write(false)?;
+        Ok(signal)
+    }
+    fn write(&self, idle: bool) -> std::io::Result<()> {
+        let mut body=json!({"session":self.session,"started":self.started});
+        if idle {body["turn_ended"]=json!(crate::util::now_millis()/1000);}
+        if let Some(dir)=self.path.parent() {std::fs::create_dir_all(dir)?;}
+        let temporary=self.path.with_extension("json.tmp");
+        std::fs::write(&temporary,serde_json::to_vec(&body)?)?;
+        std::fs::rename(&temporary,&self.path)
+    }
+    fn set(&self, idle: bool) {
+        let mut current=self.idle.lock().unwrap();
+        if *current==idle {return}
+        match self.write(idle) {
+            Ok(())=>*current=idle,
+            Err(error)=>eprintln!("[richos] stall-watch lead file {}: {error}",self.path.display()),
+        }
+    }
+    /// A turn ended and nothing is awaited.
+    fn ended(&self) {self.set(true)}
+    /// Input was given, or a turn began.
+    fn began(&self) {self.set(false)}
+}
+
+impl Drop for LeadSignal {
+    fn drop(&mut self) {drop(std::fs::remove_file(&self.path));}
+}
+
 /// The existing engine monitor, owned by Stu's native lease. Its policy stays in the engine.
 struct StallWatch {
     _child: crate::owned_process::OwnedChild,
     _output: JoinHandle<()>,
+    lead: Arc<LeadSignal>,
 }
 
 impl StallWatch {
@@ -1218,12 +1288,14 @@ impl StallWatch {
         let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),entity_id:entity.clone(),thread_id:thread.clone()};
         let script=profile.engine.join("scripts/stall-watch.sh");
         if !script.is_file() {return Err(NativeError::Protocol("The engine's stall monitor is missing".into()))}
+        let lead=Arc::new(LeadSignal::new(LeadSignal::path_for(&profile.state,session),session).map_err(NativeError::Io)?);
         let mut command=Command::new("/bin/bash");
         for (key,value) in environment.get_envs() {
             if let Some(value)=value {command.env(key,value);} else {command.env_remove(key);}
         }
         command.arg(script).args(["--monitor","--jsonl"])
             .current_dir(&profile.coordination).env("RICHOS_SESSION_ID",session)
+            .env("RICHOS_WATCH_LEAD",&lead.path)
             .env("RICHOS_SESSION_PID",lease_pid.to_string())
             .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit());
         crate::owned_process::OwnedChild::configure(&mut command);
@@ -1247,7 +1319,7 @@ impl StallWatch {
                 }
             }
         }).map_err(NativeError::Io)?;
-        Ok(Some(Self {_child:child,_output:output}))
+        Ok(Some(Self {_child:child,_output:output,lead}))
     }
 }
 
@@ -1296,6 +1368,20 @@ pub struct NativeClient {
 /// to be declared first.
 struct ReaderState {
     agent_tasks: crate::operator_lead::TaskBook,
+    /// Stu's turn-end signal for stall-watch; `None` on every lease that has no monitor.
+    lead: Option<Arc<LeadSignal>>,
+    /// How a turn that ended on an API failure learns whether the connection is up, and waits
+    /// for it ([`NativeClient::after_api_error`]).
+    connection: Arc<crate::connection::ConnectionWatch>,
+    /// The API failure Claude Code ended the running turn with (`is_api_error_message`): its
+    /// `error` kind, and its text when that text would have been delivered as the turn's words.
+    /// Held until the turn's `result` says whether the turn carries on, so the vendor's line
+    /// never becomes Rich's or Stu's words in a turn that goes on.
+    api_error: Option<(Option<String>, Option<String>)>,
+    /// The helpers (by their `parent_tool_use_id`) whose run the lost connection ended and whose
+    /// parent is told once the connection is back ([`NativeClient::after_helper_api_error`]):
+    /// one wait per helper, however many frames carry its failure.
+    helpers_waiting: std::collections::HashSet<String>,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
     /// **Where every `assistant` frame's usage goes, and the account this lease runs on**
@@ -1507,6 +1593,10 @@ impl Default for ReaderState {
     fn default() -> Self {
         ReaderState {
             agent_tasks: crate::operator_lead::TaskBook::default(),
+            lead: None,
+            connection: Arc::new(crate::connection::ConnectionWatch::system()),
+            api_error: None,
+            helpers_waiting: Default::default(),
             question_scope: None,
             work_tools_loaded: InitFact::NotYetReported,
             assignment_tool_loaded: false,
@@ -2028,6 +2118,7 @@ impl NativeClient {
                     &reader_between,
                     &reader_state,
                     &reader_text_deltas,
+                    &reader_closed_flag,
                 );
                 Self::release_between_turn(&reader_between);
             }
@@ -2113,6 +2204,7 @@ impl NativeClient {
         };
         client.handshake_cancellable(control)?;
         client.stall_watch=StallWatch::start(profile,role,&command,&client.session_id,lease_pid,Arc::clone(&client.reader_closed))?;
+        if let Some(watch)=&client.stall_watch {client.reader_state.lock().unwrap().lead=Some(Arc::clone(&watch.lead));}
         Ok(client)
     }
 
@@ -2269,6 +2361,7 @@ impl NativeClient {
         between: &Arc<Mutex<BetweenTurn>>,
         state: &Arc<Mutex<ReaderState>>,
         text_deltas: &Arc<AtomicUsize>,
+        closed: &Arc<AtomicBool>,
     ) {
         drop(state.lock().unwrap().agent_tasks.observe(&msg));
         let ty = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -2373,10 +2466,13 @@ impl NativeClient {
                 let mut guard = current.lock().unwrap();
                 // A named lifecycle establishes this child's native identity protocol for
                 // inputs already sent before its first acknowledgement too.
-                if guard.iter().any(|pending| pending.command_uuid == command) {
+                if guard.iter().any(|pending| pending.named(command)) {
                     for pending in guard.iter_mut() { pending.child_names_turns = true; }
                 }
-                if let Some(pending) = guard.iter_mut().find(|pending| pending.command_uuid == command) {
+                // An input waiting for the connection hears nothing about the message that
+                // failed (the child says `cancelled` for it right after the `result`), and the
+                // inputs one continuation carries on are all named by it.
+                for pending in guard.iter_mut().filter(|pending| pending.named(command) && !pending.awaiting_connection) {
                         // **THE LOUDNESS LAYER**: said once, at the transition, on stderr.
                         // See `ReaderState::turns_named_by_the_child` — a fallback quietly
                         // carrying the whole load looks exactly like the thing working.
@@ -2409,11 +2505,14 @@ impl NativeClient {
                 }
             }
             if let Some(reason) = terminal {
-                let pending = {
+                let ended: Vec<PendingTurn> = {
                     let mut guard = current.lock().unwrap();
-                    guard.iter().position(|pending| pending.command_uuid == command).map(|index| guard.remove(index))
+                    let (ended, kept) = std::mem::take(&mut *guard).into_iter()
+                        .partition(|pending| pending.named(command) && !pending.awaiting_connection);
+                    *guard = kept;
+                    ended
                 };
-                if let Some(pending) = pending { pending.finish(json!({"stop_reason":reason}), true); }
+                for pending in ended { pending.finish(json!({"stop_reason":reason}), true); }
             }
             Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg);
             return;
@@ -2423,6 +2522,11 @@ impl NativeClient {
         // context watermark or terminal state. In particular, whole-message fallback
         // must not promote worker narration when the lead has no active text stream.
         if msg.get("parent_tool_use_id").is_some_and(|parent| !parent.is_null()) {
+            // A helper's run Claude Code ended on an API failure (its message carries `error`)
+            // may have been ended by the lost connection: its parent is told once it is back.
+            if ty == "assistant" && msg.get("error").is_some_and(|error| !error.is_null()) {
+                Self::after_helper_api_error(&msg, stdin, state, closed);
+            }
             // A worker's whole message also reaches the between-turn sink when a turn took it:
             // Stu's host reads his workers' overloads there (`work_host.rs` observe_worker),
             // whichever turn carried them. A lease with no sink keeps nothing extra.
@@ -2430,6 +2534,13 @@ impl NativeClient {
                 between.lock().unwrap().copy_to_sink(msg);
             }
             return;
+        }
+
+        // A turn the platform started itself (a helper's hand-back, a task notification) begins
+        // with the lead's own output: it is not between turns any more.
+        if ty == "assistant" || ty == "stream_event" {
+            let lead=state.lock().unwrap().lead.clone();
+            if let Some(lead)=lead {lead.began();}
         }
 
         // ---- the terminal frame --------------------------------------------------------
@@ -2452,18 +2563,45 @@ impl NativeClient {
             // with a user send still queued — ours, the only one there can be — ends a turn
             // that was already in flight when we sent, so it is RETAINED and the parked
             // prompt keeps waiting for its own.
-            let ready = {
+            let (ready, nothing_awaited) = {
                 let mut guard = current.lock().unwrap();
                 let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut *guard).into_iter()
                     .partition(|pending| !pending.result_is_another_turns(&msg));
                 *guard = waiting;
-                ready
+                (ready, guard.is_empty())
             };
-            if ready.is_empty() {
-                between.lock().unwrap().offer_frame(msg);
-            } else {
-                finish_native_turn(ready, msg);
+            let api_error = state.lock().unwrap().api_error.take();
+            let carried_by_api_error = msg.get("terminal_reason").and_then(Value::as_str) == Some(TERMINAL_REASON_API_ERROR);
+            // Between turns only with no input still awaited; written before the reply is
+            // delivered, so whoever sees the reply sees the signal. A turn an API failure ended
+            // may carry on once the connection is back, so it signals from `after_api_error`
+            // only if it really ends there.
+            if nothing_awaited && !carried_by_api_error {
+                Self::signal_turn_end(state);
             }
+            // **AN API FAILURE MAY BE THE LOST CONNECTION** (CEO, 2026-10-21): whether it is,
+            // and the wait for the connection, run off this thread, which keeps reading. Every
+            // turn of every lease ends here, Rich's, Stu's and Claude Code's own, so they all
+            // carry on the same way. Until it is decided the inputs stay parked, waiting.
+            if msg.get("terminal_reason").and_then(Value::as_str) == Some(TERMINAL_REASON_API_ERROR) {
+                let held: Vec<String> = ready.iter().map(|pending| pending.command_uuid.clone()).collect();
+                current.lock().unwrap().extend(ready.into_iter().map(|mut pending| { pending.awaiting_connection = true; pending }));
+                let text = api_error.as_ref().and_then(|(_, text)| text.clone());
+                let (frame, ids) = (msg.clone(), held.clone());
+                let state_for_signal = state.clone();
+                let (stdin, waiting, lane, state, closed) =
+                    (stdin.clone(), current.clone(), between.clone(), state.clone(), closed.clone());
+                let decided = std::thread::Builder::new().name("richos-connection-wait".into()).spawn(move ||
+                    Self::after_api_error(frame, api_error, ids, &stdin, &waiting, &lane, &state, &closed));
+                if let Err(error) = decided {
+                    // No thread, no wait: the turn ends as it always did.
+                    eprintln!("[richos] the wait for the connection could not start: {error}");
+                    if nothing_awaited { Self::signal_turn_end(&state_for_signal); }
+                    Self::end_turn(Self::take_held(current, &held), msg, text, between);
+                }
+                return;
+            }
+            Self::end_turn(ready, msg, api_error.and_then(|(_, text)| text), between);
             return;
         }
 
@@ -2590,6 +2728,12 @@ impl NativeClient {
         // speaking because it stopped working. Whichever frame arrives first wins; both name the
         // same id.
 
+        // Claude Code's own API failure line is held until the turn's `result` says whether the
+        // turn carries on (`ReaderState::api_error`); it is delivered then only if it does not.
+        let api_error = ty == "assistant" && msg.get("is_api_error_message").and_then(Value::as_bool) == Some(true);
+        if api_error {
+            state.lock().unwrap().api_error = Some((msg.get("error").and_then(Value::as_str).map(str::to_string), None));
+        }
         if ty == "assistant" && text_deltas.load(Ordering::SeqCst) == 0 {
             let whole: String = msg
                 .get("message")
@@ -2604,7 +2748,9 @@ impl NativeClient {
                         .join("")
                 })
                 .unwrap_or_default();
-            if !whole.is_empty() {
+            if api_error {
+                if let Some((_, held)) = state.lock().unwrap().api_error.as_mut() { *held = Some(whole).filter(|t| !t.is_empty()); }
+            } else if !whole.is_empty() {
                 Self::route(ChunkMsg::Text(whole), current, between, &msg);
             }
         }
@@ -2646,6 +2792,154 @@ impl NativeClient {
             between.lock().unwrap().offer_frame(frame.clone());
         }
         routed
+    }
+
+    /// End a turn the way every turn ends: its inputs get the `result`, after Claude Code's API
+    /// failure line when one was held for it (`ReaderState::api_error`), delivered where
+    /// [`NativeClient::route`] delivers text, to the latest input. A turn no input waits for is
+    /// kept on the between-turn lane.
+    fn end_turn(mut ready: Vec<PendingTurn>, result: Value, text: Option<String>, between: &Arc<Mutex<BetweenTurn>>) {
+        if ready.is_empty() {
+            between.lock().unwrap().offer_frame(result);
+            return;
+        }
+        if let (Some(text), Some(input)) = (text, ready.last_mut()) {
+            input.send(ChunkMsg::Text(text), &Value::Null);
+        }
+        finish_native_turn(ready, result);
+    }
+
+    /// Tell Stu's stall-watch the turn is over (a no-op on a lease without a monitor).
+    fn signal_turn_end(state: &Arc<Mutex<ReaderState>>) {
+        let lead = state.lock().unwrap().lead.clone();
+        if let Some(lead) = lead { lead.ended(); }
+    }
+
+    /// The inputs named in `held` that still wait for the connection, taken off the parked list.
+    fn take_held(current: &Arc<Mutex<Vec<PendingTurn>>>, held: &[String]) -> Vec<PendingTurn> {
+        let mut guard = current.lock().unwrap();
+        let (taken, kept) = std::mem::take(&mut *guard).into_iter()
+            .partition(|pending| pending.awaiting_connection && held.contains(&pending.command_uuid));
+        *guard = kept;
+        taken
+    }
+
+    /// **A turn an API failure ended: when the lost connection ended it, wait until the
+    /// connection is back and carry the same turn on; otherwise end it as it always ended**
+    /// (CEO, 2026-10-21). Runs on its own thread, so the reader keeps reading, for the inputs
+    /// `held` that the turn's `result` answered, or for none when the turn was one Claude Code
+    /// started itself (a helper's hand-back, a task notification).
+    ///
+    /// Carrying on sends ONE `connection_restored` message in the same session, never what the
+    /// user sent again: the session already holds the input the failure interrupted. What the
+    /// message means to Rich and Stu is in their instruction files (`engine/app/agents`). The
+    /// held inputs wait on for that message's turn, so whoever waited for the first turn gets
+    /// the one `result` of the turn that finished. A Stop (which takes a waiting prompt away)
+    /// and the child ending (which ends every input) end the wait without sending anything.
+    #[allow(clippy::too_many_arguments)] // the reader's own shared handles, as `dispatch` takes them
+    fn after_api_error(result: Value, api_error: Option<(Option<String>, Option<String>)>, held: Vec<String>,
+        stdin: &Arc<Mutex<ChildStdin>>, current: &Arc<Mutex<Vec<PendingTurn>>>, between: &Arc<Mutex<BetweenTurn>>,
+        state: &Arc<Mutex<ReaderState>>, closed: &Arc<AtomicBool>) {
+        let (kind, text) = api_error.unwrap_or_default();
+        let watch = state.lock().unwrap().connection.clone();
+        if crate::connection::lost(&result, kind.as_deref(), &watch) {
+            let said = result.get("result").and_then(Value::as_str).unwrap_or_default().to_string();
+            eprintln!("[richos] the internet connection is lost ({said}); the turn carries on when it is back");
+            let still_held = || current.lock().unwrap().iter()
+                .any(|pending| pending.awaiting_connection && held.contains(&pending.command_uuid));
+            let stopped = || closed.load(Ordering::SeqCst) || (!held.is_empty() && !still_held());
+            if watch.wait_until_up(&stopped) {
+                match Self::carry_on(&said, &held, stdin, current, closed) {
+                    Ok(()) => eprintln!("[richos] the connection is back; the same turn carries on"),
+                    // The pipe is gone only with the child, whose end ends every input.
+                    Err(error) => eprintln!("[richos] the turn could not carry on: {error}"),
+                }
+            }
+            return;
+        }
+        let ready = Self::take_held(current, &held);
+        if ready.is_empty() && !held.is_empty() { return; }
+        if current.lock().unwrap().is_empty() { Self::signal_turn_end(state); }
+        Self::end_turn(ready, result, text, between);
+        Self::release_between_turn(between);
+    }
+
+    /// Send the `connection_restored` message under a new uuid and point the held inputs at it.
+    /// Nothing is sent when they were stopped meanwhile or the child is gone.
+    fn carry_on(said: &str, held: &[String], stdin: &Arc<Mutex<ChildStdin>>,
+        current: &Arc<Mutex<Vec<PendingTurn>>>, closed: &Arc<AtomicBool>) -> Result<(), NativeError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let mut inputs = current.lock().unwrap();
+            if closed.load(Ordering::SeqCst) { return Ok(()); }
+            let mut waiting = inputs.iter_mut()
+                .filter(|pending| pending.awaiting_connection && held.contains(&pending.command_uuid)).peekable();
+            if !held.is_empty() && waiting.peek().is_none() { return Ok(()); }
+            for pending in waiting {
+                pending.awaiting_connection = false;
+                pending.continued_as = Some(id.clone());
+                pending.phase = TurnPhase::Unconfirmed;
+                // The failure this carries on from is over: an overload or a limit read off its
+                // frames must not end the continued turn (review rv-20261021T031711Z-3416839f-d2f2).
+                // The continuation's own frames set them again if it meets one.
+                if let TurnSink::Input { limit, overload, .. } = &mut pending.sink {
+                    *limit = None;
+                    *overload = None;
+                }
+            }
+        }
+        Self::tell_connection_restored(stdin, &id, json!({"event":"connection_restored","error":said}))
+    }
+
+    /// Write one `connection_restored` fact into this session as a message from `connection`, in
+    /// the shape every app message to Rich and Stu has (`session_tools::Message`).
+    fn tell_connection_restored(stdin: &Arc<Mutex<ChildStdin>>, id: &str, fact: Value) -> Result<(), NativeError> {
+        let message = crate::session_tools::Message { handoff: false, from: "connection".into(),
+            text: fact.to_string(), instruction: None, work: None };
+        let text = serde_json::to_string(&message).map_err(|error| NativeError::Protocol(error.to_string()))?;
+        Self::write_line(stdin, &json!({"type":"user","uuid":id,"message":{"role":"user","content":[{"type":"text","text":text}]}}))
+    }
+
+    /// **A helper (a teammate of Rich's or Stu's) that the lost connection ended** (CEO,
+    /// 2026-10-21, "every worker the app runs"). Its run is Claude Code's, inside this lease, so
+    /// the app cannot send it anything itself; its parent can, and a message to a finished helper
+    /// continues that helper's own conversation from its transcript (Claude Code 2.1.305's
+    /// SendMessage: "a send resumes it from its transcript"). So once the connection is back the
+    /// parent gets one `connection_restored` message naming the helper (its call, agent id and
+    /// task), and its instruction file says to continue that helper, not start it over.
+    ///
+    /// The helper's failure is decided by the same rule as a turn's ([`crate::connection::lost`]),
+    /// from its message: the `error` kind, the `api_error_status` or the status its line names.
+    /// An overload is not the connection and keeps the overload schedule (`work_host.rs`).
+    fn after_helper_api_error(frame: &Value, stdin: &Arc<Mutex<ChildStdin>>, state: &Arc<Mutex<ReaderState>>,
+        closed: &Arc<AtomicBool>) {
+        let Some(call) = frame.get("parent_tool_use_id").and_then(Value::as_str).map(str::to_string) else { return };
+        if !state.lock().unwrap().helpers_waiting.insert(call.clone()) { return; }
+        let said: Vec<&str> = frame.pointer("/message/content").and_then(Value::as_array).into_iter().flatten()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|block| block.get("text").and_then(Value::as_str)).collect();
+        let said = said.join("\n");
+        let kind = frame.get("error").and_then(Value::as_str).map(str::to_string);
+        let ended = json!({"api_error_status": frame.get("api_error_status"), "result": said});
+        let fact = json!({"event":"connection_restored","error":said,
+            "helper":{"tool_use_id":call,"agent_id":frame.get("agent_id"),"task":frame.get("task_description")}});
+        let (stdin, state, closed) = (stdin.clone(), state.clone(), closed.clone());
+        let waited = std::thread::Builder::new().name("richos-helper-connection-wait".into()).spawn(move || {
+            let watch = state.lock().unwrap().connection.clone();
+            if crate::connection::lost(&ended, kind.as_deref(), &watch) {
+                eprintln!("[richos] a helper's run ended on the lost connection ({said}); its parent is told when it is back");
+                if watch.wait_until_up(&|| closed.load(Ordering::SeqCst)) {
+                    match Self::tell_connection_restored(&stdin, &uuid::Uuid::new_v4().to_string(), fact) {
+                        Ok(()) => eprintln!("[richos] the connection is back; the helper's parent is told to continue it"),
+                        Err(error) => eprintln!("[richos] the helper's parent could not be told: {error}"),
+                    }
+                }
+            }
+            state.lock().unwrap().helpers_waiting.remove(&call);
+        });
+        if let Err(error) = waited {
+            eprintln!("[richos] the wait for a helper's connection could not start: {error}");
+        }
     }
 
     /// Answer the agent's `control_request`s, AND route them as machinery.
@@ -2907,8 +3201,11 @@ impl NativeClient {
                     preparation_error: None,
                     phase: TurnPhase::Unconfirmed,
                     child_names_turns,
+                    awaiting_connection: false,
+                    continued_as: None,
                 });
-
+                let lead=self.reader_state.lock().unwrap().lead.clone();
+                if let Some(lead)=lead {lead.began();}
             }
             if let Err(error) = Self::write_line(&self.stdin, &msg) {
                 self.current_prompt.lock().unwrap().retain(|pending| pending.command_uuid != command_uuid);
@@ -3190,6 +3487,8 @@ impl TurnCancel for NativeCancelHandle {
                     // Live input always requires its own native UUID acknowledgement. A queue
                 // count cannot identify one of several independently submitted commands.
                 child_names_turns: true,
+                awaiting_connection: false,
+                continued_as: None,
             });
         }
         let message = json!({"type":"user", "uuid":id,
@@ -3235,7 +3534,7 @@ impl TurnCancel for NativeCancelHandle {
         let (sinks, running): (Vec<_>, bool) = {
             let mut inputs = self.current_prompt.lock().unwrap();
             if self.settle_workers_on_stop {
-                if let Some(input)=inputs.iter_mut().find(|pending| !pending.not_yet_ours()) {
+                if let Some(input)=inputs.iter_mut().find(|pending| !pending.not_yet_ours() || pending.awaiting_connection) {
                     let previous=input.complete.take();
                     input.complete=Some(Box::new(move || {
                         let result=previous.map_or(Ok(()),|complete|complete());
@@ -3244,7 +3543,8 @@ impl TurnCancel for NativeCancelHandle {
                     }));
                 }
             }
-            let active = inputs.iter().filter(|pending| !pending.not_yet_ours());
+            // A turn that waits for the connection is still his running turn to stop.
+            let active = inputs.iter().filter(|pending| !pending.not_yet_ours() || pending.awaiting_connection);
             let running = active.clone().next().is_some();
             let sinks = active.filter_map(|pending| match &pending.sink {
                 TurnSink::Prompt(sink) => Some(sink.clone()), _ => None,
@@ -3897,7 +4197,7 @@ impl Drop for NativeCognition {
         if let Some(path)=self.client.reader_state.lock().unwrap().question_scope.as_ref(){drop(std::fs::remove_file(path));}
         let _ = self.client.child.kill();
         let _ = self.client.child.wait();
-        if let Some(profile) = &self.engine_profile { let _ = std::fs::remove_dir_all(&profile.plugin); }
+        if let Some(profile) = &self.engine_profile { profile.remove_session_files(); }
         if let Some((_, path)) = &self.continuity { let _ = std::fs::remove_file(path); }
         if let Some(path) = &self.assignments_scope { let _ = std::fs::remove_file(path); }
         if let Some(path) = &self.status_scope { let _ = std::fs::remove_file(path); }
@@ -3936,6 +4236,9 @@ impl Cognition for NativeCognition {
     }
     fn streamed_usage(&self) -> Option<crate::quota::StreamedReading> {
         self.client.reader_state.lock().unwrap().streamed_usage.clone()
+    }
+    fn user_settings_digest(&self) -> Option<String> {
+        self.engine_profile.as_ref()?.user.digest.clone()
     }
     fn set_input_channel(&mut self, channel: Option<&str>) -> Result<(), CognitionError> {
         self.pending_channel = channel.map(str::to_string);
@@ -4582,6 +4885,53 @@ for index,prompt in enumerate([first,second]):
         assert_eq!(client.session_id(),session);
     }
 
+    /// Stu's turn-end signal (one-app plan 2026-10-21, step 1): a turn that ends with nothing
+    /// awaited sets `turn_ended` in the file stall-watch reads, and new input clears it.
+    #[test]
+    fn a_turn_ending_with_nothing_awaited_sets_the_stall_watch_signal_and_new_input_clears_it() {
+        let script=write_script("lead-signal",r#"
+exec python3 -u -c '
+import json,sys
+def read(): return json.loads(sys.stdin.readline())
+def send(row): print(json.dumps(row),flush=True)
+init=read()
+send({"type":"control_response","response":{"subtype":"success","request_id":init["request_id"],"response":{}}})
+for index in range(2):
+ prompt=read()
+ while not __import__("os").path.exists("go-"+str(index)): __import__("time").sleep(0.01)
+ send({"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reply"}]}})
+ send({"type":"result","stop_reason":"end_turn","command_uuid":prompt["uuid"]})
+'
+"#);
+        let root=script.parent().unwrap().to_path_buf();
+        let client=NativeClient::spawn(&script,&root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        let path=LeadSignal::path_for(&root,client.session_id());
+        let signal=Arc::new(LeadSignal::new(path.clone(),client.session_id()).unwrap());
+        client.reader_state.lock().unwrap().lead=Some(signal);
+        let read=||->Value {serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()};
+        let first=read();
+        assert_eq!(first["session"],client.session_id());
+        assert!(first["started"].as_u64().is_some_and(|at|at>0));
+        assert!(first.get("turn_ended").is_none(),"a lease that has ended no turn: {first}");
+        for index in 0..2 {
+            let response=client.enqueue_prompt("Work",None).unwrap();
+            assert!(read().get("turn_ended").is_none(),"input given clears the signal: {}",read());
+            std::fs::write(root.join(format!("go-{index}")),"").unwrap();
+            assert_eq!(response.wait(&mut |_|{}).unwrap(),"end_turn");
+            let ended=read();
+            assert!(ended["turn_ended"].as_u64().is_some_and(|at|at>=first["started"].as_u64().unwrap()),"{ended}");
+            assert_eq!(ended["session"],client.session_id());
+        }
+        drop(client);
+        // The file is the lease's own and goes with it.
+        // load-bound: the reader thread holds the last reference briefly after the drop.
+        let deadline=std::time::Instant::now()+Duration::from_secs(10);
+        while path.exists() {
+            assert!(std::time::Instant::now()<deadline,"the signal outlived its lease");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn native_plugin_reload_is_a_control_request_and_keeps_the_session() {
         for (name,answer) in [("reload-success","success"),("reload-refused","error")] {
@@ -4820,6 +5170,7 @@ send({"type":"result","stop_reason":"end_turn"})
                 versions: Default::default(),
             },
             work_scope: None,
+            user: Default::default(),
 
             operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default(),
         }
@@ -4891,7 +5242,7 @@ exec /bin/sleep 1000
         let other=crate::status_tools::StatusToolScope {thread_id:"thread-b".into(),..scope.clone()};
         assert!(crate::session_tools::pending(&other,"stu").unwrap().is_none());
         assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none());
-        let StallWatch {_child:child,_output:output}=monitor;
+        let StallWatch {_child:child,_output:output,..}=monitor;
         drop(child);
         output.join().unwrap();
         std::fs::remove_dir_all(root).unwrap();
@@ -6457,6 +6808,178 @@ done
         path
     }
 
+    /// A stand-in `claude` whose first turn ends on the API failure in `case.json`, in the
+    /// frames 2.1.305 was captured sending (a refused localhost port, and a localhost stand-in
+    /// answering the 2026-10-21 incident's Cloudflare `403`), and whose every later turn says
+    /// `Carried on.` and ends. Every user message it reads is written to `received.jsonl`.
+    const FAILS_ONCE_ON_THE_API: &str = r#"
+import json,pathlib,sys
+here=pathlib.Path(sys.argv[0]).parent
+case=json.loads((here/"case.json").read_text())
+def send(v): print(json.dumps(v),flush=True)
+def read():
+    line=sys.stdin.readline()
+    if not line: raise SystemExit(0)
+    v=json.loads(line)
+    if v.get("type")=="user":
+        with (here/"received.jsonl").open("a") as f: f.write(json.dumps(v)+"\n")
+    return v
+init=read()
+send({"type":"control_response","response":{"subtype":"success","request_id":init["request_id"],"response":{}}})
+first=True
+while True:
+    v=read()
+    if v.get("type")!="user": continue
+    sent=v["uuid"]
+    send({"type":"command_lifecycle","command_uuid":sent,"state":"queued"})
+    send({"type":"command_lifecycle","command_uuid":sent,"state":"started"})
+    if first and case.get("helper"):
+        first=False
+        said={"type":"assistant","parent_tool_use_id":"helper-call","agent_id":"a1b2c3d4-helper","task_description":"Fixture helper",
+            "error":case["kind"],"is_api_error_message":True,"message":{"model":"<synthetic>","role":"assistant","type":"message",
+                "content":[{"type":"text","text":case["text"]}]}}
+        if case["status"] is not None: said["api_error_status"]=case["status"]
+        send(said)
+        send({"type":"assistant","parent_tool_use_id":None,"message":{"role":"assistant","content":[{"type":"text","text":"Parent done."}]}})
+        send({"type":"result","subtype":"success","is_error":False,"stop_reason":"end_turn","terminal_reason":"completed","queued_turn_count":0})
+        send({"type":"command_lifecycle","command_uuid":sent,"state":"completed"})
+    elif first:
+        first=False
+        said={"type":"assistant","parent_tool_use_id":None,"error":case["kind"],"is_api_error_message":True,
+            "message":{"model":"<synthetic>","role":"assistant","type":"message","stop_reason":"stop_sequence",
+                "content":[{"type":"text","text":case["text"]}]},"user_message_uuid":sent}
+        if case["status"] is not None: said["api_error_status"]=case["status"]
+        send(said)
+        send({"type":"result","subtype":"success","is_error":True,"stop_reason":"stop_sequence","terminal_reason":"api_error",
+            "api_error_status":case["status"],"result":case["text"],"user_message_uuid":sent,"queued_turn_count":0})
+        send({"type":"command_lifecycle","command_uuid":sent,"state":"cancelled"})  # dialect-exempt: the vendor's own command_lifecycle state value, captured verbatim off the 2.1.305 wire
+    else:
+        send({"type":"assistant","parent_tool_use_id":None,"message":{"role":"assistant","content":[{"type":"text","text":"Carried on."}]}})
+        send({"type":"result","subtype":"success","is_error":False,"stop_reason":"end_turn","terminal_reason":"completed","queued_turn_count":0})
+        send({"type":"command_lifecycle","command_uuid":sent,"state":"completed"})
+"#;
+
+    /// The two endings of the 2026-10-21 incident: Claude Code's connection failure after its own
+    /// retries, and the Cloudflare `403` that it never retries.
+    const REFUSED: &str = "API Error: Connection refused \u{2014} a firewall or proxy may be blocking it (ECONNREFUSED)";
+    const EDGE_403: &str = r#"Please run /login · API Error: 403 {"type":"https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1034/","title":"Error 1034: Edge IP Restricted","status":403,"detail":"The host resolved to an IP address that the site owner does not have access to.","error_code":1034,"error_name":"edge_ip_restricted","error_category":"dns","zone":"api.anthropic.com","cloudflare_error":true,"retryable":false}"#;
+
+    /// A lease on the stand-in for `(kind, status, text)`, whose connection check answers "down"
+    /// `down` times and then "up"; returns it, its folder and how often the check was asked.
+    fn lease_failing_once(name: &str, kind: &str, status: Option<u64>, text: &str, down: usize)
+        -> (NativeClient, std::path::PathBuf, Arc<AtomicUsize>) {
+        lease_failing_once_in(name, json!({"kind":kind,"status":status,"text":text}), down)
+    }
+
+    /// [`lease_failing_once`] for any `case.json`; `"helper": true` puts the failure on a helper
+    /// of the turn, whose parent then ends its own turn normally.
+    fn lease_failing_once_in(name: &str, case: Value, down: usize) -> (NativeClient, std::path::PathBuf, Arc<AtomicUsize>) {
+        let script = write_script(name, "exec python3 -u \"$(dirname \"$0\")/provider.py\"\n");
+        let root = script.parent().unwrap().to_path_buf();
+        std::fs::write(root.join("provider.py"), FAILS_ONCE_ON_THE_API).unwrap();
+        std::fs::write(root.join("case.json"), case.to_string()).unwrap();
+        let client = NativeClient::spawn(&script, &root, &doctrine_fixture(), &skills_fixture()).unwrap();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let counter = asked.clone();
+        client.reader_state.lock().unwrap().connection = Arc::new(crate::connection::ConnectionWatch::new(
+            move || counter.fetch_add(1, Ordering::SeqCst) >= down, Duration::from_millis(5)));
+        (client, root, asked)
+    }
+
+    /// The user messages the stand-in read, as their texts.
+    fn received_texts(root: &Path) -> Vec<String> {
+        std::fs::read_to_string(root.join("received.jsonl")).unwrap_or_default().lines().map(|line| {
+            let frame: Value = serde_json::from_str(line).unwrap();
+            frame["message"]["content"][0]["text"].as_str().unwrap().to_string()
+        }).collect()
+    }
+
+    /// **CEO, 2026-10-21: "Of course, that must be built into the app."** A turn the lost
+    /// connection ended (Claude Code's connection failure after its retries ran out, or the
+    /// incident's `403` arriving while the connection is down) waits until the connection is
+    /// back and carries the SAME turn on, for Rich's prompt and for Stu's live input alike:
+    /// it finishes once, the vendor's line never becomes the reply, and what the user sent is
+    /// sent once, followed by one `connection_restored` message.
+    #[test]
+    fn a_turn_the_lost_connection_ended_waits_for_it_and_carries_on_once() {
+        // The third case: an overload message that arrives while the connection is down marks a live
+        // input overloaded; the continued turn must still end as its own (review
+        // rv-20261021T031711Z-3416839f-d2f2).
+        for (case, kind, status, text) in [("refused", "server_error", None, REFUSED), ("edge-403", "authentication_failed", Some(403), EDGE_403),
+            ("repeated-529-while-down", "server_error", None, "API Error: Repeated 529 Overloaded errors.")] {
+            for live_input in [false, true] {
+                let (client, root, asked) = lease_failing_once(&format!("lost-connection-{case}"), kind, status, text, 3);
+                let mut said = String::new();
+                let outcome = if live_input {
+                    let (done, finished) = std::sync::mpsc::channel();
+                    let sent = client.cancel_handle().send_input(&uuid::Uuid::new_v4().to_string(), "Draft the plan",
+                        Box::new(move |outcome| done.send(outcome.result).expect("the test waits for this outcome")));
+                    assert_eq!(sent, Ok(true));
+                    // load-bound: hang guard only; the input's own completion is the verdict.
+                    finished.recv_timeout(Duration::from_secs(60)).expect("the live input never finished")
+                } else {
+                    client.prompt("Draft the plan", &mut |item| if let TurnItem::Text { text, .. } = item { said.push_str(text) })
+                        .map_err(|error| error.to_string())
+                };
+                let what = format!("case={case} live_input={live_input}");
+                assert_eq!(outcome.as_deref(), Ok("end_turn"), "{what}: the turn did not carry on to its end");
+                if !live_input { assert_eq!(said, "Carried on.", "{what}: the vendor's line reached the reply"); }
+                let received = received_texts(&root);
+                assert_eq!(received.len(), 2, "{what}: {received:?}");
+                assert_eq!(received[0], "Draft the plan", "{what}");
+                let carried: Value = serde_json::from_str(&received[1]).unwrap();
+                let fact: Value = serde_json::from_str(carried["text"].as_str().unwrap()).unwrap();
+                assert_eq!((carried["from"].as_str(), fact["event"].as_str(), fact["error"].as_str()),
+                    (Some("connection"), Some("connection_restored"), Some(text)), "{what}");
+                assert!(asked.load(Ordering::SeqCst) >= 4, "{what}: carried on before the connection was back");
+            }
+        }
+    }
+
+    /// The control: the same `403` while the API answers is a real answer from the API, so the
+    /// turn ends exactly as it did before, on the one message the user sent.
+    #[test]
+    fn an_api_failure_while_the_connection_is_up_ends_the_turn_as_before() {
+        let (client, root, _) = lease_failing_once("edge-403-up", "authentication_failed", Some(403), EDGE_403, 0);
+        let mut said = String::new();
+        let outcome = client.prompt("Draft the plan", &mut |item| if let TurnItem::Text { text, .. } = item { said.push_str(text) });
+        assert!(outcome.expect_err("a 403 with the connection up must still fail").to_string().contains("Error 1034"));
+        assert_eq!(said, EDGE_403);
+        assert_eq!(received_texts(&root), ["Draft the plan"]);
+    }
+
+    /// **A teammate the lost connection ended is carried on too** (review
+    /// rv-20261021T021642Z-c50b0db8-452f; the incident's dead worker). Its parent's turn ends
+    /// normally; once the connection is back the parent gets one `connection_restored` message
+    /// naming that helper (its call, agent id and task), so it continues the helper's own
+    /// conversation. Both of the incident's errors; nothing is sent while the connection is down.
+    #[test]
+    fn a_teammate_the_lost_connection_ended_is_named_to_its_parent_once_the_connection_is_back() {
+        for (case, kind, status, text) in [("refused", "server_error", None, REFUSED), ("edge-403", "authentication_failed", Some(403), EDGE_403)] {
+            let (client, root, asked) = lease_failing_once_in(&format!("lost-connection-helper-{case}"),
+                json!({"kind":kind,"status":status,"text":text,"helper":true}), 3);
+            let mut said = String::new();
+            let outcome = client.prompt("Draft the plan", &mut |item| if let TurnItem::Text { text, .. } = item { said.push_str(text) });
+            assert_eq!(outcome.map_err(|error| error.to_string()).as_deref(), Ok("end_turn"), "case={case}");
+            assert_eq!(said, "Parent done.", "case={case}: a helper's failure line reached the parent's reply");
+            // load-bound: hang guard only; the stand-in reading the second message is the verdict.
+            let end = std::time::Instant::now() + Duration::from_secs(60);
+            let mut received = received_texts(&root);
+            while received.len() < 2 && std::time::Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(20));
+                received = received_texts(&root);
+            }
+            assert_eq!(received.len(), 2, "case={case}: {received:?}");
+            assert_eq!(received[0], "Draft the plan", "case={case}");
+            let told: Value = serde_json::from_str(&received[1]).unwrap();
+            let fact: Value = serde_json::from_str(told["text"].as_str().unwrap()).unwrap();
+            assert_eq!((told["from"].as_str(), fact["event"].as_str(), fact["error"].as_str()),
+                (Some("connection"), Some("connection_restored"), Some(text)), "case={case}");
+            assert_eq!(fact["helper"], json!({"tool_use_id":"helper-call","agent_id":"a1b2c3d4-helper","task":"Fixture helper"}), "case={case}");
+            assert!(asked.load(Ordering::SeqCst) >= 4, "case={case}: the parent was told before the connection was back");
+        }
+    }
+
     #[test]
     fn native_input_can_be_submitted_before_the_previous_response_is_drained() {
         let script=write_script("pending-input",r#"
@@ -7465,7 +7988,7 @@ read -r keep_alive
                 _ => std::fs::write(folder.join("callbacks.jsonl"), log).unwrap(),
             }
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
-                engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(),
+                engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(), user: Default::default(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
                 work_scope:None,  operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
             });

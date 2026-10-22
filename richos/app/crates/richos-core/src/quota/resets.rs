@@ -343,6 +343,7 @@ impl Service {
             let file = options
                 .open(self.root.join("claude-reset-offers.lock"))
                 .map_err(|_| "Reset lock unavailable.")?;
+            // lock-busy: busy is held across a network poll, so it is answered at once in words: a reset check is in progress, try again shortly.
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
                 return Err("A reset check or action is in progress. Try again shortly.".into());
             }

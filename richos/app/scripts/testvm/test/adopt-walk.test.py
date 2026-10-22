@@ -125,5 +125,55 @@ class FirstRunSheets(unittest.TestCase):
         self.assertEqual(state['pressed'], [])
 
 
+class OpenEnabled(unittest.TestCase):
+    """wait_open_enabled against a scripted chooser: the click waits for Open to be enabled."""
+
+    def walk_on(self, answers):
+        w = walk.Walk.__new__(walk.Walk)
+        w.calls = 0
+        def ax(mode, *a, **k):
+            answer = answers[min(w.calls, len(answers) - 1)]
+            w.calls += 1
+            if isinstance(answer, Exception):
+                raise answer
+            return [{'meta': True}, {'title': 'Open', 'x': 1, 'enabled': answer}]
+        w.ax = ax
+        return w
+
+    def setUp(self):
+        self.sleep, self.mono = walk.time.sleep, walk.time.monotonic
+        self.now = 0.0
+        def sleep(s):
+            self.now += s
+        walk.time.sleep = sleep
+        walk.time.monotonic = lambda: self.now
+
+    def tearDown(self):
+        walk.time.sleep, walk.time.monotonic = self.sleep, self.mono
+
+    def test_it_waits_while_open_is_disabled(self):
+        w = self.walk_on([False, False, 'true'])
+        w.wait_open_enabled()
+        self.assertEqual(w.calls, 3)
+
+    def test_a_read_with_no_answer_is_asked_again(self):
+        w = self.walk_on([walk.StepFailed('{"error": "unresponsive"}'), True])
+        w.wait_open_enabled()
+        self.assertEqual(w.calls, 2)
+
+    def test_still_disabled_at_the_limit_names_the_step_and_state(self):
+        w = self.walk_on([False])
+        with self.assertRaises(walk.StepFailed) as ctx:
+            w.wait_open_enabled()
+        self.assertIn('connect folder', str(ctx.exception))
+        self.assertIn('enabled=False', str(ctx.exception))
+
+    def test_connect_folder_has_no_fixed_sleep_before_open(self):
+        source = (HERE / 'adopt-walk.py').read_text()
+        body = source[source.index('    def connect_folder'):source.index('    def decline_first_run_sheets')]
+        self.assertIn('self.wait_open_enabled()', body)
+        self.assertNotIn('time.sleep(2.5)', body)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=1)

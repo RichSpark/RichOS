@@ -31,8 +31,10 @@ CMD="$*"
 STUB_LOG="${STUB_LOG:-/dev/null}"
 STUB_MODE="${STUB_MODE:-ok}"
 STUB_DNSNAME="${STUB_DNSNAME:-richos-test-a.tail1a2b3c.ts.net}"
-# One log record per call, including multi-line supervisor source.
-printf '%s\t%s\n' "$VM" "${CMD//$'\n'/ }" >> "$STUB_LOG"
+# One log record per call, including multi-line supervisor source. `tr`, not
+# "${CMD//$'\n'/ }": in bash 3.2 that substitution grows with the square of
+# the text, and a 16 KB supervisor source took 7.4 s of CPU per call.
+{ printf '%s\t' "$VM"; printf '%s' "$CMD" | tr '\n' ' '; printf '\n'; } >> "$STUB_LOG"
 
 # A REDIRECTION INSIDE THE COMMAND STRING IS EXECUTED BY THE GUEST, so what ssh
 # hands back already has it applied. Honored here, because getting it wrong
@@ -45,16 +47,18 @@ case "$CMD" in
   *"2>/dev/null"*) exec 2>/dev/null ;;
 esac
 
-# --- the accessibility read, for ax.sh --------------------------------------
-# ax.sh sends the PROGRAM on stdin (a `var AX_PARAMS = {...};` block followed by
-# ax.js) and expects NDJSON back. The stub keeps what arrived on stdin so a test
-# can assert what was ASKED — the mode, the title, the process — separately from
-# what was answered, and answers with a fixture.
+# --- the accessibility read, for ax.sh, hand-file.sh and pointer-drag.sh -----
+# ax.sh sends the PROGRAM on stdin (an `AX_PARAMS_JSON = '{...}'` line followed
+# by ax.py, run by the trailing `python3 -`); hand-file.sh and pointer-drag.sh
+# send a JXA program to `osascript -l JavaScript -`. Each expects NDJSON back.
+# The stub keeps what arrived on stdin so a test can assert what was ASKED — the
+# mode, the title, the process — separately from what was answered, and answers
+# with a fixture.
 #   STUB_AX_SCRIPT=<path>    where to keep the program that arrived on stdin
 #   STUB_AX_FIXTURE=<path>   the NDJSON to answer with
 #   STUB_AX_RC=<n>           what the read exits with (default 0)
 case "$CMD" in
-  *"osascript -l JavaScript"*)
+  *"osascript -l JavaScript"*|*" python3 -")
     cat > "${STUB_AX_SCRIPT:-/dev/null}"
     [ -n "${STUB_AX_FIXTURE:-}" ] && [ -f "${STUB_AX_FIXTURE:-}" ] && cat "$STUB_AX_FIXTURE"
     exit "${STUB_AX_RC:-0}" ;;

@@ -62,6 +62,7 @@ fn lock(file: &File, exclusive: bool) -> io::Result<bool> {
                     libc::LOCK_EX
                 } else {
                     libc::LOCK_SH
+                // lock-busy: busy is the answer: a liveness probe of the pause record's holder, returned as Ok(false).
                 }) | libc::LOCK_NB,
             )
         } == 0

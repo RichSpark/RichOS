@@ -133,7 +133,13 @@ def repositories(scope):
     if len(matches) != 1: raise ValueError("the active company is not uniquely registered")
     company = matches[0]
     paths = company.get("connected_repositories", [])
-    if any(p not in company.get("roots", []) or not Path(p).is_absolute() for p in paths):
+    # A repository may be connected for work in more than one company (plan item 11): `roots`
+    # stays exclusive, so a shared one is in ONE company's roots and connected by both. It is
+    # accepted for the other company only when that owner has it as a root AND connected.
+    def shared(p):
+        return any(o is not company and p in o.get("roots", []) and p in o.get("connected_repositories", [])
+                   for o in value["entities"])
+    if any((p not in company.get("roots", []) and not shared(p)) or not Path(p).is_absolute() for p in paths):
         raise ValueError("invalid repository connection")
     return paths
 

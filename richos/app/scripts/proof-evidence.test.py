@@ -783,7 +783,9 @@ class Evidence(unittest.TestCase):
             return directory, rows, detail
         units = ("engine scripts/alpha.test.sh", "engine scripts/beta.test.sh")
         off = dict.fromkeys(switches, "0")
-        author, rows, detail = invoke(worktree, "author")
+        # Since 2026-10-22 an unset switch reaches every check as "0" (runner_environment), so
+        # the author's run that ran more passes is one launched with them on.
+        author, rows, detail = invoke(worktree, "author", RICHOS_MUTATION_PASSES="1", RICHOS_FOURTEEN_MUTANTS="1")
         self.assertEqual(sorted(counter.read_text().splitlines()), ["alpha", "beta"], detail)
         gate, rows, detail = invoke(self.root, "gate", "--reuse", str(author), **off)
         self.assertEqual(sorted(counter.read_text().splitlines()), ["alpha", "beta"],
@@ -1648,6 +1650,21 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         self.assertEqual(seen[0], seen[1])
         self.assertEqual(seen[0]["PATH"].split(os.pathsep).count(shim), 1)
 
+    def test_a_handover_run_turns_mutation_passes_off_and_a_nightly_keeps_them_on(self):
+        """2026-10-22, Hank's after-measurement: an engineer's handover run left both mutation
+        switches unset, so every suite's own mutation harness ran (22.3% of the Mac in the busy
+        window). Unset, the runner gives every check the merge gate's switch; a value the caller
+        set (the nightlies' "1", the gate's own "0") is kept."""
+        base = {k: v for k, v in os.environ.items() if k not in evidence.MUTATION_SWITCHES}
+        self.assertEqual({k: runner.runner_environment(base).get(k) for k in evidence.MUTATION_SWITCHES},
+                         dict.fromkeys(evidence.MUTATION_SWITCHES, "0"))
+        on = dict(base, RICHOS_MUTATION_PASSES="1", RICHOS_FOURTEEN_MUTANTS="1")
+        self.assertEqual({k: runner.runner_environment(on)[k] for k in evidence.MUTATION_SWITCHES},
+                         dict.fromkeys(evidence.MUTATION_SWITCHES, "1"))
+        item = runner.Item("check", str(self.root), ["bash", "suite.sh"])
+        with patch.dict(os.environ, runner.runner_environment(base), clear=True):
+            self.assertEqual(runner.execution_environment(item)["RICHOS_MUTATION_PASSES"], "0")
+
     def test_the_preflight_reads_run_files_under_a_resolved_scratch(self):
         """03-E, found by the recovery demonstration: a run-tests.sh check's command names its result
         file as $RUN/... only when the path starts with the resolved run directory, and the
@@ -2376,6 +2393,52 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         # own keys): only the whole-checkout reading, which binds every RICHOS_ name, leaves them out.
         recipe = {"contract": "recipe", "environment": {"RICHOS_AGENT_OWNER": evidence.digest("x")}}
         self.assertFalse(evidence.stands_in(recipe, {**recipe, "environment": {"RICHOS_AGENT_OWNER": None}}))
+
+    def test_a_cargo_root_named_as_the_machine_settings_give_it_reads_as_one_named_by_none(self):
+        """2026-10-21, the land of cc/echo-opus-lease1x at e596d7860: the author's handover run
+        20261021T120436Z-6sgk79rr exported the documented CARGO_TARGET_DIR (machine_settings.py cache
+        cargo-target --key CARGO_TARGET_DIR) and the land names none, so 55 unchanged passes read as
+        "declared execution inputs changed (environment.CARGO_TARGET_DIR: saved 98224b0764c9...,
+        now absent)". With no Cargo root named, the shim and the nightly take that same root from
+        the settings; RICHOS_CARGO_CACHE_ROOT (which the nightly's conditions add beside it) is its
+        other spelling. Either side may be the one that names it. Any other root still counts."""
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
+        bulk = Path(self.tmp.name) / "bulk"
+        bulk.mkdir()
+        settings = {"RICHOS_BULK_ROOT": str(bulk), "RICHOS_MACHINE_SETTINGS_RESOLVED": "1"}
+        names = ("CARGO_TARGET_DIR", "RICHOS_CARGO_CACHE_ROOT")
+        unset = {name: None for name in names}
+        documented = str(bulk / "caches/cargo-target")     # what machine_settings.py prints for these settings
+        with patch.dict(os.environ, settings):
+            for name in names:
+                os.environ.pop(name, None)
+            land = {"PATH": "/usr/bin:/bin", "HOME": self.tmp.name, **settings}
+            identity = lambda env: evidence.checkout_identity(self.root, ["bash", "suite.sh"],
+                                                              {k: v for k, v in {**land, **env}.items() if v})
+            plan = {"source": dict(self.source)}
+            gap = lambda saved, wanted: evidence.evidence_gap(
+                "cargo -p richos-core --lib", {"state": "passed", "exit": 0, "source": dict(self.source),
+                                               "input": saved}, wanted, plan)
+            wanted = identity(unset)
+            author = identity({"CARGO_TARGET_DIR": documented})
+            self.assertNotEqual(author, wanted)
+            self.assertIsNone(gap(author, wanted))     # the incident: named by the author, not by the land
+            self.assertIsNone(gap(wanted, author))     # and the other way round
+            self.assertIsNone(gap(identity({"CARGO_TARGET_DIR": documented, "RICHOS_CARGO_CACHE_ROOT": documented}),
+                                  wanted))
+            self.assertEqual(evidence.identity_difference(author, wanted), "")
+            # Not loosened: a root that is not the documented one is a real difference, named.
+            for env in ({"CARGO_TARGET_DIR": "/other/target"},
+                        {"RICHOS_CARGO_CACHE_ROOT": "/other/root"},
+                        {"CARGO_TARGET_DIR": documented, "RICHOS_CARGO_CACHE_ROOT": "/other/root"},
+                        {"CARGO_TARGET_DIR": "/other/target", "RICHOS_CARGO_CACHE_ROOT": documented}):
+                with self.subTest(env=env):
+                    self.assertTrue(gap(identity(env), wanted).startswith("declared execution inputs changed (environment."))
+                    self.assertTrue(gap(identity(env), author).startswith("declared execution inputs changed (environment."))
+            # Another machine-settings root is another documented root: the old one is no longer it.
+            with patch.dict(os.environ, {"RICHOS_BULK_ROOT": self.tmp.name}):
+                self.assertTrue(gap(author, wanted).startswith("declared execution inputs changed (environment."))
+            self.assertEqual(evidence.documented_cargo_root(), documented)
 
     def test_a_refused_pass_names_each_identity_field_that_differs(self):
         """2026-10-21: two lands in a row refused 21 unchanged passes as "declared execution inputs

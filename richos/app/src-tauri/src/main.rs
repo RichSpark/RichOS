@@ -645,6 +645,13 @@ impl LeaseFactory for EngineLeaseFactory {
         Some(richos_core::config::lease_models_from_config(&self.data_dir))
     }
 
+    /// **The user's own settings files as the next lease would read them** (build plan item 0):
+    /// the central folder `EngineProfile::prepare` reads, digested the same way. The spine and
+    /// the work host compare it with the lease in the chair at each boundary.
+    fn user_settings_digest(&self) -> Option<String> {
+        richos_core::company::install_central_root().map(|folder| richos_core::user_settings::digest(&folder))
+    }
+
     /// **The second lease** — the background-work spec §2.1's work lease, in this same
     /// process, owned by the work host.
     ///
@@ -721,6 +728,9 @@ impl LeaseFactory for EngineLeaseFactory {
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         self.quota.request_refresh();
         self.quota.lease_started(); // Several at once: an expected rise (fill-first).
+        // Stu starts from the user's own `stu.md` (`user_settings.rs`), read now.
+        let skills = profile.standing_plugin(&skills);
+        let doctrine = doctrine.file_name().map(|name| skills.join("agents").join(name)).unwrap_or(doctrine);
         let cog = richos_core::native::NativeCognition::start_work_lease(&bin, &doctrine, &skills, &executable, bridge, profile)?;
         Ok(Box::new(cog))
     }
@@ -787,6 +797,9 @@ impl EngineLeaseFactory {
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         self.quota.request_refresh();
         self.quota.lease_started(); // Several at once: an expected rise (fill-first).
+        // Rich starts from the user's own `rich.md` (`user_settings.rs`), read now.
+        let skills = profile.standing_plugin(&skills);
+        let doctrine = doctrine.file_name().map(|name| skills.join("agents").join(name)).unwrap_or(doctrine);
         let cog = NativeCognition::start_with_engine(&bin, &doctrine, &skills, &executable, bridge, profile, control)?;
         Ok(Box::new(cog))
     }
@@ -2458,6 +2471,9 @@ fn main() {
         // read on the main thread.
         .register_asynchronous_uri_scheme_protocol(output_files::SCHEME, output_files::scheme_handler)
         .setup(|app| {
+            // The user's terminal environment, read once from the login shell for every lease
+            // (build plan item 4), started now so the first lease does not wait for it.
+            richos_core::login_environment::warm();
             // Durable ledger lives in the app data dir (survives restart + rotation).
             let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir());
             std::fs::create_dir_all(&data_dir).ok();

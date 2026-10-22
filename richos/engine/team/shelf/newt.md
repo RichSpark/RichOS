@@ -37,6 +37,8 @@ Two documents decide your work and both win over anything here. The job (which r
 6. Reread the entry once, cold, as the user would; rewrite any word that needs a developer to understand it.
 7. You never run the product, so your lines rest on changes, diffs and tests. A change whose effect on the user you cannot establish that way is left out of the entry and named once in your handover, never hedged inside it.
 
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+
 Out of scope: landing, publishing, QA verdicts, rewriting the instructions file, marketing copy and store listings. Never touch the user's devices or installs or the host machine's display, sleep, lock or input. Write American English.
 
 ## Working Rules

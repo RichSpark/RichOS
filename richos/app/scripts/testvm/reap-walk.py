@@ -25,7 +25,7 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   unrelated     `sleep` started in the guest by the harness: must survive every step
   normal        a short heartbeat assignment ends BY ITSELF (.done written) and is never reaped
   stop          a background and a foreground heartbeat; Stop pressed; both end within the bound,
-                timed from the press itself (ax.js); the assignment reads as stopped, not failed
+                timed from the press itself (ax.py); the assignment reads as stopped, not failed
   quit          both again; the app's Quit (a menu bar item); the question names the commands;
                 "Quit and stop the work"; both end within the quit bound; app.log and the reap
                 log say so; the assignment reads as stopped
@@ -315,17 +315,8 @@ class Walk(adopt.Walk):
 
     # --- steps --------------------------------------------------------------------------------
     def connect(self):
-        self.press('Settings', role='AXPopUpButton')
-        self.press('Connected folders', role='AXMenuItem')
-        self.ax('click', '--title', 'Company', '--role', 'AXPopUpButton', '--in', 'dialog', '--first')
-        self.press('Acme', role='AXMenuItem', contains=False)
-        self.type_into(self.company, '--role', 'AXTextField', '--title', 'Project folder location')
-        self.ax('click', '--title', 'Connect folder', '--role', 'AXButton', '--in', 'dialog', '--first')
-        time.sleep(2)
-        entities = guest(self.vm, 'cat ' + shlex.quote(self.data + '/entities.json'))
-        self.ax('click', '--title', 'Close', '--role', 'AXButton', '--in', 'dialog', '--first')
-        if self.company not in json.dumps(json.loads(entities).get('entities', [{}])[0].get('connected_repositories', [])):
-            raise StepFailed('the repository was not connected: ' + entities[:400])
+        """The folder through the shared connect step (adopt-walk.py connect_folder)."""
+        self.connect_folder()
         # Leases started before the connection carry the old --add-dir list; start fresh ones.
         self.facts['app'] = self.relaunched()
         self.save()

@@ -44,6 +44,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
+import axwait  # noqa: E402
 
 STEPS = ['identity', 'first-run', 'watch', 'pair', 'phone-task', 'observe']
 TASK = ('Please add a file named hello.txt containing the single word hello to the Acme repository '
@@ -95,20 +96,26 @@ class Walk:
         return self.ax('click', *args, app=app)
 
     def present(self, title, role='AXButton', app=None):
+        """Whether it is on screen. A find the app did not answer is "not yet" (axwait.py), so
+        the caller's own wait asks again; its last such answer is kept for that wait's failure."""
         try:
             return bool(self.ax('find', '--title', title, '--role', role, '--contains', '--first', app=app))
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
-                return False
-            raise
+            if not axwait.not_yet(exc, 'find'):
+                raise
+            if axwait.no_answer(exc):
+                self.unanswered = str(exc).strip()[-300:]
+            return False
 
     def wait_for(self, title, role='AXButton', app=None, seconds=30):
         end = time.monotonic() + seconds
+        self.unanswered = None
         while time.monotonic() < end:
             if self.present(title, role, app):
                 return True
             time.sleep(1)
-        raise StepFailed(f'{role} "{title}" never appeared within {seconds} s')
+        why = f'; the last read had no answer: {self.unanswered}' if self.unanswered else ''
+        raise StepFailed(f'{role} "{title}" never appeared within {seconds} s{why}')
 
     def type_into(self, text, *selector, app=None):
         # ax.sh type pastes through the guest clipboard and refuses one that holds no text.
@@ -129,6 +136,109 @@ class Walk:
             raise StepFailed(f'the running app was built from {built}, not {self.a.expect_sha}')
         self.facts['built_from'] = built
         return {'built_from': built}
+
+    # --- connecting a folder: the ONE copy every walk uses -----------------------------------
+    def keys(self, applescript):
+        command([HERE / 'ax.sh', self.vm, applescript], 90)
+
+    def chooser_open(self):
+        """The system folder chooser is up: an AXSheet, or its own Open button (folders-walk.py).
+        None when a read had no answer: neither up nor gone, so wait_chooser() asks again."""
+        unknown = False
+        for args in (('--role', 'AXSheet'), ('--title', 'Open', '--role', 'AXButton')):
+            try:
+                if [n for n in self.ax('find', *args) if 'x' in n and not n.get('meta')]:
+                    return True
+            except StepFailed as exc:
+                if not axwait.not_yet(exc, 'find'):
+                    raise
+                unknown = unknown or not axwait.absent(exc)
+        return None if unknown else False
+
+    def wait_chooser(self, want, seconds=15):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if self.chooser_open() == want:
+                return True
+            time.sleep(1)
+        return False
+
+    def open_connected_folders(self, settings_open=False):
+        """The Connected folders sheet, open: Settings (unless the caller already has it open), then
+        the row pressed as the plain button it is since round 27, then the sheet's Company menu."""
+        if not settings_open:
+            self.press('Settings', role='AXPopUpButton')
+        self.press('Connected folders')
+        self.wait_for('Company', role='AXPopUpButton')
+        time.sleep(2)
+
+    def wait_open_enabled(self, seconds=15):
+        """Wait for the chooser's Open button to read as enabled, then return so the caller clicks
+        it once. Typing the path and Return makes the chooser load the folder; on a busy host
+        Open stays disabled for seconds (walk-9696d0b3a4f1: "matched element is disabled"). A read
+        the app did not answer is "not yet" (axwait.py); the click is never sent here."""
+        end = time.monotonic() + seconds
+        state = 'not found'
+        while True:
+            try:
+                nodes = [n for n in self.ax('find', '--title', 'Open', '--role', 'AXButton', '--in', 'dialog')
+                         if 'x' in n and not n.get('meta')]
+                if nodes:
+                    enabled = nodes[0].get('enabled')
+                    state = 'enabled=%s' % enabled
+                    if str(enabled).lower() in ('true', '1'):
+                        return
+                else:
+                    state = 'not found'
+            except StepFailed as exc:
+                if not axwait.not_yet(exc, 'find'):
+                    raise
+                state = 'no answer' if axwait.no_answer(exc) else 'not found'
+            if time.monotonic() >= end:
+                raise StepFailed('connect folder: the chooser\'s Open button was not enabled within %s s (%s)'
+                                 % (seconds, state))
+            time.sleep(1)
+
+    def connect_folder(self):
+        """Settings -> "Connected folders (repositories)" -> the company folder, the way the app
+        asks for it since round 27: the row is a plain button (settings-button.js
+        buildDisclosureRow: "no `menuitem` role"), so pressing it as an AXMenuItem waits out the
+        guest's 20 s accessibility deadline (exit 124, guest_deadline). The sheet pre-selects the
+        only company and its folder field opens the system folder chooser on a click, so a typed
+        path never reaches it: Go to folder, the path, Return, Open, then Connect folder. Waits up
+        to 30 s for the registry to name the folder, closes the sheet, returns the connected paths."""
+        self.open_connected_folders()
+        fields = [n for n in self.ax('find', '--title', 'Project folder location', '--role', 'AXTextField',
+                                     '--contains') if 'x' in n and not n.get('meta')]
+        if not fields:
+            raise StepFailed('no "Project folder location" field on the Connected folders sheet')
+        f = fields[0]
+        command([HERE / 'ax.sh', self.vm, 'click', '--at', '%d,%d' % (f['x'] + f['w'] / 2, f['y'] + f['h'] / 2)], 90)
+        if not self.wait_chooser(True):
+            self.ax('click', '--title', 'Project folder location', '--role', 'AXTextField', '--contains', '--first')
+            if not self.wait_chooser(True):
+                raise StepFailed('the folder field did not open the folder chooser')
+        self.keys('tell application "System Events" to keystroke "g" using {command down, shift down}')
+        time.sleep(2)
+        self.keys('tell application "System Events" to keystroke ' + json.dumps(self.company))
+        time.sleep(1)
+        self.keys('tell application "System Events" to key code 36')
+        self.wait_open_enabled()
+        self.ax('click', '--title', 'Open', '--role', 'AXButton', '--in', 'dialog', '--first')
+        if not self.wait_chooser(False):
+            raise StepFailed('the folder chooser did not close after Open')
+        time.sleep(1)
+        self.ax('click', '--title', 'Connect folder', '--role', 'AXButton', '--in', 'dialog', '--first')
+        registry = self.data + '/entities.json'
+        end, value = time.monotonic() + 30, {}
+        while time.monotonic() < end:
+            value = json.loads(guest(self.vm, 'cat ' + shlex.quote(registry)))
+            connected = [r for e in value.get('entities', []) for r in e.get('connected_repositories', [])]
+            if connected:
+                self.press('Close')
+                return connected
+            time.sleep(1)
+        raise StepFailed('the repository was not connected within 30 s: ' + json.dumps(value)[:400])
 
     def decline_first_run_sheets(self, tries=3, seconds=45):
         """Press Not now on each sheet a first run puts up before the company question (main.js,
@@ -197,7 +307,12 @@ class Walk:
         url = None
         end = time.monotonic() + 30
         while time.monotonic() < end and not url:
-            text = command([HERE / 'ax.sh', self.vm, 'tree', '--in', 'dialog', '--max', '150'], 60)
+            try:
+                text = command([HERE / 'ax.sh', self.vm, 'tree', '--in', 'dialog', '--max', '150'], 60)
+            except StepFailed as exc:
+                if not axwait.ask_again(exc, 'tree'):  # a read with no answer: not drawn yet
+                    raise
+                text = ''
             m = re.search(r'https://[^\s\'"<>]+#pair=[A-Z0-9]+', text)
             url = m.group(0) if m else None
             if not url:

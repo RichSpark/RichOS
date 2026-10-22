@@ -94,19 +94,19 @@ fn an_unrelated_or_redirected_directory_is_never_adopted() {
 }
 
 #[test]
-fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child() {
+fn child_configuration_is_explicit() {
     let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let mut command = std::process::Command::new("/fictional/provider");
     command.env("RICHOS_PROJECTS_DIR", "/fictional/terminal-context").env("RICHOS_SESSIONS_DIR", "/fictional/terminal-sessions").env("LORO_CORPUS", "/fictional/private-corpus").env("NODE_OPTIONS", "--require /fictional/private.js")
         .env("RICHOS_APP_READ_ROOTS", "[\"/fictional/other-company\"]");
     profile.configure(&mut command, Path::new("/fictional/provider"), "fictional-session", &f.0.join("scope.json"));
     let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
-    assert_eq!(environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"].as_deref(), Some("1"));
     assert_eq!(environment["RICHOS_ENTITY_ROOT"].as_deref(), profile.coordination.to_str());
     assert_eq!(environment["STALL_WATCH_STATE_DIR"].as_deref(), profile.state.join("stall-watch").to_str());
     assert!(!environment["PATH"].as_ref().unwrap().contains("homebrew"));
     assert_eq!(environment["RICHOS_CLAUDE_BIN"].as_deref(), Some("/fictional/provider"));
-    assert_eq!(environment["GIT_CONFIG_GLOBAL"].as_deref(), profile.plugin.join("gitconfig").to_str());
+    assert_eq!(environment["GIT_CONFIG_SYSTEM"].as_deref(), profile.plugin.join("gitconfig").to_str());
+    assert_eq!(environment.get("GIT_CONFIG_GLOBAL"), Some(&None), "the user's own ~/.gitconfig is read as Git always reads it");
     assert_eq!(environment["GIT_AUTHOR_NAME"], None);
     assert_eq!(environment["LORO_CORPUS"], None);
     assert_eq!(environment["NODE_OPTIONS"], None);
@@ -263,11 +263,15 @@ fn generic_git_identity_is_a_default_and_explicit_assignment_identity_can_overri
     let f=Scratch::new(); let profile=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let mut configured=std::process::Command::new("/fictional/provider");
     profile.configure(&mut configured,Path::new("/fictional/provider"),"fixture-session",&f.0.join("scope.json"));
+    // A user whose own Git settings name nobody: an empty fixture home, so the person running
+    // this test is never read.
+    let home=f.0.join("home without git settings"); std::fs::create_dir_all(&home).unwrap();
     for (extra, expected) in [(vec![],"RichOS"), (vec!["-c","user.name=Fixture"],"Fixture")] {
         let mut git=std::process::Command::new("/usr/bin/git");
         for (key,value) in configured.get_envs() {
             if let Some(value)=value { git.env(key,value); } else { git.env_remove(key); }
         }
+        git.env("HOME",&home).env_remove("XDG_CONFIG_HOME");
         let output=git.current_dir(&profile.coordination).args(extra).args(["config","--get","user.name"]).output().unwrap();
         assert!(output.status.success());
         assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
@@ -633,4 +637,464 @@ fn the_home_screen_team_is_the_users_own_teammates_by_name_and_role() {
         Teammate { name: "Nora".into(), role: None },
         Teammate { name: "Will".into(), role: Some("Marketing Director".into()) },
     ]);
+}
+
+#[test]
+fn a_repository_connected_to_two_companies_is_a_read_root_in_each_companys_conversation() {
+    use richos_core::{EntityId, EntityRegistry, Ledger, Spine};
+    let f=Scratch::new();
+    let alpha=EntityId::parse("alpha").unwrap();let beta=EntityId::parse("beta").unwrap();
+    let mut registry=EntityRegistry::from_existing_ids(&[alpha.clone(),beta.clone()]);
+    let shared=f.0.join("shared repository");
+    std::fs::create_dir(&shared).unwrap();
+    registry.connect_repository(&alpha,shared.clone()).unwrap();
+    registry.connect_repository(&beta,shared.clone()).unwrap();
+    registry.save(&f.0.join("entities.json")).unwrap();
+    let mut spine=Spine::new(Ledger::open(f.0.join("ledger.jsonl")).unwrap());spine.set_entity_registry(registry);
+    for (name,id) in [("Alpha",&alpha),("Beta",&beta)] {
+        let thread=spine.create_thread(name,id).unwrap();
+        let mut profile=prepare_fixture(&engine(),&f.0,f.runtime()).unwrap();
+        profile.scope_to(&spine.ledger().thread_binding(&thread).unwrap()).unwrap();
+        let mut command=std::process::Command::new("/fictional/provider");profile.configure(&mut command,Path::new("/fictional/provider"),"session",&f.0.join("scope"));
+        let args:Vec<_>=command.get_args().map(|a|a.to_string_lossy().to_string()).collect();
+        let start=args.iter().position(|arg|arg=="--add-dir").unwrap()+1;
+        assert_eq!(args[start],shared.to_str().unwrap(),"{name} conversation must reach the shared repository");
+    }
+}
+
+// =======================================================================================
+// THE USER'S OWN SETTINGS FILES — CEO ruling §138; build plan 2026-10-21, item 0
+// =======================================================================================
+
+/// The user's copy as a session loads it: with the memory scope the app adds when the copy
+/// names none (`user_settings::MEMORY_SCOPE`).
+fn as_loaded(copy: &str) -> String {
+    copy.replacen("---\n", &format!("---\n{}\n", richos_core::user_settings::MEMORY_SCOPE), 1)
+}
+
+fn prepare_for_user(f: &Scratch, folder: &Path) -> EngineProfile {
+    EngineProfile::prepare_for(&engine(), &f.0.join("data"), f.runtime(),
+        richos_core::machine_settings::Settings::default(), Some(folder.to_path_buf()), None).unwrap()
+}
+
+/// **The CEO, 2026-10-21: a technical user tweaks Rich's and Stu's own files by hand.** On
+/// first run the shipped `rich.md` and `stu.md` (and an empty `instructions.md`) are copied to
+/// the user's folder; every later session starts from those copies, an edit is in the next
+/// session, and the app never writes them again.
+#[test]
+fn rich_and_stu_start_from_the_users_own_copies_which_the_app_never_writes_again() {
+    use richos_core::user_settings::{RICH, STU, INSTRUCTIONS};
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    let shipped = engine().join("app");
+    let first = prepare_for_user(&f, &folder);
+    for name in [RICH, STU] {
+        assert_eq!(std::fs::read(folder.join(name)).unwrap(), std::fs::read(shipped.join("agents").join(name)).unwrap(),
+            "{name} is copied as shipped on first run");
+    }
+    assert_eq!(std::fs::read_to_string(folder.join(INSTRUCTIONS)).unwrap(), "");
+    let standing = first.standing_plugin(&shipped);
+    assert_ne!(standing, shipped, "a session with a user folder must not start from the shipped plugin");
+    richos_core::skills::verify_present(&standing).unwrap();
+
+    let edited = std::fs::read_to_string(folder.join(RICH)).unwrap() + "\nFixture rule: end every reply with the word teal.\n";
+    std::fs::write(folder.join(RICH), &edited).unwrap();
+    std::fs::write(folder.join(INSTRUCTIONS), "My own rules.\n").unwrap();
+    let next = prepare_for_user(&f, &folder);
+    let standing = next.standing_plugin(&shipped);
+    // The user's instructions.md follows each definition (a_line_in_the_users_instructions...).
+    let loaded = std::fs::read_to_string(standing.join("agents").join(RICH)).unwrap();
+    assert!(loaded.starts_with(&as_loaded(&edited)) && loaded.ends_with("My own rules.\n"), "the next session follows the edit");
+    assert_eq!(std::fs::read_to_string(folder.join(RICH)).unwrap(), edited, "the user's rich.md was written over");
+    assert_eq!(std::fs::read_to_string(folder.join(INSTRUCTIONS)).unwrap(), "My own rules.\n");
+    assert!(std::fs::read_to_string(standing.join("agents").join(STU)).unwrap().starts_with(&as_loaded(&std::fs::read_to_string(folder.join(STU)).unwrap())));
+    assert_ne!(first.user.digest, next.user.digest, "the edit must renew a session at its next boundary");
+    assert_eq!(std::fs::read_to_string(first.standing_plugin(&shipped).join("agents").join(RICH)).unwrap(),
+        as_loaded(&std::fs::read_to_string(shipped.join("agents").join(RICH)).unwrap()), "a running session's plugin was changed under it");
+    // A retiring lease takes its own folders with it (second review rv-20261021T092945Z, finding 2).
+    let standing = first.standing_plugin(&shipped);
+    first.remove_session_files();
+    assert!(!first.plugin.exists() && !standing.exists(), "a retired lease left its folders behind");
+    assert!(next.standing_plugin(&shipped).is_dir(), "another lease's folders were removed");
+
+    // Without a user folder (tests, an install with no home) the shipped plugin is used.
+    assert_eq!(prepare_fixture(&engine(), &f.0.join("data"), f.runtime()).unwrap().standing_plugin(&shipped), shipped);
+
+    // A link at the name is the user's choice of file and is never written through.
+    let linked = Scratch::new();
+    let elsewhere = linked.0.join("my-rich.md");
+    std::fs::write(&elsewhere, "Kept elsewhere.\n").unwrap();
+    let folder = linked.0.join("central");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, folder.join(RICH)).unwrap();
+    let profile = prepare_for_user(&linked, &folder);
+    assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "Kept elsewhere.\n");
+    assert_eq!(std::fs::read_to_string(profile.standing_plugin(&shipped).join("agents").join(RICH)).unwrap(), "Kept elsewhere.\n");
+}
+
+/// **The user's instructions.md reaches both agents** (second review
+/// rv-20261021T082940Z-f7fbba2a-0c12): a line written there is in Rich's and Stu's standing
+/// instructions from the next session, in full; an empty file adds nothing.
+#[test]
+fn a_line_in_the_users_instructions_reaches_both_rich_and_stu() {
+    use richos_core::user_settings::{RICH, STU, INSTRUCTIONS};
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    let shipped = engine().join("app");
+    let first = prepare_for_user(&f, &folder);
+    for name in [RICH, STU] {
+        assert_eq!(std::fs::read_to_string(first.standing_plugin(&shipped).join("agents").join(name)).unwrap(),
+            as_loaded(&std::fs::read_to_string(folder.join(name)).unwrap()), "an empty instructions.md must add nothing to {name}");
+    }
+    let rule = "Fixture rule: sign every message with the word lighthouse.";
+    let long = format!("{rule}\n{}", "Another fixture line that makes this file long.\n".repeat(400));
+    std::fs::write(folder.join(INSTRUCTIONS), &long).unwrap();
+    let next = prepare_for_user(&f, &folder);
+    for name in [RICH, STU] {
+        let loaded = std::fs::read_to_string(next.standing_plugin(&shipped).join("agents").join(name)).unwrap();
+        assert!(loaded.starts_with(&as_loaded(&std::fs::read_to_string(folder.join(name)).unwrap())), "{name}'s own file comes first, frontmatter intact");
+        assert!(loaded.contains(rule), "the user's rule is not in {name}'s standing instructions");
+        assert!(loaded.ends_with(&long), "{name} did not get the user's instructions in full");
+    }
+    assert_ne!(first.user.digest, next.user.digest, "the edit must renew a session at its next boundary");
+}
+
+/// **Rich knows where a standing order goes** (richos-hq
+/// `docs/plans/2026-10-21-switching-to-the-app.md` row W, section 1: the user's instructions file
+/// is edited "by hand, or Rich when he gives a new order"). On a first run the file is empty, so the
+/// app adds nothing about it to Rich's definition (the test above) and the only place Rich can learn
+/// where it is, is his own instructions. The path is built from the code's own names, so moving the
+/// file or the folder without the sentence breaks this.
+#[test]
+fn rich_s_own_instructions_name_the_file_a_standing_order_is_saved_in() {
+    use richos_core::user_settings::{RICH, INSTRUCTIONS};
+    let file = format!("~/{}/{INSTRUCTIONS}", richos_core::company::DEFAULT_CENTRAL_DIRNAME);
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    let first = prepare_for_user(&f, &folder);
+    assert_eq!(std::fs::read_to_string(folder.join(INSTRUCTIONS)).unwrap(), "", "a first run's instructions file is empty");
+    let loaded = std::fs::read_to_string(first.standing_plugin(&engine().join("app")).join("agents").join(RICH)).unwrap();
+    let says = loaded.split("\n\n").find(|paragraph| paragraph.contains(&file))
+        .unwrap_or_else(|| panic!("Rich's definition on a first run never names {file}"));
+    assert!(says.to_lowercase().contains("from now on"), "the paragraph naming {file} does not say a standing order goes there: {says}");
+}
+
+/// With no file of the user's, the generated config is the one every lease had before; with
+/// one, each key appears once: the user's value where the user set it, today's default where
+/// not, and the app's own key the app's, whatever the user's file says.
+#[test]
+fn the_users_orchestration_config_reaches_the_coordination_folder_beside_the_apps_own_keys() {
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    let profile = prepare_for_user(&f, &folder);
+    let teams = profile.state.join("teams");
+    let today = format!("# Generated desktop coordination, not target-repository configuration.\nALLOWED_MODELS=\"opus sonnet haiku\"\nMODEL_TIERS=\"opus > sonnet > haiku\"\nSESSION_TEAMS_DIR='{}'\n", teams.display());
+    assert_eq!(std::fs::read_to_string(profile.coordination.join("orchestration.config")).unwrap(), today,
+        "a user with no orchestration.config gets today's file");
+
+    std::fs::write(folder.join("orchestration.config"),
+        "# fixture user values\nMODEL_CEILING=\"sonnet\"\nexport ALLOWED_MODELS=\"sonnet haiku\"\nSESSION_TEAMS_DIR=/fixture/elsewhere\n").unwrap();
+    let profile = prepare_for_user(&f, &folder);
+    let written = std::fs::read_to_string(profile.coordination.join("orchestration.config")).unwrap();
+    let lines = |key: &str| written.lines().filter(|l| l.trim_start().trim_start_matches("export ").starts_with(&format!("{key}="))).map(str::to_string).collect::<Vec<_>>();
+    // Written without `export`, so the engine's readers, which match `KEY="` at the start of a
+    // line, read the user's value (second review rv-20261021T072931Z-6a246fab-ad3e, finding 2).
+    assert_eq!(lines("ALLOWED_MODELS"), ["ALLOWED_MODELS=\"sonnet haiku\""], "{written}");
+    assert_eq!(lines("MODEL_TIERS"), ["MODEL_TIERS=\"opus > sonnet > haiku\""], "{written}");
+    assert_eq!(lines("MODEL_CEILING"), ["MODEL_CEILING=\"sonnet\""], "{written}");
+    assert_eq!(lines("SESSION_TEAMS_DIR"), [format!("SESSION_TEAMS_DIR='{}'", teams.display())], "{written}");
+    assert!(!written.contains("/fixture/elsewhere"), "the app's own key was taken from the user's file");
+    assert!(written.contains("# fixture user values"), "the user's file is copied as written");
+}
+
+/// The user's `settings.json` adds environment and hooks to every lease; the names the app sets
+/// for itself stay the app's. A file that is not JSON adds nothing.
+#[test]
+fn the_users_settings_json_adds_environment_and_hooks_and_never_the_apps_own_names() {
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("settings.json"), serde_json::json!({
+        "env": {"FIXTURE_TOOL_HOME": "/fixture/tool", "RICHOS_ENTITY_ROOT": "/fixture/hijack",
+                "CLAUDE_CONFIG_DIR": "/fixture/other-account", "GIT_DIR": "/fixture/repo", "NODE_OPTIONS": "--require /fixture/x.js"},
+        "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/fixture/user-hook.sh"}]}]},
+        "model": "fixture-model"
+    }).to_string()).unwrap();
+    let profile = prepare_for_user(&f, &folder);
+    let mut command = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+    assert_eq!(environment["FIXTURE_TOOL_HOME"].as_deref(), Some("/fixture/tool"));
+    assert_eq!(environment["RICHOS_ENTITY_ROOT"].as_deref(), profile.coordination.to_str());
+    assert!(!environment.contains_key("CLAUDE_CONFIG_DIR"), "the account in use is the app's");
+    assert_eq!(environment.get("GIT_DIR"), Some(&None));
+    assert_eq!(environment.get("NODE_OPTIONS"), Some(&None));
+    let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+    let settings: serde_json::Value = serde_json::from_str(&args[args.iter().position(|a| a == "--settings").unwrap() + 1]).unwrap();
+    assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["command"], "/fixture/user-hook.sh");
+    assert!(settings["model"].is_null(), "only env and hooks are read from the user's file");
+    assert!(settings["claudeMdExcludes"].is_array());
+
+    std::fs::write(folder.join("settings.json"), "{ not json").unwrap();
+    let profile = prepare_for_user(&f, &folder);
+    assert_eq!(profile.user.settings, Default::default());
+}
+
+/// The digest that renews a session moves when any of the user's files is created, changed or
+/// removed, and with nothing else in the folder.
+#[test]
+fn the_user_settings_digest_moves_with_the_users_files_and_nothing_else() {
+    use richos_core::user_settings::{digest, FILES};
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    std::fs::create_dir_all(&folder).unwrap();
+    let empty = digest(&folder);
+    std::fs::write(folder.join("notes.md"), "not a settings file").unwrap();
+    assert_eq!(digest(&folder), empty);
+    let mut seen = vec![empty.clone()];
+    for name in FILES {
+        std::fs::write(folder.join(name), "{}").unwrap();
+        let now = digest(&folder);
+        assert!(!seen.contains(&now), "{name} did not move the digest");
+        seen.push(now);
+    }
+    for name in FILES { std::fs::remove_file(folder.join(name)).unwrap(); }
+    assert_eq!(digest(&folder), empty);
+}
+
+// =======================================================================================
+// THE USER'S TERMINAL ENVIRONMENT — build plan 2026-10-21, item 4
+// =======================================================================================
+
+/// Every lease gets the login shell's environment, with the user's `PATH` after the runtime's
+/// and before the system folders; the names the app sets for itself stay the app's.
+#[test]
+fn a_lease_carries_the_users_login_environment_under_the_apps_own_names() {
+    let f = Scratch::new();
+    let login: BTreeMap<String, String> = [("FIXTURE_JAVA_HOME", "/fixture/jdk"), ("PATH", "/fixture/bin:/usr/bin:/fixture/bin"),
+        ("RICHOS_ENTITY_ROOT", "/fixture/hijack"), ("CLAUDE_CONFIG_DIR", "/fixture/other-account"), ("PYTHONPATH", "/fixture/py"),
+        ("ANTHROPIC_API_KEY", "fixture-not-a-key")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let profile = EngineProfile::prepare_for(&engine(), &f.0, f.runtime(), richos_core::machine_settings::Settings::default(),
+        None, Some(std::sync::Arc::new(login))).unwrap();
+    let mut command = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+    assert_eq!(environment["FIXTURE_JAVA_HOME"].as_deref(), Some("/fixture/jdk"));
+    let path = environment["PATH"].clone().unwrap();
+    let want = format!("{}:/fixture/bin:/usr/bin:/bin:/usr/sbin:/sbin", f.0.join("runtime/bin").display());
+    assert!(path == want || path.starts_with(&(want.clone() + ":")), "{path}");
+    assert_eq!(environment["RICHOS_ENTITY_ROOT"].as_deref(), profile.coordination.to_str());
+    assert!(!environment.contains_key("CLAUDE_CONFIG_DIR") && !environment.contains_key("ANTHROPIC_API_KEY"),
+        "which account a lease spends is the app's");
+    assert_eq!(environment.get("PYTHONPATH"), Some(&None), "the runtime's interpreters stay isolated");
+
+    // With no login environment the lease is today's: the runtime, the system folders.
+    let today = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(today.lease_path(), today.runtime.path());
+}
+
+/// The login shell is read as a login, interactive shell, between marks, and a shell that does
+/// not answer in time gives up rather than holding the lease.
+#[test]
+fn the_login_environment_is_the_login_shells_and_a_slow_shell_times_out() {
+    use richos_core::login_environment::read;
+    let f = Scratch::new();
+    // A real zsh with a fixture profile: what the user's terminal would have.
+    let zdotdir = f.0.join("zdot");
+    std::fs::create_dir_all(&zdotdir).unwrap();
+    std::fs::write(zdotdir.join(".zprofile"), "export FIXTURE_LOGIN_ONLY=from-zprofile\nexport PATH=/fixture/login/bin:$PATH\n").unwrap();
+    std::fs::write(zdotdir.join(".zshrc"), "echo interactive-noise\nexport FIXTURE_INTERACTIVE=from-zshrc\n").unwrap();
+    let found = read(Path::new("/bin/zsh"), &[("ZDOTDIR", zdotdir.to_str().unwrap())], std::time::Duration::from_secs(20)).unwrap();
+    assert_eq!(found.get("FIXTURE_LOGIN_ONLY").map(String::as_str), Some("from-zprofile"));
+    assert_eq!(found.get("FIXTURE_INTERACTIVE").map(String::as_str), Some("from-zshrc"));
+    assert!(found["PATH"].starts_with("/fixture/login/bin:"), "{}", found["PATH"]);
+    assert!(!found.contains_key("SHLVL") && !found.contains_key("_"));
+
+    let slow = f.0.join("slow-shell");
+    std::fs::write(&slow, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let began = std::time::Instant::now();
+    assert!(read(&slow, &[], std::time::Duration::from_secs(1)).is_err());
+    assert!(began.elapsed() < std::time::Duration::from_secs(10), "the read waited {:?}", began.elapsed());
+}
+
+// =======================================================================================
+// AUTO-MEMORY — build plan 2026-10-21, item 10
+// =======================================================================================
+
+/// Rich and Stu keep auto-memory as the user's terminal does, in one folder in the app's data,
+/// and it is the same folder on every Claude account, so a switch keeps what they remembered.
+#[test]
+fn auto_memory_is_on_in_one_folder_whichever_claude_account_the_lease_runs_on() {
+    use richos_core::claude_accounts::Account;
+    use richos_core::user_settings::{MEMORY_SCOPE, RICH, STU};
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    let mut profile = prepare_for_user(&f, &folder);
+    let lease = |profile: &EngineProfile| {
+        let mut command = std::process::Command::new("/fictional/provider");
+        command.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+        profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+        let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        let settings: serde_json::Value = serde_json::from_str(&args[args.iter().position(|a| a == "--settings").unwrap() + 1]).unwrap();
+        let disabled = command.get_envs().find(|(k, _)| *k == "CLAUDE_CODE_DISABLE_AUTO_MEMORY").map(|(_, v)| v.map(|v| v.to_owned()));
+        (settings, disabled)
+    };
+    for account in [Account { id: "1".into(), label: "Home".into(), folder: None },
+                    Account { id: "2".into(), label: "Work".into(), folder: Some(f.0.join("claude-accounts/2")) }] {
+        profile.claude_account = Some(account);
+        let (settings, disabled) = lease(&profile);
+        assert_eq!(settings["autoMemoryEnabled"], true);
+        assert_eq!(disabled, Some(None), "an inherited switch-off is removed");
+    }
+    // Rich and Stu run as plugin agents, whose memory is their definition's scope: `project`,
+    // under the lease's working folder (the coordination folder), the same on every account.
+    let shipped = engine().join("app");
+    for name in [RICH, STU] {
+        let loaded = std::fs::read_to_string(profile.standing_plugin(&shipped).join("agents").join(name)).unwrap();
+        let front = loaded.split("\n---").next().unwrap();
+        assert!(front.lines().any(|l| l == MEMORY_SCOPE), "{name} has no memory scope: {front}");
+        assert!(!std::fs::read_to_string(folder.join(name)).unwrap().contains(MEMORY_SCOPE), "the user's own {name} was written");
+    }
+    // A user who names a scope keeps it.
+    let mine = std::fs::read_to_string(folder.join(RICH)).unwrap().replacen("---\n", "---\nmemory: user\n", 1);
+    std::fs::write(folder.join(RICH), &mine).unwrap();
+    let next = prepare_for_user(&f, &folder);
+    let loaded = std::fs::read_to_string(next.standing_plugin(&shipped).join("agents").join(RICH)).unwrap();
+    assert!(loaded.starts_with(&mine), "the user's own memory scope was changed");
+}
+
+// =======================================================================================
+// THE USER'S OWN GIT — build plan 2026-10-21, item 8
+// =======================================================================================
+
+/// A lease commits under the user's own name and email from ~/.gitconfig, and its Git asks the
+/// helpers the user's settings name: the user's own Git's system file is included (where a Mac's
+/// osxkeychain helper is set) and that Git's helper folder is on PATH, last.
+#[test]
+fn a_lease_commits_as_the_user_and_asks_the_users_credential_helpers() {
+    let f = Scratch::new();
+    let home = f.0.join("home");
+    let bin = f.0.join("user git/bin");
+    let helpers = f.0.join("user git/libexec/git-core");
+    for dir in [&home, &bin, &helpers] { std::fs::create_dir_all(dir).unwrap(); }
+    std::fs::write(home.join(".gitconfig"), "[user]\n\tname = Fixture Person\n\temail = fixture.person@example.invalid\n[credential]\n\thelper = fixture-user-helper\n").unwrap();
+    let system = f.0.join("user git/etc/gitconfig");
+    std::fs::create_dir_all(system.parent().unwrap()).unwrap();
+    std::fs::write(&system, "[credential]\n\thelper = fixture-system-helper\n").unwrap();
+    // A vendor file below the system one, as Apple's Git has (scope `unknown`).
+    let vendor = f.0.join("user git/share/git-core/gitconfig");
+    std::fs::create_dir_all(vendor.parent().unwrap()).unwrap();
+    std::fs::write(&vendor, "[credential]\n\thelper = fixture-vendor-helper\n").unwrap();
+    // The user's Git, as `git --exec-path` and `git config --list --show-origin --show-scope`
+    // answer (its global line is the user's own file, read natively, never included).
+    let git = bin.join("git");
+    std::fs::write(&git, format!("#!/bin/sh\ncase \"$1\" in\n  --exec-path) echo '{}' ;;\n  config) printf 'unknown\\tfile:%s\\tcredential.helper=fixture-vendor-helper\\nsystem\\tfile:%s\\tcredential.helper=fixture-system-helper\\nglobal\\tfile:%s\\tuser.name=Fixture Person\\n' '{}' '{}' '{}' ;;\nesac\n",
+        helpers.display(), vendor.display(), system.display(), home.join(".gitconfig").display())).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let login: BTreeMap<String, String> = [("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("HOME", home.display().to_string())]
+        .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+    let profile = EngineProfile::prepare_for(&engine(), &f.0.join("data"), f.runtime(), richos_core::machine_settings::Settings::default(),
+        None, Some(std::sync::Arc::new(login))).unwrap();
+    assert_eq!(profile.user.git, richos_core::user_git::UserGit { system_configs: vec![vendor.clone(), system.clone()], exec_path: Some(helpers.clone()) });
+    let mut configured = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut configured, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let environment: BTreeMap<_, _> = configured.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+    assert_eq!(environment["HOME"].as_deref(), home.to_str());
+    assert!(environment["PATH"].as_deref().unwrap().ends_with(&format!(":{}", helpers.display())), "{:?}", environment["PATH"]);
+    let ask = |args: &[&str]| {
+        let mut git = std::process::Command::new("/usr/bin/git");
+        for (key, value) in configured.get_envs() {
+            if let Some(value) = value { git.env(key, value); } else { git.env_remove(key); }
+        }
+        let output = git.env_remove("XDG_CONFIG_HOME").current_dir(&profile.coordination).args(args).output().unwrap();
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    assert_eq!(ask(&["config", "--get", "user.name"]), "Fixture Person");
+    assert_eq!(ask(&["config", "--get", "user.email"]), "fixture.person@example.invalid");
+    // Ends with: Apple's own `git`, which this test runs, reads one more layer of its own first.
+    let helpers = ask(&["config", "--get-all", "credential.helper"]);
+    assert!(helpers.ends_with("fixture-vendor-helper\nfixture-system-helper\nfixture-user-helper"),
+        "the user's Git's vendor and system helpers, then the user's own, as the user's terminal asks them: {helpers:?}");
+}
+
+/// **Every lease loads the engine's shipped skills, except the terminal's two** (CEO §138: everything
+/// he uses in the terminal is a feature of the regular app; richos-hq
+/// `docs/plans/2026-10-21-switching-to-the-app.md` §4.6 and row S). Until this, a lease loaded only
+/// the standing plugin's four, and 19 of his 29 teammates name skills that never reached them, eight
+/// of them `playwright-cli`. Read off the engine folder, never a list typed here, so a skill added to
+/// the engine reaches every lease without a change in this crate.
+#[test]
+fn every_lease_loads_the_engine_s_shipped_skills_except_the_terminal_only_two() {
+    let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    let mut shipped: Vec<String> = std::fs::read_dir(engine().join("skills")).unwrap()
+        .map(|entry| entry.unwrap().path()).filter(|dir| dir.join("SKILL.md").is_file())
+        .map(|dir| dir.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    shipped.sort();
+    assert!(shipped.iter().any(|name| name == "playwright-cli"), "the engine ships no playwright-cli: {shipped:?}");
+    let mut loaded = Vec::new();
+    for name in &shipped {
+        let linked = profile.plugin.join("skills").join(name);
+        if ["rich-lander", "using-git-worktrees"].contains(&name.as_str()) {
+            // The terminal lead's landing and worktree procedures: the app lands and makes
+            // workspaces itself (Mega Lander), so a worker told to follow them would go around it.
+            assert!(!linked.exists(), "{name} is a terminal-only skill and reached a lease");
+        } else if richos_core::skills::SKILLS.contains(&name.as_str()) {
+            // The standing plugin carries the app's own words for these; the engine's copies name
+            // the terminal's install path, so a second copy would be the wrong one.
+            assert!(!linked.exists(), "{name} is in the lease twice: the standing plugin's and the engine's");
+        } else {
+            assert_eq!(std::fs::canonicalize(linked.join("SKILL.md")).unwrap(),
+                       std::fs::canonicalize(engine().join("skills").join(name).join("SKILL.md")).unwrap(),
+                       "{name} is not the engine's own skill in this lease");
+            loaded.push(name.clone());
+        }
+    }
+    assert!(loaded.contains(&"playwright-cli".to_string()), "playwright-cli did not reach the lease: {loaded:?}");
+    // Nothing else is in the lease's skills folder.
+    let mut present: Vec<String> = std::fs::read_dir(profile.plugin.join("skills")).unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    present.sort();
+    assert_eq!(present, loaded);
+    // The plugin the child is given is this one (`configure`'s `--plugin-dir`).
+    let mut command = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+    assert!(args.windows(2).any(|pair| pair[0] == "--plugin-dir" && Path::new(&pair[1]) == profile.plugin));
+    // A retired lease's folders go, and the engine's skills stay exactly where they were.
+    let before = std::fs::read(engine().join("skills/playwright-cli/SKILL.md")).unwrap();
+    profile.remove_session_files();
+    assert!(!profile.plugin.exists());
+    assert_eq!(std::fs::read(engine().join("skills/playwright-cli/SKILL.md")).unwrap(), before);
+}
+
+/// **With Apple's real Git** (second review rv-20261021T092945Z-1f1d7133-1f6d, finding 1): the
+/// files a lease includes are every file Apple's Git itself reads its credential helper from
+/// for a user with no Git settings of their own, so its `osxkeychain` default is the lease's.
+/// Skipped, and says so, on a Mac without Apple's developer tools.
+#[test]
+fn with_apples_git_the_lease_includes_the_file_its_osxkeychain_default_comes_from() {
+    let f = Scratch::new();
+    let home = f.0.join("home with no git settings");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut apple = std::process::Command::new("/usr/bin/git");
+    apple.args(["config", "--show-origin", "--get-all", "credential.helper"]).env_clear()
+        .env("HOME", &home).env("PATH", "/usr/bin:/bin").current_dir("/");
+    let developer = ["/Library/Developer/CommandLineTools".into()].into_iter()
+        .chain(std::fs::read_link("/var/db/xcode_select_link").ok()).any(|d: PathBuf| d.join("usr/bin/git").is_file());
+    let Some(answer) = developer.then(|| apple.output().ok()).flatten().filter(|o| o.status.success()) else {
+        eprintln!("skipped: no Apple developer tools on this Mac, so no Apple Git to ask");
+        return;
+    };
+    let origins: Vec<PathBuf> = String::from_utf8(answer.stdout).unwrap().lines()
+        .filter_map(|line| line.strip_prefix("file:")?.split_once('\t').map(|(file, _)| PathBuf::from(file))).collect();
+    assert!(!origins.is_empty(), "Apple's Git names no credential helper of its own here");
+    let found = richos_core::user_git::discover("/usr/bin:/bin", Some(&home), &f.0.join("runtime"));
+    for origin in &origins {
+        assert!(found.system_configs.contains(origin), "{origin:?} is where Apple's Git reads its helper, and the lease does not include it: {found:?}");
+    }
+    let layer = richos_core::user_git::system_layer(&found);
+    assert!(origins.iter().all(|o| layer.contains(&format!("path = \"{}\"", o.display()))), "{layer}");
 }

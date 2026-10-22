@@ -1553,7 +1553,38 @@ def offered_author_runs(what, runs):
 PREFLIGHT_SECONDS = 300
 
 
-def coverage_of(run):
+def cargo_root_as_the_run_named_it(repo, run, env):
+    """{name: root} for each Cargo root name (proof_evidence CARGO_ROOT_NAMES) that every passed
+    whole-checkout identity of the saved `run` sets to exactly the root the machine's settings
+    give when none is set (proof_evidence documented_cargo_root), and `env` leaves unset.
+
+    The same root either way: the Cargo shim and the nightly take that root from the settings
+    when no name is set. The runner of this tree reads the two as one input (proof_evidence
+    cargo_root_as_documented), but the preflight is answered by the runner in the author's
+    checkout, which may predate that rule and compares the names as written: the land of
+    cc/echo-opus-lease1x (2026-10-21), whose author exported the documented CARGO_TARGET_DIR,
+    had 55 unchanged passes read as changed. So the land resolves the root from the settings
+    and names it as the run did. A run that named another root, or named none, gets nothing."""
+    if repo is None or any(name in env for name in ("CARGO_TARGET_DIR", "RICHOS_CARGO_CACHE_ROOT")):
+        return {}
+    sys.path.insert(0, str(repo.top / "richos/app/scripts/lib"))
+    try:
+        import proof_evidence
+        names, root = proof_evidence.CARGO_ROOT_NAMES, proof_evidence.documented_cargo_root(env)
+        outcomes = json.loads((Path(run) / "outcomes.json").read_text())
+    except (ImportError, AttributeError, OSError, ValueError):
+        return {}
+    if not root or not isinstance(outcomes, dict):
+        return {}
+    passes = [row["input"]["environment"] for row in outcomes.values()
+              if isinstance(row, dict) and row.get("state") == "passed" and isinstance(row.get("input"), dict)
+              and row["input"].get("contract") == proof_evidence.WHOLE_CHECKOUT
+              and isinstance(row["input"].get("environment"), dict)]
+    named = proof_evidence.digest(root)
+    return {name: root for name in names if passes and all(env_.get(name) == named for env_ in passes)}
+
+
+def coverage_of(run, repo=None):
     """(exit, summary or None, output lines, the run's checkout or None) of
     `proof-run.py --coverage RUN`, asked in the run's own checkout. Exit 2: no answer."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -1562,6 +1593,7 @@ def coverage_of(run):
     # name, so the lander's LAND_TARGET here read an unchanged pass as changed (2026-10-21).
     for name in LAND_ONLY:
         env.pop(name, None)
+    env.update(cargo_root_as_the_run_named_it(repo, run, env))
     try:
         root = json.loads((Path(run) / "plan.json").read_text())["root"]
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -1616,7 +1648,7 @@ def author_preflight(repo, what, heads, runs):
         answers = []
         for run in runs:
             if run not in asked:
-                asked[run] = coverage_of(run)
+                asked[run] = coverage_of(run, repo)
             rc, summary, out, root = asked[run]
             if summary and summary.get("candidate") != head:
                 continue  # a run of another commit proves nothing about this one
