@@ -1021,6 +1021,10 @@ class RichCore private constructor(
             if (!outbox.isEmpty()) throw CoreError(UNSENT_BEFORE_PAIRING)
             if (session.pairing.phase == PairingPhase.EXCHANGING) throw CoreError("A pairing code is already on its way to the Mac")
             val previous = session.pairing.apiBase.takeIf { session.pairing.phase != PairingPhase.UNPAIRED && it != link.origin }
+            // The old Mac's removal ends here: a probe that ran while this phone stood removed stored
+            // REVOKED as the link's reason, and kept, it held "removed from your Mac" over the new
+            // pairing's six words (the Android test phone, 2026-10-22).
+            if (connection.reason == ConnectionReason.REVOKED) connection = ConnectionState()
             commit(
                 session.copy(
                     paired = false,
