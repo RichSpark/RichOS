@@ -173,6 +173,23 @@ REPORTS, NEVER BLOCKS. The harm is a decision already announced; the value is
 that the CEO sees it named in the same turn instead of having to ask a third
 time. A blocking guard on PROSE would wedge the session and get switched off,
 which is the failure mode that produced this in the first place.
+
+===========================================================================
+A DEFERRAL OPENS A HOLD (2026-10-22)
+===========================================================================
+Said once was not enough: on 2026-09-27 15:30Z a reply said "Stream B is on
+hold, deliberately.", no pattern matched it, and his order sat held for weeks.
+The CEO: "WHEN WILL [THIS] STOP ONCE AND FOR ALL???" (richos-hq docs/plans/
+2026-10-22-no-silent-holds.md). So family D adds the hold words
+(scripts/lib/hold_words.py, shared with the SendMessage parser): "on hold",
+"hold off", "parked", "until I say", "wait for my go". The 2026-08-31 corpus
+dropped "parked" at 32 noisy hits; a false catch now costs one
+`workspaces.sh release <name> --not-a-hold '<why>'`, which he is shown once,
+while a miss costs his order. A reply that says the work is held cannot be
+starting it, so an Agent spawn in the same turn does not discharge family D.
+Every finding opens a hold (workspaces.py hold(), held-<hash of the quote>),
+which every turn end shows from 30 minutes on until the work runs, lands or he
+decides.
 """
 
 import json
@@ -269,6 +286,13 @@ CONSTRUCTIONS = [
 
 _COMPILED = [(name, re.compile(pat, re.I)) for name, pat in CONSTRUCTIONS]
 
+# ---------------------------------------------------------------- family D
+# THE HOLD WORDS (see A DEFERRAL OPENS A HOLD above). One list, shared.
+HELD = "held-in-a-reply"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+import hold_words  # noqa: E402
+_COMPILED.append((HELD, hold_words.HOLD_WORDS_RE))
+
 
 def find_deferrals(text):
     """Return [(construction_name, matched_text), ...] for text, quotations
@@ -315,16 +339,35 @@ _HANDBACK = re.compile(
 )
 
 
-def discharge(text, tools):
+def discharge(text, tools, hits=()):
     """Return the name of the thing that discharges a deferral in this turn, or
-    None if nothing does."""
+    None if nothing does. A spawn never discharges a reply that says the work
+    is held (family D): that work is the one not started."""
     if "AskUserQuestion" in tools:
         return "askuserquestion"
     if text and _HANDBACK.search(text):
         return "handback"
-    if "Agent" in tools:
+    if "Agent" in tools and not any(h[0] == HELD for h in hits):
         return "agent-spawn"
     return None
+
+
+def open_hold(payload, name, quote):
+    """The hold this deferral is: holds/held-<hash>.json in the workspace registry,
+    so the same quote restated is the same hold. (hold name, '') or ('', why not)."""
+    import hashlib
+    import importlib.util
+    hold = "held-" + hashlib.sha1(quote.encode("utf-8")).hexdigest()[:8]
+    lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mega-lander", "workspaces.py")
+    try:
+        spec = importlib.util.spec_from_file_location("deferral_workspaces", lib)
+        ws = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ws)
+        ws.hold(hold, quote, "", "a reply held it without putting it to him (%s)" % name,
+                str(payload.get("session_id") or ""), by="deferral")
+    except Exception as exc:  # noqa: BLE001: said in the notice, never silence
+        return "", "%s: %s" % (exc.__class__.__name__, str(exc)[:160])
+    return hold, ""
 
 
 # ---------------------------------------------------------------------------
@@ -444,16 +487,26 @@ def main():
         print("transcript-unreadable")
         return 4
 
-    if discharge(text, tools) is not None:
+    if discharge(text, tools, hits) is not None:
         return 0
 
     name, quoted = hits[0]
+    if name == HELD:
+        # The words alone ("on hold") name nothing: the sentence they are in does.
+        scan = strip_quoted(text)
+        m = hold_words.HOLD_WORDS_RE.search(scan)
+        a = max(scan.rfind(".", 0, m.start()), scan.rfind("\n", 0, m.start())) + 1
+        b = min([i for i in (scan.find(".", m.end()), scan.find("\n", m.end())) if i >= 0] or [len(scan)])
+        quoted = " ".join(text[a:b + 1].split()) or quoted
     if len(quoted) > 120:
         quoted = quoted[:117] + "..."
+    held, why_not = open_hold(payload, name, quoted)
     print(json.dumps({
         "construction": name,
         "quote": quoted,
         "all": [h[0] for h in hits],
+        "hold": held,
+        "hold_error": why_not,
     }))
     return 3  # 3 = "a deferral fired"; the wrapper turns it into the notice
 
