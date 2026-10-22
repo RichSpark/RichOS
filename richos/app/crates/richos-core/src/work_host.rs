@@ -1298,14 +1298,15 @@ impl WorkHost {
     }
 
     /// The same Stop, also reaching the conversation's front desk (`ConversationControl::
-    /// front_desk`): the shell calls Rich made in the turn that gave this job are this job's
-    /// commands too, by the instruction his hook evidence stamped on each.
+    /// front_desk`). Reap walks walk-2bfb274d19d0 and walk-a78524f291dd: the job was handed to
+    /// Stu AND Rich ran its commands himself, in the turn that gave it. While that turn still
+    /// runs, the commands Rich's own model started after the job was registered are this job's.
     pub fn stop_assignment_and_front_desk(
         self: &Arc<Self>,
         entity: &str,
         thread: &str,
         id: &str,
-        front_desk: Option<(String, Arc<dyn TurnCancel>)>,
+        front_desk: Option<crate::steering::FrontDesk>,
     ) -> Result<(), String> {
         let record =
             assignment::read(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
@@ -1337,14 +1338,11 @@ impl WorkHost {
             }
             None => Vec::new(),
         };
-        if let Some((session, handle)) = &front_desk {
-            for tool in crate::work_status::front_desk_calls(&self.state, session,
-                &record.instruction_ledger_ref, &record.instruction_sha256)? {
-                // A call that started no task, or one that already ended, is no command to stop.
-                match handle.stop_worker(&tool) {
-                    CommandStop::NotDelivered => {}
-                    outcome => outcomes.push(outcome),
-                }
+        let job_turn = format!("ledger:{thread}:");
+        if let Some(desk) = front_desk.as_ref().filter(|desk| desk.turn.as_ref().is_some_and(|turn|
+            record.instruction_ledger_ref.strip_prefix(job_turn.as_str()) == Some(turn.turn_id.as_str()))) {
+            for command in desk.handle.own_commands().iter().filter(|c| c.started_at_ms >= record.registered_at_ms) {
+                outcomes.push(desk.handle.stop_background_command(&command.task_id));
             }
         }
         outcomes.extend(targets.iter().map(|(session, tool)| match &stopper {
@@ -3657,11 +3655,42 @@ mod tests {
     /// to Stu, and Rich ran its commands himself in that same turn, the foreground one included.
     /// Stop on the job ends Rich's command by its own task, and his turn goes on. RED at
     /// ae213107a: the Stop reached only Stu's session, so the `sleep` outlived the bound.
+    /// Rich's commands in another turn are never the job's
+    /// (`a_jobs_stop_leaves_the_front_desks_other_turns_alone`).
     #[test]
     fn a_jobs_stop_ends_the_foreground_command_rich_ran_for_it() {
         let h = harness(0);
         let job = assignment::register(&h.state, &registration(&h)).unwrap();
         stop_ends_the_foreground_command(&h, &job.id, "Run foreground heartbeat test for 300 seconds", true);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    #[test]
+    fn a_jobs_stop_leaves_the_front_desks_other_turns_alone() {
+        struct Desk(Mutex<Vec<String>>);
+        impl TurnCancel for Desk {
+            fn cancel(&self) -> bool { panic!("a job's Stop must not interrupt Rich") }
+            fn shutdown(&self) {}
+            fn own_commands(&self) -> Vec<crate::steering::OwnCommand> {
+                vec![crate::steering::OwnCommand { task_id: "brich".into(), started_at_ms: u64::MAX, description: String::new() }]
+            }
+            fn stop_background_command(&self, task: &str) -> CommandStop {
+                self.0.lock().unwrap().push(task.into());
+                CommandStop::Ended
+            }
+        }
+        let h = harness(0);
+        let job = assignment::register(&h.state, &registration(&h)).unwrap();
+        let desk = Arc::new(Desk(Mutex::new(vec![])));
+        let turn = |id: &str| Some(crate::steering::ActiveTurn { turn_id: id.into(), thread_id: "thread-one".into(), entity_id: None, started_at: None });
+        h.host.stop_assignment_and_front_desk("depot", "thread-one", &job.id,
+            Some(crate::steering::FrontDesk { handle: desk.clone(), turn: turn("turn-8") })).unwrap();
+        assert!(desk.0.lock().unwrap().is_empty(), "Rich's command in another turn is not this job's");
+        let second = assignment::register(&h.state, &Registration { obligation_id: "obligation-8".into(), ..registration(&h) }).unwrap();
+        h.host.stop_assignment_and_front_desk("depot", "thread-one", &second.id,
+            Some(crate::steering::FrontDesk { handle: desk.clone(), turn: None })).unwrap();
+        assert!(desk.0.lock().unwrap().is_empty(), "with no turn running, nothing of Rich's is this job's");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
@@ -3685,8 +3714,8 @@ mod tests {
 
     /// Stu runs one foreground command (a real `sleep`) beside a helper's; Stop on `job` must
     /// end Stu's within the reap walk's bound, with only that command's `stop_task`.
-    /// With `front_desk`, the command is Rich's, made in the turn that gave the job (his hook
-    /// evidence says so), and the Stop reaches his session instead of Stu's.
+    /// With `front_desk`, the command is Rich's, made in the turn that gave the job and still
+    /// running, and the Stop reaches his session instead of Stu's.
     fn stop_ends_the_foreground_command(h: &Harness, job: &str, description: &str, front_desk: bool) {
         let (client, dir) = crate::native::native_driver_tests::fixture_client("stop-foreground-command", &r#"
 here=$(dirname "$0")
@@ -3723,17 +3752,9 @@ read -r keep_alive
         assert!(alive(), "the stand-in command must be running before Stop");
         let stopper: Arc<dyn TurnCancel> = handle.clone();
         let desk = if front_desk {
-            let record = assignment::read(&h.state, "depot", "thread-one", job).unwrap();
-            let evidence = h.state.join("evidence/rich-session");
-            std::fs::create_dir_all(&evidence).unwrap();
-            let call = |tool: &str, reference: &str| serde_json::json!({"schema": 1,
-                "instruction": {"ledger_ref": reference, "sha256": record.instruction_sha256},
-                "callback": {"session_id": "rich-session", "hook_event_name": "PreToolUse", "tool_name": "Bash",
-                    "tool_use_id": tool, "tool_input": {"command": "python3 heartbeat.py"}}}).to_string() + "\n";
-            // A long unrelated row first, then this turn's call and another turn's.
-            std::fs::write(evidence.join("callbacks.jsonl"), "x".repeat(1024 * 1024 + 7) + "\n"
-                + &call("toolu_fg", &record.instruction_ledger_ref) + &call("toolu_other_turn", "ledger:thread-one:turn-8")).unwrap();
-            Some(("rich-session".to_string(), stopper))
+            // Rich's turn that gave the job is still running: the job's ledger ref names it.
+            Some(crate::steering::FrontDesk { handle: stopper, turn: Some(crate::steering::ActiveTurn {
+                turn_id: "turn-7".into(), thread_id: "thread-one".into(), entity_id: None, started_at: None }) })
         } else {
             let backend = Backend::new();
             {

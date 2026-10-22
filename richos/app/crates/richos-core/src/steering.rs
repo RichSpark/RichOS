@@ -823,6 +823,14 @@ pub trait TurnCancel: Send + Sync {
     fn own_commands(&self) -> Vec<OwnCommand> { Vec::new() }
 }
 
+/// A conversation's front desk as a job's Stop sees it ([`ConversationControl::front_desk`]).
+#[derive(Clone)]
+pub struct FrontDesk {
+    pub handle: Arc<dyn TurnCancel>,
+    /// The turn it is running, if one is.
+    pub turn: Option<ActiveTurn>,
+}
+
 /// One shell command a session's own model started, as its stream reported it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnCommand {
@@ -1359,11 +1367,11 @@ impl ConversationControl {
         self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.active.clone())
     }
 
-    /// The conversation's front desk while one is resident: its session and its handle.
-    pub fn front_desk(&self)->Option<(String, Arc<dyn TurnCancel>)> {
+    /// The conversation's front desk while one is resident: its handle and the turn it runs.
+    pub fn front_desk(&self)->Option<FrontDesk> {
         let states=self.shared.inner.conversations.lock().unwrap();
         let state=states.get(self.key())?;
-        Some((state.lease_session.clone()?, state.cancel.clone()?))
+        Some(FrontDesk {handle:state.cancel.clone()?, turn:state.active.clone()})
     }
 
     pub fn lease_session(&self)->Option<String> {

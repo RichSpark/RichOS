@@ -5,45 +5,6 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-/// The shell calls the front desk's own model (`agent_id` null) made in the turn that gave
-/// this job: the app's hook evidence stamps each call with that turn's instruction
-/// (`app-engine-hook.py`, `evidence.capture`), so a job's Stop reaches them by tool_use id.
-/// Reap walk walk-2bfb274d19d0: the job was handed to Stu AND its commands ran on Rich's
-/// session. A line too long to be a call is skipped; an unreadable file is an error.
-pub fn front_desk_calls(state: &Path, session: &str, reference: &str, digest: &str) -> Result<Vec<String>, String> {
-    use std::io::{BufRead, BufReader, Read};
-    if session.is_empty() || !session.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
-        return Err("Invalid native session identity".into());
-    }
-    let file = match std::fs::File::open(state.join("evidence").join(session).join("callbacks.jsonl")) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(error) => return Err(error.to_string()),
-    };
-    let mut reader = BufReader::new(file);
-    let mut calls = Vec::new();
-    loop {
-        let mut line = Vec::new();
-        let size = reader.by_ref().take(1024 * 1024 + 1).read_until(b'\n', &mut line).map_err(|e| e.to_string())?;
-        if size == 0 { break; }
-        if !line.ends_with(b"\n") {
-            // Longer than any call: skip to its end.
-            if size > 1024 * 1024 { reader.by_ref().skip_until(b'\n').map_err(|e| e.to_string())?; continue; }
-            break;
-        }
-        let Ok(row) = serde_json::from_slice::<Value>(&line) else { continue };
-        let call = &row["callback"];
-        if row["instruction"]["ledger_ref"] == reference && row["instruction"]["sha256"] == digest
-            && call["session_id"] == session && call["agent_id"].is_null()
-            && call["hook_event_name"] == "PreToolUse" && call["tool_name"] == "Bash" {
-            if let Some(tool) = call["tool_use_id"].as_str().filter(|id| !id.is_empty()) {
-                if !calls.iter().any(|id| id == tool) { calls.push(tool.to_string()); }
-            }
-        }
-    }
-    Ok(calls)
-}
-
 #[derive(Debug, Default, Serialize)]
 pub struct WorkSummary {
     pub items: Vec<WorkItem>,
