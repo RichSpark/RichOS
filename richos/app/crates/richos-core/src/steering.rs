@@ -823,6 +823,11 @@ pub trait TurnCancel: Send + Sync {
     fn own_commands(&self) -> Vec<OwnCommand> { Vec::new() }
 }
 
+impl OwnCommand {
+    /// Its task id, or its tool call's while the task has not come yet.
+    pub fn key(&self) -> &str { if self.task_id.is_empty() { &self.tool_use_id } else { &self.task_id } }
+}
+
 /// A conversation's front desk as a job's Stop sees it ([`ConversationControl::front_desk`]).
 #[derive(Clone)]
 pub struct FrontDesk {
@@ -834,8 +839,10 @@ pub struct FrontDesk {
 /// One shell command a session's own model started, as its stream reported it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnCommand {
-    /// The provider's task id.
+    /// The provider's task id; empty while the call's `task_started` has not arrived.
     pub task_id: String,
+    /// The tool call that started it.
+    pub tool_use_id: String,
     /// When its `task_started` was read (ms since the epoch).
     pub started_at_ms: u64,
     /// The call's own `description`, where Stu names the job the command is for (stu.md).

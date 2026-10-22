@@ -1331,10 +1331,8 @@ impl WorkHost {
         let mut outcomes: Vec<_> = match &stopper {
             Some((_, handle)) => {
                 let records = assignment::read_all(&self.state, entity, thread).map_err(|e| e.to_string())?;
-                job_commands(&records, id, &handle.own_commands())
-                    .iter()
-                    .map(|task| handle.stop_background_command(task))
-                    .collect()
+                let commands = handle.own_commands();
+                stop_own(handle.as_ref(), &commands, &job_commands(&records, id, &commands))
             }
             None => Vec::new(),
         };
@@ -1342,9 +1340,8 @@ impl WorkHost {
         if let Some(desk) = front_desk.as_ref().filter(|desk| desk.turn.as_ref().is_some_and(|turn|
             record.instruction_ledger_ref.strip_prefix(job_turn.as_str()) == Some(turn.turn_id.as_str()))) {
             let records = assignment::read_all(&self.state, entity, thread).map_err(|e| e.to_string())?;
-            for task in desk_commands(&records, id, &desk.handle.own_commands()) {
-                outcomes.push(desk.handle.stop_background_command(&task));
-            }
+            let commands = desk.handle.own_commands();
+            outcomes.extend(stop_own(desk.handle.as_ref(), &commands, &desk_commands(&records, id, &commands)));
         }
         outcomes.extend(targets.iter().map(|(session, tool)| match &stopper {
             Some((owner, handle)) if owner == session => handle.stop_worker(tool),
@@ -1506,6 +1503,36 @@ pub fn for_him(row: &Assignment) -> bool {
     row.waiting_sentence || row.state.awaits_his_word()
 }
 
+/// How long a Stop waits for the task of a call whose `task_started` has not come yet: a
+/// foreground one's arrives seconds after the call (repository recordings: about 3 s, review
+/// rv-20261022T123741Z-7987beff-17a0 finding 2). load-bound: hang guard only; the call's own
+/// task or its result ends the wait, and the deadline yields Unconfirmed, never Ended.
+const PENDING_TASK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Stop the selected commands (by [`crate::steering::OwnCommand::key`]) by their own task ids.
+/// A call still waiting for its task is waited for: its task is stopped when it comes, and a
+/// call answered with no task had nothing left running.
+fn stop_own(handle: &dyn TurnCancel, commands: &[crate::steering::OwnCommand], keys: &[String]) -> Vec<CommandStop> {
+    let mut outcomes = Vec::new();
+    for command in commands.iter().filter(|c| keys.iter().any(|k| k == c.key())) {
+        if !command.task_id.is_empty() {
+            outcomes.push(handle.stop_background_command(&command.task_id));
+            continue;
+        }
+        let deadline = std::time::Instant::now() + PENDING_TASK_WAIT;
+        loop {
+            let now = handle.own_commands();
+            match now.iter().find(|c| c.tool_use_id == command.tool_use_id) {
+                Some(c) if !c.task_id.is_empty() => { outcomes.push(handle.stop_background_command(&c.task_id)); break; }
+                None => break,
+                Some(_) if std::time::Instant::now() >= deadline => { outcomes.push(CommandStop::Unconfirmed); break; }
+                Some(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
+    }
+    outcomes
+}
+
 /// Does the command's description name this job's obligation_id? The whole id, never a part
 /// of a longer one ("obligation-7" is not in "obligation-70").
 fn names_job(command: &crate::steering::OwnCommand, record: &assignment::Assignment) -> bool {
@@ -1528,7 +1555,7 @@ fn desk_commands(records: &[assignment::Assignment], id: &str, commands: &[crate
         .filter(|c| c.started_at_ms >= job.registered_at_ms)
         .filter(|c| names_job(c, job)
             || (!others.iter().any(|r| names_job(c, r)) && !same_turn(c.started_at_ms)))
-        .map(|c| c.task_id.clone())
+        .map(|c| c.key().to_string())
         .collect()
 }
 
@@ -1561,7 +1588,7 @@ fn job_commands(records: &[assignment::Assignment], id: &str, commands: &[crate:
                 && command.started_at_ms >= job.registered_at_ms
                 && !another_could_run(command.started_at_ms)
         })
-        .map(|command| command.task_id.clone())
+        .map(|command| command.key().to_string())
         .collect()
 }
 
@@ -3693,7 +3720,7 @@ mod tests {
             fn cancel(&self) -> bool { panic!("a job's Stop must not interrupt Rich") }
             fn shutdown(&self) {}
             fn own_commands(&self) -> Vec<crate::steering::OwnCommand> {
-                vec![crate::steering::OwnCommand { task_id: "brich".into(), started_at_ms: u64::MAX, description: String::new() }]
+                vec![crate::steering::OwnCommand { tool_use_id: String::new(), task_id: "brich".into(), started_at_ms: u64::MAX, description: String::new() }]
             }
             fn stop_background_command(&self, task: &str) -> CommandStop {
                 self.0.lock().unwrap().push(task.into());
@@ -3726,7 +3753,7 @@ mod tests {
             fn shutdown(&self) {}
             fn own_commands(&self) -> Vec<crate::steering::OwnCommand> {
                 [("a-foreground", "obligation-7: build the site"), ("b-background", "obligation-b: watch the logs")]
-                    .into_iter().map(|(task, description)| crate::steering::OwnCommand {
+                    .into_iter().map(|(task, description)| crate::steering::OwnCommand { tool_use_id: String::new(),
                         task_id: task.into(), started_at_ms: u64::MAX, description: description.into() }).collect()
             }
             fn stop_background_command(&self, task: &str) -> CommandStop {
@@ -3754,7 +3781,7 @@ mod tests {
         let h = harness(0);
         let a = assignment::register(&h.state, &registration(&h)).unwrap();
         let read = |id: &str| assignment::read(&h.state, "depot", "thread-one", id).unwrap();
-        let command = |task: &str, description: &str| crate::steering::OwnCommand {
+        let command = |task: &str, description: &str| crate::steering::OwnCommand { tool_use_id: String::new(),
             task_id: task.into(), started_at_ms: u64::MAX, description: description.into() };
         let commands = vec![command("a-foreground", "obligation-7: build"), command("b-background", "obligation-b: watch"),
             command("unnamed", "List the files")];
@@ -3767,6 +3794,32 @@ mod tests {
         assert_eq!(desk_commands(&all, &b.id, &commands), vec!["b-background".to_string()]);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **Stop pressed between the call and its task** (review rv-20261022T123741Z-7987beff-17a0,
+    /// finding 2: a foreground task_started comes about 3 s after the Bash call). The Stop waits
+    /// for that call's task and ends it the moment the id arrives. RED at 5dc9485cb: the Stop
+    /// saw no task, sent nothing, and the command outlived the bound.
+    #[test]
+    fn a_jobs_stop_pressed_before_the_commands_task_still_ends_it() {
+        let h = harness(0);
+        let job = assignment::register(&h.state, &registration(&h)).unwrap();
+        stop_ends_the_command(&h, &job.id, "obligation-7: run the heartbeat", false, true);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// Rich and Stu are both told to name the job in each command's description: that is what
+    /// lets Stop tell two jobs' commands apart (review rv-20261022T123741Z-7987beff-17a0,
+    /// finding 1: Rich's two jobs from one turn, ordinary descriptions, stopped nothing).
+    #[test]
+    fn rich_and_stu_name_the_job_in_each_commands_description() {
+        let line = "Begin the description of every shell command you run for a job with that job's obligation_id";
+        for agent in ["rich", "stu"] {
+            let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../../../engine/app/agents/{agent}.md"))).unwrap();
+            assert!(text.contains(line), "{agent}.md does not tell him to name the job in a command's description");
+        }
     }
 
     /// The review of 9b7b70f64 (rv-20261022T093512Z-9b7b70f6-d496, finding 1): job B, open but
@@ -3791,6 +3844,13 @@ mod tests {
     /// With `front_desk`, the command is Rich's, made in the turn that gave the job and still
     /// running, and the Stop reaches his session instead of Stu's.
     fn stop_ends_the_foreground_command(h: &Harness, job: &str, description: &str, front_desk: bool) {
+        stop_ends_the_command(h, job, description, front_desk, false)
+    }
+
+    /// With `before_its_task`, Stop is pressed after the call and before its `task_started`,
+    /// which the stand-in sends 1 s later (Claude Code's foreground task comes seconds after
+    /// the call).
+    fn stop_ends_the_command(h: &Harness, job: &str, description: &str, front_desk: bool, before_its_task: bool) {
         let (client, dir) = crate::native::native_driver_tests::fixture_client("stop-foreground-command", &r#"
 here=$(dirname "$0")
 read -r init
@@ -3802,6 +3862,7 @@ echo "$command" > "$here/command.pid"
 printf '%s\n' '{"type":"assistant","message":{"id":"msg_stu","model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_fg","name":"Bash","input":{"command":"python3 heartbeat.py beat stop-fg /tmp/reap-walk --seconds 300","description":"DESCRIPTION"}}],"usage":{"input_tokens":0,"output_tokens":1}},"parent_tool_use_id":null}'
 printf '%s\n' '{"type":"assistant","message":{"id":"msg_helper","model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_helper","name":"Bash","input":{"command":"sleep 1"}}],"usage":{"input_tokens":0,"output_tokens":1}},"parent_tool_use_id":"toolu_worker"}'
 printf '%s\n' '{"type":"system","subtype":"task_started","task_type":"local_bash","task_id":"bhelper","tool_use_id":"toolu_helper","is_backgrounded":false}'
+TASK_DELAY
 printf '%s\n' '{"type":"system","subtype":"task_started","task_type":"local_bash","task_id":"bforeground","tool_use_id":"toolu_fg","is_backgrounded":false}'
 read -r stop
 case "$stop" in *'"subtype":"stop_task","task_id":"bforeground"'*) ;; *) exit 9;; esac
@@ -3812,14 +3873,15 @@ printf '%s\n' "{\"type\":\"control_response\",\"response\":{\"subtype\":\"succes
 printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"bforeground","tool_use_id":"toolu_fg","status":"stopped"}'
 printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn"}'
 read -r keep_alive
-"#.replace("DESCRIPTION", description));
+"#.replace("DESCRIPTION", description).replace("TASK_DELAY", if before_its_task { "sleep 1" } else { ":" }));
         let handle = client.cancel_handle();
         let turn = std::thread::spawn(move || {
             let ended = client.prompt("run the job's commands", &mut |_| {});
             (client, ended)
         });
         until("Stu's foreground command never started", || handle.own_commands().len() == 1);
-        assert_eq!(handle.own_commands()[0].task_id, "bforeground", "a helper's command is not Stu's own");
+        assert_eq!(handle.own_commands()[0].tool_use_id, "toolu_fg", "a helper's command is not Stu's own");
+        assert_eq!(handle.own_commands()[0].task_id, if before_its_task { "" } else { "bforeground" });
         assert_eq!(handle.own_commands()[0].description, description, "the job travels in the call's own description");
         let pid: i32 = std::fs::read_to_string(dir.join("command.pid")).unwrap().trim().parse().unwrap();
         let alive = || unsafe { libc::kill(pid, 0) } == 0;
@@ -3869,7 +3931,7 @@ read -r keep_alive
         let read = |id: &str| assignment::read(&h.state, "depot", "thread-one", id).unwrap();
         let all = || assignment::read_all(&h.state, "depot", "thread-one").unwrap();
         let at = read(&job.id).registered_at_ms;
-        let command = |task: &str, started_at_ms: u64, description: &str| crate::steering::OwnCommand {
+        let command = |task: &str, started_at_ms: u64, description: &str| crate::steering::OwnCommand { tool_use_id: String::new(),
             task_id: task.into(), started_at_ms, description: description.into() };
         let commands = vec![
             command("names-this-job", at, "obligation-7: build the site"),

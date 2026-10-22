@@ -170,8 +170,12 @@ pub struct TaskBook {
     agents: Vec<AgentTask>,
     /// `Bash` tool_use ids the session's own model called (`parent_tool_use_id` null), never a
     /// helper's: the commands a job's Stop may end on this session's behalf. → the call's own
-    /// `description`, where Stu names the job the command is for (stu.md).
-    own_bash: HashMap<String, String>,
+    /// `description`, where Stu names the job the command is for (stu.md), and when the call
+    /// was read.
+    own_bash: HashMap<String, (String, u64)>,
+    /// Tool calls whose result has come back: one with no task by then never had a command
+    /// left to stop.
+    answered: HashSet<String>,
     /// task id → when its `task_started` was read (ms since the epoch, `assignment::now_ms`).
     started_at_ms: HashMap<String, u64>,
 }
@@ -189,7 +193,8 @@ impl TaskBook {
                         && block.get("name").and_then(Value::as_str) == Some("Bash") {
                         if let Some(id) = block.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) {
                             let description = block.pointer("/input/description").and_then(Value::as_str).unwrap_or("");
-                            self.own_bash.insert(id.to_string(), description.to_string());
+                            self.own_bash.entry(id.to_string())
+                                .or_insert_with(|| (description.to_string(), crate::assignment::now_ms()));
                         }
                     }
                     let is_agent = block.get("type").and_then(Value::as_str) == Some("tool_use")
@@ -203,6 +208,15 @@ impl TaskBook {
                             .map(|(task, _)| task.clone()).collect();
                         for task in bound {
                             changed.extend(self.bind(&task, id));
+                        }
+                    }
+                }
+            }
+            (Some("user"), _) => {
+                for block in frame.pointer("/message/content").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+                    if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+                        if let Some(id) = block.get("tool_use_id").and_then(Value::as_str) {
+                            if self.own_bash.contains_key(id) { self.answered.insert(id.to_string()); }
                         }
                     }
                 }
@@ -283,16 +297,24 @@ impl TaskBook {
     }
 
     /// The session's own shell commands still running, foreground or background, oldest first:
-    /// A helper's commands are its own, not these.
+    /// A helper's commands are its own, not these. A call whose `task_started` has not come
+    /// yet (a foreground one's comes seconds after the call) is listed with no task id, from
+    /// the moment the call was read, until its task or its result arrives.
     pub fn own_running_commands(&self) -> Vec<crate::steering::OwnCommand> {
         let mut out: Vec<crate::steering::OwnCommand> = self.task_tool.iter()
             .filter(|(task, _)| !self.task_ended(task))
             .filter_map(|(task, tool)| Some(crate::steering::OwnCommand {
                 task_id: task.clone(),
+                tool_use_id: tool.clone(),
                 started_at_ms: *self.started_at_ms.get(task)?,
-                description: self.own_bash.get(tool)?.clone(),
+                description: self.own_bash.get(tool)?.0.clone(),
             }))
             .collect();
+        let has_task: HashSet<&String> = self.task_tool.values().collect();
+        out.extend(self.own_bash.iter()
+            .filter(|(tool, _)| !has_task.contains(tool) && !self.answered.contains(*tool))
+            .map(|(tool, (description, at))| crate::steering::OwnCommand {
+                task_id: String::new(), tool_use_id: tool.clone(), started_at_ms: *at, description: description.clone() }));
         out.sort_by(|a, b| (a.started_at_ms, &a.task_id).cmp(&(b.started_at_ms, &b.task_id)));
         out
     }
