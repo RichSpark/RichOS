@@ -15,9 +15,9 @@
 //!   `update-instructions` skill, which says how (CEO §124: never in code): everything from the
 //!   update is kept, and a change of the user's that conflicts with it is edited out (CEO,
 //!   2026-10-22). No copy of the previous file is kept: a user who wants their wording back edits
-//!   the file again (CEO, 2026-10-22). What is returned ([`Updated`]) carries the before and
-//!   after text of each file and the edits between them, for the before-and-after screen the
-//!   CEO asked for, with the session's own one or two lines.
+//!   the file again (CEO, 2026-10-22). Each file is updated on its own, and what is returned
+//!   ([`UpdatedFile`]) is the file before and after, paragraph by paragraph, with every edit
+//!   marked ([`rows`]), for the before-and-after screen the CEO asked for (round 37).
 //!   **No** ([`decline`]): nothing changes, and the question is not asked again until a later
 //!   version changes the instructions again.
 //!
@@ -125,44 +125,10 @@ fn own_copy(folder: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// One line of the difference between a before and an after text, for showing it: kept as it
-/// was, removed from the before text, or added in the after text. Nothing is ever merged from
-/// these.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase", tag = "kind", content = "line")]
-pub enum Edit {
-    Same(String),
-    Removed(String),
-    Added(String),
-}
-
-/// The lines of `after` against `before`, in order: the longest run of lines the two share is
-/// kept, every other line of `before` is removed and every other line of `after` added.
-pub fn edits(before: &str, after: &str) -> Vec<Edit> {
-    let (a, b): (Vec<&str>, Vec<&str>) = (before.lines().collect(), after.lines().collect());
-    // shared[i][j]: the longest run of lines a[i..] and b[j..] share.
-    let mut shared = vec![vec![0usize; b.len() + 1]; a.len() + 1];
-    for i in (0..a.len()).rev() {
-        for j in (0..b.len()).rev() {
-            shared[i][j] = if a[i] == b[j] { shared[i + 1][j + 1] + 1 } else { shared[i + 1][j].max(shared[i][j + 1]) };
-        }
-    }
-    let (mut i, mut j, mut out) = (0, 0, Vec::new());
-    while i < a.len() || j < b.len() {
-        if i < a.len() && j < b.len() && a[i] == b[j] {
-            out.push(Edit::Same(a[i].to_string())); i += 1; j += 1;
-        } else if i < a.len() && (j == b.len() || shared[i + 1][j] >= shared[i][j + 1]) {
-            out.push(Edit::Removed(a[i].to_string())); i += 1;
-        } else {
-            out.push(Edit::Added(b[j].to_string())); j += 1;
-        }
-    }
-    out
-}
-
 /// Lines that differ between two texts: added plus removed.
 fn distance(a: &str, b: &str) -> usize {
-    edits(a, b).iter().filter(|edit| !matches!(edit, Edit::Same(_))).count()
+    let (a, b): (Vec<&str>, Vec<&str>) = (a.lines().collect(), b.lines().collect());
+    steps(&a, &b).iter().filter(|(i, j)| i.is_none() || j.is_none()).count()
 }
 
 /// The shipped text a copy with no record was made from: the version it is exactly, or else the
@@ -218,7 +184,7 @@ pub fn decline(folder: &Path, shipped: &Path) -> Result<(), RuntimeError> {
     write_record(folder, &record)
 }
 
-/// One changed copy to update: the three texts the session reads.
+/// A changed copy to update: the three texts the session reads.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Update {
     pub name: &'static str,
@@ -230,75 +196,225 @@ pub struct Update {
     pub new: String,
 }
 
+/// One part of a paragraph on the before-and-after screen (round 37), as `[kind, text]`: `fm` the
+/// file's front matter, `s` the same before and after, `a` added from the RichOS update, `d`
+/// older RichOS wording the update took out, `y` one of the user's own instructions, edited out
+/// because it conflicts with the update.
+pub type Segment = (&'static str, String);
+
 /// One file as OK left it: what the before-and-after screen shows (CEO, 2026-10-22: "the user is
 /// presented with "before" and "after" with all the edits highlighted").
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UpdatedFile {
     pub name: &'static str,
-    pub before: String,
-    pub after: String,
-    /// Every line, kept, removed or added, from `before` to `after`.
-    pub edits: Vec<Edit>,
-}
-
-/// What OK did: each file, and the session's own one or two lines about it.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub struct Updated {
+    /// Where the file is, the home folder written `~`.
+    pub path: String,
+    /// The file paragraph by paragraph, before and after side by side ([`rows`]).
+    pub rows: Vec<Vec<Segment>>,
+    /// How many paragraphs have an edit.
+    pub edits: usize,
+    /// The session's own line about what changed.
     pub said: String,
-    pub files: Vec<UpdatedFile>,
 }
 
-/// **OK**: `rewrite` (in the app, [`rewrite_with_rich`]) is given every changed copy and answers
-/// with each file's new text, in the same order, and its own lines about it. Each new file is
-/// written and recorded, and each file's before, after and edits are returned. Nothing is written when `rewrite` fails, or when a copy changed
-/// while it ran.
-pub fn accept(folder: &Path, shipped: &Path,
-              rewrite: impl FnOnce(&[Update]) -> Result<(Vec<String>, String), String>) -> Result<Updated, String> {
-    let ask = check(folder, shipped).map_err(|e| e.0)?;
-    let record = read_record(folder);
-    let mut updates = Vec::new();
-    for name in ask {
-        let (Some(yours), Some(entry)) = (own_copy(folder, name), record.get(name)) else { continue };
-        updates.push(Update { name, started_from: entry.from.clone(), yours, new: shipped_text(shipped, name).map_err(|e| e.0)? });
+/// A changed copy the user is asked about: its name and where it is, the home folder written `~`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Asked {
+    pub name: &'static str,
+    pub path: String,
+}
+
+/// `path` with the home folder written `~`, the way the screen names a file.
+pub fn shown_path(path: &Path) -> String {
+    match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) if !home.as_os_str().is_empty() => match path.strip_prefix(&home) {
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => path.display().to_string(),
+        },
+        _ => path.display().to_string(),
     }
-    if updates.is_empty() { return Ok(Updated::default()); }
-    let (texts, said) = rewrite(&updates)?;
-    if texts.len() != updates.len() || texts.iter().any(|text| text.trim().is_empty()) {
-        return Err("the update did not write every file; nothing was changed".into());
+}
+
+/// [`check`], with where each file to ask about is.
+pub fn question(folder: &Path, shipped: &Path) -> Result<Vec<Asked>, RuntimeError> {
+    Ok(check(folder, shipped)?.into_iter().map(|name| Asked { name, path: shown_path(&folder.join(name)) }).collect())
+}
+
+/// **OK, for one file** (the screen updates them one after another): `rewrite` (in the app,
+/// [`rewrite_with_rich`]) is given the three texts and answers with the file's new text and its
+/// own line about it. The new file is written and recorded and the before and after returned.
+/// Nothing is written when `rewrite` fails, when its file is empty, or when the user's copy
+/// changed while it ran. No copy of the previous file is kept (CEO, 2026-10-22).
+pub fn accept(folder: &Path, shipped: &Path, name: &str,
+              rewrite: impl FnOnce(&Update) -> Result<(String, String), String>) -> Result<UpdatedFile, String> {
+    let name = *check(folder, shipped).map_err(|e| e.0)?.iter().find(|asked| **asked == name)
+        .ok_or_else(|| format!("{name} has no update waiting"))?;
+    let entry = read_record(folder).remove(name).ok_or_else(|| format!("{name} has no record"))?;
+    let yours = own_copy(folder, name).ok_or_else(|| format!("{name} is not there"))?;
+    let update = Update { name, started_from: entry.from, yours, new: shipped_text(shipped, name).map_err(|e| e.0)? };
+    let (text, said) = rewrite(&update)?;
+    if text.trim().is_empty() { return Err(format!("the update did not write {name}; nothing was changed")); }
+    if own_copy(folder, name).as_deref() != Some(update.yours.as_str()) {
+        return Err(format!("{name} was changed while it was being updated; nothing was changed"));
     }
-    for update in &updates {
-        if own_copy(folder, update.name).as_deref() != Some(update.yours.as_str()) {
-            return Err(format!("{} was changed while it was being updated; nothing was changed", update.name));
+    write_atomic(&folder.join(name), &text).map_err(|e| e.0)?;
+    let mut record = read_record(folder);
+    record.insert(name.to_string(), Entry { from: update.new.clone(), declined: None });
+    write_record(folder, &record).map_err(|e| e.0)?;
+    let rows = rows(&update.started_from, &update.yours, &text);
+    let edits = rows.iter().filter(|row| row.iter().any(|(kind, _)| matches!(*kind, "a" | "d" | "y"))).count();
+    Ok(UpdatedFile { name, path: shown_path(&folder.join(name)), rows, edits, said })
+}
+
+/// The paragraphs of a file: its blocks between blank lines.
+fn paragraphs(text: &str) -> Vec<&str> {
+    text.split("\n\n").map(|block| block.trim_matches('\n')).filter(|block| !block.is_empty()).collect()
+}
+
+/// The longest run two sequences share, as same / removed / added steps, in order.
+fn steps<T: PartialEq>(a: &[T], b: &[T]) -> Vec<(Option<usize>, Option<usize>)> {
+    let mut shared = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            shared[i][j] = if a[i] == b[j] { shared[i + 1][j + 1] + 1 } else { shared[i + 1][j].max(shared[i][j + 1]) };
         }
     }
-    let mut record = read_record(folder);
-    let mut files = Vec::new();
-    for (update, text) in updates.iter().zip(texts) {
-        write_atomic(&folder.join(update.name), &text).map_err(|e| e.0)?;
-        record.insert(update.name.to_string(), Entry { from: update.new.clone(), declined: None });
-        files.push(UpdatedFile { name: update.name, edits: edits(&update.yours, &text), before: update.yours.clone(), after: text });
+    let (mut i, mut j, mut out) = (0, 0, Vec::new());
+    while i < a.len() || j < b.len() {
+        if i < a.len() && j < b.len() && a[i] == b[j] {
+            out.push((Some(i), Some(j))); i += 1; j += 1;
+        } else if i < a.len() && (j == b.len() || shared[i + 1][j] >= shared[i][j + 1]) {
+            out.push((Some(i), None)); i += 1;
+        } else {
+            out.push((None, Some(j))); j += 1;
+        }
     }
-    write_record(folder, &record).map_err(|e| e.0)?;
-    Ok(Updated { said, files })
+    out
 }
 
-/// How long the session may take. A careful rewrite of two files on the user's own model is a
+/// Removed text is the user's own (`y`) when it is nowhere in the shipped version the user's copy
+/// was made from; otherwise it is older RichOS wording (`d`).
+fn removed(text: &str, started_from: &str) -> Segment {
+    (if started_from.contains(text.trim()) { "d" } else { "y" }, text.to_string())
+}
+
+/// **The before and after, paragraph by paragraph**, for showing it (nothing is ever merged from
+/// these). Paragraphs the two share are kept; between two kept ones, the removed and the added
+/// paragraphs are paired in order, and a pair is compared word by word, a run of one or two shared
+/// words inside a change counting as part of the change so the edit reads as a whole phrase.
+pub fn rows(started_from: &str, before: &str, after: &str) -> Vec<Vec<Segment>> {
+    let (b, a) = (paragraphs(before), paragraphs(after));
+    let mut out = Vec::new();
+    let (mut gone, mut new): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+    let flush = |gone: &mut Vec<&str>, new: &mut Vec<&str>, out: &mut Vec<Vec<Segment>>| {
+        for k in 0..gone.len().max(new.len()) {
+            out.push(match (gone.get(k), new.get(k)) {
+                (Some(g), Some(n)) => words(started_from, g, n),
+                (Some(g), None) => vec![removed(g, started_from)],
+                (None, Some(n)) => vec![("a", n.to_string())],
+                (None, None) => continue,
+            });
+        }
+        gone.clear();
+        new.clear();
+    };
+    for (i, j) in steps(&b, &a) {
+        match (i, j) {
+            (Some(i), Some(_)) => {
+                flush(&mut gone, &mut new, &mut out);
+                out.push(vec![(if out.is_empty() && b[i].starts_with("---") { "fm" } else { "s" }, b[i].to_string())]);
+            }
+            (Some(i), None) => gone.push(b[i]),
+            (None, Some(j)) => new.push(a[j]),
+            (None, None) => {}
+        }
+    }
+    flush(&mut gone, &mut new, &mut out);
+    out
+}
+
+/// One paragraph before and after, word by word ([`rows`]).
+fn words(started_from: &str, before: &str, after: &str) -> Vec<Segment> {
+    let split = |text: &str| -> Vec<String> {
+        let mut tokens: Vec<String> = Vec::new();
+        for c in text.chars() {
+            match tokens.last_mut() {
+                Some(last) if !c.is_whitespace() && last.chars().last().is_some_and(|l| !l.is_whitespace()) => last.push(c),
+                Some(last) if c.is_whitespace() => last.push(c),
+                _ => tokens.push(c.to_string()),
+            }
+        }
+        tokens
+    };
+    let (b, a) = (split(before), split(after));
+    // Each step as (kind, token): 's' same, 'r' removed, 'a' added.
+    let mut marked: Vec<(char, String)> = steps(&b, &a).into_iter().map(|step| match step {
+        (Some(i), Some(_)) => ('s', b[i].clone()),
+        (Some(i), None) => ('r', b[i].clone()),
+        (None, Some(j)) => ('a', a[j].clone()),
+        (None, None) => unreachable!(),
+    }).collect();
+    // A run of one or two shared words with a change on both sides is part of the change.
+    loop {
+        let mut changed = false;
+        let mut k = 0;
+        while k < marked.len() {
+            if marked[k].0 != 's' { k += 1; continue; }
+            let end = (k..marked.len()).find(|&e| marked[e].0 != 's').unwrap_or(marked.len());
+            if k > 0 && end < marked.len() && end - k <= 2 {
+                let run: Vec<String> = marked.drain(k..end).map(|(_, t)| t).collect();
+                let at = k;
+                for (n, token) in run.iter().enumerate() { marked.insert(at + n, ('r', token.clone())); }
+                for (n, token) in run.into_iter().enumerate() { marked.insert(end + n, ('a', token)); }
+                changed = true;
+                break;
+            }
+            k = end;
+        }
+        if !changed { break; }
+    }
+    // Between two shared runs, what was removed comes first and what was added after it.
+    let mut out: Vec<Segment> = Vec::new();
+    let (mut gone, mut new) = (String::new(), String::new());
+    let push = |out: &mut Vec<Segment>, kind: &'static str, text: String| {
+        if text.is_empty() { return; }
+        match out.last_mut() {
+            Some((last, prior)) if *last == kind => prior.push_str(&text),
+            _ => out.push((kind, text)),
+        }
+    };
+    for (kind, token) in marked {
+        match kind {
+            'r' => gone.push_str(&token),
+            'a' => new.push_str(&token),
+            _ => {
+                if !gone.is_empty() { let (k, t) = removed(&gone, started_from); push(&mut out, k, t); gone.clear(); }
+                push(&mut out, "a", std::mem::take(&mut new));
+                push(&mut out, "s", token);
+            }
+        }
+    }
+    if !gone.is_empty() { let (k, t) = removed(&gone, started_from); push(&mut out, k, t); }
+    push(&mut out, "a", new);
+    out
+}
+
+/// How long the session may take. A careful rewrite of one file on the user's own model is a
 /// minute or two; this only stops a stalled session being waited on for ever.
 const WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
-/// **The session that updates the user's changed copies**: Claude Code on the model Rich runs on,
-/// with the engine's [`SKILL`] as its whole instruction and only the Write tool, given each file's
-/// three texts and where to write the result. Returns the files it wrote and its answer.
-pub fn rewrite_with_rich(bin: &Path, profile: &crate::engine_profile::EngineProfile, updates: &[Update])
-    -> Result<(Vec<String>, String), String> {
+/// **The session that updates one changed copy**: Claude Code on the model Rich runs on, with the
+/// engine's [`SKILL`] as its whole instruction and only the Write tool, given the three texts and
+/// where to write the result. Returns the file it wrote and its answer.
+pub fn rewrite_with_rich(bin: &Path, profile: &crate::engine_profile::EngineProfile, update: &Update)
+    -> Result<(String, String), String> {
     let work = profile.state.join("instructions-update").join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let write_to = work.join(update.name);
     let result = (|| {
-        let files: Vec<_> = updates.iter().map(|update| serde_json::json!({
-            "name": update.name, "started_from": update.started_from, "yours": update.yours, "new": update.new,
-            "write_to": work.join(update.name)})).collect();
-        let body = serde_json::json!({"type": "user", "message": {"role": "user",
-            "content": serde_json::json!({"files": files}).to_string()}}).to_string();
+        let asked = serde_json::json!({"name": update.name, "started_from": update.started_from,
+            "yours": update.yours, "new": update.new, "write_to": write_to});
+        let body = serde_json::json!({"type": "user", "message": {"role": "user", "content": asked.to_string()}}).to_string();
         let mut live = crate::request_classifier::Provider::new(bin, profile, SKILL, "instructions-update")
             .writing(profile.lease_models.rich.cli_alias(), "Write").start()?;
         let said = live.exchange(body, std::time::Instant::now() + WAIT, || false, |frame| {
@@ -306,15 +422,15 @@ pub fn rewrite_with_rich(bin: &Path, profile: &crate::engine_profile::EngineProf
             if said.is_empty() { Err("the update said nothing".to_string()) } else { Ok(said.to_string()) }
         })?;
         drop(live);
-        let texts = updates.iter().map(|update| std::fs::read_to_string(work.join(update.name))
-            .map_err(|_| format!("the update did not write {}", update.name))).collect::<Result<Vec<_>, _>>()?;
-        Ok((texts, said))
+        let text = std::fs::read_to_string(&write_to).map_err(|_| format!("the update did not write {}", update.name))?;
+        Ok((text, said))
     })();
     if let Err(e) = std::fs::remove_dir_all(&work) {
         eprintln!("[richos] the update's work folder {} could not be removed: {e}", work.display());
     }
     result
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -329,13 +445,6 @@ mod tests {
     }
 
     #[test]
-    fn the_edits_show_every_line_kept_removed_or_added_in_order() {
-        assert_eq!(edits("a\nb\nc\n", "a\nB\nc\nd\n"), [
-            Edit::Same("a".into()), Edit::Removed("b".into()), Edit::Added("B".into()), Edit::Same("c".into()), Edit::Added("d".into())]);
-        assert_eq!(serde_json::to_value(Edit::Removed("x".into())).unwrap(), serde_json::json!({"kind": "removed", "line": "x"}));
-    }
-
-    #[test]
     fn a_copy_without_a_record_starts_from_the_version_it_is_or_the_nearest_one() {
         let earlier = vec!["one\n".to_string(), "one\ntwo\n".to_string()];
         assert_eq!(starting_point("one\n", "one\ntwo\nthree\n", earlier.clone()), "one\n");
@@ -343,21 +452,40 @@ mod tests {
         assert_eq!(starting_point("one\ntwo\nmine\n", "one\ntwo\nthree\nfour\n", earlier), "one\ntwo\n");
     }
 
+    /// The before and after the round-37 screen draws: the front matter, paragraphs kept, a user's
+    /// sentence edited out and tagged as theirs (`y`), older RichOS wording taken out (`d`), and
+    /// what the update added (`a`), a whole new paragraph among it.
+    #[test]
+    fn the_rows_show_each_paragraph_with_the_users_own_lines_told_apart() {
+        let started_from = "---\nname: rich\n---\n\nYou are Rich.\n\nDo things quickly.\n\nOld rule.\n";
+        let before = "---\nname: rich\n---\n\nYou are Rich.\n\nDo things quickly. Hand it to Stu always.\n\nOld rule.\n";
+        let after = "---\nname: rich\n---\n\nYou are Rich.\n\nDo things quickly. When asked yourself, do it yourself.\n\nNew rule.\n\nAnother new paragraph.\n";
+        let s = |k: &'static str, t: &str| (k, t.to_string());
+        assert_eq!(rows(started_from, before, after), vec![
+            vec![s("fm", "---\nname: rich\n---")],
+            vec![s("s", "You are Rich.")],
+            vec![s("s", "Do things quickly. "), s("y", "Hand it to Stu always."), s("a", "When asked yourself, do it yourself.")],
+            vec![s("d", "Old "), s("a", "New "), s("s", "rule.")],
+            vec![s("a", "Another new paragraph.")],
+        ]);
+        let json = serde_json::to_value(rows(started_from, before, after)).unwrap();
+        assert_eq!(json[0][0], serde_json::json!(["fm", "---\nname: rich\n---"]), "a segment is [kind, text]");
+    }
+
     /// **OK is done by Rich, from the skill** (CEO, 2026-10-22): the session is started with the
     /// engine's `update-instructions` skill as its instruction, on Rich's model, with only the
     /// Write tool, and is given the three texts; what it writes becomes the user's file, and the
-    /// before, after and edits are returned for the before-and-after screen.
+    /// before and after is returned for the screen.
     #[test]
-    fn ok_starts_a_session_with_the_three_texts_and_the_skill_and_returns_before_and_after() {
+    fn ok_starts_a_session_with_the_three_texts_and_the_skill_and_returns_the_before_and_after() {
         let (root, bin, profile, _) = crate::request_classifier::tests::fixture(r#"
 open('argv.json','w').write(json.dumps(sys.argv))
 print(json.dumps({'type':'system','subtype':'init','tools':['Write']}),flush=True)
 for line in sys.stdin:
-    data=json.loads(json.loads(line)['message']['content'])
-    open('asked.json','w').write(json.dumps(data))
-    for f in data['files']:
-        open(f['write_to'],'w').write(f['new']+f['yours'].splitlines()[-1]+'\n')
-    said='Your instructions now have the new section, and your own line is kept.'
+    f=json.loads(json.loads(line)['message']['content'])
+    open('asked.json','w').write(json.dumps(f))
+    open(f['write_to'],'w').write(f['new']+'\n'+f['yours'].splitlines()[-1]+'\n')
+    said='The update added a new section; your own line is kept.'
     print(json.dumps({'type':'assistant','message':{'model':'claude-opus-5-5','content':[{'type':'tool_use','name':'Write','input':{}}]}}),flush=True)
     print(json.dumps({'type':'result','is_error':False,'result':said}),flush=True)
 "#);
@@ -369,19 +497,12 @@ for line in sys.stdin:
         std::fs::write(shipped.join("agents").join(RICH), older).unwrap();
         std::fs::write(shipped.join("agents").join(STU), "Stu.\n").unwrap();
         crate::user_settings::provision(&folder, &shipped).unwrap();
-        let yours = format!("{older}My own line.\n");
+        let yours = format!("{older}\nMy own line.\n");
         std::fs::write(folder.join(RICH), &yours).unwrap();
         std::fs::write(shipped.join("agents").join(RICH), newer).unwrap();
         assert_eq!(check(&folder, &shipped).unwrap(), vec![RICH]);
 
-        let updated = accept(&folder, &shipped, |updates| rewrite_with_rich(&bin, &profile, updates)).unwrap();
-        assert_eq!(updated.said, "Your instructions now have the new section, and your own line is kept.");
-        // What the before-and-after screen shows: the file before, after, and every edit between.
-        let file = &updated.files[0];
-        assert_eq!((file.name, file.before.as_str(), file.after.as_str()), (RICH, yours.as_str(), format!("{newer}My own line.\n").as_str()));
-        let changed: Vec<&Edit> = file.edits.iter().filter(|e| !matches!(e, Edit::Same(_))).collect();
-        assert_eq!(changed, [&Edit::Added("".into()), &Edit::Added("A new section.".into())], "the edits are the lines the update added");
-        assert_eq!(file.edits.last(), Some(&Edit::Same("My own line.".into())));
+        let updated = accept(&folder, &shipped, RICH, |update| rewrite_with_rich(&bin, &profile, update)).unwrap();
         let session = profile.state.join("instructions-update");
         let argv: Vec<String> = serde_json::from_str(&std::fs::read_to_string(session.join("argv.json")).unwrap()).unwrap();
         let after = |flag: &str| argv[argv.iter().position(|a| a == flag).unwrap() + 1].clone();
@@ -391,12 +512,16 @@ for line in sys.stdin:
         assert_eq!(after("--tools"), "Write");
         assert_eq!(after("--model"), profile.lease_models.rich.cli_alias(), "the update runs on Rich's model");
         let asked: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(session.join("asked.json")).unwrap()).unwrap();
-        let file = &asked["files"][0];
-        assert_eq!((file["name"].as_str(), file["started_from"].as_str(), file["yours"].as_str(), file["new"].as_str()),
+        assert_eq!((asked["name"].as_str(), asked["started_from"].as_str(), asked["yours"].as_str(), asked["new"].as_str()),
             (Some(RICH), Some(older), Some(yours.as_str()), Some(newer)), "the session must read the three texts");
-        assert_eq!(asked["files"].as_array().unwrap().len(), 1, "an unchanged stu.md is not the session's");
 
-        assert_eq!(std::fs::read_to_string(folder.join(RICH)).unwrap(), format!("{newer}My own line.\n"));
+        let now = format!("{newer}\nMy own line.\n");
+        assert_eq!(std::fs::read_to_string(folder.join(RICH)).unwrap(), now);
+        assert_eq!(updated.said, "The update added a new section; your own line is kept.");
+        assert_eq!(updated.rows, rows(older, &yours, &now));
+        assert!(updated.rows.contains(&vec![("a", "A new section.".to_string())]), "{:?}", updated.rows);
+        assert!(updated.rows.contains(&vec![("s", "My own line.".to_string())]), "{:?}", updated.rows);
+        assert_eq!(updated.edits, 1);
         let mut kept: Vec<String> = std::fs::read_dir(&folder).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         kept.sort();
         assert_eq!(kept, [".richos", "instructions.md", "rich.md", "stu.md"], "OK left a file beside the user's");
@@ -421,9 +546,10 @@ for line in sys.stdin:
         crate::user_settings::provision(&folder, &shipped).unwrap();
         std::fs::write(folder.join(RICH), "Old.\nMine.\n").unwrap();
         std::fs::write(shipped.join("agents").join(RICH), "New.\n").unwrap();
-        assert!(accept(&folder, &shipped, |updates| rewrite_with_rich(&bin, &profile, updates)).is_err());
+        assert!(accept(&folder, &shipped, RICH, |update| rewrite_with_rich(&bin, &profile, update)).is_err());
         assert_eq!(std::fs::read_to_string(folder.join(RICH)).unwrap(), "Old.\nMine.\n");
         assert_eq!(check(&folder, &shipped).unwrap(), vec![RICH], "a failed update must ask again");
+        assert!(accept(&folder, &shipped, STU, |_| panic!("an unchanged stu.md has nothing to update")).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

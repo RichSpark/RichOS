@@ -2,7 +2,7 @@
 //! every existing user gets them.** A copy the user never changed is updated by the app itself;
 //! a changed one is asked about once (`instructions_update.rs`). OK's session is tested beside
 //! it (`instructions_update::tests`), with a stand-in `claude`.
-use richos_core::instructions_update::{accept, check, decline, Update, RECORD};
+use richos_core::instructions_update::{accept, check, decline, rows, Update, RECORD};
 use richos_core::user_settings::{provision, RICH, STU};
 use std::path::{Path, PathBuf};
 
@@ -65,12 +65,12 @@ fn a_changed_copy_is_asked_about_and_ok_writes_the_update_keeping_the_users_line
     assert_eq!(check(&folder, &shipped).unwrap(), vec![RICH], "the changed copy is to be asked about");
 
     let merged = format!("{V2}My own line.\n");
-    let updated = accept(&folder, &shipped, |updates| {
-        assert_eq!(updates, [Update { name: RICH, started_from: V1.into(), yours: yours.clone(), new: V2.into() }]);
-        Ok((vec![merged.clone()], "Added the improved rule; your line is kept.".into()))
+    let updated = accept(&folder, &shipped, RICH, |update| {
+        assert_eq!(update, &Update { name: RICH, started_from: V1.into(), yours: yours.clone(), new: V2.into() });
+        Ok((merged.clone(), "Added the improved rule; your line is kept.".into()))
     }).unwrap();
     assert_eq!(updated.said, "Added the improved rule; your line is kept.");
-    assert_eq!((updated.files[0].before.as_str(), updated.files[0].after.as_str()), (yours.as_str(), merged.as_str()));
+    assert_eq!(updated.rows, rows(V1, &yours, &merged), "the screen gets the file before and after");
     let now = read(folder.join(RICH));
     assert!(now.contains("My own line.") && now.contains("An improved rule."), "{now}");
     assert!(check(&folder, &shipped).unwrap().is_empty(), "the question came back after OK");
@@ -78,9 +78,9 @@ fn a_changed_copy_is_asked_about_and_ok_writes_the_update_keeping_the_users_line
     // The next version starts from the one the update was made for.
     ship(&shipped, V3, "Stu.\n");
     assert_eq!(check(&folder, &shipped).unwrap(), vec![RICH]);
-    accept(&folder, &shipped, |updates| {
-        assert_eq!(updates[0].started_from, V2);
-        Ok((vec![format!("{V3}My own line.\n")], "Done.".into()))
+    accept(&folder, &shipped, RICH, |update| {
+        assert_eq!(update.started_from, V2);
+        Ok((format!("{V3}My own line.\n"), "Done.".into()))
     }).unwrap();
 }
 
@@ -103,9 +103,9 @@ fn no_leaves_the_file_as_it_was_and_is_not_asked_again_until_a_later_version() {
     assert_eq!(read(folder.join(RICH)), yours);
     ship(&shipped, V3, "Stu.\n");
     assert_eq!(check(&folder, &shipped).unwrap(), vec![RICH], "a later version must ask again");
-    accept(&folder, &shipped, |updates| {
-        assert_eq!(updates[0].started_from, V1, "after No the starting point is still the one the copy was made from");
-        Ok((vec![format!("{V3}My own line.\n")], "Done.".into()))
+    accept(&folder, &shipped, RICH, |update| {
+        assert_eq!(update.started_from, V1, "after No the starting point is still the one the copy was made from");
+        Ok((format!("{V3}My own line.\n"), "Done.".into()))
     }).unwrap();
 }
 
@@ -139,9 +139,9 @@ fn a_copy_from_before_the_record_that_is_an_earlier_shipped_version_is_unchanged
     provision(&folder, &shipped).unwrap();
     assert_eq!(read(folder.join(RICH)), yours);
     assert_eq!(check(&folder, &shipped).unwrap(), vec![RICH]);
-    accept(&folder, &shipped, |updates| {
-        assert_eq!(updates[0].started_from, third, "the starting point is the nearest shipped version");
-        Ok((vec![current_rich.clone()], "Done.".into()))
+    accept(&folder, &shipped, RICH, |update| {
+        assert_eq!(update.started_from, third, "the starting point is the nearest shipped version");
+        Ok((current_rich.clone(), "Done.".into()))
     }).unwrap();
 }
 
