@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // RichDoctor's window, walked in WebKit (the engine its webview uses) from the real files in
 // crates/richdoctor/ui, with the app's commands and events stood in for by a scripted backend.
-// It drives round 39's journey the way a person does and asserts each step, and runs the RichOS
+// It drives round 39's journey and round 40's screenshot flow the way a person does and asserts
+// each step, and runs the RichOS
 // app's own contrast probe (ui/tests/lib/contrast.js, the walk its contrast suite runs) on every
 // state in both themes: WCAG AA is a floor, computed, never eyeballed.
 //
@@ -77,12 +78,27 @@ function backend(state) {
         window.__calls.push([cmd, args || {}]);
         const R = S.replies[cmd];
         if (cmd === "start" && !(args.description || "").trim()) return Promise.reject("Describe what went wrong first.");
+        // Round 40's image commands answer from what they are given, as the app does.
+        if (cmd === "inspect_image") {
+          const head = atob(args.imageBase64.slice(0, 16));
+          return Promise.resolve(head.startsWith("\x89PNG") ? { ok: true, kind: "png", width: 96, height: 48 } : { ok: false, problem: "type" });
+        }
+        if (cmd === "prepare_image") return Promise.resolve({ url: "data:image/png;base64," + args.imageBase64, b64: args.imageBase64, width: 96, height: 48, bytes: Math.round(args.imageBase64.length * 3 / 4) });
+        if (cmd === "use_image" || cmd === "replace_image") {
+          window.__shots = (window.__shots || 0) + (cmd === "use_image" ? 1 : 0);
+          const n = cmd === "use_image" ? window.__shots : args.index + 1;
+          return Promise.resolve({ url: "data:image/png;base64," + args.imageBase64, n: n, name: "screenshot-" + n + ".png", width: 96, height: 48, bytes: Math.round(args.imageBase64.length * 3 / 4), covers: args.covers, reduced: !!args.reduced });
+        }
         return R === undefined ? Promise.resolve(null) : Promise.resolve(JSON.parse(JSON.stringify(R)));
       },
     },
   };
 }
 
+// Round 40: a real PNG (the shared fixture RichDoctor's encoder writes) as every screenshot shown.
+const PNG = fs.readFileSync(path.join(APP, "..", "mobile", "service", "report", "fixtures", "client", "accept-final.png"));
+const PNG_URL = "data:image/png;base64," + PNG.toString("base64");
+const SHOT = (n, extra) => Object.assign({ n, name: "screenshot-" + n + ".png", width: 96, height: 48, bytes: 581000 + n, covers: n === 1 ? 2 : 0, reduced: false, url: PNG_URL }, extra || {});
 const BOOT = { installation: "Found RichOS 1.2.1 (nightly 68) in Applications.", ambiguous: false, claude_found: true, resume: null, login: { on: true, denied: false }, mail: true, support: "support@richos.ceo", destination_ok: true };
 const SAVED = { rows: [
   { id: "d-0123456789ab", title: "RichOS 1.2.1 closes before its window opens", date: "October 22, 2026", left: "sent at 8:52 AM", state: "submitted", state_words: "Report submitted", action: "view", issue_url: "https://github.com/WebDevBooster/richos/issues/412" },
@@ -111,7 +127,7 @@ async function run() {
       const errors = [];
       page.on("pageerror", (e) => errors.push(String(e)));
       page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
-      await page.addInitScript(backend, JSON.stringify({ replies: { boot: BOOT, review: REVIEW, saved: SAVED, excerpt: Object.assign({}, REVIEW, { excerpts: [Object.assign({}, REVIEW.excerpts[0]), Object.assign({}, REVIEW.excerpts[1], { removed: true })] }), mail_available: true, delivery: DELIVERY("unconfirmed", { checked_at: "9:47 AM" }) } }));
+      await page.addInitScript(backend, JSON.stringify({ replies: { boot: BOOT, review: REVIEW, saved: SAVED, excerpt: Object.assign({}, REVIEW, { excerpts: [Object.assign({}, REVIEW.excerpts[0]), Object.assign({}, REVIEW.excerpts[1], { removed: true })] }), mail_available: true, delivery: DELIVERY("unconfirmed", { checked_at: "9:47 AM" }), images: [], email_plan: { count: 0, bytes: 0, parts: 1, names: [] }, cancel_upload: true } }));
       await page.goto("file://" + path.join(dir, "index.html"));
       await page.evaluate(() => document.fonts.ready);
       const T = (sel) => page.locator(sel).first().innerText();
@@ -150,6 +166,36 @@ async function run() {
       await emit({ t: "me", text: "Earlier today" });
       await emit({ t: "progress", text: "Checking what happened when RichOS last opened…" });
       await settle();
+      // Round 40 §1 to §3: add screenshots in the conversation (the Mac's open panel, two files)
+      check(`${theme} conversation: Add screenshots with its glyph`, (await T("#conv-image")) === "Add screenshots" && (await page.locator("#conv-image svg").count()) === 1);
+      await page.setInputFiles("#img-file", [
+        { name: "Screenshot 2026-10-22 at 8.43.17 AM.png", mimeType: "image/png", buffer: PNG },
+        { name: "IMG_4471.HEIC", mimeType: "image/heic", buffer: Buffer.from("ftypheic not an image") },
+      ]);
+      await page.waitForSelector("#sheet-image:not([hidden]) #img-cover:not([hidden])");
+      check(`${theme} image: the queue strip numbers both files`, (await page.locator("#img-queue button").count()) === 2);
+      check(`${theme} image: step one asks for covers`, (await T("#img-h")) === "Screenshot 1 of 2: cover anything private" && (await T("#img-p")).includes("before Claude sees it"));
+      await page.waitForFunction(() => document.activeElement && document.activeElement.id === "img-stage", null, { timeout: 2000 }).catch(() => {});
+      await page.focus("#img-stage");
+      await page.keyboard.press("c");
+      check(`${theme} image: C adds a cover with its keyboard label`, (await page.locator("#img-stage .cover").count()) === 1);
+      await contrast(page, "image-cover", theme);
+      await page.click('[data-act="img-next"]');
+      await page.waitForSelector("#img-check:not([hidden])");
+      check(`${theme} image: step two shows the exact final image and its neutral name`, (await T("#img-final-meta")).startsWith("screenshot-1.png") && (await T("#img-final-meta")).includes("1 area covered") && (await T("#img-final-meta")).includes("metadata removed"));
+      check(`${theme} image: the shown image is the app's final bytes`, (await page.getAttribute("#img-final", "src")).startsWith("data:image/png;base64,"));
+      await contrast(page, "image-check", theme);
+      await page.click('[data-act="img-use"]');
+      await page.waitForSelector("#img-problem:not([hidden])");
+      check(`${theme} image: a HEIC is explained in place`, (await T("#img-problem-text")).includes("IMG_4471.HEIC is not a PNG or JPEG image.") && (await T("#img-foot")).includes("Leave it out"));
+      check(`${theme} image: use_image got the approved bytes and the cover count`, (await calls()).some((c) => c[0] === "use_image" && c[1].covers === 1));
+      await contrast(page, "image-problem", theme);
+      await page.click('[data-act="img-skip"]');
+      await settle();
+      check(`${theme} image: the sheet closes after the last file`, !(await visible("#sheet-image")));
+      check(`${theme} conversation: the person's line with its thumbnail`, (await T("#log")).includes("1 screenshot added (1 area covered)") && (await page.locator("#log .me .thumbs img").count()) === 1);
+      check(`${theme} conversation: the refused file is named, nothing else changed`, (await T("#log .notadded")).includes("IMG_4471.HEIC (not a PNG or JPEG)"));
+      await contrast(page, "conversation-shots", theme);
       check(`${theme} conversation: progress names the action`, (await T("#log .progress-wrap")).includes("Checking what happened when RichOS last opened"));
       await contrast(page, "progress", theme);
       await emit({ t: "done", text: "Checked what happened when RichOS last opened" });
@@ -173,7 +219,7 @@ async function run() {
       await emit({ t: "review" });
       await page.waitForSelector("#s-review:not([hidden])");
       check(`${theme} review: the title`, (await T("#rv-title")) === REVIEW.title);
-      check(`${theme} review: the public destination beside Send`, (await T("#s-review .pub")).includes("This report will be public on GitHub. Review it before sending."));
+      check(`${theme} review: the public destination beside Send`, (await T("#s-review .pub")).includes("This report will be public on GitHub. Review it before sending.") && (await T("#s-review .pub")).includes("No screenshots are included."));
       check(`${theme} review: the excerpt disclosure is collapsed with its count`, (await page.getAttribute(".disc", "aria-expanded")) === "false" && (await T(".disc .count")).startsWith("2 excerpts"));
       check(`${theme} review: the footer is shown as sent`, (await T("#rv-sections")).includes("Sent with RichDoctor 1.0 · Report ID RD-7K3M-Q9VX"));
       check(`${theme} review: Send report enabled with no problems`, !(await page.locator("#rv-send").isDisabled()));
@@ -199,18 +245,44 @@ async function run() {
       check(`${theme} revision during uncertainty: Editing a copy, Save edit, no Send`, (await T("#rv-banner")).includes("Editing a copy.") && !(await visible("#rv-send")) && (await visible("#rv-save-edit")));
       await contrast(page, "review-uncertain", theme);
 
+      // Round 40 §4: the review with its screenshots and both destinations
+      await page.evaluate((v) => { window.__TAURI__.core.invoke = ((orig) => function (c, a) { if (c === "review") return Promise.resolve(v.review); if (c === "images") return Promise.resolve(v.images); return orig(c, a); })(window.__TAURI__.core.invoke); }, { review: Object.assign({}, REVIEW, { shots: [SHOT(1), SHOT(2)] }), images: [SHOT(1), SHOT(2)] });
+      await emit({ t: "review" });
+      await page.waitForSelector("#rv-sections .shot");
+      check(`${theme} review: the Screenshots section lists both, numbered, with Inspect and Remove`, (await page.locator("#rv-sections .shot").count()) === 2 && (await T("#rv-sections .shot")).includes("screenshot-1.png") && (await page.locator('#rv-sections [aria-label="Inspect screenshot 2"]').count()) === 1);
+      check(`${theme} review: the facts line and the private destination`, (await T(".shots-sum")).startsWith("2 screenshots, 1.2 MB of 25 MB.") && (await T("#rv-pub")).includes("Screenshots are shared privately with the RichOS support team."));
+      check(`${theme} review: the footer names the numbered links`, (await T("#rv-sections")).includes("Footer, included as sent: Screenshots: 2, numbered links only the RichOS support team can open · Sent with RichDoctor 1.0"));
+      await contrast(page, "review-shots", theme);
+      await page.click('#rv-sections [data-act="inspect-shot"][data-n="2"]');
+      await page.waitForSelector("#img-check:not([hidden])");
+      check(`${theme} inspect: read-only, exactly as it will be shared`, (await T("#img-h")) === "Screenshot 2, exactly as it will be shared" && (await T("#img-foot")).includes("Edit covers") && (await T("#img-foot")).includes("Done"));
+      await page.click('[data-act="img-done"]');
+      await settle();
+      await page.evaluate((v) => { window.__TAURI__.core.invoke = ((orig) => function (c, a) { if (c === "review") return Promise.resolve(v); return orig(c, a); })(window.__TAURI__.core.invoke); }, Object.assign({}, REVIEW, { mode: "revision-upload", old_id: "RD-7K3M-Q9VX", received: 1, attempt: 2, changed: false, shots: [SHOT(1), SHOT(2)] }));
+      await emit({ t: "review" });
+      await page.waitForSelector("#rv-banner .note");
+      check(`${theme} review after an interrupted send: unchanged resumes`, (await T("#rv-banner")).includes("After an interrupted send.") && (await T("#rv-banner")).includes("1 screenshot of 2 already reached the support service"));
+      await contrast(page, "review-upload", theme);
+
       // 4. Delivery (round 39 §5)
       for (const [kind, extra, want] of [
         ["sending", {}, "Sending your report…"],
-        ["sending-screenshots", { done: 1, total: 2 }, "Sending screenshots"],
+        ["uploading", { done: 1, total: 2 }, "Sending screenshots…"],
         ["created-checking", { issue_url: "https://github.com/WebDevBooster/richos/issues/412", confirmed: 1, expected: 2 }, "Report created; checking screenshots"],
+        ["created", { issue_url: "https://github.com/WebDevBooster/richos/issues/412", confirmed: 1, expected: 2 }, "Report created; checking screenshots"],
+        ["notsent-upload", { reason: "Screenshot 2 did not finish uploading.", review: false, try_again: true, upload: true, item: "screenshot 2", toolong: false }, "Not sent yet"],
+        ["notsent-toolong", { reason: "Screenshot 2 did not finish uploading.", review: false, try_again: true, upload: true, item: "screenshot 2", toolong: true }, "Not sent yet"],
         ["checking", {}, "Checking whether your report was received"],
         ["submitted", { issue_url: "https://github.com/WebDevBooster/richos/issues/412" }, "Report submitted"],
         ["notsent", { reason: "Your Mac is not connected to the internet. Try again when you are online.", review: false, try_again: true }, "Not sent yet"],
         ["notsent", { reason: "The reporting service did not accept the report: in the startup log excerpt, one line looks like it contains a password.", review: true, try_again: false }, "Not sent yet"],
         ["unconfirmed", { checked_at: "9:41 AM" }, "Delivery could not be confirmed"],
       ]) {
-        await emit({ t: "delivery", view: DELIVERY(kind, extra) });
+        const base = kind.replace(/-(upload|toolong)$/, "");
+        const shots = ["uploading", "created", "created-checking", "notsent-upload", "notsent-toolong", "submitted"].includes(kind) ? [SHOT(1), SHOT(2)] : [];
+        const rows = kind === "uploading" ? [{ id: "1", sent: 581001, total: 581001, st: "earlier" }, { id: "2", sent: 371841, total: 581002, st: "live" }]
+          : kind.startsWith("notsent-") ? [{ id: "1", sent: 581001, total: 581001, st: "ok" }, { id: "2", sent: 371841, total: 581002, st: "stopped" }] : [];
+        await emit({ t: "delivery", view: Object.assign(DELIVERY(base, extra), { shots, rows }) });
         await settle();
         const label = kind + (extra.review ? "-rejected" : "");
         check(`${theme} result ${label}: heading`, (await T("#result-body h1")) === want);
@@ -219,10 +291,33 @@ async function run() {
         if (kind === "unconfirmed") check(`${theme} result unconfirmed: Check status, no Send or Try again`, foot.includes("Check status") && !foot.includes("Send report") && !foot.includes("Try again"));
         if (kind === "notsent" && !extra.review) check(`${theme} result notsent: the observed reason and Try again`, (await T("#result-body .why")).startsWith("Your Mac is not connected") && foot.includes("Try again"));
         if (kind === "notsent" && extra.review) check(`${theme} result rejected: Review report instead of Try again`, foot.includes("Review report") && !foot.includes("Try again"));
-        if (kind === "created-checking") check(`${theme} result created-checking: the real link, Check status, no Send`, (await T("#result-body .issue")) === "github.com/WebDevBooster/richos/issues/412" && foot.includes("Check status") && !foot.includes("Send report"));
-        if (kind === "submitted") check(`${theme} result submitted: the public link as its address`, (await T("#result-body .issue")) === "github.com/WebDevBooster/richos/issues/412");
+        if (kind === "created-checking") check(`${theme} result created-checking: the real link, no second report, no Send`, (await T("#result-body .issue")) === "github.com/WebDevBooster/richos/issues/412" && (await T("#result-body")).includes("No second report is created.") && !foot.includes("Send report"));
+        if (kind === "created") check(`${theme} result created: 1 of 2 confirmed, Check status, no Send`, (await T("#result-body .kv")).includes("1 of 2 confirmed") && (await T("#created-rows")).includes("Not confirmed") && foot.includes("Check status") && !foot.includes("Send report"));
+        if (kind === "submitted") check(`${theme} result submitted: the public link and the receipt count`, (await T("#result-body .issue")) === "github.com/WebDevBooster/richos/issues/412" && (await T("#result-body .kv")).includes("2 screenshots received"));
+        if (kind === "uploading") check(`${theme} result uploading: received earlier, a real percentage, Cancel`, (await T("#up-rows")).includes("Received earlier") && (await T("#up-rows")).includes("64%") && (await T("#up-sum")) === "1 screenshot of 2 received · sending screenshot 2" && foot.includes("Cancel"));
+        if (kind === "notsent-upload") check(`${theme} result interrupted upload: names the image, Resume sending, Review screenshots`, (await T("#result-body .why")).startsWith("Sending stopped while screenshot 2 of 2 was on its way") && foot.includes("Resume sending") && foot.includes("Review screenshots") && !foot.includes("Try again") && (await T("#ns-rows")).includes("Stopped"));
+        if (kind === "notsent-toolong") check(`${theme} result past five minutes: Reduce screenshot 2`, (await T("#result-body .why")).startsWith("Screenshot 2 of 2 did not finish within five minutes") && (await visible('[data-act="reduce-shot"]')));
         await contrast(page, "result-" + label, theme);
       }
+      // Cancel during Sending screenshots: back to the review, everything kept (round 40 §5)
+      await emit({ t: "delivery", view: Object.assign(DELIVERY("uploading", { done: 0, total: 2 }), { shots: [SHOT(1), SHOT(2)], rows: [{ id: "1", sent: 0, total: 581001, st: "live" }, { id: "2", sent: 0, total: 581002, st: "wait" }] }) });
+      await settle();
+      await page.click('#result-foot [data-act="cancel-upload"]');
+      await settle();
+      check(`${theme} cancel upload: asks the app at once`, (await calls()).some((c) => c[0] === "cancel_upload"));
+      await emit({ t: "delivery", view: Object.assign(DELIVERY("notsent", { reason: "You canceled sending.", review: false, try_again: true, upload: true, canceled: true }), { shots: [SHOT(1), SHOT(2)] }) });
+      await page.waitForSelector("#s-review:not([hidden])");
+      check(`${theme} cancel upload: the review returns with the toast`, (await T("#toast")).startsWith("Canceled. Your report and screenshots are kept on this Mac"));
+      // Email support above 10 MiB: two packages, or Mail anyway (round 40 §7)
+      await page.evaluate(() => { window.__TAURI__.core.invoke = ((orig) => function (c, a) { if (c === "email_plan") return Promise.resolve({ count: 6, bytes: 14200000, parts: 2, names: ["screenshot-1.png", "screenshot-2.png", "screenshot-3.png", "screenshot-4.png", "screenshot-5.png", "screenshot-6.png"] }); return orig(c, a); })(window.__TAURI__.core.invoke); });
+      await emit({ t: "delivery", view: DELIVERY("unconfirmed", { checked_at: "9:41 AM" }) });
+      await settle();
+      await page.click('#result-foot [data-act="email"]');
+      await page.waitForSelector("#sheet-email:not([hidden])");
+      check(`${theme} email above 10 MB: two packages, or Mail anyway`, (await T("#em-body")).includes("Your screenshots total 14.2 MB.") && (await T("#em-foot")).includes("Save 2 packages") && (await T("#em-foot")).includes("Open in Mail anyway"));
+      await contrast(page, "email-packages", theme);
+      await page.keyboard.press("Escape");
+      await page.evaluate(() => { window.__TAURI__.core.invoke = ((orig) => function (c, a) { if (c === "email_plan") return Promise.resolve({ count: 0, bytes: 0, parts: 1, names: [] }); return orig(c, a); })(window.__TAURI__.core.invoke); });
       await page.click('#result-foot [data-act="email"]');
       await page.waitForSelector("#sheet-email:not([hidden])");
       check(`${theme} email: the address and that the user sends it`, (await T("#em-body")).includes("support@richos.ceo") && (await T("#em-body")).includes("You read it and send it yourself"));

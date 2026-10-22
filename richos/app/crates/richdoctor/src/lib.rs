@@ -65,7 +65,7 @@ fn run(store: Store) {
         .invoke_handler(tauri::generate_handler![
             boot, start, answer, cancel, retry, prepare, review, edit, excerpt, save_later, send_report, try_again, check_status, delivery, saved,
             open_saved, resume_pending, delete_saved, set_login, mail_available, open_mail, copy_report, copy_address, save_report_file, open_issue,
-            use_image, remove_image, images, close_help
+            use_image, remove_image, images, close_help, inspect_image, prepare_image, replace_image, cancel_upload, email_plan, note_added
         ])
         .setup(move |app| {
             app.set_activation_policy(ActivationPolicy::Accessory);
@@ -166,6 +166,9 @@ fn open_window(app: &AppHandle, screen: Option<&str>) {
         .min_inner_size(600.0, 560.0)
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
+        // Round 40 §1: screenshots dropped on the window reach the page as files (Tauri's own
+        // drop handler would take them first and hand over only paths, which the page may not read).
+        .disable_drag_drop_handler()
         .build();
     match built {
         Ok(w) => {
@@ -360,11 +363,12 @@ fn mail_available() -> bool {
 /// sync command). Above 10 MiB of screenshots it answers "parts": the window offers the saved,
 /// numbered package instead (PRD §7).
 #[tauri::command]
-fn open_mail(engine: State<Engine>) -> Result<(), String> {
+fn open_mail(engine: State<Engine>, anyway: Option<bool>) -> Result<(), String> {
     let (id, text) = engine.exact_text().ok_or("There is no reviewed report yet.")?;
     let files = engine.image_files();
     let sizes: Vec<u64> = files.iter().map(|(_, b)| b.len() as u64).collect();
-    if richdoctor_core::email::needs_parts(&sizes) {
+    // Round 40 §7: above 10 MiB the sheet offers the numbered packages, and Open in Mail anyway.
+    if richdoctor_core::email::needs_parts(&sizes) && !anyway.unwrap_or(false) {
         return Err("parts".into());
     }
     let dir = engine.env().store.root().join("mail").join(&id);
@@ -419,8 +423,44 @@ fn open_issue(engine: State<Engine>, url: String) -> Result<(), String> {
 
 /// Use this image: returns the final bytes (a data URL), which are what the window shows.
 #[tauri::command]
-fn use_image(engine: State<Engine>, image_base64: String, covers: u32) -> Result<String, String> {
-    engine.use_image(&image_base64, covers)
+fn use_image(engine: State<Engine>, image_base64: String, covers: u32, reduced: Option<bool>) -> Result<Value, String> {
+    engine.use_image(&image_base64, covers, reduced.unwrap_or(false))
+}
+
+/// The header-only check before the window decodes a file (round 40 §3).
+#[tauri::command]
+fn inspect_image(engine: State<Engine>, image_base64: String) -> Value {
+    engine.inspect_image(&image_base64)
+}
+
+/// Check the exact image: the final bytes, made and returned, not yet kept.
+#[tauri::command]
+fn prepare_image(engine: State<Engine>, image_base64: String) -> Result<Value, String> {
+    engine.prepare_image(&image_base64)
+}
+
+/// Edit covers or Reduce: a fresh approval of screenshot `index`.
+#[tauri::command]
+fn replace_image(engine: State<Engine>, index: usize, image_base64: String, covers: u32, reduced: Option<bool>) -> Result<Value, String> {
+    engine.replace_image(index, &image_base64, covers, reduced.unwrap_or(false))
+}
+
+/// Cancel during Sending screenshots.
+#[tauri::command]
+fn cancel_upload(engine: State<Engine>) -> bool {
+    engine.cancel_upload()
+}
+
+/// What Email support would carry, for its sheet.
+#[tauri::command]
+fn email_plan(engine: State<Engine>) -> Value {
+    engine.email_plan()
+}
+
+/// The conversation's "3 screenshots added (5 areas covered)" line.
+#[tauri::command]
+fn note_added(engine: State<Engine>, count: u32, covers: u32) {
+    engine.note_added(count, covers)
 }
 
 #[tauri::command]
@@ -430,7 +470,7 @@ fn remove_image(engine: State<Engine>, index: usize) -> Result<(), String> {
 
 /// The approved screenshots' final bytes, in order.
 #[tauri::command]
-fn images(engine: State<Engine>) -> Vec<String> {
+fn images(engine: State<Engine>) -> Vec<Value> {
     engine.images()
 }
 

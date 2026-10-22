@@ -385,6 +385,17 @@ pub fn user_message(text: &str, picture: Option<&richos_core::bug_report::Pictur
     richos_core::bug_report::writer_input(text, picture)
 }
 
+/// The same stream-json user message with every screenshot approved since the last one (round 40:
+/// several are added at a time), images first, then the text.
+pub fn user_message_with(text: &str, pictures: &[richos_core::bug_report::Picture]) -> String {
+    let mut content: Vec<serde_json::Value> = pictures
+        .iter()
+        .map(|p| serde_json::json!({ "type": "image", "source": { "type": "base64", "media_type": p.media_type, "data": p.base64 } }))
+        .collect();
+    content.push(serde_json::json!({ "type": "text", "text": text }));
+    format!("{}\n", serde_json::json!({ "type": "user", "message": { "role": "user", "content": content } }))
+}
+
 // ---------------------------------------------------------------------------------------
 // THE ONE OWNED PROCESS
 // ---------------------------------------------------------------------------------------

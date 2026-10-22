@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <!--
-  RichDoctor's help window: round 39 (richos-hq design/mockups/rounds/round-39/), built as drawn,
-  copy included. The faces and tokens are the RichOS app's own files (fonts/fonts.css and
+  RichDoctor's help window: round 39 (richos-hq design/mockups/rounds/round-39/) and round 40's
+  screenshot flow (round-40/), built as drawn, copy included. The faces and tokens are the RichOS app's own files (fonts/fonts.css and
   tokens.css, copied from richos/app/ui by crates/richdoctor/build.rs); doctor.css holds the round's
   layouts; doctor.js drives the screens from the app's commands and events.
 -->
@@ -59,7 +59,8 @@
         </div>
         <div class="foot">
           <button class="btn link" data-act="cancel-inv" id="conv-cancel">Cancel</button>
-          <button class="btn link" data-act="add-image" id="conv-image">Add a screenshot</button>
+          <button class="btn link" data-act="add-shots" id="conv-image" aria-describedby="conv-image-help"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M3 14l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg><span>Add screenshots</span></button>
+          <span id="conv-image-help" hidden>PNG or JPEG files you have already made. You check each one before it is used. You can also drop or paste them here.</span>
           <div class="grow"></div>
           <button class="btn" data-act="prepare-now" id="conv-prepare">Prepare report now</button>
           <button class="btn primary" data-act="to-review" id="conv-review" hidden>Review report</button>
@@ -72,14 +73,14 @@
           <div id="unsaved-slot-review"></div>
           <div id="rv-banner"></div>
           <h1 id="rv-h" style="margin-bottom:6px">Review your report</h1>
-          <p class="soft" style="margin-bottom:18px">This is the exact text that will be sent. Change or remove anything. Private details RichDoctor recognized were already removed; it cannot know every private name or fact, so read it once.</p>
+          <p class="soft" style="margin-bottom:18px">This is the exact text that will be sent, and every screenshot exactly as it will be shared. Change or remove anything. Private details RichDoctor recognized were already removed; it cannot know every private name or fact, so read it once.</p>
           <div id="rv-notes"></div>
           <div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="soft">Title</span><button class="btn link" id="rv-exact-toggle" aria-pressed="false" data-act="toggle-exact">Show as it will be sent</button></div>
           <div class="rv-title" id="rv-title" contenteditable="true" spellcheck="false" aria-label="Report title, editable"></div>
           <div id="rv-sections"></div>
           <div id="rv-exact" class="well" hidden><div class="exact" id="rv-exact-text"></div></div>
           <div class="spacer"></div>
-          <div class="well pub"><svg viewBox="0 0 20 20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M10 1.8a8.2 8.2 0 1 0 0 16.4 8.2 8.2 0 0 0 0-16.4zM1.8 10h16.4M10 1.8c2.6 2.4 3.6 5.1 3.6 8.2s-1 5.8-3.6 8.2c-2.6-2.4-3.6-5.1-3.6-8.2s1-5.8 3.6-8.2z"/></svg><div><p><b>This report will be public on GitHub. Review it before sending.</b></p><p>It goes to the RichOS team's public issue tracker. No GitHub account is needed. Send report approves this exact text and nothing else.</p></div></div>
+          <div class="well pub" id="rv-pub"></div>
         </div>
         <div class="foot" id="rv-foot">
           <button class="btn link" data-act="back-conv" id="rv-back">Back</button>
@@ -111,16 +112,30 @@
       </section>
 
       <!-- sheets -->
+      <!-- dropping files on the window -->
+      <div id="drop" hidden aria-hidden="true"><div class="zone"><svg viewBox="0 0 20 20" aria-hidden="true" class="big"><rect x="2.5" y="4" width="15" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M3 14l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg><p><b>Drop screenshots to add them</b></p><p class="soft">PNG or JPEG. You check each one before it is used.</p></div></div>
+      <!-- the Mac's own open panel: PNG or JPEG, several at a time -->
+      <input type="file" id="img-file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" multiple hidden>
+
+      <!-- the image review: one sheet, one image at a time, in two steps -->
       <div class="sheet-scrim" id="sheet-image" hidden>
         <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="img-h">
           <div class="sh-body">
-            <h2 id="img-h">Check this screenshot before Claude sees it</h2>
-            <p>Drag over anything private, such as names, email addresses, or file paths. Covers are solid: the covered areas are flattened into a new image and the original's metadata is removed. Claude can look at it to understand the problem. <b>When you send the report, this screenshot is shared privately with RichOS support; the public report shows only a count and a link for the support team.</b></p>
-            <div class="img-stage" id="img-stage" aria-label="Screenshot preview. Press C to add a cover." tabindex="0"><img id="img-src" alt="" draggable="false" style="display:block;width:100%;height:auto"></div>
-            <input type="file" id="img-file" accept="image/png,image/jpeg,image/heic,image/gif,image/tiff" hidden>
-            <div class="img-tools"><button class="btn" data-act="add-cover">Add a cover</button><span class="soft">Keyboard: <span class="kbd">C</span> adds a cover, arrow keys move it, <span class="kbd">Shift</span> + arrows resize it, <span class="kbd">Delete</span> removes it.</span></div>
+            <div class="queue" id="img-queue" role="group" aria-label="Screenshots being added"></div>
+            <h2 id="img-h"></h2>
+            <p id="img-p"></p>
+            <div id="img-cover" hidden>
+              <div class="img-stage" id="img-stage" aria-label="Screenshot preview. Press C to add a cover." tabindex="0"><img id="img-work" alt="" draggable="false"></div>
+              <div class="img-tools"><button class="btn" data-act="add-cover">Add a cover</button><span class="soft">Keyboard: <span class="kbd">C</span> adds a cover, arrow keys move it, <span class="kbd">Shift</span> + arrows resize it, <span class="kbd">Delete</span> removes it.</span></div>
+            </div>
+            <div id="img-check" hidden>
+              <div class="final"><img id="img-final" alt=""></div>
+              <div class="final-meta"><span class="badge" id="img-final-n">1</span><p id="img-final-meta"></p></div>
+              <div id="img-fit"></div>
+            </div>
+            <div id="img-problem" class="problem" role="status" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M10 2.8l8 14H2z"/><path stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M10 8v4"/><circle cx="10" cy="14.3" r="1" fill="currentColor"/></svg><div id="img-problem-text"></div></div>
           </div>
-          <div class="sh-foot"><button class="btn link" data-act="remove-image">Remove image</button><div class="grow"></div><button class="btn" data-act="close-sheet">Cancel</button><button class="btn primary" data-act="use-image">Use this image</button></div>
+          <div class="sh-foot" id="img-foot"></div>
         </div>
       </div>
 
@@ -140,7 +155,7 @@
 
       <div class="sheet-scrim" id="sheet-save" hidden>
         <div class="sheet narrow" role="dialog" aria-modal="true" aria-labelledby="sv-h">
-          <div class="sh-body"><h2 id="sv-h">Save report and screenshots</h2><p>The reviewed report text, with its report ID, and every screenshot you approved, in a folder. The larger diagnostic packet on this Mac is not included. Attach them to an email to support@richos.ceo from any email account you use. macOS asks where to save it.</p></div>
+          <div class="sh-body"><h2 id="sv-h">Save report and screenshots</h2><p id="sv-p"></p></div>
           <div class="sh-foot"><div class="grow"></div><button class="btn" data-act="close-sheet">Cancel</button><button class="btn primary" data-act="confirm-save">Save…</button></div>
         </div>
       </div>

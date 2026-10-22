@@ -6,14 +6,19 @@
 //! connection lost after the request may have arrived). Register, status, complete and retire
 //! are bounded to 30 seconds (PRD §8). A screenshot upload instead stops after 60 seconds with no
 //! progress or 5 minutes in all, and says so ([`Transport::Stopped`]).
-use richdoctor_core::delivery::{Relay, Transport, REQUEST_BOUND, UPLOAD_CAP, UPLOAD_STALL};
+use richdoctor_core::delivery::{Relay, Transport, Upload, REQUEST_BOUND, UPLOAD_CAP, UPLOAD_STALL};
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub struct Https {
     client: reqwest::Client,
+    /// Set by the window's Cancel during Sending screenshots: an upload in progress ends within
+    /// a quarter second, and no further request that could create anything is made.
+    cancel: Arc<AtomicBool>,
+    /// Hears the per-image progress (round 40's list).
+    events: Option<Arc<dyn Fn(Upload) + Send + Sync>>,
 }
 
 impl Https {
@@ -28,7 +33,15 @@ impl Https {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Https { client })
+        Ok(Https { client, cancel: Arc::new(AtomicBool::new(false)), events: None })
+    }
+
+    /// The transport for one Send report: with the window's Cancel and its per-image listener.
+    pub fn watched(cancel: Arc<AtomicBool>, events: Arc<dyn Fn(Upload) + Send + Sync>) -> Result<Https, String> {
+        let mut h = Https::new()?;
+        h.cancel = cancel;
+        h.events = Some(events);
+        Ok(h)
     }
 }
 
@@ -48,6 +61,16 @@ async fn answer(result: Result<reqwest::Response, reqwest::Error>) -> Transport 
 }
 
 impl Relay for Https {
+    fn canceled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+
+    fn heard(&self, event: Upload) {
+        if let Some(f) = &self.events {
+            f(event);
+        }
+    }
+
     fn post(&self, url: &str, body: &Value) -> Transport {
         let request = self.client.post(url).timeout(REQUEST_BOUND).json(body);
         tauri::async_runtime::block_on(async move { answer(request.send().await).await })
@@ -70,11 +93,12 @@ impl Relay for Https {
             request = request.header(k.as_str(), v.as_str());
         }
         let started = Instant::now();
+        let cancel = self.cancel.clone();
         tauri::async_runtime::block_on(async move {
             let send = Box::pin(request.send());
             let mut send = send;
             loop {
-                let tick = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(1)));
+                let tick = Box::pin(tokio::time::sleep(std::time::Duration::from_millis(250)));
                 match futures_util::future::select(send, tick).await {
                     futures_util::future::Either::Left((result, _)) => {
                         progress(sent.load(Ordering::SeqCst));
@@ -85,6 +109,9 @@ impl Relay for Https {
                     }
                     futures_util::future::Either::Right((_, pending)) => {
                         progress(sent.load(Ordering::SeqCst));
+                        if cancel.load(Ordering::SeqCst) {
+                            return Transport::Stopped("you canceled sending.".into());
+                        }
                         let quiet = last.lock().unwrap().elapsed();
                         // Bytes are all handed over and the answer is awaited: that is waiting on the
                         // service, which the five-minute cap bounds, not a stalled upload.

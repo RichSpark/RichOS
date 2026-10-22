@@ -14,7 +14,7 @@
 //! process"); no CLI session is ever resumed.
 use richdoctor_core::adapter::{self, Failure, Next, Session, Spec, StreamEvent};
 use richdoctor_core::collect::{self, Category, Scope, Window};
-use richdoctor_core::delivery::{self, Destination, State};
+use richdoctor_core::delivery::{self, Destination, NotSent, State, Upload};
 use richdoctor_core::report::{self, Provenance, Report};
 use richdoctor_core::scrub::{self, Context};
 use richdoctor_core::store::{Delivery, Draft, Entry, SaveError, Shot, Stage, Store};
@@ -48,10 +48,35 @@ struct Inner {
     /// The message the last Claude operation sent, for Retry and Resume investigation.
     last_message: Option<String>,
     stopper: Option<adapter::Stopper>,
-    /// The newly approved screenshot for Claude's next message: (media type, base64).
-    picture: Option<(String, String)>,
+    /// The screenshots approved since Claude's last message, for its next one: (media type, base64).
+    pictures: Vec<(String, String)>,
     unsaved: Option<SaveError>,
+    /// The per-image list of the Send report in progress (round 40 §5), in manifest order.
+    upload: Vec<UploadRow>,
+    /// The Cancel of the Send report in progress.
+    cancel_upload: Option<Arc<AtomicBool>>,
+    /// Report created and screenshots unconfirmed: RichDoctor is still asking (up to 2 minutes).
+    confirming: bool,
 }
+
+/// One row of the per-image list: Waiting, a real percentage, Received, Received earlier, Stopped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UploadRow {
+    id: String,
+    sent: u64,
+    total: u64,
+    /// "wait", "live", "ok", "earlier", "stopped"
+    st: &'static str,
+}
+
+fn rows_json(rows: &[UploadRow]) -> Value {
+    Value::Array(rows.iter().map(|r| json!({"id": r.id, "sent": r.sent, "total": r.total, "st": r.st})).collect())
+}
+
+/// How long RichDoctor keeps asking whether the support team can open every screenshot once
+/// the report exists (round 40: "which takes up to two minutes"), and how often.
+const CONFIRM_FOR: Duration = Duration::from_secs(120);
+const CONFIRM_EVERY: Duration = Duration::from_secs(15);
 
 /// The fixed facts of this Mac and this run.
 pub struct Env {
@@ -86,7 +111,7 @@ fn ctx(env: &Env) -> Context {
 impl Engine {
     pub fn new(env: Env, emit: Emit) -> Engine {
         Engine {
-            inner: Arc::new(Mutex::new(Inner { draft: None, pending: Pending::None, operation: 0, last_message: None, stopper: None, picture: None, unsaved: None })),
+            inner: Arc::new(Mutex::new(Inner { draft: None, pending: Pending::None, operation: 0, last_message: None, stopper: None, pictures: Vec::new(), unsaved: None, upload: Vec::new(), cancel_upload: None, confirming: false })),
             session: Arc::new(Mutex::new(None)),
             canceled: Arc::new(AtomicBool::new(false)),
             quiet: Arc::new(AtomicBool::new(false)),
@@ -183,7 +208,7 @@ impl Engine {
             inner.draft = Some(draft);
             inner.pending = Pending::None;
             inner.last_message = None;
-            inner.picture = None;
+            inner.pictures.clear();
             inner.operation = 0;
         }
         self.canceled.store(false, Ordering::SeqCst);
@@ -409,10 +434,10 @@ impl Engine {
             let mut inner = self.inner.lock().unwrap();
             inner.operation += 1;
             inner.last_message = Some(message.to_string());
-            (inner.operation, inner.picture.take())
+            (inner.operation, std::mem::take(&mut inner.pictures))
         };
         mcp::write_operation(&dir, op).ok();
-        let picture = picture.map(|(media_type, base64)| richos_core::bug_report::Picture { media_type, base64 });
+        let pictures: Vec<richos_core::bug_report::Picture> = picture.into_iter().map(|(media_type, base64)| richos_core::bug_report::Picture { media_type, base64 }).collect();
         let mut slot = self.session.lock().unwrap();
         let fresh = slot.is_none();
         if fresh {
@@ -428,7 +453,7 @@ impl Engine {
         }
         let session = slot.as_mut().unwrap();
         let text = if fresh && op > 1 { format!("{}\n\n{message}", self.replay()) } else { message.to_string() };
-        let line = adapter::user_message(&text, picture.as_ref());
+        let line = adapter::user_message_with(&text, &pictures);
         let sent = if fresh { session.begin(&line, Duration::from_secs(30)) } else { session.send(&line).map_err(|e| (Failure::Ended, e.to_string())) };
         if let Err((f, _)) = sent {
             *slot = None;
@@ -672,7 +697,41 @@ impl Engine {
         let inner = self.inner.lock().unwrap();
         let Some(d) = inner.draft.as_ref() else { return Value::Null };
         let Some(r) = d.report.as_ref() else { return Value::Null };
-        review_view(d, r)
+        let mut v = review_view(d, r);
+        let facts = self.shot_facts(d);
+        let total: u64 = facts.iter().filter_map(|f| f["bytes"].as_u64()).sum();
+        v["shots"] = Value::Array(facts);
+        v["shots_bytes"] = json!(total);
+        if let Some(del) = &d.delivery {
+            v["received"] = json!(del.stored.len());
+            v["attempt"] = json!(del.approved.manifest.len());
+            v["changed"] = json!(!self.unchanged(d));
+        }
+        v
+    }
+
+    /// Each approved screenshot's facts, read from its saved bytes: number, neutral name, size,
+    /// dimensions, covers, whether it was reduced to fit.
+    fn shot_facts(&self, d: &Draft) -> Vec<Value> {
+        use richdoctor_core::image_profile::Entry;
+        d.screenshots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                let bytes = self.env.store.shot_bytes(&d.id, s)?;
+                let e = Entry::of(i as u32 + 1, &bytes).ok()?;
+                Some(json!({"n": i + 1, "name": e.filename, "width": e.width, "height": e.height, "bytes": e.bytes, "covers": s.covers, "reduced": s.reduced}))
+            })
+            .collect()
+    }
+
+    /// Whether the current report and screenshots are exactly what was approved under the
+    /// earlier ID (round 40 §6: unchanged, Send report resumes; changed, it is a revision).
+    fn unchanged(&self, d: &Draft) -> bool {
+        let (Some(del), Some(r)) = (&d.delivery, &d.report) else { return false };
+        let Ok(manifest) = self.env.store.manifest(d) else { return false };
+        let (title, body) = r.render();
+        delivery::content_sha256(&title, &body, &manifest) == del.approved.content_sha256
     }
 
     pub fn edit(&self, section: &str, text: &str) -> Result<Value, String> {
@@ -776,6 +835,14 @@ impl Engine {
                 Some(del) if !del.state.permits_revision() => {
                     return Err("The earlier report may already have reached the team; this edit cannot be sent until that is known.".into());
                 }
+                Some(del) if del.state.permits_try_again() && self.unchanged(d) => {
+                    // Round 40 §6: "Send this report unchanged and RichDoctor resumes with the
+                    // missing screenshots" under the same report ID and receipt.
+                    let approved = del.approved.clone();
+                    let this = self.clone();
+                    std::thread::spawn(move || this.deliver(approved, dest, true));
+                    return Ok(());
+                }
                 Some(del) => Some((del.approved.clone(), del.completion_attempted)),
                 None => None,
             }
@@ -839,7 +906,7 @@ impl Engine {
         let (title, body) = r.render();
         let approved = delivery::approve(&r.report_id, &title, &body, manifest, &dest.relay, util::now_millis(), &self.env.store.installation_id())
             .map_err(|p| p.iter().map(|p| format!("{}: {}", p.item, p.detail)).collect::<Vec<_>>().join(" "))?;
-        d.delivery = Some(Delivery { approved: approved.clone(), state: State::Sending, completion_attempted: false });
+        d.delivery = Some(Delivery { approved: approved.clone(), state: State::Sending, completion_attempted: false, stored: Vec::new() });
         d.stage = Stage::Approved;
         d.left = "approved".into();
         if let Err(e) = self.env.store.save(d, util::now_millis()) {
@@ -861,11 +928,16 @@ impl Engine {
             }
             del.state = state.clone();
         }
+        if matches!(state, State::NotSent { why: NotSent::UploadStopped { .. } | NotSent::Canceled, .. }) {
+            for row in inner.upload.iter_mut().filter(|r| r.st == "live") {
+                row.st = "stopped";
+            }
+        }
         if let Some(d) = inner.draft.as_mut() {
             d.left = left_words(state);
         }
         self.save(&mut inner);
-        let view = inner.draft.as_ref().map(delivery_view);
+        let view = self.view(&inner);
         drop(inner);
         if let Some(v) = view {
             self.send(json!({"t": "delivery", "view": v}));
@@ -873,7 +945,24 @@ impl Engine {
     }
 
     fn deliver(&self, approved: delivery::Approved, dest: Destination, retry: bool) {
-        let relay = match crate::relay::Https::new() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.cancel_upload = Some(cancel.clone());
+            inner.confirming = false;
+            let stored = inner.draft.as_ref().and_then(|d| d.delivery.as_ref()).map(|x| x.stored.clone()).unwrap_or_default();
+            inner.upload = approved
+                .manifest
+                .iter()
+                .map(|e| {
+                    let earlier = stored.contains(&e.attachment_id);
+                    UploadRow { id: e.attachment_id.clone(), sent: if earlier { e.bytes } else { 0 }, total: e.bytes, st: if earlier { "earlier" } else { "wait" } }
+                })
+                .collect();
+        }
+        let me = self.clone();
+        let listener: Arc<dyn Fn(Upload) + Send + Sync> = Arc::new(move |e| me.heard(e));
+        let relay = match crate::relay::Https::watched(cancel, listener) {
             Ok(r) => r,
             Err(_) => {
                 self.set_state(&State::NotSent { why: delivery::NotSent::Unreachable, at: util::now_millis() });
@@ -891,7 +980,119 @@ impl Engine {
             store.shot_bytes(&draft.id, shot).filter(|b| util::sha256_hex(b) == e.sha256)
         };
         let this = self.clone();
-        delivery::attempt(&approved, &loader, &dest, &relay, &util::now_millis, &|ms| std::thread::sleep(Duration::from_millis(ms)), &mut |s| this.set_state(s), retry);
+        let end = delivery::attempt(&approved, &loader, &dest, &relay, &util::now_millis, &|ms| std::thread::sleep(Duration::from_millis(ms)), &mut |s| this.set_state(s), retry);
+        self.inner.lock().unwrap().cancel_upload = None;
+        if matches!(end, State::CreatedCheckingImages { .. }) {
+            self.confirm_images(&approved, &dest, &relay);
+        }
+    }
+
+    /// Report created; checking screenshots: ask about the same report every 15 seconds for up
+    /// to two minutes. Never sends again; the last answer is what the person sees.
+    fn confirm_images(&self, approved: &delivery::Approved, dest: &Destination, relay: &crate::relay::Https) {
+        self.inner.lock().unwrap().confirming = true;
+        let started = Instant::now();
+        let mut current = self.inner.lock().unwrap().draft.as_ref().and_then(|d| d.delivery.as_ref()).map(|x| x.state.clone());
+        while started.elapsed() < CONFIRM_FOR {
+            std::thread::sleep(CONFIRM_EVERY);
+            let Some(now_state) = current.clone() else { break };
+            let now = util::now_millis();
+            let next = delivery::after_check(delivery::check(approved, dest, relay, now), &now_state, now);
+            let done = !matches!(next, State::CreatedCheckingImages { .. });
+            if done {
+                self.inner.lock().unwrap().confirming = false;
+            }
+            self.set_state(&next);
+            current = Some(next);
+            if done {
+                return;
+            }
+        }
+        self.inner.lock().unwrap().confirming = false;
+        if let Some(s) = current {
+            self.set_state(&s);
+        }
+    }
+
+    /// The per-image list hears the relay: the plan (received earlier), real bytes, receipts.
+    fn heard(&self, e: Upload) {
+        let mut inner = self.inner.lock().unwrap();
+        let mut keep = false;
+        match &e {
+            Upload::Plan { missing } => {
+                let mut stored = Vec::new();
+                for r in inner.upload.iter_mut() {
+                    if !missing.contains(&r.id) {
+                        r.st = if r.st == "ok" { "ok" } else { "earlier" };
+                        r.sent = r.total;
+                        stored.push(r.id.clone());
+                    }
+                }
+                if let Some(del) = inner.draft.as_mut().and_then(|d| d.delivery.as_mut()) {
+                    del.stored = stored;
+                }
+                keep = true;
+            }
+            Upload::Bytes { id, sent, total } => {
+                if let Some(r) = inner.upload.iter_mut().find(|r| &r.id == id) {
+                    r.sent = *sent.min(total);
+                    r.total = *total;
+                    if r.st == "wait" || r.st == "stopped" {
+                        r.st = "live";
+                    }
+                }
+            }
+            Upload::Received { id } => {
+                if let Some(r) = inner.upload.iter_mut().find(|r| &r.id == id) {
+                    r.st = "ok";
+                    r.sent = r.total;
+                }
+                if let Some(del) = inner.draft.as_mut().and_then(|d| d.delivery.as_mut()) {
+                    if !del.stored.contains(id) {
+                        del.stored.push(id.clone());
+                    }
+                }
+                keep = true;
+            }
+        }
+        if keep {
+            self.save(&mut inner);
+        }
+        let rows = rows_json(&inner.upload);
+        drop(inner);
+        self.send(json!({"t": "upload", "rows": rows}));
+    }
+
+    /// **CANCEL** during Sending screenshots (round 40): the upload in progress ends at once and
+    /// nothing that could create the public report is sent. Everything stays on this Mac.
+    pub fn cancel_upload(&self) -> bool {
+        let inner = self.inner.lock().unwrap();
+        let sending = inner.draft.as_ref().and_then(|d| d.delivery.as_ref()).is_some_and(|d| matches!(d.state, State::Sending | State::SendingScreenshots { .. }));
+        match (&inner.cancel_upload, sending) {
+            (Some(c), true) => {
+                c.store(true, Ordering::SeqCst);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The delivery view with the live per-image rows, when a send is in progress or just ended.
+    fn view(&self, inner: &Inner) -> Option<Value> {
+        let d = inner.draft.as_ref()?;
+        let mut v = delivery_view(d);
+        if v.is_null() {
+            return None;
+        }
+        if !inner.upload.is_empty() {
+            v["rows"] = rows_json(&inner.upload);
+        }
+        if v["kind"] == "created" && inner.confirming {
+            v["kind"] = json!("created-checking");
+        }
+        let facts = self.shot_facts(d);
+        v["shots"] = Value::Array(facts);
+        Some(v)
     }
 
     /// **TRY AGAIN**: the same approved report, ID, receipt, text and images. Only after a
@@ -942,15 +1143,83 @@ impl Engine {
     /// shared format profile), checked against the limits (10 images, 5 MiB each, 25 MiB
     /// together), kept with the draft (owner-only) and handed to Claude with the next message
     /// when Claude Code is helping. Returns the final bytes, which are what the window shows.
-    pub fn use_image(&self, image_base64: &str, covers: u32) -> Result<String, String> {
+    /// **BEFORE ANY DECODE** (PRD §6, round 40 §3): what the file is, from its header only. A
+    /// file that is not PNG or JPEG, cannot be read, or is over 40 megapixels is refused here,
+    /// before the window allocates its pixels.
+    pub fn inspect_image(&self, image_base64: &str) -> Value {
+        use richdoctor_core::image_profile as ip;
+        let Some(bytes) = util::base64_decode(image_base64) else { return json!({"ok": false, "problem": "unreadable"}) };
+        let kind = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") { "png" } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) { "jpeg" } else { return json!({"ok": false, "problem": "type"}) };
+        let Some((w, h)) = ip::declared(&bytes) else { return json!({"ok": false, "problem": "unreadable"}) };
+        if (w as u64) * (h as u64) > ip::MAX_PIXELS {
+            return json!({"ok": false, "problem": "pixels", "width": w, "height": h});
+        }
+        json!({"ok": true, "kind": kind, "width": w, "height": h, "bytes": bytes.len()})
+    }
+
+    /// **CHECK THE EXACT IMAGE** (round 40 §2): the covered working copy made final (new pixels,
+    /// no metadata, the shared profile) and returned, not yet kept. Over 5 MiB it answers
+    /// `too-large:<bytes>` so the window reduces it and asks again.
+    pub fn prepare_image(&self, image_base64: &str) -> Result<Value, String> {
+        use richdoctor_core::image_profile as ip;
+        let bytes = util::base64_decode(image_base64).ok_or("RichDoctor could not read that image.")?;
+        let (clean, shape) = ip::finalize(&bytes).map_err(|e| format!("That image cannot be used: {e}."))?;
+        if clean.len() as u64 > ip::MAX_IMAGE_BYTES {
+            return Err(format!("too-large:{}", clean.len()));
+        }
+        let b64 = util::base64_std(&clean);
+        Ok(json!({"url": format!("data:{};base64,{b64}", shape.kind.media_type()), "b64": b64, "width": shape.width, "height": shape.height, "bytes": clean.len()}))
+    }
+
+    /// What Email support would carry: the screenshots' total size and how many numbered parts
+    /// of at most 10 MiB they need (computed from the real sizes, PRD §7).
+    pub fn email_plan(&self) -> Value {
+        use richdoctor_core::email;
+        let files = self.image_files();
+        let sizes: Vec<u64> = files.iter().map(|(_, b)| b.len() as u64).collect();
+        let text = self.exact_text().map(|(_, t)| t.len() as u64).unwrap_or(0);
+        let parts = if email::needs_parts(&sizes) { email::packages(text, &sizes).map(|p| p.len()).unwrap_or(0) } else { 1 };
+        json!({"count": files.len(), "bytes": sizes.iter().sum::<u64>(), "parts": parts, "names": files.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()})
+    }
+
+    /// **USE THIS IMAGE** again for screenshot `index` (Edit covers, or Reduce after the
+    /// five-minute cap): a fresh approval replacing that one, same number.
+    pub fn replace_image(&self, index: usize, image_base64: &str, covers: u32, reduced: bool) -> Result<Value, String> {
+        {
+            let inner = self.inner.lock().unwrap();
+            let d = inner.draft.as_ref().ok_or("no report")?;
+            if index >= d.screenshots.len() {
+                return Err("no such screenshot".into());
+            }
+        }
+        let v = self.use_image(image_base64, covers, reduced)?;
+        let mut inner = self.inner.lock().unwrap();
+        let d = inner.draft.as_mut().ok_or("no report")?;
+        let new = d.screenshots.pop().ok_or("no report")?;
+        let old = std::mem::replace(&mut d.screenshots[index], new);
+        std::fs::remove_file(self.env.store.draft_dir(&d.id).join("shots").join(&old.id)).ok();
+        if let Some(r) = d.report.as_mut() {
+            r.screenshots = d.screenshots.iter().map(|s| s.id.clone()).collect();
+            r.fit();
+        }
+        self.save(&mut inner);
+        let mut v = v;
+        v["n"] = json!(index + 1);
+        Ok(v)
+    }
+
+    pub fn use_image(&self, image_base64: &str, covers: u32, reduced: bool) -> Result<Value, String> {
         use richdoctor_core::image_profile as ip;
         let bytes = util::base64_decode(image_base64).ok_or("RichDoctor could not read that image.")?;
         if bytes.len() as u64 > 4 * ip::MAX_IMAGE_BYTES {
             return Err("That image is too large to use.".into());
         }
-        let (clean, shape) = ip::finalize(&bytes).map_err(|e| format!("That image cannot be used: {e}."))?;
+        let (clean, shape) = match ip::check(&bytes) {
+            Ok(shape) => (bytes, shape),
+            Err(_) => ip::finalize(&bytes).map_err(|e| format!("That image cannot be used: {e}."))?,
+        };
         if clean.len() as u64 > ip::MAX_IMAGE_BYTES {
-            return Err("too-large".into());
+            return Err(format!("too-large:{}", clean.len()));
         }
         let sha = util::sha256_hex(&clean);
         let id = util::new_id("shot").map_err(|e| e.to_string())?;
@@ -966,19 +1235,22 @@ impl Engine {
             }
             let dir = self.env.store.draft_dir(&d.id).join("shots");
             util::write_private(&dir.join(&id), &clean).map_err(|e| e.to_string())?;
-            d.screenshots.push(Shot { id, sha256: sha, covers, approved_at: util::now_millis(), media_type: shape.kind.media_type().into() });
+            d.screenshots.push(Shot { id, sha256: sha, covers, approved_at: util::now_millis(), media_type: shape.kind.media_type().into(), reduced });
             if let Some(r) = d.report.as_mut() {
                 r.screenshots = d.screenshots.iter().map(|s| s.id.clone()).collect();
                 r.fit();
             }
             if !d.without_ai {
-                inner.picture = Some((shape.kind.media_type().to_string(), util::base64_std(&clean)));
+                inner.pictures.push((shape.kind.media_type().to_string(), util::base64_std(&clean)));
             }
             self.save(&mut inner);
         }
-        let words = format!("Screenshot added{}", if covers > 0 { format!(" ({covers} {} covered)", if covers == 1 { "area" } else { "areas" }) } else { String::new() });
-        self.line(Entry::Note { text: words });
-        Ok(format!("data:{};base64,{}", shape.kind.media_type(), util::base64_std(&clean)))
+        let n = self.inner.lock().unwrap().draft.as_ref().map(|d| d.screenshots.len()).unwrap_or(0);
+        let entry = richdoctor_core::image_profile::Entry::of(n as u32, &clean)?;
+        Ok(json!({
+            "url": format!("data:{};base64,{}", shape.kind.media_type(), util::base64_std(&clean)),
+            "n": n, "name": entry.filename, "width": entry.width, "height": entry.height, "bytes": entry.bytes, "covers": covers, "reduced": reduced,
+        }))
     }
 
     /// **REMOVE** an approved screenshot (a changed set needs a fresh review).
@@ -999,10 +1271,29 @@ impl Engine {
     }
 
     /// The approved screenshots' final bytes, as the window shows them.
-    pub fn images(&self) -> Vec<String> {
+    pub fn images(&self) -> Vec<Value> {
         let inner = self.inner.lock().unwrap();
         let Some(d) = inner.draft.as_ref() else { return Vec::new() };
-        d.screenshots.iter().filter_map(|s| self.env.store.shot_bytes(&d.id, s).map(|b| format!("data:{};base64,{}", s.media_type, util::base64_std(&b)))).collect()
+        let facts = self.shot_facts(d);
+        d.screenshots
+            .iter()
+            .zip(facts)
+            .filter_map(|(s, mut f)| {
+                let b = self.env.store.shot_bytes(&d.id, s)?;
+                f["url"] = json!(format!("data:{};base64,{}", s.media_type, util::base64_std(&b)));
+                Some(f)
+            })
+            .collect()
+    }
+
+    /// The conversation's line after a set of screenshots was approved (round 40 §2).
+    pub fn note_added(&self, count: u32, covers: u32) {
+        if count == 0 {
+            return;
+        }
+        let shots = if count == 1 { "1 screenshot added".to_string() } else { format!("{count} screenshots added") };
+        let words = if covers > 0 { format!("{shots} ({covers} {} covered)", if covers == 1 { "area" } else { "areas" }) } else { shots };
+        self.line(Entry::Note { text: words });
     }
 
     // -----------------------------------------------------------------------------------
@@ -1041,7 +1332,11 @@ impl Engine {
         Ok(json!({
             "stage": d.stage,
             "conversation": d.conversation.iter().map(entry_event).collect::<Vec<_>>(),
-            "delivery": d.delivery.as_ref().map(|_| delivery_view(&d)),
+            "delivery": d.delivery.as_ref().map(|_| {
+                let mut v = delivery_view(&d);
+                v["shots"] = Value::Array(self.shot_facts(&d));
+                v
+            }),
             "has_report": d.report.is_some(),
             "pending_question": d.questions.iter().rev().find(|q| q.1.is_none()).map(|q| q.0.clone()),
             "without_ai": d.without_ai,
@@ -1107,7 +1402,8 @@ impl Engine {
 
     /// The current draft's delivery view.
     pub fn delivery(&self) -> Value {
-        self.inner.lock().unwrap().draft.as_ref().map(delivery_view).unwrap_or(Value::Null)
+        let inner = self.inner.lock().unwrap();
+        self.view(&inner).unwrap_or(Value::Null)
     }
 }
 
@@ -1152,6 +1448,7 @@ fn left_words(state: &State) -> String {
 pub fn review_view(d: &Draft, r: &Report) -> Value {
     let mode = match &d.delivery {
         Some(del) if del.state.unresolved() => "revision-uncertain",
+        Some(Delivery { state: State::NotSent { why: NotSent::UploadStopped { .. } | NotSent::Canceled, .. }, .. }) => "revision-upload",
         Some(del) if del.state.permits_revision() => "revision-notsent",
         Some(_) => "approved",
         None => "draft",
@@ -1205,13 +1502,31 @@ pub fn delivery_view(d: &Draft) -> Value {
     let excerpts = d.report.as_ref().map(|r| r.excerpts.iter().filter(|e| !e.removed).count()).unwrap_or(0);
     let (kind, extra) = match &del.state {
         State::Sending | State::Creating => ("sending", json!({})),
-        State::SendingScreenshots { done, total } => ("sending-screenshots", json!({"done": done, "total": total})),
-        State::CreatedCheckingImages { issue_url, confirmed, expected, .. } => ("created-checking", json!({"issue_url": issue_url, "confirmed": confirmed, "expected": expected})),
+        State::SendingScreenshots { done, total } => ("uploading", json!({"done": done, "total": total})),
+        State::CreatedCheckingImages { issue_url, confirmed, expected, .. } => ("created", json!({"issue_url": issue_url, "confirmed": confirmed, "expected": expected})),
         State::Checking { .. } => ("checking", json!({})),
         State::Unconfirmed { checked_at } => ("unconfirmed", json!({"checked_at": util::local_clock(*checked_at)})),
         State::Submitted { issue_url, .. } => ("submitted", json!({"issue_url": issue_url})),
-        State::NotSent { why, .. } => ("notsent", json!({"reason": why.reason(), "review": why.needs_review(), "try_again": del.state.permits_try_again()})),
+        State::NotSent { why, .. } => {
+            // Round 40 §5: an interrupted upload names the image that stopped; past the
+            // five-minute cap it also offers Reduce.
+            let (upload, item, toolong) = match why {
+                NotSent::UploadStopped { item, why } => (true, Some(item.clone()), why.contains("five minutes")),
+                NotSent::Canceled => (true, None, false),
+                _ => (false, None, false),
+            };
+            ("notsent", json!({"reason": why.reason(), "review": why.needs_review(), "try_again": del.state.permits_try_again(), "upload": upload, "item": item, "toolong": toolong, "canceled": matches!(why, NotSent::Canceled)}))
+        }
     };
+    let rows: Vec<Value> = del
+        .approved
+        .manifest
+        .iter()
+        .map(|e| {
+            let ok = del.stored.contains(&e.attachment_id);
+            json!({"id": e.attachment_id, "sent": if ok { e.bytes } else { 0 }, "total": e.bytes, "st": if ok { "ok" } else { "wait" }})
+        })
+        .collect();
     json!({
         "kind": kind,
         "report_id": del.approved.report_id,
@@ -1219,6 +1534,9 @@ pub fn delivery_view(d: &Draft) -> Value {
         "first": first.split("\n\nExpected").next().unwrap_or("").chars().take(600).collect::<String>(),
         "summary": format!("{sections} sections, {excerpts} diagnostic {}, the report ID footer. The exact text is in Saved reports.", if excerpts == 1 { "excerpt" } else { "excerpts" }),
         "extra": extra,
+        "rows": rows,
+        "received": del.stored.len(),
+        "attempt": del.approved.manifest.len(),
     })
 }
 
@@ -1227,7 +1545,9 @@ fn saved_row(d: &Draft) -> Value {
     let (state, words, action) = match d.delivery.as_ref().map(|x| &x.state) {
         Some(State::Submitted { .. }) => ("submitted", "Report submitted".to_string(), "view"),
         Some(State::Unconfirmed { .. }) | Some(State::Checking { .. }) | Some(State::Sending) | Some(State::Creating) | Some(State::SendingScreenshots { .. }) => ("unconfirmed", "Delivery could not be confirmed".to_string(), "check"),
-        Some(State::CreatedCheckingImages { .. }) => ("unconfirmed", "Report created; checking screenshots".to_string(), "check"),
+        Some(State::CreatedCheckingImages { confirmed, expected, .. }) => ("created", format!("Report created; checking screenshots · {confirmed} of {expected} confirmed"), "check"),
+        Some(State::NotSent { why: delivery::NotSent::UploadStopped { item, .. }, .. }) => ("notsent", format!("Not sent yet · {item} of {} did not finish", d.screenshots.len()), "resume-upload"),
+        Some(State::NotSent { why: delivery::NotSent::Canceled, .. }) => ("notsent", "Not sent yet · sending was canceled".to_string(), "resume-upload"),
         Some(State::NotSent { why, .. }) => ("notsent", format!("Not sent yet · {}", match why {
             delivery::NotSent::Offline => "offline",
             delivery::NotSent::Busy { .. } => "the service asked to wait",
@@ -1246,12 +1566,132 @@ fn saved_row(d: &Draft) -> Value {
         Some(State::Submitted { issue_url, .. }) | Some(State::CreatedCheckingImages { issue_url, .. }) => Some(issue_url.clone()),
         _ => None,
     };
-    json!({"id": d.id, "title": d.title(), "date": date, "left": d.left, "state": state, "state_words": words, "action": action, "issue_url": issue})
+    // Round 40 §7: the date line carries the screenshot facts.
+    let k = d.screenshots.len();
+    let shots = |n: usize| if n == 1 { "1 screenshot".to_string() } else { format!("{n} screenshots") };
+    let shots_words = match d.delivery.as_ref() {
+        Some(del) if matches!(del.state, State::Submitted { .. }) => if k == 0 { "no screenshots".to_string() } else { format!("{} received", shots(k)) },
+        Some(del) if k > 0 && matches!(del.state, State::NotSent { .. }) => format!("{} of {} received", del.stored.len(), shots(k)),
+        Some(_) if k == 0 => "no screenshots".to_string(),
+        _ if k > 0 => shots(k),
+        _ => String::new(),
+    };
+    json!({"id": d.id, "title": d.title(), "date": date, "left": d.left, "state": state, "state_words": words, "action": action, "issue_url": issue, "shots_words": shots_words})
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn png(seed: u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut e = png::Encoder::new(&mut out, 2, 1);
+            e.set_color(png::ColorType::Rgba);
+            e.set_depth(png::BitDepth::Eight);
+            e.write_header().unwrap().write_image_data(&[seed, 0, 0, 255, 0, seed, 0, 255]).unwrap();
+        }
+        out
+    }
+
+    /// An engine over a scratch store, with two approved screenshots and a report, and the
+    /// events it emits.
+    fn engine_with_shots() -> (Engine, Arc<Mutex<Vec<Value>>>, PathBuf) {
+        let root = std::env::temp_dir().join(format!("rd-engine-{}", util::hex(&util::random_bytes(4).unwrap())));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s2 = seen.clone();
+        let env = Env { store: Store::at(&root), home: root.clone(), exe: PathBuf::new(), claude: None, dest: Err("no relay in this test".into()) };
+        let engine = Engine::new(env, Arc::new(move |v| s2.lock().unwrap().push(v)));
+        {
+            let mut inner = engine.inner.lock().unwrap();
+            let mut d = Draft::new(1).unwrap();
+            d.description = "RichOS closes before its window opens.".into();
+            inner.draft = Some(d);
+        }
+        for seed in [1u8, 2] {
+            engine.use_image(&util::base64_std(&png(seed)), u32::from(seed == 1), false).unwrap();
+        }
+        (engine, seen, root)
+    }
+
+    #[test]
+    fn the_per_image_list_follows_the_relay_and_keeps_what_was_stored() {
+        let (engine, seen, root) = engine_with_shots();
+        let manifest = {
+            let inner = engine.inner.lock().unwrap();
+            engine.env.store.manifest(inner.draft.as_ref().unwrap()).unwrap()
+        };
+        {
+            let mut inner = engine.inner.lock().unwrap();
+            inner.upload = manifest.iter().map(|e| UploadRow { id: e.attachment_id.clone(), sent: 0, total: e.bytes, st: "wait" }).collect();
+            let approved = delivery::approve("RD-7K3M-Q9VX", "t", &richdoctor_core::report::ending("https://report.richos.ceo", "RD-7K3M-Q9VX", 2), manifest.clone(), "https://report.richos.ceo", 1, &util::uuid_v4().unwrap()).unwrap();
+            inner.draft.as_mut().unwrap().delivery = Some(Delivery { approved, state: State::SendingScreenshots { done: 1, total: 2 }, completion_attempted: false, stored: Vec::new() });
+        }
+        engine.heard(Upload::Plan { missing: vec!["2".into()] });
+        engine.heard(Upload::Bytes { id: "2".into(), sent: manifest[1].bytes / 2, total: manifest[1].bytes });
+        let rows = |engine: &Engine| engine.inner.lock().unwrap().upload.iter().map(|r| r.st).collect::<Vec<_>>();
+        assert_eq!(rows(&engine), ["earlier", "live"]);
+        let v = engine.delivery();
+        assert_eq!(v["kind"], "uploading");
+        assert_eq!(v["rows"][1]["sent"], manifest[1].bytes / 2, "a real byte count, never a guess");
+        assert_eq!(v["shots"].as_array().unwrap().len(), 2);
+        engine.heard(Upload::Received { id: "2".into() });
+        assert_eq!(rows(&engine), ["earlier", "ok"]);
+        let stored = engine.inner.lock().unwrap().draft.as_ref().unwrap().delivery.as_ref().unwrap().stored.clone();
+        assert_eq!(stored, ["1", "2"], "what the relay stored is kept with the draft");
+        assert!(seen.lock().unwrap().iter().any(|e| e["t"] == "upload"));
+        // A stopped upload marks its row; the not-sent view names it and offers Resume.
+        engine.inner.lock().unwrap().upload[1].st = "live";
+        engine.set_state(&State::NotSent { why: NotSent::UploadStopped { item: "screenshot 2".into(), why: "it did not finish within five minutes.".into() }, at: 5 });
+        assert_eq!(rows(&engine), ["earlier", "stopped"]);
+        let v = engine.delivery();
+        assert_eq!(v["kind"], "notsent");
+        assert_eq!(v["extra"]["upload"], true);
+        assert_eq!(v["extra"]["toolong"], true);
+        // The review after it is round 40's "after an interrupted send", unchanged until edited.
+        let r = engine.review();
+        assert!(r.is_null() || r["mode"] == "revision-upload");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn cancel_is_offered_only_while_sending() {
+        let (engine, _, root) = engine_with_shots();
+        assert!(!engine.cancel_upload(), "nothing to cancel");
+        let flag = Arc::new(AtomicBool::new(false));
+        {
+            let mut inner = engine.inner.lock().unwrap();
+            inner.cancel_upload = Some(flag.clone());
+            let approved = delivery::approve("RD-7K3M-Q9VX", "t", &richdoctor_core::report::footer("RD-7K3M-Q9VX"), Vec::new(), "https://report.richos.ceo", 1, &util::uuid_v4().unwrap()).unwrap();
+            inner.draft.as_mut().unwrap().delivery = Some(Delivery { approved, state: State::SendingScreenshots { done: 0, total: 2 }, completion_attempted: false, stored: Vec::new() });
+        }
+        assert!(engine.cancel_upload() && flag.load(Ordering::SeqCst));
+        engine.inner.lock().unwrap().draft.as_mut().unwrap().delivery.as_mut().unwrap().state = State::Creating;
+        flag.store(false, Ordering::SeqCst);
+        assert!(!engine.cancel_upload() && !flag.load(Ordering::SeqCst), "once the report is being filed, Cancel is not offered");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn an_image_is_refused_from_its_header_before_any_decode() {
+        let (engine, _, root) = engine_with_shots();
+        let ok = engine.inspect_image(&util::base64_std(&png(3)));
+        assert_eq!(ok["ok"], true);
+        assert_eq!(ok["width"], 2);
+        assert_eq!(engine.inspect_image(&util::base64_std(b"\0\0\0\x18ftypheic"))["problem"], "type");
+        // A PNG header declaring 8000 x 6000 (48 megapixels) is refused on its header alone.
+        let mut big = png(4);
+        big[16..20].copy_from_slice(&8000u32.to_be_bytes());
+        big[20..24].copy_from_slice(&6000u32.to_be_bytes());
+        assert_eq!(engine.inspect_image(&util::base64_std(&big))["problem"], "pixels");
+        // What use_image keeps is exactly what prepare_image showed.
+        let shown = engine.prepare_image(&util::base64_std(&png(5))).unwrap();
+        let kept = engine.use_image(shown["b64"].as_str().unwrap(), 0, false).unwrap();
+        assert_eq!(shown["url"], kept["url"]);
+        assert_eq!(kept["n"], 3);
+        assert_eq!(kept["name"], "screenshot-3.png");
+        std::fs::remove_dir_all(root).ok();
+    }
 
     #[test]
     fn progress_folds_into_one_soft_line() {

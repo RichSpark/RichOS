@@ -81,6 +81,9 @@ pub struct Shot {
     pub approved_at: u64,
     #[serde(default = "png_type")]
     pub media_type: String,
+    /// Scaled down to fit the 5 MiB limit before it was approved (round 40: "reduced to fit").
+    #[serde(default)]
+    pub reduced: bool,
 }
 
 fn png_type() -> String {
@@ -120,6 +123,10 @@ pub struct Delivery {
     /// durable proof that no issue can exist under this ID.
     #[serde(default)]
     pub completion_attempted: bool,
+    /// The screenshots the relay confirmed it stored under this report ID (attachment ids), as
+    /// heard during the upload: what "Received earlier" and Resume sending rest on.
+    #[serde(default)]
+    pub stored: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -418,10 +425,10 @@ mod tests {
         let mut d = Draft::new(1).unwrap();
         let body = crate::report::footer("RD-7K3M-Q9VX");
         let approved = crate::delivery::approve("RD-7K3M-Q9VX", "t", &body, vec![], "https://report.richos.ceo", 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
-        d.delivery = Some(Delivery { approved: approved.clone(), state: State::Unconfirmed { checked_at: 2 }, completion_attempted: true });
+        d.delivery = Some(Delivery { approved: approved.clone(), state: State::Unconfirmed { checked_at: 2 }, completion_attempted: true, stored: vec![] });
         assert!(!d.may_send_revision());
         assert!(d.retire_for_revision().is_err());
-        d.delivery = Some(Delivery { approved, state: State::NotSent { why: crate::delivery::NotSent::NotReceived, at: 3 }, completion_attempted: true });
+        d.delivery = Some(Delivery { approved, state: State::NotSent { why: crate::delivery::NotSent::NotReceived, at: 3 }, completion_attempted: true, stored: vec![] });
         d.retire_for_revision().unwrap();
         assert_eq!(d.retired_ids, ["RD-7K3M-Q9VX"]);
         assert!(d.delivery.is_none());
@@ -433,7 +440,7 @@ mod tests {
         let mut d = Draft::new(1).unwrap();
         let body = crate::report::footer("RD-7K3M-Q9VX");
         let approved = crate::delivery::approve("RD-7K3M-Q9VX", "Title", &body, vec![], "https://report.richos.ceo", 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
-        d.delivery = Some(Delivery { approved, state: State::Submitted { issue_url: "https://github.com/a/b/issues/1".into(), issue_number: 1, at: 10 }, completion_attempted: true });
+        d.delivery = Some(Delivery { approved, state: State::Submitted { issue_url: "https://github.com/a/b/issues/1".into(), issue_number: 1, at: 10 }, completion_attempted: true, stored: vec![] });
         s.save(&mut d, 10).unwrap();
         assert_eq!(s.expire(10 + SUBMITTED_KEPT_MS - 1), 0);
         assert_eq!(s.expire(10 + SUBMITTED_KEPT_MS), 1);

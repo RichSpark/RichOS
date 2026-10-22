@@ -193,3 +193,68 @@ label.lbl { display: block; font-weight: 600; margin: 0 0 8px; }
 /* toasts */
 #toast { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--card); border: 1px solid var(--line-control); color: var(--ink); border-radius: var(--radius); padding: 10px 16px; box-shadow: 0 8px 24px var(--shadow-soft); z-index: 20; }
 #toast[hidden] { display: none; }
+
+/* ---- round 40: the screenshot flow (round-40 head.html, the rules screenshots add) ---------- */
+.me .thumbs {display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;}
+.me .thumbs img {display: block; width: 150px; height: auto; border-radius: 6px; border: 1px solid var(--line-strong);}
+.notadded {display: flex; gap: 10px; align-items: flex-start; color: var(--ink); background: var(--card); border: 1px solid var(--attention); border-radius: var(--radius); padding: 10px 14px;}
+.notadded svg {width: 18px; height: 18px; flex: none; margin-top: 3px; color: var(--attention);}
+.notadded p {margin: 0;}
+#conv-image svg, .sec-head .btn svg {width: 18px; height: 18px;}
+.sec-head {display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px;}
+.sec-head h3 {margin: 0;}
+.shots {display: flex; flex-direction: column; gap: 8px; margin-top: 8px;}
+.shot {display: grid; grid-template-columns: 28px 120px 1fr auto; gap: 12px; align-items: center; padding: 10px 12px; background: var(--card); border: 1px solid var(--line-strong); border-radius: var(--radius);}
+.shot:focus-within {outline: 2px solid var(--gold); outline-offset: 2px;}
+.shot img {display: block; width: 120px; height: auto; max-height: 72px; object-fit: cover; object-position: top; border-radius: 4px; border: 1px solid var(--line-strong); background: var(--surface-sunk);}
+.shot .meta {min-width: 0;}
+.shot .meta b {display: block; font-weight: 600;}
+.shot .meta span {color: var(--ink-soft);}
+.shot .acts {display: flex; gap: 4px;}
+.shot .pbar {margin-top: 6px;}
+.badge {width: 28px; height: 28px; border-radius: 50%; background: var(--gold); color: var(--on-gold); font-weight: 600; display: grid; place-items: center; font-variant-numeric: tabular-nums;}
+.badge.soft {background: transparent; color: var(--ink); border: 1.5px solid var(--line-control);}
+.pbar {position: relative; height: 6px; border-radius: 3px; background: var(--line-strong); overflow: hidden;}
+.pbar i {position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--gold); border-radius: 3px; transition: width .25s linear;}
+.pbar.done i {background: var(--success);}
+.pbar.stopped i {background: var(--attention);}
+@media (prefers-reduced-motion: reduce) { .pbar i {transition: none;} }
+.shot .state {font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px;}
+.shot .state svg {width: 18px; height: 18px;}
+.shot .state.ok {color: var(--success);}
+.shot .state.stopped {color: var(--attention);}
+.shot .state.wait {color: var(--ink-soft);}
+.shot .state.live, .shot .state.unsure {color: var(--accent-text);}
+.shots-sum {color: var(--ink-soft); margin: 8px 0 0;}
+.approved .strip {display: flex; gap: 8px; margin: 10px 0 10px;}
+.approved .strip img {display: block; width: 96px; height: 56px; object-fit: cover; object-position: top; border-radius: 4px; border: 1px solid var(--line-strong);}
+.sheet {max-height: 700px;}
+.queue {display: flex; gap: 8px; margin: 0 0 14px; flex-wrap: wrap;}
+.queue[hidden] {display: none;}
+.queue button {display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px 0 6px; border-radius: var(--radius); border: 1px solid var(--line-control); background: var(--tint-soft); color: var(--ink); font-weight: 500;}
+.queue button[aria-current="true"] {border-color: var(--gold); background: var(--tint-gold-weak);}
+.queue button .badge {width: 24px; height: 24px;}
+.queue button svg {width: 18px; height: 18px;}
+.queue .ok {color: var(--success);}
+.queue .bad {color: var(--attention);}
+.img-stage img {display: block; width: 100%; height: auto; pointer-events: none; -webkit-user-drag: none;}
+.final {border: 1px solid var(--line-control); border-radius: var(--radius); background: var(--surface-sunk); overflow: hidden;}
+.final img {display: block; width: 100%; height: auto;}
+.final-meta {display: flex; gap: 12px; align-items: center; margin-top: 10px;}
+.final-meta .badge {flex: none;}
+.final-meta p {margin: 0;}
+.problem {display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--attention); border-radius: var(--radius); background: var(--card); padding: 14px 16px;}
+.problem[hidden] {display: none;}
+.problem svg {width: 20px; height: 20px; flex: none; color: var(--attention); margin-top: 3px;}
+.problem p {margin: 0 0 6px;}
+.problem p:last-child {margin: 0;}
+#drop {position: absolute; inset: 0; z-index: 9; display: grid; place-items: center; background: var(--scrim);}
+#drop[hidden] {display: none;}
+#drop .zone {width: 560px; padding: 36px; text-align: center; border: 2px dashed var(--gold); border-radius: 12px; background: var(--card); color: var(--ink);}
+#drop .zone svg {width: 36px; height: 36px; color: var(--accent-text); margin-bottom: 8px;}
+#drop .zone p {margin: 0;}
+/* A cover's edge (a contrast floor beyond round 40 as drawn): the solid fill alone measured 1.21:1
+   against the stage in dark, and has no visible edge on a dark screenshot. --line-control is 3.79:1
+   dark and 4.06:1 light against --card, and 4.57:1 and 4.45:1 against the fill. The edge lies inside
+   the cover's box, so the flattened area is the same box. */
+.img-stage .cover {border: 2px solid var(--line-control); box-sizing: border-box;}
