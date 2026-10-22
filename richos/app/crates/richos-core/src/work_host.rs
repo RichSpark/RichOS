@@ -1384,6 +1384,55 @@ impl WorkHost {
         Ok(())
     }
 
+    /// **He chose "Quit and stop the work"** (§7.4a): every open job records his Stop, exactly
+    /// as the Stop button records it ([`Self::stop_assignment_and_front_desk`]): his Stop on
+    /// the record, its questions closed, its answers discarded and Stu told. This is what he
+    /// did, not host inference, so it stands with 2002ec31b. The commands are not stopped here:
+    /// the quit path ends every lease and its commands right after. Called only on his
+    /// confirmed quit; an ordinary quit and a crash record nothing, and the job resumes.
+    /// Returns how many jobs it stopped and why any could not be.
+    pub fn record_quit_and_stop(&self) -> (usize, Vec<String>) {
+        let scan = match assignment::scan_open(&self.state) {
+            Ok(scan) => scan,
+            Err(error) => return (0, vec![error.to_string()]),
+        };
+        let mut errors: Vec<String> = scan.unreadable.iter().map(ToString::to_string).collect();
+        let mut stopped = 0;
+        for record in scan.rows.iter().filter(|record| record.accepts_input()) {
+            match self.record_one_quit_stop(record) {
+                Ok(()) => stopped += 1,
+                Err(error) => errors.push(error),
+            }
+        }
+        (stopped, errors)
+    }
+
+    fn record_one_quit_stop(&self, record: &Assignment) -> Result<(), String> {
+        let (entity, thread) = (record.entity_id.as_str(), record.thread_id.as_str());
+        let stopped = assignment::record_user_stop(&self.state, entity, thread, &record.id)
+            .map_err(|e| e.to_string())?;
+        crate::questions::Store::new(&self.state).close(
+            entity,
+            thread,
+            Some(&record.obligation_id),
+            "The user stopped this assignment",
+            false,
+        )?;
+        crate::question_work::discard(&self.state, entity, thread, &record.obligation_id)?;
+        let scope = crate::status_tools::StatusToolScope {
+            version: 1,
+            state_root: self.state.clone(),
+            entity_id: entity.into(),
+            thread_id: thread.into(),
+        };
+        crate::session_tools::observe_user_stop(
+            &scope,
+            &record.id,
+            &record.obligation_id,
+            stopped.user_stop_requested_at_ms.unwrap(),
+        )
+    }
+
     /// Quit ends provider connections. Job reports, questions and inbox receipts remain unchanged.
     pub fn shutdown(&self) {
         *self.closing.lock().unwrap() = true;
