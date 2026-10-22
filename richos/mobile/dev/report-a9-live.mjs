@@ -110,7 +110,7 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
     // Screenshots (protocol 2): register, then uploads, then completion, on the real service.
     const shots = screenshotReport({ origin: base, files: [{ bytes: largePng(), type: 'image/png' }, { bytes: fixture('accept-baseline.jpg'), type: 'image/jpeg' }] });
     const register = () => call('/v1/reports', registerBody(shots));
-    const put = (n, body) => fetchImpl(`${base}/v1/reports/${shots.report_id}/attachments/${n}`, { redirect: 'error', ...uploadInit(shots, n, body) })
+    const put = (n, body) => fetchImpl(`${base}/v1/reports/${shots.report_id}/uploads/${n}`, { redirect: 'error', ...uploadInit(shots, n, body) })
       .then(async r => ({ status: r.status, body: await r.json().catch(() => null) }));
     const action = name => call(`/v1/reports/${shots.report_id}/${name}`, { receipt_secret: shots.receipt_secret });
     check('registering creates nothing', (await register()).body?.state === 'receiving');

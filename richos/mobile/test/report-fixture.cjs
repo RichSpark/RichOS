@@ -103,9 +103,10 @@ async function fixture(t, options = {}) {
   const status = (id, receipt) => post(`/v1/reports/${id}/status`, { receipt_secret: receipt });
   const complete = (id, receipt) => post(`/v1/reports/${id}/complete`, { receipt_secret: receipt });
   const retire = (id, receipt) => post(`/v1/reports/${id}/retire`, { receipt_secret: receipt });
-  function upload(payload, n, bytes = payload.files[n - 1], headers = {}) {
+  // Uploads go to uploads/n; `route` 'attachments' sends the PUT the relay still accepts there.
+  function upload(payload, n, bytes = payload.files[n - 1], headers = {}, route = 'uploads') {
     const item = payload.manifest[n - 1];
-    return send(new Request(`${origin}/v1/reports/${payload.report_id}/attachments/${n}`, { method: 'PUT', body: bytes,
+    return send(new Request(`${origin}/v1/reports/${payload.report_id}/${route}/${n}`, { method: 'PUT', body: bytes,
       headers: { 'Content-Type': item.media_type, 'X-Receipt-Secret': payload.receipt_secret, 'X-Content-SHA256': item.sha256, 'cf-connecting-ip': '192.0.2.1', ...headers } }));
   }
   const read = (id, n, token) => send(new Request(`${origin}/v1/reports/${id}/attachments/${n}`, { headers: token ? { 'Cf-Access-Jwt-Assertion': token } : {} }));

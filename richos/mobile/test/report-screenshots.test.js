@@ -325,3 +325,16 @@ test('a claimed cleanup withdraws staff reads at once, even when deleting the ob
   const gone = await f.read(payload.report_id, 1, await f.accessToken());
   assert.equal(gone.status, 410); assert.match(await gone.text(), /was deleted on/);
 });
+
+test('uploads go to uploads/n, outside the staff-only links, so an Access application on the links never blocks the app', async t => {
+  const f = await fixture(t), payload = await f.report({}, ['accept-rgb.png', 'accept-palette.png']);
+  await f.create(payload);
+  assert.deepEqual((await f.answer(await f.upload(payload, 1))).body.stored, ['1']);
+  // Where no Access application sits in front (a test relay), the older PUT path still works.
+  assert.equal((await f.answer(await f.upload(payload, 2, undefined, {}, 'attachments'))).body.state, 'ready');
+  const token = await f.accessToken();
+  const onUploads = await f.send(new Request(`${f.origin}/v1/reports/${payload.report_id}/uploads/1`, { headers: { 'Cf-Access-Jwt-Assertion': token } }));
+  assert.equal(onUploads.status, 404, 'an image is read only from its staff link');
+  assert.equal((await f.read(payload.report_id, 1, token)).status, 200);
+  assert.equal((await f.read(payload.report_id, 1)).status, 403);
+});

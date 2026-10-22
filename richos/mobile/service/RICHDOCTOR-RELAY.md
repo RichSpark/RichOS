@@ -11,7 +11,7 @@ JSON in and out, UTF-8, unless stated. Key on `state`, never on the HTTP status;
 | Method and path | Purpose |
 | --- | --- |
 | `POST /v1/reports` | Register (protocol 2) or create in one step (protocol 1, text only). Never a second issue |
-| `PUT /v1/reports/{report_id}/attachments/{n}` | Upload screenshot n: the exact approved bytes, headers `X-Receipt-Secret`, `Content-Type`, `X-Content-SHA256` |
+| `PUT /v1/reports/{report_id}/uploads/{n}` | Upload screenshot n: the exact approved bytes, headers `X-Receipt-Secret`, `Content-Type`, `X-Content-SHA256`. Never under `attachments/`, which Cloudflare Access guards in production (Access matches paths, not methods); a PUT there still works only where no Access application sits in front |
 | `POST /v1/reports/{report_id}/complete` | `{"receipt_secret"}`. Creates the issue, only when every approved screenshot is stored |
 | `POST /v1/reports/{report_id}/status` | `{"receipt_secret"}`. Never creates |
 | `POST /v1/reports/{report_id}/retire` | `{"receipt_secret"}`. Retire this ID before sending a changed revision |

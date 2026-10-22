@@ -356,13 +356,17 @@ export async function handle(request, env, ctx, ports = {}) {
       const control = configured(env) ? await new Store(env.DB).control().catch(() => null) : null;
       return reply(control ? 200 : 503, { ok: !!control, service: 'richos-report', protocol: 2, accepting: !!control && !control.paused && control.daily_cap > 0 });
     }
-    const route = /^\/v1\/reports(?:\/([^/]+)\/(status|complete|retire|attachments\/(\d{1,2})))?$/.exec(url.pathname);
-    const [, id, action, attachmentId] = route || [];
+    // Uploads go to uploads/n, outside the Cloudflare Access application that guards the staff
+    // links (attachments/n): Access matches paths, never methods. A PUT to attachments/n is still
+    // accepted where no Access application sits in front (a test relay, the local stand-in).
+    const route = /^\/v1\/reports(?:\/([^/]+)\/(status|complete|retire|attachments\/(\d{1,2})|uploads\/(\d{1,2})))?$/.exec(url.pathname);
+    const [, id, action, attachmentId, uploadId] = route || [];
     const allowed = route && (id === undefined ? request.method === 'POST' : REPORT_ID.test(id)
-      && (attachmentId ? ['PUT', 'GET'].includes(request.method) : request.method === 'POST'));
+      && (attachmentId ? ['PUT', 'GET'].includes(request.method) : uploadId ? request.method === 'PUT' : request.method === 'POST'));
     if (!allowed) return reply(404, { error: 'not_found' });
     if (!configured(env)) return unavailable();
     const relay = new Relay(env, ctx, ports);
+    if (uploadId) return await relay.upload(request, id, uploadId);
     if (attachmentId) return await (request.method === 'GET' ? relay.image(request, id, attachmentId) : relay.upload(request, id, attachmentId));
     if (action === 'status') return await relay.status(request, id);
     // Requests that may create or retire are handed to waitUntil before their first await: a

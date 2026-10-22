@@ -179,7 +179,7 @@ test('A9 screenshots in workerd: slow, cut and lost uploads, a restart after cre
   const json = async response => response.json();
   const register = payload => relay.fetch('/v1/reports', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: registerBody(payload) }).then(json);
   const call = (payload, action) => relay.fetch(`/v1/reports/${payload.report_id}/${action}`, { method: 'POST', body: JSON.stringify({ receipt_secret: payload.receipt_secret }) }).then(json);
-  const upload = (payload, n, body, init) => relay.fetch(`/v1/reports/${payload.report_id}/attachments/${n}`, uploadInit(payload, n, body, init));
+  const upload = (payload, n, body, init) => relay.fetch(`/v1/reports/${payload.report_id}/uploads/${n}`, uploadInit(payload, n, body, init));
   const staffRead = async (payload, n, token) => relay.fetch(`/v1/reports/${payload.report_id}/attachments/${n}`, { headers: token ? { 'Cf-Access-Jwt-Assertion': token } : {} });
   const objects = async prefix => (await (await relay.bucket()).list({ prefix })).objects.length;
   const posts = () => github.calls.filter(c => c === `POST /repos/${relay.repository}/issues`).length;
