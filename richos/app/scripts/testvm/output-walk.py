@@ -1568,8 +1568,12 @@ class OutputWalk(command_walk.CommandWalk):
         note(windows=listing, opened=opened, quit=[p for p, _ in opened])
         if not opened:
             raise StepFailed('pressing the card put no window named %s on screen: %s' % (RICH_FILE_NAME, listing))
-        # Round 36's card says a PDF's pages ("PDF · 2 KB · 1 page"): cupsfilter writes one page.
+        # Round 36's card says a PDF's pages ("PDF · 2 KB · 1 page"): cupsfilter writes one page. The
+        # line is the card button's description (aria-describedby), so it reaches the accessibility tree
+        # as the button's help or description, not as a static text of its own (the button's name,
+        # "Open … in Preview", stands in for its children).
         pages = [n.get('value') or n.get('title') for n in self.texts(' · 1 page')]
+        pages += [card.get(k) for k in ('help', 'desc', 'title', 'value') if ' · 1 page' in str(card.get(k) or '')]
         note(pages_line=pages)
         # The normal view, another turn: the conversation is re-read when it ends, and the card stays.
         self.front()
