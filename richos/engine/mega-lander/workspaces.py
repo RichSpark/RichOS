@@ -3247,6 +3247,12 @@ def holds(me="", at=None, cache=None):
     """Every hold this session must keep in sight: a list of dicts with name,
     what, why, since (epoch), end, state, detail, source, key."""
     cache = {} if cache is None else cache
+    if (os.environ.get("RICHOS_APP_ENTITY") or "").strip() and (os.environ.get("RICHOS_APP_THREAD") or "").strip():
+        # THE APP'S REGISTRY IS ONE CONVERSATION'S OWN PARTITION (engine_profile.rs
+        # workspace_state), so every hold in it is this conversation's, Rich's lease's
+        # and Stu's alike: Stu's watcher must not drop a hold of Rich's running lease
+        # (second review rv-20261022T013056Z-12c77c90-1291, finding 4).
+        me = ""
     out = []
     try:
         names = sorted(os.listdir(_holds_dir()))
@@ -3268,8 +3274,12 @@ def holds(me="", at=None, cache=None):
         w, p = rec.get("waiting") or {}, rec.get("pause") or {}
         name = rec.get("name") or rec["key"]
         found = []                       # (source, what, why, since, end)
-        if paused_ and p:
-            found.append(("pause", "the work of %s" % name, p.get("until") or "(nothing named)", p.get("at"),
+        # A PAUSE OUTLIVES ITS SESSION (second review rv-20261022T013056Z-12c77c90-1291,
+        # finding 5): once the session ends the agent counts as finished, but the work
+        # it was paused on never ran; only a hand-in after it ends the pause.
+        if p and (paused_ or (fin and not rec.get("handed_in"))):
+            found.append(("pause" if paused_ else "pause-ended", "the work of %s" % name,
+                          p.get("until") or "(nothing named)", p.get("at"),
                           p.get("end") or hold_end(p.get("until"), strict=False)))
         elif w and (fin or w.get("kind") == "held"):
             found.append(("wait", "the work of %s" % name, w.get("on") or "", w.get("at"),
@@ -3348,6 +3358,7 @@ def hold_command(h):
     """What makes held work run: the one command for Rich."""
     if h["source"] == "pause":
         return "workspaces.sh resume %s" % h["name"]
+    # Anything else, a pause whose session ended included: its run cannot resume.
     return "spawn the teammate that does it with the line  continues: %s" % h["name"]
 
 
@@ -3452,7 +3463,7 @@ def _release_one(h, name, ceo_word, not_a_hold, session_id):
             save_agent(rec)
         else:
             rec = load_agent(h["key"])
-            field = {"pause": "pause", "correction": "correction"}.get(h["source"], "waiting")
+            field = {"pause": "pause", "pause-ended": "pause", "correction": "correction"}.get(h["source"], "waiting")
             rec.setdefault("history", []).append({"at": iso(), "fact": "hold released", field: rec.get(field),
                                                   "how": how})
             rec[field] = None

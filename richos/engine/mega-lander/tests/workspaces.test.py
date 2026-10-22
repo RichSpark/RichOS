@@ -7322,6 +7322,18 @@ class NoSilentHolds(Base):
         send("Go: run the walk now.")
         self.assertEqual(ws.holds(self.sid), [])
 
+    def test_holds_a_pause_outlives_its_session(self):
+        """Review rv-20261022T013056Z-12c77c90-1291 finding 5: a manual pause, then an ordinary
+        session end, must not drop the paused work from both reporting paths."""
+        aid, _n = self.spawn("zach-opus-ps")
+        ws.pause("zach-opus-ps", "Rich's resume", self.sid)
+        self.assertEqual([h["source"] for h in ws.holds(self.sid) if h["name"] == "zach-opus-ps"], ["pause"])
+        ws.record_session_end(self.sid, "SessionEnd")
+        held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-ps"]
+        self.assertEqual([h["source"] for h in held], ["pause-ended"])
+        self.assertIn("continues: zach-opus-ps", ws.hold_command(held[0]))
+        self.assertTrue(any("the work of zach-opus-ps" in l for l in ws.hold_lines(self.sid, at=ws.now() + 31 * 60)))
+
     def test_holds_a_repeated_wait_keeps_the_age_of_the_hold(self):
         """Review rv-20261022T002958Z-2ac46e09-fa4e finding 2: repeating an unresolved wait every
         20 minutes must not make a 2-hour hold look new."""

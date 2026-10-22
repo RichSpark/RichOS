@@ -329,7 +329,6 @@ _HANDBACK = re.compile(
     r"shall I\b|should I\b|"
     r"if you want|whenever you want|when you're ready|"
     r"until you (?:rule|say|decide|tell)|"
-    r"those are orders|you (?:killed|stopped|told me to stop)|"
     r"the next move is yours|nothing (?:happens|moves) until you|"
     r"(?:name|pick|choose) (?:the|which|one)\b|"
     r"either way[, ][^.\n]{0,40}\byou\b|"
@@ -339,10 +338,17 @@ _HANDBACK = re.compile(
 )
 
 
+# HIS ORDER, CITED: the decision is already his and made, so it discharges the deferral
+# and opens no hold. A hand-back (above) is a choice put to him and not yet made.
+_HIS_ORDER = re.compile(r"\b(?:those are orders|you (?:killed|stopped|told me to stop))\b", re.I)
+
+
 def discharge(text, tools, hits=()):
     """Return the name of the thing that discharges a deferral in this turn, or
     None if nothing does. A spawn never discharges a reply that says the work
     is held (family D): that work is the one not started."""
+    if text and _HIS_ORDER.search(text):
+        return "his-order"
     if "AskUserQuestion" in tools:
         return "askuserquestion"
     if text and _HANDBACK.search(text):
@@ -352,19 +358,52 @@ def discharge(text, tools, hits=()):
     return None
 
 
-def open_hold(payload, name, quote):
+_WS = []
+
+
+def _sentence(text, scan, start, end):
+    """The sentence (or line) of `text` around [start, end)."""
+    a = max(scan.rfind(".", 0, start), scan.rfind("\n", 0, start)) + 1
+    b = min([i for i in (scan.find(".", end), scan.find("\n", end)) if i >= 0] or [len(scan)])
+    return " ".join(text[a:b + 1].split())
+
+
+def held_pieces(text, hits):
+    """[(construction, quote)]: one per held piece of work in the reply (second review
+    rv-20261022T013056Z-12c77c90-1291, finding 3: "Spelling work is on hold. The sign-in fix
+    is parked." holds two). Family D gives one per sentence holding work; the other families
+    their own quote. The same sentence is one piece."""
+    scan = strip_quoted(text)
+    out, seen = [], set()
+    for name, quoted in hits:
+        quotes = [_sentence(text, scan, m.start(), m.end()) or quoted
+                  for m in hold_words.HOLD_WORDS_RE.finditer(scan)] if name == HELD else [quoted]
+        for q in quotes:
+            q = q if len(q) <= 120 else q[:117] + "..."
+            if q not in seen:
+                seen.add(q)
+                out.append((name, q))
+    return out
+
+
+def open_hold(payload, name, quote, asked=None):
     """The hold this deferral is: holds/held-<hash>.json in the workspace registry,
-    so the same quote restated is the same hold. (hold name, '') or ('', why not)."""
+    so the same quote restated is the same hold. (hold name, '') or ('', why not).
+    `asked`: how the choice was put to him; the hold stays until he decides
+    (second review rv-20261022T013056Z-12c77c90-1291, finding 2)."""
     import hashlib
     import importlib.util
     hold = "held-" + hashlib.sha1(quote.encode("utf-8")).hexdigest()[:8]
     lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mega-lander", "workspaces.py")
+    why = ("put to him as his choice (%s); held until he decides" % asked if asked
+           else "a reply held it without putting it to him (%s)" % name)
     try:
-        spec = importlib.util.spec_from_file_location("deferral_workspaces", lib)
-        ws = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(ws)
-        ws.hold(hold, quote, "", "a reply held it without putting it to him (%s)" % name,
-                str(payload.get("session_id") or ""), by="deferral")
+        if not _WS:
+            spec = importlib.util.spec_from_file_location("deferral_workspaces", lib)
+            ws = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(ws)
+            _WS.append(ws)
+        _WS[0].hold(hold, quote, "", why, str(payload.get("session_id") or ""), by="deferral")
     except Exception as exc:  # noqa: BLE001: said in the notice, never silence
         return "", "%s: %s" % (exc.__class__.__name__, str(exc)[:160])
     return hold, ""
@@ -487,26 +526,30 @@ def main():
         print("transcript-unreadable")
         return 4
 
-    if discharge(text, tools, hits) is not None:
+    asked = discharge(text, tools, hits)
+    if asked in ("agent-spawn", "his-order"):
+        return 0          # the spawn starts the deferred work (never family D), or he ordered it
+    # EVERY HELD PIECE IS RECORDED, also when the choice was put to him: until he decides,
+    # nothing else brings it back (second review rv-20261022T013056Z-12c77c90-1291, findings
+    # 2 and 3). Put to him, there is no notice; the hold's turn-end line is the reminder.
+    pieces = held_pieces(text, hits)
+    opened, errors = [], []
+    for name, quote in pieces:
+        held, why_not = open_hold(payload, name, quote, asked)
+        if held:
+            opened.append(held)
+        if why_not:
+            errors.append(why_not)
+    if asked is not None:
         return 0
-
-    name, quoted = hits[0]
-    if name == HELD:
-        # The words alone ("on hold") name nothing: the sentence they are in does.
-        scan = strip_quoted(text)
-        m = hold_words.HOLD_WORDS_RE.search(scan)
-        a = max(scan.rfind(".", 0, m.start()), scan.rfind("\n", 0, m.start())) + 1
-        b = min([i for i in (scan.find(".", m.end()), scan.find("\n", m.end())) if i >= 0] or [len(scan)])
-        quoted = " ".join(text[a:b + 1].split()) or quoted
-    if len(quoted) > 120:
-        quoted = quoted[:117] + "..."
-    held, why_not = open_hold(payload, name, quoted)
+    name, quoted = pieces[0]
     print(json.dumps({
         "construction": name,
         "quote": quoted,
         "all": [h[0] for h in hits],
-        "hold": held,
-        "hold_error": why_not,
+        "hold": ", ".join(opened),
+        "holds": opened,
+        "hold_error": "; ".join(errors),
     }))
     return 3  # 3 = "a deferral fired"; the wrapper turns it into the notice
 

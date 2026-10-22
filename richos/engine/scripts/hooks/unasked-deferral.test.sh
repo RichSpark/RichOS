@@ -197,6 +197,31 @@ if printf '%s' "$GOUT" | grep -q 'HELD BY RICH, NOT BY YOU: Stream B is on hold,
 else bad "T1b the turn-end line names the hold" "$GOUT"; fi
 rm -rf "$RICHOS_WORKSPACES_DIR/holds"
 
+# Second review rv-20261022T013056Z-12c77c90-1291, finding 2: a hold put to him as a choice
+# stays recorded until he decides (no notice: he was asked); finding 3: each held piece of
+# work in one reply is its own hold.
+write_transcript Bash
+run_hook "Spelling work is on hold, deliberately. Your call: run it now or keep holding?"
+N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
+if quiet && [ "$N" = 1 ] && grep -q "held until he decides" "$RICHOS_WORKSPACES_DIR"/holds/held-*.json; then
+    ok "T1c a hold handed back to him as his choice is recorded until he decides, with no notice"
+else bad "T1c a handed-back hold is recorded" "holds=$N out=$HOUT"; fi
+rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+write_transcript Bash
+run_hook "Spelling work is on hold, deliberately. The sign-in fix is parked."
+N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
+if spoke && [ "$N" = 2 ] && grep -q "sign-in fix is parked" "$RICHOS_WORKSPACES_DIR"/holds/held-*.json; then
+    ok "T1d two held pieces of work in one reply are two holds"
+else bad "T1d each held piece is its own hold" "holds=$N out=$HOUT"; fi
+rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+write_transcript Bash
+run_hook "You killed Stream B, so Stream B is on hold."
+N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
+if quiet && [ "$N" = 0 ]; then
+    ok "T1e his own order, cited, opens no hold: the decision is his and made"
+else bad "T1e a cited order of his opens no hold" "holds=$N out=$HOUT"; fi
+rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+
 # ===========================================================================
 # 2. THE THREE DISCHARGES — same text, silenced three different ways
 # ===========================================================================

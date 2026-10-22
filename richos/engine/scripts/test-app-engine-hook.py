@@ -60,6 +60,19 @@ class DesktopHooks(unittest.TestCase):
         self.assertIn("HELD BY RICH, NOT BY YOU: Stream B of his order since", context)
         self.assertIn("Why: on hold, deliberately.", context)
 
+    def test_a_reply_holding_work_opens_a_hold_at_the_apps_turn_end(self):
+        """Second review rv-20261022T013056Z-12c77c90-1291 finding 1: the app's Stop ran only the
+        stated-actions guard, so 'Spelling work is on hold, deliberately.' opened nothing."""
+        transcript = self.root / "transcript.jsonl"
+        transcript.write_text(json.dumps({"type": "user", "isSidechain": False,
+                                          "message": {"role": "user", "content": "How is it going?"}}) + "\n")
+        result = self.hook("Stop", last_assistant_message="Spelling work is on hold, deliberately.",
+                           transcript_path=str(transcript), stop_hook_active=False)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        holds = sorted((self.root / "workspaces" / "holds").glob("held-*.json"))
+        self.assertEqual(len(holds), 1, result.stderr)
+        self.assertEqual(json.loads(holds[0].read_text())["what"], "Spelling work is on hold, deliberately.")
+
     def test_stus_turn_carries_no_hold_lines(self):
         self._wait_on_file()
         (self.root / "state/evidence/fictional-session").mkdir(parents=True)

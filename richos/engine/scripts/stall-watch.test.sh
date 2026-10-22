@@ -823,6 +823,34 @@ check "T4c  the quota reset passes: RELEASE DUE for the quota pause" \
 OUT="$(STALL_WATCH_NOW=$(( $(date +%s) + 1860 )) bash "$SW" --once 2>&1)"; RC=$?
 check "HD3  --once lists the holds too" "$( has "$OUT" "[HELD] quebec-opus-s1"; echo $?)" "out=$OUT"
 
+# Second review rv-20261022T013056Z-12c77c90-1291, finding 4: in the app the watcher runs in Stu's
+# lease, and a hold of Rich's lease (another RUNNING session of the same conversation partition)
+# must still be told; in a terminal another running session's holds stay that session's.
+new_registry hd4; new_state hd4
+SID_RICH="beadfeed-0000-4000-8000-0000000rich1"
+python3 - "$RICHOS_WORKSPACES_DIR" "$SID" "$SID_RICH" <<'PY2'
+import json, os, shutil, sys
+reg, sid, rich = sys.argv[1:4]
+shutil.copy(os.path.join(reg, "sessions", sid + ".json"), os.path.join(reg, "sessions", rich + ".json"))
+PY2
+add_agent victor-opus-a1 a0000000000fixv "$SID_RICH" 3600 3500 3000 end
+python3 - "$ENGINE" "$SID_RICH" <<'PY2'
+import os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "mega-lander"))
+import workspaces as ws
+ws.wait("%s--victor-opus-a1" % sys.argv[2], "started", "code done, real-app checks left", "", sys.argv[2])
+rec = ws.load_agent("%s--victor-opus-a1" % sys.argv[2])
+rec["waiting"]["at"] = time.time() - 40 * 60
+ws.save_agent(rec)
+PY2
+tick 0
+check "HD4  a terminal session does not tell another running session's hold" \
+    "$( ! has "$OUT" "victor-opus-a1: held by Rich"; echo $?)" "out=$OUT"
+new_state hd4b
+OUT="$(RICHOS_APP_ENTITY=acme RICHOS_APP_THREAD=thread-1 STALL_WATCH_NOW=$(date +%s) bash "$SW" --tick 2>&1)"
+check "HD5  in the app (one conversation's partition) Stu's watcher tells the hold of Rich's running lease" \
+    "$( has "$OUT" "[HELD] victor-opus-a1: held by Rich"; echo $?)" "out=$OUT"
+
 # --- E: a teammate's escalation wakes an idle lead (2026-10-01) ---------------
 # richos-hq docs/operations/2026-10-01-escalation-wakes-the-lead.md, built past
 # Sage's review (richos-hq 8ba32b71). Every case below that asserts silence is

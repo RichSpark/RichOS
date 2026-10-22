@@ -234,6 +234,15 @@ def handle(payload):
     if event in ("SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure"):
         work.observe(scope(), payload)
     if event == "Stop":
+        # A REPLY THAT HOLDS WORK OPENS A HOLD here too (second review
+        # rv-20261022T013056Z-12c77c90-1291, finding 1): the same analyzer as the terminal's
+        # deferral notice, writing into this conversation's registry, whose lines open Rich's
+        # next turn. Its notice text is the terminal's; nothing of it is printed here.
+        held = subprocess.run([sys.executable, str(ENGINE / "scripts/hooks/guard-unasked-deferral.py")],
+                              input=json.dumps(payload), text=True, capture_output=True, timeout=20)
+        if held.returncode not in (0, 3, 4):
+            print(f"RichOS desktop engine: the hold check failed (exit {held.returncode}): "
+                  f"{held.stderr.strip()[-300:]}", file=sys.stderr)
         # Context-only priming is host machinery, not a new assignment or promise.
         # The same host grant controls mutation tools and the visible-turn analyzer.
         active = scope()
