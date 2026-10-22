@@ -407,7 +407,7 @@ pub enum ReadError {
     SignedInNoLimits,
 }
 impl ReadError {
-    fn message(self) -> &'static str {
+    fn ceo_message(self) -> &'static str {
         match self {
             Self::Unsupported => "Claude Code did not report subscription limits for this account.",
             Self::SignedOut => "This Claude account is not signed in on this Mac.",
@@ -517,7 +517,17 @@ pub fn normalize(response: &Value) -> Result<Vec<Window>, ReadError> {
 
 pub trait Source: Send {
     fn read(&mut self, bin: &Path, cwd: &Path) -> Result<Vec<Window>, ReadError>;
+    /// Technical evidence for the last failed read. Never used as the card's message.
+    fn diagnostic(&self) -> Option<&str> { None }
     fn disconnect(&mut self) {}
+}
+
+#[derive(Debug)]
+pub enum AccountEmailError { MissingAccount }
+impl AccountEmailError {
+    pub fn ceo_message(&self) -> &'static str {
+        match self { Self::MissingAccount => "That account is no longer on this Mac." }
+    }
 }
 
 #[derive(Default)]
@@ -717,7 +727,7 @@ impl Snapshot {
         self.retry_at = Some(observed + BACKOFF_MS);
     }
     /// **A reading the lease itself streamed** (`rate_limit_event`), merged window by window
-    /// over the probe's. It never clears a probe error or its backoff; it only adds what it saw.
+    /// over the probe's. It keeps probe errors except a sign-out disproved by this reading.
     fn observe(&mut self, windows: &[Window], observed: u64) {
         if self.checked_at.is_some_and(|t| observed <= t) { return; }
         self.measure(windows, observed);
@@ -728,7 +738,19 @@ impl Snapshot {
             }
         }
         self.checked_at = Some(observed);
-        self.signed_in = Some(true);
+        self.auth_known(true, observed);
+    }
+    /// An auth answer must update the whole visible fact, not leave a contradictory message.
+    fn auth_known(&mut self, signed_in: bool, observed: u64) {
+        if !signed_in {
+            self.empty(ReadError::SignedOut, observed);
+        } else {
+            self.signed_in = Some(true);
+            if self.error == Some(ReadError::SignedOut) {
+                self.error = None;
+                self.retry_at = None;
+            }
+        }
     }
     fn view(&self, policy: Policy, now: u64) -> View {
         self.view_with(policy, None, now)
@@ -833,7 +855,7 @@ impl Snapshot {
             }),
             refresh_interval_ms: interval,
             retry_at: self.retry_at.filter(|t| *t > now),
-            message: self.error.map(|e| e.message().into()),
+            message: self.error.map(|e| e.ceo_message().into()),
             signed_in: self.signed_in(),
             policy,
             admission,
@@ -1517,21 +1539,34 @@ impl Service {
     /// `Connected` is signed in and `SignedOut` is signed out; any other answer (`Connecting`,
     /// `Cancelled`, `Failed`, `Unavailable`) says nothing and leaves the record as it was. The
     /// usage reads write the same field themselves (`Snapshot::accept`, `observe`, `empty`).
-    /// Account 1's record may just have been cleared by a changed connection
-    /// (`set_connecting`); an added account's is made here if no read has made it yet.
+    /// A changed connection retires usage figures, not the last auth verdict; an added
+    /// account's record is made here if no read has made it yet.
     pub fn sign_in_known(&self, id: &str, auth: &crate::provider_auth::AuthState) {
         use crate::provider_auth::AuthState;
         let known = match auth { AuthState::Connected => true, AuthState::SignedOut => false, _ => return };
+        let observed = crate::util::now_millis();
         if id == crate::claude_accounts::ACCOUNT_ONE {
-            self.snapshot.lock().unwrap().signed_in = Some(known);
+            self.snapshot.lock().unwrap().auth_known(known, observed);
         } else if let Some(folder) = self.accounts.folder(id) {
             let mut extra = self.extra.lock().unwrap();
             let (_, snapshot) = extra.entry(id.to_string()).or_insert_with(|| self.reader(folder));
-            snapshot.signed_in = Some(known);
+            snapshot.auth_known(known, observed);
         }
         if let Err(error) = self.publish() {
             eprintln!("[richos] quota snapshot: {error}");
         }
+    }
+    /// Show email reads an auth verdict too. Keep its boolean, never its address or account ID.
+    pub fn account_email(&self, bin: &Path, id: &str) -> Result<crate::provider_auth::SignedInAs, AccountEmailError> {
+        use crate::provider_auth::{AuthState, SignedInAs};
+        let folder = self.accounts.sign_in_folder(id).ok_or(AccountEmailError::MissingAccount)?;
+        let answer = crate::provider_auth::signed_in_as(bin, folder.as_deref());
+        match &answer {
+            SignedInAs::Email { .. } => self.sign_in_known(id, &AuthState::Connected),
+            SignedInAs::SignedOut => self.sign_in_known(id, &AuthState::SignedOut),
+            SignedInAs::Unknown => {}
+        }
+        Ok(answer)
     }
     /// A used weekly reset ends Account 1's READING (`refresh`), not its sign-in: the account
     /// is still signed in as it was, so the verdict is kept with the new, empty record.
@@ -1600,6 +1635,11 @@ impl Service {
             // for this account is shared, exactly as Account 1's is (`refresh_windows`).
             let Ok(mut source) = reader.try_lock() else { continue };
             let result = source.read(bin, &self.cwd);
+            if result.is_err() {
+                if let Some(detail) = source.diagnostic() {
+                    eprintln!("[richos] quota reader {}: {detail}", account.id);
+                }
+            }
             drop(source);
             let observed = crate::util::now_millis();
             let mut extra = self.extra.lock().unwrap();
@@ -1702,6 +1742,11 @@ impl Service {
             return self.view();
         }
         let result = source.read(bin, &self.cwd);
+        if result.is_err() {
+            if let Some(detail) = source.diagnostic() {
+                eprintln!("[richos] quota reader 1: {detail}");
+            }
+        }
         let observed = crate::util::now_millis();
         let mut snapshot = self.snapshot.lock().unwrap();
         match result {
@@ -1722,14 +1767,22 @@ impl Service {
             .swap(connecting, std::sync::atomic::Ordering::SeqCst)
             != connecting
         {
-            self.disconnect();
+            // Starting or canceling browser login says nothing about the existing sign-in.
+            // Forget its usage figures and probe, but keep the last actual auth verdict.
+            self.clear_connection(true);
         }
     }
     /// Called when the account connection changes. Old account readings cannot survive it.
     pub fn disconnect(&self) {
+        self.clear_connection(false);
+    }
+    fn clear_connection(&self, keep_sign_in: bool) {
         self.source.lock().unwrap().disconnect();
         self.resets.clear_connection();
-        *self.snapshot.lock().unwrap() = Snapshot::default();
+        let mut snapshot = self.snapshot.lock().unwrap();
+        let signed_in = if keep_sign_in { snapshot.signed_in } else { None };
+        *snapshot = Snapshot { signed_in, ..Snapshot::default() };
+        drop(snapshot);
         let _best_effort = self.publish();
         self.request_refresh();
     }
@@ -2469,6 +2522,8 @@ pub(crate) mod tests {
         let rows: Vec<Row> = vec![
             ("startup check: signed in", Who::Both, Some(false), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Connected)), Some(true)),
             ("startup check: signed out", Who::Both, Some(true), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::SignedOut)), Some(false)),
+            ("auth check: signed out after a usage reading", Who::Both, Some(true),
+                Box::new(|s, id, at| { record(s, id, |r| r.accept(live(10.).windows, at)); s.sign_in_known(id, &AuthState::SignedOut); }), Some(false)),
             ("startup check: no answer", Who::Both, Some(true), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Failed)), Some(true)),
             ("startup check: Claude Code missing", Who::Both, Some(false), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Unavailable)), Some(false)),
             ("browser sign-in: the connection changes, then Connected", Who::AccountOne, Some(false),
@@ -2476,6 +2531,10 @@ pub(crate) mod tests {
             ("browser sign-in: Connected, no record yet", Who::Added, None, Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Connected)), Some(true)),
             ("browser sign-in: Connected after signed out", Who::Added, Some(false), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Connected)), Some(true)),
             ("browser sign-in: stopped before it finished", Who::Both, Some(false), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Cancelled)), Some(false)),
+            ("browser sign-in: Account 1 canceled after the connection changes", Who::AccountOne, Some(false),
+                Box::new(|s, id, _| { s.set_connecting(true); s.set_connecting(false); s.sign_in_known(id, &AuthState::Cancelled); }), Some(false)),
+            ("browser sign-in: Account 1 failed after the connection changes", Who::AccountOne, Some(true),
+                Box::new(|s, id, _| { s.set_connecting(true); s.set_connecting(false); s.sign_in_known(id, &AuthState::Failed); }), Some(true)),
             ("usage read: a reading", Who::Both, Some(false), Box::new(|s, id, at| record(s, id, |r| r.accept(live(10.).windows, at))), Some(true)),
             ("usage read: streamed by the lease", Who::Both, Some(false), Box::new(|s, id, at| record(s, id, |r| r.observe(&live(10.).windows, at))), Some(true)),
             ("usage read: signed out", Who::Both, Some(true), Box::new(read_as(ReadError::SignedOut)), Some(false)),
@@ -2507,6 +2566,15 @@ pub(crate) mod tests {
                 }
                 event(&service, &id, now + 1);
                 let after = verdict(&service, &id);
+                let account = service.view().accounts.into_iter().find(|a| a.id == id);
+                let message = account.as_ref().and_then(|a| a.message.clone()).unwrap_or_default();
+                if *want == Some(false) && account.is_some_and(|a| !a.windows.is_empty()) {
+                    failures.push(format!("{place} (account {id}): signed out but still carrying usage figures"));
+                }
+                if (*want == Some(true) && message.contains("not signed in"))
+                    || (*want == Some(false) && message.contains("is signed in")) {
+                    failures.push(format!("{place} (account {id}): {want:?} contradicts its message: {message}"));
+                }
                 let after_failed = if service.accounts.folder(&id).is_some() || one {
                     record(&service, &id, |r| r.empty(ReadError::Failed, now + 2));
                     verdict(&service, &id)
@@ -2517,6 +2585,40 @@ pub(crate) mod tests {
             }
         }
         assert!(failures.is_empty(), "{} place(s) do not keep the sign-in:\n{}", failures.len(), failures.join("\n"));
+    }
+
+    #[test]
+    fn revealing_an_email_keeps_only_its_auth_verdict_and_never_a_contradictory_message() {
+        use std::os::unix::fs::PermissionsExt;
+        use crate::provider_auth::{AuthState, SignedInAs};
+        let root = Scratch::new();
+        let service = Service::open(root.path()).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        let bin = root.path().join("claude-fixture");
+        fs::write(&bin, "#!/usr/bin/env python3\nfrom pathlib import Path\nprint(Path(__file__).with_suffix('.json').read_text())\n").unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+        for id in ["1", work.id.as_str()] {
+            service.sign_in_known(id, &AuthState::SignedOut);
+            fs::write(bin.with_extension("json"), r#"{"loggedIn":true,"email":"reader@fixture.invalid","orgId":"private-fixture-org"}"#).unwrap();
+            assert!(matches!(service.account_email(&bin, id).unwrap(), SignedInAs::Email { .. }));
+            let view = service.view();
+            let account = view.accounts.iter().find(|a| a.id == id).unwrap();
+            assert_eq!(account.signed_in, Some(true));
+            assert!(!account.message.as_deref().unwrap_or("").contains("not signed in"));
+            let serialized = serde_json::to_string(&view).unwrap();
+            assert!(!serialized.contains("reader@fixture.invalid") && !serialized.contains("private-fixture-org"));
+            fs::write(bin.with_extension("json"), r#"{"loggedIn":false}"#).unwrap();
+            assert_eq!(service.account_email(&bin, id).unwrap(), SignedInAs::SignedOut);
+            let view = service.view();
+            let account = view.accounts.iter().find(|a| a.id == id).unwrap();
+            assert_eq!(account.signed_in, Some(false));
+            assert!(account.windows.is_empty());
+            assert!(account.message.as_deref().unwrap().contains("not signed in"));
+            fs::write(bin.with_extension("json"), "{}").unwrap();
+            assert_eq!(service.account_email(&bin, id).unwrap(), SignedInAs::Unknown);
+            assert_eq!(service.view().accounts.iter().find(|a| a.id == id).unwrap().signed_in, Some(false));
+        }
+        assert!(service.account_email(&bin, "missing").is_err());
     }
 
     #[test]

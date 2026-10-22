@@ -333,6 +333,59 @@ class DesktopWork(unittest.TestCase):
         # The same request for another teammate is different work.
         with self.assertRaisesRegex(ValueError,"different work"):self.call("prepare",{**self.args,"teammate":"mark"})
 
+    def test_prepare_runs_one_job_on_a_named_model_within_the_users_ceiling(self):
+        """Build plan item 7 (richos-hq docs/plans/2026-10-21-everything-for-every-user.md): an
+        optional `model` runs this one job on another model than the teammate's default. It must
+        be one the user's ALLOWED_MODELS lists; the user's MODEL_CEILING is applied by
+        guard-model-ceiling.sh at the spawn, as for every other dispatch; a move below the
+        definition's default states its reason, as the isolation guard asks of any spawn."""
+        (self.root/"spawn-hooks.json").write_text(json.dumps({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[
+            {"type":"command","command":f"/bin/bash '{ENGINE}/scripts/hooks/{name}'"} for name in ("guard-worktree-isolation.sh","guard-model-ceiling.sh")]}]}}))
+        (self.coord/"orchestration.config").write_text('ALLOWED_MODELS="fable opus sonnet haiku"\n'
+                                                       'MODEL_TIERS="fable > opus > sonnet > haiku"\nMODEL_CEILING="opus"\n')
+        with self.assertRaisesRegex(ValueError,"model must be one of fable, opus, sonnet, haiku"):
+            self.call("prepare",{**self.args,"request_id":"unknown-model","model":"gpt"})
+        self.assertEqual(self.call("inspect")["records"],[],"a model nobody allows left a receipt")
+        # Above the default and within the ceiling: Mark (sonnet) on Opus for this one job.
+        ready=self.call("prepare",{**self.args,"request_id":"stronger","model":"opus"})
+        self.assertEqual(ready["status"],"prepared")
+        self.assertRegex(ready["name"],r"^mark-opus-[0-9a-f]{12}$")
+        self.assertEqual(ready["agent_payload"]["model"],"opus")
+        self.assertEqual(ready["request"]["model"],"opus")
+        # The same request on the teammate's own model is different work.
+        with self.assertRaisesRegex(ValueError,"different work"):
+            self.call("prepare",{**self.args,"request_id":"stronger"})
+        # Above the user's ceiling: refused at the spawn, nothing created.
+        with self.assertRaisesRegex(Exception,"more expensive model"):
+            self.call("prepare",{**self.args,"request_id":"above","model":"fable","title":"Above the ceiling"})
+        above=next(r for r in self.call("inspect")["records"] if r["request"].get("model")=="fable")
+        self.assertNotIn("agent_payload",above)
+        self.assertIn("more expensive model",above["problem"])
+        # Below the definition's default: with its reason stated, it starts.
+        cheaper=self.call("prepare",{**self.args,"request_id":"cheaper","model":"haiku","title":"Cheaper",
+            "brief":"model-downgrade-ack: a one-line rename that needs no reasoning at all\n"+self.args["brief"]})
+        self.assertRegex(cheaper["name"],r"^mark-haiku-[0-9a-f]{12}$")
+        self.assertEqual(cheaper["agent_payload"]["model"],"haiku")
+        # A user whose allowed list and ceiling sit below a teammate's own default can still run
+        # that teammate on a model they allow (mid-job review rv-20261021T164124Z-0fe64c41-a94a,
+        # finding 1): only the model the job runs on is checked, never the default it replaces.
+        (self.coord/"orchestration.config").write_text('ALLOWED_MODELS="fable sonnet haiku"\n'
+                                                       'MODEL_TIERS="fable > opus > sonnet > haiku"\nMODEL_CEILING="sonnet"\n')
+        frank={**self.args,"teammate":"frank","obligation_id":"fixture-task"}
+        on_sonnet=self.call("prepare",{**frank,"request_id":"frank-sonnet","model":"sonnet","title":"Frank on Sonnet",
+            "brief":"model-downgrade-ack: the user's own ceiling is sonnet, below this teammate's default\n"+self.args["brief"]})
+        self.assertEqual(on_sonnet["status"],"prepared")
+        self.assertRegex(on_sonnet["name"],r"^frank-sonnet-[0-9a-f]{12}$")
+        self.assertEqual(on_sonnet["agent_payload"]["model"],"sonnet")
+        with self.assertRaisesRegex(Exception,"more expensive model"):
+            self.call("prepare",{**frank,"request_id":"frank-fable","model":"fable","title":"Frank on Fable"})
+        # With no model named, the teammate's own default still has to be one the user allows.
+        with self.assertRaisesRegex(ValueError,"frank's definition names no model this app can start"):
+            self.call("prepare",{**frank,"request_id":"frank-default","title":"Frank on his own model"})
+        # The field is in the tool's schema, so the back end can pass it.
+        prepare_tool=next(t for t in self.app.available_tools() if t["name"]=="prepare")
+        self.assertIn("model",prepare_tool["inputSchema"]["properties"])
+
     def test_a_consult_may_make_the_media_skills_working_folder_and_no_other_file(self):
         """Every teammate's standing instruction sends a recording to `watch-video` or
         `audio-transcription` (CEO 2026-10-10), and both make a working folder for frames,

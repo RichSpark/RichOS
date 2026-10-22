@@ -48,6 +48,34 @@ signed in on this Mac." and once a check answered something else it says what.
 
 | Place | Status |
 |---|---|
-| `ui/quota.js` "No reading yet." (Technical view's detailed quota row) | Open. Technical view only; the account card everyone sees is fixed. The same `signedIn` field is in the view it reads. |
-| `ui/accounts.js` an added account with no reading is drawn "Not signed in" | The opposite error (asserting signed out without knowing). Open: the view now carries `signedIn` per added account, so the card can tell the two apart; that card is round 18's chosen design and is changed only with a design round. |
+| `ui/quota.js` Technical quota panel and account lanes | Guarded: the panel distinguishes signed out, signed in without figures and an unknown sign-in. It never asks an account known to be signed in to sign in for want of usage figures. The quota browser suite checks each state and its recovery controls. |
+| `ui/accounts.js` an added account with no reading | Unknown is now explicitly unconfirmed for either account, active or idle. A failed check says what failed without claiming sign-out. No empty meters are drawn without a reading. |
 | The "outcome not recorded" marks on tool rows | The update and machinery work of the same day; see its class file in this folder. |
+
+## Browser sign-in transitions
+
+Starting or stopping the browser login does not itself establish a new authentication verdict.
+`Service::set_connecting` retires the probe and usage figures but preserves the last known
+sign-in. Explicit disconnect still clears it. The table test
+`every_place_the_sign_in_becomes_known_writes_it_and_a_failed_read_never_erases_it` includes
+cancellation and failure through both real connection transitions, rather than merely passing
+`Cancelled` to the final setter. `ui/tests/accounts.js` also covers an unknown verdict for
+either account, active or idle, before a check and after a failed check, in both themes.
+
+A known sign-in alone does not establish that subscription limits are absent. The card and
+Technical view say only that it is signed in until a usage response establishes more.
+
+## A verdict and its message are one fact
+
+`Snapshot::auth_known` updates the boolean, the auth-specific message and obsolete figures
+together. An explicit sign-out clears old usage figures; a signed-in answer or streamed
+usage reading clears an obsolete signed-out error. Other failed usage reads still leave the
+known sign-in standing. The transition table checks messages as well as booleans and refuses
+a signed-out account retaining usage figures.
+
+Show email uses `Service::account_email`, which records the sign-in verdict from the same
+provider answer and returns the address only for its existing temporary display. No address
+or organization identifier enters the quota snapshot. The production-method test
+`revealing_an_email_keeps_only_its_auth_verdict_and_never_a_contradictory_message` exercises
+both accounts, signed in, signed out and no answer. The browser suite verifies that the
+card reflects that verdict immediately instead of contradicting its revealed address.

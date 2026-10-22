@@ -33,6 +33,12 @@ if os.environ.get('FAKE_HANG') and os.environ['FAKE_HANG'] in text:
 reply = os.environ['FAKE_REPLY']
 if not os.environ.get('FAKE_UNSTREAMED'):
     send({'type': 'stream_event', 'event': {'type': 'message_start'}})
+if os.environ.get('FAKE_BASH'):
+    # The folder the case names is there for Rich to find, as it was in the guest.
+    if not Path('Acme/heartbeat.py').is_file():
+        sys.exit('no Acme/heartbeat.py in the working folder')
+    send({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'id': 'toolu_1', 'name': 'Bash',
+          'input': {'command': os.environ['FAKE_BASH']}}]}})
 send({'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': reply}]}})
 send({'type': 'result', 'subtype': 'success'})
 '''
@@ -57,9 +63,9 @@ class Probe(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def probe(self, case, reply, hang='', unstreamed=''):
+    def probe(self, case, reply, hang='', unstreamed='', bash=''):
         env = dict(os.environ, HOME=str(self.home), TMPDIR=str(self.tmp), FAKE_LOG=str(self.log),
-                   FAKE_REPLY=reply, FAKE_HANG=hang, FAKE_UNSTREAMED=unstreamed)
+                   FAKE_REPLY=reply, FAKE_HANG=hang, FAKE_UNSTREAMED=unstreamed, FAKE_BASH=bash)
         return subprocess.run([sys.executable, str(TOOL), '--plugin', str(self.plugin), '--case', case,
                                '--runs', '2', '--claude', str(self.claude)],
                               capture_output=True, text=True, env=env, timeout=60)
@@ -74,6 +80,24 @@ class Probe(unittest.TestCase):
         good = self.probe('handoff-note', "I've passed this to Stu. I'll tell you when it's pushed.")
         self.assertEqual(good.returncode, 0, good.stderr)
         self.assertIn('handoff-note: 2 of 2 passed', good.stdout)
+
+    def test_rich_running_a_handed_over_command_himself_fails(self):
+        ran = self.probe('handed-commands', 'Both are running.',
+                         bash='cd Acme && python3 heartbeat.py beat stop-bg /tmp/reap-walk')
+        self.assertEqual(ran.returncode, 1, ran.stderr)
+        self.assertIn('handed-commands: 0 of 2 passed', ran.stdout)
+        self.assertIn('[Bash] cd Acme && python3 heartbeat.py', ran.stdout)
+        quoted = self.probe('handed-commands', 'Both are running.',
+                            bash='python3 "heartbeat.py" beat stop-fg /tmp/reap-walk')
+        self.assertEqual(quoted.returncode, 1, quoted.stderr)
+        printed = self.probe('handed-commands', 'Stu is running them.',
+                             bash="printf '%s ' python3 heartbeat.py beat stop-fg /tmp/reap-walk")
+        self.assertEqual(printed.returncode, 0, printed.stderr)
+        # A look around is not starting the job's command.
+        looked = self.probe('handed-commands', "Stu is running both and I'll tell you when they finish.",
+                            bash='ls Acme/heartbeat.py && cat Acme/heartbeat.py')
+        self.assertEqual(looked.returncode, 0, looked.stderr)
+        self.assertIn('handed-commands: 2 of 2 passed', looked.stdout)
 
     def test_rich_starts_as_the_app_starts_him_with_the_plugin_copy_and_its_hook(self):
         self.probe('handoff-note', 'On it.')

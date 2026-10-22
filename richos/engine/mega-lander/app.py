@@ -895,15 +895,15 @@ CONSULT_ANSWER_LIMIT = 100000
 TEAMMATE_NAME = re.compile(r"[a-z][a-z0-9]{1,15}")
 
 
-def teammate_model(teammate):
-    """The model an ACTIVE teammate runs on: its own definition's `model:` line (plan §5).
+def active_definition(teammate):
+    """The frontmatter of an ACTIVE teammate's definition, whose `model:` line is the model it
+    runs on unless one job names another (plan §5; `job_model`).
 
     Active means on the roster this lease registered, `<entity root>/.claude/agents/`, which
     is the same file the isolation guard resolves `richos-app-engine:<teammate>` to and the
     same bytes the lease's plugin carries (`EngineProfile::prepare`). A name that is not
-    there is refused with the names that are. The `model:` line gets the guard's own reading
-    (scripts/lib/resolve-model.sh): the first frontmatter block, lowercased, a verbose id
-    reduced to the alias it contains, which must be one ALLOWED_MODELS lists."""
+    there is refused with the names that are. The frontmatter gets the guard's own reading
+    (scripts/lib/resolve-model.sh): the first frontmatter block, lowercased (`front_matter`)."""
     if not TEAMMATE_NAME.fullmatch(teammate):
         raise ValueError("teammate must be an active teammate's name: 2 to 16 lowercase letters and digits")
     root = Path(os.environ["RICHOS_ENTITY_ROOT"])
@@ -912,7 +912,7 @@ def teammate_model(teammate):
     if teammate in DUTIES or path.is_symlink() or not path.is_file():
         active = sorted(p.stem for p in roster.glob("*.md") if TEAMMATE_NAME.fullmatch(p.stem) and p.stem not in DUTIES)
         raise ValueError(f"{teammate} is not an active teammate. Active teammates: {', '.join(active) or 'none'}")
-    return definition_model(teammate, front_matter(path.read_text(encoding="utf-8")))
+    return front_matter(path.read_text(encoding="utf-8"))
 
 
 def front_matter(body):
@@ -928,21 +928,48 @@ def front_matter(body):
     return front
 
 
+def require_named(teammate, front):
+    """A definition can be started only by the name it gives itself."""
+    if front.get("name") != teammate:
+        raise ValueError(f"{teammate}'s definition names itself {front.get('name')!r}, so it cannot be started by that name")
+
+
 def definition_model(teammate, front):
     """The model a definition named `teammate` starts on, or a refusal saying why it cannot be
     started by that name: its `name:` must be `teammate` and its `model:` must contain one of
     the coordination folder's ALLOWED_MODELS (a verbose id reduced to the alias it contains)."""
-    if front.get("name") != teammate:
-        raise ValueError(f"{teammate}'s definition names itself {front.get('name')!r}, so it cannot be started by that name")
-    config = (Path(os.environ["RICHOS_ENTITY_ROOT"]) / "orchestration.config").read_text(encoding="utf-8")
-    allowed = re.search(r'^ALLOWED_MODELS="([^"]*)"', config, re.M)
-    allowed = allowed.group(1).split() if allowed else []
+    require_named(teammate, front)
+    allowed = allowed_models()
     written = front.get("model", "").lower()
     model = next((m for m in allowed if m in written), None)
     if not model:
         raise ValueError(f"{teammate}'s definition names no model this app can start "
                          f"(model: {written or 'missing'}; one of {', '.join(allowed)})")
     return model
+
+
+def allowed_models():
+    """The coordination folder's ALLOWED_MODELS: the user's list where the user's
+    orchestration.config sets one, the engine's otherwise (user_settings.rs)."""
+    config = (Path(os.environ["RICHOS_ENTITY_ROOT"]) / "orchestration.config").read_text(encoding="utf-8")
+    allowed = re.search(r'^ALLOWED_MODELS="([^"]*)"', config, re.M)
+    return allowed.group(1).split() if allowed else []
+
+
+def job_model(teammate, chosen):
+    """The model one job runs on (build plan item 7): `chosen` when the back end names one,
+    which must be an alias the user's ALLOWED_MODELS lists, otherwise the teammate's own
+    default. Only the model the job runs on is checked, so a teammate whose default the user
+    does not allow can still run on one they do. The cost ceiling is guard-model-ceiling.sh's,
+    at the spawn, as for any dispatch."""
+    front = active_definition(teammate)
+    if chosen is None:
+        return definition_model(teammate, front)
+    require_named(teammate, front)
+    allowed = allowed_models()
+    if chosen not in allowed:
+        raise ValueError(f"model must be one of {', '.join(allowed)}, or left out for {teammate}'s own model")
+    return chosen
 
 
 # **THE SHELF AND THE USER'S OWN TEAM** (proto-teammate shelf plan §2, §4 and §10; slice 4).
@@ -1122,7 +1149,7 @@ def save_words(path, words):
 
 
 def prepare(scope_path, scope, args):
-    if set(args) - {"request_id","obligation_id","repo","repos","title","brief","role","teammate","integration","base","review_of","continue_of"}:
+    if set(args) - {"request_id","obligation_id","repo","repos","title","brief","role","teammate","model","integration","base","review_of","continue_of"}:
         raise ValueError("unsupported preparation fields")
     request_id = text(args,"request_id",128)
     # **THE SCOPE WINS, AND IT WINS SILENTLY** -- see `carried_obligation`. A work
@@ -1152,10 +1179,14 @@ def prepare(scope_path, scope, args):
     else:
         repo, repos_all = connected_repositories(scope, args)
     teammate = text(args,"teammate",64)
-    model = teammate_model(teammate)
+    chosen = text(args,"model",16) if args.get("model") is not None else None
+    model = job_model(teammate, chosen)
     title, brief = text(args,"title",256), sent_text(args,"brief",BRIEF_LIMIT)
     normalized = {"obligation_id":obligation,"repo":str(repo) if repo else None,"repos":[str(r) for r in repos_all],"title":title,"brief":brief,"role":role,"teammate":teammate,
         "integration":args.get("integration"),"base":args.get("base"),"review_of":args.get("review_of"),"continue_of":args.get("continue_of")}
+    if chosen is not None:
+        # Only when named, so a receipt written before this field compares equal on a retry.
+        normalized["model"] = chosen
     identity = hashlib.sha256(json.dumps([scope["binding"]["entity_id"],scope["binding"]["thread_id"],request_id],separators=(",", ":")).encode()).hexdigest()
     # The conversation-wide lock is held while the request is checked and its
     # receipt written, and RELEASED (lock_stack.close() below) before the spawn
@@ -2557,7 +2588,7 @@ TOOLS = [
     {"name":"complete","description":"Close a code assignment in ECS only after every requirement is satisfied and every final worker has a passing independent review, verified local integration and completed cleanup. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Supply all final worker receipts, across every repository. Unresolved execution or omitted work is refused. Do not use this to claim unrelated or unverified business outcomes. For an assignment without implementation work, supply answer with your verified outcome instead of worker_ids. Unresolved execution and code work refuse this answer-only path. Completion updates the operational record but never sends Rich a message. Local completion never means publication.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"answer":{"type":"string","minLength":1,"maxLength":262144},"worker_ids":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":50}},"required":[],"additionalProperties":False}},
     {"name":"report","description":"Keep the selected operational assignment current: running when you begin handling it, or failed when you cannot complete it. Supply the real obligation_id from the record. This never dispatches work or sends Rich a message. Completion uses complete and its evidence checks.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"state":{"type":"string","enum":["running","failed"]},"detail":{"type":"string","maxLength":4096}},"required":["obligation_id","state","detail"],"additionalProperties":False}},
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
-    {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs on its own model with its own definition, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns agent_payload only while no dispatch has been attempted. Submit that exact JSON to Agent once. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A failed preparation that never dispatched is settled when a new request_id prepares a replacement: anything it created is withdrawn, and dirty files are refused rather than discarded. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
+    {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns agent_payload only while no dispatch has been attempted. Submit that exact JSON to Agent once. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A failed preparation that never dispatched is settled when a new request_id prepares a replacement: anything it created is withdrawn, and dirty files are refused rather than discarded. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
     {"name":"integrate","description":"After an authorized implementation and an actual passing independent review, merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id","reviewer_id"],"additionalProperties":False}},
     {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. New teammates become available to Agent after this turn through the native plugin reload, without replacing Stu or stopping running workers. Changes to an existing definition take effect in a new Stu session.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart.","inputSchema":{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":False}},
