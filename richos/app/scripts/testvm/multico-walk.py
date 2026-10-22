@@ -46,6 +46,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('command_walk', HERE / 'command-walk.py')
 cw = importlib.util.module_from_spec(_spec)
@@ -66,13 +67,13 @@ class Walk(cw.CommandWalk):
         self.beta = self.home + '/Beta'
 
     def ax(self, mode, *args, app=None, timeout=150):
-        # A read that hits ax.sh's own guest deadline on a loaded host is asked again, at most five
-        # times in all (folders-walk.py's rule); any other failure is raised as before.
+        # A read (find, tree) with no answer on a loaded host is asked again, at most five times in
+        # all; a click is sent once (axwait.ask_again); any other failure is raised as before.
         for attempt in range(5):
             try:
                 return super().ax(mode, *args, app=app, timeout=timeout)
             except StepFailed as exc:
-                if ('guest_deadline' not in str(exc) and 'failed (124)' not in str(exc)) or attempt == 4:
+                if not axwait.ask_again(exc, mode) or attempt == 4:
                     raise
                 time.sleep(5)
 
@@ -83,7 +84,7 @@ class Walk(cw.CommandWalk):
                 if self.ax('find', *flags, words, '--contains'):
                     return True
             except StepFailed as exc:
-                if 'notfound' not in str(exc) and 'nothing matched' not in str(exc):
+                if not axwait.absent(exc):
                     raise
         return False
 
@@ -195,7 +196,7 @@ class Walk(cw.CommandWalk):
                 break
             except StepFailed as exc:
                 self.shot(f'second-company-no-rail-{attempt}.png')
-                if attempt or 'notfound' not in str(exc):
+                if attempt or not axwait.absent(exc):
                     raise
                 self.ax('click', '--id', 'rail-toggle')
                 time.sleep(2)
