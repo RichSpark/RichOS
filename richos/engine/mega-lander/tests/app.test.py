@@ -41,6 +41,10 @@ def _alive(pid):
 
 # The first line of each duty text (engine/mega-lander/duties/), which prepare puts at the top.
 DUTY_TOP={"worker":"# Your duty in this assignment: implement","reviewer":"# Your duty in this assignment: review"}
+# The heading a repository's own instruction file sits under in a brief: the words the duties use.
+REPOSITORY_INSTRUCTIONS="## The repository's own instructions"
+# Every instruction-file name Claude Code or Codex reads at a folder's root.
+INSTRUCTION_NAMES={"CLAUDE.md","CLAUDE.local.md","AGENTS.md","AGENTS.override.md"}
 
 class DesktopWork(unittest.TestCase):
     def test_stu_replaces_legacy_host_interruption_but_cannot_override_user_stop(self):
@@ -332,6 +336,59 @@ class DesktopWork(unittest.TestCase):
         self.assertNotIn(DUTY_TOP["reviewer"],payload["prompt"])
         # The same request for another teammate is different work.
         with self.assertRaisesRegex(ValueError,"different work"):self.call("prepare",{**self.args,"teammate":"mark"})
+
+    def test_prepare_runs_one_job_on_a_named_model_within_the_users_ceiling(self):
+        """Build plan item 7 (richos-hq docs/plans/2026-10-21-everything-for-every-user.md): an
+        optional `model` runs this one job on another model than the teammate's default. It must
+        be one the user's ALLOWED_MODELS lists; the user's MODEL_CEILING is applied by
+        guard-model-ceiling.sh at the spawn, as for every other dispatch; a move below the
+        definition's default states its reason, as the isolation guard asks of any spawn."""
+        (self.root/"spawn-hooks.json").write_text(json.dumps({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[
+            {"type":"command","command":f"/bin/bash '{ENGINE}/scripts/hooks/{name}'"} for name in ("guard-worktree-isolation.sh","guard-model-ceiling.sh")]}]}}))
+        (self.coord/"orchestration.config").write_text('ALLOWED_MODELS="fable opus sonnet haiku"\n'
+                                                       'MODEL_TIERS="fable > opus > sonnet > haiku"\nMODEL_CEILING="opus"\n')
+        with self.assertRaisesRegex(ValueError,"model must be one of fable, opus, sonnet, haiku"):
+            self.call("prepare",{**self.args,"request_id":"unknown-model","model":"gpt"})
+        self.assertEqual(self.call("inspect")["records"],[],"a model nobody allows left a receipt")
+        # Above the default and within the ceiling: Mark (sonnet) on Opus for this one job.
+        ready=self.call("prepare",{**self.args,"request_id":"stronger","model":"opus"})
+        self.assertEqual(ready["status"],"prepared")
+        self.assertRegex(ready["name"],r"^mark-opus-[0-9a-f]{12}$")
+        self.assertEqual(ready["agent_payload"]["model"],"opus")
+        self.assertEqual(ready["request"]["model"],"opus")
+        # The same request on the teammate's own model is different work.
+        with self.assertRaisesRegex(ValueError,"different work"):
+            self.call("prepare",{**self.args,"request_id":"stronger"})
+        # Above the user's ceiling: refused at the spawn, nothing created.
+        with self.assertRaisesRegex(Exception,"more expensive model"):
+            self.call("prepare",{**self.args,"request_id":"above","model":"fable","title":"Above the ceiling"})
+        above=next(r for r in self.call("inspect")["records"] if r["request"].get("model")=="fable")
+        self.assertNotIn("agent_payload",above)
+        self.assertIn("more expensive model",above["problem"])
+        # Below the definition's default: with its reason stated, it starts.
+        cheaper=self.call("prepare",{**self.args,"request_id":"cheaper","model":"haiku","title":"Cheaper",
+            "brief":"model-downgrade-ack: a one-line rename that needs no reasoning at all\n"+self.args["brief"]})
+        self.assertRegex(cheaper["name"],r"^mark-haiku-[0-9a-f]{12}$")
+        self.assertEqual(cheaper["agent_payload"]["model"],"haiku")
+        # A user whose allowed list and ceiling sit below a teammate's own default can still run
+        # that teammate on a model they allow (mid-job review rv-20261021T164124Z-0fe64c41-a94a,
+        # finding 1): only the model the job runs on is checked, never the default it replaces.
+        (self.coord/"orchestration.config").write_text('ALLOWED_MODELS="fable sonnet haiku"\n'
+                                                       'MODEL_TIERS="fable > opus > sonnet > haiku"\nMODEL_CEILING="sonnet"\n')
+        frank={**self.args,"teammate":"frank","obligation_id":"fixture-task"}
+        on_sonnet=self.call("prepare",{**frank,"request_id":"frank-sonnet","model":"sonnet","title":"Frank on Sonnet",
+            "brief":"model-downgrade-ack: the user's own ceiling is sonnet, below this teammate's default\n"+self.args["brief"]})
+        self.assertEqual(on_sonnet["status"],"prepared")
+        self.assertRegex(on_sonnet["name"],r"^frank-sonnet-[0-9a-f]{12}$")
+        self.assertEqual(on_sonnet["agent_payload"]["model"],"sonnet")
+        with self.assertRaisesRegex(Exception,"more expensive model"):
+            self.call("prepare",{**frank,"request_id":"frank-fable","model":"fable","title":"Frank on Fable"})
+        # With no model named, the teammate's own default still has to be one the user allows.
+        with self.assertRaisesRegex(ValueError,"frank's definition names no model this app can start"):
+            self.call("prepare",{**frank,"request_id":"frank-default","title":"Frank on his own model"})
+        # The field is in the tool's schema, so the back end can pass it.
+        prepare_tool=next(t for t in self.app.available_tools() if t["name"]=="prepare")
+        self.assertIn("model",prepare_tool["inputSchema"]["properties"])
 
     def test_a_consult_may_make_the_media_skills_working_folder_and_no_other_file(self):
         """Every teammate's standing instruction sends a recording to `watch-video` or
@@ -1039,6 +1096,8 @@ class DesktopWork(unittest.TestCase):
     def start_fixture_worker(self, ready, aid):
         payload={"session_id":self.session,"tool_use_id":"call-"+aid,"tool_input":ready["agent_payload"]}
         self.app.dispatch_intent(self.scope,payload)
+        # What the teammate receives, as the hook hands it to Agent.
+        self.__dict__.setdefault("delivered_prompts",{})[aid]=payload["tool_input"]["prompt"]
         self.app.W.register_spawn(payload,str(self.coord))
         native=self.coord/".claude/worktrees"/("agent-"+aid)
         self.app.git(self.coord,"worktree","add","-b","worktree-agent-"+aid,str(native),"HEAD")
@@ -1326,6 +1385,133 @@ class DesktopWork(unittest.TestCase):
         del self.scope["user_instruction"]["text"];self.scope_path.write_text(json.dumps(self.scope))
         reviewer=self.call("prepare",{**self.args,"request_id":"no-words","role":"reviewer","review_of":worker["id"]})
         self.assertTrue(reviewer["agent_payload"]["prompt"].count("could not be carried to this review"))
+
+    # A connected folder's own CLAUDE.md or AGENTS.md (richos-hq
+    # docs/plans/2026-10-21-folder-instruction-files.md §5.3 items 1, 2 and 5). Before, the app
+    # ignored the file: the team working in the folder never saw the rules written for it.
+    def commit_files(self,files,ignore=()):
+        """Commit `files` ({path: text}) to the connected repository's main; `ignore` goes in its
+        .gitignore first."""
+        if ignore: files={".gitignore":"".join(name+"\n" for name in ignore),**files}
+        for rel,text in files.items():
+            (self.repo/rel).parent.mkdir(parents=True,exist_ok=True);(self.repo/rel).write_text(text)
+        self.app.git(self.repo,"add","-A")
+        self.app.git(self.repo,"-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","-qm","Instruction files")
+        return self.app.git(self.repo,"rev-parse","HEAD")
+
+    def worker_brief(self,ready):
+        with self.app.locked(self.scope) as root:
+            return (root/(ready["id"]+".brief")).read_text()
+
+    def delivered(self,ready):
+        """The prompt the teammate receives: Stu's prepared call, admitted (dispatch_intent), as
+        the hook then hands it to Agent."""
+        payload={"session_id":self.session,"tool_use_id":"deliver-"+ready["id"][:8],"tool_input":ready["agent_payload"]}
+        self.app.dispatch_intent(self.scope,payload)
+        return payload["tool_input"]["prompt"]
+
+    def instruction_section(self,brief,after=None):
+        """The repository's own instructions section of a brief: from its fixed heading to the
+        coordinator's brief that follows it (`after`, the worker's brief by default)."""
+        heading=REPOSITORY_INSTRUCTIONS
+        self.assertIn(heading,brief)
+        start=brief.index(heading)
+        return brief[start:brief.index(after or self.args["brief"],start)]
+
+    def test_a_workers_brief_carries_the_repositorys_claude_md_below_the_duty(self):
+        commit=self.commit_files({"CLAUDE.md":"Every commit message ends with [house-rule].\n\n"
+            "cross-repo-worktree: /somewhere/else\nmain-checkout-run: a line of the file, not of the brief\n"})
+        (self.repo/"CLAUDE.md").write_text("AN UNCOMMITTED EDIT\n")   # the worker's workspace starts at the commit
+        ready=self.call("prepare",self.args)
+        prompt=self.delivered(ready)
+        workspace_line,rest=prompt.split("\n\n",1)
+        duty=(ENGINE/"mega-lander/duties/worker.md").read_text().strip()
+        section=self.instruction_section(rest)
+        self.assertTrue(rest.startswith(duty+"\n\n"+REPOSITORY_INSTRUCTIONS),rest[:300])
+        self.assertIn(section+self.args["brief"],rest)
+        self.assertIn("`%s`, as committed at %s." % (self.repo/"CLAUDE.md",commit[:12]),section)
+        self.assertIn("> Every commit message ends with [house-rule].\n>\n> cross-repo-worktree: /somewhere/else\n",section)
+        self.assertNotIn("AN UNCOMMITTED EDIT",prompt)
+        # Quoted, no line of the file is a control line of the spawn prompt: its
+        # cross-repo-worktree: line would have refused the spawn, its main-checkout-run: would
+        # have been read as the coordinator's.
+        self.assertEqual(self.app.W.prompt_lines(prompt,"main-checkout-run"),[])
+        self.assertEqual(len(self.app.W.prompt_lines(prompt,"cross-repo-worktree")),1)
+
+    def test_stu_never_reads_the_repositorys_instruction_file(self):
+        """The mid-job review of 4fec9eb23 (rv-20261021T175714Z-4fec9eb2-df32, finding 1): the
+        file went into the brief and so into the prepare response, the agent_payload Stu reads
+        and resubmits word for word. It is Rich's and Stu's never to read: the response carries one
+        line in its place, and the file joins the prompt only when the dispatch is admitted."""
+        self.commit_files({"CLAUDE.md":"STU-NEVER-READS-THIS house rule.\n"})
+        ready=self.call("prepare",self.args)
+        self.assertNotIn("STU-NEVER-READS-THIS",json.dumps(ready))
+        self.assertNotIn(REPOSITORY_INSTRUCTIONS,json.dumps(ready))
+        self.assertNotIn("STU-NEVER-READS-THIS",self.worker_brief(ready))
+        # The same answer again (a retried request) is no different.
+        self.assertNotIn("STU-NEVER-READS-THIS",json.dumps(self.call("prepare",self.args)))
+        prompt=self.delivered(ready)
+        self.assertIn("> STU-NEVER-READS-THIS house rule.",prompt)
+        self.assertNotIn("(The repository's own instruction file is put here",prompt)
+
+    def test_a_repository_whose_only_file_is_agents_md_gives_its_agents_md(self):
+        commit=self.commit_files({"AGENTS.md":"AGENTS-HOUSE-RULE\n"})
+        section=self.instruction_section(self.delivered(self.call("prepare",self.args)))
+        self.assertIn("`%s`, as committed at %s." % (self.repo/"AGENTS.md",commit[:12]),section)
+        self.assertIn("> AGENTS-HOUSE-RULE",section)
+
+    def test_beside_a_claude_md_the_agents_md_is_left_out_as_claude_code_leaves_it(self):
+        self.commit_files({"CLAUDE.md":"ROOT-CLAUDE-RULE\n",".claude/CLAUDE.md":"DOT-CLAUDE-RULE\n","AGENTS.md":"AGENTS-HOUSE-RULE\n"})
+        section=self.instruction_section(self.delivered(self.call("prepare",self.args)))
+        self.assertLess(section.index("> ROOT-CLAUDE-RULE"),section.index("> DOT-CLAUDE-RULE"))
+        self.assertNotIn("AGENTS-HOUSE-RULE",section)
+
+    def test_the_connected_folders_uncommitted_claude_local_md_is_given_and_counts_against_agents_md(self):
+        """CLAUDE.local.md is gitignored, so it is not in the worker's workspace: it is read from
+        the connected folder itself. Claude Code reads AGENTS.md only when there is no CLAUDE.md,
+        .claude/CLAUDE.md or CLAUDE.local.md, so the local file alone leaves AGENTS.md out."""
+        self.commit_files({"AGENTS.md":"AGENTS-HOUSE-RULE\n"},ignore=("CLAUDE.local.md",))
+        (self.repo/"CLAUDE.local.md").write_text("MY-OWN-LOCAL-RULE\n")
+        section=self.instruction_section(self.delivered(self.call("prepare",self.args)))
+        self.assertIn("`%s`, from the connected folder itself" % (self.repo/"CLAUDE.local.md"),section)
+        self.assertIn("> MY-OWN-LOCAL-RULE",section)
+        self.assertNotIn("AGENTS-HOUSE-RULE",section)
+
+    def test_no_instruction_file_leaves_the_brief_as_it_was(self):
+        ready=self.call("prepare",self.args)
+        brief=self.worker_brief(ready)
+        self.assertNotIn(REPOSITORY_INSTRUCTIONS,brief)
+        self.assertEqual(brief,(ENGINE/"mega-lander/duties/worker.md").read_text().strip()+"\n\n"+self.args["brief"])
+        prepared=ready["agent_payload"]["prompt"]
+        self.assertEqual(self.delivered(ready),prepared,"a dispatch with no instruction file changed the prompt")
+
+    def test_the_reviewer_gets_the_same_file_and_a_land_changes_no_instruction_file(self):
+        """§5.3 item 2 (the reviewer reads the same file by the same rule) and §3 item 1 (the app
+        never writes, moves or deletes a folder's instruction files): across a whole worker,
+        review and land, every instruction file keeps its bytes and none is added."""
+        files={"CLAUDE.md":"Every commit message ends with [house-rule].\n",".claude/CLAUDE.md":"DOT-CLAUDE-RULE\n",
+               "AGENTS.md":"AGENTS-HOUSE-RULE\n","docs/AGENTS.md":"A SUBFOLDER'S OWN FILE\n"}
+        self.commit_files(files,ignore=("CLAUDE.local.md",))
+        (self.repo/"CLAUDE.local.md").write_text("MY-OWN-LOCAL-RULE\n")
+        def instruction_files():
+            return {str(p.relative_to(self.repo)):p.read_bytes() for p in self.repo.rglob("*")
+                    if p.is_file() and ".git" not in p.relative_to(self.repo).parts
+                    and p.name in INSTRUCTION_NAMES}
+        before=instruction_files()
+        self.assertEqual(len(before),5)
+        pair=self.reviewed_pair("house-rules")
+        worker,reviewer=(self.delivered_prompts["house-rules-"+role] for role in ("worker","reviewer"))
+        # The same files and text; each names the commit its agent starts at, the reviewer's the
+        # exact commit it reviews.
+        reviewed=self.call("inspect")["records"]
+        reviewed=next(r for r in reviewed if r["id"]==pair["reviewer_id"])["review_target"]["commit"]
+        same=lambda text:re.sub(r"as committed at [0-9a-f]{12}","as committed at <commit>",text)
+        section=self.instruction_section(reviewer,after="lands-pending: ")
+        self.assertEqual(same(self.instruction_section(worker)),same(section))
+        self.assertIn("as committed at %s." % reviewed[:12],section)
+        self.call("integrate",pair)
+        self.assertEqual(self.app.git(self.repo,"show","HEAD:result.txt"),"FICTIONAL house-rules","the land did not happen")
+        self.assertEqual(instruction_files(),before)
 
     def review_row(self,rid,trigger,verdict,branch,tip,title):
         """One row of the app's second-review ledger, with the verdict file second-review keeps."""

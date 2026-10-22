@@ -2862,6 +2862,40 @@ class AuthorRuns(unittest.TestCase):
             self.assertNotIn(name, checks)
         self.assertEqual(seen[0]["RICHOS_BULK_ROOT"], "/fixture/bulk")    # a real setting still reaches it
 
+    def test_the_readiness_preflight_hands_the_authors_runner_the_environment_its_run_recorded(self):
+        """2026-10-22, codex/first-run-reliability-20261022 at 4494536289: the preflight is answered
+        by the runner in the author's checkout, which predates reading a run's environment itself,
+        and five lands refused 56 unchanged passes for LANG, LC_ALL, CARGO_TARGET_DIR, RUST_LOG,
+        SDKROOT (Apple's /usr/bin/git sets it for its hooks) and more, values only the two shells
+        held. The land starts that runner with the values the run recorded instead of its own; its
+        Git and per-run names and a credential the run withheld stay the land's."""
+        import types
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        repo = types.SimpleNamespace(top=HERE.parents[2])
+        with tempfile.TemporaryDirectory(dir=os.path.realpath(tempfile.gettempdir())) as top:
+            root, run = Path(top) / "checkout", Path(top) / "run"
+            (root / module.PROOF_RUN).parent.mkdir(parents=True)
+            (root / module.PROOF_RUN).write_text("# fixture: takes --coverage\n")
+            run.mkdir()
+            recorded = {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "RUST_LOG": "warn", "PATH": "/usr/bin:/bin",
+                        "CARGO_TARGET_DIR": "/caches/cargo-target/codex"}
+            (run / "plan.json").write_text(json.dumps({"schema": 1, "root": str(root), "items": [],
+                "environment": {"values": recorded, "withheld": ["API_TOKEN"]}}))
+            seen = []
+
+            def preflight(argv, **kwargs):
+                seen.append(kwargs["env"])
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            land = {"LANG": "en_US.UTF-8", "SDKROOT": "/Applications/Xcode.app/SDKs/MacOSX.sdk", "API_TOKEN": "t",
+                    "RICHOS_AUTOCHECK_ACTIVE": "common:1", module.LAND_TARGET: "main", "PATH": "/opt/git-core:/usr/bin"}
+            with mock.patch.dict(os.environ, land, clear=True), \
+                    mock.patch.object(module.subprocess, "run", side_effect=preflight):
+                module.coverage_of(str(run), repo)
+        self.assertEqual(seen, [{**recorded, "API_TOKEN": "t", "RICHOS_AUTOCHECK_ACTIVE": "common:1"}])
+
     def test_the_readiness_preflight_names_the_documented_cargo_root_as_the_author_run_named_it(self):
         """2026-10-21, the land of cc/echo-opus-lease1x at e596d7860: its author exported the
         documented CARGO_TARGET_DIR (machine_settings.py cache cargo-target --key CARGO_TARGET_DIR)

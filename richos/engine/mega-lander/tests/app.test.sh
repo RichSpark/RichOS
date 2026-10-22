@@ -6,6 +6,8 @@
 # The second review's app half is exercised here too (slice 4): app.test.py drives
 # scripts/lib/app_review.py through scripts/app-engine-hook.py's mid-job delivery, and
 # scripts/lib/review_watch.py's app mode (AppWorld) over this fixture's registry.
+# A connected repository's own CLAUDE.md or AGENTS.md in a worker's and a reviewer's brief:
+# app.test.py drives scripts/lib/instruction_files.py through prepare.
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

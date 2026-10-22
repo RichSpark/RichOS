@@ -4,7 +4,9 @@
 The host supplies all roots and the active scope. There is no terminal-settings
 fallback. Provider callbacks are evidence, not proof of assignment completion.
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -250,9 +252,74 @@ def handle(payload):
             run([sys.executable, str(ENGINE / "ass-kicker/guard-stated-actions.py")], payload)
 
 
+DECISION_RANK = {"allow": 1, "ask": 2, "defer": 3, "deny": 4}
+
+
+def one_envelope(text):
+    """Everything a PreToolUse call printed, as ONE hook answer, or None when it printed nothing.
+
+    Claude Code acts on a hook's stdout only when it is one JSON object: measured 2026-10-21 on
+    2.1.306, an Agent call whose hook printed a context object and then the answer kept its
+    original prompt, and the same answer printed alone changed it. The canonical guards this
+    hook runs forward their own output, so an Agent dispatch printed several objects and the
+    `updatedInput` below (the receipt's name, the repository's own instruction file) never
+    reached the teammate. Here every context is kept, the strictest decision wins, and the last
+    `updatedInput` (this hook's own, written after every guard) is the one passed on. A line that
+    is not a JSON object goes to stderr, where it is kept for whoever reads the log."""
+    envelope, contexts, reasons, decision, updated = {}, [], [], None, None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            obj = None
+        if not isinstance(obj, dict):
+            print(line, file=sys.stderr)
+            continue
+        specific = obj.get("hookSpecificOutput") or {}
+        envelope.update({k: v for k, v in obj.items() if k != "hookSpecificOutput"})
+        if specific.get("additionalContext"):
+            contexts.append(specific["additionalContext"])
+        if specific.get("permissionDecisionReason"):
+            reasons.append(specific["permissionDecisionReason"])
+        if DECISION_RANK.get(specific.get("permissionDecision"), 0) > DECISION_RANK.get(decision, 0):
+            decision = specific["permissionDecision"]
+        if "updatedInput" in specific:
+            updated = specific["updatedInput"]
+    if not envelope and not contexts and not reasons and decision is None and updated is None:
+        return None
+    out = {"hookEventName": "PreToolUse"}
+    if decision is not None:
+        out["permissionDecision"] = decision
+    if reasons:
+        out["permissionDecisionReason"] = "\n\n".join(reasons)
+    if updated is not None:
+        out["updatedInput"] = updated
+    if contexts:
+        out["additionalContext"] = "\n\n".join(contexts)
+    envelope["hookSpecificOutput"] = out
+    return envelope
+
+
+def main(stdin=sys.stdin, stdout=sys.stdout):
+    payload = json.load(stdin)
+    if payload.get("hook_event_name") == "PreToolUse" and payload.get("tool_name") == "Agent":
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            handle(payload)
+        envelope = one_envelope(captured.getvalue())
+        if envelope is not None:
+            stdout.write(json.dumps(envelope) + "\n")
+            stdout.flush()
+    else:
+        handle(payload)
+
+
 if __name__ == "__main__":
     try:
-        handle(json.load(sys.stdin))
+        main()
     except Exception as error:
         print(f"RichOS desktop engine: {error}", file=sys.stderr)
         raise SystemExit(2)
