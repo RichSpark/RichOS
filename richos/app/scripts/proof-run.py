@@ -857,9 +857,6 @@ def conditions_line(items):
     return "nightly conditions: " + "; ".join(parts)
 
 
-RUNNER_TOOL_DIRS = (os.path.join(os.path.expanduser("~"), ".cargo", "bin"), "/opt/homebrew/bin", "/usr/local/bin")
-
-
 def canonical_path(value):
     """The PATH every check gets, whatever shell started the run: the checkout's own directories
     as the caller placed them, then the runner's tool directories in a fixed order, then every
@@ -874,8 +871,9 @@ def canonical_path(value):
     root = os.path.realpath(ROOT)
     entries = [p for p in value.split(os.pathsep) if p]
     own = [p for p in entries if os.path.realpath(p) == root or os.path.realpath(p).startswith(root + os.sep)]
+    tools = [os.path.join(os.path.expanduser("~"), ".cargo", "bin"), "/opt/homebrew/bin", "/usr/local/bin"]
     out = []
-    for p in own + list(RUNNER_TOOL_DIRS) + [p for p in entries if p not in RUNNER_TOOL_DIRS]:
+    for p in own + tools + [p for p in entries if p not in tools]:
         if p not in out:
             out.append(p)
     return os.pathsep.join(out)
