@@ -67,6 +67,28 @@ use richos_voice::vad::{frames_to_secs, SAMPLE_RATE, VAD_FRAME_SAMPLES};
 use richos_voice::wav;
 use std::path::{Path, PathBuf};
 
+/// **ONE REPLAY AT A TIME IN THIS TEST PROCESS, OR THE HOST'S CPU GUARD STOPS IT.**
+///
+/// Every test below that replays a recording runs the real canceller frame by frame over 9.5 to
+/// 25.6 s of audio, on one thread. libtest runs the tests of a file side by side, so with the
+/// private fixture present six of them start at once, and the one process holds a core per
+/// test. The host's CPU circuit breaker stops any process above `JOB_CORES` = 3.0 cores for
+/// `WINDOW` = 10 s (`cpu_guard.py`), and it did, with SIGTERM, in the land's merge check:
+/// 4.02 cores at 01:51Z and 3.91 at 01:56Z on 2026-10-22 (`cpu-guard/events.jsonl`, binary
+/// `barge_in_on_the_ceos_rig-293b0af695e6b9e6`), after 3 of 7 tests had printed `ok`. Folding
+/// replies into one test per voice (bc8866111) did not cure it: it still left four replaying
+/// tests running together, and that build was never run with the fixture.
+///
+/// So each replaying test holds this lock for its whole body: one canceller thread works at a
+/// time, about 1 core, whatever `--test-threads` is. Nothing it measures changes; only the
+/// order the tests run in does. A test that fails poisons the lock, and the next one takes it
+/// anyway, so one red test is reported as itself and never turns the rest red.
+static ONE_REPLAY_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+fn one_replay_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    ONE_REPLAY_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 const ECHO_ONLY_MORNING: &str = "tests/fixtures/echo-path/ceo-rig-2026-09-17";
 const ECHO_ONLY_VOL60: &str = "tests/fixtures/echo-path/ceo-rig-2026-09-18-nearend";
 const HIS_VOICE: &str = "tests/fixtures/echo-path/ceo-rig-2026-09-18-nearend2";
@@ -314,6 +336,7 @@ const VOLUMES: &[f32] = &[-52.00, -49.50, -47.00, -45.25, -43.00, -41.00];
 /// failing to drive it.
 #[test]
 fn richs_own_echo_never_interrupts_him_at_any_volume() {
+    let _one = one_replay_at_a_time();
     for prefix in [ECHO_ONLY_MORNING, ECHO_ONLY_VOL60] {
         let mic0 = read(prefix, "-mic.wav");
         let reference = read(prefix, "-reference.wav");
@@ -407,6 +430,7 @@ fn richs_own_echo_never_interrupts_him_at_any_volume() {
               directory to run this."
 )]
 fn the_ceos_own_voice_over_rich_interrupts_him_and_his_words_are_kept() {
+    let _one = one_replay_at_a_time();
     let mic = read_his_mic();
     let reference = read(HIS_VOICE, "-reference.wav");
     // The pair shares one index (`-nearend2-session.json`: "reference[i] is what went to the
@@ -636,6 +660,7 @@ fn every_duration_in_this_file_is_the_frame_math() {
 /// In both, the line he is shown must say what to do: say it again now.
 #[test]
 fn richs_own_echo_raises_the_half_duplex_line_and_it_says_what_to_do() {
+    let _one = one_replay_at_a_time();
     use richos_voice::controller::VoiceNotice;
     let line = VoiceNotice::CouldNotListenWhileSpeaking.ceo_message();
     assert!(line.contains("please say it again now"), "the line gives no next step: {line}");
@@ -678,6 +703,7 @@ fn richs_own_echo_raises_the_half_duplex_line_and_it_says_what_to_do() {
               directory to run this."
 )]
 fn a_short_word_of_his_over_rich_is_lost_and_the_line_tells_him_to_say_it_again() {
+    let _one = one_replay_at_a_time();
     use richos_voice::controller::VoiceNotice;
     let his_mic = read_his_mic();
     // 12 frames from the middle of his first marked interval: under the 15 a barge-in needs.
@@ -820,10 +846,9 @@ impl VoiceObserver for Lines {
 
 /// **Every reply in `replies`, given on the frame after the line, at every residual level.**
 /// Each is `(what it is, its samples, whether it is shorter than the endpoint's minimum)`.
-/// One thread for all of them on purpose: each replay runs the real canceller over 25 s of
-/// audio, and run side by side as separate tests, four of them held one test process above
-/// the 3 cores the host's CPU guard allows for 10 s and it was stopped (proof run
-/// 20261021T225139Z, 2026-10-22).
+/// One test for all of them: each replay runs the real canceller over 25 s of audio. That
+/// alone did not keep the process under the host's CPU guard (see [`ONE_REPLAY_AT_A_TIME`],
+/// which does), but it keeps the replies of one voice in one place.
 fn every_reply_to_the_line_is_kept(replies: &[(&str, Vec<f32>, bool)], who: &str) {
     let mic0 = read(ECHO_ONLY_VOL60, "-mic.wav");
     let reference = read(ECHO_ONLY_VOL60, "-reference.wav");
@@ -913,6 +938,7 @@ fn every_reply_to_the_line_is_kept(replies: &[(&str, Vec<f32>, bool)], who: &str
 /// catch that, so I haven't sent anything. Please say it again. I'm still listening."
 #[test]
 fn the_half_duplex_line_is_shown_only_once_a_reply_would_be_heard() {
+    let _one = one_replay_at_a_time();
     let reference = read(ECHO_ONLY_VOL60, "-reference.wav");
     let start = (0..reference.len() / VAD_FRAME_SAMPLES)
         .find(|b| {
@@ -940,6 +966,7 @@ fn the_half_duplex_line_is_shown_only_once_a_reply_would_be_heard() {
               directory to run this."
 )]
 fn his_own_reply_to_the_half_duplex_line_is_heard() {
+    let _one = one_replay_at_a_time();
     let his_mic = read_his_mic();
     let (open, close) = HIS_INTERVALS[0];
     let long = his_mic[(open * SAMPLE_RATE as f32) as usize..(close * SAMPLE_RATE as f32) as usize].to_vec();
