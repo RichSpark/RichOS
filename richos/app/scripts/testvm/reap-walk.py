@@ -164,14 +164,28 @@ def ask_text(tag, background=True, seconds=FOREGROUND_SECONDS):
 def runs_heartbeat(command, tag):
     """Does this shell command run one of the ask's heartbeats (`heartbeat.py beat <tag>-...`)?
     Read as the shell splits it, so quoting and spacing never hide one (review
-    rv-20261022T114810Z-cdd66038-220d: `python3 "heartbeat.py" beat` was missed)."""
+    rv-20261022T114810Z-cdd66038-220d: `python3 "heartbeat.py" beat` was missed). Only as the program a shell segment runs (`python3 heartbeat.py beat ...` or
+    `./heartbeat.py beat ...`), never as words printed by another program (review
+    rv-20261022T124912Z-7ceba023-ce38: `printf '%s ' python3 heartbeat.py beat ...`)."""
     try:
-        words = shlex.split(command, comments=True)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()')
+        lexer.whitespace_split, lexer.commenters = True, '#'
+        words = list(lexer)
     except ValueError:
         words = command.split()
-    return any(w.rsplit('/', 1)[-1] == 'heartbeat.py' and words[i + 1:i + 2] == ['beat']
-               and (words[i + 2:i + 3] or [''])[0].startswith(tag + '-')
-               for i, w in enumerate(words))
+    segment = []
+    for word in words + [';']:
+        if word and set(word) <= set(';&|()'):
+            program = [w for w in segment if '=' not in w.split('/')[0]]  # skip VAR=value
+            if program and program[0].rsplit('/', 1)[-1].startswith('python'):
+                program = program[1:]
+            if (program[:1] and program[0].rsplit('/', 1)[-1] == 'heartbeat.py' and program[1:2] == ['beat']
+                    and (program[2:3] or [''])[0].startswith(tag + '-')):
+                return True
+            segment = []
+        else:
+            segment.append(word)
+    return False
 
 
 def rich_ran_handed(calls, assignments):
