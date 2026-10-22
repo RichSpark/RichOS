@@ -88,6 +88,8 @@ fn main() {
     let stored = get(&dest, "/_attachments");
     let mine: Vec<String> = stored.as_array().unwrap_or(&vec![]).iter().filter(|x| x["key"].as_str().is_some_and(|k| k.starts_with(&format!("{}/", a.report_id)))).filter_map(|x| x["sha256"].as_str().map(str::to_string)).collect();
     check("1 both images stored, byte-identical to the approved ones", mine.len() == 2 && a.manifest.iter().all(|e| mine.contains(&e.sha256)), format!("{mine:?}"));
+    let paths: Vec<String> = stored.as_array().unwrap_or(&vec![]).iter().filter(|x| x["key"].as_str().is_some_and(|k| k.starts_with(&format!("{}/", a.report_id)))).filter_map(|x| x["path"].as_str().map(str::to_string)).collect();
+    check("1 uploads went to /uploads/{n}, never to the staff read path", paths.len() == 2 && paths.iter().all(|p| p == "uploads"), format!("{paths:?}"));
     let body = issues[0]["body"].as_str().unwrap_or("");
     check("1 the issue carries the count and the staff links", body.contains("Screenshots: 2, shared privately with RichOS support (staff sign-in required)") && body.contains(&format!("\n2. {}/v1/reports/{}/attachments/2\n", dest.relay, a.report_id)), body.to_string());
 

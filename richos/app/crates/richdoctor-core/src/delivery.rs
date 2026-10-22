@@ -7,7 +7,7 @@
 //!
 //!   1. **register** (`POST /v1/reports`, schema `richdoctor-report/2`): the approved text, the
 //!      screenshot manifest, the report ID and the receipt secret. It never creates an issue;
-//!   2. **upload** each approved image (`PUT /v1/reports/{id}/attachments/{n}`, the secret in the
+//!   2. **upload** each approved image (`PUT /v1/reports/{id}/uploads/{n}`, the secret in the
 //!      `X-Receipt-Secret` header, never the URL);
 //!   3. **complete** (`POST /v1/reports/{id}/complete`), which creates the issue only when every
 //!      approved image is stored, and never creates a text-only issue for a report with images.
@@ -441,7 +441,10 @@ fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Dest
                 ("Content-Type".to_string(), entry.media_type.clone()),
                 ("X-Content-SHA256".to_string(), entry.sha256.clone()),
             ];
-            let url = format!("{}/v1/reports/{}/attachments/{}", dest.relay, approved.report_id, entry.attachment_id);
+            // Uploads have their own path: Cloudflare Access protects the staff read path
+            // (/attachments/{n}) by path alone, whatever the method, so an upload there would be
+            // sent to its login in production.
+            let url = format!("{}/v1/reports/{}/uploads/{}", dest.relay, approved.report_id, entry.attachment_id);
             let mut waits = 0;
             loop {
                 let size = bytes.len() as u64;
@@ -739,7 +742,7 @@ mod tests {
         let (s, seen) = run(&a, &images, &r, false);
         assert!(matches!(s, State::Submitted { issue_number: 42, .. }), "{s:?}");
         let order: Vec<String> = r.log.borrow().iter().map(|(m, u)| format!("{m} {u}")).collect();
-        assert_eq!(order, ["POST /v1/reports", "PUT /v1/reports/RD-7K3M-Q9VX/attachments/1", "PUT /v1/reports/RD-7K3M-Q9VX/attachments/2", "POST /v1/reports/RD-7K3M-Q9VX/complete"]);
+        assert_eq!(order, ["POST /v1/reports", "PUT /v1/reports/RD-7K3M-Q9VX/uploads/1", "PUT /v1/reports/RD-7K3M-Q9VX/uploads/2", "POST /v1/reports/RD-7K3M-Q9VX/complete"]);
         assert!(seen.contains(&State::SendingScreenshots { done: 1, total: 2 }));
     }
 
@@ -753,7 +756,7 @@ mod tests {
         let (s, _) = run(&a, &images, &r, false);
         assert!(matches!(s, State::CreatedCheckingImages { confirmed: 0, expected: 1, .. }), "{s:?}");
         assert!(s.unresolved() && !s.permits_try_again());
-        assert_eq!(r.count("/attachments/1"), 0, "a stored image is not sent again");
+        assert_eq!(r.count("/uploads/1"), 0, "a stored image is not sent again");
     }
 
     #[test]
@@ -776,8 +779,8 @@ mod tests {
         ]);
         let (s, _) = run(&a, &images, &again, true);
         assert!(matches!(s, State::Submitted { .. }));
-        assert_eq!(again.count("/attachments/1"), 0);
-        assert_eq!(again.count("/attachments/2"), 1);
+        assert_eq!(again.count("/uploads/1"), 0);
+        assert_eq!(again.count("/uploads/2"), 1);
     }
 
     #[test]
@@ -796,7 +799,7 @@ mod tests {
         let size = images[1].len() as u64;
         assert!(ev.contains(&Upload::Bytes { id: "2".into(), sent: size, total: size }));
         assert_eq!(ev.last(), Some(&Upload::Received { id: "2".into() }));
-        assert_eq!(r.count("/attachments/1"), 0);
+        assert_eq!(r.count("/uploads/1"), 0);
     }
 
     #[test]
@@ -810,7 +813,7 @@ mod tests {
         let (s, _) = run(&a, &images, &r, false);
         assert!(matches!(s, State::NotSent { why: NotSent::Canceled, .. }), "{s:?}");
         assert_eq!(r.count("/complete"), 0, "nothing public after a cancel");
-        assert_eq!(r.count("/attachments/2"), 0, "no upload starts after a cancel");
+        assert_eq!(r.count("/uploads/2"), 0, "no upload starts after a cancel");
         assert!(s.permits_try_again() && s.permits_revision());
         let again = script(vec![
             j(json!({"state":"receiving","stored":["1"],"missing":["2","3"]})),
@@ -820,7 +823,7 @@ mod tests {
         ]);
         let (s, _) = run(&a, &images, &again, true);
         assert!(matches!(s, State::Submitted { .. }), "{s:?}");
-        assert_eq!(again.count("/attachments/1"), 0, "a received image is not sent again");
+        assert_eq!(again.count("/uploads/1"), 0, "a received image is not sent again");
         // A cancel after the last upload and before completion creates nothing either.
         let (b, images) = approved_with(1);
         let mut late = script(vec![
@@ -846,7 +849,7 @@ mod tests {
         ]);
         let (s, _) = run(&a, &images, &r, false);
         assert!(matches!(s, State::Submitted { .. }), "{s:?}");
-        assert_eq!(r.count("/attachments/1"), 2);
+        assert_eq!(r.count("/uploads/1"), 2);
         // A long wait is not slept through: the person sees when to try again.
         let r = script(vec![
             j(json!({"state":"receiving","stored":[],"missing":["1"]})),

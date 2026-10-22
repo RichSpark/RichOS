@@ -11,7 +11,8 @@ status, retire, the same-id replay rule and three injectable faults.
     report-relay-stand-in.py <port> <state.json>
 
     POST /v1/reports                               register (the contract's body)
-    PUT  /v1/reports/<id>/attachments/<n>          one image, X-Receipt-Secret, X-Content-SHA256
+    PUT  /v1/reports/<id>/uploads/<n>              one image, X-Receipt-Secret, X-Content-SHA256
+                                                   (the relay also takes the older /attachments/<n>)
     POST /v1/reports/<id>/complete                 {"receipt_secret": ...}
     POST /v1/reports/<id>/status                   {"receipt_secret": ...}
     POST /v1/reports/<id>/retire                   {"receipt_secret": ...}
@@ -101,7 +102,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         parts = self.path.split("/")
-        if len(parts) != 6 or parts[1:3] != ["v1", "reports"] or parts[4] != "attachments":
+        if len(parts) != 6 or parts[1:3] != ["v1", "reports"] or parts[4] not in ("uploads", "attachments"):
             return self.reply(404, {"state": "unknown_id"})
         rid, n = parts[3], parts[5]
         data = self.raw()
@@ -113,7 +114,7 @@ class H(BaseHTTPRequestHandler):
         entry = next((e for e in r["manifest"] if str(e["attachment_id"]) == n), None)
         if entry is None or sha(data) != entry["sha256"] or self.headers.get("X-Content-SHA256") != entry["sha256"] or len(data) != entry["bytes"]:
             return self.reply(422, {"state": "rejected", "reason": "attachment", "item": f"screenshot {n}", "detail": f"screenshot {n} is not the approved image."})
-        S["files"][f"{rid}/{n}"] = {"sha256": sha(data), "bytes": len(data)}
+        S["files"][f"{rid}/{n}"] = {"sha256": sha(data), "bytes": len(data), "path": parts[4]}
         save()
         self.reply(200, view(rid))
 
