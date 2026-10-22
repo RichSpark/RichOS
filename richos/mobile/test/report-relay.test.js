@@ -75,15 +75,12 @@ test('the schema, sizes and fingerprint are checked and nothing is stored for a 
   assert.equal(f.db.raw.prepare('SELECT count(*) AS n FROM reports').get().n, 1);
 });
 
-test('content rules reject unsafe or private words for review and never rewrite them', async t => {
+test('content rules reject unsafe structure and never rewrite the words; approved words are never vetoed for privacy', async t => {
   const f = await fixture(t);
   const id = reportId(), footer = `Sent with RichDoctor 1.0 · Report ID ${id}`;
   const rejected = {
     markup: ['A picture ![x](https://evil.example/p.png)', 'A link [click](https://evil.example)', 'HTML <img src=x>'],
     mention: ['Ask @octocat'],
-    secret: ['token ghp\\_' + 'a'.repeat(36), 'Authorization: Basic abc', 'key sk-ant-api03-' + 'b'.repeat(20)],
-    email: ['Mail jane\\.doe@​example\\.com'],
-    home_path: ['Opened /Users/jane/Library/Logs'],
     control: ['carriage\rreturn'],
   };
   for (const [kind, lines] of Object.entries(rejected)) for (const line of lines) {
@@ -93,12 +90,6 @@ test('content rules reject unsafe or private words for review and never rewrite 
   }
   const noFooter = await f.answer(await f.create(await f.report({ report_id: id, body: 'No footer' })));
   assert.equal(noFooter.body.reason, 'content'); assert.equal(noFooter.body.item, 'line 1');
-  const titled = await f.answer(await f.create(await f.report({ report_id: id, title: 'From jane@example.com' })));
-  assert.equal(titled.body.item, 'title');
-  const own = await f.report({ report_id: id }), echoedBody = `The receipt ${own.receipt_secret}\n\n${footer}`;
-  const { contentHash } = await import('../service/report/checks.mjs');
-  const echoed = await f.answer(await f.create({ ...own, body: echoedBody, content_sha256: await contentHash(own.title, echoedBody) }));
-  assert.equal(echoed.body.reason, 'content', 'the receipt secret never goes public'); assert.equal(echoed.body.item, 'line 1');
   assert.equal(f.posts(), 0); assert.equal(f.db.raw.prepare('SELECT count(*) AS n FROM reports').get().n, 0);
   // The escaped forms Bust a bug writes, scrubbed stand-ins and the support address all pass.
   const safe = ['A picture \\!\\[x\\](https://example.com)', 'Opened /Users/\\[a person\\]/Library/Logs', 'Write to support@​richos\\.ceo',
@@ -106,6 +97,13 @@ test('content rules reject unsafe or private words for review and never rewrite 
   const ok = await f.answer(await f.create(await f.report({ report_id: id, body: `${safe.join('\n')}\n\n${footer}` })));
   assert.equal(ok.body.state, 'delivered');
   assert.equal(f.github.created()[0].body, `${safe.join('\n')}\n\n${footer}`, 'delivered byte for byte');
+  // Words the user's Claude reviewed and the user approved are posted as approved, whatever they look like.
+  const approved = ['token ghp\\_' + 'a'.repeat(36), 'Authorization: Basic abc', 'Mail jane\\.doe@​example\\.com', 'Opened /Users/jane/Library/Logs'];
+  const other = await f.report({ title: 'From jane@example.com' }), privateBody = `${approved.join('\n')}\n\n${other.body.split('\n').pop()}`;
+  const { contentHash } = await import('../service/report/checks.mjs');
+  const sent = await f.answer(await f.create({ ...other, body: privateBody, content_sha256: await contentHash(other.title, privateBody) }));
+  assert.equal(sent.body.state, 'delivered', 'the relay never vetoes approved words');
+  assert.equal(f.github.created()[1].body, privateBody); assert.equal(f.posts(), 2);
 });
 
 test('an ID is bound to its receipt and bytes: wrong secret, changed bytes and unknown IDs', async t => {
@@ -258,6 +256,19 @@ test('an older unknown ID is reconciled by its footer before any create; a copie
   const blind = await f.report(); f.advance(3600_000); f.github.fault('list:500');
   const unsure = await f.answer(await f.create(blind));
   assert.equal(unsure.body.state, 'limited', 'an incomplete listing permits no create'); assert.equal(f.posts(), 1);
+});
+
+test('a report sent offline and retried an hour later is filed exactly once', async t => {
+  // The user pressed Send with no connection, so the first send never reached the relay; an hour
+  // later Try again sends the same approved report, which the relay has never seen.
+  const f = await fixture(t), offline = await f.report();
+  f.advance(3600_000);
+  const retried = await f.answer(await f.create(offline));
+  assert.equal(retried.body.state, 'delivered'); assert.equal(retried.body.issue_number, 1);
+  assert.equal(f.github.created()[0].body, offline.body); assert.equal(f.posts(), 1);
+  assert.equal((await f.answer(await f.create(offline))).body.issue_number, 1, 'a second Try again returns the same issue');
+  assert.equal((await f.answer(await f.status(offline.report_id, offline.receipt_secret))).body.state, 'delivered');
+  assert.equal(f.posts(), 1, 'filed once');
 });
 
 test('a token failure is an authoritative non-creation; throttling says nothing about the report; a PKCS#1 App key works', async t => {
