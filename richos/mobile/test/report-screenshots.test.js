@@ -362,3 +362,20 @@ test('the production smoke test files exactly one report with one screenshot, an
   await assert.rejects(smoke(profile, { ...deps, confirm: CONFIRM }), /already sent: https:\/\/github.com\/WebDevBooster\/richos\/issues\/1/);
   assert.equal(f.posts(), 1, 'never a second production report');
 });
+
+test('the production smoke test finds an earlier smoke report on a later page of the bot\'s issues', async t => {
+  const { smoke, SMOKE_TITLE, CONFIRM } = await import('../dev/report-smoke-production.mjs');
+  const { PRODUCTION } = await import('../cli/report.mjs');
+  // One issue per page; the listing reaches the smoke report only on its fourth page.
+  const f = await fixture(t, { repository: PRODUCTION.repository, bot: 'richos-reports[bot]', pageSize: 1 });
+  for (let i = 0; i < 3; i++) f.github.add(`A real report ${i}`, 'words', 'richos-reports[bot]');
+  f.github.add(SMOKE_TITLE, 'the earlier smoke report', 'richos-reports[bot]');
+  const profile = { stage: 'production', ...PRODUCTION, bucket: 'richos-report', accountId: 'a'.repeat(32), databaseId: '11111111-2222-3333-4444-555555555555',
+    appId: '123', installationId: '456', botLogin: 'richos-reports[bot]', label: 'richdoctor' };
+  const fetchImpl = async (url, init = {}) => url.startsWith('https://api.github.com/') ? f.github.fetch(url, init)
+    : url === 'https://report.richos.ceo/v1/health' ? new Response(JSON.stringify({ ok: true, service: 'richos-report', protocol: 2, accepting: true }))
+    : f.send(new Request(url, init));
+  const screenshot = readFileSync(join(__dirname, '../service/report/fixtures/relay/accept-rgb.png'));
+  await assert.rejects(smoke(profile, { fetchImpl, screenshot, wait: async () => {}, confirm: CONFIRM }), /already sent: https:\/\/github.com\/WebDevBooster\/richos\/issues\/4/);
+  assert.equal(f.posts(), 0, 'nothing was sent');
+});

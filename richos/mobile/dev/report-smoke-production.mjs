@@ -21,10 +21,17 @@ export async function smoke(profile, { confirm, fetchImpl = fetch, screenshot, w
   if (confirm !== CONFIRM) throw Error(`Name the confirmation word: ${CONFIRM}`);
   const base = `https://${profile.hostname}`;
   const gh = path => fetchImpl(`https://api.github.com${path}`, { redirect: 'error', headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'richos-report-smoke', 'X-GitHub-Api-Version': '2022-11-28' } });
-  const earlier = await gh(`/repos/${profile.repository}/issues?creator=${encodeURIComponent(profile.botLogin)}&state=all&per_page=100`);
-  if (!earlier.ok) throw Error(`GitHub listing failed (HTTP ${earlier.status}); nothing was sent`);
-  const sent = (await earlier.json()).find(issue => issue.title === SMOKE_TITLE);
-  if (sent) throw Error(`The smoke test was already sent: ${sent.html_url}`);
+  // Every issue the bot ever made, every page: an earlier smoke report on any page refuses.
+  let path = `/repos/${profile.repository}/issues?creator=${encodeURIComponent(profile.botLogin)}&state=all&per_page=100`, pages = 0;
+  for (; path; pages++) {
+    if (pages === 10) throw Error('The bot has more than ten pages of issues; nothing was sent');
+    const earlier = await gh(path);
+    if (!earlier.ok) throw Error(`GitHub listing failed (HTTP ${earlier.status}); nothing was sent`);
+    const sent = (await earlier.json()).find(issue => issue.title === SMOKE_TITLE);
+    if (sent) throw Error(`The smoke test was already sent: ${sent.html_url}`);
+    const next = /<https:\/\/api\.github\.com([^>]+)>;\s*rel="next"/.exec(earlier.headers.get('link') || '');
+    path = next ? next[1] : null;
+  }
   const health = await (await fetchImpl(base + '/v1/health', { redirect: 'error' })).json().catch(() => null);
   if (!health?.ok || !health.accepting) throw Error('The production relay is not accepting reports; switch it on first');
 
