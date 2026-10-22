@@ -1312,13 +1312,22 @@ impl WorkHost {
             crate::work_status::trail(&self.state, entity, thread, &record.obligation_id)?
                 .stop_targets;
         drop(dispatch_lock);
-        let outcomes: Vec<_> = targets
-            .iter()
-            .map(|(session, tool)| match &stopper {
-                Some((owner, handle)) if owner == session => handle.stop_worker(tool),
-                _ => CommandStop::NotDelivered,
-            })
-            .collect();
+        // Stu's own commands for this job first, the one he waits on in the foreground among
+        // them: they are his native tasks, so each ends by its own id and nothing else stops.
+        let mut outcomes: Vec<_> = match &stopper {
+            Some((_, handle)) => {
+                let records = assignment::read_all(&self.state, entity, thread).map_err(|e| e.to_string())?;
+                job_commands(&records, id, &handle.own_commands())
+                    .iter()
+                    .map(|task| handle.stop_background_command(task))
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        outcomes.extend(targets.iter().map(|(session, tool)| match &stopper {
+            Some((owner, handle)) if owner == session => handle.stop_worker(tool),
+            _ => CommandStop::NotDelivered,
+        }));
         assignment::record_stop_observation(
             &self.state,
             entity,
@@ -1475,6 +1484,22 @@ pub fn for_him(row: &Assignment) -> bool {
     row.waiting_sentence || row.state.awaits_his_word()
 }
 
+/// Which of Stu's own running commands are job `id`'s: those started after it was registered
+/// while no other job of this conversation was open. Stu's commands carry no job, so one that
+/// started while another job was open could be that job's; it is left to Stu, who is told of
+/// the Stop, rather than guessed. A closed job counts as open until its last update.
+fn job_commands(records: &[assignment::Assignment], id: &str, commands: &[(String, u64)]) -> Vec<String> {
+    let Some(job) = records.iter().find(|r| r.id == id) else { return Vec::new() };
+    let other_open = |at: u64| {
+        records.iter().any(|r| r.id != id && r.registered_at_ms <= at && (r.accepts_input() || at <= r.updated_at_ms))
+    };
+    commands
+        .iter()
+        .filter(|(_, at)| *at >= job.registered_at_ms && !other_open(*at))
+        .map(|(task, _)| task.clone())
+        .collect()
+}
+
 fn stop_detail(outcomes: &[CommandStop]) -> &'static str {
     if outcomes.is_empty() {
         "Stop requested by the user. Stu has been notified."
@@ -1488,7 +1513,7 @@ fn stop_detail(outcomes: &[CommandStop]) -> &'static str {
     } else if outcomes.contains(&CommandStop::Unconfirmed) {
         "Stop requested. A command's ending has not been confirmed."
     } else {
-        "The recorded workers stopped. Stu has been notified."
+        "The job's recorded work stopped. Stu has been notified."
     }
 }
 
@@ -3544,6 +3569,102 @@ mod tests {
                 .state,
             AssignmentState::Registered
         );
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A job's Stop ends the command Stu is running for it in the foreground** (reap walk 10,
+    /// esc-20261021T224235Z-4a2d4e70: "stop-fg (pid 3294) was still running after the trigger").
+    /// A real `sleep` stands in for the command; the stand-in `claude` ends it only on a
+    /// `stop_task` for that command's own task, as Claude Code 2.1.307 does (measured: the
+    /// foreground task's `stop_task` answered success and the process was gone 28 ms later, with
+    /// the turn going on). A helper's command in the same stream is not Stu's and is not stopped.
+    /// RED before the fix: Stop sent nothing for Stu's own command, so the `sleep` outlived the bound.
+    #[test]
+    fn a_jobs_stop_ends_the_foreground_command_stu_runs_for_it() {
+        let h = harness(0);
+        let job = assignment::register(&h.state, &registration(&h)).unwrap();
+        let (client, dir) = crate::native::native_driver_tests::fixture_client("stop-foreground-command", r#"
+here=$(dirname "$0")
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+read -r prompt
+sleep 300 &
+command=$!
+echo "$command" > "$here/command.pid"
+printf '%s\n' '{"type":"assistant","message":{"id":"msg_stu","model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_fg","name":"Bash","input":{"command":"python3 heartbeat.py beat stop-fg /tmp/reap-walk --seconds 300"}}],"usage":{"input_tokens":0,"output_tokens":1}},"parent_tool_use_id":null}'
+printf '%s\n' '{"type":"assistant","message":{"id":"msg_helper","model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_helper","name":"Bash","input":{"command":"sleep 1"}}],"usage":{"input_tokens":0,"output_tokens":1}},"parent_tool_use_id":"toolu_worker"}'
+printf '%s\n' '{"type":"system","subtype":"task_started","task_type":"local_bash","task_id":"bhelper","tool_use_id":"toolu_helper","is_backgrounded":false}'
+printf '%s\n' '{"type":"system","subtype":"task_started","task_type":"local_bash","task_id":"bforeground","tool_use_id":"toolu_fg","is_backgrounded":false}'
+read -r stop
+case "$stop" in *'"subtype":"stop_task","task_id":"bforeground"'*) ;; *) exit 9;; esac
+kill "$command"
+wait "$command" 2>/dev/null
+id=$(printf '%s' "$stop" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+printf '%s\n' "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$id\",\"response\":{}}}"
+printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"bforeground","tool_use_id":"toolu_fg","status":"stopped"}'
+printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn"}'
+read -r keep_alive
+"#);
+        let handle = client.cancel_handle();
+        let turn = std::thread::spawn(move || {
+            let ended = client.prompt("run the job's commands", &mut |_| {});
+            (client, ended)
+        });
+        until("Stu's foreground command never started", || handle.own_commands().len() == 1);
+        assert_eq!(handle.own_commands()[0].0, "bforeground", "a helper's command is not Stu's own");
+        let pid: i32 = std::fs::read_to_string(dir.join("command.pid")).unwrap().trim().parse().unwrap();
+        let alive = || unsafe { libc::kill(pid, 0) } == 0;
+        assert!(alive(), "the stand-in command must be running before Stop");
+        let backend = Backend::new();
+        {
+            let mut inner = backend.inner.lock().unwrap();
+            inner.lease_session = Some("stu-session".into());
+            let stopper: Arc<dyn TurnCancel> = handle.clone();
+            inner.peer_stopper = Some(("stu-session".into(), stopper));
+        }
+        h.host.backends.lock().unwrap().insert("thread-one".into(), backend);
+        let pressed = std::time::Instant::now();
+        h.host.stop_assignment("depot", "thread-one", &job.id).unwrap();
+        // The reap walk's bound (reap-walk.py BOUND_MS), from the press.
+        while alive() && pressed.elapsed() < std::time::Duration::from_millis(2000) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let gone_after = pressed.elapsed();
+        if alive() {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            panic!("the job's foreground command (pid {pid}) was still running {gone_after:?} after Stop");
+        }
+        let (_client, ended) = turn.join().unwrap();
+        assert_eq!(ended.unwrap(), "end_turn", "Stu's turn goes on past the stopped command; it is not interrupted");
+        let stopped = assignment::read(&h.state, "depot", "thread-one", &job.id).unwrap();
+        assert_eq!(stopped.state, AssignmentState::Interrupted);
+        assert_eq!(stopped.detail, "The job's recorded work stopped. Stu has been notified.");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// Stu's commands carry no job, so a Stop takes only those that can be no other job's:
+    /// started after this job was registered, while no other job of the conversation was open.
+    #[test]
+    fn a_jobs_stop_takes_only_the_commands_no_other_job_could_own() {
+        let h = harness(0);
+        let earlier = assignment::register(&h.state, &Registration { obligation_id: "earlier".into(), ..registration(&h) }).unwrap();
+        let job = assignment::register(&h.state, &registration(&h)).unwrap();
+        let read = |id: &str| assignment::read(&h.state, "depot", "thread-one", id).unwrap();
+        let all = || assignment::read_all(&h.state, "depot", "thread-one").unwrap();
+        let job_at = read(&job.id).registered_at_ms;
+        assert!(read(&earlier.id).registered_at_ms <= job_at);
+        let mut commands = vec![("before-the-job".to_string(), job_at.saturating_sub(1)), ("while-both-open".to_string(), job_at)];
+        // Both jobs open: neither command can be told to be this job's.
+        assert!(job_commands(&all(), &job.id, &commands).is_empty());
+        // The earlier job has since closed: a command started after its last update is this job's.
+        assignment::record_user_stop(&h.state, "depot", "thread-one", &earlier.id).unwrap();
+        commands.push(("after-it-closed".to_string(), read(&earlier.id).updated_at_ms + 1));
+        assert_eq!(job_commands(&all(), &job.id, &commands), vec!["after-it-closed".to_string()]);
+        // The only job there is: everything started once it was registered.
+        assert_eq!(job_commands(&[read(&job.id)], &job.id, &commands),
+            vec!["while-both-open".to_string(), "after-it-closed".to_string()]);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }

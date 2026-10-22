@@ -168,6 +168,11 @@ pub struct TaskBook {
     early_status: HashMap<String, TaskStatus>,
     /// Native agents in start order. A named agent started twice keeps both rows.
     agents: Vec<AgentTask>,
+    /// `Bash` tool_use ids the session's own model called (`parent_tool_use_id` null), never a
+    /// helper's: the commands a job's Stop may end on this session's behalf.
+    own_bash: HashSet<String>,
+    /// task id → when its `task_started` was read (ms since the epoch, `assignment::now_ms`).
+    started_at_ms: HashMap<String, u64>,
 }
 
 impl TaskBook {
@@ -177,7 +182,14 @@ impl TaskBook {
         match (frame.get("type").and_then(Value::as_str), frame.get("subtype").and_then(Value::as_str)) {
             (Some("assistant"), _) => {
                 let blocks = frame.pointer("/message/content").and_then(Value::as_array).cloned().unwrap_or_default();
+                let own = frame.get("parent_tool_use_id").is_none_or(Value::is_null);
                 for block in blocks {
+                    if own && block.get("type").and_then(Value::as_str) == Some("tool_use")
+                        && block.get("name").and_then(Value::as_str) == Some("Bash") {
+                        if let Some(id) = block.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) {
+                            self.own_bash.insert(id.to_string());
+                        }
+                    }
                     let is_agent = block.get("type").and_then(Value::as_str) == Some("tool_use")
                         && matches!(block.get("name").and_then(Value::as_str), Some("Agent" | "Task"));
                     let name = block.pointer("/input/name").and_then(Value::as_str).map(str::trim).unwrap_or("");
@@ -197,6 +209,7 @@ impl TaskBook {
                 let task = frame.get("task_id").and_then(Value::as_str).unwrap_or("");
                 let tool = frame.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
                 if !task.is_empty() {
+                    self.started_at_ms.entry(task.to_string()).or_insert_with(crate::assignment::now_ms);
                     if !tool.is_empty() {
                         self.task_tool.insert(task.to_string(), tool.to_string());
                     }
@@ -265,6 +278,17 @@ impl TaskBook {
         let task = tasks.next()?.clone();
         if tasks.next().is_some() { return None; }
         Some(task)
+    }
+
+    /// The session's own shell commands still running, foreground or background, oldest first:
+    /// `(task id, when its task_started was read)`. A helper's commands are its own, not these.
+    pub fn own_running_commands(&self) -> Vec<(String, u64)> {
+        let mut out: Vec<(String, u64)> = self.task_tool.iter()
+            .filter(|(task, tool)| self.own_bash.contains(*tool) && !self.task_ended(task))
+            .filter_map(|(task, _)| Some((task.clone(), *self.started_at_ms.get(task)?)))
+            .collect();
+        out.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+        out
     }
 
     pub fn task_ended(&self, task: &str) -> bool {

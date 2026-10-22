@@ -817,6 +817,11 @@ pub trait TurnCancel: Send + Sync {
 
     /// Stop the native agent launched by this exact prepared tool call.
     fn stop_worker(&self, _tool_use_id: &str) -> CommandStop { CommandStop::NotDelivered }
+
+    /// The shell commands this session's own model started that are still running, foreground
+    /// or background, by the provider's task id with when each started (ms since the epoch).
+    /// [`Self::stop_background_command`] stops one by that id.
+    fn own_commands(&self) -> Vec<(String, u64)> { Vec::new() }
 }
 
 /// What became of a request to stop one background command, from the provider's own frames.
