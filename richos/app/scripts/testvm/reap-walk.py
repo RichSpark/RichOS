@@ -202,6 +202,29 @@ def rich_ran_handed(calls, assignments):
             % (', '.join(a.get('id') or '?' for a in assignments), json.dumps(mine)[:1200]))
 
 
+def summarize(found, sent_ms):
+    """One paragraph from reap-guest.py evidence for a step's failure line: did the ask become a
+    job, what did Rich last say, what did Stu last say or run. The files keep the rest."""
+    if not found:
+        return 'the app\'s files could not be read'
+    jobs = [a for a in found.get('assignments') or [] if (a.get('registered_at_ms') or 0) >= sent_ms]
+    parts = ['jobs since the ask: %s' % ('; '.join('%s %s (%s)' % (a.get('kind'), a.get('state'), (a.get('title') or '')[:60])
+                                                   for a in jobs) or 'none')]
+    turns = found.get('rich_turns') or []
+    if turns:
+        last = turns[-1]
+        parts.append('Rich\'s last turn %s: %r' % ((last.get('ended') or {}).get('event') or 'not ended',
+                                                  (last.get('reply') or '')[-300:]))
+    stu = [s for s in found.get('sessions') or [] if s.get('role') == 'stu']
+    if stu:
+        said = (stu[-1].get('said') or [{}])[-1].get('text', '')
+        tool = (stu[-1].get('tools') or [{}])[-1]
+        parts.append('Stu last said %r, last ran %s' % (said[-300:], tool.get('name') or 'nothing'))
+    else:
+        parts.append('no Stu session')
+    return '; '.join(parts)
+
+
 # --- the grade, pure, so test/reap-walk.test.py can hold it to its rules without a guest ---------
 
 def grade_ended(rows, names, trigger_ms, bound_ms, left=None):
@@ -368,8 +391,35 @@ class Walk(adopt.Walk):
                         'run_by': calls}
             approved += self.approve_pending()
             time.sleep(3)
-        raise StepFailed('prerequisite unavailable: %s never recorded itself within %d s (approved %d request(s))'
-                         % (', '.join(names), within, approved))
+        why = 'prerequisite unavailable: %s never recorded itself within %d s (approved %d request(s))' % (
+            ', '.join(names), within, approved)
+        raise StepFailed('%s\n%s' % (why, self.not_started(tag, sent)))
+
+    def not_started(self, tag, sent_ms):
+        """What explains an ask whose commands never started, saved in OUT/<tag>-not-started/
+        before the guest is gone: the job list, Rich's and Stu's last words and tool calls
+        (reap-guest.py evidence), the screen and its accessibility tree. Returns the summary the
+        step's failure carries. Each piece that cannot be read is written down as such and
+        never changes the step's outcome (walk-56a6baace66a's quit step kept none of them)."""
+        folder = self.out / ('%s-not-started' % tag)
+        folder.mkdir(parents=True, exist_ok=True)
+        found = None
+        try:
+            text = guest(self.vm, 'python3 %s evidence %s %s %d' % (shlex.quote(self.helper), shlex.quote(self.data),
+                                                                    shlex.quote(self.home), sent_ms), 120)
+            found = json.loads(text)
+            (folder / 'evidence.json').write_text(json.dumps(found, indent=2) + '\n')
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
+            (folder / 'evidence.failed.txt').write_text('%s\n' % exc)
+        try:
+            command([HERE / 'shot.sh', self.vm, folder / 'screen.png'], 60)
+        except Exception as exc:  # noqa: BLE001
+            (folder / 'screen.failed.txt').write_text('%s\n' % exc)
+        try:
+            (folder / 'ax-tree.txt').write_text(command([HERE / 'ax.sh', self.vm, 'tree'], 90))
+        except Exception as exc:  # noqa: BLE001
+            (folder / 'ax-tree.failed.txt').write_text('%s\n' % exc)
+        return 'saved in %s: %s' % (folder, summarize(found, sent_ms))
 
     def verdict(self, names, trigger_ms, bound_ms):
         time.sleep(bound_ms / 1000 + 1)

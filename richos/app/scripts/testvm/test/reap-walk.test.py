@@ -237,5 +237,142 @@ class Grade(unittest.TestCase):
         self.assertAlmostEqual(walk.cpu_seconds(' 1:02:03.50\n'), 3723.5)
 
 
+class NotStarted(unittest.TestCase):
+    """walk-56a6baace66a: the quit step's ask never started its commands, and the timeout kept no
+    job list, no reply, no screen: nobody could say whether it became a job. The saving itself."""
+
+    SENT = T
+
+    def app_files(self, root):
+        """The app's own files, in the shapes it writes them."""
+        data, home = root / 'data', root / 'home'
+        job = data / 'engine-state/assignments/acme/a2.json'
+        job.parent.mkdir(parents=True)
+        (data / 'engine-state/assignments/acme/a1.json').write_text(json.dumps(
+            {'id': 'a1', 'kind': 'task', 'state': 'interrupted', 'title': 'stop job', 'registered_at_ms': T - 60000,
+             'user_stop_requested_at_ms': T - 5000, 'notices': [{'kind': 'interrupted', 'text': 'It was stopped.'}]}))
+        job.write_text(json.dumps({'id': 'a2', 'kind': 'task', 'state': 'registered', 'title': 'quit job',
+                                   'registered_at_ms': T + 4000}))
+        (data / 'engine-state/assignments/acme/broken.json').write_text('{')
+        for session, role in (('s-rich', 'rich'), ('s-stu', 'stu')):
+            binding = data / 'engine-state/evidence' / session / 'binding.json'
+            binding.parent.mkdir(parents=True)
+            binding.write_text(json.dumps({'session_id': session, 'role': role}))
+        transcript = home / '.claude/projects/-acme/s-stu.jsonl'
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text('\n'.join(json.dumps(r) for r in [
+            {'type': 'user', 'timestamp': '2026-10-22T19:30:00Z', 'message': {'content': 'job a2'}},
+            {'type': 'assistant', 'timestamp': '2026-10-22T19:30:05Z', 'message': {'content': [
+                {'type': 'text', 'text': 'Waiting for the stopped job to settle.'},
+                {'type': 'tool_use', 'name': 'Bash', 'input': {'command': 'sleep 1'}}]}}]) + '\nnot json\n')
+        inbox = data / 'engine-state/messages/acme/thr_1/stu.jsonl'
+        inbox.parent.mkdir(parents=True)
+        inbox.write_text(json.dumps({'from': 'rich', 'at': T + 3000, 'text': 'quit job'}) + '\n')
+        (data / 'conversation-ledger.jsonl').write_text('\n'.join(json.dumps(r) for r in [
+            {'event': 'PromptReceived', 'turn_id': 't1', 'thread_id': 'thr_1', 'text': 'stop job', 'source': 'text', 'at': T - 70000},
+            {'event': 'TurnCompleted', 'turn_id': 't1', 'stop_reason': 'end_turn', 'at': T - 60000},
+            {'event': 'PromptReceived', 'turn_id': 't2', 'thread_id': 'thr_1', 'text': 'quit job', 'source': 'text', 'at': T + 100},
+            {'event': 'TurnStarted', 'turn_id': 't2', 'session_id': 's-rich', 'at': T + 200},
+            {'event': 'AssistantDelta', 'turn_id': 't2', 'text': 'On it, ', 'at': T + 300},
+            {'event': 'AssistantDelta', 'turn_id': 't2', 'text': 'handed to Stu.', 'at': T + 400}]) + '\n')
+        return data, home
+
+    def test_the_guest_helper_reads_the_job_list_and_both_sides_last_words(self):
+        with tempfile.TemporaryDirectory() as d:
+            data, home = self.app_files(Path(d))
+            ran = subprocess.run([sys.executable, str(HERE / 'reap-guest.py'), 'evidence', str(data), str(home), str(T)],
+                                 capture_output=True, text=True)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        found = json.loads(ran.stdout)
+        self.assertEqual([(a['id'], a['state']) for a in found['assignments']], [('a1', 'interrupted'), ('a2', 'registered')])
+        self.assertEqual(found['assignments'][0]['notices'], ['It was stopped.'])
+        self.assertTrue(any('broken.json' in u for u in found['unreadable']), found['unreadable'])
+        # Only the turns since the ask; the reply is the deltas joined, the turn not ended yet.
+        self.assertEqual([t['turn_id'] for t in found['rich_turns']], ['t2'])
+        self.assertEqual(found['rich_turns'][0]['reply'], 'On it, handed to Stu.')
+        self.assertNotIn('ended', found['rich_turns'][0])
+        stu = [s for s in found['sessions'] if s['role'] == 'stu'][0]
+        self.assertEqual(stu['said'][-1]['text'], 'Waiting for the stopped job to settle.')
+        self.assertEqual(stu['tools'][-1]['name'], 'Bash')
+        rich = [s for s in found['sessions'] if s['role'] == 'rich'][0]
+        self.assertIsNone(rich['transcript'])
+        self.assertEqual(found['stu_inboxes'][0]['last'][0]['text'], 'quit job')
+        summary = walk.summarize(found, T)
+        self.assertIn('task registered (quit job)', summary)
+        self.assertNotIn('stop job', summary.split('Rich')[0])
+        self.assertIn('not ended', summary)
+        self.assertIn('Waiting for the stopped job to settle.', summary)
+
+    def the_walk(self, root):
+        w = object.__new__(walk.Walk)
+        w.vm, w.out, w.helper = 'walk-test', root / 'out', str(HERE / 'reap-guest.py')
+        w.data, w.home = str(root / 'data'), str(root / 'home')
+        w.out.mkdir()
+        return w
+
+    def test_a_timeout_saves_the_evidence_screen_and_tree_and_names_them(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.app_files(root)
+            w = self.the_walk(root)
+            calls = []
+
+            def guest(vm, cmd, timeout=30):  # the guest is this machine, its python3 this one
+                calls.append(cmd)
+                return subprocess.run(cmd.replace('python3 ', sys.executable + ' ', 1), shell=True, capture_output=True,
+                                      text=True, check=True).stdout
+
+            def command(argv, timeout=30):
+                argv = list(map(str, argv))
+                if argv[0].endswith('shot.sh'):
+                    Path(argv[2]).write_bytes(b'\x89PNG')
+                    return ''
+                self.assertEqual(argv[1:], ['walk-test', 'tree'])
+                return 'AXWindow "RichOS"\n  AXTextArea "Message to Rich" value="quit job"\n'
+            saved = walk.guest, walk.command
+            walk.guest, walk.command = guest, command
+            try:
+                w.rows, w.approve_pending, w.ask = (lambda: []), (lambda: 0), (lambda text: None)
+                w.now = lambda: T
+                with self.assertRaises(walk.StepFailed) as failed:
+                    w.start('quit', within=0)
+            finally:
+                walk.guest, walk.command = saved
+            folder = w.out / 'quit-not-started'
+            message = str(failed.exception)
+            self.assertIn('quit-fg, quit-bg never recorded itself within 0 s', message)
+            self.assertIn(str(folder), message)
+            self.assertIn('task registered (quit job)', message)
+            found = json.loads((folder / 'evidence.json').read_text())
+            self.assertEqual(found['since_ms'], T)
+            self.assertEqual((folder / 'screen.png').read_bytes(), b'\x89PNG')
+            self.assertIn('Message to Rich', (folder / 'ax-tree.txt').read_text())
+            self.assertEqual(sorted(p.name for p in folder.iterdir()), ['ax-tree.txt', 'evidence.json', 'screen.png'])
+
+    def test_a_piece_that_cannot_be_read_is_written_down_and_the_rest_still_saved(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            w = self.the_walk(root)
+
+            def guest(vm, cmd, timeout=30):
+                raise RuntimeError('ssh: connection refused')
+
+            def command(argv, timeout=30):
+                if str(argv[0]).endswith('shot.sh'):
+                    raise walk.StepFailed('a black frame')
+                return 'AXWindow "RichOS"\n'
+            saved = walk.guest, walk.command
+            walk.guest, walk.command = guest, command
+            try:
+                summary = w.not_started('quit', T)
+            finally:
+                walk.guest, walk.command = saved
+            folder = w.out / 'quit-not-started'
+            self.assertIn("could not be read", summary)
+            self.assertIn('connection refused', (folder / 'evidence.failed.txt').read_text())
+            self.assertIn('black frame', (folder / 'screen.failed.txt').read_text())
+            self.assertTrue((folder / 'ax-tree.txt').exists())
+
+
 if __name__ == '__main__':
     unittest.main()
