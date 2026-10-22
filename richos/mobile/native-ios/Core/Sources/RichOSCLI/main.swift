@@ -31,7 +31,8 @@ RichOS native iPhone development loop (JSON output; nonzero exit on failure)
   bin/rios sim restart                relaunch the app process
   bin/rios sim verify                 headless and simulator results must be byte-identical
   bin/rios sim screenshot [path]      capture the screen; default name <screen>-<appearance>.png
-  bin/rios sim ui-test                the XCUITest target on this simulator
+  bin/rios sim ui-test [TARGET/SUITE] the UI and unit tests on this simulator, or only one target,
+                                      suite or test (xcodebuild -only-testing)
   bin/rios sim check-release          prove fixtures and the bridge are absent from Release
   bin/rios sim build Debug|Release    build only
   bin/rios sim stop                   terminate the app, shut the simulator down and delete it
