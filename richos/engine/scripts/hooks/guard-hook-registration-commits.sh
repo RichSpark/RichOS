@@ -254,6 +254,9 @@ fi
 # raw payload retires the overwhelming majority before a subprocess is spawned.
 # Deliberately OVER-inclusive (a commit MESSAGE containing "push" gets past it
 # and is classified properly below); over-inclusive costs time, never coverage.
+# dispatch-words: commit push
+#   (dispatch-pretooluse.sh skips this rule on a call that names none of these
+#   words: they are the words the filter below needs before it can do anything.)
 case "$INPUT" in
     *commit*|*push*) ;;
     *) exit 0 ;;

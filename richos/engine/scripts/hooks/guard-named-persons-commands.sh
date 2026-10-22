@@ -228,6 +228,9 @@ COMMAND="$(printf '%s' "$INPUT" | python3 -c 'import json,sys; d=json.load(sys.s
 # Everything else on the Bash matcher passes untouched.
 # Command bodies can be larger than one environment entry. Feed the full
 # script on stdin and distinguish classifier failure from a non-publishing call.
+# dispatch-words: git gh
+#   (dispatch-pretooluse.sh skips this rule on a call that names none of these
+#   words: they are the words the filter below needs before it can do anything.)
 NP_SURFACE="$(python3 -c '
 import re, sys
 cmd = sys.stdin.read()
