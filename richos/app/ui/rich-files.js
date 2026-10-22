@@ -85,6 +85,10 @@
     const text = node("span", "tl-rfile-text");
     text.appendChild(node("span", "tl-rfile-name", name));
     const meta = node("span", "tl-rfile-meta", f.exists === false ? GONE : (f.meta || ""));
+    // The button's name is what pressing it does; its description is this line (type, size, pages,
+    // or why it cannot open), which the name would otherwise hide from a screen reader.
+    meta.id = "tl-rfile-meta-" + el.dataset.fileId;
+    main.setAttribute("aria-describedby", meta.id);
     text.appendChild(meta);
     main.append(glyph, text);
 
