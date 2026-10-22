@@ -317,7 +317,7 @@
     },
     "scripts/hooks/notice-waiver-repetition.py#discovery": {
       "source": "scripts/hooks/notice-waiver-repetition.py",
-      "sha256": "536de700653b2d81df7ea51223338be0a9e93e67c1203e9950ec33a312381125",
+      "sha256": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
       "evidence": "Source discovery scans script .sh/.py text and record discovery scans state logs. These functions neither execute discovered scripts nor read orchestration.config.",
       "keys": [],
       "edges": [],
@@ -3748,8 +3748,8 @@
     },
     "scripts/lib/inflight.py": {
       "source": "scripts/lib/inflight.py",
-      "sha256": "d1feca630d8fda5b042c70e0940798856678db09faa65e4b722f3d9c6f9ec3a3",
-      "evidence": "Reads Git worktree/ref/diff metadata, acknowledgement and notice ledgers, timestamps and PID liveness. Its only dynamic imports are teammate-identity and the workspaces integration_for reader. It never reads orchestration.config, runs payload commands or invokes workspace lifecycle actions. The full module was reviewed, including default-tip and durable-ack paths.",
+      "sha256": "5e6596f5a7eb395b724f624166dc83ab0ce428165c0d85f2fee9cfaf82f26d44",
+      "evidence": "Reads Git worktree/ref/diff metadata, acknowledgement and notice ledgers, timestamps and PID liveness. Its only dynamic imports are teammate-identity and the workspaces integration_for reader. It never reads orchestration.config, runs payload commands or invokes workspace lifecycle actions. The full module was reviewed, including default-tip and durable-ack paths. Since 2026-10-22 it also reads and rewrites richos-inflight-answers.json in the repository's own git common directory: answers about pairs of full commit ids (is-ancestor, merge-base, rev-list, diff --name-only), reused while the same ids are asked about; no setting, and a question git could not answer is never stored.",
       "keys": [],
       "edges": [
         {
@@ -7660,8 +7660,8 @@
     },
     "scripts/hooks/notice-waiver-repetition.py": {
       "source": "scripts/hooks/notice-waiver-repetition.py",
-      "sha256": "536de700653b2d81df7ea51223338be0a9e93e67c1203e9950ec33a312381125",
-      "evidence": "Reviewed import/call inventory and all I/O boundaries: stdlib-only source discovery reads scripts as text, resolves ledger names with regex and dictionaries then reads state/teams logs. No source execution, config reader or subprocess. This suite supplies private engine/entity/config roots; CLI date is fixed for most cases, hook cases use wall clock.",
+      "sha256": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
+      "evidence": "Reviewed import/call inventory and all I/O boundaries: stdlib-only source discovery reads scripts as text, resolves ledger names with regex and dictionaries then reads state/teams logs. No source execution, config reader or subprocess. This suite supplies private engine/entity/config roots; CLI date is fixed for most cases, hook cases use wall clock. Since 2026-10-22 it also reads and rewrites waiver-repetition-memo-<seat>.json in the config root's state directory: the source scan and each ledger's analysis, reused only while every file read (path, inode, size, mtime_ns) and the analyzer itself are unchanged; not a ledger (.json is never scanned), no setting.",
       "keys": [],
       "edges": []
     },
@@ -7719,7 +7719,7 @@
     },
     "scripts/hooks/waiver-repetition.test.sh": {
       "source": "scripts/hooks/waiver-repetition.test.sh",
-      "sha256": "f39df3a82c34246ee8c989b43c9dfa62f131bd4150992f4d4cd5dfac1fa2f3cb",
+      "sha256": "20384e76e4dd16fae33dce16a23c5d8e26d795f8b38d3b1d0d30a10ebcdce95a",
       "evidence": "Full suite creates literal entity config, fake source guards and private ledgers under isolated CLAUDE_CONFIG_DIR. The fake guard source is analyzer data, never executed. Real hooks JSON is grep-checked for notice-waiver-repetition.sh. Nested fixed driver preserves the same fixture-only config obligations. Renewed 2026-10-01: RICHOS_ENTITY_ROOT and CLAUDE_PROJECT_DIR are unset and case 17 runs the hook from its unadopted directory, so no case can resolve the real engine as its entity; no new reader.",
       "keys": [],
       "edges": [
@@ -16408,6 +16408,28 @@
         }
       ],
       "evidence": "Terminal event adapter. Reads the existing registry records, each worker's lead transcript and its own transcript, the send hook's inflight-notices ledger (resolved by teammate-identity's ladder, so INFLIGHT_TEAMS_DIR binds it in fixtures), the review ledger and the entity-local recovery declaration. Writes only recovery_events on the existing registry records, rows in the existing recovery events.jsonl and its drain cursor, lock and log beside the review ledger. Fixtures run on the registry suite's sandbox with fake triage and scheduling, or a literal fake provider through SECOND_REVIEW_CLAUDE and SECOND_REVIEW_QUOTA_CMD. No orchestration.config key or new environment reader."
+    },
+    "scripts/lib/inflight-gaps.test.sh": {
+      "source": "scripts/lib/inflight-gaps.test.sh",
+      "sha256": "cdede4ec007ce1aba17a8b3ec7cb49b84c0db35778949611957770072f10fe3f",
+      "evidence": "Executes exactly the adjacent fixed Python fixture, with no mutation driver.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/inflight-gaps.test.py"
+        }
+      ]
+    },
+    "scripts/lib/inflight-gaps.test.py": {
+      "source": "scripts/lib/inflight-gaps.test.py",
+      "sha256": "7ed521aa99ef7e50aa3e60b7920f93bfc1c88e285eb39b5c8e43f9db40fa516e",
+      "evidence": "Fixed Python fixture: builds a private Git repository and one linked worktree under its own temporary directory, points RICHOS_INFLIGHT_ACK_LEDGER at a private file and calls inflight.assess/main with an explicit tip and teams directory. Git failures are simulated by patching the module's own helpers; no orchestration setting or operator ledger is read.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/inflight.py"
+        }
+      ]
     }
   },
   "units": {
@@ -16593,7 +16615,8 @@
     "scripts/hooks/by-reference-4.test.sh": "scripts/hooks/by-reference-4.test.sh",
     "scripts/operator-fences-second-git.test.sh": "scripts/operator-fences-second-git.test.sh",
     "scripts/lib/merge-verification-pins.test.sh": "scripts/lib/merge-verification-pins.test.sh",
-    "scripts/verification-pins.test.sh": "scripts/verification-pins.test.sh"
+    "scripts/verification-pins.test.sh": "scripts/verification-pins.test.sh",
+    "scripts/lib/inflight-gaps.test.sh": "scripts/lib/inflight-gaps.test.sh"
   },
   "hook_readers": {
     "scripts/hooks/ceo-asks.test.sh": {
@@ -16947,7 +16970,7 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/lib/hook-dependencies.py": "013b187a06ddb52d8e679407b45d635d8a6c693348d0bcb4998b58f6ec44debe",
         "scripts/lib/hook-dependencies.sh": "a4634dd1f95fe9c518055fd324d4b56a07186aafb8828e387c890c3cbd0e4621",
-        "scripts/lib/inflight.py": "d1feca630d8fda5b042c70e0940798856678db09faa65e4b722f3d9c6f9ec3a3",
+        "scripts/lib/inflight.py": "5e6596f5a7eb395b724f624166dc83ab0ce428165c0d85f2fee9cfaf82f26d44",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/lib/interactive-prompt.py": "fd95664d486aa1cde400a9c216e1d2fda2eeb5f21a202a8ccce2b2d1a7b11af8",
         "scripts/lib/mechanical-findings.py": "0942c108c40a62c831eaee4d569f8def0178903e17a289e221cc93ed7f51db78",
@@ -17082,7 +17105,7 @@
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
         "scripts/hooks/notice-unstarted-rows.sh": "b85c3314266c707dd30e6ab3d8bd311119f504115166b3b0023a4291b3193e48",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
-        "scripts/hooks/notice-waiver-repetition.py": "536de700653b2d81df7ea51223338be0a9e93e67c1203e9950ec33a312381125",
+        "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
         "scripts/hooks/release-land-leases.sh": "67507402a96c8fa243814ba2269cb3d3e00fede94ae50ca2c2bd9bb90b891e76",
         "scripts/hooks/release-shared-writes.sh": "da06d8fbe6b3438a0bb1c33cea6e6b4789aeb041f9aef246ec3eea24d0f4ed80",
@@ -17400,12 +17423,12 @@
       ],
       "evidence": "Suite greps the raw hooks JSON for this literal script name; the nested mutation renames that registration. Binds every copied/executed helper and the driver.",
       "sources": {
-        "scripts/hooks/waiver-repetition.test.sh": "f39df3a82c34246ee8c989b43c9dfa62f131bd4150992f4d4cd5dfac1fa2f3cb",
+        "scripts/hooks/waiver-repetition.test.sh": "20384e76e4dd16fae33dce16a23c5d8e26d795f8b38d3b1d0d30a10ebcdce95a",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/stop-hook-notice.sh": "f1431988b7e290d871da89518cd3c6c2bfc455558517862097659472ddcf409d",
-        "scripts/hooks/notice-waiver-repetition.py": "536de700653b2d81df7ea51223338be0a9e93e67c1203e9950ec33a312381125",
+        "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
         "scripts/waiver-repetition-lint.sh": "03bba7c566c0b3348d91badad662f240b2da1085c80291bc34765418ce88adb0",
         "scripts/hooks/waiver-repetition.mutation.sh": "a767577b4b2a78dd280f9dd90a43359a1db4d0c19f3fb54a4f91351cd3df5403",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
@@ -17742,7 +17765,7 @@
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
         "scripts/hooks/notice-inflight-acks.sh": "472a52d1fe0e78b0f4f166da9402fae9acf3eba3f6329c3afeb7460ced547a32",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
-        "scripts/lib/inflight.py": "d1feca630d8fda5b042c70e0940798856678db09faa65e4b722f3d9c6f9ec3a3",
+        "scripts/lib/inflight.py": "5e6596f5a7eb395b724f624166dc83ab0ce428165c0d85f2fee9cfaf82f26d44",
         "scripts/hooks/notice-mechanical-findings.sh": "1b3ba1af8d15b64cd8eda504e691347f0ef923bd78e53f235223589248bb1c07",
         "scripts/lib/mechanical-findings.sh": "1c67019e979adea3071d160882f26acb6bd14c032162ba31d7a1020ad06509bb",
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
@@ -17758,7 +17781,7 @@
         "scripts/lib/unstarted-rows.sh": "12069725d4b1d131f6ae622f957087e432b197a84f5c446fa323bd6f533657e0",
         "scripts/lib/unstarted-rows.py": "d23e53f6afe1f247ca32637f162d65525c2bc137ec736f3401f8b09fbe6b9473",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
-        "scripts/hooks/notice-waiver-repetition.py": "536de700653b2d81df7ea51223338be0a9e93e67c1203e9950ec33a312381125",
+        "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
         "scripts/hooks/release-land-leases.sh": "67507402a96c8fa243814ba2269cb3d3e00fede94ae50ca2c2bd9bb90b891e76",
         "scripts/hooks/shell-evidence.sh": "01d511155b7df5a4be0ab6cb25aaac934a467e086d5c31f2afd6ee9c7bcc370a",
         "scripts/hooks/shell-evidence.py": "de4326ba4e1c9d8a415e27379efe3b4ecb15d4dd362419925628afe64c1cf240",

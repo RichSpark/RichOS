@@ -217,6 +217,65 @@ def ancestor_state(repo, a, b):
     return None
 
 
+# AN ANSWER ABOUT TWO COMMITS NEVER CHANGES, SO IT IS ASKED ONCE (2026-10-22). The Stop notice
+# asked git the same questions about every worktree at every turn end: whether its head
+# contains or trails the tip, their merge-base, the commits and paths between. With 50
+# worktrees that was 16.4 CPU-s a turn (Hank's after-measurement, richos-hq
+# docs/research/2026-10-22-mac-system-cpu-after.md), and between two lands every answer was
+# the one it gave last turn. Each is a fact about full commit ids, so it is kept in the
+# repository's own git directory and reused while those ids are the ones asked about. Only a
+# definite answer is kept: a question git could not answer is asked again next time, so a
+# failure is never remembered as a fact. A worktree whose head moved, or a new tip, asks anew.
+GIT_MEMO_NAME = "richos-inflight-answers.json"
+_FULL_SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+
+
+class GitMemo:
+    """What one assessment asked git, kept for the next. Only the answers this assessment used
+    are written back, so the file holds one assessment's worth (about 7 MB for richos's 50
+    worktrees on 2026-10-22, most of it moved-path listings) and never grows with the history
+    of tips."""
+    def __init__(self, root):
+        common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+        self.path = os.path.join(common, GIT_MEMO_NAME) if common else ""
+        self.entries, self.used, self.dirty = {}, set(), False
+        try:
+            with open(self.path) as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict) and isinstance(loaded.get("entries"), dict):
+                self.entries = loaded["entries"]
+        except (OSError, ValueError):
+            pass
+
+    def ask(self, key, shas, compute, definite):
+        """compute()'s answer, reused for `key` when every id in `shas` is a full commit id."""
+        keep = bool(self.path) and all(_FULL_SHA.match(s or "") for s in shas)
+        name = "\t".join(key)
+        if keep and name in self.entries:
+            self.used.add(name)
+            return self.entries[name]
+        answer = compute()
+        if keep and definite(answer):
+            self.entries[name] = answer
+            self.used.add(name)
+            self.dirty = True
+        return answer
+
+    def save(self):
+        if not self.path or not (self.dirty or set(self.entries) != self.used):
+            return
+        tmp = "%s.%d.tmp" % (self.path, os.getpid())
+        try:
+            with open(tmp, "w") as fh:
+                json.dump({"schema": 1, "entries": {k: self.entries[k] for k in sorted(self.used)}}, fh)
+            os.replace(tmp, self.path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
 def main_checkout(repo):
     """The TRUE main checkout for this repository, from any worktree inside it.
 
@@ -1155,6 +1214,7 @@ def assess(repo, tip=None, teams_dir="", timeout_min=DEFAULT_ACK_TIMEOUT_MIN,
         # exits 2 on an error and guard-inflight-notify.sh refuses on it.
         result["error"] = "the worktree inventory could not be read (%s), so who is in flight is UNKNOWN" % exc
         return result
+    memo = GitMemo(root)
     for entry in inventory:
         path = entry["path"]
         if norm(path) == norm(root):
@@ -1214,8 +1274,12 @@ def assess(repo, tip=None, teams_dir="", timeout_min=DEFAULT_ACK_TIMEOUT_MIN,
 
         head = entry["head"] or wt["branch"]
         wt["scan_gap"] = ""
-        landed_state = ancestor_state(root, head, tip) if head else False
-        behind_state = ancestor_state(root, tip, head) if head else False
+        ancestor = lambda a, b: memo.ask(("is-ancestor", a, b), (a, b),
+                                         lambda: ancestor_state(root, a, b), lambda v: v is not None)
+        asked = lambda key, shas, *args: memo.ask(key, shas, lambda: git_checked(root, *args),
+                                                  lambda v: bool(v[0]))
+        landed_state = ancestor(head, tip) if head else False
+        behind_state = ancestor(tip, head) if head else False
         if landed_state is None or behind_state is None:
             wt["scan_gap"] = "git could not say whether %s contains or trails %s" % (head[:12], tip[:12])
         contained = bool(head) and landed_state is True
@@ -1228,7 +1292,7 @@ def assess(repo, tip=None, teams_dir="", timeout_min=DEFAULT_ACK_TIMEOUT_MIN,
         wt["own_paths"] = []
         wt["overlap"] = []
         if wt["behind"] and head:
-            ok_b, out_b = git_checked(root, "merge-base", tip, head)
+            ok_b, out_b = asked(("merge-base", tip, head), (tip, head), "merge-base", tip, head)
             base = out_b.strip() if ok_b else ""
             wt["base"] = base
             if not base:
@@ -1237,9 +1301,9 @@ def assess(repo, tip=None, teams_dir="", timeout_min=DEFAULT_ACK_TIMEOUT_MIN,
                 # moved under it": the verdict below would say CLEAN-NOT-BEHIND.
                 wt["scan_gap"] = "the merge-base of %s and %s could not be computed, so what moved under it is UNKNOWN" % (tip[:12], head[:12])
             else:
-                ok1, shas = git_checked(root, "rev-list", "%s..%s" % (base, tip))
-                ok2, moved = git_checked(root, "diff", "--name-only", base, tip)
-                ok3, own = git_checked(root, "diff", "--name-only", base, head)
+                ok1, shas = asked(("rev-list", base, tip), (base, tip), "rev-list", "%s..%s" % (base, tip))
+                ok2, moved = asked(("diff", base, tip), (base, tip), "diff", "--name-only", base, tip)
+                ok3, own = asked(("diff", base, head), (base, head), "diff", "--name-only", base, head)
                 if not (ok1 and ok2 and ok3):
                     wt["scan_gap"] = "git could not list the commits or paths that moved since %s" % base[:12]
                 wt["moved_shas"] = shas.split()
@@ -1248,6 +1312,7 @@ def assess(repo, tip=None, teams_dir="", timeout_min=DEFAULT_ACK_TIMEOUT_MIN,
                 wt["overlap"] = sorted(set(wt["moved_paths"]) & set(wt["own_paths"]))
 
         result["worktrees"].append(wt)
+    memo.save()
 
     live = [w for w in result["worktrees"] if w["live"]]
     result["live_count"] = len(live)

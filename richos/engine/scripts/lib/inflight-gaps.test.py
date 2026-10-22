@@ -133,6 +133,44 @@ class InflightGaps(unittest.TestCase):
         self.assertFalse(res.get("error"), res.get("error"))
         self.assertEqual([w["verdict"] for w in res["worktrees"]], ["NOT-LIVE"])
 
+    def test_7_answers_about_two_commits_are_asked_of_git_once(self):
+        # 2026-10-22: the Stop notice asked git the same questions about every worktree at
+        # every turn end (16.4 CPU-s a turn over richos's 50 worktrees). An answer about two
+        # full commit ids never changes, so the next assessment reuses it and decides the same.
+        first = self.assess()
+        asked = []
+        real_checked, real_ancestor = inflight.git_checked, inflight.ancestor_state
+
+        def checked(repo, *args):
+            asked.append(args[0])
+            return real_checked(repo, *args)
+
+        def ancestor(repo, a, b):
+            asked.append("is-ancestor")
+            return real_ancestor(repo, a, b)
+
+        with mock.patch.object(inflight, "git_checked", checked), \
+                mock.patch.object(inflight, "ancestor_state", ancestor):
+            second = self.assess()
+        self.assertEqual([a for a in asked if a != "worktree"], [], "the same questions were asked again")
+        keys = ("verdict", "landed", "behind", "base", "moved_shas", "moved_paths", "own_paths", "overlap")
+        self.assertEqual([{k: w[k] for k in keys} for w in second["worktrees"]],
+                         [{k: w[k] for k in keys} for w in first["worktrees"]])
+        self.assertEqual(second["blocking"], first["blocking"])
+
+    def test_8_a_question_git_could_not_answer_is_asked_again(self):
+        with mock.patch.object(inflight, "ancestor_state", lambda *a: None, create=True):
+            res = self.assess()
+        self.assertIn("could not say", res.get("error", ""))
+        res = self.assess()
+        self.assertFalse(res.get("error"), res.get("error"))
+        self.assertEqual([w["verdict"] for w in res["worktrees"]], ["OWED-NO-NOTICE"])
+
+    def test_9_a_worktree_that_moves_is_asked_about_anew(self):
+        self.assertEqual([w["verdict"] for w in self.assess()["worktrees"]], ["OWED-NO-NOTICE"])
+        run("git", "merge", "-q", "--no-edit", "main", cwd=self.wt)
+        self.assertEqual([w["verdict"] for w in self.assess()["worktrees"]], ["CLEAN-NOT-BEHIND"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
