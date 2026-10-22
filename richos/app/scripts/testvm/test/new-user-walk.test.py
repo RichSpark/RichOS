@@ -159,6 +159,49 @@ class SignedOutVerdict(unittest.TestCase):
 
 
 class AccountsVerdict(unittest.TestCase):
+    def test_the_browser_check_keeps_only_provider_host_and_path(self):
+        self.assertEqual(walk.provider_page('https://claude.ai/oauth/authorize?state=private&code=secret'),
+                         {'host': 'claude.ai', 'path': '/oauth/authorize'})
+        for url in ['http://claude.ai/login', 'https://claude.ai.evil.invalid/login',
+                    'https://unrelated.invalid/login', 'file:///private/login']:
+            self.assertIsNone(walk.provider_page(url), url)
+
+    def test_real_sign_in_is_pressed_cancelled_and_retried_before_the_projected_login(self):
+        clicks = []
+        stub = types.SimpleNamespace(vm='guest', by_id=lambda _: {'enabled': True},
+            ax=lambda *args: clicks.append(args),
+            frame=lambda _: 'Sign-in was canceled. You can try again when you are ready.')
+        running = iter([False, True, False, False, True, False])
+        stub.login_running = lambda: next(running)
+        pages = iter([('https://claude.ai/oauth?state=first', {'host': 'claude.ai', 'path': '/oauth'}),
+                      ('https://claude.ai/oauth?state=second', {'host': 'claude.ai', 'path': '/oauth'})])
+        stub.browser_page = lambda: next(pages)
+        with mock.patch.object(walk, 'guest', return_value=''):
+            result = walk.NewUserWalk.sign_in_browser(stub)
+        self.assertEqual([c[2] for c in clicks], ['acc-sign-one', 'provider-connect', 'provider-cancel',
+                                                'provider-connect', 'provider-cancel', 'setup-close'])
+        self.assertEqual(len(result['attempts']), 2)
+        self.assertFalse(result['external_authentication_completed'])
+        self.assertNotIn('state=', str(result))
+
+    def test_a_button_without_a_provider_browser_journey_cannot_pass(self):
+        stub = types.SimpleNamespace(vm='guest', by_id=lambda _: {'enabled': True},
+            ax=lambda *args: None, login_running=lambda: False, browser_page=lambda: (None, None))
+        import itertools
+        with mock.patch.object(walk.time, 'monotonic', side_effect=itertools.count(0, 100)):
+            with self.assertRaisesRegex(walk.StepFailed, 'did not start provider login'):
+                walk.NewUserWalk.sign_in_browser(stub)
+
+    def test_a_provider_address_without_its_sign_in_controls_is_not_browser_proof(self):
+        address = {'value': 'https://claude.ai/login?state=private', 'desc': 'Address and Search'}
+        for controls, accepted in [([{'title': 'Reload Page'}], False),
+                                   ([{'title': 'Continue with Google'}], True)]:
+            stub = types.SimpleNamespace(ax=lambda mode, *args, **kwargs:
+                                         controls if args[1] == 'AXButton' else [address])
+            raw, safe = walk.NewUserWalk.browser_page(stub)
+            self.assertEqual(bool(raw), accepted)
+            self.assertEqual(safe, {'host': 'claude.ai', 'path': '/login'} if accepted else None)
+
     def test_his_card_fails(self):
         self.assertIn('account state unknown', walk.accounts_verdict(
             'Your Claude account In use now\n' + NO_READING + '\nWeekly limit Not reported yet'))

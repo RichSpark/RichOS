@@ -22,14 +22,15 @@ STEPS, in the guest, never on the host's screen (CEO ruling 65):
   identity    the running app says it was built from --expect-sha (skipped without one)
   setup       first setup as a new user does it: the setup sheet's "Set it up" (Claude Code, the
               engine and the video tools fetched by the app itself), the memory question "Not
-              now", any done/account sheet closed, the company "RV Park" added with its folder,
+              now", any done/account sheet closed, the fictional company "First Run Workshop" added with its folder,
               the business questions "Not now"; the first conversation exists
   signed-out  Claude Code is on this Mac and nobody is signed in to it. A message typed and sent
               with real keys. PASS only when the turn ends with the not-signed-in cause and the
               screen names the way out (sign in), never the transient "usually fixes itself"
               sentence and never machinery rows. Two messages, as a new user sends them
   accounts    Settings, Claude accounts, still signed out: PASS when the card says the account
-              is not signed in and offers Sign in, never "No reading yet"
+              is not signed in and offers Sign in, never "No reading yet"; then press Sign in,
+              start the real provider login, verify its browser page, cancel and retry
   update      Settings opened, the update check pressed once: PASS when the row reaches a
               verdict (up to date, available, ready) and never a raw OS error
   signed-in   the host's login pushed into this home's keychain (claude-login.sh push), as a
@@ -51,6 +52,7 @@ import shlex
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -66,7 +68,7 @@ command = setup_walk.adopt_walk.command
 
 STEPS = ['identity', 'setup', 'signed-out', 'accounts', 'update', 'signed-in']
 RETURN_KEY = '36'
-COMPANY = 'RV Park'
+COMPANY = 'First Run Workshop'
 
 # THE DEAD ENDS, as the screen says them. Each is a sentence or token a new user must never be
 # left looking at; see docs/development/first-run-dead-ends.md for the class each belongs to.
@@ -159,6 +161,19 @@ def accounts_verdict(text, sheet=None, sign=None):
     if not re.search(r'sign in', re.sub(r'not signed in', '', text or '', flags=re.I), re.I):
         return 'the account card does not offer the sign-in'
     return None
+
+
+def provider_page(url):
+    """Only the provider host/path may enter evidence, never OAuth query, state or code."""
+    try:
+        parsed = urlsplit(url if '://' in url else 'https://' + url)
+    except ValueError:
+        return None
+    if parsed.scheme != 'https' or parsed.hostname not in {
+        'claude.ai', 'console.anthropic.com', 'platform.claude.com', 'auth.anthropic.com',
+    }:
+        return None
+    return {'host': parsed.hostname, 'path': parsed.path}
 
 
 # The update row's headlines once a check has an answer (ui/updates.js `words`): up to date,
@@ -359,17 +374,85 @@ class NewUserWalk(setup_walk.SetupWalk):
             sheet, sign = self.by_id('acc-close'), self.by_id('acc-sign-one')
             if sheet and (sign or 'No reading yet' in text):
                 break
-        if sheet:
+        why = accounts_verdict(text, sheet, sign)
+        browser = None
+        if not why:
+            browser = self.sign_in_browser()
+        elif sheet:
             self.ax('click', '--id', 'acc-close', '--first')  # the sheet's own close button
             time.sleep(1)
         self.settings(False, 'accounts-closed')
         self.report['accounts'] = {'screen': text.strip()[-1500:], 'dead_ends': dead_ends(text),
                                    'sheet_open': bool(sheet),
-                                   'sign_in': sign and {k: sign.get(k) for k in ('role', 'title', 'desc', 'enabled')}}
-        why = accounts_verdict(text, sheet, sign)
+                                   'sign_in': sign and {k: sign.get(k) for k in ('role', 'title', 'desc', 'enabled')},
+                                   'browser_sign_in': browser}
         if why:
             raise StepFailed(why)
         return self.report['accounts']
+
+    def login_running(self):
+        # Do not return process arguments: provider output and OAuth parameters are private.
+        return guest(self.vm, "python3 - <<'PY'\nimport subprocess\nrows = subprocess.check_output(['ps', '-axo', 'command'], text=True).splitlines()\nprint(any(r.split()[-3:] == ['auth', 'login', '--claudeai'] for r in rows))\nPY").strip() == 'True'
+
+    def browser_page(self):
+        try:
+            nodes = self.ax('find', '--role', 'AXTextField', app='Safari')
+        except StepFailed as exc:
+            if axwait.not_yet(exc, 'find'):
+                return None, None
+            raise
+        for n in nodes:
+            raw = str(n.get('value') or '')
+            safe = provider_page(raw)
+            if safe:
+                # A provider URL alone also appears on Safari's network-error page. Require
+                # the actual sign-in controls, not merely an address handed to the browser.
+                buttons = self.ax('find', '--role', 'AXButton', app='Safari')
+                labels = ' '.join(str(node.get(k) or '') for node in nodes + buttons
+                                  for k in ('title', 'desc'))
+                if re.search(r'\b(email|log in|sign in|continue with (google|apple|email))\b', labels, re.I):
+                    return raw, safe
+        return None, None
+
+    def sign_in_browser(self):
+        """Real app action, real provider login/browser, cancel and retry. Completing external
+        authentication is separate: signed_in() projects a login and must never claim OAuth proof."""
+        self.ax('click', '--id', 'acc-sign-one', '--first')
+        end = time.monotonic() + 60
+        while not self.by_id('provider-connect'):
+            if time.monotonic() >= end:
+                raise StepFailed('Sign in did not open the account connection sheet')
+            time.sleep(1)
+        attempts, previous_url = [], None
+        for n in (1, 2):
+            if self.login_running():
+                raise StepFailed('a previous provider login is still running before attempt %d' % n)
+            self.ax('click', '--id', 'provider-connect', '--first')
+            end = time.monotonic() + 90
+            process_seen, safe = False, None
+            while time.monotonic() < end:
+                process_seen = self.login_running() or process_seen
+                raw, page = self.browser_page()
+                if process_seen and raw and raw != previous_url:
+                    safe, previous_url = page, raw
+                    break
+                time.sleep(1)
+            if not safe:
+                raise StepFailed('Sign in attempt %d did not start provider login and open a new provider page' % n)
+            self.ax('click', '--id', 'provider-cancel', '--first')
+            guest(self.vm, "osascript -e 'tell application id \"com.richos.app\" to activate'")
+            end = time.monotonic() + 30
+            while self.login_running() or not self.by_id('provider-connect'):
+                if time.monotonic() >= end:
+                    raise StepFailed('cancelling sign-in did not stop its process and restore Connect account')
+                time.sleep(1)
+            text = self.frame('sign-in-cancelled-%d' % n)
+            if 'sign-in was canceled' not in ' '.join(text.split()).lower():
+                raise StepFailed('the app did not explain that sign-in was canceled')
+            attempts.append({'attempt': n, 'provider_process_seen': process_seen,
+                             'browser_page': safe, 'cancelled': True})
+        self.ax('click', '--id', 'setup-close', '--first')
+        return {'attempts': attempts, 'external_authentication_completed': False}
 
     def settings(self, want_open, name):
         """Open or close Settings the way a person does, with its own button, and check the frame:
@@ -420,7 +503,9 @@ class NewUserWalk(setup_walk.SetupWalk):
         words = 'Reply with one word: received.'
         outcome, text = self.send(words, 'signed-in', self.a.turn_within)
         hits = dead_ends(text)
-        self.report['signed-in'] = {'login': line, 'outcome': outcome, 'dead_ends': hits}
+        self.report['signed-in'] = {'login': line, 'outcome': outcome, 'dead_ends': hits,
+                                    'credential_source': 'host projection',
+                                    'external_authentication_completed': False}
         self.pull()
         if not outcome or outcome['state'] != 'completed' or not outcome.get('rich_wrote'):
             raise StepFailed('Rich did not answer once signed in: %s' % json.dumps(outcome))

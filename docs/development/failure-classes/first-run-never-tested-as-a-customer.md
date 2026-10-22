@@ -22,8 +22,9 @@ The build walks every candidate as a new user before it can be published:
   and the window's activation only: no harness Claude Code, login, engine or settings.
 - `scripts/testvm/new-user-walk.py` walks it: identity; first setup as a person does it (the app
   installs Claude Code and its engine itself); two messages signed out, each of which must end
-  as "not signed in" with the way out on screen; an update check that must reach a verdict; a
-  sign-in and Rich's answer. Every frame is read for the known dead ends (`DEAD_ENDS`) and any
+  as "not signed in" with the way out on screen; an update check that must reach a verdict; the real app sign-in action, browser handoff,
+  cancellation and retry; then projected credentials and Rich's answer. External browser
+  authentication is not completed by the harness and is never claimed by that last step. Every frame is read for the known dead ends (`DEAD_ENDS`) and any
   hit fails the step that showed it.
 - `nightly-local.py build` runs it after the VM boot proof, in its own guest
   (phase `new-user-walk`) and `publish` refuses a candidate whose walk did not pass on its own
@@ -49,3 +50,17 @@ The build walks every candidate as a new user before it can be published:
 
 Add its words to `DEAD_ENDS` in `new-user-walk.py` with a test in `new-user-walk.test.py`, so
 every later build is walked against it; then add its class file here.
+
+## Sign-in evidence boundaries
+
+The accounts step presses the actual card's Sign in control, opens the connection sheet and
+starts the real provider's `auth login --claudeai`. Each of two attempts must show that owned
+login process and a new HTTPS page on a known provider host in the guest browser. The app's
+own Cancel sign-in control must retire that process and restore the connection control.
+Only the browser host and path enter structured evidence; no OAuth query, code or state is
+retained. The offline tests exercise the action sequence and refuse absent browser evidence.
+
+The signed-in step remains a separate credential-projection check. Its report explicitly
+identifies host projection and says external authentication was not completed. It proves
+that the app recovers to an answer after a valid login becomes available. It does not prove
+that a person completed the provider's account, consent or multifactor screens.
