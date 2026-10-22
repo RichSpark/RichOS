@@ -51,10 +51,11 @@ export class GitHub {
     return input + '.' + b64url(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, utf8.encode(input)));
   }
   // An installation token for this repository and Issues write only. Throws before anything is sent.
-  async authorize() {
+  // `scoped: false` is only for the operator's check of what the installation itself can reach.
+  async authorize({ scoped = true } = {}) {
     const response = await this.fetch(`${API}/app/installations/${this.env.GITHUB_INSTALLATION_ID}/access_tokens`, {
       method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(10000), headers: this.headers(await this.jwt()),
-      body: JSON.stringify({ repositories: [this.repository.split('/')[1]], permissions: { issues: 'write' } }),
+      body: JSON.stringify(scoped ? { repositories: [this.repository.split('/')[1]], permissions: { issues: 'write' } } : {}),
     });
     const data = response.status === 201 ? await response.json().catch(() => null) : null;
     if (typeof data?.token !== 'string' || !data.token) throw Object.assign(Error('token_unavailable'), { retryAfter: retryAfter(response, this.now()) });

@@ -8,7 +8,7 @@ const fromB64url = text => Uint8Array.from(atob(text.replace(/-/g, '+').replace(
 export class FakeGitHub {
   constructor({ repository, bot, appId, installationId, publicKey, pageSize = 100, now = Date.now }) {
     Object.assign(this, { repository, bot, appId: String(appId), installationId: String(installationId), publicKey, pageSize, now });
-    this.issues = []; this.tokens = new Set(); this.faults = []; this.calls = []; this.held = [];
+    this.issues = []; this.tokens = new Set(); this.scopes = new Map(); this.faults = []; this.calls = []; this.held = [];
   }
   fault(name) { this.faults.push(name); }
   take(prefix) { const i = this.faults.findIndex(f => f.startsWith(prefix)); return i < 0 ? null : this.faults.splice(i, 1)[0]; }
@@ -39,8 +39,10 @@ export class FakeGitHub {
       if (this.take('token:500')) return json(500, { message: 'error' });
       if (!await this.verifyJwt(auth)) return json(401, { message: 'Bad credentials' });
       const body = await request.json();
-      if (JSON.stringify(body) !== JSON.stringify({ repositories: [this.repository.split('/')[1]], permissions: { issues: 'write' } })) return json(422, { message: 'scope' });
-      const token = 'ghs_' + crypto.randomUUID().replace(/-/g, ''); this.tokens.add(token);
+      const scoped = JSON.stringify(body) === JSON.stringify({ repositories: [this.repository.split('/')[1]], permissions: { issues: 'write' } });
+      if (!scoped && JSON.stringify(body) !== '{}') return json(422, { message: 'scope' });
+      // As on GitHub, a token restricted to one repository sees only that repository.
+      const token = 'ghs_' + crypto.randomUUID().replace(/-/g, ''); this.tokens.add(token); this.scopes.set(token, scoped ? [this.repository] : (this.reach || [this.repository]));
       return json(201, { token, expires_at: new Date(this.now() + 3600_000).toISOString() });
     }
     // The App's own identity and its installation, read with the App JWT.
@@ -49,9 +51,9 @@ export class FakeGitHub {
       if (url.pathname === '/app') return json(200, { id: Number(this.appId), slug: this.bot.replace(/\[bot\]$/, '') });
       return json(200, { id: Number(this.installationId), repository_selection: this.selection || 'selected', permissions: this.permissions || { issues: 'write', metadata: 'read' } });
     }
-    if (request.method === 'GET' && url.pathname === '/installation/repositories') {
+    if (request.method === 'GET' && url.pathname === '/installation/repositories') { // ?per_page is ignored
       if (!this.tokens.has((auth || '').replace(/^Bearer /, ''))) return json(401, { message: 'Bad credentials' });
-      const repositories = (this.reach || [this.repository]).map(full_name => ({ full_name }));
+      const repositories = this.scopes.get((auth || '').replace(/^Bearer /, '')).map(full_name => ({ full_name }));
       return json(200, { total_count: repositories.length, repositories });
     }
     // Reads of a public repository need no token, as on GitHub; a token that is sent must be valid.

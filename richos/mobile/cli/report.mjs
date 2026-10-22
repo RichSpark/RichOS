@@ -157,7 +157,8 @@ export async function appIdentity(appId, repository, appKey, { fetch: fetchImpl 
   if (permissions !== 'issues:write,metadata:read') throw Error(`The App has permissions ${permissions}; it must have Issues write only`);
   if (installation.repository_selection !== 'selected') throw Error('The App is installed on all repositories; install it on the one repository only');
   app.env.GITHUB_INSTALLATION_ID = String(installation.id);
-  const reach = await get('/installation/repositories', await app.authorize());
+  // An unrestricted installation token: a token scoped to the one repository would see only it.
+  const reach = await get('/installation/repositories?per_page=100', await app.authorize({ scoped: false }));
   const names = (reach.repositories || []).map(r => r.full_name);
   if (reach.total_count !== 1 || names[0] !== repository) throw Error(`The installation reaches ${reach.total_count} repositories; it must reach ${repository} only`);
   return { appId, botLogin: `${about.slug}[bot]`, installationId: String(installation.id), repository, permissions };
