@@ -1,0 +1,260 @@
+// RichDoctor report relay (PRD §7, acceptance A9 logic): schema, limits, content rules, durable
+// pending state before GitHub, exact replay, status by ID, the state-based retry after an
+// authoritative non-creation, reconciliation by footer, the operator off switch and the daily cap.
+const test = require('node:test'), assert = require('node:assert/strict');
+const { fixture, reportId } = require('./report-fixture.cjs');
+
+test('health reports configuration and the off switch; a new database starts switched off', async t => {
+  const f = await fixture(t);
+  const health = async () => f.answer(await f.send(new Request('https://report.example.com/v1/health')));
+  assert.deepEqual((await health()).body, { ok: true, service: 'richos-report', protocol: 1, accepting: true });
+  f.db.raw.exec('UPDATE control SET paused=1');
+  assert.equal((await health()).body.accepting, false);
+  f.db.raw.exec('DELETE FROM control');
+  assert.equal((await health()).status, 503);
+  const { handle } = await import('../service/report-worker.mjs');
+  assert.equal((await handle(new Request('https://report.example.com/v1/reports', { method: 'POST', body: '{}' }), {}, null)).status, 503);
+  const fresh = await fixture(t); fresh.db.raw.exec('DELETE FROM control');
+  fresh.db.raw.exec(require('node:fs').readFileSync(require('node:path').join(__dirname, '../service/report/schema.sql'), 'utf8'));
+  assert.deepEqual({ ...fresh.db.raw.prepare('SELECT paused, daily_cap FROM control').get() }, { paused: 1, daily_cap: 0 });
+});
+
+test('an approved report becomes exactly one issue with its exact words; replay and status return it', async t => {
+  const f = await fixture(t), payload = await f.report();
+  const first = await f.answer(await f.create(payload));
+  assert.equal(first.status, 201);
+  assert.deepEqual(first.body, { report_id: payload.report_id, state: 'delivered', issue_url: `https://github.com/${f.repository}/issues/1`, issue_number: 1 });
+  const [issue] = f.github.created();
+  assert.equal(issue.title, payload.title); assert.equal(issue.body, payload.body);
+  assert.deepEqual(issue.labels, [{ name: 'richdoctor' }]);
+  assert.equal(f.waits.length, 1, 'the attempt is registered to finish even if the client goes away');
+  const replay = await f.answer(await f.create(payload));
+  assert.equal(replay.status, 200); assert.equal(replay.body.issue_url, first.body.issue_url);
+  assert.deepEqual((await f.answer(await f.status(payload.report_id, payload.receipt_secret))).body, { ...first.body });
+  assert.equal(f.posts(), 1);
+  // The database keeps receipt state only: no words, no secret, no installation ID.
+  const row = JSON.stringify(f.db.raw.prepare('SELECT * FROM reports').all());
+  for (const value of [payload.title, 'RichOS closed', payload.receipt_secret, payload.installation_id]) assert(!row.includes(value), value);
+  assert(!issue.body.includes(payload.receipt_secret));
+});
+
+test('the schema, sizes and fingerprint are checked and nothing is stored for a refused request', async t => {
+  const f = await fixture(t);
+  const cases = [
+    [{ extra: 1 }, 400, 'schema'], [{ report_id: 'RD-0000-AAAA' }, 400, 'schema'], [{ receipt_secret: 'short' }, 400, 'schema'],
+    [{ schema: 'richdoctor-report/2' }, 400, 'schema'], [{ installation_id: 'not-a-uuid' }, 400, 'schema'],
+    [{ approved_at: f.now() + 2 * 86_400_000 }, 400, 'schema'], [{ content_sha256: 'a'.repeat(64) }, 400, 'schema'],
+    [{ title: 'x'.repeat(201) }, 413, 'size'],
+  ];
+  for (const [change, code, reason] of cases) {
+    const payload = { ...await f.report(change.title ? { title: change.title } : {}), ...change };
+    const reply = await f.answer(await f.create(payload));
+    assert.equal(reply.status, code, JSON.stringify(change)); assert.equal(reply.body.state, 'rejected'); assert.equal(reply.body.reason, reason);
+  }
+  assert.equal((await f.answer(await f.create('{not json'))).body.reason, 'schema');
+  // The largest body PRD §10 allows is accepted; one more byte is not.
+  const id = reportId(), footer = `\n\nSent with RichDoctor 1.0 · Report ID ${id}`;
+  const fits = 'a'.repeat(60000 - Buffer.byteLength(footer)) + footer;
+  assert.equal((await f.answer(await f.create(await f.report({ report_id: id, body: fits })))).body.state, 'delivered');
+  const over = await f.answer(await f.create(await f.report({ report_id: reportId(), body: 'a' + fits })));
+  assert.equal(over.status, 413); assert.equal(over.body.reason, 'size');
+  assert.equal(f.db.raw.prepare('SELECT count(*) AS n FROM reports').get().n, 1);
+});
+
+test('content rules reject unsafe or private words for review and never rewrite them', async t => {
+  const f = await fixture(t);
+  const id = reportId(), footer = `Sent with RichDoctor 1.0 · Report ID ${id}`;
+  const rejected = {
+    markup: ['A picture ![x](https://evil.example/p.png)', 'A link [click](https://evil.example)', 'HTML <img src=x>'],
+    mention: ['Ask @octocat'],
+    secret: ['token ghp\\_' + 'a'.repeat(36), 'Authorization: Basic abc', 'key sk-ant-api03-' + 'b'.repeat(20)],
+    email: ['Mail jane\\.doe@​example\\.com'],
+    home_path: ['Opened /Users/jane/Library/Logs'],
+    control: ['carriage\rreturn'],
+  };
+  for (const [kind, lines] of Object.entries(rejected)) for (const line of lines) {
+    const reply = await f.answer(await f.create(await f.report({ report_id: id, body: `${line}\n\n${footer}` })));
+    assert.equal(reply.status, 422, line); assert.equal(reply.body.reason, 'content');
+    assert.equal(reply.body.item, 'line 1', line); assert(!JSON.stringify(reply.body).includes(line), 'the words are never echoed');
+  }
+  const noFooter = await f.answer(await f.create(await f.report({ report_id: id, body: 'No footer' })));
+  assert.equal(noFooter.body.reason, 'content'); assert.equal(noFooter.body.item, 'line 1');
+  const titled = await f.answer(await f.create(await f.report({ report_id: id, title: 'From jane@example.com' })));
+  assert.equal(titled.body.item, 'title');
+  const own = await f.report({ report_id: id }), echoedBody = `The receipt ${own.receipt_secret}\n\n${footer}`;
+  const { contentHash } = await import('../service/report/checks.mjs');
+  const echoed = await f.answer(await f.create({ ...own, body: echoedBody, content_sha256: await contentHash(own.title, echoedBody) }));
+  assert.equal(echoed.body.reason, 'content', 'the receipt secret never goes public'); assert.equal(echoed.body.item, 'line 1');
+  assert.equal(f.posts(), 0); assert.equal(f.db.raw.prepare('SELECT count(*) AS n FROM reports').get().n, 0);
+  // The escaped forms Bust a bug writes, scrubbed stand-ins and the support address all pass.
+  const safe = ['A picture \\!\\[x\\](https://example.com)', 'Opened /Users/\\[a person\\]/Library/Logs', 'Write to support@​richos\\.ceo',
+    'Thanks @​team', 'Shared /Users/Shared/RichOS', 'password: \\[removed\\]'];
+  const ok = await f.answer(await f.create(await f.report({ report_id: id, body: `${safe.join('\n')}\n\n${footer}` })));
+  assert.equal(ok.body.state, 'delivered');
+  assert.equal(f.github.created()[0].body, `${safe.join('\n')}\n\n${footer}`, 'delivered byte for byte');
+});
+
+test('an ID is bound to its receipt and bytes: wrong secret, changed bytes and unknown IDs', async t => {
+  const f = await fixture(t), payload = await f.report();
+  await f.create(payload);
+  const other = await f.report({ report_id: payload.report_id });
+  assert.deepEqual((await f.answer(await f.create({ ...payload, receipt_secret: other.receipt_secret }))).body, { state: 'forbidden' });
+  const edited = await f.report({ report_id: payload.report_id, title: 'Edited after approval' });
+  const conflict = await f.answer(await f.create({ ...edited, receipt_secret: payload.receipt_secret }));
+  assert.equal(conflict.status, 409); assert.equal(conflict.body.state, 'conflict');
+  assert.equal((await f.answer(await f.status(payload.report_id, other.receipt_secret))).status, 403);
+  const unknown = await f.answer(await f.status(reportId(), other.receipt_secret));
+  assert.equal(unknown.status, 404); assert.equal(unknown.body.state, 'unknown_id');
+  assert.equal(f.posts(), 1);
+});
+
+test('A9: GitHub created the issue but its answer was lost; the footer reconciles it, never a second create', async t => {
+  for (const fault of ['create:lost', 'create:502-after']) {
+    const f = await fixture(t), payload = await f.report();
+    f.github.fault(fault);
+    const reply = await f.answer(await f.create(payload));
+    assert.equal(reply.body.state, 'delivered', fault); assert.equal(reply.body.issue_number, 1);
+    assert.equal(f.posts(), 1); assert.equal(f.github.created().length, 1);
+  }
+});
+
+test('A9: an incomplete or failing listing never permits recreation; the bound ends in operator review, and a late find delivers', async t => {
+  const f = await fixture(t, { pageSize: 1 }), payload = await f.report();
+  // Two earlier bot issues fill page 1 and 2, so the match is on page 3 behind a failing page 2.
+  f.github.add('earlier', 'one'); f.github.add('earlier', 'two');
+  f.github.fault('create:lost'); for (let i = 0; i < 3; i++) f.github.fault('list:page2');
+  let reply = await f.answer(await f.create(payload));
+  assert.equal(reply.status, 202); assert.deepEqual(reply.body, { report_id: payload.report_id, state: 'pending', check_after_seconds: 5 });
+  // Retries during uncertainty, including edited bytes, never create.
+  assert.equal((await f.answer(await f.create(payload))).body.state, 'pending');
+  const edited = await f.report({ report_id: payload.report_id, title: 'Edited' });
+  assert.equal((await f.answer(await f.create({ ...edited, receipt_secret: payload.receipt_secret }))).body.state, 'conflict');
+  for (let i = 0; i < 20; i++) f.github.fault('list:500');
+  f.advance(30_000);
+  assert.equal((await f.answer(await f.status(payload.report_id, payload.receipt_secret))).body.state, 'pending');
+  f.advance(100_000);
+  reply = await f.answer(await f.status(payload.report_id, payload.receipt_secret));
+  assert.equal(reply.body.state, 'unconfirmed', 'two minutes after the attempt, it is in operator review');
+  assert.deepEqual((await f.store.unconfirmed()).map(row => row.report_id), [payload.report_id]);
+  assert.equal((await f.answer(await f.create(payload))).body.state, 'unconfirmed', 'a replay of an unconfirmed report never creates');
+  f.github.faults.length = 0; f.advance(61_000);
+  reply = await f.answer(await f.status(payload.report_id, payload.receipt_secret));
+  assert.equal(reply.body.state, 'delivered', 'a delayed success returns the existing issue');
+  assert.equal(reply.body.issue_number, 3);
+  assert.equal(f.posts(), 1); assert.equal(f.github.created().length, 3);
+});
+
+test('A9: a recorded definitive refusal permits one new serialized attempt with the same ID, secret and bytes', async t => {
+  const f = await fixture(t), payload = await f.report();
+  f.github.fault('create:403-retry');
+  let reply = await f.answer(await f.create(payload));
+  assert.equal(reply.body.state, 'rejected'); assert.equal(reply.body.reason, 'delivery');
+  assert.equal(reply.body.retry_after_seconds, 90); assert.equal(reply.retryAfter, '90');
+  assert.equal((await f.answer(await f.status(payload.report_id, payload.receipt_secret))).body.state, 'rejected');
+  // The cause cleared: Try again with the same ID creates exactly one issue.
+  reply = await f.answer(await f.create(payload));
+  assert.equal(reply.body.state, 'delivered');
+  assert.equal(f.db.raw.prepare('SELECT attempt FROM reports').get().attempt, 2);
+  assert.equal((await f.answer(await f.create(payload))).body.state, 'delivered');
+  assert.equal(f.github.created().length, 1);
+  f.github.fault('create:422');
+  const second = await f.report();
+  assert.equal((await f.answer(await f.create(second))).body.reason, 'delivery');
+  assert.equal(f.github.created().length, 1, 'a 422 created nothing');
+});
+
+test('A9: the relay stopped mid-attempt; status decides from the persisted record alone', async t => {
+  const f = await fixture(t);
+  const record = async payload => ({ reportId: payload.report_id, secretHash: await (await import('../service/report/checks.mjs')).sha256(payload.receipt_secret),
+    contentHash: payload.content_sha256, approvedAt: payload.approved_at });
+  // Stopped before the create request was recorded as sent: authoritative non-creation.
+  const before = await f.report();
+  assert(await f.store.begin(await record(before), 'attempt-a', 60_000));
+  assert.equal((await f.answer(await f.status(before.report_id, before.receipt_secret))).body.state, 'pending');
+  f.advance(60_000);
+  assert.equal((await f.answer(await f.status(before.report_id, before.receipt_secret))).body.reason, 'delivery');
+  assert.equal((await f.answer(await f.create(before))).body.state, 'delivered');
+  assert.equal(f.posts(), 1);
+  // Stopped after sending, and GitHub had created it: found by its footer.
+  const after = await f.report();
+  assert(await f.store.begin(await record(after), 'attempt-b', 60_000)); assert(await f.store.markSent(after.report_id, 'attempt-b'));
+  f.github.add(after.title, after.body);
+  f.advance(26_000);
+  assert.equal((await f.answer(await f.status(after.report_id, after.receipt_secret))).body.state, 'delivered');
+  // Stopped after sending, and nothing is found: never "not created", only unconfirmed.
+  const lost = await f.report();
+  assert(await f.store.begin(await record(lost), 'attempt-c', 60_000)); assert(await f.store.markSent(lost.report_id, 'attempt-c'));
+  f.advance(121_000);
+  assert.equal((await f.answer(await f.status(lost.report_id, lost.receipt_secret))).body.state, 'unconfirmed');
+  assert.equal((await f.answer(await f.create(lost))).body.state, 'unconfirmed');
+  assert.equal(f.posts(), 1);
+  // A lapsed lease cannot be used to send late.
+  const late = await f.report();
+  assert(await f.store.begin(await record(late), 'attempt-d', 60_000)); f.advance(60_000);
+  assert.equal(await f.store.markSent(late.report_id, 'attempt-d'), false);
+});
+
+test('concurrent creates for one ID serialize to one GitHub request', async t => {
+  const f = await fixture(t), payload = await f.report();
+  f.github.fault('create:hold');
+  const racing = [f.create(payload), f.create(payload), f.create(payload)];
+  await new Promise(resolve => setTimeout(resolve, 50)); f.github.release();
+  const states = (await Promise.all(racing.map(async r => (await f.answer(await r)).body.state))).sort();
+  assert.deepEqual(states, ['delivered', 'pending', 'pending']);
+  assert.equal(f.posts(), 1);
+});
+
+test('the off switch and the daily cap close new reports honestly and never block known ones', async t => {
+  const f = await fixture(t, { cap: 1 }), first = await f.report();
+  assert.equal((await f.answer(await f.create(first))).body.state, 'delivered');
+  const capped = await f.answer(await f.create(await f.report()));
+  assert.equal(capped.status, 503); assert.equal(capped.body.state, 'closed'); assert.equal(capped.body.reason, 'daily_cap');
+  assert.equal(capped.body.retry_after_seconds, 12 * 3600, 'until the next UTC midnight');
+  f.db.raw.exec('UPDATE control SET paused=1');
+  const off = await f.answer(await f.create(await f.report()));
+  assert.deepEqual(off.body, { state: 'closed', reason: 'operator_off' });
+  assert.equal((await f.answer(await f.create(first))).body.state, 'delivered', 'a replay is answered while switched off');
+  assert.equal((await f.answer(await f.status(first.report_id, first.receipt_secret))).body.state, 'delivered');
+  assert.equal(f.db.raw.prepare('SELECT count(*) AS n FROM reports').get().n, 1);
+  f.db.raw.exec('UPDATE control SET paused=0, daily_cap=0');
+  assert.equal((await f.answer(await f.create(await f.report()))).body.reason, 'daily_cap', 'a cap of zero creates nothing');
+  assert.equal(f.posts(), 1);
+});
+
+test('an older unknown ID is reconciled by its footer before any create; a copied footer from another account is ignored', async t => {
+  const f = await fixture(t), old = await f.report();
+  f.github.add(old.title, old.body);
+  f.advance(3600_000);
+  const reply = await f.answer(await f.create(old));
+  assert.equal(reply.body.state, 'delivered'); assert.equal(reply.body.issue_number, 1); assert.equal(f.posts(), 0);
+  const copied = await f.report(); f.github.addForeign(copied.title, copied.body); f.advance(3600_000);
+  assert.equal((await f.answer(await f.create(copied))).body.issue_number, 3);
+  assert.equal(f.posts(), 1);
+  const blind = await f.report(); f.advance(3600_000); f.github.fault('list:500');
+  const unsure = await f.answer(await f.create(blind));
+  assert.equal(unsure.body.state, 'limited', 'an incomplete listing permits no create'); assert.equal(f.posts(), 1);
+});
+
+test('a token failure is an authoritative non-creation; throttling says nothing about the report; a PKCS#1 App key works', async t => {
+  const f = await fixture(t, { pkcs1: true }), payload = await f.report();
+  f.github.fault('token:500');
+  const reply = await f.answer(await f.create(payload));
+  assert.equal(reply.body.reason, 'delivery'); assert.equal(reply.body.retry_after_seconds, 60); assert.equal(f.posts(), 0);
+  assert.equal((await f.answer(await f.create(payload))).body.state, 'delivered', 'the PKCS#1 key signs a JWT GitHub accepts');
+  f.env.CREATE_LIMIT = { limit: async () => ({ success: false }) };
+  const throttled = await f.answer(await f.create(await f.report()));
+  assert.equal(throttled.status, 429); assert.deepEqual(throttled.body, { state: 'limited', retry_after_seconds: 60 }); assert.equal(throttled.retryAfter, '60');
+  assert.equal((await f.send(new Request('https://report.example.com/v1/reports?target=x', { method: 'POST' }))).status, 404);
+  assert.equal((await f.send(new Request('https://report.example.com/v1/reports/RD-AAAA-AAAA/status', { method: 'GET' }))).status, 404);
+});
+
+test('the content checks take linear time on the largest adversarial body', async () => {
+  const { contentProblem } = await import('../service/report/checks.mjs');
+  const id = reportId(), footer = `\n\nSent with RichDoctor 1.0 · Report ID ${id}`, room = 60000 - Buffer.byteLength(footer);
+  for (const filler of ['a'.repeat(room - 1) + '@', 'a@'.repeat(Math.floor(room / 2)), '\\'.repeat(room), 'password='.repeat(Math.floor(room / 9))]) {
+    const started = performance.now();
+    contentProblem({ title: 'x', body: filler + footer, reportId: id, secret: 'z'.repeat(43) });
+    const spent = performance.now() - started;
+    assert(spent < 500, `${filler.slice(0, 12)} took ${Math.round(spent)} ms`);
+  }
+});
