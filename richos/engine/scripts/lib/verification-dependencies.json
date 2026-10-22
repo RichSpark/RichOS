@@ -14161,7 +14161,7 @@
     },
     "scripts/lib/agent_hold.test.py": {
       "source": "scripts/lib/agent_hold.test.py",
-      "sha256": "3df63b430665437c2aacadb42268dbeb214a7feb56ed12a165928d2ddfb9d893",
+      "sha256": "dee27ea44974041ad5f8bd70a39961c022b6ab46e8bd01f267c2e2c0c076d804",
       "evidence": "Fixed Python fixture imports only the bound helper and standard library. Subprocess work/registry programs are literal strings in this source; no config-provided command or discovered test executes. Preserve the real helper closure conservatively. Renewed 2026-10-04: HeldAgentMakesNoModelCalls reads hooks/hooks.json for the PreToolUse[Bash] hooks that act on a held agent's call (the rewriter) and runs them, then the command they leave. Renewed 2026-10-04 (holdleak3): the fixture worker takes an optional go file as a literal argument, a path in the test's own temporary directory that the test creates after its hold; no new configuration key, environment variable or outside file is read.",
       "keys": [],
       "edges": [
@@ -15031,7 +15031,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "e1d2925c127e79ab8ed3c6ffce842fc99fd0b181de20308d588b054bcda00e10",
+          "sha256": "cc52c1b85d838c2c4183b989dce07647a16e3b380922b0dea041949eba5f878a",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         }
       ]
@@ -15124,7 +15124,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "e1d2925c127e79ab8ed3c6ffce842fc99fd0b181de20308d588b054bcda00e10",
+          "sha256": "cc52c1b85d838c2c4183b989dce07647a16e3b380922b0dea041949eba5f878a",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
