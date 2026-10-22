@@ -393,7 +393,9 @@ class Walk(adopt.Walk):
         try:
             evidence = self.verdict(names, press['pressed_at_ms'], BOUND_MS)
         except StepFailed as exc:
-            raise StepFailed('%s\n%s' % (exc, self.stop_evidence())) from exc
+            seen = {r['name']: r['t_ms'] for r in self.rows() if r.get('kind') == 'seen' and r.get('name') in names}
+            raise StepFailed('%s\nheartbeats seen at (guest ms): %s; pressed at %d\n%s'
+                             % (exc, json.dumps(seen), press['pressed_at_ms'], self.stop_evidence())) from exc
         record = self.closed_record(target['id'])
         told = told_stopped(record)
         if told:
@@ -413,13 +415,16 @@ class Walk(adopt.Walk):
                   '    except Exception: continue\n'
                   '    print("assignment",json.dumps({k:r.get(k) for k in ("id","obligation_id","state","detail","registered_at_ms","updated_at_ms","user_stop_requested_at_ms")}))\n'
                   'for p in glob.glob(root+"/evidence/*/callbacks.jsonl"):\n'
+                  '    try: role=json.load(open(p.rsplit("/",1)[0]+"/binding.json")).get("role")\n'
+                  '    except Exception: role=None\n'
                   '    for line in open(p,errors="replace"):\n'
-                  '        if "heartbeat.py beat stop-" not in line or "PreToolUse" not in line: continue\n'
+                  '        if "heartbeat.py beat stop-" not in line: continue\n'
                   '        try: c=json.loads(line).get("callback",{})\n'
                   '        except Exception: continue\n'
-                  '        if c.get("tool_name")!="Bash": continue\n'
-                  '        print("bash",json.dumps({"session":c.get("session_id"),"agent":c.get("agent_id"),"tool_use_id":c.get("tool_use_id"),\n'
-                  '            "input":c.get("tool_input")})[:700])\n')
+                  '        if c.get("tool_name")!="Bash" or c.get("hook_event_name") not in ("PreToolUse","PostToolUse"): continue\n'
+                  '        print("bash",json.dumps({"event":c.get("hook_event_name"),"role":role,"session":c.get("session_id"),\n'
+                  '            "agent":c.get("agent_id"),"tool_use_id":c.get("tool_use_id"),"input":c.get("tool_input"),\n'
+                  '            "response":str(c.get("tool_response"))[:200]})[:900])\n')
         try:
             return guest(self.vm, 'python3 -c %s %s' % (shlex.quote(script), shlex.quote(self.data)), 60).strip()[-6000:]
         except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
