@@ -308,10 +308,30 @@ class Walk(adopt.Walk):
         return relaunch(self.vm, environment={'ANTHROPIC_MODEL': model} if model else None)
 
     def enter(self):
-        if self.present('Talk to Rich'):
-            self.press('Talk to Rich')
-        time.sleep(2)
-        self.press(self.facts.get('thread_title') or 'Running')
+        # Every caller has just relaunched the app, and a launch with a company opens on the HOME
+        # screen (asked-again-walk.py waits up to 90 s for it). Its door is waited for, not
+        # checked once: checked before home was drawn, it was skipped, and the walk then waited
+        # on the home screen for a conversation row (walk-45ed47dcaab0's screenshot,
+        # esc-20261021T213902Z-b513879e).
+        self.wait_for('Talk to Rich', seconds=90)
+        self.press('Talk to Rich')
+        # The door opens the company's last conversation itself: walk-5a4e3ff2c768 showed
+        # "Acme / Onboarding" with its composer and the sidebar closed, so the row the walk then
+        # waited for was not on screen. The row is pressed only when the door opened another one.
+        self.wait_for('Message to Rich', role='AXTextArea')
+        title = self.facts.get('thread_title') or 'Running'
+        # The crumb is static text, whose words are its AXValue (walk-08aeea74dab4's tree:
+        # {"role": "AXStaticText", "title": "", "value": "Onboarding"}), never its title.
+        try:
+            if self.ax('find', '--value', title, '--role', 'AXStaticText', '--first'):
+                return
+        except StepFailed as exc:
+            if not adopt.axwait.not_yet(exc, 'find'):
+                raise
+        # Waited for before it is pressed: a press is never asked again (axwait.py), and right
+        # after a relaunch the app may not answer one read (esc-20261021T205850Z-48c70d7d).
+        self.wait_for(title)
+        self.press(title)
 
     # --- steps --------------------------------------------------------------------------------
     def connect(self):
@@ -361,7 +381,12 @@ class Walk(adopt.Walk):
         target, why = stoppable(self.assignments_since(started['sent_ms']))
         if why:
             raise StepFailed(why)
-        self.press('waiting for you') if self.present('waiting for you') else self.press('assignment running')
+        # The work chip names the job's state ("1 assignment starting", "... running", "... waiting
+        # to start", "1 waiting for you"; main.js renderDrillChip) and always ends its label with
+        # "Open the work summary." Walk walk-21f83423b356 pressed the fixed words "assignment
+        # running" while the chip said another state; the chip's own ending is pressed instead.
+        self.wait_for('Open the work summary')
+        self.press('Open the work summary')
         # The row's Stop is labeled "Stop <its title>" (work-summary.js); name this one.
         label = 'Stop ' + (target.get('title') or '')[:60]
         press = pressed_at(self.press(label))
