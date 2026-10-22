@@ -28,11 +28,13 @@
 # ONE LINE, STATE-CHANGE DE-DUPLICATED
 # ===========================================================================
 # systemMessage via scripts/lib/stop-hook-notice.sh, because that is the only
-# channel measured to reach the operator (see that file's table). A persistent
-# set of rows is announced ONCE; the notice speaks again when the SET changes,
-# which is exactly the moment a row is created without being started, and the
-# moment one is finally picked up. A condition repeated under every turn is a
-# condition the eye is trained to skip.
+# channel measured to reach the operator (see that file's table). The notice
+# speaks when the SET changes, which is exactly the moment a row is created
+# without being started, and the moment one is finally picked up, and AGAIN
+# EVERY 30 MINUTES while the set persists (2026-10-22, richos-hq docs/plans/
+# 2026-10-22-no-silent-holds.md): announced once is how these rows went quiet
+# while the CEO asked "WHEN WILL [THIS] STOP ONCE AND FOR ALL???". Only a
+# blocker naming the CEO quiets a row (unstarted-rows.py names_ceo).
 #
 # UNEVALUATED-PAYLOAD-EXEMPT: payload-independent — the predicate is the row table in the record. Byte-identical
 # output on all four payload shapes.
@@ -208,6 +210,6 @@ NAMES="$(printf '%s' "$UR_UNSTARTED" | tr ' ' '\n' | head -6 | tr '\n' ' ' | sed
 MORE=""
 [ "${UR_N_UNSTARTED:-0}" -gt 6 ] && MORE=" (+$((UR_N_UNSTARTED - 6)) more)"
 
-stop_notice_abnormal "unstarted:$UR_UNSTARTED" \
-    "UNSTARTED WORK, NOTHING RUNNING FOR IT — ${UR_N_UNSTARTED} row(s): ${NAMES}${MORE}. Nothing is named as blocking them and no live worktree claims them, so writing them down is all that has happened. Start one, or say what it waits on: a \`Blocked by\` cell in ${UR_QUEUE_LABEL}, or \`**Blocked:** <who>\` in a ${UR_RECORD_LABEL} row. Detail: scripts/unstarted-rows-lint.sh"
+stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \
+    "UNSTARTED WORK, NOTHING RUNNING FOR IT — ${UR_N_UNSTARTED} row(s): ${NAMES}${MORE}. Nothing but Rich or earlier work holds them and no live worktree claims them, so writing them down is all that has happened. Start one, or, if it is his decision, name the CEO as its blocker: a \`Blocked by\` cell in ${UR_QUEUE_LABEL}, or \`**Blocked:** the CEO — <the CEO-TODOs item>\` in a ${UR_RECORD_LABEL} row. Detail: scripts/unstarted-rows-lint.sh" 1800
 exit 0

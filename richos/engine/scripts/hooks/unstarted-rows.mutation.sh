@@ -169,7 +169,7 @@ T="scripts/unstarted-rows-lint.sh"
 
 # --- 1. THE NOTICE ITSELF --------------------------------------------------
 mutant no-notice "1a " "$H" \
-    'stop_notice_abnormal "unstarted:$UR_UNSTARTED" \' \
+    'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \
     'stop_notice_normal "" \' \
     "the whole point: an unstarted row must end the turn with something on screen."
 
@@ -184,8 +184,8 @@ mutant vague-notice "1c " "$H" \
     "the notice has to say what is wrong, not merely that something is."
 
 mutant blocking "1d " "$H" \
-    'stop_notice_abnormal "unstarted:$UR_UNSTARTED" \' \
-    'exit 2; stop_notice_abnormal "unstarted:$UR_UNSTARTED" \' \
+    'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \
+    'exit 2; stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \
     "a Stop hook that refuses turns on a judgment it does not have gets switched off."
 
 # --- 2. CLAIMS -------------------------------------------------------------
@@ -289,8 +289,8 @@ mutant section-missing-ok "4c " "$P" \
 
 # --- 6. DE-DUPLICATION -----------------------------------------------------
 mutant constant-state-key "5b " "$H" \
-    'stop_notice_abnormal "unstarted:$UR_UNSTARTED" \' \
-    'stop_notice_abnormal "unstarted" \' \
+    'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \
+    'stop_notice_abnormal_recurring "unstarted" \' \
     "if the key never changes, the notice never speaks again — including when a row is created."
 
 # --- 7. THE LINT'S THREE ANSWERS -------------------------------------------
@@ -342,8 +342,8 @@ mutant broken-reads-clear "4b " "$H" \
     "a failure that reads like a clean sweep is the whole failure class, restated."
 
 mutant announces-every-turn "5a " "$H" \
-    'stop_notice_abnormal "unstarted:$UR_UNSTARTED" \' \
-    'stop_notice_abnormal "unstarted:$UR_UNSTARTED:$RANDOM" \' \
+    'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \
+    'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED:$RANDOM" \' \
     "a line under every turn is a line the eye is trained to skip, and then muted."
 
 mutant lint-never-clean "7b " "$T" \
@@ -353,14 +353,14 @@ mutant lint-never-clean "7b " "$T" \
 
 # --- 8. A DECLARATION THAT NAMES NOBODY ------------------------------------
 mutant blocked-nothing-silences "3f " "$P" \
-    '        elif bm and not names_nobody(bm.group("who")):' \
+    '        elif bm and names_ceo(bm.group("who")):' \
     '        elif bm:' \
     "a row saying in so many words that nothing blocks it must be the loudest row on the page, not a silent one (rows 3.19/3.20, 2026-09-02)."
 
-mutant queue-nothing-silences "3h " "$P" \
-    '        elif names_nobody(blocker):' \
-    '        elif norm in NOTHING_NAMED:' \
-    "the queue cell 'nothing — because…' names nobody; only its first word says so, and the whole string does not match."
+mutant rich-blocker-silences "3i " "$P" \
+    '        elif names_ceo(blocker):' \
+    '        elif True:' \
+    "a blocker naming Rich or earlier work is a hold on his work; only the CEO quiets a row (2026-10-22, no silent holds)."
 
 # --- the verdict ------------------------------------------------------------
 # Drained rather than accumulated: PASS/FAIL below come from the workers' exit
