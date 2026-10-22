@@ -113,6 +113,8 @@ MUT_POOL_PASS=0
 MUT_POOL_FAIL=0
 MUT_POOL_SLOWEST=""
 MUT_POOL_TOTAL_MS=0
+MUT_POOL_BUSY=0
+MUT_POOL_WAKE=0      # 1 while fd 8 is this pool's wake-up FIFO (_mut_pool_wait_for_a_worker)
 
 # mut_pool_jobs_default — the degree, derived rather than typed.
 #
@@ -176,6 +178,10 @@ mut_pool_init() {
     MUT_POOL_FAIL=0
     MUT_POOL_SLOWEST=""
     MUT_POOL_TOTAL_MS=0
+    MUT_POOL_WAKE=0
+    if mkfifo "$MUT_POOL_DIR/wake" 2>/dev/null && exec 8<>"$MUT_POOL_DIR/wake"; then
+        MUT_POOL_WAKE=1
+    fi
     if [ -n "${1:-}" ]; then
         MUT_POOL_JOBS="$1"
     else
@@ -236,16 +242,27 @@ mut_pool_init() {
 # A slot with no marker and no PID FILE YET counts as occupied: `.pid` is
 # written by the parent immediately after `&`, so the window is microseconds,
 # but treating it as free would over-subscribe the pool by one.
+#
+# The throttle asks _mut_pool_count, which leaves the count in MUT_POOL_BUSY and uses builtins
+# only (printf -v, read): it is asked every time the pool wakes, and a `$(cat ...)` per slot
+# started one process per slot per wake (2026-10-22, below). _mut_pool_occupied prints the
+# same count, for a caller that wants it as text.
 _mut_pool_occupied() {
+    _mut_pool_count
+    printf '%s' "$MUT_POOL_BUSY"
+}
+
+_mut_pool_count() {
     local i seq n=0 pid
     i=1
     while [ "$i" -le "$MUT_POOL_N" ]; do
-        seq="$(printf '%04d' "$i")"
+        printf -v seq '%04d' "$i"
         if [ ! -e "$MUT_POOL_DIR/$seq.done" ]; then
             if [ ! -e "$MUT_POOL_DIR/$seq.pid" ]; then
                 n=$(( n + 1 ))
             else
-                pid="$(cat "$MUT_POOL_DIR/$seq.pid" 2>/dev/null)"
+                pid=""
+                read -r pid <"$MUT_POOL_DIR/$seq.pid" 2>/dev/null || :
                 if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
                     n=$(( n + 1 ))
                 fi
@@ -253,7 +270,23 @@ _mut_pool_occupied() {
         fi
         i=$(( i + 1 ))
     done
-    printf '%s' "$n"
+    MUT_POOL_BUSY="$n"
+}
+
+# THE THROTTLE WAITS FOR A WORKER TO FINISH, NOT FOR A CLOCK (2026-10-22). It used to sleep
+# 0.05 s and count again: a `sleep` and a process per slot twenty times a second for as long
+# as the pool was full, which Hank's after-measurement caught 313 times in one once-a-second
+# sample (richos-hq docs/research/2026-10-22-mac-system-cpu-after.md). Now every worker writes
+# one byte to the pool's FIFO, on fd 8, right after its marker, and the throttle blocks reading
+# it. A killed worker writes nothing, so the read gives up after one second and the count above,
+# which is the only thing that decides, is asked again: the deadlock it was written against
+# stays impossible. With no FIFO (mkfifo failed) it sleeps as before.
+_mut_pool_wait_for_a_worker() {
+    if [ "$MUT_POOL_WAKE" = 1 ]; then
+        read -r -n 1 -t 1 -u 8 _mut_pool_token 2>/dev/null || :
+    else
+        sleep 0.05
+    fi
 }
 
 # mut_pool_submit <label> <fn> [args...]
@@ -272,14 +305,12 @@ mut_pool_submit() {
             *) return 0 ;;
         esac
     fi
-    # Block until a slot frees. The sleep is 0.05s: short enough that a freed
-    # core is not left idle for a human-visible time, long enough that the
-    # throttle is not itself a spinning core.
-    local _busy
-    _busy="$(_mut_pool_occupied)"
-    while [ "$_busy" -ge "$MUT_POOL_JOBS" ]; do
-        sleep 0.05
-        _busy="$(_mut_pool_occupied)"
+    # Block until a slot frees: woken by the worker that finished (_mut_pool_wait_for_a_worker),
+    # so a freed core is taken at once and a full pool costs nothing while it waits.
+    _mut_pool_count
+    while [ "$MUT_POOL_BUSY" -ge "$MUT_POOL_JOBS" ]; do
+        _mut_pool_wait_for_a_worker
+        _mut_pool_count
     done
     # A RUN-WIDE WORKER BUDGET, when the caller gives one (RICHOS_WORKER_TOKENS, from
     # proof-run.py; scripts/lib/worker_tokens.py): mutation-harness.sh `_mut_run` runs each
@@ -303,7 +334,7 @@ mut_pool_submit() {
             _free="-"
             [ "$MUT_POOL_BORROW" = 0 ] || _free="$MUT_POOL_DIR/free.lock"
             python3 "${RICHOS_WORKER_TOKENS_TOOL:-$_MUT_WORKER_TOOL_DEFAULT}" lease "$RICHOS_WORKER_TOKENS" \
-                "$(cat "$MUT_POOL_DIR/$seq.pid")" "$MUT_POOL_DIR/$seq.ready" "$MUT_POOL_DIR/$seq.release" "$_free" &
+                "$(cat "$MUT_POOL_DIR/$seq.pid")" "$MUT_POOL_DIR/$seq.ready" "$MUT_POOL_DIR/$seq.release" "$_free" 8>&- &
             _lease=$!
             while [ ! -s "$MUT_POOL_DIR/$seq.ready" ]; do
                 if ! kill -0 "$_lease" 2>/dev/null; then exit 125; fi
@@ -315,7 +346,7 @@ mut_pool_submit() {
             export RICHOS_PROCESS_SCOPE RICHOS_WORKER_SLOT_HELD RICHOS_WORKER_BORROW_LOCK
         fi
         _t0="$(sw_now_ms)"
-        "$@" >"$MUT_POOL_DIR/$seq.out" 2>&1
+        "$@" >"$MUT_POOL_DIR/$seq.out" 2>&1 8>&-
         _rc=$?
         if [ -n "$_lease" ]; then
             : > "$MUT_POOL_DIR/$seq.release"
@@ -326,6 +357,8 @@ mut_pool_submit() {
         # LAST, and deliberately so: the marker means the three files above are
         # complete on disk. The throttle and the drain then share one fact.
         : >"$MUT_POOL_DIR/$seq.done"
+        # Then wake the throttle. The FIFO is open read-write here, so this never blocks.
+        [ "$MUT_POOL_WAKE" != 1 ] || printf 'x' >&8 2>/dev/null || :
     ) &
     # The worker's PID, recorded by the PARENT because a bash 3.2 subshell
     # cannot portably learn its own: `$$` inside `( )` is the SCRIPT's pid, not
@@ -445,6 +478,10 @@ mut_pool_report_line() { # <wall-ms>
 }
 
 mut_pool_cleanup() {
+    if [ "$MUT_POOL_WAKE" = 1 ]; then
+        exec 8>&-
+        MUT_POOL_WAKE=0
+    fi
     [ -n "$MUT_POOL_DIR" ] && rm -rf "$MUT_POOL_DIR"
     MUT_POOL_DIR=""
     return 0
