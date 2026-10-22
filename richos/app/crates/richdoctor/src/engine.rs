@@ -56,6 +56,9 @@ struct Inner {
     upload: Vec<UploadRow>,
     /// The Cancel of the Send report in progress.
     cancel_upload: Option<Arc<AtomicBool>>,
+    /// A saved report was reopened: its next fresh Claude Code process gets the record so far,
+    /// whatever the operation count.
+    resumed: bool,
     /// Report created and screenshots unconfirmed: RichDoctor is still asking (up to 2 minutes).
     confirming: bool,
 }
@@ -112,7 +115,7 @@ fn ctx(env: &Env) -> Context {
 impl Engine {
     pub fn new(env: Env, emit: Emit) -> Engine {
         Engine {
-            inner: Arc::new(Mutex::new(Inner { draft: None, pending: Pending::None, operation: 0, last_message: None, stopper: None, pictures: Vec::new(), unsaved: None, upload: Vec::new(), cancel_upload: None, confirming: false })),
+            inner: Arc::new(Mutex::new(Inner { draft: None, pending: Pending::None, operation: 0, last_message: None, stopper: None, pictures: Vec::new(), unsaved: None, upload: Vec::new(), cancel_upload: None, confirming: false, resumed: false })),
             session: Arc::new(Mutex::new(None)),
             canceled: Arc::new(AtomicBool::new(false)),
             quiet: Arc::new(AtomicBool::new(false)),
@@ -211,6 +214,7 @@ impl Engine {
             inner.last_message = None;
             inner.pictures.clear();
             inner.operation = 0;
+            inner.resumed = false;
         }
         self.canceled.store(false, Ordering::SeqCst);
         self.write_scope();
@@ -431,11 +435,11 @@ impl Engine {
     fn operation(&self, message: &str) -> Result<String, Option<Failure>> {
         let Some(dir) = self.draft_dir() else { return Err(Some(Failure::Ended)) };
         let Some(bin) = self.env.claude.clone() else { return Err(Some(Failure::NotInstalled)) };
-        let (op, picture) = {
+        let (op, picture, resumed) = {
             let mut inner = self.inner.lock().unwrap();
             inner.operation += 1;
             inner.last_message = Some(message.to_string());
-            (inner.operation, std::mem::take(&mut inner.pictures))
+            (inner.operation, std::mem::take(&mut inner.pictures), inner.resumed)
         };
         mcp::write_operation(&dir, op).ok();
         let pictures: Vec<richos_core::bug_report::Picture> = picture.into_iter().map(|(_, base64, media_type)| richos_core::bug_report::Picture { media_type, base64 }).collect();
@@ -453,7 +457,10 @@ impl Engine {
             }
         }
         let session = slot.as_mut().unwrap();
-        let text = if fresh && op > 1 { format!("{}\n\n{message}", self.replay()) } else { message.to_string() };
+        let text = if fresh && (op > 1 || resumed) { format!("{}\n\n{message}", self.replay()) } else { message.to_string() };
+        if fresh {
+            self.inner.lock().unwrap().resumed = false;
+        }
         let line = adapter::user_message_with(&text, &pictures);
         let sent = if fresh { session.begin(&line, Duration::from_secs(30)) } else { session.send(&line).map_err(|e| (Failure::Ended, e.to_string())) };
         if let Err((f, _)) = sent {
@@ -773,7 +780,7 @@ impl Engine {
     pub fn exact_text(&self) -> Option<(String, String)> {
         let inner = self.inner.lock().unwrap();
         let d = inner.draft.as_ref()?;
-        if let Some(del) = &d.delivery {
+        if let Some(del) = exported_approval(d) {
             return Some((del.approved.report_id.clone(), format!("{}\n\n{}", del.approved.title, del.approved.body)));
         }
         d.report.as_ref().map(|r| (r.report_id.clone(), r.exact()))
@@ -784,6 +791,15 @@ impl Engine {
     pub fn image_files(&self) -> Vec<(String, Vec<u8>)> {
         let inner = self.inner.lock().unwrap();
         let Some(d) = inner.draft.as_ref() else { return Vec::new() };
+        if let Some(del) = exported_approval(d) {
+            // The approved text goes with exactly its approved images, in its manifest's order.
+            return del
+                .approved
+                .manifest
+                .iter()
+                .filter_map(|e| d.screenshots.iter().find(|s| s.sha256 == e.sha256).and_then(|s| self.env.store.shot_bytes(&d.id, s)).map(|b| (e.filename.clone(), b)))
+                .collect();
+        }
         d.screenshots
             .iter()
             .enumerate()
@@ -1164,7 +1180,7 @@ impl Engine {
     pub fn prepare_image(&self, image_base64: &str) -> Result<Value, String> {
         use richdoctor_core::image_profile as ip;
         let bytes = util::base64_decode(image_base64).ok_or("RichDoctor could not read that image.")?;
-        let (clean, shape) = ip::finalize(&bytes).map_err(|e| format!("That image cannot be used: {e}."))?;
+        let (clean, shape) = ip::encode(&bytes).map_err(|e| format!("That image cannot be used: {e}."))?;
         if clean.len() as u64 > ip::MAX_IMAGE_BYTES {
             return Err(format!("too-large:{}", clean.len()));
         }
@@ -1333,6 +1349,10 @@ impl Engine {
             inner.pending = Pending::None;
             inner.last_message = None;
             inner.operation = 0;
+            // Screenshots queued for the report that was open never go out with this one.
+            inner.pictures.clear();
+            inner.upload.clear();
+            inner.resumed = !d.conversation.is_empty();
             inner.draft = Some(d.clone());
         }
         let in_flight = d.delivery.as_ref().is_some_and(|x| x.state.unresolved());
@@ -1455,6 +1475,12 @@ fn left_words(state: &State) -> String {
     }
 }
 
+/// The approval Copy, Save and Email carry: the one that was sent or may have been. After a
+/// definite "not sent" the person may revise, so the current reviewed report is what they carry.
+fn exported_approval(d: &Draft) -> Option<&Delivery> {
+    d.delivery.as_ref().filter(|del| !del.state.permits_revision())
+}
+
 pub fn review_view(d: &Draft, r: &Report) -> Value {
     let mode = match &d.delivery {
         Some(del) if del.state.unresolved() => "revision-uncertain",
@@ -1488,7 +1514,7 @@ pub fn review_view(d: &Draft, r: &Report) -> Value {
         "old_id": old_id,
         "title": r.title,
         "sections": [
-            {"key": "what_happened", "heading": "What happened", "text": if r.expected.trim().is_empty() { r.what_happened.clone() } else { format!("{}\n\nExpected: {}", r.what_happened, r.expected) }},
+            {"key": "what_happened", "heading": "What happened", "text": r.what_happened_view()},
             {"key": "when", "heading": "When", "text": r.when},
             {"key": "versions", "heading": "Versions", "text": r.versions},
         ],
@@ -1736,6 +1762,179 @@ mod tests {
         let v = engine.replace_image(9, &util::base64_std(&png(12)), 1, true).unwrap();
         assert_eq!(v["n"], 10);
         assert_eq!(engine.inner.lock().unwrap().draft.as_ref().unwrap().screenshots.len(), 10);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    // ---- review rv-20261022T175949Z-1f7a6af4-1920, its fixtures as tests ----------------------
+
+    fn reviewed_draft(expected: &str) -> Draft {
+        let mut d = Draft::new(1).unwrap();
+        d.description = "RichOS closes before opening".into();
+        d.stage = Stage::Review;
+        let ai = adapter::Drafted { title: "RichOS closes".into(), what_happened: d.description.clone(), expected: expected.into(), steps: vec!["Open the confidential acquisition document".into()], ..Default::default() };
+        d.report = Some(Report::build(&report::Input {
+            report_id: "RD-7K3M-Q9VX",
+            description: &d.description,
+            answers: &[],
+            when: "Just now",
+            evidence: &[],
+            drafted: Some(&ai),
+            provenance: Provenance::Claude,
+            screenshots: &[],
+            relay: delivery::RELAY,
+            ctx: &Context::default(),
+        }));
+        d
+    }
+
+    fn engine_at(root: &std::path::Path, cli: Option<PathBuf>) -> (Engine, Arc<Mutex<Vec<Value>>>) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let e2 = events.clone();
+        let env = Env { store: Store::at(root), home: root.join("fixture-home"), exe: PathBuf::new(), claude: cli, dest: Err("no relay in this test".into()) };
+        (Engine::new(env, Arc::new(move |v| e2.lock().unwrap().push(v))), events)
+    }
+
+    /// A stand-in Claude Code: records the first message it is given, then answers every turn.
+    fn fake_cli(root: &std::path::Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(root).unwrap();
+        let p = root.join("fake-claude");
+        let init = json!({"type":"system","subtype":"init","tools":["mcp__richdoctor__collect_diagnostics","mcp__richdoctor__read_evidence"],"mcp_servers":[{"name":"richdoctor","status":"connected"}],"permissionMode":"dontAsk","slash_commands":[],"skills":[],"plugins":[]});
+        let result = json!({"type":"result","is_error":false,"result":"{\"say\":\"ok\",\"ready\":true}"});
+        std::fs::write(&p, format!("#!/bin/sh\nIFS= read -r first\nprintf '%s\\n' \"$first\" > captured.json\nprintf '%s\\n' '{init}' '{result}'\nwhile IFS= read -r line; do printf '%s\\n' '{result}'; done\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    fn wait_turn(events: &Arc<Mutex<Vec<Value>>>) {
+        // load-bound: a bound on a local shell stand-in answering one line; only a hang reaches it.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if events.lock().unwrap().iter().any(|v| v["t"] == "ready" || v["t"] == "ai-failed") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the stand-in did not answer");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("rd-{tag}-{}", util::hex(&util::random_bytes(4).unwrap())))
+    }
+
+    #[test]
+    fn deleting_expected_or_the_steps_in_the_review_removes_them_from_what_is_sent() {
+        let root = scratch("review");
+        let (e, _) = engine_at(&root, None);
+        let mut d = reviewed_draft("The confidential acquisition document should open");
+        e.env().store.save(&mut d, 2).unwrap();
+        e.open(&d.id).unwrap();
+        let shown = e.review()["sections"][0]["text"].as_str().unwrap().to_string();
+        assert!(shown.contains("Expected: The confidential acquisition document should open"), "{shown}");
+        assert!(shown.contains("Open the confidential acquisition document"), "the steps are shown for review: {shown}");
+        // Exactly what the window sends after the person deletes the Expected paragraph.
+        let without_expected = shown.replace("\n\nExpected: The confidential acquisition document should open", "");
+        e.edit("what_happened", &without_expected).unwrap();
+        let exact = e.exact_text().unwrap().1;
+        assert!(!exact.contains("Expected: The confidential acquisition document should open"), "{exact}");
+        assert!(exact.contains("Open the confidential acquisition document"), "the steps it kept are still sent");
+        // And deletes the steps too.
+        e.edit("what_happened", "RichOS closes before opening").unwrap();
+        let exact = e.exact_text().unwrap().1;
+        assert!(!exact.contains("Open the confidential acquisition document"), "{exact}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn after_a_failed_send_copy_save_and_email_use_the_current_reviewed_text() {
+        let root = scratch("revision");
+        let (e, _) = engine_at(&root, None);
+        let mut d = reviewed_draft("The confidential acquisition document should open");
+        let r = d.report.as_ref().unwrap();
+        let approved = delivery::approve("RD-7K3M-Q9VX", &r.title, &r.render().1, vec![], delivery::RELAY, 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
+        d.delivery = Some(Delivery { approved, state: State::NotSent { why: NotSent::Unreachable, at: 2 }, completion_attempted: false, stored: vec![] });
+        e.env().store.save(&mut d, 3).unwrap();
+        e.open(&d.id).unwrap();
+        e.edit("what_happened", "Corrected symptom after review").unwrap();
+        assert!(e.review()["exact"].as_str().unwrap().contains("Corrected symptom"));
+        let exported = e.exact_text().unwrap().1;
+        assert!(exported.contains("Corrected symptom"), "{exported}");
+        assert!(!exported.contains("confidential acquisition"), "the removed text is not exported");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_reopened_investigation_replays_its_record_on_the_first_resumed_operation() {
+        let root = scratch("resume");
+        let cli = fake_cli(&root);
+        let (e, events) = engine_at(&root.join("store"), Some(cli));
+        let mut d = reviewed_draft("");
+        d.stage = Stage::Investigating;
+        d.report = None;
+        d.description = "Original symptom: microphone button freezes".into();
+        d.conversation = vec![Entry::Person { text: d.description.clone() }, Entry::Question { text: "Did it work yesterday?".into(), choices: vec![] }];
+        d.questions.push(("Did it work yesterday?".into(), None));
+        e.env().store.save(&mut d, 1).unwrap();
+        e.open(&d.id).unwrap();
+        e.resume_pending();
+        e.answer("Yes, it worked yesterday".into());
+        wait_turn(&events);
+        let sent = std::fs::read_to_string(e.env().store.work_dir().join("captured.json")).unwrap();
+        e.close();
+        assert!(sent.contains("worked yesterday"));
+        assert!(sent.contains("conversation_restarted") && sent.contains("microphone button freezes") && sent.contains("Did it work yesterday"), "{sent}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn opening_another_saved_report_drops_the_first_reports_screenshots_from_claudes_queue() {
+        let root = scratch("switch");
+        let cli = fake_cli(&root);
+        let (e, events) = engine_at(&root.join("store"), Some(cli));
+        let mut a = reviewed_draft("");
+        let mut b = reviewed_draft("");
+        b.stage = Stage::Investigating;
+        b.report = None;
+        e.env().store.save(&mut a, 1).unwrap();
+        e.env().store.save(&mut b, 1).unwrap();
+        e.open(&a.id).unwrap();
+        e.use_image(&util::base64_std(&png(71)), 0, false).unwrap();
+        e.open(&b.id).unwrap();
+        e.answer("The second problem happens every time".into());
+        wait_turn(&events);
+        let sent: Value = serde_json::from_str(&std::fs::read_to_string(e.env().store.work_dir().join("captured.json")).unwrap()).unwrap();
+        e.close();
+        let images = sent["message"]["content"].as_array().unwrap().iter().filter(|v| v["type"] == "image").count();
+        assert_eq!(e.images().len(), 0);
+        assert_eq!(images, 0, "report A's screenshot never goes out with report B");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn an_image_that_encodes_above_5_mib_gets_the_reduce_signal() {
+        // A real 1600 x 1200 PNG of noise: under 40 megapixels, valid, about 7.7 MB once encoded.
+        let mut pixels = Vec::with_capacity(1600 * 1200 * 4);
+        let mut rand: u32 = 0x635c_a923;
+        for _ in 0..1600 * 1200 {
+            for _ in 0..3 {
+                rand ^= rand << 13;
+                rand ^= rand >> 17;
+                rand ^= rand << 5;
+                pixels.push(rand as u8);
+            }
+            pixels.push(255);
+        }
+        let mut big = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut big, 1600, 1200);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header().unwrap().write_image_data(&pixels).unwrap();
+        }
+        let root = scratch("large");
+        let (e, _) = engine_at(&root, None);
+        let failure = e.prepare_image(&util::base64_std(&big)).unwrap_err();
+        assert!(failure.starts_with("too-large:"), "the window reduces it instead of calling it unreadable: {failure}");
         std::fs::remove_dir_all(root).ok();
     }
 

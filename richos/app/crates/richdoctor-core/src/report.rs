@@ -245,6 +245,51 @@ impl Report {
     /// Replace one section with the person's edit, scrubbed like everything else, and fit the
     /// size budget again. `versions` and the excerpts are evidence: they can be removed or
     /// shortened, never rewritten into something the evidence did not say.
+    /// **WHAT HAPPENED, AS IT IS SENT**: the description, then "Expected: ..." and the numbered
+    /// steps when there are any. The review shows this one text, so everything in it can be
+    /// changed or removed there ([`Report::edit`] splits it back).
+    pub fn what_happened_view(&self) -> String {
+        let mut what = self.what_happened.clone();
+        if !self.expected.trim().is_empty() {
+            what.push_str(&format!("\n\nExpected: {}", self.expected.trim()));
+        }
+        if !self.steps.is_empty() {
+            what.push_str("\n\nSteps the person described:");
+            for (n, s) in self.steps.iter().enumerate() {
+                what.push_str(&format!("\n{}. {}", n + 1, s.trim()));
+            }
+        }
+        what
+    }
+
+    /// Split an edited [`Report::what_happened_view`] back into the description, Expected and the
+    /// steps. A part the person deleted is gone; one they kept or changed is kept as edited.
+    fn set_what_happened(&mut self, text: &str) {
+        let mut rest = text.trim_end().to_string();
+        self.steps = Vec::new();
+        if let Some(at) = rest.find("Steps the person described:") {
+            let block = rest[at + "Steps the person described:".len()..].to_string();
+            self.steps = block
+                .lines()
+                .map(|l| {
+                    let l = l.trim();
+                    let digits = l.chars().take_while(char::is_ascii_digit).count();
+                    if digits > 0 && l[digits..].starts_with('.') { l[digits + 1..].trim().to_string() } else { l.to_string() }
+                })
+                .filter(|l| !l.is_empty())
+                .collect();
+            rest.truncate(at);
+        }
+        self.expected = String::new();
+        if let Some(at) = rest.rfind("Expected:") {
+            if at == 0 || rest[..at].ends_with('\n') {
+                self.expected = rest[at + "Expected:".len()..].trim().to_string();
+                rest.truncate(at);
+            }
+        }
+        self.what_happened = rest.trim_end().to_string();
+    }
+
     pub fn edit(&mut self, section: &str, text: &str, ctx: &Context) -> Result<(), String> {
         let (clean, removed) = scrub::scrub(text, ctx);
         if removed.total() > 0 {
@@ -252,7 +297,7 @@ impl Report {
         }
         match section {
             "title" => self.title = bounded(clean.trim(), TITLE_MAX_CHARS),
-            "what_happened" => self.what_happened = clean,
+            "what_happened" => self.set_what_happened(&clean),
             "expected" => self.expected = clean,
             "when" => self.when = clean,
             "versions" => self.versions = clean,

@@ -172,6 +172,11 @@ pub fn check(bytes: &[u8]) -> Result<Shape, String> {
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
         return Err("larger than 5 MiB".into());
     }
+    structure(bytes)
+}
+
+/// The profile's structure and dimensions, without the size limit.
+fn structure(bytes: &[u8]) -> Result<Shape, String> {
     let shape = if bytes.starts_with(PNG_SIGNATURE) {
         png(bytes)?
     } else if bytes.starts_with(&[0xFF, 0xD8]) {
@@ -218,12 +223,20 @@ pub fn declared(bytes: &[u8]) -> Option<(u32, u32)> {
 /// segment outside the profile (EXIF, ICC, comments, any APPn but JFIF). The result passes
 /// [`check`], or the reason it cannot is returned for the person.
 pub fn finalize(input: &[u8]) -> Result<(Vec<u8>, Shape), String> {
+    let (out, shape) = encode(input)?;
+    check(&out).map_err(|e| format!("it cannot be sent as it is ({e})"))?;
+    Ok((out, shape))
+}
+
+/// [`finalize`] without the size limit: the new bytes and their shape, so the window can see an
+/// image that encodes above 5 MiB and reduce it (the size is checked again when it is kept).
+pub fn encode(input: &[u8]) -> Result<(Vec<u8>, Shape), String> {
     let (w, h) = declared(input).ok_or("it is not a PNG or JPEG image RichDoctor can read")?;
     if w as u64 * h as u64 > MAX_PIXELS {
         return Err("it is larger than 40 megapixels".into());
     }
     let out = if input.starts_with(PNG_SIGNATURE) { repng(input)? } else { rejpeg(input)? };
-    let shape = check(&out).map_err(|e| format!("it cannot be sent as it is ({e})"))?;
+    let shape = structure(&out).map_err(|e| format!("it cannot be sent as it is ({e})"))?;
     Ok((out, shape))
 }
 
