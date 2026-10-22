@@ -55,6 +55,9 @@ pub fn connect_folder(registry: &EntityRegistry, entity: &EntityId, selected: &P
     next.connect_repository(entity, root.clone()).map_err(|e| e.to_string())?;
     // Canonicalize other registered roots as well: legacy files may contain aliases.
     for other in registry.entities().iter().filter(|e| &e.id != entity) {
+        // A repository another company has connected is shared, not overlapped, whatever other
+        // roots that company owns (its own company folder may be an ancestor of the repository).
+        if other.connected_repositories.iter().any(|c| std::fs::canonicalize(c).unwrap_or_else(|_| c.clone()) == root) { continue; }
         for old in &other.roots {
             let old = std::fs::canonicalize(old).unwrap_or_else(|_| old.clone());
             if root.starts_with(&old) || old.starts_with(&root) { return Err("That folder overlaps another company's folder.".into()); }

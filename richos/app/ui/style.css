@@ -11857,3 +11857,29 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
    which is what stays in view while the columns scroll (`.sm-foot`). */
 .set-floor > .bugbtn:hover:not(:disabled) { background: linear-gradient(var(--tint-gold), var(--tint-gold)), var(--surface); }
 .set-floor > .bugbtn + .bugbtn { margin-top: 2px; }
+
+/* One folder, two companies (round 36, plan item 11, CEO 2026-10-21): the notice before connecting
+   a folder another company has, and the "Also in ..." line on the folder's row. Gold edge and tint
+   as the mockup; every text pair is --ink / --ink-soft on --tint-gold-weak or the panel. */
+.repository-also {
+  display: flex; align-items: center; gap: 7px; margin: 2px 0 4px;
+  font-size: 1rem; color: var(--ink-soft);
+}
+.repository-also svg { width: 16px; height: 16px; color: var(--gold-text); flex-shrink: 0; }
+.repository-also b { font-weight: 600; color: var(--ink); }
+#repository-list li.repository-new { animation: repository-row-in 1.8s var(--out-quint, ease-out) 1; border-radius: 6px; }
+@keyframes repository-row-in {
+  0% { background: transparent; }
+  25% { background: var(--tint-gold-strong); }
+  100% { background: transparent; }
+}
+.repository-shared {
+  margin: 12px 0 4px; padding: 13px 14px; border-radius: 10px;
+  border: 1px solid var(--line-control); border-left: 4px solid var(--gold);
+  background: var(--tint-gold-weak);
+  animation: overlay-in 0.2s ease-out;
+}
+.repository-shared-title { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 1rem; font-weight: 600; color: var(--ink); }
+.repository-shared-title svg { width: 20px; height: 20px; color: var(--gold-text); flex-shrink: 0; }
+.repository-shared p { margin: 0; font-size: 1rem; line-height: 1.45; color: var(--ink); }
+.repository-shared p + p { margin-top: 6px; color: var(--ink-soft); }

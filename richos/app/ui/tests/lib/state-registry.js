@@ -3732,6 +3732,31 @@ module.exports = [
     "why": "Confirms a connection that also set up Git, because every connected folder gets Git tracking (CEO, 2026-10-06): the folder had none, so its files became the first commit. Nothing was pushed and nothing is left to do."
   },
   {
+    "s": "Already connected to",
+    "c": "FRAGMENT",
+    "why": "Head of the shared-folder notice on the connected folders sheet (plan item 11, round 36 screen 2), completed by the company names that already have the folder. The button beside it, Connect to <company> too, is the action."
+  },
+  {
+    "s": "Connect it here too and Rich can work in it from",
+    "c": "FRAGMENT",
+    "why": "First part of the shared-folder notice's second sentence (round 36 screen 2), completed by the company names around 'chats as well as'."
+  },
+  {
+    "s": "chats as well as",
+    "c": "FRAGMENT",
+    "why": "Middle of the shared-folder notice's second sentence (round 36 screen 2), between the two company names."
+  },
+  {
+    "s": "Nothing in the folder moves and each company keeps its own chats and notes.",
+    "c": "INFORMATIONAL",
+    "why": "Third sentence of the shared-folder notice (round 36 screen 2): says what does not change when a folder is in two companies. Nothing is left to do."
+  },
+  {
+    "s": "Folder connected. It is now in",
+    "c": "FRAGMENT",
+    "why": "Confirmation after a folder is connected to a second company (plan item 11), completed by the company names. Nothing is left to do."
+  },
+  {
     "s": "No project folders connected yet.",
     "c": "ACTIONABLE",
     "why": "The empty state of the connected folders sheet (CEO copy, 2026-10-06, item 2d). The company selector begins the connection flow; repositories.js checks selection, folder entry and connection.",
