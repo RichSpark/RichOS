@@ -76,8 +76,6 @@ export class FakeGitHub {
       const page = Number(url.searchParams.get('page') || 1), fault = this.take('list:');
       if (fault === 'list:500' || (fault === 'list:page2' && page === 2)) return json(500, { message: 'error' });
       if (fault === 'list:page2' && page !== 2) this.faults.unshift(fault);
-      // A complete listing that cannot see an existing issue: no match is never proof of non-creation.
-      if (fault === 'list:empty') return json(200, []);
       // GitHub's `since` filter answered [] for minutes-old issues on 2026-10-22; this stand-in
       // answers [] whenever it is used, so nothing can come to rely on it.
       if (url.searchParams.has('since')) return json(200, []);

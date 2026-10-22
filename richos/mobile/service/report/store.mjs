@@ -99,26 +99,10 @@ export class Store {
       this.statement(`INSERT INTO reports (report_id, secret_hash, content_hash, protocol, state, issue_number, issue_url, approved_at,
         delivered_at, expires_at, active_at, created_at, updated_at) VALUES (?,?,?,?,'delivered',?,?,?,?,?,?,?,?) ON CONFLICT(report_id) DO NOTHING`,
       r.reportId, r.secretHash, r.contentHash, r.schema, issue.number, issue.url, r.approvedAt, now, now + retain, now, now, now),
-      ...this.manifestRows(r, stored),
+      ...r.manifest.map(item => this.statement(`INSERT INTO attachments (report_id, attachment_id, ord, media_type, width, height, bytes, sha256, stored)
+        SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9 WHERE EXISTS (SELECT 1 FROM reports WHERE report_id=?1 AND content_hash=?10) ON CONFLICT DO NOTHING`,
+      r.reportId, item.attachment_id, item.order, item.media_type, item.width, item.height, item.bytes, item.sha256, stored.includes(item.attachment_id) ? 1 : 0, r.contentHash)),
     ]);
-  }
-  // An older unknown ID whose footer was not found: no match is not proof that nothing was created
-  // (its receipt may have been lost), so it is recorded unconfirmed, on the operator's list, and
-  // never created. attempt=0 marks a receipt this relay never attempted; attempt_at holds the
-  // first listing's look-back, so a status check lists as far back. Just listed: checked_at is now.
-  async holdUnknown(r, since, stored = []) {
-    const now = this.now();
-    await this.db.batch([
-      this.statement(`INSERT INTO reports (report_id, secret_hash, content_hash, protocol, state, title, body, attempt_at, checked_at, approved_at,
-        active_at, created_at, updated_at) VALUES (?,?,?,?,'unconfirmed',?,?,?,?,?,?,?,?) ON CONFLICT(report_id) DO NOTHING`,
-      r.reportId, r.secretHash, r.contentHash, r.schema, r.title, r.body, since, now, r.approvedAt, now, now, now),
-      ...this.manifestRows(r, stored),
-    ]);
-  }
-  manifestRows(r, stored) {
-    return r.manifest.map(item => this.statement(`INSERT INTO attachments (report_id, attachment_id, ord, media_type, width, height, bytes, sha256, stored)
-      SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9 WHERE EXISTS (SELECT 1 FROM reports WHERE report_id=?1 AND content_hash=?10) ON CONFLICT DO NOTHING`,
-    r.reportId, item.attachment_id, item.order, item.media_type, item.width, item.height, item.bytes, item.sha256, stored.includes(item.attachment_id) ? 1 : 0, r.contentHash));
   }
   // Authoritative non-creation: GitHub refused (sent=1 allowed), or the attempt never sent.
   async notCreated(id, attemptId, reason, retryAt, requireUnsent = false) {
