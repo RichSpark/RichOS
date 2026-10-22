@@ -380,7 +380,7 @@ class Walk(adopt.Walk):
         names = started['names']
         target, why = stoppable(self.assignments_since(started['sent_ms']))
         if why:
-            raise StepFailed(why)
+            raise StepFailed('%s\n%s' % (why, self.stop_evidence()))
         # The work chip names the job's state ("1 assignment starting", "... running", "... waiting
         # to start", "1 waiting for you"; main.js renderDrillChip) and always ends its label with
         # "Open the work summary." Walk walk-21f83423b356 pressed the fixed words "assignment
