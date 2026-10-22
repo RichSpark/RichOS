@@ -56,7 +56,7 @@
   // ------------------------------------------------------------------ 1. the question --------
   function buildQuestion() {
     qOverlay = h(
-      '<div class="overlay iu-overlay" id="instructions-update" hidden role="dialog" aria-modal="true" aria-labelledby="iu-q-text" data-dismiss="control:#iu-no">' +
+      '<div class="overlay iu-overlay" id="instructions-update" hidden role="dialog" aria-labelledby="iu-q-text" data-dismiss="control:#iu-no">' +
         '<div class="overlay-panel iu-q" data-s="ask">' +
           '<div class="iu-q-ask">' +
             '<div class="iu-q-mark">' + mark() + "</div>" +
@@ -158,7 +158,7 @@
   // ------------------------------------------------------------------ 2. before and after ----
   function buildResult() {
     rOverlay = h(
-      '<div class="overlay iu-overlay" id="instructions-update-result" hidden role="dialog" aria-modal="true" aria-labelledby="iu-r-title" data-dismiss="control:#iu-done">' +
+      '<div class="overlay iu-overlay" id="instructions-update-result" hidden role="dialog" aria-labelledby="iu-r-title" data-dismiss="control:#iu-done">' +
         '<div class="overlay-panel iu-sheet">' +
           '<div class="iu-head">' +
             '<div class="iu-head-row"><h2 class="iu-title" id="iu-r-title">Before and after</h2>' +

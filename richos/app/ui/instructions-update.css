@@ -19,7 +19,7 @@
 }
 
 /* ---------- shared ---------------------------------------------------------------------------- */
-.iu-overlay { z-index: 320; align-items: center; padding: 24px; }
+.iu-overlay { z-index: 299; align-items: center; padding: 24px; }
 .iu-overlay code, .iu-mono { font-family: var(--mono); }
 .iu-icon { width: 20px; height: 20px; flex-shrink: 0; }
 @keyframes iu-spin { to { transform: rotate(360deg); } }
@@ -42,7 +42,7 @@
   margin: 0 0 20px; font-family: var(--font-serif); font-weight: 400; font-size: 1.375rem; line-height: 1.42;
   color: var(--ink); letter-spacing: -0.003em;
 }
-.iu-q-text code { font-size: 0.86em; padding: 1px 3px; border-radius: 6px; background: var(--tint-soft); white-space: nowrap; }
+.iu-q-text code { font-size: 1.1875rem; padding: 1px 3px; border-radius: 6px; background: var(--tint-soft); white-space: nowrap; }
 .iu-files { list-style: none; margin: 0 0 24px; padding: 0; border-top: 1px solid var(--line); }
 .iu-files li {
   display: flex; align-items: center; gap: 12px; padding: 11px 2px; border-bottom: 1px solid var(--line);
@@ -136,7 +136,7 @@
 .iu-cell.iu-after { border-left: 1px solid var(--line-control); }
 .iu-row-first { padding-top: 16px; }
 .iu-row-last { padding-bottom: 28px; }
-.iu-cell code { font-size: 0.9375em; }
+.iu-cell code { font-size: 1rem; }
 .iu-cell code, .iu-cell .iu-fm { font-family: var(--mono); }
 .iu-cell .iu-fm { font-size: 1rem; line-height: 1.55; color: var(--ink); }
 /* The edit's mark in the gutter: a bar (the indicator) and its sign. */
