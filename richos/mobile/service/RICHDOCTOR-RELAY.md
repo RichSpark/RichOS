@@ -70,6 +70,14 @@ HTTP codes, for logs only: 201 first delivered, 200 replay or status, 202 pendin
 - Credential-shaped text is refused: GitHub, Slack, AWS, Anthropic and OpenAI-style tokens, PEM private-key blocks, JWTs, `Authorization:`, `Cookie:` and `Bearer` values, password-style assignments and the report's own receipt. Email addresses are refused, except `support@richos.ceo`. A `/Users/<name>` path is refused, except `/Users/Shared` and a scrubbed stand-in (`/Users/\[...`). These checks read the words as GitHub shows them (escapes removed, U+200B removed).
 - The checks are linear in the body's length.
 
+## Screenshots: coming in a later schema version
+
+The CEO ruled on 2026-10-22 that the user's approved, redacted screenshots must reach the team, linked to the same report. This supersedes the text-only boundary of PRD v4. Protocol 1 carries text only and nothing in it rules attachments out. Room is left to add screenshots without breaking a protocol-1 client:
+- a new `schema` value (the relay refuses fields a version does not define, so a version is the place for new ones);
+- an additive D1 table keyed by `report_id`, with no change to `reports`;
+- a separate upload limit and route, so the 128 KiB create body and the 60,000-byte issue body stay as they are.
+The attachment contract is not decided here.
+
 ## What is stored
 
 D1 holds, per report: the ID, the receipt's hash, the content hash, the state, the attempt number and its times, the `sent` mark, the refusal reason and retry time and the issue number and URL. Never the title, the body, the receipt itself, an IP address or an installation ID. Rows are kept (PRD §7: at least a year). The relay writes no log line; deploy it with Logs, Traces and Logpush off and no tail consumers.
