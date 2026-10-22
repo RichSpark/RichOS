@@ -113,7 +113,10 @@ def told_stopped(record):
     required; one that is there must still say it was stopped (walk-28d1d7305246 failed only on
     the missing notice, with both commands ended inside the bound)."""
     if record.get('state') in OPEN:
-        return 'the stopped assignment is still running: ' + json.dumps(record)[:400]
+        # The state and detail first: walk-f7c9cf5b8d7a's 400 characters ended before them.
+        return 'the stopped assignment is still open (state %r, detail %r, user stop %r): %s' % (
+            record.get('state'), record.get('detail'), record.get('user_stop_requested_at_ms'),
+            json.dumps(record)[:400])
     notices = record.get('notices') or []
     last = notices[-1] if notices else {}
     if record.get('state') != 'interrupted' or not record.get('user_stop_requested_at_ms') \

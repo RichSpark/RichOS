@@ -230,7 +230,9 @@ class Grade(unittest.TestCase):
         failed = {'id': 'a1', 'state': 'failed', 'detail': 'Claude channel closed (child exited?).', 'notices': [
             {'kind': 'failed', 'text': 'Run two... It stopped before it finished. Claude channel closed (child exited?).'}]}
         self.assertIn('failed', walk.told_stopped(failed))
-        self.assertIn('still running', walk.told_stopped(dict(stopped, state='running')))
+        # walk-f7c9cf5b8d7a: the record's first 400 characters ended before its state.
+        still = walk.told_stopped(dict(stopped, state='running', detail='Worker start observed', notes='x' * 600))
+        self.assertIn("still open (state 'running', detail 'Worker start observed'", still)
 
     def test_ps_time_is_read_past_an_hour(self):
         self.assertAlmostEqual(walk.cpu_seconds('0:01.46'), 1.46)
