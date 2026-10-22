@@ -759,6 +759,26 @@ fn a_line_in_the_users_instructions_reaches_both_rich_and_stu() {
     assert_ne!(first.user.digest, next.user.digest, "the edit must renew a session at its next boundary");
 }
 
+/// **Rich knows where a standing order goes** (richos-hq
+/// `docs/plans/2026-10-21-switching-to-the-app.md` row W, section 1: the user's instructions file
+/// is edited "by hand, or Rich when he gives a new order"). On a first run the file is empty, so the
+/// app adds nothing about it to Rich's definition (the test above) and the only place Rich can learn
+/// where it is, is his own instructions. The path is built from the code's own names, so moving the
+/// file or the folder without the sentence breaks this.
+#[test]
+fn rich_s_own_instructions_name_the_file_a_standing_order_is_saved_in() {
+    use richos_core::user_settings::{RICH, INSTRUCTIONS};
+    let file = format!("~/{}/{INSTRUCTIONS}", richos_core::company::DEFAULT_CENTRAL_DIRNAME);
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    let first = prepare_for_user(&f, &folder);
+    assert_eq!(std::fs::read_to_string(folder.join(INSTRUCTIONS)).unwrap(), "", "a first run's instructions file is empty");
+    let loaded = std::fs::read_to_string(first.standing_plugin(&engine().join("app")).join("agents").join(RICH)).unwrap();
+    let says = loaded.split("\n\n").find(|paragraph| paragraph.contains(&file))
+        .unwrap_or_else(|| panic!("Rich's definition on a first run never names {file}"));
+    assert!(says.to_lowercase().contains("from now on"), "the paragraph naming {file} does not say a standing order goes there: {says}");
+}
+
 /// With no file of the user's, the generated config carries the engine's own model list, order
 /// and cost ceiling (build plan item 7: the engine's full list, the shipped ceiling Opus); with
 /// one, each key appears once: the user's value where the user set it, the engine's where not,
@@ -1004,6 +1024,56 @@ fn a_lease_commits_as_the_user_and_asks_the_users_credential_helpers() {
     let helpers = ask(&["config", "--get-all", "credential.helper"]);
     assert!(helpers.ends_with("fixture-vendor-helper\nfixture-system-helper\nfixture-user-helper"),
         "the user's Git's vendor and system helpers, then the user's own, as the user's terminal asks them: {helpers:?}");
+}
+
+/// **Every lease loads the engine's shipped skills, except the terminal's two** (CEO §138: everything
+/// he uses in the terminal is a feature of the regular app; richos-hq
+/// `docs/plans/2026-10-21-switching-to-the-app.md` §4.6 and row S). Until this, a lease loaded only
+/// the standing plugin's four, and 19 of his 29 teammates name skills that never reached them, eight
+/// of them `playwright-cli`. Read off the engine folder, never a list typed here, so a skill added to
+/// the engine reaches every lease without a change in this crate.
+#[test]
+fn every_lease_loads_the_engine_s_shipped_skills_except_the_terminal_only_two() {
+    let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    let mut shipped: Vec<String> = std::fs::read_dir(engine().join("skills")).unwrap()
+        .map(|entry| entry.unwrap().path()).filter(|dir| dir.join("SKILL.md").is_file())
+        .map(|dir| dir.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    shipped.sort();
+    assert!(shipped.iter().any(|name| name == "playwright-cli"), "the engine ships no playwright-cli: {shipped:?}");
+    let mut loaded = Vec::new();
+    for name in &shipped {
+        let linked = profile.plugin.join("skills").join(name);
+        if ["rich-lander", "using-git-worktrees"].contains(&name.as_str()) {
+            // The terminal lead's landing and worktree procedures: the app lands and makes
+            // workspaces itself (Mega Lander), so a worker told to follow them would go around it.
+            assert!(!linked.exists(), "{name} is a terminal-only skill and reached a lease");
+        } else if richos_core::skills::SKILLS.contains(&name.as_str()) {
+            // The standing plugin carries the app's own words for these; the engine's copies name
+            // the terminal's install path, so a second copy would be the wrong one.
+            assert!(!linked.exists(), "{name} is in the lease twice: the standing plugin's and the engine's");
+        } else {
+            assert_eq!(std::fs::canonicalize(linked.join("SKILL.md")).unwrap(),
+                       std::fs::canonicalize(engine().join("skills").join(name).join("SKILL.md")).unwrap(),
+                       "{name} is not the engine's own skill in this lease");
+            loaded.push(name.clone());
+        }
+    }
+    assert!(loaded.contains(&"playwright-cli".to_string()), "playwright-cli did not reach the lease: {loaded:?}");
+    // Nothing else is in the lease's skills folder.
+    let mut present: Vec<String> = std::fs::read_dir(profile.plugin.join("skills")).unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    present.sort();
+    assert_eq!(present, loaded);
+    // The plugin the child is given is this one (`configure`'s `--plugin-dir`).
+    let mut command = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+    assert!(args.windows(2).any(|pair| pair[0] == "--plugin-dir" && Path::new(&pair[1]) == profile.plugin));
+    // A retired lease's folders go, and the engine's skills stay exactly where they were.
+    let before = std::fs::read(engine().join("skills/playwright-cli/SKILL.md")).unwrap();
+    profile.remove_session_files();
+    assert!(!profile.plugin.exists());
+    assert_eq!(std::fs::read(engine().join("skills/playwright-cli/SKILL.md")).unwrap(), before);
 }
 
 /// **With Apple's real Git** (second review rv-20261021T092945Z-1f1d7133-1f6d, finding 1): the

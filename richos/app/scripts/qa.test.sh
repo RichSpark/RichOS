@@ -90,11 +90,15 @@
 #   US1-US4 usage-shape: a get_usage answer RichOS's reader gets no figures from (rate_limits
 #           null) exits 1 naming the rule; a readable one exits 0; no binary and a
 #           claude that never answers are refused, against a scripted claude
+#   LR1-LR5 lease-retention-probe: a lease that keeps everything while the default control
+#           sweeps exits 0; a lease that deletes exits 1; no sweep anywhere exits 2; no binary
+#           is refused; a lease start that dies before system/init exits 2, against a
+#           scripted claude
 #   X1      the committed fixtures still match their generator
 #
 # run-tests: no-host-screen: its only capture/keystroke references are the strings it asserts those two tools REFUSE to act on, and its frames are committed PNG fixtures
 # run-tests: inputs richos/app/scripts/qa.test.sh richos/app/scripts/qa richos/mobile/conformance/vectors/fingerprint.json richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
-# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
+# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -143,7 +147,7 @@ python3 -c 'import PIL' >/dev/null 2>&1 && HAVE_PIL=1
 echo ""
 echo "=== H. every tool answers for itself ==="
 for t in contrast.py frame.py redact.py timeline.py ocr-gate.sh ocr-find.sh \
-         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh fixtures/make-fixtures.py; do
+         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh lease-retention-probe.py fixtures/make-fixtures.py; do
   if [ ! -x "$QA/$t" ]; then
     bad "H $t is executable" "not present or not executable at $QA/$t"
     continue
@@ -1643,6 +1647,42 @@ run "$US" --claude "$TMP/no-such-claude" --wait 2
 expect "US3 no claude binary is refused, exit 2" 2 "no claude to ask"
 export FAKE_SILENT=1; run "$US" --claude "$TMP/fake-usage-claude" --wait 2; unset FAKE_SILENT FAKE_USAGE
 expect "US4 a claude that never answers get_usage is refused, exit 2" 2 "no get_usage response"
+
+echo "=== LR. lease-retention-probe: does a lease-shaped claude start delete old transcripts? ==="
+LR="$QA/lease-retention-probe.py"
+# Scripted claudes, one per behavior (the probe starts claude with a clean environment, so the
+# behavior is in the file, not a variable): each reads the probe's two frames, deletes fixture
+# transcripts as its mode says for the --setting-sources it was given, then prints an init frame
+# and a result.
+for mode in honest lease-sweeps never no-init; do
+  sed "s/@MODE@/$mode/" > "$TMP/fake-retention-claude-$mode" <<'FAKE'
+#!/bin/sh
+[ "${1:-}" = "--version" ] && { echo "9.9.9 (scripted)"; exit 0; }
+read -r _; read -r _
+src=absent; prev=
+for a in "$@"; do [ "$prev" = "--setting-sources" ] && src="[$a]"; prev="$a"; done
+gone() { find "$HOME/.claude/projects" -name "*-$1.jsonl" -delete; }
+case "@MODE@:$src" in
+  honest:absent|no-init:absent) gone age060; gone age150 ;;
+  'honest:[user]'|'no-init:[user]') gone age150 ;;
+  'no-init:[]') echo "fixture: lease startup failed before system/init" >&2; exit 64 ;;
+  lease-sweeps:*) gone age060 ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init","skills":["skillprobe:probe-copied","skillprobe:probe-linked"]}'
+printf '%s\n' '{"type":"result","subtype":"success"}'
+FAKE
+  chmod 755 "$TMP/fake-retention-claude-$mode"
+done
+run "$LR" --claude "$TMP/fake-retention-claude-honest"
+expect "LR1 a lease that keeps everything while the default control sweeps exits 0, with the linked skill listed" 0 "skillprobe:probe-linked"
+run "$LR" --claude "$TMP/fake-retention-claude-lease-sweeps"
+expect "LR2 a lease-shaped start that deletes a transcript exits 1, naming it" 1 "the lease-shaped start DELETED ['age060']"
+run "$LR" --claude "$TMP/fake-retention-claude-never"
+expect "LR3 no sweep in the default control either is no answer, exit 2" 2 "cannot tell"
+run "$LR" --claude "$TMP/no-such-claude"
+expect "LR4 no claude binary is refused, exit 2" 2 "is not an executable"
+run "$LR" --claude "$TMP/fake-retention-claude-no-init"
+expect "LR5 a lease start that dies before system/init measured nothing, exit 2" 2 "that start measured nothing"
 
 echo ""
 echo "=== X. the fixtures are still the fixtures ==="
