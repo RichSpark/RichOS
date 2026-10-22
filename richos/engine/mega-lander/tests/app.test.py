@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -201,6 +202,10 @@ class DesktopWork(unittest.TestCase):
         for repo in (self.coord,self.repo):
             repo.mkdir();subprocess.run(["git","init","--template=","-q","-b","main",str(repo)],check=True)
             subprocess.run(["git","-C",str(repo),"-c","core.hooksPath=/dev/null","-c","commit.gpgSign=false","-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","--allow-empty","-qm","Fixture"],check=True)
+        # Every land is a merge commit (land_merge), and its committer is the one the repository's
+        # own Git configuration names; nothing supplies one.
+        for key,value in (("user.name","Fixture"),("user.email","fixture@example.invalid")):
+            subprocess.run(["git","-C",str(self.repo),"config",key,value],check=True)
         (self.coord/".claude/agents").mkdir(parents=True)
         # The roster a lease registers (slice 1 of the proto-teammate shelf plan): the always-active
         # five as shipped, and a fictional teammate of the user's own who does the code jobs.
@@ -227,7 +232,11 @@ class DesktopWork(unittest.TestCase):
              # ~/.claude) and would write its land locks under the operator's
              # home. CLAUDE_CONFIG_DIR is the one name the app does not strip, so the
              # suite owns the child's land-lock home by pointing it inside the fixture.
-             "CLAUDE_CONFIG_DIR":str(self.root/"claude config")}
+             "CLAUDE_CONFIG_DIR":str(self.root/"claude config"),
+             # A land reads the user's own Git settings (users_git_settings): the fixture's user
+             # is an empty home, never the person running the suite.
+             "HOME":str(self.root/"user home"),"XDG_CONFIG_HOME":str(self.root/"user home"/".config")}
+        (self.root/"user home").mkdir()
         self.env=patch.dict(os.environ,env);self.env.start();self.addCleanup(self.env.stop)
         self.app=load();ecs=self.root/"ecs"
         binding=self.app.ECS.execute(ecs,{"protocol":1,"command":"bind","scope":{"entity_id":"depot","thread_id":"thread-a","session_id":self.session,"turn_id":"turn-a","audience":"ceo"},"request_id":"bind-first","source_ref":"ledger:thread-a:turn-a","expected_revision":None})["binding"]
@@ -866,6 +875,8 @@ class DesktopWork(unittest.TestCase):
         second=self.root/"second project";second.mkdir()
         subprocess.run(["git","init","--template=","-q","-b","main",str(second)],check=True)
         subprocess.run(["git","-C",str(second),"-c","core.hooksPath=/dev/null","-c","commit.gpgSign=false","-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","--allow-empty","-qm","Fixture"],check=True)
+        for key,value in (("user.name","Fixture"),("user.email","fixture@example.invalid")):
+            subprocess.run(["git","-C",str(second),"config",key,value],check=True)
         self.registry.write_text(json.dumps({"version":2,"entities":[{"id":"depot","roots":[str(self.repo),str(second)],
             "connected_repositories":[str(self.repo),str(second)]}]}))
         return second
@@ -927,9 +938,11 @@ class DesktopWork(unittest.TestCase):
         self.assertTrue(landed["work_integrated"])
         self.assertEqual(landed["cleanup_pending"],[])
         for repo,commit in commits.items():
-            self.assertEqual(self.app.git(repo,"rev-parse","main"),commit)
+            head=self.app.git(repo,"rev-parse","main")
+            self.assertEqual(self.app.git(repo,"rev-parse",head+"^2"),commit)   # each repository's own merge
             self.assertIn(commit,landed["evidence_ref"])
-            self.assertEqual(self.app.W.land_records(repo)[-1]["commit"],commit)
+            self.assertEqual(self.app.W.land_records(repo)[-1]["commit"],head)
+            self.assertEqual(self.app.W.land_records(repo)[-1]["reviewed_commit"],commit)
         self.assertEqual(sorted(landed["land_locks"]),sorted(commits))
         for path in list(paths.values())+list(review_paths.values()): self.assertFalse(Path(path).exists(),path)
         self.assertTrue(self.call("complete",{"obligation_id":"fixture-task","worker_ids":[worker["id"]]})["obligation_closed"])
@@ -1446,12 +1459,11 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual((self.repo/"unrelated.txt").read_text(),"KEEP")
         self.assertFalse((self.repo/"result.txt").exists())
         (self.repo/"unrelated.txt").unlink()
-        original=self.app.git
-        def crash_after_merge(repo,*argv):
-            result=original(repo,*argv)
-            if argv[:2]==("merge","--ff-only"):raise RuntimeError("synthetic crash after fast-forward")
-            return result
-        with patch.object(self.app,"git",side_effect=crash_after_merge):
+        original=self.app.land_merge
+        def crash_after_merge(*argv):
+            original(*argv)
+            raise RuntimeError("synthetic crash after the merge")
+        with patch.object(self.app,"land_merge",side_effect=crash_after_merge):
             with self.assertRaisesRegex(RuntimeError,"synthetic crash"):self.call("integrate",args)
         self.assertEqual((self.repo/"result.txt").read_text(),"FICTIONAL")
         with patch.object(self.app.W,"remove_workspace",return_value=(False,"synthetic busy workspace")):
@@ -2057,7 +2069,7 @@ class DesktopWork(unittest.TestCase):
 
     def test_a_second_reviewed_change_is_merged_after_the_first_moved_the_branch(self):
         """Part 4, finding 3. Two workers start from the same tip and change
-        different files. The first lands by fast-forward. The second used to be
+        different files. The first lands on the tip they started from. The second used to be
         refused by an ancestry check whose whole message was Git's empty output
         ("engine operation refused"), which sent finished, reviewed work back for
         another implementation and review. It now lands by a merge commit whose
@@ -2068,19 +2080,21 @@ class DesktopWork(unittest.TestCase):
         # CONTROL: both really started from the same tip, and neither contains the other.
         self.assertEqual(self.app.git(self.repo,"merge-base",first_commit,second_commit),start)
         self.call("integrate",first)
-        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),first_commit)     # a fast-forward, as before
+        first_land=self.app.git(self.repo,"rev-parse","main")
+        self.assertEqual(self.app.git(self.repo,"rev-parse",first_land+"^1"),start)
+        self.assertEqual(self.app.git(self.repo,"rev-parse",first_land+"^2"),first_commit)
         landed_second=self.call("integrate",second)
         self.assertTrue(landed_second["work_integrated"])
         self.assertEqual(landed_second["commit"],second_commit)
         self.assertEqual(landed_second["cleanup_pending"],[])
         tip=self.app.git(self.repo,"rev-parse","main")
-        self.assertEqual(self.app.git(self.repo,"rev-parse",tip+"^1"),first_commit)
+        self.assertEqual(self.app.git(self.repo,"rev-parse",tip+"^1"),first_land)
         self.assertEqual(self.app.git(self.repo,"rev-parse",tip+"^2"),second_commit)   # the reviewed commit, unrewritten
         self.assertEqual((self.repo/"one.txt").read_text(),"FICTIONAL one")
         self.assertEqual((self.repo/"two.txt").read_text(),"FICTIONAL two")
         self.assertEqual(self.app.git(self.repo,"status","--porcelain"),"")
         record=self.app.W.land_records(self.repo)[-1]
-        self.assertEqual((record["before"],record["commit"],record["reviewed_commit"]),(first_commit,tip,second_commit))
+        self.assertEqual((record["before"],record["commit"],record["reviewed_commit"]),(first_land,tip,second_commit))
         # A repeated integrate merges nothing and records no second land.
         self.assertTrue(self.call("integrate",second)["work_integrated"])
         self.assertEqual(self.app.git(self.repo,"rev-parse","main"),tip)
@@ -2103,6 +2117,153 @@ class DesktopWork(unittest.TestCase):
         self.assertFalse(Path(self.app.git(self.repo,"rev-parse","--path-format=absolute","--git-path","MERGE_HEAD")).exists())
         self.assertEqual((self.repo/"result.txt").read_text(),"FICTIONAL left")
 
+    # AN APP LAND GETS THE CHECKS A TERMINAL LAND GETS (plan item 6, 2026-10-21). The repository's
+    # own hooks and its land fence are the repository's settings: these tests install them into the
+    # fixture repository, never into the app, and the land must meet them as `git merge` from a
+    # terminal does. Before, integrate ran Git with core.hooksPath=/dev/null and landed by
+    # commit-tree plus a fast-forward, so no merge-time check and no fence ever saw an app land.
+
+    def repository_hook(self,name,body):
+        hooks=Path(self.app.git(self.repo,"rev-parse","--path-format=absolute","--git-common-dir"))/"hooks"
+        hooks.mkdir(exist_ok=True)
+        path=hooks/name;path.write_text("#!/bin/sh\n"+body);path.chmod(0o755)
+        return path
+
+    def test_an_app_land_runs_the_repositorys_own_merge_check_and_a_refusal_lands_nothing(self):
+        args=self.reviewed_pair("gated")
+        asked=self.root/"merge check asked";refuse=self.root/"merge check refuses";refuse.write_text("")
+        self.repository_hook("pre-merge-commit",
+            'echo asked >> %s\nif [ -e %s ]; then echo "FIXTURE MERGE CHECK: this land is refused" >&2; exit 1; fi\n'
+            % (shlex.quote(str(asked)),shlex.quote(str(refuse))))
+        tip=self.app.git(self.repo,"rev-parse","main")
+        with self.assertRaisesRegex(ValueError,"FIXTURE MERGE CHECK: this land is refused"):
+            self.call("integrate",args)
+        self.assertEqual(asked.read_text().splitlines(),["asked"])             # the repository's check ran
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),tip)       # and nothing landed
+        self.assertEqual(self.app.git(self.repo,"status","--porcelain","--untracked-files=all"),"")
+        self.assertFalse(Path(self.app.git(self.repo,"rev-parse","--path-format=absolute","--git-path","MERGE_HEAD")).exists())
+        self.assertFalse((self.repo/"result.txt").exists())
+        self.assertEqual(self.app.W.land_records(self.repo),[])
+        # The way out: once the check passes, the same reviewed work lands through it.
+        refuse.unlink()
+        landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertEqual(asked.read_text().splitlines(),["asked","asked"])
+        head=self.app.git(self.repo,"rev-parse","main")
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^1"),tip)
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])   # the reviewed commit, unrewritten
+        self.assertEqual((self.repo/"result.txt").read_text(),"FICTIONAL gated")
+
+    def users_own_hooks_refuse(self,how):
+        """The user's own Git settings select a hook folder whose merge check refuses, the way a
+        user sets one for every repository (`global`: core.hooksPath in ~/.gitconfig) or for one
+        repository (`includeIf`: a gitdir condition naming it). The app's lease hides the user's
+        global file behind a generated identity-only GIT_CONFIG_GLOBAL, as EngineProfile::configure
+        does today (mid-job review rv-20261021T082940Z-f79aeabf-fd06)."""
+        hooks=self.root/"users own hooks";hooks.mkdir()
+        (hooks/"pre-merge-commit").write_text('#!/bin/sh\necho "USERS OWN MERGE CHECK: refused" >&2\nexit 1\n')
+        (hooks/"pre-merge-commit").chmod(0o755)
+        home=Path(os.environ["HOME"]);setting='[core]\n\thooksPath = "%s"\n' % hooks
+        if how=="global":
+            (home/".gitconfig").write_text(setting)
+        else:
+            (home/"acme.gitconfig").write_text(setting)
+            (home/".gitconfig").write_text('[includeIf "gitdir:%s/"]\n\tpath = "%s"\n'
+                                           % (os.path.realpath(self.repo),home/"acme.gitconfig"))
+        app_layer=self.root/"app identity.gitconfig"
+        app_layer.write_text("[user]\n\tname = RichOS\n\temail = richos@localhost\n")
+        return {"GIT_CONFIG_GLOBAL":str(app_layer),"GIT_CONFIG_NOSYSTEM":"1"}
+
+    def test_an_app_land_runs_the_merge_check_the_users_global_git_settings_select(self):
+        args=self.reviewed_pair("globalhooks")
+        lease=self.users_own_hooks_refuse("global")
+        tip=self.app.git(self.repo,"rev-parse","main")
+        with patch.dict(os.environ,lease):
+            with self.assertRaisesRegex(ValueError,"USERS OWN MERGE CHECK: refused"):
+                self.call("integrate",args)
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),tip)
+        self.assertEqual(self.app.git(self.repo,"status","--porcelain","--untracked-files=all"),"")
+
+    def test_an_app_land_runs_the_merge_check_an_includeif_in_the_users_settings_selects(self):
+        args=self.reviewed_pair("includeif")
+        lease=self.users_own_hooks_refuse("includeIf")
+        tip=self.app.git(self.repo,"rev-parse","main")
+        with patch.dict(os.environ,lease):
+            with self.assertRaisesRegex(ValueError,"USERS OWN MERGE CHECK: refused"):
+                self.call("integrate",args)
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),tip)
+        self.assertEqual(self.app.git(self.repo,"status","--porcelain","--untracked-files=all"),"")
+
+    def fence_on(self,locks=None):
+        """The fixture repository's land fence, installed and switched on with operator-fences.sh.
+        `locks` is the land-lock home it is installed with (by default the one this land uses)."""
+        entity=self.root/"fence entity";entity.mkdir()
+        (entity/"orchestration.config").write_text('OPERATOR_FENCES="on"\nLAND_LEASE_HOLDERS=""\nOPERATOR_FENCES_REPOS=""\n')
+        env={**os.environ,**({"RICHOS_LAND_LOCKS_DIR":str(locks)} if locks else {})}
+        for verb in ("install","on"):
+            done=subprocess.run(["bash",str(ENGINE/"scripts/operator-fences.sh"),verb,"--repo",str(self.repo),"--entity",str(entity)],
+                                capture_output=True,text=True,env=env)
+            self.assertEqual(done.returncode,0,done.stdout+done.stderr)
+        F=self.app.W._fence_program()
+        conf,_paths=F.launcher_for(str(self.repo))
+        self.assertTrue(F.fenced(conf))
+        return F.Files(conf)
+
+    def test_an_app_land_under_another_claude_account_takes_the_fences_own_lease_and_lands(self):
+        """An account switch (mid-job review rv-20261021T072931Z-a4453faa-ffff, finding 1). The
+        app runs a lease under an added account with CLAUDE_CONFIG_DIR at that account's folder, so
+        this land's lock lives in that folder while the fence keeps the home it was installed with.
+        The land still takes the fence's own lease, under the fence's own lock, and lands."""
+        args=self.reviewed_pair("switched")
+        first_account=self.root/"first account land locks"
+        files=self.fence_on(first_account)
+        self.assertNotEqual(os.path.realpath(files.lock),os.path.realpath(self.app.land_lock_path(self.repo)))  # CONTROL
+        tip=self.app.git(self.repo,"rev-parse","main")
+        seen=self.root/"lease during the switched land"
+        self.repository_hook("pre-merge-commit","cp %s %s\n" % (shlex.quote(files.lease),shlex.quote(str(seen))))
+        held=[]
+        original=self.app.land_merge
+        def watch(*argv):
+            held.append(not self.land_lock_free(files.lock))
+            return original(*argv)
+        with patch.object(self.app,"land_merge",side_effect=watch):
+            landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertEqual(held,[True],"the merge ran without the fence's own lock held")
+        self.assertEqual(json.loads(seen.read_text())["holder"]["pid"],os.getpid())
+        self.assertFalse(os.path.exists(files.lease),"the land lease outlived the land")
+        self.assertTrue(self.land_lock_free(files.lock),"the fence's lock outlived the land")
+        head=self.app.git(self.repo,"rev-parse","main")
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^1"),tip)
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])
+
+    def test_an_app_land_into_a_fenced_repository_takes_the_land_lease_and_lands(self):
+        # The work is prepared, done and reviewed first, and the fence switched on after: this test
+        # is about the land. (The fence reads a `git worktree add` writer's argv from `ps`, split
+        # on spaces, and this fixture's paths have spaces in them on purpose.)
+        args=self.reviewed_pair("fenced")
+        files=self.fence_on()
+        tip=self.app.git(self.repo,"rev-parse","main")
+        # POSITIVE CONTROL: the fence is on. A move of main by a process holding no lease is refused.
+        stray=self.app.git(self.repo,"commit-tree",tip+"^{tree}","-p",tip,"-m","stray")
+        refused=subprocess.run(["git","-C",str(self.repo),"update-ref","refs/heads/main",stray,tip],capture_output=True,text=True)
+        self.assertNotEqual(refused.returncode,0,refused.stdout+refused.stderr)
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),tip)
+        # What the lease says while the land's own merge runs, read by the repository's merge hook.
+        seen=self.root/"lease during the land"
+        self.repository_hook("pre-merge-commit","cp %s %s\n" % (shlex.quote(files.lease),shlex.quote(str(seen))))
+        landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertTrue(seen.exists(),"the land ran no merge hook, so neither the repository's checks nor its fence saw it")
+        holder=json.loads(seen.read_text())["holder"]
+        self.assertEqual(holder["pid"],os.getpid())        # this land held the lease, as itself
+        self.assertEqual(landed["land_lock"]["land_lease"],files.lease)
+        self.assertFalse(os.path.exists(files.lease),"the land lease outlived the land")
+        head=self.app.git(self.repo,"rev-parse","main")
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^1"),tip)
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])
+        self.assertEqual((self.repo/"result.txt").read_text(),"FICTIONAL fenced")
+
     def test_two_conversations_landing_in_one_repository_take_one_lock_and_the_merge_is_under_it(self):
         args=self.reviewed_pair("onelock")
         lock=self.app.land_lock_path(self.repo)
@@ -2116,14 +2277,14 @@ class DesktopWork(unittest.TestCase):
         # POSITIVE CONTROL: the probe can say "free", and does, before the land.
         self.assertTrue(self.land_lock_free(lock))
         held=[]
-        original=self.app.git
-        def watch(repo,*argv):
-            if argv[:2]==("merge","--ff-only"): held.append(not self.land_lock_free(lock))
-            return original(repo,*argv)
-        with patch.object(self.app,"git",side_effect=watch):
+        original=self.app.land_merge
+        def watch(*argv):
+            held.append(not self.land_lock_free(lock))
+            return original(*argv)
+        with patch.object(self.app,"land_merge",side_effect=watch):
             result=self.call("integrate",args)
         self.assertTrue(result["work_integrated"])
-        self.assertEqual(held,[True],"the fast-forward ran without this repository's land lock held")
+        self.assertEqual(held,[True],"the merge ran without this repository's land lock held")
         self.assertTrue(self.land_lock_free(lock),"the land lock outlived the land")
         self.assertLess(result["land_lock"]["waited_seconds"],1.0)
         self.assertNotIn("waited_for",result["land_lock"])
@@ -2247,8 +2408,8 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(rows[0]["thread_id"],"thread-a")            # the conversation that landed
         self.assertEqual(rows[0]["entity_id"],"depot")
         self.assertEqual(rows[0]["branch"],"main")
-        self.assertEqual(rows[0]["commit"],first["commit"])
-        self.assertEqual(rows[0]["commit"],self.app.git(self.repo,"rev-parse","main"))
+        self.assertEqual(rows[0]["reviewed_commit"],first["commit"])
+        self.assertEqual(rows[0]["commit"],self.app.git(self.repo,"rev-parse","main"))     # the land's merge commit
         # A REPEATED integrate merges nothing, so it records no land: the record
         # is written where the ref actually moves, not where the call ends.
         self.assertTrue(self.call("integrate",first_args)["work_integrated"])
@@ -2260,7 +2421,8 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(len(after),2)
         self.assertEqual(after[0],rows[0])
         self.assertEqual(after[1]["before"],rows[0]["commit"])
-        self.assertEqual(after[1]["commit"],second_result["commit"])
+        self.assertEqual(after[1]["reviewed_commit"],second_result["commit"])
+        self.assertEqual(after[1]["commit"],self.app.git(self.repo,"rev-parse","main"))
         # THE WRITER AND THE READER, END TO END, IN ONE PROCESS. Everything
         # above is the writing half. This is the function the PostToolUse check
         # actually calls (workspaces.py, `land_by_another_conversation`), asked
@@ -2369,8 +2531,10 @@ class DesktopWork(unittest.TestCase):
         self.finish_fixture_worker("multi-witness-reviewer","RICHOS_REVIEW "+json.dumps(
             {"commit":commits[str(self.repo)],"commits":commits,"verdict":"passed","checks":["both repositories"]}))
         self.assertTrue(self.call("integrate",{"worker_id":worker["id"],"reviewer_id":reviewer["id"]})["work_integrated"])
+        # Each row names the commit its repository's branch now points at: that land's merge commit.
         self.assertEqual(sorted((r["path"],r["from"],r["commit"]) for r in self.land_rows()),
-            sorted((os.path.join(repo,"result.txt"),os.path.join(paths[repo],"result.txt"),commits[repo]) for repo in commits))
+            sorted((os.path.join(repo,"result.txt"),os.path.join(paths[repo],"result.txt"),
+                    self.app.git(repo,"rev-parse","main")) for repo in commits))
 
 
 class RunBoundIsTheWholeOperations(unittest.TestCase):
