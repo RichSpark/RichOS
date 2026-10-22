@@ -1459,8 +1459,11 @@ class EndOwned(Base):
         return p
 
     def loop(self):
-        # Exactly the incident's shape: the folder it watches is gone, so it never finishes.
-        return 'until grep -q "Finished" %s 2>/dev/null; do sleep 0.2; done' % self.out("deleted/build.log")
+        # Exactly the incident's shape: the folder it watches is gone, so it never finishes while
+        # its test runs. It still ends once the test process that started it ($PPID) is gone, or
+        # after ten minutes, so a test that dies before its tearDown leaves nothing running.
+        return ('until grep -q "Finished" %s 2>/dev/null || ! kill -0 $PPID 2>/dev/null'
+                ' || [ $SECONDS -ge 600 ]; do sleep 0.2; done' % self.out("deleted/build.log"))
 
     def alive(self, pid):
         return bool(state(pid)) and not state(pid).startswith("Z")
@@ -1506,6 +1509,27 @@ class EndOwned(Base):
         line = agent_hold.describe_end(r)
         self.assertIn("END fixture-agent:", line)
         sys.stderr.write("\n  measured: %s (%.2f s); ended: %s\n" % (line[:60], r["seconds"], [e["command"][:40] for e in r["ended"]]))
+
+    def test_its_fixture_loop_never_outlives_the_test_that_started_it(self):
+        """2026-10-22, PID 9650: the twin loop above, parent launchd and its own process group,
+        ran for six days and 3.6 CPU-hours after the test process that started it was gone,
+        because only that test's tearDown ended it. The loop ends itself once its test has."""
+        starter = ("import subprocess, sys\n"
+                   "p = subprocess.Popen([sys.argv[1], '-c', sys.argv[2]], start_new_session=True)\n"
+                   "print(p.pid, flush=True)\n"
+                   "sys.stdin.read()\n")
+        test = subprocess.Popen([sys.executable, "-c", starter, SHELL, self.loop()], process_group=0,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.procs.append(test)
+        loop = int(test.stdout.readline())
+        self.pids.add(loop)
+        # A `sleep` child means its condition was tested with the test alive and came out false.
+        self.assertTrue(wait_for(lambda: any(row["ppid"] == loop for row in agent_hold.snapshot().values())),
+                        "the loop goes round while its test runs")
+        self.assertTrue(self.alive(loop), "while its test runs, the loop does not finish by itself")
+        test.stdin.close()                  # the test process ends without running its tearDown
+        test.wait(10)
+        self.assertTrue(wait_for(lambda: not self.alive(loop), 10), "the loop outlived its test")
 
     def test_a_paused_agents_work_is_never_ended(self):
         self.start_call("%s %s %s %d" % (sys.executable, self.worker, self.out("w"), ROUNDS * 20))
