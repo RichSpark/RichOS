@@ -730,17 +730,35 @@ def conditions_line(items):
     return "nightly conditions: " + "; ".join(parts)
 
 
+def canonical_path(value):
+    """The PATH every check gets, whatever shell started the run: the checkout's own directories
+    as the caller placed them, then the runner's tool directories in a fixed order, then every
+    other entry in the caller's order, each once.
+
+    2026-10-22, the land of cc/zach-opus-holds3 at e8e06b8e1: the author's run on that tip, on
+    the same content, had passed 94 of 95, and the gate reused none of its whole-checkout passes,
+    "made in another checkout, where it no longer stands in its own checkout (environment.PATH)".
+    The two PATHs held the same 21 entries; the agent's shell had ~/.cargo/bin second and the
+    lead's had it last (the runner only appended a missing one). A check's PATH, and so its
+    identity, depended on which shell started the run."""
+    root = os.path.realpath(ROOT)
+    entries = [p for p in value.split(os.pathsep) if p]
+    own = [p for p in entries if os.path.realpath(p) == root or os.path.realpath(p).startswith(root + os.sep)]
+    tools = [os.path.join(os.path.expanduser("~"), ".cargo", "bin"), "/opt/homebrew/bin", "/usr/local/bin"]
+    out = []
+    for p in own + tools + [p for p in entries if p not in tools]:
+        if p not in out:
+            out.append(p)
+    return os.pathsep.join(out)
+
+
 def execution_environment(item):
     if hasattr(item, "private_environment"):
         return {**item.private_environment, **item.env}
     # Verification must not rewrite bytecode inside its own declared inputs. The nightly's
     # conditions sit between the caller's environment and the check's own values.
     env = {**os.environ, **nightly_conditions(item), **item.env, "PYTHONDONTWRITEBYTECODE": "1"}
-    path = env.get("PATH", "").split(os.pathsep)
-    for extra in (os.path.join(os.path.expanduser("~"), ".cargo", "bin"), "/opt/homebrew/bin", "/usr/local/bin"):
-        if extra not in path:
-            path.append(extra)
-    env["PATH"] = os.pathsep.join(p for p in path if p)
+    env["PATH"] = canonical_path(env.get("PATH", ""))
     if item.argv[:1] == ["cargo"]:
         import cargo_identity
         return cargo_identity.enable_environment(env)
