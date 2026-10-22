@@ -573,6 +573,36 @@ def dependency_closure(dependencies, unit):
     return (paths, prefixes), None
 
 
+# Constructs that enumerate files: a suite using one reads files that neither the dependency map
+# (what is executed) nor the selector (what is named) can list. Review
+# rv-20261022T082555Z-a7f21660-cbb8: mutation-inventory.test.sh finds every *.mutation.sh with
+# `find`; a change to a harness's merge-gate switch failed its assertion, and the selector, the map
+# and a renewed pin all left its earlier pass standing. A comment line is not code; everything
+# else that matches counts, so a doubtful line makes the check run.
+ENUMERATES_FILES = re.compile(
+    r"(?:^|[\s;|&(`$])(?:find|ls|compgen|rg)\s"
+    r"|\bgrep\s+(?:-\w*\s+)*-\w*[rR]"
+    r"|\bls-files\b"
+    r"|\bos\.(?:walk|listdir|scandir)\s*\("
+    r"|\bi?glob\s*\(|\.r?glob\s*\(|\.iterdir\s*\("
+    r"|[\w}\"']/\*|(?:^|[\s\"'/=(])\*\.\w")
+
+
+def discovery_in(paths):
+    """'path:line' of the first construct in `paths` (repository-relative) that enumerates files,
+    or None when none does; an unreadable source counts as one."""
+    for path in sorted(paths):
+        try:
+            with open(os.path.join(ROOT, path), errors="replace") as fh:
+                lines = fh.read().splitlines()
+        except OSError:
+            return path + " (unreadable)"
+        for n, line in enumerate(lines, 1):
+            if not line.lstrip().startswith("#") and ENUMERATES_FILES.search(line):
+                return "%s:%d" % (path, n)
+    return None
+
+
 def selection_unaffected(a, b, label):
     """None when a pass of `label` saved at commit a stands at commit b (above), else why not."""
     if head_commit() != b:
@@ -593,6 +623,9 @@ def selection_unaffected(a, b, label):
     reached = sorted(p for p in changed if p in paths or any(p.startswith(x) for x in prefixes))
     if reached:
         return "%s..%s changes %s, which it executes (dependency map)" % (a[:12], b[:12], reached[0])
+    found = discovery_in(paths)
+    if found:
+        return "it enumerates files the dependency map does not list (%s)" % found
     return None
 
 

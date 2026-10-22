@@ -1107,6 +1107,89 @@ class Evidence(unittest.TestCase):
         self.assertEqual(executed, ["alpha", "beta", "gamma"], detail)
         self.assertIn("inputs other than the checkout's content changed", detail)
 
+    def test_a_suite_that_enumerates_its_inputs_runs_at_a_later_commit_whatever_the_selector_says(self):
+        """Review rv-20261022T082555Z-a7f21660-cbb8: the dependency map lists what a suite executes
+        and the selector what it names; neither lists what a suite finds by enumerating files.
+        mutation-inventory.test.sh finds every *.mutation.sh with `find`; a changed harness failed
+        its assertion while selector, map and renewed pin all left its earlier pass standing. A
+        suite whose mapped sources enumerate files has no complete read coverage, so at a later
+        commit it runs; a covered suite that enumerates nothing beside it is still reused."""
+        app, engine = self.copy_runner_fixture()
+        counter = Path(self.tmp.name) / "executions"
+        (engine / "scripts/cases").mkdir()
+        (engine / "scripts/cases/one.case").write_text("ok\n")
+        (engine / "scripts/delta.test.sh").write_text(
+            '#!/bin/bash\nfor f in "$(dirname "$0")"/cases/*.case; do grep -q ok "$f" || exit 1; done\n'
+            'printf "delta\\n" >> "$FIXTURE_COUNTER"\n')
+        (engine / "scripts/beta.test.sh").write_text('#!/bin/bash\nprintf "beta\\n" >> "$FIXTURE_COUNTER"\n')
+        for name in ("beta", "delta"):
+            (engine / "scripts" / (name + ".test.sh")).chmod(0o755)
+        dependency_map = engine / "scripts/lib/verification-dependencies.json"
+        node = lambda rel: {"source": rel, "sha256": evidence.file_digest(engine / rel), "evidence": "fixture",
+                            "keys": [], "edges": []}
+        units = {name: "scripts/%s.test.sh" % name for name in ("beta", "delta")}
+        evidence.atomic(dependency_map, {"schema": 1, "nodes": {u: node(u) for u in units.values()},
+                                         "units": {u: u for u in units.values()}})
+        table = Path(self.tmp.name) / "selector-table.json"
+        # The case file maps to nothing: no suite names it, as no suite names a *.mutation.sh.
+        table.write_text(json.dumps({"richos/engine/scripts/cases/one.case": []}))
+        selector = app / "proof-for.sh"
+        selector.write_text(
+            "#!/bin/bash\nexec python3 -c '\n"
+            "import json, subprocess, sys\n"
+            "table = json.load(open(sys.argv[1]))\n"
+            "changed = subprocess.check_output([\"git\", \"diff\", \"--name-only\", sys.argv[-1]], text=True).split()\n"
+            "if any(path not in table for path in changed):\n"
+            "    sys.exit(1)\n"
+            "print(\"\\n\".join(sorted({line for path in changed for line in table[path]})))\n"
+            "' \"$FIXTURE_SELECTOR_TABLE\" \"$@\"\n")
+        selector.chmod(0o755)
+        umask = os.umask(0)
+        os.umask(umask)
+        for written in self.root.rglob("*"):
+            if written.is_file() and not written.is_symlink():
+                written.chmod((0o777 if written.stat().st_mode & 0o100 else 0o666) & ~umask)
+
+        def git(*args):
+            return subprocess.check_output(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture",
+                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *args],
+                cwd=self.root, text=True, stderr=subprocess.PIPE).strip()
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "A")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("RICHOS_", "GIT_"))}
+        env.update(RICHOS_MACHINE_WORKERS=str(Path(self.tmp.name) / "machine"),
+            RICHOS_ENGINE_PASS_DIR=str(Path(self.tmp.name) / "slot"),
+            RICHOS_PROOF_RUN_DIR=str(Path(self.tmp.name) / "history"),
+            RICHOS_PROOF_RUN_SLOTS_DIR=str(Path(self.tmp.name) / "proof-slots"),
+            CLAUDE_CONFIG_DIR=str(Path(self.tmp.name) / "config"),
+            FIXTURE_COUNTER=str(counter), FIXTURE_SELECTOR_TABLE=str(table), PYTHONDONTWRITEBYTECODE="1")
+        commands = Path(self.tmp.name) / "commands"
+        shard = "cd %s && bash scripts/ci-shard.sh --only-units " % "richos/engine"
+        commands.write_text(shard + ",".join(units.values()) + "\n")
+
+        def invoke(name, previous=None):
+            counter.write_text("")
+            shutil.rmtree(Path(env["RICHOS_PROOF_RUN_DIR"]) / "input-owners", ignore_errors=True)
+            directory = Path(self.tmp.name) / name
+            result = subprocess.run([*idle_proof_run(app / "proof-run.py"), "--commands", str(commands),
+                "--log-dir", str(directory), *(["--reuse", str(previous)] if previous else [])],
+                cwd=self.root, env=env, text=True, capture_output=True, timeout=120)
+            detail = result.stdout + result.stderr + "\n" + "\n".join(p.read_text() for p in directory.glob("*.log"))
+            self.assertEqual(result.returncode, 0, detail)
+            rows = {row["check"]: row for row in json.loads((directory / "summary.json").read_text())["checks"]}
+            return directory, sorted(counter.read_text().splitlines()), rows, detail
+
+        first, executed, _rows, detail = invoke("A")
+        self.assertEqual(executed, ["beta", "delta"], detail)
+        (engine / "scripts/cases/one.case").write_text("ok, changed\n")
+        git("commit", "-qam", "B")
+        _run, executed, rows, detail = invoke("B", first)
+        self.assertEqual(executed, ["delta"], "delta, which finds its cases by enumerating them, was left "
+                         "standing over a changed case, or beta, which enumerates nothing, ran again\n" + detail)
+        self.assertIn("enumerates files the dependency map does not list (richos/engine/scripts/delta.test.sh:2)", detail)
+        self.assertEqual(rows["engine scripts/beta.test.sh"]["reused_from"], str(first), detail)
+
     def test_a_recipe_pass_stands_only_once_its_identity_binds_ignored_files(self):
         """What git ignores, no selector sees: a reviewed recipe's paths bind ignored files, so a
         recipe identity that does not name them apart (saved before they were bound) never stands,
