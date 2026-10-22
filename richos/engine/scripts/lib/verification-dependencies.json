@@ -317,7 +317,7 @@
     },
     "scripts/hooks/notice-waiver-repetition.py#discovery": {
       "source": "scripts/hooks/notice-waiver-repetition.py",
-      "sha256": "536de700653b2d81df7ea51223338be0a9e93e67c1203e9950ec33a312381125",
+      "sha256": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
       "evidence": "Source discovery scans script .sh/.py text and record discovery scans state logs. These functions neither execute discovered scripts nor read orchestration.config.",
       "keys": [],
       "edges": [],
@@ -500,7 +500,7 @@
     },
     "scripts/lib/proc_tree.py": {
       "source": "scripts/lib/proc_tree.py",
-      "sha256": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+      "sha256": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
       "evidence": "Supervises the caller\u2019s command and samples owned processes. Its own inputs are the caller\u2019s arguments, environment, process identity and controller state, never orchestration settings. Since 1421cf76 the arguments include --guard-role, restricted to the literal choices session and release-build (anything else refuses before registration); it only names the role cpu_guard.register records for this supervisor.",
       "keys": [],
       "edges": [
@@ -551,7 +551,7 @@
     },
     "scripts/lib/mutation-pool.sh": {
       "source": "scripts/lib/mutation-pool.sh",
-      "sha256": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+      "sha256": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
       "evidence": "Runs the supplied mutation callback with worker leases; its own configuration is operational environment. Actual callback/helper relationships belong to each harness.",
       "keys": [],
       "edges": [
@@ -3748,8 +3748,8 @@
     },
     "scripts/lib/inflight.py": {
       "source": "scripts/lib/inflight.py",
-      "sha256": "d1feca630d8fda5b042c70e0940798856678db09faa65e4b722f3d9c6f9ec3a3",
-      "evidence": "Reads Git worktree/ref/diff metadata, acknowledgement and notice ledgers, timestamps and PID liveness. Its only dynamic imports are teammate-identity and the workspaces integration_for reader. It never reads orchestration.config, runs payload commands or invokes workspace lifecycle actions. The full module was reviewed, including default-tip and durable-ack paths.",
+      "sha256": "5e6596f5a7eb395b724f624166dc83ab0ce428165c0d85f2fee9cfaf82f26d44",
+      "evidence": "Reads Git worktree/ref/diff metadata, acknowledgement and notice ledgers, timestamps and PID liveness. Its only dynamic imports are teammate-identity and the workspaces integration_for reader. It never reads orchestration.config, runs payload commands or invokes workspace lifecycle actions. The full module was reviewed, including default-tip and durable-ack paths. Since 2026-10-22 it also reads and rewrites richos-inflight-answers.json in the repository's own git common directory: answers about pairs of full commit ids (is-ancestor, merge-base, rev-list, diff --name-only), reused while the same ids are asked about; no setting, and a question git could not answer is never stored.",
       "keys": [],
       "edges": [
         {
@@ -7660,8 +7660,8 @@
     },
     "scripts/hooks/notice-waiver-repetition.py": {
       "source": "scripts/hooks/notice-waiver-repetition.py",
-      "sha256": "536de700653b2d81df7ea51223338be0a9e93e67c1203e9950ec33a312381125",
-      "evidence": "Reviewed import/call inventory and all I/O boundaries: stdlib-only source discovery reads scripts as text, resolves ledger names with regex and dictionaries then reads state/teams logs. No source execution, config reader or subprocess. This suite supplies private engine/entity/config roots; CLI date is fixed for most cases, hook cases use wall clock.",
+      "sha256": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
+      "evidence": "Reviewed import/call inventory and all I/O boundaries: stdlib-only source discovery reads scripts as text, resolves ledger names with regex and dictionaries then reads state/teams logs. No source execution, config reader or subprocess. This suite supplies private engine/entity/config roots; CLI date is fixed for most cases, hook cases use wall clock. Since 2026-10-22 it also reads and rewrites waiver-repetition-memo-<seat>.json in the config root's state directory: the source scan and each ledger's analysis, reused only while every file read (path, inode, size, mtime_ns) and the analyzer itself are unchanged; not a ledger (.json is never scanned), no setting.",
       "keys": [],
       "edges": []
     },
@@ -7719,7 +7719,7 @@
     },
     "scripts/hooks/waiver-repetition.test.sh": {
       "source": "scripts/hooks/waiver-repetition.test.sh",
-      "sha256": "f39df3a82c34246ee8c989b43c9dfa62f131bd4150992f4d4cd5dfac1fa2f3cb",
+      "sha256": "20384e76e4dd16fae33dce16a23c5d8e26d795f8b38d3b1d0d30a10ebcdce95a",
       "evidence": "Full suite creates literal entity config, fake source guards and private ledgers under isolated CLAUDE_CONFIG_DIR. The fake guard source is analyzer data, never executed. Real hooks JSON is grep-checked for notice-waiver-repetition.sh. Nested fixed driver preserves the same fixture-only config obligations. Renewed 2026-10-01: RICHOS_ENTITY_ROOT and CLAUDE_PROJECT_DIR are unset and case 17 runs the hook from its unadopted directory, so no case can resolve the real engine as its entity; no new reader.",
       "keys": [],
       "edges": [
@@ -11826,7 +11826,7 @@
     },
     "scripts/lib/mutation-pool.test.sh": {
       "source": "scripts/lib/mutation-pool.test.sh",
-      "sha256": "6febbf1ee2f9f4ac266fdcdfe3cd50d34bca70b9c9295f0687260f4e35f4d88b",
+      "sha256": "e904f996f0899c9a59252c53fee07a702a0d906344abb2b03cca058992da4d45",
       "evidence": "All pool callbacks are defined literal sleep/printf functions in this suite. The worker-token CLI is fixed to the shipped sibling and uses a private token directory. Only operational environment controls vary; no nested production suite or orchestration reader executes.",
       "keys": [],
       "edges": [
@@ -14157,7 +14157,7 @@
     },
     "scripts/lib/proc_tree_pause.test.py": {
       "source": "scripts/lib/proc_tree_pause.test.py",
-      "sha256": "57f5cd14777c8425e01ed986b0243981e0fa341c5608d457b937a87465e02e5e",
+      "sha256": "516a80d1a72b2f186465b75ae632d7572939f8daaf3756c2225c7ad89f87f2c5",
       "evidence": "Fixed Python fixture imports only the bound helper and standard library. Subprocess work/registry programs are literal strings in this source; no config-provided command or discovered test executes. Preserve the real helper closure conservatively.",
       "keys": [],
       "edges": [
@@ -14980,12 +14980,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/proof-run.py",
-          "sha256": "325e9d87e4a899c0563938af687fb6e0be2c76869b2dac9ef22de85d7bc40bb1",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
           "path": "richos/app/scripts/lib/cargo_identity.py",
           "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
           "evidence": "Private-output dispatcher used by the bound app runner. Reads Cargo manifests only for its selected workspace or private fixture; fixture imports that do not enter main execute no Cargo command."
@@ -14999,7 +14993,13 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/proc_tree.py",
-          "sha256": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+          "sha256": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/proof-run.py",
+          "sha256": "e1d2925c127e79ab8ed3c6ffce842fc99fd0b181de20308d588b054bcda00e10",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         }
       ]
@@ -15092,7 +15092,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "325e9d87e4a899c0563938af687fb6e0be2c76869b2dac9ef22de85d7bc40bb1",
+          "sha256": "e1d2925c127e79ab8ed3c6ffce842fc99fd0b181de20308d588b054bcda00e10",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -16408,6 +16408,28 @@
           "to": "scripts/lib/publication-boundary.py"
         }
       ]
+    },
+    "scripts/lib/inflight-gaps.test.sh": {
+      "source": "scripts/lib/inflight-gaps.test.sh",
+      "sha256": "cdede4ec007ce1aba17a8b3ec7cb49b84c0db35778949611957770072f10fe3f",
+      "evidence": "Executes exactly the adjacent fixed Python fixture, with no mutation driver.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/inflight-gaps.test.py"
+        }
+      ]
+    },
+    "scripts/lib/inflight-gaps.test.py": {
+      "source": "scripts/lib/inflight-gaps.test.py",
+      "sha256": "7ed521aa99ef7e50aa3e60b7920f93bfc1c88e285eb39b5c8e43f9db40fa516e",
+      "evidence": "Fixed Python fixture: builds a private Git repository and one linked worktree under its own temporary directory, points RICHOS_INFLIGHT_ACK_LEDGER at a private file and calls inflight.assess/main with an explicit tip and teams directory. Git failures are simulated by patching the module's own helpers; no orchestration setting or operator ledger is read.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/inflight.py"
+        }
+      ]
     }
   },
   "units": {
@@ -16593,7 +16615,8 @@
     "scripts/hooks/by-reference-4.test.sh": "scripts/hooks/by-reference-4.test.sh",
     "scripts/operator-fences-second-git.test.sh": "scripts/operator-fences-second-git.test.sh",
     "scripts/lib/merge-verification-pins.test.sh": "scripts/lib/merge-verification-pins.test.sh",
-    "scripts/verification-pins.test.sh": "scripts/verification-pins.test.sh"
+    "scripts/verification-pins.test.sh": "scripts/verification-pins.test.sh",
+    "scripts/lib/inflight-gaps.test.sh": "scripts/lib/inflight-gaps.test.sh"
   },
   "hook_readers": {
     "scripts/hooks/ceo-asks.test.sh": {
@@ -16625,9 +16648,9 @@
         "scripts/ceo-asks-status.sh": "ee087fd11e7a3a9507845240dd367c3528935f31d85c1ba7bb9eca004de2f7cf",
         "scripts/hooks/ceo-asks.mutation.sh": "725db41447a235f5ed23adda76b69987dda3e350b20fe9e932ae7f942573dfb1",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -16669,9 +16692,9 @@
         "scripts/ceo-ruled-exempt.sh": "d763157b150db58cf30e87a25c6215e869e29eada3760b8b44295553657cab09",
         "scripts/hooks/ceo-ruled.mutation.sh": "44319bb20fa4eb8189e26561707f16af5889e306533ff0cb59815dd40975e596",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -16709,9 +16732,9 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -16822,9 +16845,9 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -16947,18 +16970,18 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/lib/hook-dependencies.py": "013b187a06ddb52d8e679407b45d635d8a6c693348d0bcb4998b58f6ec44debe",
         "scripts/lib/hook-dependencies.sh": "a4634dd1f95fe9c518055fd324d4b56a07186aafb8828e387c890c3cbd0e4621",
-        "scripts/lib/inflight.py": "d1feca630d8fda5b042c70e0940798856678db09faa65e4b722f3d9c6f9ec3a3",
+        "scripts/lib/inflight.py": "5e6596f5a7eb395b724f624166dc83ab0ce428165c0d85f2fee9cfaf82f26d44",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/lib/interactive-prompt.py": "fd95664d486aa1cde400a9c216e1d2fda2eeb5f21a202a8ccce2b2d1a7b11af8",
         "scripts/lib/mechanical-findings.py": "0942c108c40a62c831eaee4d569f8def0178903e17a289e221cc93ed7f51db78",
         "scripts/lib/mechanical-findings.sh": "1c67019e979adea3071d160882f26acb6bd14c032162ba31d7a1020ad06509bb",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/operator_fences_admin.py": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
         "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
         "scripts/lib/qa-toolkit.py": "f490cd7a72bacf99bef3eef47cc059d99cac5f3878b0d2399eea06dae55a24c0",
         "scripts/lib/registered-hooks.sh": "73e390bacc85aef935d4da0f4b132ebb6790a83d55310a46c1c602614afe0a83",
@@ -17082,7 +17105,7 @@
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
         "scripts/hooks/notice-unstarted-rows.sh": "b85c3314266c707dd30e6ab3d8bd311119f504115166b3b0023a4291b3193e48",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
-        "scripts/hooks/notice-waiver-repetition.py": "536de700653b2d81df7ea51223338be0a9e93e67c1203e9950ec33a312381125",
+        "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
         "scripts/hooks/release-land-leases.sh": "67507402a96c8fa243814ba2269cb3d3e00fede94ae50ca2c2bd9bb90b891e76",
         "scripts/hooks/release-shared-writes.sh": "da06d8fbe6b3438a0bb1c33cea6e6b4789aeb041f9aef246ec3eea24d0f4ed80",
@@ -17169,9 +17192,9 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -17295,9 +17318,9 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -17400,18 +17423,18 @@
       ],
       "evidence": "Suite greps the raw hooks JSON for this literal script name; the nested mutation renames that registration. Binds every copied/executed helper and the driver.",
       "sources": {
-        "scripts/hooks/waiver-repetition.test.sh": "f39df3a82c34246ee8c989b43c9dfa62f131bd4150992f4d4cd5dfac1fa2f3cb",
+        "scripts/hooks/waiver-repetition.test.sh": "20384e76e4dd16fae33dce16a23c5d8e26d795f8b38d3b1d0d30a10ebcdce95a",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/stop-hook-notice.sh": "f1431988b7e290d871da89518cd3c6c2bfc455558517862097659472ddcf409d",
-        "scripts/hooks/notice-waiver-repetition.py": "536de700653b2d81df7ea51223338be0a9e93e67c1203e9950ec33a312381125",
+        "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
         "scripts/waiver-repetition-lint.sh": "03bba7c566c0b3348d91badad662f240b2da1085c80291bc34765418ce88adb0",
         "scripts/hooks/waiver-repetition.mutation.sh": "a767577b4b2a78dd280f9dd90a43359a1db4d0c19f3fb54a4f91351cd3df5403",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -17438,9 +17461,9 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -17569,9 +17592,9 @@
         "scripts/hooks/operator-leads.mutation.sh": "9f08a3b3b487ed429c120190f73730964156f91a7ebd3b505759926f54cb2c5f",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
@@ -17671,9 +17694,9 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -17742,7 +17765,7 @@
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
         "scripts/hooks/notice-inflight-acks.sh": "472a52d1fe0e78b0f4f166da9402fae9acf3eba3f6329c3afeb7460ced547a32",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
-        "scripts/lib/inflight.py": "d1feca630d8fda5b042c70e0940798856678db09faa65e4b722f3d9c6f9ec3a3",
+        "scripts/lib/inflight.py": "5e6596f5a7eb395b724f624166dc83ab0ce428165c0d85f2fee9cfaf82f26d44",
         "scripts/hooks/notice-mechanical-findings.sh": "1b3ba1af8d15b64cd8eda504e691347f0ef923bd78e53f235223589248bb1c07",
         "scripts/lib/mechanical-findings.sh": "1c67019e979adea3071d160882f26acb6bd14c032162ba31d7a1020ad06509bb",
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
@@ -17758,7 +17781,7 @@
         "scripts/lib/unstarted-rows.sh": "12069725d4b1d131f6ae622f957087e432b197a84f5c446fa323bd6f533657e0",
         "scripts/lib/unstarted-rows.py": "d23e53f6afe1f247ca32637f162d65525c2bc137ec736f3401f8b09fbe6b9473",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
-        "scripts/hooks/notice-waiver-repetition.py": "536de700653b2d81df7ea51223338be0a9e93e67c1203e9950ec33a312381125",
+        "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
         "scripts/hooks/release-land-leases.sh": "67507402a96c8fa243814ba2269cb3d3e00fede94ae50ca2c2bd9bb90b891e76",
         "scripts/hooks/shell-evidence.sh": "01d511155b7df5a4be0ab6cb25aaac934a467e086d5c31f2afd6ee9c7bcc370a",
         "scripts/hooks/shell-evidence.py": "de4326ba4e1c9d8a415e27379efe3b4ecb15d4dd362419925628afe64c1cf240",
@@ -17918,10 +17941,10 @@
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/operator_fences.py": "b5c407f6ab6856673824cc0ad883d352589a6186aa8b1e657a805ba831958bf2",
         "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
         "scripts/lib/qa-toolkit.py": "f490cd7a72bacf99bef3eef47cc059d99cac5f3878b0d2399eea06dae55a24c0",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -17987,7 +18010,7 @@
         "scripts/hooks/guard-owned-state.sh": "5f137d70ca9ea567cf0d5d06250ff50606db82f2323d2e68346e5295721d58aa",
         "scripts/hooks/owned-state.mutation.sh": "16c882410080023b2f3502ca2d7237fe005ce31b9c91be738ffba65551d05932",
         "scripts/owned-state.sh": "313a26b975baf1005c6a86beaa03cc7910481b9e1d6754d45a0e4206b5b001a0",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
         "owned-systems.declaration": "22c6e921991e633148a8d191806d2647a471507ee8f7fbd478fb893a30a8b44a",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
@@ -17995,7 +18018,7 @@
         "scripts/hooks/owned-state.test.sh": "543f28888f9c8524d6598e54526f9dcb25d853fc21a32cb5c57829dca1099b5a",
         "scripts/lib/escalations.py": "b221aa573110d20f2031d76edec1312c3875929e517ced3f631923468729086b",
         "scripts/escalate.sh": "9f9de4d2efea2703c9e6fd0ff7f9c3479c5cb15fc6e0df7ec58ae4a8339616f0",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/owned-state-checks/registered-executables.py": "cc79f6eed01ccc73a862f201bfae2257d7f36e305c183a6d3095a3a2b6202421",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
@@ -18034,8 +18057,8 @@
         "scripts/lib/registered-hooks.sh": "73e390bacc85aef935d4da0f4b132ebb6790a83d55310a46c1c602614afe0a83",
         "scripts/hooks/ceo-todos.test.sh": "456edf169779e0b78ae8d3ffba553ded91e72bb0ff61573fccd1ec80ed648cc6",
         "scripts/ceo-todos-render.sh": "63b00d5fde2eb129df925749ae9967521d9251936f5f19db627bded6049fddc3",
-        "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
-        "scripts/lib/proc_tree.py": "81bfd1e90c9e60d02a99d2c7a13742509f3293a5aba475388804b45f2ba0e69f",
+        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
+        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/cold-open.sh": "8e6022432b0520e9027bcf328552baa555e8d27d4fc23f48ce2250e0c0f38c84",
         "scripts/ceo-todos-lint.sh": "cec21eee8a4d92b52d91d67df77ca120cc42fd33c686e3a3d79775c76ee91619",
         "scripts/hooks/dispatch-pretooluse.manifest": "50818b9e68379300f0922b76a78f5c4d4b3d6e88f8aae6ed08271c95b498afbc"

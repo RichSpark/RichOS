@@ -429,6 +429,38 @@ fi
 mut_pool_cleanup
 unset RICHOS_MUTANT_ONLY
 
+# ---------------------------------------------------------------------------
+# P12: A FULL POOL WAITS FOR ITS WORKER, NOT FOR A CLOCK (2026-10-22). The throttle
+# slept 0.05 s and counted again, starting a `sleep` twenty times a second while the
+# pool was full. A `sleep` on PATH that logs its parent shows whether the throttle (this
+# shell, $$) started any; the bodies use /bin/sleep, and the workers' own waits are
+# started by the workers, so neither is counted. The next mutant still starts at once.
+# ---------------------------------------------------------------------------
+mkdir -p "$SANDBOX/p12-shim"
+printf '#!/bin/sh\necho "$PPID" >> "%s/p12-sleeps.log"\nexec /bin/sleep "$@"\n' "$SANDBOX" > "$SANDBOX/p12-shim/sleep"
+chmod +x "$SANDBOX/p12-shim/sleep"
+body_p12() { /bin/sleep 0.6; printf '  PASS  %s\n' "$1"; return 0; }
+P12_PATH="$PATH"
+PATH="$SANDBOX/p12-shim:$PATH"
+hash -r
+mut_pool_init 1
+P12_T0="$(sw_now_ms)"
+mut_pool_submit p12a body_p12 p12a
+mut_pool_submit p12b body_p12 p12b
+mut_pool_submit p12c body_p12 p12c
+mut_pool_drain >"$SANDBOX/p12.out" 2>&1
+P12_MS=$(( $(sw_now_ms) - P12_T0 ))
+PATH="$P12_PATH"
+hash -r
+P12_OWN="$(grep -cx "$$" "$SANDBOX/p12-sleeps.log" 2>/dev/null || true)"
+if [ "${P12_OWN:-0}" -eq 0 ] && [ "$MUT_POOL_PASS" -eq 3 ]; then
+    ok "P12. a-full-pool-waits-for-its-worker-not-a-clock (0 throttle sleeps, 3 mutants at degree 1 in ${P12_MS}ms)"
+else
+    bad "P12. a-full-pool-waits-for-its-worker-not-a-clock" \
+        "throttle sleeps=${P12_OWN:-?} pass=$MUT_POOL_PASS wall=${P12_MS}ms"
+fi
+mut_pool_cleanup
+
 echo ""
 if [ "$FAIL" -gt 0 ]; then
     echo "=== mutation-pool: $FAIL failed, $PASS passed ==="
