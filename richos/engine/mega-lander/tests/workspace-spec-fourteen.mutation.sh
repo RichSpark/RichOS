@@ -197,12 +197,12 @@ mutant S-p05-outside-reach-needs-no-todo "C5.11" "$W" \
     '    if False:' \
     "SPEC-DERIVED (point 5 negated, 'the latter goes on the CEO's TODO list'): an item waiting on something outside Rich's reach would be recorded with no CEO-TODO reference, and nothing would ever put it in front of him."
 mutant S-p05-outside-reach-blocks-the-turn "C5.12" "$W" \
-    '            "blocks_turn_end": kind not in ("ceo-discard", "started", "outside"),' \
-    '            "blocks_turn_end": kind not in ("ceo-discard", "started"),' \
+    '            "blocks_turn_end": kind not in ("ceo-discard", "started", "outside", "held"),' \
+    '            "blocks_turn_end": kind not in ("ceo-discard", "started", "held"),' \
     "SPEC-DERIVED (point 5 negated, 'Rich may end his turn when every pending item is ... waiting on something outside his reach'): a recorded outside-reach wait would still block the turn."
 mutant S-p05-his-word-blocks-the-turn "C5.13" "$W" \
-    '            "blocks_turn_end": kind not in ("ceo-discard", "started", "outside"),' \
-    '            "blocks_turn_end": kind not in ("started", "outside"),' \
+    '            "blocks_turn_end": kind not in ("ceo-discard", "started", "outside", "held"),' \
+    '            "blocks_turn_end": kind not in ("started", "outside", "held"),' \
     "SPEC-DERIVED (point 5 negated, 'that one item then waits on him, is on his TODO list'): a discard waiting on the CEO's word, asked and recorded, would still block the turn."
 mutant S-p05-ceo-wait-blocks-new-work "C5.13" "$W" \
     '    continuation_keys = []' \
