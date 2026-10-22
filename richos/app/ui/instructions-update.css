@@ -19,7 +19,12 @@
 }
 
 /* ---------- shared ---------------------------------------------------------------------------- */
-.iu-overlay { z-index: 299; align-items: center; padding: 24px; }
+/* 240, as `.home-prefs`: above the home screen (150) and the held opening screen (200), so the
+   question is over whatever is on screen when the new version opens; below the Bust a bug panel
+   (#bugdock, 298) and Settings (300), so a report started over it is on top and Settings stays
+   above every overlay (review rv-20261022T132946Z-3284b71e-753a: at 299 its scrim covered the
+   report panel). */
+.iu-overlay { z-index: 240; align-items: center; padding: 24px; }
 .iu-overlay code, .iu-mono { font-family: var(--mono); }
 .iu-icon { width: 20px; height: 20px; flex-shrink: 0; }
 @keyframes iu-spin { to { transform: rotate(360deg); } }
