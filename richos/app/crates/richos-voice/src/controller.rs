@@ -2627,6 +2627,9 @@ impl Drop for VoiceController {
 /// card so a later genuine refusal speaks again. It does **not** clear the half-duplex latch:
 /// that one is session-scoped for the measured reason above, and
 /// `being_heard_does_not_re_arm_the_notice_because_the_condition_is_not_an_event` holds it.
+///
+/// [`Self::reply_invited`], called when the half-duplex line is SHOWN: the line asked him to
+/// say it again, so its own card stops outranking a refusal of that repeat. Its latch stays.
 #[derive(Debug, Clone, Default)]
 pub struct RefusalNotices {
     /// The card currently standing, and therefore the authority a new one has to beat. `None`
@@ -2706,6 +2709,20 @@ impl RefusalNotices {
     /// latch is deliberately untouched.
     pub fn recovered(&mut self) {
         self.standing = None;
+    }
+
+    /// **The half-duplex line has just been SHOWN, asking him to say it again: what he says next
+    /// may be refused out loud.** The line claims its authority-3 card at the discard, so the
+    /// recognizer's lines cannot stack on it while it waits to be shown (`HalfDuplexDelivery`).
+    /// Once shown it has said what it had to say, and left standing it outranked every refusal
+    /// of the very repeat it asked for: a word whisper heard as `[BLANK_AUDIO]` got no line at
+    /// all, his words lost again in silence (review rv-20261021T225454Z-d47fcfe5-d9e7). So the
+    /// card it holds is released here and the next refusal speaks. The session-scoped
+    /// half-duplex latch is untouched, so the line itself still comes at most once.
+    pub fn reply_invited(&mut self) {
+        if self.standing == Some(VoiceNotice::CouldNotListenWhileSpeaking) {
+            self.standing = None;
+        }
     }
 
     /// What is standing right now. The diagnostic that makes "why did it not say anything"
@@ -3575,8 +3592,12 @@ fn supervise(
         let playing = rich_audible(audible.is_open(), shared.answer_sounded.load(Ordering::Relaxed));
         shared.speaking.store(playing, Ordering::Relaxed);
         if let Some(n) = half_duplex_line.due(playing, shared.takes_a_reply.load(Ordering::Relaxed)) {
-            // It asks him to say it again: keep what he says next however short.
+            // It asks him to say it again: keep what he says next however short, and let a
+            // refusal of it be said (`RefusalNotices::reply_invited`).
             shared.reply_invited.store(true, Ordering::Relaxed);
+            if let Ok(mut b) = notices.lock() {
+                b.reply_invited();
+            }
             observer.on_voice_event(&VoiceEvent::Notice { message: n.ceo_message().to_string(), at: now_millis() });
         }
         if playing && !was_playing {

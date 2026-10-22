@@ -59,7 +59,9 @@ use richos_voice::bargein::{
     BargeInMode, AEC_BARGE_IN_REQUIRED_FRAMES, AEC_BARGE_IN_WINDOW_FRAMES,
     BARGE_IN_DEBOUNCE_FRAMES,
 };
-use richos_voice::controller::{CapMsg, CaptureBrain};
+use richos_voice::controller::{AdmittedUtterance, CapMsg, CaptureBrain, RecognizerDesk, RefusalNotices};
+use richos_voice::{VoiceEvent, VoiceObserver};
+use std::sync::{Arc, Mutex};
 use richos_voice::private_fixtures;
 use richos_voice::vad::{frames_to_secs, SAMPLE_RATE, VAD_FRAME_SAMPLES};
 use richos_voice::wav;
@@ -634,7 +636,7 @@ fn every_duration_in_this_file_is_the_frame_math() {
 /// In both, the line he is shown must say what to do: say it again now.
 #[test]
 fn richs_own_echo_raises_the_half_duplex_line_and_it_says_what_to_do() {
-    use richos_voice::controller::{RefusalNotices, VoiceNotice};
+    use richos_voice::controller::VoiceNotice;
     let line = VoiceNotice::CouldNotListenWhileSpeaking.ceo_message();
     assert!(line.contains("please say it again now"), "the line gives no next step: {line}");
 
@@ -676,7 +678,7 @@ fn richs_own_echo_raises_the_half_duplex_line_and_it_says_what_to_do() {
               directory to run this."
 )]
 fn a_short_word_of_his_over_rich_is_lost_and_the_line_tells_him_to_say_it_again() {
-    use richos_voice::controller::{RefusalNotices, VoiceNotice};
+    use richos_voice::controller::VoiceNotice;
     let his_mic = read_his_mic();
     // 12 frames from the middle of his first marked interval: under the 15 a barge-in needs.
     let (open, close) = HIS_INTERVALS[0];
@@ -729,10 +731,16 @@ struct LineAndReply {
 /// frame. From the frame after the line is shown, `reply` is summed into the microphone track:
 /// the person does what the line says, at once, which is the earliest and therefore the hardest
 /// reply the line can invite. When the line is shown it calls `CaptureBrain::invite_reply`,
-/// as the capture callback does on the frame after `supervise` shows it. Then it counts what
-/// became of that reply.
-fn line_then_reply(mic: &[f32], reference: &[f32], reply: &[f32]) -> LineAndReply {
-    use richos_voice::controller::{HalfDuplexDelivery, RefusalNotices, VoiceNotice};
+/// as the capture callback does on the frame after `supervise` shows it, and
+/// `RefusalNotices::reply_invited`, as `supervise` does. Then it counts what became of that
+/// reply, and returns the replies it admitted and the budget, shared the way `supervise` and the
+/// recognizer desk share it.
+fn line_then_reply(
+    mic: &[f32],
+    reference: &[f32],
+    reply: &[f32],
+) -> (LineAndReply, Vec<AdmittedUtterance>, Arc<Mutex<RefusalNotices>>) {
+    use richos_voice::controller::{HalfDuplexDelivery, VoiceNotice};
     let n = mic.len().min(reference.len());
     let frames = n / VAD_FRAME_SAMPLES;
     let active: Vec<bool> = (0..frames)
@@ -746,7 +754,8 @@ fn line_then_reply(mic: &[f32], reference: &[f32], reply: &[f32]) -> LineAndRepl
     let mut o = LineAndReply { last_audible: last + 1, ..LineAndReply::default() };
     let (aec, ring) = EchoCanceller::new();
     let mut brain = CaptureBrain::with_aec(aec);
-    let mut notices = RefusalNotices::new();
+    let notices = Arc::new(Mutex::new(RefusalNotices::new()));
+    let mut admitted = Vec::new();
     let mut delivery = HalfDuplexDelivery::default();
     let reply_frames = reply.len().div_ceil(VAD_FRAME_SAMPLES);
     // Room after the recording for the longest wait the line can have (a tainted recording
@@ -772,7 +781,7 @@ fn line_then_reply(mic: &[f32], reference: &[f32], reply: &[f32]) -> LineAndRepl
             match (m, o.shown) {
                 (CapMsg::Discarded { tainted: true }, None) => {
                     o.first_tainted_discard.get_or_insert(b);
-                    if let Some(n) = notices.half_duplex() {
+                    if let Some(n) = notices.lock().unwrap().half_duplex() {
                         delivery.owe(n);
                     }
                 }
@@ -781,6 +790,7 @@ fn line_then_reply(mic: &[f32], reference: &[f32], reply: &[f32]) -> LineAndRepl
                 (CapMsg::Utterance(u), Some(_)) => {
                     o.reply_admitted += 1;
                     o.reply_speech_frames.push(u.utterance.speech_frames);
+                    admitted.push(*u);
                 }
                 _ => {}
             }
@@ -790,9 +800,22 @@ fn line_then_reply(mic: &[f32], reference: &[f32], reply: &[f32]) -> LineAndRepl
             assert!(o.shown.is_none(), "the line was shown twice");
             o.shown = Some(b);
             brain.invite_reply();
+            notices.lock().unwrap().reply_invited();
         }
     }
-    o
+    (o, admitted, notices)
+}
+
+/// Every line the recognizer desk shows him, in order.
+#[derive(Default)]
+struct Lines(Mutex<Vec<String>>);
+
+impl VoiceObserver for Lines {
+    fn on_voice_event(&self, e: &VoiceEvent) {
+        if let VoiceEvent::Notice { message, .. } | VoiceEvent::Error { message, .. } = e {
+            self.0.lock().unwrap().push(message.clone());
+        }
+    }
 }
 
 /// **Every reply in `replies`, given on the frame after the line, at every residual level.**
@@ -808,7 +831,7 @@ fn every_reply_to_the_line_is_kept(replies: &[(&str, Vec<f32>, bool)], who: &str
         let g = mic_gain_for_residual(&mic0, &reference, vol);
         let mic: Vec<f32> = mic0.iter().map(|s| s * g).collect();
         for (what, reply, short) in replies {
-            let o = line_then_reply(&mic, &reference, reply);
+            let (o, admitted, budget) = line_then_reply(&mic, &reference, reply);
             println!(
                 "[measured] residual {vol:.2} dBFS: first tainted discard at {:?} s, line shown at {:?} s, \
                  Rich audible until {:.3} s; {who} {what} after it: {} admitted (speech frames {:?}), \
@@ -834,6 +857,20 @@ fn every_reply_to_the_line_is_kept(replies: &[(&str, Vec<f32>, bool)], who: &str
                     "premise: {who} {what} was not below the minimum it is meant to get past: {o:?}"
                 );
             }
+            // **AND IF WHAT HE SAID AGAIN IS REFUSED, HE IS TOLD, WITH THE NEXT STEP.** The reply
+            // goes to the recognizer desk sharing the budget `supervise` spent on the line, and
+            // recognition returns `[BLANK_AUDIO]`, the decoder's documented answer for no words.
+            // Before `RefusalNotices::reply_invited` the line's card outranked that refusal and
+            // nothing at all was shown (review rv-20261021T225454Z-d47fcfe5-d9e7).
+            let lines = Lines::default();
+            let mut desk = RecognizerDesk::sharing(budget);
+            desk.handle(&admitted[0], &lines, |_| Ok(("[BLANK_AUDIO]".to_string(), 1)), |text, _| {
+                panic!("a blank transcript was sent as his words: {text:?}")
+            });
+            let said = lines.0.lock().unwrap().clone();
+            println!("[measured]   {who} {what} refused by recognition: shown {said:?}");
+            assert_eq!(said.len(), 1, "{who} {what} was refused and he was told nothing at residual {vol:.2}: {said:?}");
+            assert!(said[0].contains("say it again"), "the refusal gives no next step: {}", said[0]);
         }
     }
 }
@@ -868,9 +905,12 @@ fn every_reply_to_the_line_is_kept(replies: &[(&str, Vec<f32>, bool)], who: &str
 ///   the long reply begun on the next frame was discarded tainted.
 /// - `CaptureBrain::invite_reply` a no-op (the minimum as before): at residual -52.00 dBFS the
 ///   short reply was dropped as too short, 0 admitted.
+/// - `RefusalNotices::reply_invited` a no-op (the line's card left standing): the reply
+///   refused by recognition showed nothing at all, here and in the next test, at -52.00 dBFS.
 ///
 /// Green: shown at 25.376 s, 26 frames (0.416 s) after 24.960 s; both replies admitted at all
-/// six levels, the short one with 9 or 10 speech frames.
+/// six levels, the short one with 9 or 10 speech frames, and each refused one shown "I didn't
+/// catch that, so I haven't sent anything. Please say it again. I'm still listening."
 #[test]
 fn the_half_duplex_line_is_shown_only_once_a_reply_would_be_heard() {
     let reference = read(ECHO_ONLY_VOL60, "-reference.wav");

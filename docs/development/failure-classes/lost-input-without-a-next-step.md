@@ -54,6 +54,10 @@ same kind** and two reviews found two ways the line could invite a reply that wo
    rv-20261021T215433Z-1979e6d9-40f2): the endpoint drops anything under `MIN_SPEECH_FRAMES`
    = 19 frames x 256 / 16 000 = 0.304 s as a cough, with no notice at all and "yes" or "send
    it" can be that short.
+4. Kept, a repeat that recognition then refused got no line at all (review
+   rv-20261021T225454Z-d47fcfe5-d9e7): the half-duplex line's own card (authority 3 in
+   `RefusalNotices`) stayed standing after it was shown and outranked every refusal of the
+   repeat it had asked for.
 
 So the line now waits for three things together: Rich not audible, 26 quiet frames and no
 tainted recording open. Tests (`richos-voice/tests/barge_in_on_the_ceos_rig.rs`):
@@ -66,10 +70,13 @@ short (`CaptureBrain::invite_reply`, set by `supervise` through `Shared::reply_i
 a fragment of an open turn it is admitted from the 7-frame (0.112 s) onset and passed on to
 recognition, where a cough instead meets that desk's own line with its next step. The same
 two tests reply with a 0.192 s word as well, required to be admitted with fewer speech frames
-than that minimum; red before that fix. The rule for anything new in
+than that minimum; red before that fix. And when the line is shown, its card is released
+(`RefusalNotices::reply_invited`, its once-per-session latch kept), so a refused repeat gets
+the recognizer's own line with its next step; the same tests hand each reply to the recognizer
+desk with a `[BLANK_AUDIO]` result and require exactly that line, red before that fix. The rule for anything new in
 this class: **a line that asks for a reply is shown only when the capture state says the reply
-would be kept and then keeps it however short** and its test replies at once, long and short,
-and checks it was kept. Its two
+would be kept, then keeps it however short and lets a refusal of it be said** and its test
+replies at once, long and short, checks it was kept and that a refusal of it is said. Its two
 siblings in the same family got the same treatment, because the check found them:
 `HeardNoVoice` ("...If you said something, please say it again. I'm still listening.") and
 `DidNotCatchThat` ("...Please say it again. I'm still listening."). The open microphone is the
