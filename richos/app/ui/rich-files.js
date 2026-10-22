@@ -30,6 +30,16 @@
       card.dataset.s = "ready";
       meta.textContent = sentence;
     }
+    named(card.querySelector(".tl-rfile-main"), meta);
+  }
+
+  // The card button's name: what pressing it does, then its line (type, size, pages, or why it
+  // cannot open). The name stands in for the button's children, so without the line a screen reader
+  // never says it; WebKit puts no `aria-describedby` text where the Mac's accessibility reads it
+  // (the VM walk of 2026-10-22: the button's help stayed its title). Set again whenever the line changes.
+  function named(main, meta) {
+    const line = meta.textContent.trim();
+    main.setAttribute("aria-label", main.dataset.action + (line ? ", " + line : ""));
   }
 
   // A CARD THAT HAS JUST ARRIVED rises into place once (round 36 screen 3, `r36-file-in`: 0.7 s,
@@ -77,7 +87,7 @@
     const main = node("button", "tl-rfile-main");
     main.type = "button";
     main.title = name;
-    main.setAttribute("aria-label", app ? "Open " + name + " in " + app : "Open " + name);
+    main.dataset.action = app ? "Open " + name + " in " + app : "Open " + name;
     const glyph = node("span", "tl-rfile-glyph");
     glyph.innerHTML = PAGE;
     // Declared 14px and skippable (round 36 README): the type repeats at 16px beside it.
@@ -85,11 +95,8 @@
     const text = node("span", "tl-rfile-text");
     text.appendChild(node("span", "tl-rfile-name", name));
     const meta = node("span", "tl-rfile-meta", f.exists === false ? GONE : (f.meta || ""));
-    // The button's name is what pressing it does; its description is this line (type, size, pages,
-    // or why it cannot open), which the name would otherwise hide from a screen reader.
-    meta.id = "tl-rfile-meta-" + el.dataset.fileId;
-    main.setAttribute("aria-describedby", meta.id);
     text.appendChild(meta);
+    named(main, meta);
     main.append(glyph, text);
 
     const acts = node("span", "tl-rfile-acts");

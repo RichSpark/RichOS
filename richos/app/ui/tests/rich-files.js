@@ -100,8 +100,6 @@ async function cards(page) {
         ext: c.querySelector(".tl-rfile-ext").textContent,
         open: c.querySelector(".tl-rfile-open").textContent,
         label: c.querySelector(".tl-rfile-main").getAttribute("aria-label"),
-        // What a screen reader says after the name: the element the button is described by.
-        described: (document.getElementById(c.querySelector(".tl-rfile-main").getAttribute("aria-describedby") || "") || {}).textContent,
         openShown: shown(".tl-rfile-open"),
         finderShown: shown(".tl-rfile-finder"),
         askShown: shown(".tl-rfile-ask"),
@@ -124,9 +122,10 @@ async function main() {
     assertEqual(got[0].meta, "PDF · 184 KB · 2 pages", "a PDF's card says its pages, as the round writes it");
     assertEqual(got[0].ext, "PDF");
     assertEqual(got[0].open, "Open in Preview");
-    assertEqual(got[0].label, "Open Acme-counteroffer.pdf in Preview");
-    assertEqual(got[0].described, "PDF · 184 KB · 2 pages",
-      "the card's line (type, size, pages) is its description: the name alone hid it from a screen reader");
+    // The name says what pressing does, then the card's line: the name stands in for the button's
+    // children, so without the line a screen reader never said the type, size or pages.
+    assertEqual(got[0].label, "Open Acme-counteroffer.pdf in Preview, PDF · 184 KB · 2 pages");
+    assertEqual(got[1].label, "Open Acme-comparables.xlsx in Numbers, Spreadsheet · 46 KB");
     assertEqual(got[1].name, "Acme-comparables.xlsx");
     assertEqual(got[1].meta, "Spreadsheet · 46 KB");
     assertEqual(got[1].open, "Open in Numbers");
