@@ -761,7 +761,7 @@ def _():
     # `reboot` is the remedy the check itself applies, so it too runs without the check, holding the phone.
     # `launch` opens the app on purpose: it holds the phone but runs its own Wi-Fi-first, launch-once procedure
     # instead of the trust check, so it sits beside the read-only verbs on the HOLD line and is the only one there that launches.
-    assert 'approval|procs|apps|lock|battery|syslog|trust|net|close|wifi-restore|wifi-on|wifi-off|reboot|launch) exec "${HOLD[@]}"' in text
+    assert 'approval|procs|apps|lock|battery|syslog|crashes|trust|net|close|wifi-restore|wifi-on|wifi-off|reboot|launch) exec "${HOLD[@]}"' in text
 
 
 @case("D27b a phone joined to Wi-Fi whose Wi-Fi carries no traffic is restarted once BEFORE anything is opened, so iOS never refuses the app for want of a network")
