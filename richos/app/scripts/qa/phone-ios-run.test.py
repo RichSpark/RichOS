@@ -124,6 +124,12 @@ class KeptLog(Fixture):
         self.assertEqual((code, summary["passed"]), (1, False))
         self.assertIn("produced nothing", summary["syslog"]["error"])
 
+    def test_a_relay_that_ended_before_the_walk_is_not_a_pass(self):
+        code, summary, _ = self.run_with_log(
+            lambda *a: {"out": "x", "kept": 1, "read": 1, "relayExit": 1, "endedBeforeAsked": True})
+        self.assertEqual((code, summary["passed"]), (1, False))
+        self.assertIn("ended before the walk did", summary["syslog"]["error"])
+
     def test_a_capture_that_raised_says_so(self):
         def boom(*_a):
             raise FileNotFoundError("no such folder")

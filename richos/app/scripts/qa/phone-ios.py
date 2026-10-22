@@ -1057,6 +1057,9 @@ def run(args):
             kept.setdefault("error", "the log relay did not finish within 15 s of the walk's end")
         elif not kept.get("error") and kept.get("read", 0) == 0:
             kept["error"] = "the phone's log relay produced nothing (is the hardware UDID attached?)"
+        elif not kept.get("error") and kept.get("endedBeforeAsked"):
+            kept["error"] = (f"the phone's log relay ended before the walk did (exit {kept.get('relayExit')}): "
+                             "the log covers only part of the walk")
         summary["syslog"] = kept
         # The log was asked for: a walk without it is not the walk that was asked for.
         if kept.get("error"):
@@ -1835,7 +1838,7 @@ def capture_syslog(device, out, keys, network, done, relay=None):
             relay.kill()
             relay.wait()
     return {"out": str(out), "kept": kept, "read": total, "keys": list(keys), "relayPid": relay.pid,
-            "relayExit": relay.returncode}
+            "relayExit": relay.returncode, "endedBeforeAsked": not done()}
 
 
 SYSLOG_ENTRY = re.compile(r"^\w{3} +\d+ (\d\d):(\d\d):(\d\d)(?:\.\d+)? (\S+)\[(\d+)\]")
