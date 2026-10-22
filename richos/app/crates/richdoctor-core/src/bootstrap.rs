@@ -291,12 +291,19 @@ pub fn macos_major() -> Option<u32> {
     crate::collect::macos_version()?.split('.').next()?.parse().ok()
 }
 
-/// The copies already installed, newest first: (path, version).
-pub fn installed(places: &Places) -> Vec<(PathBuf, String)> {
+/// The copies already installed, newest first: (path, version). A copy counts only when it is
+/// RichDoctor as RichOS expects it: RichDoctor's identifier, a signature that verifies, and the
+/// same signing team as the RichOS carrying it (`team`; both ad-hoc on a development build). One
+/// that fails any of these is never trusted as current, refreshed in place or replaced; its path
+/// is simply not free for a new copy (Codex audit of 0881b5f8f #4).
+pub fn installed(places: &Places, team: &Option<String>) -> Vec<(PathBuf, String)> {
     let mut out: Vec<(PathBuf, String)> = [&places.system_apps, &places.user_apps]
         .iter()
         .map(|d| d.join(APP))
-        .filter_map(|p| identity(&p).filter(|(id, _)| id == crate::IDENTIFIER).map(|(_, v)| (p, v)))
+        .filter_map(|p| {
+            let (id, version) = identity(&p)?;
+            (id == crate::IDENTIFIER && signing_team(&p).ok().as_ref() == Some(team)).then_some((p, version))
+        })
         .collect();
     out.sort_by(|a, b| if older(&a.1, &b.1) { std::cmp::Ordering::Greater } else if older(&b.1, &a.1) { std::cmp::Ordering::Less } else { std::cmp::Ordering::Equal });
     out
@@ -360,7 +367,7 @@ pub fn refresh_with(payload: &Path, payload_version: &str, team: &Option<String>
         return Outcome::NotApplicable("RichDoctor requires macOS 13 or newer".into());
     }
     let Ok(bytes) = fs::read(payload) else { return Outcome::NotApplicable("this RichOS carries no RichDoctor".into()) };
-    let copies = installed(places);
+    let copies = installed(places, team);
     let (target_dir, existing) = match copies.first() {
         Some((path, version)) if !older(version, payload_version) => return Outcome::Current(path.clone()),
         Some((path, _)) => {
@@ -520,6 +527,47 @@ mod tests {
         assert_eq!(identity(&po.system_apps.join(APP)).unwrap().0, "com.example.other");
         assert!(matches!(out, Outcome::Installed(ref path) if path == &po.user_apps.join(APP)), "{out:?}");
         for d in [root, build, other] {
+            fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// Codex audit of 0881b5f8f #4: a copy with RichDoctor's identifier whose signature does not
+    /// verify (or is another signer's) is neither trusted as current nor overwritten.
+    #[test]
+    fn a_copy_that_is_not_signed_as_expected_is_never_reused_or_replaced() {
+        let tampered = |dir: &Path, version: &str| {
+            let app = bundle(dir, crate::IDENTIFIER, version);
+            fs::write(app.join("Contents/MacOS/RichDoctor"), b"#!/bin/sh\n").unwrap();
+            app
+        };
+        let build = temp("build7");
+        let root = temp("untrusted");
+        let payload = root.join(PAYLOAD);
+        archive(&bundle(&build, crate::IDENTIFIER, "1.0.0"), &payload);
+        // As new as the payload, same identifier, a broken signature: not "Current".
+        let p = places(&root);
+        let same = tampered(&p.system_apps, "1.0.0");
+        let before = fs::read(same.join("Contents/MacOS/RichDoctor")).unwrap();
+        let out = refresh_with(&payload, "1.0.0", &None, &p, &|_| {});
+        assert!(!matches!(out, Outcome::Current(_)), "an unverified copy is not trusted as current: {out:?}");
+        assert_eq!(fs::read(same.join("Contents/MacOS/RichDoctor")).unwrap(), before, "and it is left alone");
+        // Older, same identifier, a broken signature: never overwritten in place.
+        let root2 = temp("untrusted-old");
+        let p2 = places(&root2);
+        let old = tampered(&p2.system_apps, "0.9.0");
+        let out = refresh_with(&payload, "1.0.0", &None, &p2, &|_| {});
+        assert_ne!(out, Outcome::Refreshed(old.clone()), "an unverified copy is not refreshed in place");
+        assert_eq!(identity(&old).unwrap().1, "0.9.0");
+        // The audit's case: only an Info.plist claiming RichDoctor 99, no app inside it.
+        let root3 = temp("plist-only");
+        let p3 = places(&root3);
+        let fake = p3.system_apps.join(APP);
+        fs::create_dir_all(fake.join("Contents")).unwrap();
+        fs::write(fake.join("Contents/Info.plist"), format!(r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>{}</string><key>CFBundleShortVersionString</key><string>99.0.0</string></dict></plist>"#, crate::IDENTIFIER)).unwrap();
+        let out = refresh_with(&payload, "1.0.0", &None, &p3, &|_| {});
+        assert!(matches!(out, Outcome::Installed(ref at) if at == &p3.user_apps.join(APP)), "a working copy is installed beside it: {out:?}");
+        fs::remove_dir_all(root3).ok();
+        for d in [build, root, root2] {
             fs::remove_dir_all(d).ok();
         }
     }
