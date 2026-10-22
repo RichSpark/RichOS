@@ -376,19 +376,26 @@ class NewUserWalk(setup_walk.SetupWalk):
                 break
         why = accounts_verdict(text, sheet, sign)
         browser = None
-        if not why:
+        try:
+            if why:
+                raise StepFailed(why)
             browser = self.sign_in_browser()
-        elif sheet:
-            self.ax('click', '--id', 'acc-close', '--first')  # the sheet's own close button
-            time.sleep(1)
-        self.settings(False, 'accounts-closed')
-        self.report['accounts'] = {'screen': text.strip()[-1500:], 'dead_ends': dead_ends(text),
-                                   'sheet_open': bool(sheet),
-                                   'sign_in': sign and {k: sign.get(k) for k in ('role', 'title', 'desc', 'enabled')},
-                                   'browser_sign_in': browser}
-        if why:
-            raise StepFailed(why)
-        return self.report['accounts']
+            self.report['accounts'] = {'screen': text.strip()[-1500:], 'dead_ends': dead_ends(text),
+                                       'sheet_open': bool(sheet),
+                                       'sign_in': sign and {k: sign.get(k) for k in ('role', 'title', 'desc', 'enabled')},
+                                       'browser_sign_in': browser}
+            return self.report['accounts']
+        finally:
+            original = sys.exc_info()[1]
+            try:
+                for control in ('provider-cancel', 'setup-close', 'acc-close'):
+                    if self.by_id(control):
+                        self.ax('click', '--id', control, '--first')
+                self.settings(False, 'accounts-closed')
+            except (StepFailed, RuntimeError, subprocess.TimeoutExpired) as cleanup:
+                if original is not None:
+                    raise StepFailed('%s; account cleanup also failed: %s' % (original, cleanup)) from original
+                raise
 
     def login_running(self):
         # Do not return process arguments: provider output and OAuth parameters are private.
@@ -407,7 +414,12 @@ class NewUserWalk(setup_walk.SetupWalk):
             if safe:
                 # A provider URL alone also appears on Safari's network-error page. Require
                 # the actual sign-in controls, not merely an address handed to the browser.
-                buttons = self.ax('find', '--role', 'AXButton', app='Safari')
+                try:
+                    buttons = self.ax('find', '--role', 'AXButton', app='Safari')
+                except StepFailed as exc:
+                    if axwait.not_yet(exc, 'find'):
+                        return None, None
+                    raise
                 labels = ' '.join(str(node.get(k) or '') for node in nodes + buttons
                                   for k in ('title', 'desc'))
                 if re.search(r'\b(email|log in|sign in|continue with (google|apple|email))\b', labels, re.I):
@@ -442,13 +454,13 @@ class NewUserWalk(setup_walk.SetupWalk):
             self.ax('click', '--id', 'provider-cancel', '--first')
             guest(self.vm, "osascript -e 'tell application id \"com.richos.app\" to activate'")
             end = time.monotonic() + 30
-            while self.login_running() or not self.by_id('provider-connect'):
+            while self.login_running() or not self.by_id('provider-connect') or not self.shows_text('Sign-in was canceled'):
                 if time.monotonic() >= end:
-                    raise StepFailed('cancelling sign-in did not stop its process and restore Connect account')
+                    raise StepFailed('sign-in cancellation did not stop its process, restore Connect account and explain the cancellation')
                 time.sleep(1)
-            text = self.frame('sign-in-cancelled-%d' % n)
-            if 'sign-in was canceled' not in ' '.join(text.split()).lower():
-                raise StepFailed('the app did not explain that sign-in was canceled')
+            # The live frame is still retained and scanned for dead ends. Its OCR lost the
+            # initial S of this modal's sentence, so the actual accessible text decides it.
+            self.frame('sign-in-cancelled-%d' % n)
             attempts.append({'attempt': n, 'provider_process_seen': process_seen,
                              'browser_page': safe, 'cancelled': True})
         self.ax('click', '--id', 'setup-close', '--first')

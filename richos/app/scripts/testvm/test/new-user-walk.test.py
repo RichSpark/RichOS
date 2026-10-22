@@ -170,7 +170,8 @@ class AccountsVerdict(unittest.TestCase):
         clicks = []
         stub = types.SimpleNamespace(vm='guest', by_id=lambda _: {'enabled': True},
             ax=lambda *args: clicks.append(args),
-            frame=lambda _: 'Sign-in was canceled. You can try again when you are ready.')
+            frame=lambda _: 'ign-in was canceled. You can try again when you are ready.',
+            shows_text=lambda text: text == 'Sign-in was canceled')
         running = iter([False, True, False, False, True, False])
         stub.login_running = lambda: next(running)
         pages = iter([('https://claude.ai/oauth?state=first', {'host': 'claude.ai', 'path': '/oauth'}),
@@ -183,6 +184,34 @@ class AccountsVerdict(unittest.TestCase):
         self.assertEqual(len(result['attempts']), 2)
         self.assertFalse(result['external_authentication_completed'])
         self.assertNotIn('state=', str(result))
+
+    def test_cancellation_needs_the_actual_notice_even_when_ocr_says_it(self):
+        import itertools
+        running = itertools.chain([False, True], itertools.repeat(False))
+        stub = types.SimpleNamespace(vm='guest', by_id=lambda _: {'enabled': True},
+            ax=lambda *args: None, shows_text=lambda _: False,
+            login_running=lambda: next(running),
+            browser_page=lambda: ('https://claude.ai/login', {'host': 'claude.ai', 'path': '/login'}),
+            frame=lambda _: 'Sign-in was canceled.')
+        with mock.patch.object(walk, 'guest', return_value=''), \
+             mock.patch.object(walk.time, 'monotonic', side_effect=itertools.count(0, 10)), \
+             mock.patch.object(walk.time, 'sleep'):
+            with self.assertRaisesRegex(walk.StepFailed, 'explain the cancellation'):
+                walk.NewUserWalk.sign_in_browser(stub)
+
+    def test_a_failed_browser_step_closes_its_modal_and_settings(self):
+        clicks, settings = [], []
+        def fail():
+            raise walk.StepFailed('fixture browser failure')
+        stub = types.SimpleNamespace(report={}, sign_in_browser=fail,
+            settings=lambda want, name: settings.append(want),
+            ax=lambda *args: clicks.append(args), frame=lambda _: self.CARD,
+            by_id=lambda name: {'enabled': True, 'title': 'Sign in'} if name != 'provider-cancel' else None)
+        with mock.patch.object(walk.time, 'sleep'):
+            with self.assertRaisesRegex(walk.StepFailed, 'fixture browser failure'):
+                walk.NewUserWalk.accounts(stub)
+        self.assertIn(('click', '--id', 'setup-close', '--first'), clicks)
+        self.assertEqual(settings, [True, False])
 
     def test_a_button_without_a_provider_browser_journey_cannot_pass(self):
         stub = types.SimpleNamespace(vm='guest', by_id=lambda _: {'enabled': True},
