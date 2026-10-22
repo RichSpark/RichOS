@@ -22,13 +22,22 @@ MACHINE_LIB="$ROOT/richos/engine/scripts/lib"
 # shellcheck source=../../engine/scripts/lib/machine-settings.sh
 . "$MACHINE_LIB/machine-settings.sh"
 richos_machine_settings || exit 2
-python3 "$MACHINE_LIB/machine_settings.py" cache >/dev/null || exit 2
+CACHE_ROOT="$(python3 "$MACHINE_LIB/machine_settings.py" cache)" || exit 2
 
 notrun() { echo "  NOT RUN  native-ios-share: $1"; exit 2; }
 [ "$(uname -s)" = Darwin ] || notrun "macOS is required"
 for tool in swift xcrun xcodebuild xcodegen node python3; do
   command -v "$tool" >/dev/null 2>&1 || notrun "$tool is unavailable"
 done
+
+# Build output is reused per checkout (a cold Debug + Release build is minutes); scratch is per run.
+KEY="$(printf '%s' "$ROOT" | shasum -a 256 | cut -c1-10)"
+CACHE="$(python3 "$MACHINE_LIB/machine_settings.py" validate "$CACHE_ROOT/richos-native-ios-proof/$KEY-share")" || exit 2
+CACHE="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$CACHE")"
+if [ "${RICHOS_SIMULATOR_CACHE_HELD:-}" != "$CACHE" ]; then
+  exec python3 "$DIR/lib/simulator_budget.py" cache "$CACHE" -- bash "${BASH_SOURCE[0]}" "$@"
+fi
+mkdir -p "$CACHE"
 mkdir -p "${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}"
 SCRATCH="$(mktemp -d "${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}/native-ios-share.XXXXXX")" || { echo '  FAIL  scratch directory'; exit 1; }
 trap 'rm -rf "$SCRATCH"' EXIT HUP INT TERM
