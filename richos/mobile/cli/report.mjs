@@ -140,8 +140,11 @@ export async function operate(action, profile, args, { token, fetch: fetchImpl =
     const { hasFooterLine } = await import('../service/report/checks.mjs');
     const url = `https://github.com/${profile.repository}/issues/${number}`;
     if (issue?.user?.login !== profile.botLogin || issue?.html_url !== url || !hasFooterLine(issue.body, id)) throw Error('That issue was not made by the relay for this report');
-    const result = await query("UPDATE reports SET state='delivered', issue_number=CAST(?1 AS INTEGER), issue_url=?2, updated_at=?3 WHERE report_id=?4 AND state IN ('pending','unconfirmed')",
-      [number, url, String(Date.now()), id]);
+    // The same delivery transition the Worker makes: words dropped, one-year screenshot retention.
+    const now = Date.now();
+    const result = await query(`UPDATE reports SET state='delivered', issue_number=CAST(?1 AS INTEGER), issue_url=?2, title=NULL, body=NULL,
+      delivered_at=CAST(?3 AS INTEGER), expires_at=CAST(?4 AS INTEGER), updated_at=CAST(?3 AS INTEGER) WHERE report_id=?5 AND state IN ('pending','unconfirmed')`,
+    [number, url, String(now), String(now + 365 * 86_400_000), id]);
     return { reportId: id, issueUrl: url, updated: result.meta?.changes === 1 };
   }
   throw Error('Unknown report operator action');

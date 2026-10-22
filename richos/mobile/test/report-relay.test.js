@@ -332,6 +332,10 @@ test('operator resolve accepts only an issue the relay bot made with this report
   const done = await operate('resolve', profile, [payload.report_id, '1'], { token: 't', fetch: fake });
   assert.deepEqual(done, { reportId: payload.report_id, issueUrl: `https://github.com/${f.repository}/issues/1`, updated: true });
   assert.equal((await f.answer(await f.status(payload.report_id, payload.receipt_secret))).body.issue_number, 1);
+  // The full delivery transition (review rv-20261022T154816Z): words dropped, retention clock started.
+  const row = f.db.raw.prepare('SELECT title, body, delivered_at, expires_at FROM reports WHERE report_id=?').get(payload.report_id);
+  assert.equal(row.title, null); assert.equal(row.body, null);
+  assert(row.delivered_at > 0); assert.equal(row.expires_at - row.delivered_at, 365 * 86_400_000);
   assert.equal(statements.length, 1);
 });
 
