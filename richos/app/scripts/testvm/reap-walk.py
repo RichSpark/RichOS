@@ -37,7 +37,10 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
 
 THE GRADE REFUSES a case whose pids were not recorded by the commands themselves (the reason P15's
 reap-lead-crash half regraded to PREMISE-FALSE): a heartbeat records its own pid, group and start
-before it beats, and a case with none is REFUSED, never passed. Exit 0 when every step passes.
+before it beats, and a case with none is REFUSED, never passed. A job handed to Stu whose
+command a session bound as Rich's started FAILS at once (walk-2bfb274d19d0): each step's
+evidence names the role, session and helper that started every heartbeat. Exit 0 when every
+step passes.
 Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
 import argparse
@@ -140,21 +143,33 @@ def recorded(rows, names, since_ms):
 
 
 def ask_text(tag, background=True, seconds=FOREGROUND_SECONDS):
-    """What he types to have the heartbeats run: worded as a job to be done, the way
-    command-walk.py's fixed wording is, so the front desk registers a `task` and the back end's
-    lease runs them. "Tell me what it prints" alone was registered as a `check` there (the
-    2026-09-27 command diagnosis, proof-run-1)."""
+    """What he types to have the heartbeats run: worded as a job to be done, so it is handed to
+    Stu and his side runs them. "Tell me what it prints" alone was registered as a `check` (the
+    2026-09-27 command diagnosis, proof-run-1). Never "for me yourself": since a6ddf48f4 a request
+    he asks Rich to do himself is Rich's (rich.md), and walk walk-2bfb274d19d0 (bundle 8cdad8794)
+    had the job handed to Stu and both commands run by Rich's own session."""
     fg = 'python3 heartbeat.py beat %s-fg %s --seconds %d' % (tag, BEATS, seconds)
     tail = ('heartbeat.py is my own harmless test script at the top of that folder: it records its own '
             'process id and writes the time into small files under %s until it ends.' % BEATS)
     if background:
-        return ('Please run these two harmless test commands for me yourself with your shell tool, in my '
+        return ('Please run these two harmless test commands for me with a shell tool, in my '
                 'Acme folder, and tell me when they have finished and what they printed. First start this '
                 'one in the background (run_in_background: true): python3 heartbeat.py beat %s-bg %s   '
                 'Then run this one in the foreground and wait for it: %s   %s' % (tag, BEATS, fg, tail))
-    return ('Please run this harmless test command for me yourself with your shell tool, in my Acme '
+    return ('Please run this harmless test command for me with a shell tool, in my Acme '
             'folder, in the foreground, and tell me when it has finished and what it printed: %s   %s'
             % (fg, tail))
+
+
+def rich_ran_handed(calls, assignments):
+    """None, or why the run is wrong: a job was handed to Stu (an assignment registered) and a
+    session bound as Rich's started one of its commands. When Rich hands a job to Stu, its
+    commands are run by Stu's side only (CEO §139); walk-2bfb274d19d0 saw Rich run both."""
+    mine = [c for c in calls if c.get('role') == 'rich']
+    if not assignments or not mine:
+        return None
+    return ("the job was handed to Stu (%s) and Rich's own session ran its commands: %s"
+            % (', '.join(a.get('id') or '?' for a in assignments), json.dumps(mine)[:1200]))
 
 
 # --- the grade, pure, so test/reap-walk.test.py can hold it to its rules without a guest ---------
@@ -262,6 +277,28 @@ class Walk(adopt.Walk):
             time.sleep(1)
         return record
 
+    def commands_run(self, tag):
+        """Every Bash call that started one of this ask's heartbeats, from the app's own hook
+        evidence (<engine-state>/evidence/<session>/callbacks.jsonl): the role its session is
+        bound as (binding.json: rich or stu), the session, the helper agent if any, and the
+        command. Read after the heartbeats recorded themselves, so their calls are on disk."""
+        script = ('import json,glob,sys\n'
+                  'root,tag=sys.argv[1]+"/engine-state",sys.argv[2]\n'
+                  'out=[]\n'
+                  'for p in glob.glob(root+"/evidence/*/callbacks.jsonl"):\n'
+                  '    try: role=json.load(open(p.rsplit("/",1)[0]+"/binding.json")).get("role")\n'
+                  '    except Exception: role=None\n'
+                  '    for line in open(p,errors="replace"):\n'
+                  '        if "heartbeat.py beat "+tag+"-" not in line: continue\n'
+                  '        try: c=json.loads(line).get("callback",{})\n'
+                  '        except Exception: continue\n'
+                  '        if c.get("tool_name")!="Bash" or c.get("hook_event_name")!="PreToolUse": continue\n'
+                  '        out.append({"role":role,"session":c.get("session_id"),"agent":c.get("agent_id"),\n'
+                  '                    "command":str((c.get("tool_input") or {}).get("command",""))[:300]})\n'
+                  'print(json.dumps(out))\n')
+        return json.loads(guest(self.vm, 'python3 -c %s %s %s' % (shlex.quote(script), shlex.quote(self.data),
+                                                                  shlex.quote(tag)), 60))
+
     def approve_pending(self):
         """Open the work summary when something waits for him, and approve every request there."""
         if not self.present('waiting for you'):
@@ -290,7 +327,12 @@ class Walk(adopt.Walk):
         approved = 0
         while time.monotonic() < end:
             if recorded(self.rows(), names, sent):
-                return {'names': names, 'approved': approved, 'sent_ms': sent, 'assignments': self.assignments_since(sent)}
+                assignments, calls = self.assignments_since(sent), self.commands_run(tag)
+                wrong = rich_ran_handed(calls, assignments)
+                if wrong:
+                    raise StepFailed(wrong)
+                return {'names': names, 'approved': approved, 'sent_ms': sent, 'assignments': assignments,
+                        'run_by': calls}
             approved += self.approve_pending()
             time.sleep(3)
         raise StepFailed('prerequisite unavailable: %s never recorded itself within %d s (approved %d request(s))'
