@@ -1608,6 +1608,19 @@ impl Service {
                 Ok(windows) => snapshot.accept(windows, observed),
                 Err(error) => snapshot.empty(error, observed),
             }
+            let unknown = snapshot.signed_in.is_none();
+            drop(extra);
+            // **AN ADDED ACCOUNT'S VERDICT AFTER A RELAUNCH** (review
+            // rv-20261022T055257Z-a2ab9fcf-8231, finding 1). Account 1's comes from the startup
+            // check (`provider_auth_status`); an added account starts each launch with an empty
+            // record, so when its read did not say, Claude Code's own `auth status` for its
+            // folder is asked, here on the monitor's thread, never the window's, and only while
+            // the verdict is unknown.
+            if unknown {
+                if let Some(folder) = account.folder.as_deref() {
+                    self.sign_in_known(&account.id, &crate::provider_auth::status_in(bin, Some(folder)).state);
+                }
+            }
         }
     }
     pub fn set_policy(&self, policy: Policy) -> io::Result<View> {
@@ -2437,6 +2450,19 @@ pub(crate) mod tests {
         fn read_as(error: ReadError) -> impl Fn(&Service, &str, u64) {
             move |s, id, at| record(s, id, |r| r.empty(error, at))
         }
+        // A relaunch: a fresh service whose added account's first usage read gets no answer,
+        // and whose Claude Code says, when asked, that the account is signed in (or not).
+        fn relaunch(logged_in: bool) -> impl Fn(&Service, &str, u64) {
+            move |s, _, _| {
+                use std::os::unix::fs::PermissionsExt;
+                let root = Scratch::new();
+                let bin = root.path().join("claude-fixture");
+                let flag = if logged_in { "True" } else { "False" };
+                fs::write(&bin, format!("#!/usr/bin/env python3\nimport json, sys\nif sys.argv[1:4] == ['auth', 'status', '--json']:\n    print(json.dumps({{'loggedIn': {flag}}}))\n    sys.exit(0 if {flag} else 1)\nsys.exit(1)\n")).unwrap();
+                fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+                s.refresh_accounts(&bin, true);
+            }
+        }
         type Event = Box<dyn Fn(&Service, &str, u64)>;
         // (place, whose record, the record before, the place's event, the record after)
         type Row = (&'static str, Who, Option<bool>, Event, Option<bool>);
@@ -2462,6 +2488,8 @@ pub(crate) mod tests {
                 Box::new(|s, id, at| { let o = other(s, id); record(s, &o, |r| r.accept(live(10.).windows, at)); s.use_account_first(&o).unwrap(); }), Some(true)),
             ("weekly reset used: the reading is forgotten", Who::AccountOne, Some(true), Box::new(|s, _, _| s.forget_reading()), Some(true)),
             ("sign-out: Remove", Who::Added, Some(true), Box::new(|s, id, _| { s.remove_account(id).unwrap(); }), None),
+            ("relaunch: no answer from the first read, auth status says signed in", Who::Added, None, Box::new(relaunch(true)), Some(true)),
+            ("relaunch: no answer from the first read, auth status says signed out", Who::Added, None, Box::new(relaunch(false)), Some(false)),
         ];
         let mut failures = Vec::new();
         for (place, who, prior, event, want) in &rows {
