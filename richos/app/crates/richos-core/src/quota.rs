@@ -548,6 +548,14 @@ struct Snapshot {
     handoff: Option<(u64, f64)>,
     /// Null answers in a row before this account's first reading (`FIRST_READING_RETRY_MS`).
     empties: u32,
+    /// **What the last answer ABOUT the sign-in said** ([`View::signed_in`]), kept apart from
+    /// the last check's error (mid-job review rv-20261021T233844Z-10df0b1f-1846, finding 1):
+    /// while it lived only in that error, one check where Claude Code did not answer replaced
+    /// "signed out" or "signed in without limits" with `Failed`, and the card offered Sign in
+    /// to a signed-in account. Set by a reading (`Some(true)`), `SignedOut` (`Some(false)`)
+    /// and `SignedInNoLimits` (`Some(true)`); every other outcome leaves it as it was. A
+    /// changed account connection starts a new `Snapshot` and so forgets it (`disconnect`).
+    signed_in: Option<bool>,
 }
 
 /// **An account with no reading yet is asked again soon after a null answer** (handoff round
@@ -678,8 +686,9 @@ impl Snapshot {
         let bases = std::mem::take(&mut self.bases);
         let rises = std::mem::take(&mut self.rises);
         let (rise_until, token_speed, handoff) = (self.rise_until, self.token_speed, self.handoff);
+        // Only a signed-in account reports a reading.
         *self = Self { windows, checked_at: Some(observed), retry_at: None, error, speeds, bases, rises, rise_until, empty_at: None, token_speed,
-            since_reading: 0., handoff, empties: 0 };
+            since_reading: 0., handoff, empties: 0, signed_in: Some(true) };
     }
     /// **A check that came back with no figures.** Every kind records when, so the pause stops
     /// waiting on it (`Admission::NoReading`). A null answer (`ReadError::NoReading`) is not a
@@ -694,6 +703,11 @@ impl Snapshot {
             self.retry_at = None;
             if self.checked_at.is_none() { self.empties = self.empties.saturating_add(1); }
             return;
+        }
+        match error {
+            ReadError::SignedOut => self.signed_in = Some(false),
+            ReadError::SignedInNoLimits => self.signed_in = Some(true),
+            _ => {}
         }
         if matches!(error, ReadError::Unsupported | ReadError::SignedOut | ReadError::SignedInNoLimits) {
             self.windows.clear();
@@ -714,19 +728,15 @@ impl Snapshot {
             }
         }
         self.checked_at = Some(observed);
+        self.signed_in = Some(true);
     }
     fn view(&self, policy: Policy, now: u64) -> View {
         self.view_with(policy, None, now)
     }
-    /// [`View::signed_in`]: what the last check established about the sign-in, and nothing more.
+    /// [`View::signed_in`]: what the last answer about the sign-in established, and nothing
+    /// more; a check that said nothing about it leaves it standing (`Snapshot::signed_in`).
     fn signed_in(&self) -> Option<bool> {
-        if self.error == Some(ReadError::SignedOut) {
-            Some(false)
-        } else if self.checked_at.is_some() || self.error == Some(ReadError::SignedInNoLimits) {
-            Some(true)
-        } else {
-            None
-        }
+        self.signed_in
     }
     /// The view of this account, with its test cut-off (`Reading::weekly_cutoff`).
     fn view_with(&self, policy: Policy, weekly_cutoff: Option<f64>, now: u64) -> View {
@@ -1984,13 +1994,38 @@ pub(crate) mod tests {
         assert_eq!(view.signed_in, Some(false));
         assert_eq!(view.message.as_deref(), Some("This Claude account is not signed in on this Mac."));
         s.empty(ReadError::Unsupported, NOW + 1);
-        assert_eq!(s.view(policy(), NOW + 1).signed_in, None, "no limits alone says nothing about the sign-in");
+        assert_eq!(s.view(policy(), NOW + 1).signed_in, Some(false),
+            "no limits alone says nothing new about the sign-in, so the last verdict stands");
         s.empty(ReadError::SignedInNoLimits, NOW + 1);
         let view = s.view(policy(), NOW + 1);
         assert_eq!(view.signed_in, Some(true), "a signed-in verdict stands without a usage reading");
         assert!(view.windows.is_empty());
         s.accept(snapshot(20., 3_600_000).windows, NOW + 2);
         assert_eq!(s.view(policy(), NOW + 2).signed_in, Some(true));
+    }
+
+    /// **A sign-in verdict is never lost because one later check failed** (mid-job review
+    /// rv-20261021T233844Z-10df0b1f-1846, finding 1): when the verdict lived only in the last
+    /// check's error, one check where Claude Code did not answer replaced it with `Failed`, the
+    /// verdict dropped to unknown and the card offered Sign in to a signed-in account. Only an
+    /// answer about the sign-in (signed out, signed in without limits, a reading) changes it.
+    #[test]
+    fn a_failed_check_never_erases_what_the_last_answer_said_about_the_sign_in() {
+        for (verdict, want) in [(ReadError::SignedOut, Some(false)), (ReadError::SignedInNoLimits, Some(true))] {
+            let mut s = Snapshot::default();
+            s.empty(verdict, NOW);
+            for (i, later) in [ReadError::Failed, ReadError::Malformed, ReadError::NoReading, ReadError::Unsupported].into_iter().enumerate() {
+                let at = NOW + 1 + i as u64;
+                s.empty(later, at);
+                assert_eq!(s.view(policy(), at).signed_in, want, "{verdict:?} then {later:?}");
+            }
+        }
+        let mut s = Snapshot::default();
+        s.accept(snapshot(20., 3_600_000).windows, NOW);
+        s.empty(ReadError::Failed, NOW + 1);
+        assert_eq!(s.view(policy(), NOW + 1).signed_in, Some(true), "a reading, then a failed check");
+        s.empty(ReadError::SignedOut, NOW + 2);
+        assert_eq!(s.view(policy(), NOW + 2).signed_in, Some(false), "a signed-out answer still changes it");
     }
 
     #[test]
