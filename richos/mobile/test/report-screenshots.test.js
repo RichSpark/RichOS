@@ -311,3 +311,17 @@ test('a recovered report keeps its approved screenshots: an older unknown ID ado
   assert.equal(f.r2.objects.size, 0);
   assert.equal((await f.read(kept.report_id, 1, await f.accessToken())).status, 410);
 });
+
+test('a claimed cleanup withdraws staff reads at once, even when deleting the objects failed', async t => {
+  const f = await fixture(t), payload = await f.report({}, ['accept-rgb.png']);
+  await f.create(payload); await f.upload(payload, 1); await f.complete(payload.report_id, payload.receipt_secret);
+  f.advance(366 * DAY); f.r2.fault('delete');
+  await f.cleanup();
+  assert.equal((await f.store.get(payload.report_id)).cleanup, 'claimed');
+  assert.equal(f.r2.objects.size, 1, 'the object is still in the bucket');
+  const read = await f.read(payload.report_id, 1, await f.accessToken());
+  assert.equal(read.status, 410); assert.match(await read.text(), /being deleted.*one-year retention ended/);
+  await f.cleanup();
+  const gone = await f.read(payload.report_id, 1, await f.accessToken());
+  assert.equal(gone.status, 410); assert.match(await gone.text(), /was deleted on/);
+});

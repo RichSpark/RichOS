@@ -314,6 +314,9 @@ class Relay {
     if (!attachment) return text(404, 'There is no such screenshot.');
     // Retirement withdraws a receipt's screenshots at once, before its cleanup deletes them.
     if (record.state === 'retired') return text(410, 'This screenshot was withdrawn: its report was replaced by a changed version before it was sent.');
+    // A claimed cleanup has already marked it unavailable; a failed delete never serves it again.
+    if (record.cleanup === 'claimed' && !attachment.deleted_at)
+      return text(410, record.state === 'delivered' ? 'This screenshot is being deleted, because its one-year retention ended.' : 'This screenshot is being deleted, because its report was never sent.');
     if (attachment.deleted_at) {
       const when = new Date(attachment.deleted_at).toISOString().slice(0, 10);
       return text(410, record.state === 'delivered' ? `This screenshot was deleted on ${when}, when its one-year retention ended.` : `This screenshot was deleted on ${when}, because its report was never sent.`);

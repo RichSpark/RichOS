@@ -67,7 +67,7 @@ HTTP codes, for logs only: 201 first delivered, 200 replay or status, 202 pendin
 2. The schema, sizes and fingerprint are checked.
 3. **The record is looked up first.** A known ID with the right receipt and bytes answers its real state, whatever the switch, cap or content rules say. A retired ID answers `retired`. A wrong receipt answers `forbidden`, other bytes `conflict`.
 4. The content rules run. The relay accepts the exact words or rejects them; it never rewrites them.
-5. The operator switch is checked. An unknown ID approved more than 15 minutes ago is first looked for by its footer; if found it is recorded as delivered, with its approved manifest in the same transaction and answers `delivered` only when every approved screenshot is in the bucket (otherwise `created_checking_images`).
+5. The operator switch is checked. An unknown ID approved more than 15 minutes ago is first looked for by its footer; if found it is recorded as delivered together with its approved manifest in one transaction. It answers `delivered` only when every approved screenshot is in the bucket (otherwise `created_checking_images`).
 6. Registration stores the receipt, the words (only until the report is posted or retired) and the manifest in one transaction. It never calls GitHub.
 7. **One per-receipt lock** serializes upload, completion, retirement and cleanup.
    - An upload is checked before the lock: the receipt, the type, the exact size and hash and the image profile with the manifest's width and height. Under the lock, the object is written once per hash (an identical retry finds it and only records it), then marked stored.
@@ -89,7 +89,7 @@ Golden files: `report/fixtures/relay/accept-*` and `reject-*` (made by `dev/repo
 
 **Storage:** one private R2 bucket bound as `IMAGES`, with public access off. Objects are keyed by report ID, attachment ID and hash and are never transformed.
 
-**Staff access:** every image read needs a Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`). The Worker verifies its RS256 signature against the team's published keys, its issuer, audience and expiry, on every hostname, so a direct workers.dev request is refused. A report ID or link grants nothing. Images are served with their fixed type, `nosniff` and `private, no-store`, with no page, listing or presigned link. A deleted image answers 410 with the reason. A retired report's images answer 410 at once.
+**Staff access:** every image read needs a Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`). The Worker verifies its RS256 signature against the team's published keys, its issuer, audience and expiry, on every hostname, so a direct workers.dev request is refused. A report ID or link grants nothing. Images are served with their fixed type, `nosniff` and `private, no-store`, with no page, listing or presigned link. A deleted image answers 410 with the reason. A retired report's images answer 410 at once. So do images whose cleanup is claimed, even while a failed delete has left the object in the bucket.
 
 **Retention and cleanup** run hourly from the Worker's own schedule:
 - Delivered screenshots are kept one year after delivery. The operator can extend that before expiry; an extension is refused once the cleanup has been claimed.
