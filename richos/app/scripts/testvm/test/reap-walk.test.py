@@ -106,6 +106,18 @@ class Grade(unittest.TestCase):
         # the Stop case on its own).
         self.assertIsNone(walk.rich_ran_handed([rich], []))
 
+    def test_a_heartbeat_command_is_read_as_the_shell_splits_it(self):
+        # Review rv-20261022T114810Z-cdd66038-220d: `python3 "heartbeat.py" beat` was missed.
+        for ran in ('cd /h/Acme && python3 heartbeat.py beat stop-fg /tmp/reap-walk --seconds 300',
+                    'python3 "heartbeat.py" beat stop-fg /tmp/reap-walk',
+                    "python3  /h/Acme/heartbeat.py   'beat'  stop-bg /tmp/reap-walk",
+                    'cd /h/Acme&&python3 ./heartbeat.py beat stop-bg /tmp/reap-walk'):
+            self.assertTrue(walk.runs_heartbeat(ran, 'stop'), ran)
+        for other in ('cat heartbeat.py', 'ls /h/Acme/heartbeat.py',
+                      'python3 heartbeat.py beat quit-fg /tmp/reap-walk',  # another step's
+                      'echo "python3 heartbeat.py beat stop-fg is my test"', 'python3 heartbeat.py'):
+            self.assertFalse(walk.runs_heartbeat(other, 'stop'), other)
+
     def test_the_foreground_heartbeat_fits_one_foreground_tool_call(self):
         # Claude Code's Bash tool takes at most 600000 ms per foreground call. Asked for a 900-s
         # "foreground" heartbeat, the back end ran it with run_in_background: true (guest

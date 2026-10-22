@@ -161,6 +161,19 @@ def ask_text(tag, background=True, seconds=FOREGROUND_SECONDS):
             % (fg, tail))
 
 
+def runs_heartbeat(command, tag):
+    """Does this shell command run one of the ask's heartbeats (`heartbeat.py beat <tag>-...`)?
+    Read as the shell splits it, so quoting and spacing never hide one (review
+    rv-20261022T114810Z-cdd66038-220d: `python3 "heartbeat.py" beat` was missed)."""
+    try:
+        words = shlex.split(command, comments=True)
+    except ValueError:
+        words = command.split()
+    return any(w.rsplit('/', 1)[-1] == 'heartbeat.py' and words[i + 1:i + 2] == ['beat']
+               and (words[i + 2:i + 3] or [''])[0].startswith(tag + '-')
+               for i, w in enumerate(words))
+
+
 def rich_ran_handed(calls, assignments):
     """None, or why the run is wrong: a job was handed to Stu (an assignment registered) and a
     session bound as Rich's started one of its commands. When Rich hands a job to Stu, its
@@ -289,15 +302,16 @@ class Walk(adopt.Walk):
                   '    try: role=json.load(open(p.rsplit("/",1)[0]+"/binding.json")).get("role")\n'
                   '    except Exception: role=None\n'
                   '    for line in open(p,errors="replace"):\n'
-                  '        if "heartbeat.py beat "+tag+"-" not in line: continue\n'
+                  '        if "heartbeat.py" not in line: continue\n'
                   '        try: c=json.loads(line).get("callback",{})\n'
                   '        except Exception: continue\n'
                   '        if c.get("tool_name")!="Bash" or c.get("hook_event_name")!="PreToolUse": continue\n'
                   '        out.append({"role":role,"session":c.get("session_id"),"agent":c.get("agent_id"),\n'
-                  '                    "command":str((c.get("tool_input") or {}).get("command",""))[:300]})\n'
+                  '                    "command":str((c.get("tool_input") or {}).get("command",""))[:2000]})\n'
                   'print(json.dumps(out))\n')
-        return json.loads(guest(self.vm, 'python3 -c %s %s %s' % (shlex.quote(script), shlex.quote(self.data),
-                                                                  shlex.quote(tag)), 60))
+        calls = json.loads(guest(self.vm, 'python3 -c %s %s %s' % (shlex.quote(script), shlex.quote(self.data),
+                                                                   shlex.quote(tag)), 60))
+        return [c for c in calls if runs_heartbeat(c['command'], tag)]
 
     def approve_pending(self):
         """Open the work summary when something waits for him, and approve every request there."""
