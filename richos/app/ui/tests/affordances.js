@@ -69,6 +69,7 @@ const {
   looksLikeProse,
   looksLikeShader,
   shaderStrings,
+  rustCeoLiterals,
 } = require("./lib/state-strings");
 const SOURCES = require("./lib/ui-sources");
 const REGISTRY = require("./lib/state-registry");
@@ -1942,6 +1943,20 @@ async function main() {
   // control.
   const LOST_INPUT = /haven't sent anything|didn't reach me|(answer|message|words?) (was|were) not sent/i;
   const NEXT_STEP = /\b(say it again|send it again|try again|copy it|press|tap|click|retry)\b/i;
+  await run.check("every voice input refusal has a next step regardless of its wording", async () => {
+    const file = path.resolve(UI_DIR, "../crates/richos-voice/src/controller.rs");
+    const notices = rustCeoLiterals(file, fs.readFileSync(file, "utf8"));
+    // ReplyCutOff reports a failed ANSWER. Its caller appends the interruption's own route.
+    // Every other notice here refuses INPUT, including future variants and rewordings.
+    const inputs = notices.filter(r => !r.text.startsWith("I was cut off partway through that answer"));
+    assert(inputs.length >= 4, "the voice input-notice family was not read");
+    for (const row of inputs) {
+      assert(NEXT_STEP.test(row.text), "input refusal has no next step: " + row.text);
+      const registered = REGISTRY.find(r => normalize(r.s) === normalize(row.text));
+      assert(registered && registered.c === "ACTIONABLE", "input refusal must carry its recovery control: " + row.text);
+    }
+    return inputs.length + " input notices read from shipped Rust, independent of the lost-input phrase scan";
+  });
   await run.check("every line saying his words did not get through says what to do next", async () => {
     const lost = REGISTRY.filter((r) => LOST_INPUT.test(r.s));
     const deadEnds = lost.filter(

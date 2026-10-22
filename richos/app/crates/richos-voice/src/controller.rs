@@ -1547,7 +1547,8 @@ impl VoiceNotice {
         match self {
             VoiceNotice::SoundButNoWords => {
                 "I can hear sound, but I'm not getting words out of it. The microphone may \
-                 be picking up the room rather than you. Voice is still on."
+                 be picking up the room rather than you. Please say it again closer to the \
+                 microphone. I'm still listening."
             }
             // STATES THE CONSEQUENCE, not just the observation. "I didn't catch that"
             // leaves open whether something was sent anyway, and the whole defect being
@@ -5261,6 +5262,14 @@ mod tests {
     /// new user was left with a loss and no next step). The step is the one the open
     /// microphone supports, saying it again now, and never a work-around such as waiting
     /// for Rich to finish.
+    #[test]
+    fn every_input_refusal_names_a_next_step() {
+        for notice in [VoiceNotice::HeardNoVoice, VoiceNotice::DidNotCatchThat,
+                       VoiceNotice::SoundButNoWords, VoiceNotice::CouldNotListenWhileSpeaking] {
+            assert!(notice.ceo_message().contains("say it again"), "{notice:?}: {}", notice.ceo_message());
+        }
+    }
+
     #[test]
     fn the_half_duplex_line_states_the_consequence_and_what_to_do() {
         let m = VoiceNotice::CouldNotListenWhileSpeaking.ceo_message();

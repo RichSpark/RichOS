@@ -540,17 +540,18 @@ module.exports = [
   {
     s:
       "I can hear sound, but I'm not getting words out of it. The microphone may be " +
-      "picking up the room rather than you. Voice is still on.",
-    c: "INFORMATIONAL",
+      "picking up the room rather than you. Please say it again closer to the microphone. I'm still listening.",
+    c: "ACTIONABLE",
+    control: "#talk-toggle",
+    fixture: "shell",
     why:
       "`VoiceNotice::SoundButNoWords`, added 2026-09-04. Three utterances in a row came " +
       "back as whisper's documented silence noise, which is the ONE path in the recognizer " +
       "thread that used to produce nothing at all: an utterance in, an eprintln out, and " +
       "the panel still saying \"listening…\". Ray measured 25+ seconds of exactly that on " +
-      "published v1.0.0. It is INFORMATIONAL rather than ACTIONABLE deliberately — it " +
-      "invents no control, because the ◉ that ends voice is already on screen with its own " +
-      "footnote two lines below the notice, and a sentence pointing at a control that is " +
-      "already offered is a request wearing a status's clothes.",
+      "published v1.0.0. It is ACTIONABLE: after repeated recognition refusals, it tells the user " +
+      "to repeat the message nearer the microphone. The open microphone is the recovery path; " +
+      "the voice toggle remains available to switch back to typing.",
   },
   {
     s:
