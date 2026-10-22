@@ -17,6 +17,8 @@ mod startup_alert;
 mod update_startup;
 /// The relaunch into a downloaded update once nothing is running (CEO feedback 2026-10-06, item 1).
 mod update_relaunch;
+/// RichDoctor installed or refreshed beside RichOS, in the background (RichDoctor PRD §3).
+mod richdoctor_install;
 // HOW BIG THE WINDOW OPENS AND WHERE — derived from the display it opens on, never from a
 // constant. `docs/hardware-choices-2026-09-10.md` D2. Deliberately free of every Tauri type
 // so the arithmetic is unit-testable and can be dry-run with no window created at all
@@ -2383,6 +2385,9 @@ fn main() {
         }
         return;
     }
+    // RICHDOCTOR (PRD 2026-10-22 §3): installed or refreshed beside this RichOS on a background
+    // thread, before any setting or engine exists; nothing below waits for it.
+    richdoctor_install::start();
     tauri::Builder::default()
         // =================================================================================
         // THE MENU, AND THE ONE ITEM IN IT THIS APP HAS TO OWN — background-work spec §2.5

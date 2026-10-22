@@ -21,6 +21,10 @@ sha2 = "0.10"
 # richos-user-update and the Tauri shell resolve.
 plist = "1"
 libc = "0.2"
+# The bundled install's payload archive (bootstrap.rs): the same two crates, at the versions
+# richos-user-update already resolves, for the same single-root checks.
+flate2 = "1"
+tar = "0.4"
 # A screenshot's final bytes (image_profile.rs): decoded to pixels and written again as a new
 # PNG, so nothing of the original file survives. The version the Tauri shell's lockfile holds.
 png = "0.17"

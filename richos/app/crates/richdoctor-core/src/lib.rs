@@ -12,6 +12,7 @@
 //! Nothing here opens a window or a network connection. The app crate (`crates/richdoctor`)
 //! owns the webview, the menu bar item, the login item and the HTTPS transport.
 pub mod adapter;
+pub mod bootstrap;
 pub mod collect;
 pub mod delivery;
 pub mod email;
