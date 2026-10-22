@@ -226,6 +226,9 @@ fi
 # Classified in python, assigned via a quoted heredoc first for the same bash
 # 3.2 reason guard-worktree-removal.sh documents: a `)` inside a character
 # class mis-scans as the close of a $( ) substitution on macOS's /bin/bash.
+# dispatch-words: commit
+#   (dispatch-pretooluse.sh skips this rule on a call that names none of these
+#   words: they are the words the filter below needs before it can do anything.)
 read -r -d '' _PC_CLASSIFIER <<'PYEOF' || true
 import json, os, re, sys, shlex
 

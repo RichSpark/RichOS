@@ -1310,6 +1310,21 @@ const FIXTURES = {
     });
   },
 
+  /// A BUSY UPDATE RECORD (`Failure::of_journal`, kind `busy`), the state that replaced the
+  /// 2026-10-21 "could not prepare" over "os error 35" on a plain check. Its row claims the
+  /// headline renders with `#update-check`, so it gets its own fixture for the same reason
+  /// the install failure does.
+  async "updates-busy"(browser) {
+    return openUpdates(browser, {
+      state: "failed",
+      failure: {
+        kind: "busy",
+        headline: "RichOS is busy with another update task. Try again in a minute.",
+        detail: "the update record stayed in use by another part of RichOS",
+      },
+    });
+  },
+
   /// THE §26 STATE ITSELF: an update is waiting and RichOS is working, so the control is
   /// REMOVED rather than dimmed and the sentence has to carry the whole answer on its own.
   async "updates-waiting-available"(browser) {
@@ -1834,6 +1849,36 @@ async function main() {
         "and owes a control"
     );
     return REGISTRY.filter((r) => r.c === "INFORMATIONAL").length + " INFORMATIONAL states, none issuing an instruction";
+  });
+
+  // THE FAILURE CLASS `docs/development/failure-classes/lost-input-without-a-next-step.md`.
+  // On 2026-10-21 a new user was told, in voice mode, that whatever he had just said "didn't
+  // reach me and I haven't sent anything. I'm listening now." and nothing about what to do. A
+  // line that tells someone their words did not get through is a loss, and a loss with no
+  // next step is a dead end. So every such line is ACTIONABLE (PART 3 then proves its control
+  // is on screen) and, when it is a whole sentence, says the step in words. A lead-in that
+  // ends with ":" introduces the recovery drawn right after it, and its row still names that
+  // control.
+  const LOST_INPUT = /haven't sent anything|didn't reach me|(answer|message|words?) (was|were) not sent/i;
+  const NEXT_STEP = /\b(say it again|send it again|try again|copy it|press|tap|click|retry)\b/i;
+  await run.check("every line saying his words did not get through says what to do next", async () => {
+    const lost = REGISTRY.filter((r) => LOST_INPUT.test(r.s));
+    const deadEnds = lost.filter(
+      (r) => r.c !== "ACTIONABLE" || (!r.s.trim().endsWith(":") && !NEXT_STEP.test(r.s))
+    );
+    assertEqual(
+      deadEnds.map((r) => r.c + ": " + r.s.slice(0, 110)),
+      [],
+      "a line that tells him his words did not get through must be ACTIONABLE and must say " +
+        "the next step (" + NEXT_STEP.source + ")"
+    );
+    // POSITIVE CONTROL, so an empty match cannot pass this: the 2026-10-21 sentence itself is
+    // caught, and the voice family it belongs to is in the corpus.
+    const incident = "While I was speaking, I couldn't tell your voice from my own, so if you said " +
+      "something just then, it didn't reach me and I haven't sent anything. I'm listening now.";
+    assert(LOST_INPUT.test(incident) && !NEXT_STEP.test(incident), "the rule no longer catches the incident's sentence");
+    assert(lost.length >= 3, "only " + lost.length + " lost-input lines found; the voice family alone is three");
+    return lost.length + " lines report lost input, each ACTIONABLE with its next step";
   });
 
   // ---- PART 3: the control is really on screen ------------------------------------------

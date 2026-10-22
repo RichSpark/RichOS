@@ -149,3 +149,22 @@ fn legacy_registry_loads_without_granting_repository_execution(){
  let backups:Vec<_>=std::fs::read_dir(&f.0).unwrap().flatten().filter(|e|e.file_name().to_string_lossy().ends_with(".backup.json")).collect();
  assert_eq!(backups.len(),1);assert_eq!(std::fs::read(backups[0].path()).unwrap(),original);
 }
+#[test]
+fn a_repository_inside_the_owners_company_folder_can_still_be_shared_with_another_company(){
+ // Plan item 11, §138. Alpha's company folder is the parent and Alpha has connected a
+ // repository inside it, so Alpha owns BOTH roots. Beta may still connect that repository;
+ // any other overlap with Alpha's folder is still refused.
+ let f=Fixture::new();let home=f.dir("alpha home");let project=home.join("project");std::fs::create_dir(&project).unwrap();
+ let other=home.join("other");std::fs::create_dir(&other).unwrap();
+ let reg=EntityRegistry::new(vec![Entity::try_new("alpha","Alpha",vec![home.clone()]).unwrap(),Entity::new("beta","Beta",&[]).unwrap()]).unwrap();
+ let (reg,_)=connect(&reg,&id("alpha"),&project,&f.runtime(),&[]).unwrap();
+ let (reg,_)=connect(&reg,&id("beta"),&project,&f.runtime(),&[]).unwrap();
+ assert_eq!(reg.get(&id("beta")).unwrap().connected_repositories,vec![project.clone()]);
+ assert!(reg.get(&id("beta")).unwrap().roots.is_empty(),"roots stay exclusive to Alpha");
+ assert_eq!(reg.resolve_root(&project).unwrap().id,id("alpha"));
+ assert!(connect(&reg,&id("beta"),&other,&f.runtime(),&[]).unwrap_err().contains("overlaps"),"an unconnected folder in Alpha's folder is still refused");
+ assert!(connect(&reg,&id("beta"),&home,&f.runtime(),&[]).unwrap_err().contains("overlaps"),"Alpha's company folder itself is still refused");
+ // The registry survives a save and a load.
+ reg.save(&f.0.join("entities.json")).unwrap();
+ assert_eq!(EntityRegistry::load(&f.0.join("entities.json")).registry,reg);
+}

@@ -319,24 +319,62 @@ fn root(home: &Path) -> io::Result<PathBuf> {
     }
     Ok(root)
 }
-struct Lock(File);
+/// A held `flock`. `publication` marks the publication lock (`lock`), whose holder thread is
+/// recorded in [`PUBLICATION_HELD`]. The `PhantomData` makes a `Lock` neither `Send` nor
+/// `Sync`: it is released on the thread that took it, so that record stays true.
+struct Lock(File, bool, std::marker::PhantomData<*const ()>);
+thread_local! {
+    /// This thread holds the publication lock. A second take on the same thread can never
+    /// succeed (`flock` conflicts between two descriptions even inside one process), so
+    /// [`Lock::acquire`] refuses it AT ONCE instead of waiting [`PUBLICATION_WAIT`] for a
+    /// release that only this thread could perform.
+    static PUBLICATION_HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// What a caller is told when the publication lock stayed busy for the whole
+/// [`PUBLICATION_WAIT`]. The kind stays `WouldBlock`, so a caller can tell "busy, ask again"
+/// from a real failure; the words replace the bare OS text ("Resource temporarily
+/// unavailable (os error 35)"), which said nothing about what was busy.
+pub const PUBLICATION_BUSY: &str = "the update record stayed in use by another part of RichOS";
+/// How long a publication-lock caller waits for another holder before it answers "busy".
+///
+/// Every holder of `lock` holds it for a short, bounded act: a receipt read, a lease
+/// conversion, a rename. So a caller that finds it held WAITS for it, bounded, rather than
+/// failing on the first try. Until 2026-10-21 the readers (`staged`, `last_activation`,
+/// `rollback_target`, `collect_retired`) took it with ONE non-blocking `flock` and no wait,
+/// so two of the app's own threads asking at the same moment -- the launch check's
+/// `staged()` and the window's `update_state` reading `rollback_target()` -- made one of them
+/// fail with `EWOULDBLOCK`, which a user saw as "RichOS could not prepare this update.",
+/// technical reason "Resource temporarily unavailable (os error 35)", on a Mac where nothing
+/// was being prepared at all. There is deliberately no non-waiting way to take this lock any
+/// more, so no future reader can reintroduce that.
+const PUBLICATION_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 impl Lock {
     fn acquire_startup(root: &Path) -> io::Result<Self> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            match Self::acquire(root) {
-                Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        && std::time::Instant::now() < deadline =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(20))
-                }
-                result => return result,
-            }
-        }
+        Self::acquire(root)
     }
     fn acquire(root: &Path) -> io::Result<Self> {
-        Self::named(root, "lock")
+        if PUBLICATION_HELD.with(|held| held.get()) {
+            return Err(refuse(
+                "the publication lock was taken again on the thread that already holds it",
+            ));
+        }
+        let deadline = std::time::Instant::now() + PUBLICATION_WAIT;
+        loop {
+            match Self::named(root, "lock") {
+                Ok(mut lock) => {
+                    lock.1 = true;
+                    PUBLICATION_HELD.with(|held| held.set(true));
+                    return Ok(lock);
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(io::Error::new(io::ErrorKind::WouldBlock, PUBLICATION_BUSY));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
     fn named(root: &Path, name: &str) -> io::Result<Self> {
         lock_step(|| {
@@ -351,10 +389,11 @@ impl Lock {
             if !m.is_file() || m.uid() != uid() || m.nlink() != 1 || m.mode() & 0o077 != 0 {
                 return Err(refuse("invalid update lock"));
             }
+            // lock-busy: one try. `acquire` polls it for PUBLICATION_WAIT and then answers busy in words; stage.lock's busy reaches updates.rs as WouldBlock and is said as busy.
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
                 return Err(io::Error::last_os_error());
             }
-            Ok(Self(file))
+            Ok(Self(file, false, std::marker::PhantomData))
         })
     }
 }
@@ -362,6 +401,9 @@ impl Drop for Lock {
     fn drop(&mut self) {
         unsafe {
             libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+        if self.1 {
+            PUBLICATION_HELD.with(|held| held.set(false));
         }
     }
 }
@@ -389,6 +431,7 @@ impl StartupLease {
         // EXCLUSIVE-then-SHARED is ONE observation: a fork window opening between the two
         // would answer "somebody else is running" about a child that is about to exec.
         let exclusive = lock_step(|| {
+            // lock-busy: busy is the answer: another session is running, so this one takes the shared side and does not activate.
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
                 return Ok(true);
             }
@@ -396,6 +439,7 @@ impl StartupLease {
             if error.kind() != io::ErrorKind::WouldBlock {
                 return Err(error);
             }
+            // lock-busy: busy only while a startup holds the exclusive side; WouldBlock returns to the caller: update_startup's wait_for_lock retries for 10 s, and a staging says busy (updates.rs).
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -433,6 +477,7 @@ impl StartupLease {
         // Redirected children only retain SH. Never probe EX on an inherited SH
         // description: BSD conversion can drop protection while trying to upgrade.
         lock_step(|| {
+            // lock-busy: busy only while a startup holds the exclusive side; WouldBlock returns to update_startup's wait_for_lock, which retries for 10 s.
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -471,6 +516,7 @@ impl StartupLease {
         let _publication = Lock::acquire_startup(&root)?;
         self.exclusive = false;
         let fd = self.session_fd();
+        // lock-busy: a conversion of a lease this process holds exclusively; failure marks the lease invalid and update_startup's wait_for_lock retries.
         if lock_step(|| unsafe { libc::flock(fd, libc::LOCK_SH | libc::LOCK_NB) }) != 0 {
             self.valid = false;
             return Err(io::Error::last_os_error());
@@ -1873,6 +1919,7 @@ pub fn wait_for_sessions_to_end(home: &Path, within: std::time::Duration) -> io:
                 Err(e) => return Err(e),
             };
             // Closing the file (dropped on return) releases the exclusive side again.
+            // lock-busy: one poll inside the caller's bounded `within`; busy past it is the answer false (a session still runs).
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
                 return Ok(true);
             }
@@ -2717,6 +2764,79 @@ released lease, so the next session refused to activate over a session that had 
             .unwrap()
             .success());
         assert!(preferred(&h).is_err());
+    }
+    /// THE 2026-10-21 FIRST-RUN DEFECT, as a test: a READER of the publication journal that
+    /// finds the lock held by somebody else for a moment WAITS for it. Before the fix, each of
+    /// these three failed on the first try with `EWOULDBLOCK` -- "Resource temporarily
+    /// unavailable (os error 35)" -- which the update row showed a new user as "RichOS could
+    /// not prepare this update." while nothing was being prepared.
+    #[test]
+    fn journal_readers_wait_for_a_short_hold_instead_of_failing() {
+        let t = home();
+        let h = canonical(&t);
+        let r = root(&h).unwrap();
+        for reader in ["staged", "last_activation", "rollback_target"] {
+            // The other holder is ANOTHER THREAD, as in the app (the launch check and the
+            // window's `update_state`). It takes the lock, says so, and lets go 300 ms later.
+            let (held_tx, held_rx) = std::sync::mpsc::channel();
+            let holder_root = r.clone();
+            let releaser = std::thread::spawn(move || {
+                let held = Lock::acquire(&holder_root).unwrap();
+                held_tx.send(()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                drop(held);
+            });
+            held_rx.recv().unwrap();
+            let answer = match reader {
+                "staged" => staged(&h).map(|_| ()),
+                "last_activation" => last_activation(&h).map(|_| ()),
+                _ => rollback_target(&h).map(|_| ()),
+            };
+            releaser.join().unwrap();
+            assert!(answer.is_ok(), "{reader} failed while the lock was held for 300 ms: {answer:?}");
+        }
+    }
+    /// A SECOND TAKE ON THE THREAD THAT HOLDS THE LOCK IS REFUSED AT ONCE. `flock` conflicts
+    /// between two descriptions even inside one process, so waiting could only end in the
+    /// same failure [`PUBLICATION_WAIT`] later; `update_startup.rs` read `last_activation`
+    /// inside `with_preferred`'s callback and would have paid that on every launch. A refusal
+    /// that is not `WouldBlock` is one that did not wait for the deadline: past it, the answer
+    /// is `WouldBlock`.
+    #[test]
+    fn a_second_take_on_the_holding_thread_is_refused_at_once_not_after_the_wait() {
+        let t = home();
+        let h = canonical(&t);
+        let r = root(&h).unwrap();
+        let held = Lock::acquire(&r).unwrap();
+        let error = last_activation(&h).expect_err("a second take on the holding thread succeeded");
+        assert_ne!(error.kind(), io::ErrorKind::WouldBlock, "it was treated as busy: {error}");
+        drop(held);
+        assert!(last_activation(&h).is_ok(), "the lock was not released on drop");
+    }
+    /// What a caller hears when the lock stays busy for the whole wait: `WouldBlock`, in words
+    /// that say what was busy, never the bare OS text.
+    #[test]
+    fn a_lock_still_busy_after_the_wait_says_so_in_words() {
+        let t = home();
+        let h = canonical(&t);
+        let r = root(&h).unwrap();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let holder_root = r.clone();
+        let holder = std::thread::spawn(move || {
+            let held = Lock::acquire(&holder_root).unwrap();
+            held_tx.send(()).unwrap();
+            // Err only when the test has already failed and dropped its sender.
+            done_rx.recv().unwrap_or(());
+            drop(held);
+        });
+        held_rx.recv().unwrap();
+        let error = staged(&h).expect_err("staged() succeeded while another thread held the lock");
+        done_tx.send(()).unwrap();
+        holder.join().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(error.to_string(), PUBLICATION_BUSY);
+        assert!(!error.to_string().contains("os error"), "{error}");
     }
     #[test]
     fn concurrent_install_cannot_modify_existing_journal() {

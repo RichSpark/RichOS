@@ -17,6 +17,7 @@ import advisory_rules
 from common import APP, Refusal, checked, classify, inventory, select, shellcheck, tracked
 import dialect
 import load_rules
+import lock_rules
 import process_rules
 import ratchet
 import rust
@@ -28,7 +29,7 @@ BASE = APP + "scripts/lint/baselines/"
 # Seconds of Tauri Clippy's OWN work; waiting for Cargo's lock is not counted (rust.LOCK_WAIT).
 TAURI_CAP = 180
 RULES = {**process_rules.RULES,**timeout_rules.RULES, **advisory_rules.RULES, **dialect.RULES, **suite_rules.RULES,
-         **load_rules.RULES}
+         **load_rules.RULES, **lock_rules.RULES}
 
 
 def versions(root, cargo=False):
@@ -70,6 +71,8 @@ def custom(root, rows, read=None):
         if row["language"] == "shell":
             found += process_rules.scan(text) + timeout_rules.scan(text)
             found += suite_rules.scan(path, text)
+        if row["language"] == "rust":
+            found += lock_rules.scan(text)
         for rule, line in found:
             findings.append(dict(path=path, line=line, rule=rule, classification=RULES[rule]))
             if RULES[rule] == "blocking":

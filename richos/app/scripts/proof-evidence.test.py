@@ -783,7 +783,9 @@ class Evidence(unittest.TestCase):
             return directory, rows, detail
         units = ("engine scripts/alpha.test.sh", "engine scripts/beta.test.sh")
         off = dict.fromkeys(switches, "0")
-        author, rows, detail = invoke(worktree, "author")
+        # Since 2026-10-22 an unset switch reaches every check as "0" (runner_environment), so
+        # the author's run that ran more passes is one launched with them on.
+        author, rows, detail = invoke(worktree, "author", RICHOS_MUTATION_PASSES="1", RICHOS_FOURTEEN_MUTANTS="1")
         self.assertEqual(sorted(counter.read_text().splitlines()), ["alpha", "beta"], detail)
         gate, rows, detail = invoke(self.root, "gate", "--reuse", str(author), **off)
         self.assertEqual(sorted(counter.read_text().splitlines()), ["alpha", "beta"],
@@ -1647,6 +1649,21 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
                 runner.run_main(["--coverage", str(self.root)], {})
         self.assertEqual(seen[0], seen[1])
         self.assertEqual(seen[0]["PATH"].split(os.pathsep).count(shim), 1)
+
+    def test_a_handover_run_turns_mutation_passes_off_and_a_nightly_keeps_them_on(self):
+        """2026-10-22, Hank's after-measurement: an engineer's handover run left both mutation
+        switches unset, so every suite's own mutation harness ran (22.3% of the Mac in the busy
+        window). Unset, the runner gives every check the merge gate's switch; a value the caller
+        set (the nightlies' "1", the gate's own "0") is kept."""
+        base = {k: v for k, v in os.environ.items() if k not in evidence.MUTATION_SWITCHES}
+        self.assertEqual({k: runner.runner_environment(base).get(k) for k in evidence.MUTATION_SWITCHES},
+                         dict.fromkeys(evidence.MUTATION_SWITCHES, "0"))
+        on = dict(base, RICHOS_MUTATION_PASSES="1", RICHOS_FOURTEEN_MUTANTS="1")
+        self.assertEqual({k: runner.runner_environment(on)[k] for k in evidence.MUTATION_SWITCHES},
+                         dict.fromkeys(evidence.MUTATION_SWITCHES, "1"))
+        item = runner.Item("check", str(self.root), ["bash", "suite.sh"])
+        with patch.dict(os.environ, runner.runner_environment(base), clear=True):
+            self.assertEqual(runner.execution_environment(item)["RICHOS_MUTATION_PASSES"], "0")
 
     def test_the_preflight_reads_run_files_under_a_resolved_scratch(self):
         """03-E, found by the recovery demonstration: a run-tests.sh check's command names its result

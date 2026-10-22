@@ -639,6 +639,29 @@ fn the_home_screen_team_is_the_users_own_teammates_by_name_and_role() {
     ]);
 }
 
+#[test]
+fn a_repository_connected_to_two_companies_is_a_read_root_in_each_companys_conversation() {
+    use richos_core::{EntityId, EntityRegistry, Ledger, Spine};
+    let f=Scratch::new();
+    let alpha=EntityId::parse("alpha").unwrap();let beta=EntityId::parse("beta").unwrap();
+    let mut registry=EntityRegistry::from_existing_ids(&[alpha.clone(),beta.clone()]);
+    let shared=f.0.join("shared repository");
+    std::fs::create_dir(&shared).unwrap();
+    registry.connect_repository(&alpha,shared.clone()).unwrap();
+    registry.connect_repository(&beta,shared.clone()).unwrap();
+    registry.save(&f.0.join("entities.json")).unwrap();
+    let mut spine=Spine::new(Ledger::open(f.0.join("ledger.jsonl")).unwrap());spine.set_entity_registry(registry);
+    for (name,id) in [("Alpha",&alpha),("Beta",&beta)] {
+        let thread=spine.create_thread(name,id).unwrap();
+        let mut profile=prepare_fixture(&engine(),&f.0,f.runtime()).unwrap();
+        profile.scope_to(&spine.ledger().thread_binding(&thread).unwrap()).unwrap();
+        let mut command=std::process::Command::new("/fictional/provider");profile.configure(&mut command,Path::new("/fictional/provider"),"session",&f.0.join("scope"));
+        let args:Vec<_>=command.get_args().map(|a|a.to_string_lossy().to_string()).collect();
+        let start=args.iter().position(|arg|arg=="--add-dir").unwrap()+1;
+        assert_eq!(args[start],shared.to_str().unwrap(),"{name} conversation must reach the shared repository");
+    }
+}
+
 // =======================================================================================
 // THE USER'S OWN SETTINGS FILES — CEO ruling §138; build plan 2026-10-21, item 0
 // =======================================================================================

@@ -110,6 +110,14 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
             }
         }
     } else { false };
+    // READ BEFORE `with_preferred`, never inside it: that callback runs while the publication
+    // lock is held, and `last_activation` takes the same lock. Inside, the read could never
+    // succeed (until 2026-10-21 it failed at once with EWOULDBLOCK, so `rolled_back_here` was
+    // always false; the lock now refuses a second take on the thread that holds it). Nothing
+    // between here and the redirect can change the record: only an activation writes it, an
+    // activation needs the exclusive session lease, and this process holds that lease (or
+    // its shared side, which excludes every other activation) until it exits.
+    let last_activation = richos_user_update::last_activation(&home).ok().flatten();
     let result = wait_for_lock(|| richos_user_update::with_preferred(&home, |publication| {
         if redirected {
             if exe.canonicalize()? != publication.executable(&home).canonicalize()?
@@ -127,9 +135,8 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
         // another process completed the exchange sees exactly the same changed bundle and
         // must reach the same answer. Without it, opening RichOS twice around a rollback
         // refuses to start with a sentence about a downgrade nobody attempted.
-        let rolled_back_here = richos_user_update::last_activation(&home)
-            .ok()
-            .flatten()
+        let rolled_back_here = last_activation
+            .as_ref()
             .is_some_and(|a| a.rollback && a.entered.version == publication.version);
         if loaded_bundle_changed && !newer && publication.version != compiled_version && !rolled_back_here {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Changed application cannot redirect to an older release"));
@@ -161,3 +168,32 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
 
 #[cfg(not(target_os = "macos"))]
 pub fn prepare(_compiled_version: &str) -> Result<Option<StartupLease>, String> { Ok(None) }
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::wait_for_lock;
+    use std::io::{Error, ErrorKind};
+
+    /// Startup waits out a BUSY update record (`WouldBlock`) and nothing else. Since
+    /// 2026-10-21 the record's lock refuses a second take on the thread that holds it with
+    /// `InvalidData` (richos-user-update `Lock::acquire`), and that refusal must end a startup
+    /// wait at once: retried, it would cost every launch this loop's whole 10 s for an answer
+    /// that cannot change. Counted in attempts, never timed.
+    #[test]
+    fn startup_retries_a_busy_record_and_returns_any_other_refusal_at_once() {
+        let mut attempts = 0;
+        let busy_twice = wait_for_lock(|| {
+            attempts += 1;
+            if attempts < 3 { Err(Error::from(ErrorKind::WouldBlock)) } else { Ok(attempts) }
+        });
+        assert_eq!(busy_twice.unwrap(), 3, "a busy record is waited out");
+
+        let mut attempts = 0;
+        let refused = wait_for_lock(|| -> std::io::Result<()> {
+            attempts += 1;
+            Err(Error::from(ErrorKind::InvalidData))
+        });
+        assert_eq!(refused.unwrap_err().kind(), ErrorKind::InvalidData);
+        assert_eq!(attempts, 1, "a refusal that is not busy was retried");
+    }
+}
