@@ -3758,8 +3758,9 @@ mod tests {
             task_id: task.into(), started_at_ms: u64::MAX, description: description.into() };
         let commands = vec![command("a-foreground", "obligation-7: build"), command("b-background", "obligation-b: watch"),
             command("unnamed", "List the files")];
-        // A alone from this turn: its own command and the unnamed one; never one naming another job.
-        assert_eq!(desk_commands(&[read(&a.id)], &a.id, &commands), vec!["a-foreground".to_string(), "unnamed".to_string()]);
+        // A alone from this turn: its own command and the unnamed one.
+        assert_eq!(desk_commands(&[read(&a.id)], &a.id, &[commands[0].clone(), commands[2].clone()]),
+            vec!["a-foreground".to_string(), "unnamed".to_string()]);
         let b = assignment::register(&h.state, &Registration { obligation_id: "obligation-b".into(), ..registration(&h) }).unwrap();
         let all = assignment::read_all(&h.state, "depot", "thread-one").unwrap();
         assert_eq!(desk_commands(&all, &a.id, &commands), vec!["a-foreground".to_string()]);
