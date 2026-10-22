@@ -120,7 +120,7 @@ let repositoryRoot: URL = {
             .voiceInterrupted(at: 15), .voiceLevel(0.4), .voiceSettled, .sendKept(id: "k", at: 16), .discardKept(id: "k"),
             .playRecording(id: "k"),
             .turnOnNotifications, .notificationsResult(.denied), .turnOffNotifications, .dismissNotificationOffer,
-            .setPreviews(false), .forgetPairing, .confirmForget, .openSystemSettings,
+            .setPreviews(false), .forgetPairing, .confirmForget, .discardUnsentAndForget, .openSystemSettings,
             .updatePolicy(UpdateNotice(prominence: .banner, version: "1.1", message: "x"), voicePaused: true),
             .updatePolicy(nil, voicePaused: false), .dismissUpdate, .openAppStore, .openSupport,
             .checkForUpdates, .openPrivacyPolicy, .discardUnsentAndPair,

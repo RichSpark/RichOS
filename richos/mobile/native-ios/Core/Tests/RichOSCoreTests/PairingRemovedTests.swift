@@ -83,6 +83,33 @@ import Testing
         #expect(s.fingerprintWords.count == 6)
     }
 
+    /// A Mac that is gone for good (reinstalled, replaced) with a message still waiting for it: the
+    /// iPhone TEST app on 2026-10-22 had no way out. Forget was refused while the message waited, the
+    /// message had no Discard (only one that needs attention has), and a paired phone has no
+    /// pairing link. "Discard and forget" in the refusal is that way out.
+    @Test func discardAndForgetLetsAPhoneWhoseMacIsGonePairAgain() throws {
+        var s = removedWithWork()
+        s.pairing = .paired
+        s.connectionNotice = .macUnreachable
+        s = Reducer.reduce(s, .forgetPairing).state
+        #expect(s.sheet == .forgetBlocked)
+        let (forgotten, effects) = Reducer.reduce(s, .discardUnsentAndForget)
+        #expect(forgotten.outbox.isEmpty)
+        #expect(forgotten.mac == nil)
+        #expect(forgotten.screen == .pairIntro)
+        #expect(effects.contains(.forgetIdentity(origin: "https://mm1.tail1a2b3c.ts.net:8443")))
+        // Nothing is sent: the Mac it was written for never gets it, and neither does the next.
+        #expect(!effects.contains { if case .deliver = $0 { return true } else { return false } })
+        let pairing = Reducer.reduce(forgotten, .submitPairingLink(text: "https://mm2.tail1a2b3c.ts.net:8443/#pair=K7M2QX9H")).state
+        #expect(pairing.pairing == .connecting)
+    }
+
+    @Test func discardAndForgetDoesNothingOutsideTheRefusal() throws {
+        var s = removedWithWork()
+        s.pairing = .paired
+        #expect(Reducer.reduce(s, .discardUnsentAndForget).state == s)
+    }
+
     @Test func discardAndPairDoesNothingWithoutTheQuestion() {
         let s = removedWithWork()
         #expect(Reducer.reduce(s, .discardUnsentAndPair).state == s)

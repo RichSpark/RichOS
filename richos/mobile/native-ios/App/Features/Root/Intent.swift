@@ -68,6 +68,8 @@ enum Intent: Equatable, Sendable {
     case openPrivacyPolicy
     case forget
     case confirmForget
+    /// "Discard and forget" in the refusal: the way out for a phone whose Mac is gone for good.
+    case discardAndForget
     case showWaiting
     case closeDialog
     case setAppearance(Appearance)
@@ -137,6 +139,7 @@ enum Intent: Equatable, Sendable {
         case .openWhereMessagesGo, .learnMore: return .openSheet(.whereMessagesGo)
         case .forget: return .forgetPairing
         case .confirmForget: return .confirmForget
+        case .discardAndForget: return .discardUnsentAndForget
         case .openSystemSettings: return .openSystemSettings
         case .turnOnNotifications: return .turnOnNotifications
         case .notificationsNotNow: return .dismissNotificationOffer

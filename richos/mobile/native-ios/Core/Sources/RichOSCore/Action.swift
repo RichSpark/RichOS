@@ -169,6 +169,9 @@ public enum Action: Equatable, Sendable {
     case forgetPairing
     /// The filled, destructive button in the confirmation.
     case confirmForget
+    /// "Discard and forget" in the refusal (`settings-forget-blocked`): the waiting messages go and the
+    /// pairing is forgotten, so a phone whose Mac is gone for good can pair again.
+    case discardUnsentAndForget
     case openSystemSettings
     // update notices (group 10)
     /// The hosted policy's verdict for this app version (contract §5.10).
@@ -350,7 +353,7 @@ public enum Reducer {
              .voiceTouchCanceled, .voiceStartFailed, .voiceInterrupted, .voiceLevel, .voiceSettled, .sendKept, .discardKept, .playRecording:
             VoiceReducer.reduce(&next, action, &effects)
         case .turnOnNotifications, .notificationsResult, .turnOffNotifications, .dismissNotificationOffer, .setPreviews,
-             .forgetPairing, .confirmForget, .openSystemSettings:
+             .forgetPairing, .confirmForget, .discardUnsentAndForget, .openSystemSettings:
             SettingsReducer.reduce(&next, action, &effects)
         case .updatePolicy, .dismissUpdate, .openAppStore, .openSupport, .checkForUpdates, .openPrivacyPolicy:
             UpdateReducer.reduce(&next, action, &effects)
