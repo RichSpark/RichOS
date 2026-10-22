@@ -328,6 +328,8 @@ class Walk(adopt.Walk):
         while time.monotonic() < end:
             if recorded(self.rows(), names, sent):
                 assignments, calls = self.assignments_since(sent), self.commands_run(tag)
+                # In the walk's log at once: a later verdict that fails keeps who ran them.
+                print('run_by %s %s' % (tag, json.dumps({'assignments': assignments, 'calls': calls})), flush=True)
                 wrong = rich_ran_handed(calls, assignments)
                 if wrong:
                     raise StepFailed(wrong)
