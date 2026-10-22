@@ -897,6 +897,149 @@ class Evidence(unittest.TestCase):
         executes_all("other-installs", own, "a pass made against another dependency install was reused",
                      "the two checkouts load different dependency installs")
 
+    def test_a_pass_stands_at_a_later_commit_only_where_the_selector_does_not_select_it(self):
+        """2026-10-22, zach-opus-holds3: after a three-file change the fourth handover run reused
+        0 of the 94 checks its third run had passed 92 of, because a check with no reviewed read
+        list is keyed by the whole checkout (richos-hq docs/research/2026-10-22-mac-system-cpu-
+        round2.md). Lead's answer to esc-20261022T054303Z-e2b6f41e: a pass saved at commit A
+        stands at B when the rest of its identity is unchanged and the selector, mapping A..B
+        cleanly, would not select it; where it cannot map A..B cleanly, the check runs. Real
+        runner, ci-shard.sh and coverage verifier, with a stand-in selector that maps each
+        changed path through a fixed table: a selected check still runs, an unselected one is
+        reused, and an unmapped path, an uncommitted change or a changed environment runs all."""
+        app, engine = self.copy_runner_fixture()
+        counter = Path(self.tmp.name) / "executions"
+        for name in ("alpha", "beta"):
+            path = engine / "scripts" / (name + ".test.sh")
+            path.write_text('#!/bin/bash\nprintf "' + name + '\\n" >> "$FIXTURE_COUNTER"\n')
+            path.chmod(0o755)
+        (engine / "scripts/alpha-input.txt").write_text("alpha reads this\n")
+        (self.root / "gamma.test.sh").write_text('printf "gamma\\n" >> "$FIXTURE_COUNTER"\n')
+        (self.root / "notes.txt").write_text("read by no check\n")
+        (self.root / "LICENSE").write_text("fixture license\n")
+        shard = "cd %s && bash scripts/ci-shard.sh --only-units " % "richos/engine"
+        units = {name: "scripts/%s.test.sh" % name for name in ("alpha", "beta")}
+        table = Path(self.tmp.name) / "selector-table.json"
+        table.write_text(json.dumps({"richos/engine/scripts/alpha-input.txt": [shard + units["alpha"]],
+                                    "notes.txt": []}))
+        # The stand-in selector: proof-for.sh's contract (the lines on stdout, exit 1 for a changed
+        # path no suite covers), over `git diff --name-only <range>` exactly as proof-for.sh reads it.
+        selector = app / "proof-for.sh"
+        selector.write_text(
+            "#!/bin/bash\nexec python3 -c '\n"
+            "import json, subprocess, sys\n"
+            "table = json.load(open(sys.argv[1]))\n"
+            "changed = subprocess.check_output([\"git\", \"diff\", \"--name-only\", sys.argv[-1]], text=True).split()\n"
+            "if any(path not in table for path in changed):\n"
+            "    sys.exit(1)\n"
+            "print(\"\\n\".join(sorted({line for path in changed for line in table[path]})))\n"
+            "' \"$FIXTURE_SELECTOR_TABLE\" \"$@\"\n")
+        selector.chmod(0o755)
+        umask = os.umask(0)
+        os.umask(umask)
+        for written in self.root.rglob("*"):
+            if written.is_file() and not written.is_symlink():
+                written.chmod((0o777 if written.stat().st_mode & 0o100 else 0o666) & ~umask)
+
+        def git(*args):
+            return subprocess.check_output(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture",
+                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *args],
+                cwd=self.root, text=True, stderr=subprocess.PIPE).strip()
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "A")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("RICHOS_", "GIT_"))}
+        env.update(RICHOS_MACHINE_WORKERS=str(Path(self.tmp.name) / "machine"),
+            RICHOS_ENGINE_PASS_DIR=str(Path(self.tmp.name) / "slot"),
+            RICHOS_PROOF_RUN_DIR=str(Path(self.tmp.name) / "history"),
+            RICHOS_PROOF_RUN_SLOTS_DIR=str(Path(self.tmp.name) / "proof-slots"),
+            CLAUDE_CONFIG_DIR=str(Path(self.tmp.name) / "config"),
+            FIXTURE_COUNTER=str(counter), FIXTURE_SELECTOR_TABLE=str(table), PYTHONDONTWRITEBYTECODE="1")
+        commands = Path(self.tmp.name) / "commands"
+        commands.write_text(shard + ",".join(units.values()) + "\ncd . && bash gamma.test.sh\n")
+
+        def invoke(name, previous=None, **extra):
+            counter.write_text("")
+            # Only the offered run is under test: the input-owner pool joins exact passes by itself.
+            shutil.rmtree(Path(env["RICHOS_PROOF_RUN_DIR"]) / "input-owners", ignore_errors=True)
+            directory = Path(self.tmp.name) / name
+            result = subprocess.run([*idle_proof_run(app / "proof-run.py"), "--commands", str(commands),
+                "--log-dir", str(directory), *(["--reuse", str(previous)] if previous else [])],
+                cwd=self.root, env=dict(env, **extra), text=True, capture_output=True, timeout=120)
+            detail = result.stdout + result.stderr + "\n" + "\n".join(p.read_text() for p in directory.glob("*.log"))
+            self.assertEqual(result.returncode, 0, detail)
+            rows = {row["check"]: row for row in json.loads((directory / "summary.json").read_text())["checks"]}
+            self.assertEqual(rows["engine receipts"]["result"], "passed", detail)
+            return directory, sorted(counter.read_text().splitlines()), rows, detail
+
+        first, executed, _rows, detail = invoke("A")
+        self.assertEqual(executed, ["alpha", "beta", "gamma"], detail)
+        # B: alpha's input and a file no check reads. The selector selects alpha alone.
+        (engine / "scripts/alpha-input.txt").write_text("alpha reads this, changed\n")
+        (self.root / "notes.txt").write_text("read by no check, changed\n")
+        git("commit", "-qam", "B")
+        second, executed, rows, detail = invoke("B", first)
+        self.assertEqual(executed, ["alpha"], "a check the selector does not select ran again, or alpha "
+                         "(selected) did not\n" + detail)
+        for check in ("engine scripts/beta.test.sh", "gamma"):
+            self.assertEqual(rows[check]["reused_from"], str(first), detail)
+        self.assertIn("the selector maps", detail)
+        self.assertIsNone(rows["engine scripts/alpha.test.sh"]["reused_from"], detail)
+        # A pass that stood stands again at the next commit, from the run it stood in.
+        (self.root / "notes.txt").write_text("read by no check, changed twice\n")
+        git("commit", "-qam", "C")
+        third, executed, rows, detail = invoke("C", second)
+        self.assertEqual(executed, [], detail)
+        # D: a changed path the selector cannot map. Everything runs.
+        (self.root / "orphan.sh").write_text("#!/bin/sh\n")
+        git("add", "orphan.sh")
+        git("commit", "-qm", "D")
+        _run, executed, _rows, detail = invoke("D", third)
+        self.assertEqual(executed, ["alpha", "beta", "gamma"], "a pass stood over a change the selector "
+                         "cannot map\n" + detail)
+        self.assertIn("cannot map", detail)
+        git("rm", "-q", "orphan.sh")
+        git("commit", "-qm", "E")
+        fifth, executed, _rows, detail = invoke("E", third)
+        self.assertEqual(executed, [], "removing the unmapped file returned the tree to C's content\n" + detail)
+        # An uncommitted change: no commit range describes it. Everything runs.
+        (self.root / "notes.txt").write_text("uncommitted\n")
+        _run, executed, _rows, detail = invoke("dirty", fifth)
+        self.assertEqual(executed, ["alpha", "beta", "gamma"], detail)
+        self.assertIn("this checkout is not a clean commit", detail)
+        git("commit", "-qam", "F")
+        # Another environment at a clean commit the selector maps: the rest of the identity changed.
+        _run, executed, _rows, detail = invoke("environment", fifth, RICHOS_FIXTURE_SETTING="other")
+        self.assertEqual(executed, ["alpha", "beta", "gamma"], detail)
+        self.assertIn("inputs other than the checkout's content changed", detail)
+
+    def test_a_recipe_pass_stands_only_once_its_identity_binds_ignored_files(self):
+        """What git ignores, no selector sees: a reviewed recipe's paths bind ignored files, so a
+        recipe identity that does not name them apart (saved before they were bound) never stands,
+        and one whose ignored files changed never stands either."""
+        source = {"commit": "a" * 40, "tracked_diff_sha256": evidence.EMPTY_SHA256,
+                  "untracked_sha256": evidence.EMPTY_SHA256}
+        later = dict(source, commit="b" * 40)
+        recipe = {"contract": "c1", "paths": {"richos/engine": "p1"}, "tools": {}, "environment": {},
+                  "ignored": "i1", "settings": {}}
+        old = {"state": "passed", "exit": 0, "source": source, "input": recipe}
+        asked = []
+
+        def unaffected(a, b, label):
+            asked.append((a, b, label))
+            return None
+        now = dict(recipe, contract="c2", paths={"richos/engine": "p2"})
+        self.assertIsNone(evidence.selection_standing("u", old, now, later, unaffected))
+        self.assertEqual(asked, [("a" * 40, "b" * 40, "u")])
+        before = dict(old, input={k: v for k, v in recipe.items() if k != "ignored"})
+        self.assertEqual(evidence.selection_standing("u", before, now, later, unaffected),
+                         "its identity predates the binding of ignored files")
+        self.assertIn("inputs other than the checkout's content changed",
+                      evidence.selection_standing("u", old, dict(now, ignored="i2"), later, unaffected))
+        self.assertEqual(evidence.selection_standing("u", old, now, dict(later, untracked_sha256="x"), unaffected),
+                         "this checkout is not a clean commit")
+        self.assertEqual(len(asked), 1, "the selector was asked where the identities already refused")
+
     def test_actual_cross_commit_coverage_rechecks_inputs_and_keeps_original_sha(self):
         self.cross_commit_coverage()
 
