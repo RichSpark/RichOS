@@ -303,6 +303,9 @@
   // ---- the lanes ------------------------------------------------------------------------
   function accountNote(a) {
     if (isUsedUp(a)) { const limit = "Usage limit reached"; return `${limit} · usable again ${stamp(a.exhaustedUntil, true)}`; }
+    // Signed in with no reading (quota.rs `Snapshot::signed_in`, kept through a check that got no
+    // answer) is only reached through a check that reported no limits, so that is its sentence.
+    if (!a.message && a.signedIn === true) return "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show.";
     return a.message || (a.checkedAt ? "No allowance reported." : "Not read yet. Sign in, then refresh.");
   }
   function figure(w, name, old) {
@@ -360,7 +363,9 @@
         side.appendChild(first);
       }
       if (a.id !== "1") {
-        if (!read && !signing) {
+        // An account Claude Code says is signed in is never offered Sign in for want of a
+        // reading (mid-job review rv-20261022T014956Z-56662dcd-dcc3, finding 1).
+        if (!read && !signing && a.signedIn !== true) {
           const signIn = node("button", "quota-btn quota-btn-quiet", "Sign in"); signIn.type = "button"; signIn.disabled = accountBusy;
           signIn.setAttribute("aria-label", `Sign in to ${a.label}`); signIn.dataset.focus = "sign-" + a.id;
           signIn.addEventListener("click", () => accountSignIn(a.id));

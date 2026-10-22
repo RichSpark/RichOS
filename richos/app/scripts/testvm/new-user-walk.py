@@ -27,7 +27,9 @@ STEPS, in the guest, never on the host's screen (CEO ruling 65):
   signed-out  Claude Code is on this Mac and nobody is signed in to it. A message typed and sent
               with real keys. PASS only when the turn ends with the not-signed-in cause and the
               screen names the way out (sign in), never the transient "usually fixes itself"
-              sentence and never machinery rows
+              sentence and never machinery rows. Two messages, as a new user sends them
+  accounts    Settings, Claude accounts, still signed out: PASS when the card says the account
+              is not signed in and offers Sign in, never "No reading yet"
   update      Settings opened, the update check pressed once: PASS when the row reaches a
               verdict (up to date, available, ready) and never a raw OS error
   signed-in   the host's login pushed into this home's keychain (claude-login.sh push), as a
@@ -59,9 +61,10 @@ _spec = importlib.util.spec_from_file_location('setup_walk', HERE / 'setup-walk.
 setup_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(setup_walk)
 StepFailed = setup_walk.StepFailed
-command = setup_walk.command
+# The one subprocess helper every walk uses lives in adopt-walk.py, which setup-walk.py loads.
+command = setup_walk.adopt_walk.command
 
-STEPS = ['identity', 'setup', 'signed-out', 'update', 'signed-in']
+STEPS = ['identity', 'setup', 'signed-out', 'accounts', 'update', 'signed-in']
 RETURN_KEY = '36'
 COMPANY = 'RV Park'
 
@@ -72,12 +75,19 @@ DEAD_ENDS = {
     'retry loop on a permanent cause': r'usually fixes itself',
     'machinery in the user view': r'control_request|system:init|outcome not recorded|Between turns',
     'account state unknown': r'No reading yet',
+    # Claude Code's own terminal instruction, shown as Rich's reply on 1.2.1 (guest walk,
+    # 2026-10-21): a person using the app has no terminal to run it in.
+    "machine words as Rich's words": r'Please run /login',
 }
 
 
 def dead_ends(text):
-    """The dead-end names whose pattern matches TEXT (OCR or accessibility text)."""
-    return sorted(name for name, pattern in DEAD_ENDS.items() if re.search(pattern, text or '', re.I))
+    """The dead-end names whose pattern matches TEXT (OCR or accessibility text). Whitespace is
+    folded first: OCR keeps the screen's line breaks, so "No reading\\nyet" (a sentence wrapped
+    where the card wraps it) slipped past every pattern (review rv-20261021T193611Z-6df3f1f3-b313,
+    finding 1)."""
+    flat = re.sub(r'\s+', ' ', text or '')
+    return sorted(name for name, pattern in DEAD_ENDS.items() if re.search(pattern, flat, re.I))
 
 
 def turn_outcome(rows, words):
@@ -115,6 +125,8 @@ def signed_out_verdict(outcome, screen_hits, screen_text):
     if outcome.get('cause') != 'not-signed-in':
         return ('the turn ended as %r (%s), not as "not signed in": the user is told the wrong thing'
                 % (outcome.get('cause'), outcome.get('reason')))
+    if outcome.get('rich_wrote'):
+        return "the turn failed and still recorded text as Rich's answer (the vendor's line as his words)"
     if screen_hits:
         return 'dead end on screen: ' + ', '.join(screen_hits)
     if not re.search(r'sign in', screen_text or '', re.I):
@@ -122,13 +134,73 @@ def signed_out_verdict(outcome, screen_hits, screen_text):
     return None
 
 
-def update_verdict(line, screen_hits):
+def accounts_verdict(text, sheet=None, sign=None):
+    """None when Settings, Claude accounts tells a signed-out new user so, with the way to sign
+    in, else why not (the dead end of 2026-10-21: "In use now" over "No reading yet").
+
+    SHEET is the Claude accounts sheet's own close button as the accessibility tree reports it
+    (present only while the sheet is open) and SIGN the card's own Sign in button
+    (#acc-sign-one). Text alone is not enough: Settings' row says "Not signed in on this Mac"
+    and the interruption before it says "sign in", so a frame could pass with no account card
+    and no button at all (review rv-20261021T213648Z-b3f0990a-85f9, finding 2)."""
+    hits = dead_ends(text)
+    if hits:
+        return 'dead end on screen: ' + ', '.join(hits)
+    if not sheet:
+        return 'the Claude accounts sheet did not open'
+    if not sign:
+        return "the account card has no Sign in button"
+    if sign.get('enabled') is False:
+        return 'the account card\'s Sign in button cannot be pressed'
+    if not re.search(r'sign in', ' '.join(str(sign.get(k) or '') for k in ('title', 'desc', 'value')), re.I):
+        return 'the account card\'s Sign in button does not say Sign in'
+    if not re.search(r'not signed in', text or '', re.I):
+        return 'the account card does not say the account is not signed in'
+    if not re.search(r'sign in', re.sub(r'not signed in', '', text or '', flags=re.I), re.I):
+        return 'the account card does not offer the sign-in'
+    return None
+
+
+# The update row's headlines once a check has an answer (ui/updates.js `words`): up to date,
+# available, ready, going back, or a failure's headline. While it checks, the headline is the
+# bare "RichOS <version>" with "Checking for updates…" under it, so the headline alone is no
+# verdict (review rv-20261021T153457Z-fb99f171-52f1, finding 2).
+UPDATE_VERDICT = r'is up to date\.|is available\.|is ready|will go back|could not|did not|cannot'
+
+
+def update_settled(line, sub):
+    """True once the update row (headline LINE, subtitle SUB) says how the check ended."""
+    return bool(line) and bool(re.search(UPDATE_VERDICT, line, re.I)) \
+        and not re.search(r'checking|looking|downloading|preparing', (sub or '') + ' ' + line, re.I)
+
+
+def update_row(text):
+    """(headline, subtitle) of Settings' Updates row, read from a frame's OCR TEXT: the two lines
+    after the "Updates" heading. The accessibility tree's `value` of #update-line came back empty
+    on the guest walk of 2026-10-21 (WebKit keeps a paragraph's words in its child text) while
+    the frame said "RichOS 1.2.2 is up to date.", so the row is read the way a person reads it."""
+    lines = [l.strip() for l in (text or '').splitlines() if l.strip()]
+    for i, line in enumerate(lines):
+        if line == 'Updates':
+            rest = lines[i + 1:i + 3] + [None, None]
+            return rest[0], rest[1]
+    return None, None
+
+
+def settings_open(text):
+    """Whether a frame's OCR TEXT shows the Settings panel (its first column's heading)."""
+    return bool(re.search(r'^\s*HOW IT LOOKS\s*$', text or '', re.M))
+
+
+def update_verdict(line, sub, screen_hits):
     """None when the update row reached a verdict a user can act on, else why not."""
     if screen_hits:
         return 'dead end on screen: ' + ', '.join(screen_hits)
     if not line:
         return 'the update row says nothing'
-    if re.search(r'could not', line, re.I):
+    if not update_settled(line, sub):
+        return 'the update check never reached a verdict: %s / %s' % (line, sub)
+    if re.search(r'could not|did not|cannot', line, re.I):
         return 'the update check failed: ' + line
     return None
 
@@ -138,16 +210,23 @@ class NewUserWalk(setup_walk.SetupWalk):
         super().__init__(a)
         self.company = self.home + '/' + COMPANY.replace(' ', '-')
         self.report = {}
+        # Every frame taken, with the dead ends on it (run_step judges each step by its frames).
+        self.seen = []
 
     # --- evidence -----------------------------------------------------------------------------
     def frame(self, name):
-        """A frame of the guest's screen, and the dead ends OCR finds on it."""
+        """A frame of the guest's screen and ALL of its text, read through the shared OCR cache
+        (qa/ocr-read.py). Never ocr-find's `--show`, which prints at most three matching lines
+        per frame, so three harmless lines could hide a dead end (review
+        rv-20261021T153457Z-fb99f171-52f1, finding 1)."""
         self.shot(name + '.png')
-        found = subprocess.run([str(HERE.parent / 'qa' / 'ocr-find.sh'), '|'.join(DEAD_ENDS.values()) + '|sign in',
-                                str(self.out / (name + '.png')), '--show'], capture_output=True, text=True, timeout=90)
-        if found.returncode not in (0, 1):
-            raise StepFailed('ocr-find could not read %s.png: %s' % (name, found.stderr.strip()))
-        return found.stdout
+        read = subprocess.run([sys.executable, str(HERE.parent / 'qa' / 'ocr-read.py'), str(self.out / (name + '.png'))],
+                              capture_output=True, text=True, timeout=90)
+        if read.returncode != 0:
+            raise StepFailed('ocr-read could not read %s.png: %s' % (name, read.stderr.strip()))
+        (self.out / (name + '.txt')).write_text(read.stdout)
+        self.seen.append((name, dead_ends(read.stdout)))
+        return read.stdout
 
     def ledger_rows(self):
         rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
@@ -235,10 +314,11 @@ class NewUserWalk(setup_walk.SetupWalk):
 
     def send(self, words, name, seconds):
         """Type WORDS into the composer with real keys, send with Return, and wait for its turn to end."""
-        self.ax('click', '--title', 'Message to Rich', '--role', 'AXTextArea', '--contains', '--first')
-        literal = words.replace('\\', '\\\\').replace('"', '\\"')
-        command([HERE / 'guest.sh', self.vm, 'osascript', '-e',
-                 'tell application "System Events" to keystroke "%s"' % literal], 120)
+        # ax.sh `type` sets the composer's focus and VERIFIES it before a word is sent
+        # (`focusfailed` otherwise). A click on a text area does not focus it: on the guest walk
+        # of 2026-10-21 the third message was typed into nothing once Settings had been opened
+        # and closed, and the composer stayed empty.
+        self.type_into(words, '--role', 'AXTextArea', '--title', 'Message to Rich')
         command([HERE / 'ax.sh', self.vm, '--key', RETURN_KEY])
         end = time.monotonic() + seconds
         outcome = None
@@ -252,38 +332,83 @@ class NewUserWalk(setup_walk.SetupWalk):
         return outcome, text
 
     def signed_out(self):
-        words = 'what do I do now?'
-        outcome, text = self.send(words, 'signed-out', self.a.turn_within)
-        hits = dead_ends(text)
-        self.report['signed-out'] = {'outcome': outcome, 'screen': text.strip()[-1500:], 'dead_ends': hits}
+        """Two messages, as he sent them: the second is where a passing-hiccup sentence becomes a
+        loop. Each must end not-signed-in, with the way out on screen and no dead end."""
+        rows = []
+        for n, words in enumerate(('what do I do now?', 'Test to see if something is working.'), 1):
+            outcome, text = self.send(words, 'signed-out-%d' % n, self.a.turn_within)
+            hits = dead_ends(text)
+            rows.append({'words': words, 'outcome': outcome, 'screen': text.strip()[-1500:], 'dead_ends': hits,
+                         'verdict': signed_out_verdict(outcome, hits, text)})
+        self.report['signed-out'] = rows
         self.pull()
-        why = signed_out_verdict(outcome, hits, text)
+        why = '; '.join('message %d: %s' % (n, r['verdict']) for n, r in enumerate(rows, 1) if r['verdict'])
         if why:
             raise StepFailed(why)
         return self.report['signed-out']
 
+    def accounts(self):
+        """Settings, Claude accounts, signed out: the card says so and offers Sign in."""
+        self.settings(True, 'accounts-settings')
+        self.ax('click', '--id', 'set-accounts-open', '--first')
+        end = time.monotonic() + 120
+        text, sheet, sign = '', None, None
+        while time.monotonic() < end:
+            time.sleep(5)
+            text = self.frame('accounts')
+            sheet, sign = self.by_id('acc-close'), self.by_id('acc-sign-one')
+            if sheet and (sign or 'No reading yet' in text):
+                break
+        if sheet:
+            self.ax('click', '--id', 'acc-close', '--first')  # the sheet's own close button
+            time.sleep(1)
+        self.settings(False, 'accounts-closed')
+        self.report['accounts'] = {'screen': text.strip()[-1500:], 'dead_ends': dead_ends(text),
+                                   'sheet_open': bool(sheet),
+                                   'sign_in': sign and {k: sign.get(k) for k in ('role', 'title', 'desc', 'enabled')}}
+        why = accounts_verdict(text, sheet, sign)
+        if why:
+            raise StepFailed(why)
+        return self.report['accounts']
+
+    def settings(self, want_open, name):
+        """Open or close Settings the way a person does, with its own button, and check the frame:
+        Escape left it open on the guest walk of 2026-10-21, and the next message was typed into
+        nothing. Returns the frame's text with Settings in the state asked for."""
+        text = self.frame(name)
+        for _ in range(2):
+            if settings_open(text) == want_open:
+                return text
+            self.ax('click', '--id', 'set-btn', '--first')
+            time.sleep(2)
+            text = self.frame(name)
+        if settings_open(text) != want_open:
+            raise StepFailed('Settings did not %s' % ('open' if want_open else 'close'))
+        return text
+
     def update(self):
-        self.ax('click', '--id', 'set-btn', '--first')
-        time.sleep(2)
-        before = (self.by_id('update-line') or {}).get('value')
+        text = self.settings(True, 'update-before')
+        before = update_row(text)
         if self.by_id('update-check'):
             self.ax('click', '--id', 'update-check', '--first')
-        line = before
-        end = time.monotonic() + 90
+        line, sub = before
+        # Until the row says how the check ended (update_settled), never on an in-between state,
+        # read off the frame as a person reads it (update_row).
+        end = time.monotonic() + self.a.update_within
         while time.monotonic() < end:
-            time.sleep(3)
-            line = (self.by_id('update-line') or {}).get('value')
-            if line and not re.search(r'checking|looking', line, re.I):
+            time.sleep(5)
+            text = self.frame('update')
+            line, sub = update_row(text)
+            if update_settled(line, sub):
                 break
-        text = self.frame('update')
         if self.by_id('update-why'):
             self.ax('click', '--id', 'update-why', '--first')
             time.sleep(1)
             text += self.frame('update-reason')
         hits = [h for h in dead_ends(text) if h == 'raw OS error']
-        self.report['update'] = {'before': before, 'line': line, 'dead_ends': hits}
-        command([HERE / 'ax.sh', self.vm, '--key', '53'])  # Escape closes Settings
-        why = update_verdict(line, hits)
+        self.report['update'] = {'before': before, 'line': line, 'sub': sub, 'dead_ends': hits}
+        self.settings(False, 'update-closed')
+        why = update_verdict(line, sub, hits)
         if why:
             raise StepFailed(why)
         return self.report['update']
@@ -304,6 +429,33 @@ class NewUserWalk(setup_walk.SetupWalk):
         return self.report['signed-in']
 
 
+def frames_with_dead_ends(seen):
+    """'frame: dead end, ...; ...' for every captured (frame, hits) pair that has one, else ''."""
+    return '; '.join('%s: %s' % (name, ', '.join(hits)) for name, hits in seen if hits)
+
+
+def run_step(walk, step):
+    """Walk STEP and judge it, AND every frame it captured against every known dead end. A step's
+    own verdict looks at the part of the screen it is about; a dead end anywhere else on a frame it
+    took still fails it (review rv-20261021T183543Z-ad01d021-62a5: the update step kept only
+    'raw OS error' and passed a frame showing 'Between turns')."""
+    start = len(walk.seen)
+    row = {'step': step}
+    try:
+        row['evidence'] = getattr(walk, step.replace('-', '_'))()
+        row['outcome'] = 'PASS'
+    except (StepFailed, RuntimeError, ValueError, KeyError, IndexError, subprocess.TimeoutExpired) as exc:
+        row['outcome'] = 'FAIL'
+        row['detail'] = str(exc)
+    hits = frames_with_dead_ends(walk.seen[start:])
+    if hits:
+        row['frame_dead_ends'] = hits
+        if row['outcome'] == 'PASS':
+            row['outcome'] = 'FAIL'
+            row['detail'] = 'dead end on screen: ' + hits
+    return row
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('vm')
@@ -311,6 +463,8 @@ def main():
     p.add_argument('--expect-sha', default='', help='the commit the bundle under test was built from')
     p.add_argument('--within', type=float, default=1200, help='seconds for first setup (it fetches Claude Code and the engine)')
     p.add_argument('--turn-within', type=float, default=240, help='seconds for one message to Rich to end')
+    p.add_argument('--update-within', type=float, default=180,
+                   help='seconds for the update check to reach a verdict; past it the step fails, never passes')
     p.add_argument('--steps', default=','.join(STEPS))
     p.add_argument('--keep-going', action='store_true',
                    help='walk every step even after one fails (to collect evidence; the exit status still fails)')
@@ -324,14 +478,8 @@ def main():
     ok = True
     for step in steps:
         began = time.monotonic()
-        row = {'step': step}
-        try:
-            row['evidence'] = getattr(walk, step.replace('-', '_'))()
-            row['outcome'] = 'PASS'
-        except (StepFailed, RuntimeError, ValueError, KeyError, IndexError, subprocess.TimeoutExpired) as exc:
-            row['outcome'] = 'FAIL'
-            row['detail'] = str(exc)
-            ok = False
+        row = run_step(walk, step)
+        ok = ok and row['outcome'] == 'PASS'
         row['seconds'] = round(time.monotonic() - began, 1)
         report['steps'].append(row)
         a.out.mkdir(parents=True, exist_ok=True)
@@ -339,6 +487,12 @@ def main():
         print(f"{step}: {row['outcome']}" + (f" — {row.get('detail')}" if row['outcome'] != 'PASS' else ''), flush=True)
         if not ok and not a.keep_going:
             break
+    # THE WALK'S OWN END, written only here: report.json is rewritten after every step, so a walk
+    # that stopped after `identity` left a report of passes the gate would have read as a pass
+    # (review rv-20261021T163510Z-b612361c-0e62, finding 3). `complete` says every step asked
+    # for was walked; nightly-local.py require_new_user_walk refuses a report without it.
+    report['complete'] = [row['step'] for row in report['steps']] == steps
+    (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     walk.pull()
     return 0 if ok else 1
 

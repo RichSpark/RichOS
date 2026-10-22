@@ -511,21 +511,74 @@ def merge_tree(repo, tip, commit, branch):
     return lines[0].strip()
 
 
-def merge_commit(repo, tip, commit, branch, reviewer_id):
-    """A merge commit with parents (tip, reviewed commit) and the clean merged
-    tree. It is only an object until the caller fast-forwards the branch to it,
-    so an interruption here leaves the branch and the checkout exactly as they
-    were. Its author is whoever this repository's own Git configuration names;
-    nothing supplies one."""
-    tree = merge_tree(repo, tip, commit, branch)
+def land_merge(repo, tip, commit, branch, reviewer_id, author_runs=()):
+    """THE LAND IS `git merge`, WITH THE REPOSITORY'S OWN HOOKS (plan item 6, 2026-10-21: an app
+    land gets the checks a terminal land gets in that repository). It is the merge the terminal's
+    lander runs (`workspaces.sh merge`, workspaces.py merge_and_land): `--no-ff`, in the
+    repository's checkout, which integrate has already found on `branch` and clean, with the same
+    environment (_land_env: the branch landed onto, the caller's locale, the author's saved proof
+    runs). So git runs the repository's pre-merge-commit check before the merge commit exists, its
+    reference-transaction hook (where a land fence lives) on every ref the merge moves, and its
+    post-merge hook after. Until then the app wrote the merge with `commit-tree` and moved the
+    branch with `merge --ff-only` under core.hooksPath=/dev/null, so no hook of the repository
+    ever saw an app land. Which hooks run, and what they check, is the repository's own setting;
+    nothing here names one.
+
+    No time bound of this command's own: a repository's land check bounds itself, and the
+    terminal's merge has none either. Returns the commit the branch now points at. A refusal
+    leaves no merge behind (_abort_own_merge) and is raised with Git's and the checks' own words.
+    Its author and committer are whoever the repository's own Git configuration names."""
     message = ("Merge reviewed work %s into %s\n\nReviewed commit: %s\nReviewer receipt: %s\n"
                % (commit[:12], branch, commit, reviewer_id))
-    try:
-        return git(repo, "commit-tree", tree, "-p", tip, "-p", commit, "-m", message)
-    except RunFailure as error:
-        raise ValueError("Git could not record the merge commit for %s in %s, so nothing was merged. If Git "
-                         "names no user, set this repository's user.name and user.email. %s"
-                         % (commit[:12], repo, str(error).strip()[-2000:]))
+    result = subprocess.run(["git", "-c", "commit.gpgSign=false", "-C", str(repo), "merge", "--no-ff", "--no-edit",
+                             "-m", message, commit], text=True, capture_output=True, stdin=subprocess.DEVNULL,
+                            env=users_git_settings(W._land_env(branch, author_runs)))
+    if result.returncode == 0:
+        return git(repo, "rev-parse", "HEAD")
+    said = (result.stdout + result.stderr).strip()[-6000:]
+    raise ValueError("%s did not land in %s: git merge exited %d, so %s did not move. What Git and this "
+                     "repository's own checks said:\n%s\n%s"
+                     % (commit[:12], repo, result.returncode, branch, said, _abort_own_merge(repo, tip, commit)))
+
+
+def users_git_settings(env):
+    """THE LAND READS THE USER'S OWN GIT SETTINGS, as a merge from the user's terminal does
+    (mid-job review rv-20261021T082940Z-f79aeabf-fd06). The app gives its leases a generated
+    identity-only file as GIT_CONFIG_GLOBAL and switches the system layer off
+    (EngineProfile::configure), which hides every hook the user selects in their own settings:
+    a global core.hooksPath, or an includeIf that sets one for this repository. So the land's
+    Git reads the user's ~/.gitconfig (and XDG file) as Git always does, and the app's file
+    becomes the lowest layer (GIT_CONFIG_SYSTEM), whose identity counts only when no other layer
+    names one. Where the lease already passes no GIT_CONFIG_GLOBAL (build plan item 8 makes a
+    lease read the user's settings natively), this changes nothing. Which hooks those settings
+    select is the user's and the repository's; nothing here names one."""
+    env = dict(env)
+    app_layer = env.pop("GIT_CONFIG_GLOBAL", None)
+    env.pop("GIT_CONFIG_NOSYSTEM", None)
+    if app_layer and not env.get("GIT_CONFIG_SYSTEM"):
+        env["GIT_CONFIG_SYSTEM"] = app_layer
+    return env
+
+
+def _abort_own_merge(repo, tip, commit):
+    """A refused merge leaves no merge behind. A pre-merge-commit check that refuses makes Git
+    stop with "Not committing merge", leaving MERGE_HEAD and the merged files staged. Only the
+    merge this land started is aborted (MERGE_HEAD is the reviewed commit and HEAD the tip it
+    merged into), with the repository's hooks on: where a fence guards the checkout, this land
+    still holds its lease. Returns one sentence saying what was done."""
+    found = _git_answer(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+    if found.returncode != 0:
+        return "No merge was left in progress."
+    head = _git_answer(repo, "rev-parse", "HEAD").stdout.strip()
+    if found.stdout.strip() != commit or head != tip:
+        return ("A merge is in progress that this land did not start (MERGE_HEAD %s, HEAD %s); it was left alone."
+                % (found.stdout.strip()[:12], head[:12]))
+    aborted = subprocess.run(["git", "-C", str(repo), "merge", "--abort"], text=True, capture_output=True,
+                             stdin=subprocess.DEVNULL, env=users_git_settings(W._git_env()))
+    if aborted.returncode == 0 and _git_answer(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode != 0:
+        return "The merge this land started was aborted: the checkout is back at %s." % tip[:12]
+    return ("The merge this land started could NOT be aborted (exit %d) and is still in progress: %s"
+            % (aborted.returncode, (aborted.stdout + aborted.stderr).strip()[-2000:]))
 
 
 def landed_files(repo, before, landed):
@@ -1664,7 +1717,7 @@ def verification_evidence(scope, identity):
 #                     (engine_profile.rs:148-155, :205)
 #
 # Two conversation threads therefore take two different lock files and the
-# `git merge --ff-only` below runs with no lock on the repository at all. Frank
+# land's merge below ran with no lock on the repository at all. Frank
 # reproduced the two paths from the engine's own identity hash:
 #
 #   $ python3 -c 'import hashlib,json; f=lambda e,t: hashlib.sha256(
@@ -1743,10 +1796,11 @@ def _write_land_lock(handle, record):
 def _live_fence_lease(repo):
     """The holder record of a LIVE operator-fence land lease on `repo`, or None.
 
-    Spec r3 e1 and Frank G2: this lander runs Git with core.hooksPath=/dev/null,
-    so the Git fence never sees its merge. Waiting here on a live lease is
-    therefore the ONLY thing that serializes the product lander against a lease
-    holder, and it is required rather than optional.
+    Spec r3 e1 and Frank G2: the product lander waits here for a live lease
+    before it takes its own (_take_fence_lease). Since 2026-10-21 (plan item 6)
+    its merge runs with the repository's hooks, so the Git fence sees it too;
+    this wait is what turns another holder's land into a wait rather than the
+    fence's refusal.
 
     Read from the repository's own launcher (the switch and the lease home live
     there, Frank G10 and G12) and never from this process's environment. With the
@@ -1784,6 +1838,96 @@ def _live_fence_lease(repo):
     return holder if abs(epoch - int(holder.get("start", -1))) <= 1 else None
 
 
+def _is_this_process(holder):
+    """A lease this very process left (a land of it that could not release one): its own, never
+    a holder to wait for."""
+    try:
+        return int(holder.get("pid")) == os.getpid()
+    except (TypeError, ValueError):
+        return False
+
+
+def _take_fence_lease(repo, lock):
+    """THE APP'S LAND TAKES THE LAND LEASE WHERE THE FENCE IS ON (plan item 6, 2026-10-21).
+
+    The land now runs Git with the repository's own hooks, so where its launcher has the fence on
+    (operator-fences.sh), the fence refuses a move of main, and an ORIG_HEAD written in the main
+    checkout, by anyone who does not hold the land lease. This process takes it, as itself: the
+    fence's test is ancestry, pid and start time (operator_fences.authorized), and every Git
+    command of this land is this process's child.
+
+    THE LEASE IS TAKEN UNDER THE FENCE'S OWN LOCK, named by the repository's launcher (its baked
+    home and key): the lock land-lease.sh takes and releases a lease under. Usually that is `lock`,
+    the land flock this land already holds (operator_fences_admin installs the launcher's home from
+    the same land_lock_path). It is ANOTHER file when this lease runs under another Claude account:
+    EngineProfile.configure points CLAUDE_CONFIG_DIR at the selected account's folder, and the land
+    lock's home follows it while the fence keeps the home it was installed with. Then the fence's
+    lock is taken as well, after this land's own (one order for every land, so two never wait on
+    each other), and a live lease of another holder is waited for under it, within the land lock's
+    bound.
+
+    Returns (fence program, its Files, the holder, the fence lock taken here or None) for
+    _release_fence_lease, or None when the repository has no fence or has it off. The switch and
+    the lease home are the repository's own settings, never anything the app holds."""
+    F = W._fence_program()
+    conf, _paths = F.launcher_for(str(repo))
+    if not F.fenced(conf):
+        return None
+    files = F.Files(conf)
+    me = F.proc(os.getpid())
+    if not me:
+        raise ValueError("nothing was merged into %s: its land fence is on, and this process's own start time, "
+                         "which a land lease names, could not be read" % repo)
+    holder = {"kind": "app", "pid": me["pid"], "start": me["start"]}
+    fence_lock = None
+    if os.path.realpath(files.lock) != os.path.realpath(lock):
+        timeout, started = land_lock_timeout(), time.monotonic()
+        while True:
+            fence_lock = F._Flock(files.lock)
+            if fence_lock.try_take():
+                lease = F.read_lease(files)
+                if F.lease_state(lease) not in ("live", "expired") or F.same_holder(lease.get("holder"), holder):
+                    break
+                busy = F.holder_label(lease.get("holder"))
+            else:
+                busy = "another land of this repository"
+            fence_lock.release()
+            fence_lock = None
+            if time.monotonic() - started >= timeout:
+                raise ValueError("nothing was merged into %s: its land lease is held by %s and was not free within "
+                                 "%.0f seconds. Retry once that land has finished." % (repo, busy, timeout))
+            time.sleep(0.5)
+    try:
+        F.write_json_atomic(files.lease, F._new_lease(holder, conf.get("REPO") or str(repo)))
+    except BaseException:
+        if fence_lock:
+            fence_lock.release()
+        raise
+    return F, files, holder, fence_lock
+
+
+def _release_fence_lease(taken):
+    """Ends the lease _take_fence_lease wrote, still under the lock it was written under, and only
+    while it is still this land's; then lets go of the fence's lock if this land took it. Never
+    raises: the land has happened or been refused by then, and a lease left by a process that has
+    ended is taken by the next acquire at rest."""
+    if not taken:
+        return
+    F, files, holder, fence_lock = taken
+    try:
+        lease = F.read_lease(files)
+        if lease and F.same_holder(lease.get("holder"), holder):
+            os.unlink(files.lease)
+    except OSError:
+        pass
+    finally:
+        if fence_lock:
+            try:
+                fence_lock.release()
+            except OSError:
+                pass
+
+
 def _land_holder_text(holder):
     if not holder:
         return "another conversation, which left no readable record in the lock file"
@@ -1795,7 +1939,7 @@ def _land_holder_text(holder):
 @contextlib.contextmanager
 def land_lock(scope, repo):
     """Hold this repository's land for the whole land: the recorded-tip check,
-    the fast-forward, and the workspace cleanup that deletes worktrees and
+    the merge, and the workspace cleanup that deletes worktrees and
     branches in the same repository.
 
     TAKEN BEFORE `locked(scope)`, AND THAT ORDER IS THE POINT. A wait here can
@@ -1846,7 +1990,7 @@ def land_lock(scope, repo):
                 # can appear: checking here, and letting go while one is live,
                 # is race-free. Off or absent fence: None, and nothing changes.
                 leased = _live_fence_lease(repo)
-                if leased is None:
+                if leased is None or _is_this_process(leased):
                     break
                 fcntl.flock(handle, fcntl.LOCK_UN)
             if leased is not None:
@@ -1864,9 +2008,10 @@ def land_lock(scope, repo):
                     "because a refused land sends finished, reviewed work back for a fresh "
                     "implementation and a fresh review. The bound is not about a holder that crashed "
                     "— the kernel releases that lock the moment its process dies — it is about one "
-                    "that is alive and stuck, and a land is local Git only (integrate never pushes), "
-                    "so %.0f seconds is far above any real one. Retry once that land has finished."
-                    % (_land_holder_text(holder), timeout, timeout))
+                    "that is alive and stuck. A land is local Git and the repository's own merge "
+                    "checks (integrate never pushes), and those checks can take a while; "
+                    "RICHOS_LAND_LOCK_TIMEOUT raises the bound. Retry once that land has finished."
+                    % (_land_holder_text(holder), timeout))
             time.sleep(min(0.5, 0.01 + waited / 20.0))
         status = {"repository": str(repo), "lock": str(path), "record": W.land_record_path(repo),
                   "waited_seconds": round(time.monotonic() - started, 3)}
@@ -1880,10 +2025,16 @@ def land_lock(scope, repo):
             previous = W.land_records(repo)[-1:]
             if previous and previous[0].get("thread_id") == holder.get("thread_id"):
                 status["waited_for_land"] = previous[0]
-        _write_land_lock(handle, mine)
+        # Held from here to the end of the land, under the flock just taken; released below,
+        # before the flock is.
+        lease = _take_fence_lease(repo, path)
         try:
+            if lease:
+                status["land_lease"] = lease[1].lease
+            _write_land_lock(handle, mine)
             yield status
         finally:
+            _release_fence_lease(lease)
             mine["state"] = "released"
             mine["until"] = W.iso()
             try:
@@ -1985,10 +2136,11 @@ def integrate(scope_path,scope,args):
                             if Path(git(tree,"rev-parse","--path-format=absolute","--git-path",marker)).exists():
                                 raise ValueError("finish or explicitly abandon the existing Git operation first")
                     # A MOVED BRANCH IS MERGED, NEVER REBASED OR RESOLVED (part 4,
-                    # finding 3). The reviewed commit is landed exactly as reviewed:
-                    # by fast-forward when the branch has not moved, and otherwise by
-                    # a merge commit whose second parent IS that commit, recorded only
-                    # when Git merges the two without a conflict. No rebase rewrites
+                    # finding 3). The reviewed commit is landed exactly as reviewed,
+                    # as the second parent of the land's merge commit (land_merge,
+                    # which merges with --no-ff as the terminal's lander does, so the
+                    # repository's merge check runs), and a branch that moved is
+                    # merged only when Git merges the two without a conflict. No rebase rewrites
                     # it and no conflict is resolved here, so a moved target that
                     # needs new changes still goes back for another implementation
                     # and review -- and is told which files conflict. Until this, a
@@ -2022,24 +2174,31 @@ def integrate(scope_path,scope,args):
                         landing_entry(worker["integration"],repository,r)["before"]=plan[r]["tip"]
                     if moved: save(path,worker)
                 read_scope(scope_path)
-                # FIRST every merge commit is made, which moves no ref, THEN every
-                # branch is fast-forwarded: a merge commit Git cannot record (no
-                # committer configured, say) refuses before any repository moved.
                 for repo in repositories_to_land:
                     entry=landing_entry(worker["integration"],repository,repo)
-                    commit,branch,tip=plan[repo]["commit"],plan[repo]["branch"],plan[repo]["tip"]
-                    if plan[repo]["already"]: continue
-                    if tip!=entry["before"]:
+                    if not plan[repo]["already"] and plan[repo]["tip"]!=entry["before"]:
                         raise ValueError("integration target moved after intent; reconcile before retrying")
-                    plan[repo]["landed"]=commit
-                    if not is_ancestor(repo,tip,commit):
-                        plan[repo]["landed"]=entry["merge_commit"]=merge_commit(repo,tip,commit,branch,reviewer["id"])
-                        save(path,worker)
+                # EACH REPOSITORY IS LANDED BY ITS OWN `git merge`, WITH ITS OWN HOOKS (plan item 6,
+                # 2026-10-21; land_merge). Its merge-time check runs before the merge commit
+                # exists, and a refusal moves nothing in that repository. In a job of several
+                # repositories, one refused after another landed leaves that one landed, as the
+                # terminal's lander does; the repeated integrate finds it already contains the
+                # reviewed commit and lands only the rest.
+                chain=W._chain(canonical)
+                landed_now=[]
                 for repo in repositories_to_land:
                     commit,branch,tip=plan[repo]["commit"],plan[repo]["branch"],plan[repo]["tip"]
                     if not plan[repo]["already"]:
-                        landed=plan[repo]["landed"]
-                        git(repo,"merge","--ff-only",landed)
+                        try:
+                            landed=plan[repo]["landed"]=land_merge(repo,tip,commit,branch,reviewer["id"],
+                                                                   W._author_runs(chain,commit))
+                        except ValueError as error:
+                            if landed_now:
+                                raise ValueError("%s Already landed by this call: %s. Integrate again once this is "
+                                                 "resolved: it lands only what is not landed yet."
+                                                 % (error, ", ".join(landed_now)))
+                            raise
+                        landed_now.append(repo)
                         # THE LAND RECORD, WRITTEN AT THE MOMENT THE REF ACTUALLY
                         # MOVED and while this repository's land lock is still held.
                         # APPENDED, never a field on the lock: two lands in a row
@@ -2051,7 +2210,7 @@ def integrate(scope_path,scope,args):
                         # moved with no record of who moved it -- and a REPEATED
                         # integrate, which merges nothing, must not record a second
                         # land it did not perform. `commit` is where the ref now
-                        # points (the merge commit when one was recorded), because
+                        # points (the land's merge commit), because
                         # that is what `land_by_another_conversation` matches;
                         # `reviewed_commit` is the work itself.
                         lands[repo]["landed"]={"schema":1,"branch":branch,"before":tip,"commit":landed,"reviewed_commit":commit,"at":W.iso(),
@@ -2430,7 +2589,7 @@ TOOLS = [
     {"name":"report","description":"Keep the selected operational assignment current: running when you begin handling it, or failed when you cannot complete it. Supply the real obligation_id from the record. This never dispatches work or sends Rich a message. Completion uses complete and its evidence checks.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"state":{"type":"string","enum":["running","failed"]},"detail":{"type":"string","maxLength":4096}},"required":["obligation_id","state","detail"],"additionalProperties":False}},
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
     {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns agent_payload only while no dispatch has been attempted. Submit that exact JSON to Agent once. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A failed preparation that never dispatched is settled when a new request_id prepares a replacement: anything it created is withdrawn, and dirty files are refused rather than discarded. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
-    {"name":"integrate","description":"After an authorized implementation and an actual passing independent review, fast-forward the recorded clean integration branch to the exact reviewed commit and clean up through Mega Lander. If the branch moved since the work started, the reviewed commit is merged with a merge commit only when Git merges the two without a conflict. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id","reviewer_id"],"additionalProperties":False}},
+    {"name":"integrate","description":"After an authorized implementation and an actual passing independent review, merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id","reviewer_id"],"additionalProperties":False}},
     {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. New teammates become available to Agent after this turn through the native plugin reload, without replacing Stu or stopping running workers. Changes to an existing definition take effect in a new Stu session.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart.","inputSchema":{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":False}},
 ]

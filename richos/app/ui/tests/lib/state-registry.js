@@ -243,7 +243,7 @@ module.exports = [
       "deliberate stop as an error. It issues no instruction and asks for nothing.",
   },
   {
-    s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Restore my message, then send it again.",
+    s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. Press Restore my message, then send it again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: null,
@@ -251,7 +251,22 @@ module.exports = [
       "`InterruptionCause::Transient` — the ONE class where asking again is honest advice, " +
       "and therefore the one that still draws the card's button. It is the positive control " +
       "for the whole change: without a class that keeps the control, 'the sign-in case has " +
-      "no button' could just mean the card stopped drawing one.",
+      "no button' could just mean the card stopped drawing one. It said 'This usually fixes " +
+      "itself' until 2026-10-21, when a new user was shown it on every message of a Mac where it " +
+      "never did; the same failure again right after it is `Repeated`, the row below.",
+  },
+  {
+    s: "Rich could not answer again because Claude Code stopped before he replied, so sending again is unlikely to help. Open Settings and choose Claude accounts to check that your account is signed in on this Mac. If it is, press Bust a bug in Settings so we can see what went wrong.",
+    c: "ACTIONABLE",
+    control: "#set-btn",
+    fixture: "interruption-repeated",
+    why:
+      "`InterruptionCause::Repeated` (2026-10-21, docs/development/failure-classes/" +
+      "permanent-failure-told-as-passing.md): the lost connection again, right after the last " +
+      "one, with no answer in between. A failure that repeats is not passing, so it offers no " +
+      "retry; it names the one place that says whether the account is signed in (Claude " +
+      "accounts, which now says Not signed in with Sign in on the card) and the way to report " +
+      "it when it is. The Settings button is on screen in every view this card appears in.",
   },
   {
     s: "Rich's answer stopped early and RichOS can't tell you why. Press Restore my message, then send it again.",
@@ -5224,7 +5239,9 @@ module.exports = [
   {"s": "Give the new account a name, for example Work.", "c": "ACTIONABLE", "control": "#acc-nu", "fixture": null, "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): step 1's check: the field it asks for is beside it. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "It is fresh again .", "c": "FRAGMENT", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): \"It is fresh again Thu 9:00 AM.\" inside the banner's why. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "Its week is fresh again soonest, so it goes next.", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): the Next card's line: why it is next (plan answer 1). tests/accounts.js renders it in both themes with contrast computed."},
-  {"s": "No reading yet. If this account is not signed in on this Mac, sign in here.", "c": "ACTIONABLE", "control": "#accounts-sheet [data-act=\"sign-one\"]", "fixture": null, "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): the first account's card with no reading: Sign in on the card opens the app's own sign-in (the setup sheet's account step). tests/accounts.js renders it in both themes with contrast computed."},
+  {"s": "This account is not signed in on this Mac, so Rich cannot answer you yet. Sign in here.", "c": "ACTIONABLE", "control": "#accounts-sheet [data-act=\"sign-one\"]", "fixture": "accounts-signed-out", "why": "A new user's first run (2026-10-21): the card said \"In use now\" and \"No reading yet\" on a Mac where nobody had signed in. quota.rs `View::signed_in` carries Claude Code's own `auth status` verdict; `accounts.js` draws it. docs/development/failure-classes/unknown-state-shown-as-pending.md. The card in use, signed out: Sign in on the card opens the app's own sign-in."},
+  {"s": "Not signed in on this Mac", "c": "ACTIONABLE", "control": "#set-accounts-open", "fixture": "accounts-row-signed-out", "why": "A new user's first run (2026-10-21): the card said \"In use now\" and \"No reading yet\" on a Mac where nobody had signed in. quota.rs `View::signed_in` carries Claude Code's own `auth status` verdict; `accounts.js` draws it. docs/development/failure-classes/unknown-state-shown-as-pending.md. The Settings row's line, in gold: the row opens the sheet whose card has Sign in."},
+  {"s": "Checking whether this account is signed in on this Mac.", "c": "INFORMATIONAL", "fixture": "accounts-checking", "why": "A new user's first run (2026-10-21): the card said \"In use now\" and \"No reading yet\" on a Mac where nobody had signed in. quota.rs `View::signed_in` carries Claude Code's own `auth status` verdict; `accounts.js` draws it. docs/development/failure-classes/unknown-state-shown-as-pending.md. The card in use before the first check has answered; nothing to do, and it is replaced by the verdict when the check returns."},
   {"s": "Not used in the last 5 hours", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): a card's 5-hour meter at 0%. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "Rich and the team are working on this one.", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): the In use now card's line with two or more accounts (with the agents counted when any are). tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "Rich and the team do their work on your Claude account. Claude limits how much each account can do in 5 hours and in a week.", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): the sheet's lede with one account. tests/accounts.js renders it in both themes with contrast computed."},
@@ -5246,6 +5263,7 @@ module.exports = [
   {"s": "That is the account you already use as <b></b>. Sign in with your other Claude account.", "c": "ACTIONABLE", "control": "#accounts-sheet [data-act=\"sign\"]", "fixture": null, "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): an added account's Sign in came back as an account already in use; the card's Sign in is beside it. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "That name is taken. Pick a different one.", "c": "ACTIONABLE", "control": "#acc-nu", "fixture": null, "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): step 1's check: the field is beside it. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "Using , switched", "c": "FRAGMENT", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): \"Using Work, switched 11:01 AM\", the Settings row's line for six hours after a switch. INFORMATIONAL as a whole. tests/accounts.js renders it in both themes with contrast computed."},
+  {"s": "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show.", "c": "INFORMATIONAL", "why": "quota.rs `ReadError::SignedInNoLimits` (Claude Code reported no limits and its own `auth status` says this account is signed in), drawn by `accounts.js` on a card with no reading whose `signedIn` is true, in use or not, and by `quota.js` on such an account's lane in Technical view (reviews rv-20261021T213648Z-b3f0990a-85f9, rv-20261021T234558Z-10df0b1f-03b0 finding 2 and rv-20261022T014956Z-56662dcd-dcc3 finding 1). Nothing to do: the account is signed in and has no limits to show. tests/accounts.js renders it in use and not in use, and measures the card not in use in both themes with contrast computed; tests/quota.js renders the lane."},
   {"s": "Waiting its turn.", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): a Ready card's line. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "When run out, the team pauses until is fresh again . Nothing is lost.", "c": "FRAGMENT", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): the both-near banner's second sentence. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "Why: had used % of its . Nothing stopped and the team carried on.", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): why it switched, the banner's body for a weekly or 5-hour switch. tests/accounts.js renders it in both themes with contrast computed."},
