@@ -23,7 +23,8 @@
 //!
 //! A copy made before the record existed has none. One that is exactly a shipped version (the
 //! current one or one of [`EARLIER`]) was not changed, and that version is its starting point;
-//! any other was changed, and its starting point is the shipped version nearest to it.
+//! any other was changed, and its starting point is the shipped version nearest to it (the
+//! oldest of those as near, so a shipped improvement is never read as the user's deletion).
 //!
 //! What the user's file is used for from then on is unchanged: every session of Rich and Stu
 //! starts from it, so the result applies from the next session (`user_settings::digest`).
@@ -132,17 +133,22 @@ fn distance(a: &str, b: &str) -> usize {
 }
 
 /// The shipped text a copy with no record was made from: the version it is exactly, or else the
-/// one nearest to it (the later one of two as near). The current version is taken only when it
-/// alone is the nearest: a copy as near to an earlier version as to the current one may be that
-/// earlier version with the user's edits, so it is not guessed to be up to date, and the user
-/// is asked (second review rv-20261022T102758Z-81c4f463-539d, finding 1).
+/// one nearest to it, and of several as near the OLDEST: what the shipped versions after it
+/// added is then applied by the update, never read as the user's deletion (handover review
+/// rv-20261022T190835Z-14d20d59-03a2, finding 1: of rich/2 and rich/3 as near, rich/3 was taken
+/// and the recovery instructions it added were treated as removed by the user). The current
+/// version is taken only when it alone is the nearest, for the same reason: a copy as near to an
+/// earlier version as to the current one may be that earlier version with the user's edits, so
+/// it is not guessed to be up to date, and the user is asked (second review
+/// rv-20261022T102758Z-81c4f463-539d, finding 1).
 fn starting_point(yours: &str, new: &str, earlier: Vec<String>) -> String {
     if yours == new { return new.to_string(); }
     if let Some(exact) = earlier.iter().find(|version| version.as_str() == yours) { return exact.clone(); }
     let to_new = distance(new, yours);
     // The current version is often among the earlier ones too (the set is frozen as of the
     // version that introduced the record); it is the current one, not an earlier one.
-    let nearest_earlier = earlier.into_iter().rev().filter(|version| version != new)
+    // `earlier` is oldest first and `min_by_key` keeps the first of equal keys: the oldest.
+    let nearest_earlier = earlier.into_iter().filter(|version| version != new)
         .map(|version| (distance(&version, yours), version)).min_by_key(|(d, _)| *d);
     match nearest_earlier {
         Some((d, version)) if d <= to_new => version,
@@ -471,6 +477,28 @@ mod tests {
         assert_eq!(starting_point("a\nmine\n", "a\nnew\n", earlier.clone()), "a\nold\n");
         // Nearer to the current version alone: the user edited the current version.
         assert_eq!(starting_point("a\nnew\nmine\n", "a\nnew\n", earlier), "a\nnew\n");
+        // As near to two earlier versions: the older one, so every shipped improvement since it
+        // is applied by the update rather than read as the user's deletion.
+        let earlier = vec!["a\nold\n".to_string(), "a\nnew\n".to_string()];
+        assert_eq!((distance("a\nold\n", "a\nold\nnew\n"), distance("a\nnew\n", "a\nold\nnew\n")), (1, 1));
+        assert_eq!(starting_point("a\nold\nnew\n", "a\nnew\nmore\n", earlier), "a\nold\n");
+    }
+
+    /// Handover review rv-20261022T190835Z-14d20d59-03a2, finding 1, on the real shipped history:
+    /// rich/2 with a sentence added to its internal-events paragraph is as near to rich/3 as to
+    /// rich/2, and rich/3 already carries the recovery instructions this user never had. The
+    /// starting point is rich/2, the older of the two.
+    #[test]
+    fn an_edited_copy_as_near_to_two_earlier_versions_starts_from_the_older_one() {
+        let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app");
+        let history = earlier(&app, RICH);
+        assert!(history.len() >= 3, "the shipped history has rich/1 to rich/3 at least");
+        let new = shipped_text(&app, RICH).unwrap();
+        let sentence = "Internal events supply facts about ongoing work.";
+        assert!(history[1].contains(sentence));
+        let yours = history[1].replacen(sentence, &format!("{sentence} Keep status updates to one sentence."), 1);
+        assert_eq!(distance(&history[1], &yours), distance(&history[2], &yours), "the case is a tie");
+        assert_eq!(starting_point(&yours, &new, history.clone()), history[1]);
     }
 
     /// The before and after the round-37 screen draws: the front matter, paragraphs kept, a user's
