@@ -144,10 +144,13 @@ Bash calls, preserving the command and its other arguments; interrupting the
 session would also stop unrelated workers. Every shell command Stu's own model
 starts, foreground or background, is a native task with its own id (Claude Code
 2.1.307 answers `stop_task` for a foreground one and ends only that command; the
-turn goes on). Stu's calls carry no job, so the host also stops those of his
-running commands that started after the stopped job was registered while no other
-job of the conversation was open; one started while another job was open is left
-to Stu. The Stop fact prevents subsequent preparation, dispatch and worker actions
+turn goes on). The job travels with the command: Stu begins each command's
+description with the job's obligation_id (stu.md) and the host also stops those
+of his running commands that name the stopped job, never one that names another
+job. A command that names no job is stopped only when it started after the job was
+registered and no other open job could be running it (one waiting on the user,
+the screen or the allowance with no change since cannot); the rest are left to
+Stu. The Stop fact prevents subsequent preparation, dispatch and worker actions
 for that obligation. Stu receives typed user-control facts through the same inbox;
 other assignments and Rich's conversation keep their own execution ownership.
 
