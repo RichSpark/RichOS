@@ -190,10 +190,12 @@ python3 - "$HOLDFILE" <<'PYEOF'
 import json, sys, time
 h = json.load(open(sys.argv[1])); h["at"] = time.time() - 31 * 60; json.dump(h, open(sys.argv[1], "w"))
 PYEOF
-GOUT="$(stop_payload "Done for now." | python3 "$REPO/mega-lander/workspaces.py" --entity "$REPO" gate-stop 2>&1)"
-if printf '%s' "$GOUT" | grep -q 'HELD BY RICH, NOT BY YOU: Stream B is on hold, deliberately. since' \
-        && printf '%s' "$GOUT" | grep -q '"systemMessage"'; then
-    ok "T1b the next turn end at +31 min names it to him (systemMessage), and every one after"
+# The workspace gate's turn-end systemMessage is built from hold_lines() (workspaces.test.py
+# NoSilentHolds test_holds_the_gates_turn_end_message_carries_the_lines proves the gate's half).
+GOUT="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import workspaces as w; print("\n".join(w.hold_lines(sys.argv[2])))' \
+    "$REPO/mega-lander" "deadbeef-1111-4000-8000-000000000000" 2>&1)"
+if printf '%s' "$GOUT" | grep -q 'HELD BY RICH, NOT BY YOU: Stream B is on hold, deliberately. since'; then
+    ok "T1b the next turn end at +31 min names it to him, and every one after"
 else bad "T1b the turn-end line names the hold" "$GOUT"; fi
 rm -rf "$RICHOS_WORKSPACES_DIR/holds"
 

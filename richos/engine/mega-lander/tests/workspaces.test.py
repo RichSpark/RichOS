@@ -7326,6 +7326,17 @@ class NoSilentHolds(Base):
         send("Go: run the walk now.")
         self.assertEqual(ws.holds(self.sid), [])
 
+    def test_holds_the_gates_turn_end_message_carries_the_lines(self):
+        """The workspace gate (Stop) puts the hold lines in its systemMessage, at every turn end."""
+        ws.hold("stream-b", "Stream B of his spelling order", "", "on hold, deliberately", self.sid)
+        h = ws.read_json(ws._hold_path("stream-b"))
+        h["at"] -= 31 * 60
+        ws.write_json(ws._hold_path("stream-b"), h)
+        for _turn in range(2):
+            ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
+            self.assertTrue(ok, msg)
+            self.assertIn("HELD BY RICH, NOT BY YOU: Stream B of his spelling order since", msg)
+
     def test_holds_a_pause_outlives_its_session(self):
         """Review rv-20261022T013056Z-12c77c90-1291 finding 5: a manual pause, then an ordinary
         session end, must not drop the paused work from both reporting paths."""
