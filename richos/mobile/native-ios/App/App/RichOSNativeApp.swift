@@ -213,11 +213,14 @@ enum Boot {
         return left > .zero ? left : .zero
     }
 
-    /// Where the files Rich attached are kept once they came over (round 36 screen 3): Application
-    /// Support, so a second tap opens one at once and the system never purges it under the person.
+    /// Where the files Rich attached are kept once they came over (round 36 screen 3): the app's own
+    /// folder (`LocalOnlyStorage.appRoot`, beside `Attachments/` and `Recordings/`), so a second tap
+    /// opens one at once, the system never purges it, and it never goes into an iCloud or Finder backup
+    /// (security review I-2). Not `Application Support` itself: on the test iPhone that belongs to root
+    /// after the start-time measurement seeds the app's state (perf/ios.py `DeviceState`), and the
+    /// folder could not be made there (NSCocoaErrorDomain 513, 2026-10-22).
     static func richFilesDirectory() -> URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("rich-files", isDirectory: true)
+        LocalOnlyStorage.appRoot.appendingPathComponent("RichFiles", isDirectory: true)
     }
 
     static func start() {
