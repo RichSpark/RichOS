@@ -212,6 +212,13 @@ sealed interface Action {
     @Serializable @SerialName("confirm-forget")
     data object ConfirmForget : Action
 
+    /**
+     * The refused forget's way out: what waits was written for this pairing's Mac, which may be gone
+     * for good, so it is discarded and the pairing forgotten as [ConfirmForget] does.
+     */
+    @Serializable @SerialName("discard-and-forget")
+    data object DiscardAndForget : Action
+
     @Serializable @SerialName("open-system-settings")
     data object OpenSystemSettings : Action
 

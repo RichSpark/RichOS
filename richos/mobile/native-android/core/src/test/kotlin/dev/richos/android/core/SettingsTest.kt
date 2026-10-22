@@ -2,6 +2,7 @@ package dev.richos.android.core
 
 import dev.richos.android.core.dev.DevRequest
 import dev.richos.android.core.dev.DevRuntime
+import dev.richos.android.core.dev.Fixtures
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -74,6 +75,31 @@ class SettingsTest {
         assertEquals(PairingPhase.UNPAIRED, s.pairing.phase)
         assertEquals(listOf("k"), s.keptRecordings.map { it.id })
         assertEquals(Theme.LIGHT, s.theme)
+    }
+
+    /**
+     * The dead end (iPhone report, 2026-10-22, the same on Android): paired with a Mac that no longer
+     * exists, one message waiting for it. It never turns "needs attention" (an unreachable Mac is a
+     * wait, not a refusal), so it has no Discard, and Forget is refused while it waits. "Discard and
+     * forget" on the refused dialog is the way out: what waits goes, then the pairing, as Forget does.
+     */
+    @Test
+    fun `discard and forget is the way out when a message waits for a Mac that is gone`() = runTest {
+        val runtime = DevRuntime.create().also { it.execute(DevRequest.Fixture("queued")) }
+        runtime.execute(DevRequest.parse("transport", "unreachable"))
+        var s = runtime.core.dispatch(Action.ForgetPairing)
+        assertEquals(Sheet.FORGET_BLOCKED, s.sheet)
+        assertEquals(1, s.outbox.size)
+        s = runtime.core.dispatch(Action.DiscardAndForget)
+        assertEquals(PairingPhase.UNPAIRED, s.pairing.phase)
+        assertFalse(s.paired)
+        assertTrue(s.outbox.isEmpty(), "the waiting message was discarded")
+        assertEquals(null, s.sheet)
+        assertFalse(Fixtures.ORIGIN in runtime.export().keys, "the key went with the pairing")
+
+        // With no pairing there is nothing to forget: unsent work on an unpaired phone stays.
+        val unpaired = DevRuntime.create().also { it.execute(DevRequest.Fixture("unpaired")) }
+        assertEquals(PairingPhase.UNPAIRED, unpaired.core.dispatch(Action.DiscardAndForget).pairing.phase)
     }
 
     @Test

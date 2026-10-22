@@ -98,6 +98,12 @@ class InteractionTest {
         compose.waitForIdle()
         compose.onNodeWithText("Forget pairing on this phone").performClick()
         assertEquals(Action.ConfirmForget, actions.last())
+
+        // Forget refused while a message waits: the way out when that Mac is gone.
+        set(screen("settings-forget-blocked"))
+        compose.waitForIdle()
+        compose.onNodeWithText("Discard and forget").performClick()
+        assertEquals(Action.DiscardAndForget, actions.last())
     }
 
     @Test

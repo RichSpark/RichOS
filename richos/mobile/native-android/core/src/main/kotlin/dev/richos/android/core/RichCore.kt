@@ -163,7 +163,7 @@ class RichCore private constructor(
         is Action.VoiceInterrupted, is Action.VoiceLevel, Action.VoiceSettled, is Action.SendKept, is Action.DiscardKept,
         Action.AskMicrophone, Action.DismissMicrophoneCard -> voice(action)
         Action.TurnOnNotifications, is Action.NotificationsResult, Action.TurnOffNotifications, Action.DismissNotificationOffer,
-        is Action.SetPreviews, is Action.OpenSheet, Action.CloseSheet, Action.ForgetPairing, Action.ConfirmForget,
+        is Action.SetPreviews, is Action.OpenSheet, Action.CloseSheet, Action.ForgetPairing, Action.ConfirmForget, Action.DiscardAndForget,
         Action.OpenSystemSettings, is Action.OpenedFromNotification, is Action.ProvisionalReply, Action.ClearFocus, is Action.UpdatePolicy,
         Action.DismissUpdate, Action.OpenAppStore, Action.OpenSupport, Action.CheckForUpdates, Action.OpenPrivacyPolicy -> settings(action)
         is Action.PushToken -> pushToken(action)
@@ -1412,6 +1412,15 @@ class RichCore private constructor(
                 if (session.pairing.phase == PairingPhase.UNPAIRED) return emit()
                 sheet = if (outbox.isEmpty()) Sheet.FORGET else Sheet.FORGET_BLOCKED
                 emit()
+            }
+            Action.DiscardAndForget -> {
+                if (session.pairing.phase == PairingPhase.UNPAIRED) return emit()
+                for (item in outbox.all()) {
+                    outbox.discard(item.clientId)
+                    item.attachments.orEmpty().forEach { ports.files.delete(it.id) }
+                }
+                sheet = Sheet.FORGET
+                settingsLocked(Action.ConfirmForget, tellMac, forgetKey, forgot)
             }
             Action.ConfirmForget -> {
                 if (sheet != Sheet.FORGET || !outbox.isEmpty()) return emit()
