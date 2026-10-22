@@ -89,9 +89,10 @@ RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mo
 
 A new database starts switched off with a cap of zero; Rich names the operator and the initial cap and `control on` records both. `pending` is the operator's review list. `resolve` records an issue the operator found: it re-reads the issue and accepts it only if the relay's bot made it and its footer names that report. The operator never marks an unconfirmed report as not created; only the authoritative cases above permit another create.
 
-Deploying is two commands with a short-lived Cloudflare token (Workers Scripts Edit and D1 Edit on the one account) and the GitHub App's private key, each in a mode-0600 file:
+Deploying is three commands with a short-lived Cloudflare token (Workers Scripts Edit and D1 Edit on the one account) and the GitHub App's private key, each in a mode-0600 file. The first reads the profile's bot login and installation ID from GitHub with the App's key and refuses an App that can do more than write issues or whose installation reaches any other repository:
 
 ```sh
+RICHOS_REPORT_APP_KEY_FILE=… node richos/mobile/cli/mobile.mjs report app-identity <App ID> <owner/repository>
 RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mobile.mjs report create-database <account ID> <Worker name>   # once; put the ID in the profile
 RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… RICHOS_REPORT_APP_KEY_FILE=… node richos/mobile/cli/mobile.mjs report deploy
 ```

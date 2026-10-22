@@ -43,6 +43,17 @@ export class FakeGitHub {
       const token = 'ghs_' + crypto.randomUUID().replace(/-/g, ''); this.tokens.add(token);
       return json(201, { token, expires_at: new Date(this.now() + 3600_000).toISOString() });
     }
+    // The App's own identity and its installation, read with the App JWT.
+    if (request.method === 'GET' && (url.pathname === '/app' || url.pathname === `/repos/${this.repository}/installation`)) {
+      if (!await this.verifyJwt(auth)) return json(401, { message: 'Bad credentials' });
+      if (url.pathname === '/app') return json(200, { id: Number(this.appId), slug: this.bot.replace(/\[bot\]$/, '') });
+      return json(200, { id: Number(this.installationId), repository_selection: this.selection || 'selected', permissions: this.permissions || { issues: 'write', metadata: 'read' } });
+    }
+    if (request.method === 'GET' && url.pathname === '/installation/repositories') {
+      if (!this.tokens.has((auth || '').replace(/^Bearer /, ''))) return json(401, { message: 'Bad credentials' });
+      const repositories = (this.reach || [this.repository]).map(full_name => ({ full_name }));
+      return json(200, { total_count: repositories.length, repositories });
+    }
     // Reads of a public repository need no token, as on GitHub; a token that is sent must be valid.
     if ((auth || request.method !== 'GET') && !this.tokens.has((auth || '').replace(/^Bearer /, ''))) return json(401, { message: 'Bad credentials' });
     const single = new RegExp(`^/repos/${this.repository}/issues/(\\d+)$`).exec(url.pathname);

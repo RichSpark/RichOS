@@ -140,6 +140,29 @@ function cloudflare(accountId, token, fetchImpl) {
   };
 }
 
+// The profile's GitHub identifiers, read from GitHub with the App's own key, so nobody copies
+// them by hand: the bot login and the installation ID. It refuses an App that can do anything
+// but write issues (and read metadata), or whose installation reaches any other repository.
+export async function appIdentity(appId, repository, appKey, { fetch: fetchImpl = fetch } = {}) {
+  if (!/^\d{1,12}$/.test(appId || '') || !/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(repository || '')) throw Error('Expected: app-identity <App ID> <owner/repository>');
+  const { GitHub, API } = await import('../service/report/github.mjs');
+  const app = new GitHub({ GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY: appKey, GITHUB_REPOSITORY: repository }, { fetch: fetchImpl });
+  const get = async (path, token) => {
+    const response = await fetchImpl(API + path, { redirect: 'error', headers: app.headers(token) });
+    if (!response.ok) throw Error(`GitHub ${path.split('/').slice(0, 3).join('/')} answered HTTP ${response.status}`);
+    return response.json();
+  };
+  const jwt = await app.jwt(), about = await get('/app', jwt), installation = await get(`/repos/${repository}/installation`, jwt);
+  const permissions = Object.entries(installation.permissions || {}).map(([k, v]) => `${k}:${v}`).sort().join(',');
+  if (permissions !== 'issues:write,metadata:read') throw Error(`The App has permissions ${permissions}; it must have Issues write only`);
+  if (installation.repository_selection !== 'selected') throw Error('The App is installed on all repositories; install it on the one repository only');
+  app.env.GITHUB_INSTALLATION_ID = String(installation.id);
+  const reach = await get('/installation/repositories', await app.authorize());
+  const names = (reach.repositories || []).map(r => r.full_name);
+  if (reach.total_count !== 1 || names[0] !== repository) throw Error(`The installation reaches ${reach.total_count} repositories; it must reach ${repository} only`);
+  return { appId, botLogin: `${about.slug}[bot]`, installationId: String(installation.id), repository, permissions };
+}
+
 // The relay's own D1 database, named after its Worker. Prints only the new ID for the profile.
 export async function createDatabase(accountId, worker, { token, fetch: fetchImpl = fetch } = {}) {
   if (!/^[a-f0-9]{32}$/.test(accountId || '') || !/^richos-report[a-z0-9-]*$/.test(worker || '')) throw Error('Expected: create-database <account ID> <Worker name>');
@@ -185,11 +208,15 @@ export async function command(action, file, rest = []) {
     return reportArtifact(JSON.parse(readFileSync(file, 'utf8')));
   }
   if (action === 'create-database') return createDatabase(file, rest[0], { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE) });
-  if (action === 'deploy') {
+  const appKey = () => {
     const keyFile = process.env.RICHOS_REPORT_APP_KEY_FILE;
     if (!keyFile || (statSync(keyFile).mode & 0o077) !== 0) throw Error('Set RICHOS_REPORT_APP_KEY_FILE to the private (mode 0600) GitHub App key file');
+    return readFileSync(keyFile, 'utf8');
+  };
+  if (action === 'app-identity') return appIdentity(file, rest[0], appKey());
+  if (action === 'deploy') {
     return deploy(JSON.parse(readFileSync(process.env.RICHOS_REPORT_PROFILE || '', 'utf8')),
-      { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE), appKey: readFileSync(keyFile, 'utf8') });
+      { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE), appKey: appKey() });
   }
   const profile = JSON.parse(readFileSync(process.env.RICHOS_REPORT_PROFILE || '', 'utf8'));
   return operate(action, profile, [file, ...rest].filter(v => v !== undefined), { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE) });

@@ -346,6 +346,19 @@ test('deploy applies the schema, uploads the exact modules, installs the key as 
   await assert.rejects(deploy({ ...profile, hostname: 'richos-report-test.other.workers.dev' }, { token: 't', appKey: key, fetch: fake }), /workers\.dev hostname is/);
 });
 
+test('app-identity reads the bot login and installation from GitHub and refuses a broader App', async t => {
+  const f = await fixture(t), { appIdentity } = await import('../cli/report.mjs');
+  const fetch = (url, init) => f.github.fetch(url, init);
+  assert.deepEqual(await appIdentity('123', f.repository, f.env.GITHUB_APP_PRIVATE_KEY, { fetch }),
+    { appId: '123', botLogin: f.bot, installationId: '456', repository: f.repository, permissions: 'issues:write,metadata:read' });
+  f.github.permissions = { issues: 'write', metadata: 'read', contents: 'write' };
+  await assert.rejects(appIdentity('123', f.repository, f.env.GITHUB_APP_PRIVATE_KEY, { fetch }), /Issues write only/);
+  f.github.permissions = null; f.github.selection = 'all';
+  await assert.rejects(appIdentity('123', f.repository, f.env.GITHUB_APP_PRIVATE_KEY, { fetch }), /one repository only/);
+  f.github.selection = null; f.github.reach = [f.repository, 'WebDevBooster/richos'];
+  await assert.rejects(appIdentity('123', f.repository, f.env.GITHUB_APP_PRIVATE_KEY, { fetch }), /reaches 2 repositories/);
+});
+
 test('the content checks take linear time on the largest adversarial body', async () => {
   const { contentProblem } = await import('../service/report/checks.mjs');
   const id = reportId(), footer = `\n\nSent with RichDoctor 1.0 · Report ID ${id}`, room = 60000 - Buffer.byteLength(footer);
