@@ -204,6 +204,9 @@ pub enum NotSent {
     UploadStopped { item: String, why: String },
     /// This report ID was retired (a revision replaced it). It cannot be sent.
     Retired,
+    /// The person canceled while the screenshots were being sent (round 40: Cancel during
+    /// Sending screenshots). Nothing public was created; Send report resumes it.
+    Canceled,
 }
 
 impl NotSent {
@@ -229,6 +232,7 @@ impl NotSent {
             NotSent::NotReceived => "The reporting service did not receive the report. You can send it again.".into(),
             NotSent::UploadStopped { item, why } => format!("{} did not finish uploading: {why} Nothing was filed. Your report and its screenshots are kept; Try again sends the rest.", capitalized(item)),
             NotSent::Retired => "This copy of the report was replaced by a revised one, so it is not sent.".into(),
+            NotSent::Canceled => "You canceled sending. Nothing public was created; your report and its screenshots are kept on this Mac.".into(),
         }
     }
     /// Whether the fix is in the content: round 39 offers Review report instead of Try again.
@@ -298,11 +302,32 @@ pub enum Transport {
     Stopped(String),
 }
 
+/// What the per-image list hears while screenshots are sent (round 40 §5: Waiting, a real
+/// percentage, Received, Received earlier).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "t", rename_all = "kebab-case")]
+pub enum Upload {
+    /// The relay's answer to registration: these images are still to send; every other one in
+    /// the manifest was received earlier under this report ID.
+    Plan { missing: Vec<String> },
+    /// One image's bytes sent so far, of its whole size.
+    Bytes { id: String, sent: u64, total: u64 },
+    /// The relay confirmed it stored this image.
+    Received { id: String },
+}
+
 /// The HTTPS seam: the app crate makes the requests, tests make them up.
 pub trait Relay {
     fn post(&self, url: &str, body: &Value) -> Transport;
     /// Upload `bytes` with `headers`; `progress` hears the bytes sent so far.
     fn put(&self, url: &str, headers: &[(String, String)], bytes: Vec<u8>, progress: &mut dyn FnMut(u64)) -> Transport;
+    /// Whether the person canceled sending. Checked before each upload and before the
+    /// completion request; a transport also ends an upload in progress when it is set.
+    fn canceled(&self) -> bool {
+        false
+    }
+    /// Hears the per-image progress.
+    fn heard(&self, _event: Upload) {}
 }
 
 /// An issue link is accepted only on the configured repository, as a plain issue number.
@@ -388,6 +413,7 @@ const UPLOAD_WAIT_MAX_MS: u64 = 30_000;
 fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State)) -> Result<(), State> {
     let total = approved.manifest.len() as u32;
     let mut missing = missing;
+    relay.heard(Upload::Plan { missing: missing.clone() });
     // Twice at most: an identical retry of an image that was stored answers the same.
     for _round in 0..2 {
         if missing.is_empty() {
@@ -397,6 +423,9 @@ fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Dest
         for entry in round {
             if !missing.contains(&entry.attachment_id) {
                 continue;
+            }
+            if relay.canceled() {
+                return Err(State::NotSent { why: NotSent::Canceled, at: clock() });
             }
             let done = total - missing.len() as u32;
             on_state(&State::SendingScreenshots { done, total });
@@ -415,12 +444,21 @@ fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Dest
             let url = format!("{}/v1/reports/{}/attachments/{}", dest.relay, approved.report_id, entry.attachment_id);
             let mut waits = 0;
             loop {
-                let t = relay.put(&url, &headers, bytes.clone(), &mut |_| {});
+                let size = bytes.len() as u64;
+                let t = relay.put(&url, &headers, bytes.clone(), &mut |sent| relay.heard(Upload::Bytes { id: entry.attachment_id.clone(), sent, total: size }));
                 if let Transport::Stopped(why) = &t {
+                    if relay.canceled() {
+                        return Err(State::NotSent { why: NotSent::Canceled, at: clock() });
+                    }
                     return Err(State::NotSent { why: NotSent::UploadStopped { item, why: why.clone() }, at: clock() });
                 }
                 match read(&t, &dest.repository, clock()) {
-                    Reading::Receiving { missing: m } => missing = m,
+                    Reading::Receiving { missing: m } => {
+                        for id in missing.iter().filter(|id| !m.contains(id)) {
+                            relay.heard(Upload::Received { id: id.clone() });
+                        }
+                        missing = m;
+                    }
                     // "limited": the upload met the receipt lock or a running cleanup. The same
                     // upload is sent again after the short wait the relay asked for; a long one
                     // is shown to the person instead of slept through.
@@ -475,6 +513,11 @@ pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &
         },
     };
     if let Err(s) = upload(approved, missing, images, dest, relay, clock, sleep, on_state) {
+        on_state(&s);
+        return s;
+    }
+    if relay.canceled() {
+        let s = State::NotSent { why: NotSent::Canceled, at: clock() };
         on_state(&s);
         return s;
     }
@@ -608,6 +651,9 @@ mod tests {
     struct Script {
         answers: RefCell<Vec<Transport>>,
         log: RefCell<Vec<(String, String)>>,
+        events: RefCell<Vec<Upload>>,
+        /// Cancel after this many uploads (None: never).
+        cancel_after: Option<usize>,
     }
     impl Relay for Script {
         fn post(&self, url: &str, _body: &Value) -> Transport {
@@ -618,7 +664,15 @@ mod tests {
             assert!(headers.iter().any(|(k, _)| k == "X-Receipt-Secret"));
             assert!(!url.contains("secret"), "the secret is never in a URL");
             self.log.borrow_mut().push(("PUT".into(), url.trim_start_matches(BASE).into()));
+            _p(_bytes.len() as u64 / 2);
+            _p(_bytes.len() as u64);
             self.next()
+        }
+        fn canceled(&self) -> bool {
+            self.cancel_after.is_some_and(|n| self.log.borrow().iter().filter(|(m, _)| m == "PUT").count() >= n)
+        }
+        fn heard(&self, e: Upload) {
+            self.events.borrow_mut().push(e);
         }
     }
     impl Script {
@@ -631,7 +685,7 @@ mod tests {
         }
     }
     fn script(answers: Vec<Transport>) -> Script {
-        Script { answers: RefCell::new(answers), log: RefCell::new(vec![]) }
+        Script { answers: RefCell::new(answers), log: RefCell::new(vec![]), events: RefCell::new(vec![]), cancel_after: None }
     }
     fn j(v: Value) -> Transport {
         Transport::Answer { status: 200, body: Some(v), retry_after: None }
@@ -724,6 +778,59 @@ mod tests {
         assert!(matches!(s, State::Submitted { .. }));
         assert_eq!(again.count("/attachments/1"), 0);
         assert_eq!(again.count("/attachments/2"), 1);
+    }
+
+    #[test]
+    fn the_per_image_list_hears_the_plan_real_bytes_and_each_receipt() {
+        let (a, images) = approved_with(2);
+        let r = script(vec![
+            j(json!({"state":"receiving","stored":["1"],"missing":["2"]})),
+            j(json!({"state":"ready","stored":["1","2"],"missing":[]})),
+            j(json!({"state":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":2,"images_expected":2})),
+        ]);
+        let (s, _) = run(&a, &images, &r, true);
+        assert!(matches!(s, State::Submitted { .. }), "{s:?}");
+        let ev = r.events.borrow();
+        // Image 1 was received earlier: only 2 is planned, and only 2 is sent.
+        assert_eq!(ev[0], Upload::Plan { missing: vec!["2".into()] });
+        let size = images[1].len() as u64;
+        assert!(ev.contains(&Upload::Bytes { id: "2".into(), sent: size, total: size }));
+        assert_eq!(ev.last(), Some(&Upload::Received { id: "2".into() }));
+        assert_eq!(r.count("/attachments/1"), 0);
+    }
+
+    #[test]
+    fn cancel_during_sending_screenshots_creates_nothing_and_send_resumes_the_rest() {
+        let (a, images) = approved_with(3);
+        let mut r = script(vec![
+            j(json!({"state":"receiving","stored":[],"missing":["1","2","3"]})),
+            j(json!({"state":"receiving","stored":["1"],"missing":["2","3"]})),
+        ]);
+        r.cancel_after = Some(1);
+        let (s, _) = run(&a, &images, &r, false);
+        assert!(matches!(s, State::NotSent { why: NotSent::Canceled, .. }), "{s:?}");
+        assert_eq!(r.count("/complete"), 0, "nothing public after a cancel");
+        assert_eq!(r.count("/attachments/2"), 0, "no upload starts after a cancel");
+        assert!(s.permits_try_again() && s.permits_revision());
+        let again = script(vec![
+            j(json!({"state":"receiving","stored":["1"],"missing":["2","3"]})),
+            j(json!({"state":"receiving","stored":["1","2"],"missing":["3"]})),
+            j(json!({"state":"ready","stored":["1","2","3"],"missing":[]})),
+            j(json!({"state":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":3,"images_expected":3})),
+        ]);
+        let (s, _) = run(&a, &images, &again, true);
+        assert!(matches!(s, State::Submitted { .. }), "{s:?}");
+        assert_eq!(again.count("/attachments/1"), 0, "a received image is not sent again");
+        // A cancel after the last upload and before completion creates nothing either.
+        let (b, images) = approved_with(1);
+        let mut late = script(vec![
+            j(json!({"state":"receiving","stored":[],"missing":["1"]})),
+            j(json!({"state":"ready","stored":["1"],"missing":[]})),
+        ]);
+        late.cancel_after = Some(1);
+        let (s, _) = run(&b, &images, &late, false);
+        assert!(matches!(s, State::NotSent { why: NotSent::Canceled, .. }), "{s:?}");
+        assert_eq!(late.count("/complete"), 0);
     }
 
     #[test]

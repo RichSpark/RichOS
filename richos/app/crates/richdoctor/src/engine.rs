@@ -1238,6 +1238,7 @@ fn saved_row(d: &Draft) -> Value {
             delivery::NotSent::NotReceived => "not received",
             delivery::NotSent::UploadStopped { .. } => "a screenshot did not finish uploading",
             delivery::NotSent::Retired => "replaced by a revision",
+            delivery::NotSent::Canceled => "sending was canceled",
         }), if why.needs_review() { "review" } else { "try" }),
         None => ("saved", "Saved on this Mac".to_string(), "resume"),
     };
