@@ -79,7 +79,10 @@ fn main() {
     let a = report(&dest, &images);
     let loader = |e: &Entry| images.get(e.order as usize - 1).cloned();
     let mut seen = Vec::new();
-    let s = delivery::attempt(&a, &loader, &dest, &relay, &clock, &sleep, &mut |s| seen.push(s.clone()), false);
+    let s = delivery::attempt(&a, &loader, &dest, &relay, &clock, &sleep, &mut |s| {
+        seen.push(s.clone());
+        true
+    }, false);
     check("1 two screenshots: Report submitted", matches!(s, State::Submitted { .. }), format!("{s:?}"));
     check("1 the upload stage was shown before filing", seen.iter().any(|s| matches!(s, State::SendingScreenshots { .. })) && seen.contains(&State::Creating), format!("{seen:?}"));
     let issues = get(&dest, "/_issues");
@@ -96,7 +99,7 @@ fn main() {
     // 2. Created, answer lost: reconciled, never created again.
     let b = report(&dest, &[]);
     relay.post(&format!("{}/_fault", dest.relay), &serde_json::json!({"next": "lost"}));
-    let s = delivery::attempt(&b, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| {}, false);
+    let s = delivery::attempt(&b, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| true, false);
     check("2 a lost answer is reconciled to Report submitted", matches!(s, State::Submitted { .. }), format!("{s:?}"));
     let n = get(&dest, "/_issues").as_array().map(|a| a.len()).unwrap_or(0);
     check("2 still one issue for that report (two in all)", n == 2, format!("{n}"));
@@ -104,9 +107,9 @@ fn main() {
     // 3. A definite refusal, then Try again with the same ID.
     let c = report(&dest, &[]);
     relay.post(&format!("{}/_fault", dest.relay), &serde_json::json!({"next": "limited"}));
-    let s = delivery::attempt(&c, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| {}, false);
+    let s = delivery::attempt(&c, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| true, false);
     check("3 busy: Not sent yet, Try again offered", matches!(s, State::NotSent { why: NotSent::Busy { .. }, .. }) && s.permits_try_again(), format!("{s:?}"));
-    let s = delivery::attempt(&c, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| {}, true);
+    let s = delivery::attempt(&c, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| true, true);
     check("3 Try again, same ID: Report submitted", matches!(s, State::Submitted { .. }), format!("{s:?}"));
     let n = get(&dest, "/_issues").as_array().map(|a| a.len()).unwrap_or(0);
     check("3 one issue for it (three in all)", n == 3, format!("{n}"));
@@ -114,7 +117,7 @@ fn main() {
     // 4. Retirement.
     let d = report(&dest, &[]);
     check("4 an unseen ID retires", delivery::retire(&d, &dest, &relay, clock()).is_ok(), String::new());
-    let s = delivery::attempt(&d, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| {}, false);
+    let s = delivery::attempt(&d, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| true, false);
     check("4 a retired ID is never filed", matches!(s, State::NotSent { why: NotSent::Retired, .. }), format!("{s:?}"));
     let n = get(&dest, "/_issues").as_array().map(|a| a.len()).unwrap_or(0);
     check("4 no issue was created for it", n == 3, format!("{n}"));

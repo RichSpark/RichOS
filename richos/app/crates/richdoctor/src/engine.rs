@@ -970,9 +970,18 @@ impl Engine {
     }
 
     fn set_state(&self, state: &State) {
+        self.set_state_saved(state);
+    }
+
+    /// Show and save `state`; `false` when it could not be saved on this Mac. A "Creating" that
+    /// could not be saved leaves `completion_attempted` as it was, and delivery then makes no
+    /// completion request (Codex audit of 0881b5f8f #1).
+    fn set_state_saved(&self, state: &State) -> bool {
         let mut inner = self.inner.lock().unwrap();
+        let mut before = None;
         if let Some(del) = inner.draft.as_mut().and_then(|d| d.delivery.as_mut()) {
             if matches!(state, State::Creating) {
+                before = Some(del.completion_attempted);
                 del.completion_attempted = true;
             }
             del.state = state.clone();
@@ -986,11 +995,16 @@ impl Engine {
             d.left = left_words(state);
         }
         self.save(&mut inner);
+        let saved = inner.unsaved.is_none();
+        if let (false, Some(was), Some(del)) = (saved, before, inner.draft.as_mut().and_then(|d| d.delivery.as_mut())) {
+            del.completion_attempted = was;
+        }
         let view = self.view(&inner);
         drop(inner);
         if let Some(v) = view {
             self.send(json!({"t": "delivery", "view": v}));
         }
+        saved
     }
 
     fn deliver(&self, approved: delivery::Approved, dest: Destination, retry: bool) {
@@ -1029,7 +1043,7 @@ impl Engine {
             store.shot_bytes(&draft.id, shot).filter(|b| util::sha256_hex(b) == e.sha256)
         };
         let this = self.clone();
-        let end = delivery::attempt(&approved, &loader, &dest, &relay, &util::now_millis, &|ms| std::thread::sleep(Duration::from_millis(ms)), &mut |s| this.set_state(s), retry);
+        let end = delivery::attempt(&approved, &loader, &dest, &relay, &util::now_millis, &|ms| std::thread::sleep(Duration::from_millis(ms)), &mut |s| this.set_state_saved(s), retry);
         self.inner.lock().unwrap().cancel_upload = None;
         if matches!(end, State::CreatedCheckingImages { .. }) {
             self.confirm_images(&approved, &dest, &relay);
@@ -1648,6 +1662,7 @@ fn saved_row(d: &Draft) -> Value {
             delivery::NotSent::UploadStopped { .. } => "a screenshot did not finish uploading",
             delivery::NotSent::Retired => "replaced by a revision",
             delivery::NotSent::Canceled => "sending was canceled",
+            delivery::NotSent::NotSaved => "it could not be saved on this Mac",
         }), if why.needs_review() { "review" } else { "try" }),
         None => ("saved", "Saved on this Mac".to_string(), "resume"),
     };
@@ -2193,6 +2208,204 @@ mod tests {
         assert_eq!(images.len(), 3, "first message, failed answer, retry: {images:?}");
         assert_eq!(images[1], 1, "the failed attempt carried the screenshot");
         assert_eq!(images[2], 1, "the retried investigation receives it again");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    // ---- Codex audit of 0881b5f8f: a local relay, and its cases as tests ----------------------
+
+    /// What the local stand-in relay keeps between requests.
+    #[derive(Default)]
+    struct Relayed {
+        report_id: String,
+        ids: Vec<String>,
+        /// attachment id and the sha256 of the bytes stored for it, once each.
+        stored: Vec<(String, String)>,
+        /// How many issues were created.
+        created: u32,
+        /// How many more uploads are stored; past that an upload's connection is dropped,
+        /// unanswered and not stored (an interrupted send). `None`: every one is stored.
+        allow_stores: Option<u32>,
+        /// Hold every status answer until this is false.
+        hold_status: bool,
+        status_waiting: bool,
+    }
+
+    /// A stand-in for the reporting relay, protocol 2, over plain HTTP on loopback: it registers
+    /// a manifest, stores uploads, creates one issue on complete once every image is stored, and
+    /// answers status and retire. `log` keeps "METHOD path" of every request.
+    #[derive(Clone)]
+    struct FakeRelay {
+        url: String,
+        log: Arc<Mutex<Vec<String>>>,
+        st: Arc<(Mutex<Relayed>, std::sync::Condvar)>,
+    }
+
+    const FAKE_REPOSITORY: &str = "fixture/reports";
+
+    impl FakeRelay {
+        fn start() -> FakeRelay {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let relay = FakeRelay { url: format!("http://{}", listener.local_addr().unwrap()), log: Arc::new(Mutex::new(Vec::new())), st: Arc::new((Mutex::new(Relayed::default()), std::sync::Condvar::new())) };
+            let r = relay.clone();
+            std::thread::spawn(move || {
+                for conn in listener.incoming() {
+                    let Ok(conn) = conn else { return };
+                    let r = r.clone();
+                    std::thread::spawn(move || r.serve(conn));
+                }
+            });
+            relay
+        }
+
+        fn dest(&self) -> Destination {
+            Destination { relay: self.url.clone(), repository: FAKE_REPOSITORY.into() }
+        }
+
+        fn requests(&self, what: &str) -> usize {
+            self.log.lock().unwrap().iter().filter(|l| l.contains(what)).count()
+        }
+
+        fn serve(&self, conn: std::net::TcpStream) {
+            use std::io::{BufRead, BufReader, Read, Write};
+            let mut reader = BufReader::new(conn.try_clone().unwrap());
+            let mut conn = conn;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    return;
+                }
+                let mut parts = line.split_whitespace();
+                let (method, path) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("").to_string());
+                let (mut len, mut chunked) = (0usize, false);
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let h = h.trim_end().to_ascii_lowercase();
+                    if h.is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                    chunked |= h.starts_with("transfer-encoding:") && h.contains("chunked");
+                }
+                let mut body = Vec::new();
+                if chunked {
+                    loop {
+                        let mut size = String::new();
+                        reader.read_line(&mut size).unwrap_or(0);
+                        let n = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
+                        let mut part = vec![0u8; n + 2];
+                        if reader.read_exact(&mut part).is_err() {
+                            return;
+                        }
+                        if n == 0 {
+                            break;
+                        }
+                        body.extend_from_slice(&part[..n]);
+                    }
+                } else {
+                    body.resize(len, 0);
+                    if reader.read_exact(&mut body).is_err() {
+                        return;
+                    }
+                }
+                self.log.lock().unwrap().push(format!("{method} {path}"));
+                let Some(answer) = self.answer(&method, &path, &body) else { return };
+                let text = answer.to_string();
+                if write!(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{text}", text.len()).is_err() {
+                    return;
+                }
+            }
+        }
+
+        /// The relay's answer, or `None` to drop the connection unanswered.
+        fn answer(&self, method: &str, path: &str, body: &[u8]) -> Option<Value> {
+            let (lock, cv) = &*self.st;
+            let mut s = lock.lock().unwrap();
+            if path.ends_with("/status") && s.hold_status {
+                s.status_waiting = true;
+                cv.notify_all();
+                while s.hold_status {
+                    s = cv.wait_timeout(s, Duration::from_secs(10)).unwrap().0;
+                }
+            }
+            if method == "POST" && path == "/v1/reports" {
+                let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                s.report_id = v["report_id"].as_str().unwrap_or("").to_string();
+                s.ids = v["manifest"].as_array().map(|m| m.iter().filter_map(|e| e["attachment_id"].as_str().map(str::to_string)).collect()).unwrap_or_default();
+            } else if method == "PUT" && path.contains("/uploads/") {
+                match s.allow_stores {
+                    Some(0) => return None,
+                    Some(k) => s.allow_stores = Some(k - 1),
+                    None => {}
+                }
+                let n = path.rsplit('/').next().unwrap_or("").to_string();
+                if !s.stored.iter().any(|x| x.0 == n) {
+                    s.stored.push((n, util::sha256_hex(body)));
+                }
+            } else if path.ends_with("/retire") {
+                return Some(json!({"report_id": s.report_id, "state": "retired", "stage": "retired", "stored": [], "missing": []}));
+            } else if path.ends_with("/complete") && s.created == 0 && s.ids.iter().all(|i| s.stored.iter().any(|x| &x.0 == i)) {
+                s.created += 1;
+            }
+            let k = s.ids.len();
+            if s.created > 0 {
+                return Some(json!({"report_id": s.report_id, "state": "delivered", "stage": "delivered", "issue_url": format!("https://github.com/{FAKE_REPOSITORY}/issues/7"), "issue_number": 7, "images_expected": k, "images_confirmed": k}));
+            }
+            let stored: Vec<String> = s.stored.iter().map(|x| x.0.clone()).collect();
+            let missing: Vec<String> = s.ids.iter().filter(|i| !stored.contains(i)).cloned().collect();
+            let state = if missing.is_empty() { "ready" } else { "receiving" };
+            Some(json!({"report_id": s.report_id, "state": state, "stage": state, "stored": stored, "missing": missing}))
+        }
+    }
+
+    /// An engine sending to `relay`, its report built for that relay's address.
+    fn engine_for(root: &std::path::Path, relay: &FakeRelay) -> (Engine, Arc<Mutex<Vec<Value>>>) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let e2 = events.clone();
+        let env = Env { store: Store::at(root), home: root.join("fixture-home"), exe: PathBuf::new(), claude: None, dest: Ok(relay.dest()) };
+        (Engine::new(env, Arc::new(move |v| e2.lock().unwrap().push(v))), events)
+    }
+
+    fn draft_for(relay: &FakeRelay) -> Draft {
+        let mut d = reviewed_draft("");
+        let r = d.report.as_mut().unwrap();
+        r.relay = relay.url.clone();
+        r.report_id = delivery::new_report_id().unwrap();
+        r.fit();
+        d
+    }
+
+    #[test]
+    fn a_completion_whose_proof_cannot_be_saved_is_never_requested() {
+        let root = scratch("unsaved-complete");
+        let relay = FakeRelay::start();
+        let (e, _) = engine_for(&root, &relay);
+        let mut d = draft_for(&relay);
+        e.env().store.save(&mut d, 1).unwrap();
+        e.open(&d.id).unwrap();
+        let approved = e.approve_and_save(&relay.dest()).unwrap();
+        // The report's file stops taking writes after the approval was saved (a full disk, a lost
+        // volume): here a folder sits where it is written.
+        let file = e.env().store.draft_dir(&d.id).join("draft.json");
+        let approved_record = std::fs::read(&file).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir_all(file.join("blocked")).unwrap();
+        e.deliver(approved, relay.dest(), false);
+        assert_eq!(relay.requests("/complete"), 0, "no completion request without its saved proof: {:?}", relay.log.lock().unwrap());
+        assert_eq!(e.delivery()["kind"], "notsent");
+        // Restart: the record on disk is the approval, completion never attempted, and that is true.
+        std::fs::remove_dir_all(&file).unwrap();
+        std::fs::write(&file, approved_record).unwrap();
+        e.close();
+        let (e, _) = engine_for(&root, &relay);
+        let saved = e.env().store.load(&d.id).unwrap();
+        assert!(!saved.delivery.unwrap().completion_attempted);
+        assert_eq!(relay.st.0.lock().unwrap().created, 0, "and nothing was created");
+        drop(e);
         std::fs::remove_dir_all(root).ok();
     }
 

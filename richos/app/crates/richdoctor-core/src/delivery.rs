@@ -207,6 +207,10 @@ pub enum NotSent {
     /// The person canceled while the screenshots were being sent (round 40: Cancel during
     /// Sending screenshots). Nothing public was created; Send report resumes it.
     Canceled,
+    /// RichDoctor could not save, on this Mac, that it was about to ask for the issue to be
+    /// created, so it did not ask: the saved record must never say "no completion was sent"
+    /// after one was. Nothing was filed; Try again sends it once the folder can be written.
+    NotSaved,
 }
 
 impl NotSent {
@@ -233,6 +237,7 @@ impl NotSent {
             NotSent::UploadStopped { item, why } => format!("{} did not finish uploading: {why} Nothing was filed. Your report and its screenshots are kept; Try again sends the rest.", capitalized(item)),
             NotSent::Retired => "This copy of the report was replaced by a revised one, so it is not sent.".into(),
             NotSent::Canceled => "You canceled sending. Nothing public was created; your report and its screenshots are kept on this Mac.".into(),
+            NotSent::NotSaved => "RichDoctor could not save its progress on this Mac, so it stopped before filing the report. Nothing was filed. Free some disk space, then choose Try again.".into(),
         }
     }
     /// Whether the fix is in the content: round 39 offers Review report instead of Try again.
@@ -410,7 +415,7 @@ pub type Images<'a> = &'a dyn Fn(&Entry) -> Option<Vec<u8>>;
 const UPLOAD_WAITS: u32 = 3;
 const UPLOAD_WAIT_MAX_MS: u64 = 30_000;
 
-fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State)) -> Result<(), State> {
+fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State) -> bool) -> Result<(), State> {
     let total = approved.manifest.len() as u32;
     let mut missing = missing;
     relay.heard(Upload::Plan { missing: missing.clone() });
@@ -489,8 +494,10 @@ fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Dest
 /// complete; then, on anything but a definite answer, ask status until a definite answer or
 /// [`RECONCILE_BOUND_MS`] after the attempt began, then "could not be confirmed". It never
 /// creates twice. `retry` is Try again: a register that answers the report's earlier definite
-/// refusal goes on to complete, which the relay allows from that state.
-pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State), retry: bool) -> State {
+/// refusal goes on to complete, which the relay allows from that state. `on_state` shows and
+/// saves each state and answers whether it was saved: completion is asked for only after
+/// [`State::Creating`] was.
+pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State) -> bool, retry: bool) -> State {
     let begun = clock();
     on_state(&State::Sending);
     let registered = relay.post(&format!("{}/v1/reports", dest.relay), &approved.register_body());
@@ -524,7 +531,14 @@ pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &
         on_state(&s);
         return s;
     }
-    on_state(&State::Creating);
+    // The proof that completion was asked for is saved BEFORE the request that can create the
+    // issue. When it cannot be saved the request is not made: after a restart the saved "never
+    // asked" would otherwise be taken as proof that no issue exists.
+    if !on_state(&State::Creating) {
+        let s = State::NotSent { why: NotSent::NotSaved, at: clock() };
+        on_state(&s);
+        return s;
+    }
     let complete = |relay: &dyn Relay| relay.post(&format!("{}/v1/reports/{}/complete", dest.relay, approved.report_id), &approved.secret_body());
     let mut answer = complete(relay);
     // The relay found an image missing after all (a cleanup, a lost write): upload it once more.
@@ -554,7 +568,7 @@ pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &
 
 /// Ask status until a definite answer, within the two-minute bound of the attempt.
 #[allow(clippy::too_many_arguments)]
-fn reconcile(approved: &Approved, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State), begun: u64, first_wait: u64) -> State {
+fn reconcile(approved: &Approved, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State) -> bool, begun: u64, first_wait: u64) -> State {
     let mut wait = first_wait;
     on_state(&State::Checking { since: clock() });
     loop {
@@ -697,7 +711,19 @@ mod tests {
         let now = Cell::new(10_000u64);
         let mut seen = Vec::new();
         let loader = |e: &Entry| images.get(e.order as usize - 1).cloned();
-        let s = attempt(a, &loader, &dest(), relay, &|| now.get(), &|ms| now.set(now.get() + ms), &mut |s| seen.push(s.clone()), retry);
+        let s = attempt(
+            a,
+            &loader,
+            &dest(),
+            relay,
+            &|| now.get(),
+            &|ms| now.set(now.get() + ms),
+            &mut |s| {
+                seen.push(s.clone());
+                true
+            },
+            retry,
+        );
         (s, seen)
     }
     const LINK: &str = "https://github.com/WebDevBooster/richos-test/issues/42";
@@ -744,6 +770,24 @@ mod tests {
         let order: Vec<String> = r.log.borrow().iter().map(|(m, u)| format!("{m} {u}")).collect();
         assert_eq!(order, ["POST /v1/reports", "PUT /v1/reports/RD-7K3M-Q9VX/uploads/1", "PUT /v1/reports/RD-7K3M-Q9VX/uploads/2", "POST /v1/reports/RD-7K3M-Q9VX/complete"]);
         assert!(seen.contains(&State::SendingScreenshots { done: 1, total: 2 }));
+    }
+
+    /// Codex audit of 0881b5f8f #1: a "Creating" state that could not be saved stops the
+    /// completion request, so the saved record never wrongly proves nothing was created.
+    #[test]
+    fn an_unsaved_creating_state_makes_no_completion_request() {
+        let (a, images) = approved_with(1);
+        let r = script(vec![
+            j(json!({"state":"receiving","stored":[],"missing":["1"]})),
+            j(json!({"state":"ready","stored":["1"],"missing":[]})),
+            j(json!({"state":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":1,"images_expected":1})),
+        ]);
+        let now = Cell::new(10_000u64);
+        let loader = |e: &Entry| images.get(e.order as usize - 1).cloned();
+        let s = attempt(&a, &loader, &dest(), &r, &|| now.get(), &|ms| now.set(now.get() + ms), &mut |s| !matches!(s, State::Creating), false);
+        assert_eq!(r.count("/complete"), 0, "no completion request without its saved proof");
+        assert!(matches!(s, State::NotSent { why: NotSent::NotSaved, .. }), "{s:?}");
+        assert!(s.permits_try_again());
     }
 
     #[test]
