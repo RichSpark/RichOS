@@ -63,6 +63,13 @@ python3 app/scripts/testvm/run-walk.py --bundle ZIP --home EMPTY_HOME --engine E
     app/scripts/testvm/folder-instructions-walk.py --out DIR --expect-sha SHA
 ```
 
+## Finished by zach-opus-folderfiles2 (2026-10-22)
+
+Main `05c8035ea` merged once (`b4b87e243`; the only conflict was the verification pins, resolved
+with both sides' evidence and renewed hashes). The merge changed `engine/` and app code, so the walk
+ran once more on the merged tip and passed every step (run 4 in `folderfiles1-walks-2026-10-21.md`).
+The branch proof run follows this commit; its logs directory is in the handover report.
+
 ## Noted, not changed
 
 - On main and here, Stu reads a connected folder's files as ordinary files and may relay their

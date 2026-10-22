@@ -147,3 +147,55 @@ Instruction files, sha256 before and after (identical: True):
 ## The interrupted proof run (cb0c7ae43..c1a2ccc94)
 
 3 of the plan's checks passed and 0 failed before the CEO's order of 23:05Z stopped the run; every check it had started was stopped with it. The passes were the repository-connection Rust suite (11 of 11), one Rust test of the native driver and the UI affordance suite. Nothing else ran.
+
+## 4. Green, seeded, after merging main (engine and bundle b4b87e243, zach-opus-folderfiles2, 2026-10-22)
+
+The merge of main `05c8035ea` changed `engine/` (the app hook, `dispatch-pretooluse.sh`,
+`workspaces.py`, `mega-lander/app.py`) and app code, so the walk ran once more on the merged tip:
+a development bundle `1.2.2-dev.b4b87e243` from `package-app.sh` and the engine asset from
+`make-engine-asset.sh` at the same commit, with the team seeded by `command-walk.py --seed-team`.
+
+run-walk.py: vm `walk-a77b01f00a98`, execution `completed`, scenario exit 0, cleanup complete True, 837 s.
+
+| Step | Outcome |
+|---|---|
+| identity | PASS |
+| seed | PASS |
+| first-run | PASS |
+| connect | PASS |
+| connect-tools | PASS |
+| house-rule | PASS |
+| agents-rule | PASS |
+| preserved | PASS |
+
+**house-rule**: job settled; landed True; rule followed True; commit message:
+
+```text
+Add notes.md
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+[house-rule]
+```
+
+| Role | Teammate | Received heading | Received rule | Received AGENTS.md beside CLAUDE.md | Stu payload holds the file |
+|---|---|---|---|---|---|
+| worker | norm | True | True | False | False |
+| reviewer | tom | True | True | False | False |
+
+**agents-rule**: job settled; landed True; rule followed True; commit message:
+
+```text
+Add tools.md
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+[agents-rule]
+```
+
+| Role | Teammate | Received heading | Received rule | Received AGENTS.md beside CLAUDE.md | Stu payload holds the file |
+|---|---|---|---|---|---|
+| reviewer | tom | True | True | False | False |
+| worker | norm | True | True | False | False |
+
+Instruction files, sha256 before and after (identical: True): the same four values as run 3.
+run-walk.py quit the test app and removed the guest ("clean: app quit, VM stopped, clone deleted,
+state removed").
