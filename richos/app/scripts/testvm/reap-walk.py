@@ -103,16 +103,19 @@ def pressed_at(records):
 
 def told_stopped(record):
     """None when the assignment he stopped (or quit) reads as stopped, else why not. A stop he
-    made is `interrupted` with the "was stopped" notice; guest walk-0ddfdbf8ff00 read "failed ...
-    Claude channel closed (child exited?)." for both Stops and the Quit."""
+    made is `interrupted` with his Stop on the record (`user_stop_requested_at_ms`); guest
+    walk-0ddfdbf8ff00 read "failed ... Claude channel closed (child exited?)." for both Stops and
+    the Quit. The host no longer raises an assignment notice of its own (2002ec31b, "remove
+    host-inferred job execution state": Stu is told and Rich tells him), so a notice is not
+    required; one that is there must still say it was stopped (walk-28d1d7305246 failed only on
+    the missing notice, with both commands ended inside the bound)."""
     if record.get('state') in OPEN:
         return 'the stopped assignment is still running: ' + json.dumps(record)[:400]
     notices = record.get('notices') or []
-    if not notices:
-        return 'the stopped assignment raised no notice: ' + json.dumps(record)[:400]
-    last = notices[-1]
-    if record.get('state') != 'interrupted' or last.get('kind') != 'interrupted':
-        return 'the stop was told as %s, not as a stop: %r' % (record.get('state'), last.get('text', ''))
+    last = notices[-1] if notices else {}
+    if record.get('state') != 'interrupted' or not record.get('user_stop_requested_at_ms') \
+            or (notices and last.get('kind') != 'interrupted'):
+        return 'the stop was told as %s, not as a stop: %r' % (record.get('state'), last.get('text') or record.get('detail', ''))
     return None
 
 
@@ -257,7 +260,7 @@ class Walk(adopt.Walk):
             text = guest(self.vm, 'python3 -c %s %s %s' % (shlex.quote(script), shlex.quote(self.data),
                                                             shlex.quote(assignment_id)), 60)
             record = json.loads(text) if text.strip() else {}
-            if record.get('state') not in OPEN and record.get('notices'):
+            if record.get('state') not in OPEN:
                 break
             time.sleep(1)
         return record
@@ -401,7 +404,7 @@ class Walk(adopt.Walk):
         if told:
             raise StepFailed(told)
         return dict(evidence, press=press, started=started, stopped=target['id'],
-                    told=record['notices'][-1]['text'], detail=record.get('detail'))
+                    told=(record.get('notices') or [{}])[-1].get('text'), detail=record.get('detail'))
 
     def stop_evidence(self):
         """What a Stop that left a command running had to go on, read before the guest is gone:
@@ -455,7 +458,7 @@ class Walk(adopt.Walk):
         if told:
             raise StepFailed(told)
         return dict(evidence, app_log=app_log, question=question[-800:], started=started, stopped=target['id'],
-                    told=record['notices'][-1]['text'])
+                    told=(record.get('notices') or [{}])[-1].get('text'))
 
     def crash(self):
         self.facts['app'] = self.relaunched()
