@@ -42,19 +42,22 @@ recorded" under "Worked for 3s" and `system:hook_started` / `system:hook_respons
 What the code says about it (1.2.1 is tag `v1.2.1` and this path is unchanged since): those
 rows are drawn only from `get_machinery`, which the window requests only when the Technical
 view is on for the conversation on screen and the "Between turns" section is filled only from
-that payload. With the view off, the projection has already removed them. The screenshots are
-consistent with the view having been turned on during the session: the same conversation end
-appears without the "Between turns" section in an earlier screenshot (the section is drawn
-whenever the view is on), Settings shows the switch off in a screenshot taken before the rows
-appear and none shows the switch after. Every way of turning it on asks where and needs a
-confirm (the Settings switch, the rail switch, the header chip or Cmd-Shift-T then Enter).
-What would settle it: the person's `~/Library/Application Support/com.richos.app/config.json`,
-whose `techy_default`, `techy_entities` and `techy_threads` record every time it was turned on.
-One path that does put the rows on screen with the switch off was found by review on
-2026-10-21 and is fixed: switching the view off while a reload that had asked for it was still
-in flight (a turn ending during the switch) let that reload's late reply draw the machinery
-over the calm view. Whether that is what happened on the person's Mac needs the same file
-(a technical setting that was on and then turned off).
+that payload. With the view off, the projection has already removed them. The screenshots show Settings off at one moment and technical rows later. They do not show
+the view being switched on and do not establish who or what changed its state. An earlier
+frame lacks the "Between turns" section, but that observation alone cannot reconstruct the
+sequence.
+
+The person's `~/Library/Application Support/com.richos.app/config.json` stores the current
+global, company and conversation preferences (`techy_default`, `techy_entities` and
+`techy_threads`). It is not an event history and does not record every toggle. A
+contemporaneous configuration snapshot plus session or timing evidence could help distinguish
+a saved preference from a rendering race. A current file alone cannot settle the incident.
+
+Review found a real path that puts rows on screen with the switch off: a reload that asked
+for the Technical view can return after it has been switched off and overwrite the plain
+view. The stale-response check fixes that path, with a regression that failed before the
+fix. Whether that race caused the historical screenshots remains unconfirmed without the
+incident evidence.
 
 ## Other places that could show machinery, as of 2026-10-21
 

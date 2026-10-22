@@ -111,3 +111,17 @@ is discarded and the line tells him to say it again. The sentence is conditional
 Raising it only when the canceller's near-end verdict shows more than echo would make it rarer
 and is a separate, measured change on the committed echo-path fixtures; it is not part of this
 fix.
+
+## Every voice input refusal, independent of its wording
+
+The phrase scan is a backstop, not a semantic guarantee. `affordances.js` also reads every
+shipped `ceo_message()` literal in the voice controller and requires an explicit next step and
+an ACTIONABLE classification for every input notice. The single exception is `ReplyCutOff`,
+which reports a failed answer and receives its interruption's route from its caller. This
+structural check found the fourth refusal, `SoundButNoWords`: it previously ended with
+"Voice is still on" after repeated failed recognition. It now asks for a repeat nearer the
+microphone. `every_input_refusal_names_a_next_step` checks the same family in Rust.
+
+Neither a next-step sentence nor a fixture pass guarantees that a speaker/microphone pair can
+separate simultaneous voices. The recorded capture tests establish when a requested repeat is
+accepted and how a refused repeat is explained. Keep that scope with the evidence.
