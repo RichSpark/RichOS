@@ -390,13 +390,40 @@ class Walk(adopt.Walk):
         # The row's Stop is labeled "Stop <its title>" (work-summary.js); name this one.
         label = 'Stop ' + (target.get('title') or '')[:60]
         press = pressed_at(self.press(label))
-        evidence = self.verdict(names, press['pressed_at_ms'], BOUND_MS)
+        try:
+            evidence = self.verdict(names, press['pressed_at_ms'], BOUND_MS)
+        except StepFailed as exc:
+            raise StepFailed('%s\n%s' % (exc, self.stop_evidence())) from exc
         record = self.closed_record(target['id'])
         told = told_stopped(record)
         if told:
             raise StepFailed(told)
         return dict(evidence, press=press, started=started, stopped=target['id'],
-                    told=record['notices'][-1]['text'])
+                    told=record['notices'][-1]['text'], detail=record.get('detail'))
+
+    def stop_evidence(self):
+        """What a Stop that left a command running had to go on, read before the guest is gone:
+        every assignment of the conversation (state, detail, obligation), and every Bash call the
+        heartbeats were started with (whose session, whether a helper's, its description and
+        background option), from the app's own hook evidence. A diagnostic: never the verdict."""
+        script = ('import json,glob,sys\n'
+                  'root=sys.argv[1]+"/engine-state"\n'
+                  'for p in sorted(glob.glob(root+"/assignments/*/*.json")):\n'
+                  '    try: r=json.load(open(p))\n'
+                  '    except Exception: continue\n'
+                  '    print("assignment",json.dumps({k:r.get(k) for k in ("id","obligation_id","state","detail","registered_at_ms","updated_at_ms","user_stop_requested_at_ms")}))\n'
+                  'for p in glob.glob(root+"/evidence/*/callbacks.jsonl"):\n'
+                  '    for line in open(p,errors="replace"):\n'
+                  '        if "heartbeat.py beat stop-" not in line or "PreToolUse" not in line: continue\n'
+                  '        try: c=json.loads(line).get("callback",{})\n'
+                  '        except Exception: continue\n'
+                  '        if c.get("tool_name")!="Bash": continue\n'
+                  '        print("bash",json.dumps({"session":c.get("session_id"),"agent":c.get("agent_id"),"tool_use_id":c.get("tool_use_id"),\n'
+                  '            "input":c.get("tool_input")})[:700])\n')
+        try:
+            return guest(self.vm, 'python3 -c %s %s' % (shlex.quote(script), shlex.quote(self.data)), 60).strip()[-6000:]
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
+            return 'stop evidence could not be read: %s' % exc
 
     def quit(self):
         started = self.start('quit')
