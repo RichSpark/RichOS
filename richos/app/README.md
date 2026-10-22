@@ -226,6 +226,10 @@ richos/app/
     tests/terminal_session_tests.rs native session continuity and overlapping-input regressions.
     tests/rotation_tests.rs account-resume, native model-control and quota-notice tests.
     tests/questions.rs       durable question sets, revisions, delivery, engine witnesses and the app-run ask gate
+    tests/instructions_update_tests.rs a new version's improved rich.md/stu.md reach the user:
+                              an unchanged copy updated silently, a changed one asked about once
+                              (OK writes the update, No is not asked again for that version), a
+                              copy from before the record recognized by the earlier versions
     tests/action_ledger_tests.rs action-ledger WRITER tests (the ledger is non-empty
                               at runtime; CEO-facing actions cross a rotation; machinery
                               stays out of every priming prompt)
