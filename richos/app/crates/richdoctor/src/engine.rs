@@ -1361,16 +1361,17 @@ impl Engine {
     }
 
     /// The approved screenshots' final bytes, as the window shows them, each with its own
-    /// number. `Err` names one that cannot be read.
-    pub fn images(&self) -> Result<Vec<Value>, String> {
+    /// number. One that cannot be read keeps its place and number with the sentence naming it
+    /// (`problem`), so the person sees it and can remove it (audit R2).
+    pub fn images(&self) -> Vec<Value> {
         let inner = self.inner.lock().unwrap();
-        let Some(d) = inner.draft.as_ref() else { return Ok(Vec::new()) };
+        let Some(d) = inner.draft.as_ref() else { return Vec::new() };
         d.screenshots
             .iter()
             .enumerate()
-            .map(|(i, s)| {
-                let (b, e) = self.shot_checked(d, i, s)?;
-                Ok(json!({"n": i + 1, "name": e.filename, "width": e.width, "height": e.height, "bytes": e.bytes, "covers": s.covers, "reduced": s.reduced, "url": format!("data:{};base64,{}", s.media_type, util::base64_std(&b))}))
+            .map(|(i, s)| match self.shot_checked(d, i, s) {
+                Ok((b, e)) => json!({"n": i + 1, "name": e.filename, "width": e.width, "height": e.height, "bytes": e.bytes, "covers": s.covers, "reduced": s.reduced, "url": format!("data:{};base64,{}", s.media_type, util::base64_std(&b))}),
+                Err(problem) => json!({"n": i + 1, "name": format!("screenshot-{}", i + 1), "width": 0, "height": 0, "bytes": 0, "covers": s.covers, "reduced": s.reduced, "url": "", "problem": problem}),
             })
             .collect()
     }
@@ -1985,7 +1986,7 @@ mod tests {
         let sent: Value = serde_json::from_str(&std::fs::read_to_string(e.env().store.work_dir().join("captured.json")).unwrap()).unwrap();
         e.close();
         let images = sent["message"]["content"].as_array().unwrap().iter().filter(|v| v["type"] == "image").count();
-        assert_eq!(e.images().unwrap().len(), 0);
+        assert_eq!(e.images().len(), 0);
         assert_eq!(images, 0, "report A's screenshot never goes out with report B");
         std::fs::remove_dir_all(root).ok();
     }
@@ -2445,7 +2446,9 @@ mod tests {
         assert_eq!(shots.len(), 2, "the review still lists both: {shots:?}");
         assert_eq!(shots[1]["n"], 2);
         assert!(shots[0]["problem"].as_str().is_some_and(|w| w.contains("Screenshot 1")), "{shots:?}");
-        assert!(e.images().is_err_and(|w| w.contains("Screenshot 1")), "the previews name it");
+        let previews = e.images();
+        assert_eq!(previews.len(), 2, "the previews keep it in its place");
+        assert!(previews[0]["problem"].as_str().is_some_and(|w| w.contains("Screenshot 1")), "and name it: {previews:?}");
         assert!(e.image_files().is_err_and(|w| w.contains("Screenshot 1")));
         std::fs::remove_dir_all(out).ok();
         std::fs::remove_dir_all(root).ok();

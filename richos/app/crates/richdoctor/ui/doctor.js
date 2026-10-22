@@ -241,7 +241,7 @@
   }
   // An approved screenshot from the draft, as the app returned it.
   function fromSaved(f) {
-    return { n: f.n, name: f.name, file: f.name, note: fmtDims(f.width, f.height), covers: new Array(f.covers).fill(null), approved: true, reducedFlag: f.reduced, final: { src: f.url, w: f.width, h: f.height, bytes: f.bytes } };
+    return { n: f.n, name: f.name, file: f.name, note: fmtDims(f.width, f.height), covers: new Array(f.covers).fill(null), approved: true, reducedFlag: f.reduced, problem: f.problem || null, final: { src: f.url, w: f.width, h: f.height, bytes: f.bytes } };
   }
   // A saved screenshot that cannot be read is named (the app's error), never dropped silently.
   function refreshShots() { return invoke("images").then(function (list) { S.shots = (list || []).map(fromSaved); return S.shots; }, function (err) { fail(err); return S.shots; }); }
@@ -493,6 +493,15 @@
   function shotRow(s, acts) {
     const row = el('<div class="shot" role="listitem"><span class="badge" aria-hidden="true"></span><img alt=""><div class="meta"><b></b><span></span></div><div class="acts"></div></div>');
     row.querySelector(".badge").textContent = s.n;
+    if (s.problem) {
+      // A saved screenshot that cannot be read keeps its row and number, named, so it can be removed.
+      row.querySelector("img").remove();
+      row.querySelector(".meta b").textContent = s.name;
+      row.querySelector(".meta span").textContent = s.problem;
+      if (acts) row.querySelector(".acts").innerHTML = '<button class="btn link" data-act="remove-shot" data-n="' + s.n + '" aria-label="Remove screenshot ' + s.n + '">Remove</button>';
+      else row.querySelector(".acts").remove();
+      return row;
+    }
     row.querySelector("img").src = s.final.src;
     row.querySelector("img").alt = "Screenshot " + s.n + ": " + s.note;
     row.querySelector(".meta b").textContent = s.name;

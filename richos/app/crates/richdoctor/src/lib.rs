@@ -470,7 +470,7 @@ fn remove_image(engine: State<Engine>, index: usize) -> Result<(), String> {
 
 /// The approved screenshots' final bytes, in order.
 #[tauri::command]
-fn images(engine: State<Engine>) -> Result<Vec<Value>, String> {
+fn images(engine: State<Engine>) -> Vec<Value> {
     engine.images()
 }
 

@@ -287,6 +287,32 @@ async function run() {
       check(`${theme} review after an interrupted send: unchanged resumes`, (await T("#rv-banner")).includes("After an interrupted send.") && (await T("#rv-banner")).includes("1 screenshot of 2 already reached the support service"));
       await contrast(page, "review-upload", theme);
 
+      // Audit R2: a reopened draft whose screenshot 1 is missing on this Mac lists it in its place,
+      // named, with Remove; removing it leaves the other screenshot to carry on with.
+      const MISSING = { n: 1, name: "screenshot-1", width: 0, height: 0, bytes: 0, covers: 0, reduced: false, url: "", problem: "Screenshot 1 could not be read on this Mac: its saved copy is missing or is not the image you approved. Remove it from the report and add it again." };
+      await page.evaluate((v) => {
+        window.__missingCase = true;
+        let removed = false;
+        window.__TAURI__.core.invoke = ((orig) => function (c, a) {
+          if (!window.__missingCase) return orig(c, a);
+          if (c === "remove_image") { removed = true; window.__calls.push([c, a || {}]); return Promise.resolve(null); }
+          if (c === "review") return Promise.resolve(removed ? v.after : v.review);
+          if (c === "images") return Promise.resolve(removed ? v.afterImages : v.images);
+          return orig(c, a);
+        })(window.__TAURI__.core.invoke);
+      }, { review: Object.assign({}, REVIEW, { shots: [MISSING, SHOT(2)] }), images: [MISSING, SHOT(2)], after: Object.assign({}, REVIEW, { shots: [SHOT(1)] }), afterImages: [SHOT(1)] });
+      await emit({ t: "review" });
+      await page.waitForSelector("#rv-sections .shot");
+      await settle();
+      check(`${theme} review: a missing screenshot keeps its numbered row and names the problem`, (await page.locator("#rv-sections .shot").count()) === 2 && (await T("#rv-sections .shot")).includes("Screenshot 1 could not be read on this Mac"));
+      await contrast(page, "review-missing-shot", theme);
+      await page.click('#rv-sections [data-act="remove-shot"][data-n="1"]');
+      await settle();
+      check(`${theme} review: removing it asks the app and leaves the other screenshot`, (await calls()).some((c) => c[0] === "remove_image" && c[1].index === 0) && (await page.locator("#rv-sections .shot").count()) === 1 && (await page.locator('#rv-sections [aria-label="Inspect screenshot 1"]').count()) === 1);
+      await page.evaluate(() => { window.__missingCase = false; });
+      await emit({ t: "review" });
+      await settle();
+
       // 4. Delivery (round 39 §5)
       for (const [kind, extra, want] of [
         ["sending", {}, "Sending your report…"],
