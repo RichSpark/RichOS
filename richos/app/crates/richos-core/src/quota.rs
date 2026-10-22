@@ -1722,14 +1722,22 @@ impl Service {
             .swap(connecting, std::sync::atomic::Ordering::SeqCst)
             != connecting
         {
-            self.disconnect();
+            // Starting or canceling browser login says nothing about the existing sign-in.
+            // Forget its usage figures and probe, but keep the last actual auth verdict.
+            self.clear_connection(true);
         }
     }
     /// Called when the account connection changes. Old account readings cannot survive it.
     pub fn disconnect(&self) {
+        self.clear_connection(false);
+    }
+    fn clear_connection(&self, keep_sign_in: bool) {
         self.source.lock().unwrap().disconnect();
         self.resets.clear_connection();
-        *self.snapshot.lock().unwrap() = Snapshot::default();
+        let mut snapshot = self.snapshot.lock().unwrap();
+        let signed_in = if keep_sign_in { snapshot.signed_in } else { None };
+        *snapshot = Snapshot { signed_in, ..Snapshot::default() };
+        drop(snapshot);
         let _best_effort = self.publish();
         self.request_refresh();
     }
@@ -2476,6 +2484,10 @@ pub(crate) mod tests {
             ("browser sign-in: Connected, no record yet", Who::Added, None, Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Connected)), Some(true)),
             ("browser sign-in: Connected after signed out", Who::Added, Some(false), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Connected)), Some(true)),
             ("browser sign-in: stopped before it finished", Who::Both, Some(false), Box::new(|s, id, _| s.sign_in_known(id, &AuthState::Cancelled)), Some(false)),
+            ("browser sign-in: Account 1 canceled after the connection changes", Who::AccountOne, Some(false),
+                Box::new(|s, id, _| { s.set_connecting(true); s.set_connecting(false); s.sign_in_known(id, &AuthState::Cancelled); }), Some(false)),
+            ("browser sign-in: Account 1 failed after the connection changes", Who::AccountOne, Some(true),
+                Box::new(|s, id, _| { s.set_connecting(true); s.set_connecting(false); s.sign_in_known(id, &AuthState::Failed); }), Some(true)),
             ("usage read: a reading", Who::Both, Some(false), Box::new(|s, id, at| record(s, id, |r| r.accept(live(10.).windows, at))), Some(true)),
             ("usage read: streamed by the lease", Who::Both, Some(false), Box::new(|s, id, at| record(s, id, |r| r.observe(&live(10.).windows, at))), Some(true)),
             ("usage read: signed out", Who::Both, Some(true), Box::new(read_as(ReadError::SignedOut)), Some(false)),
