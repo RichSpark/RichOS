@@ -236,6 +236,7 @@ pub fn scrub(text: &str, ctx: &Context) -> (String, Removed) {
     let mut removed = Removed::default();
     let text = scrub_key_blocks(text, &mut removed);
     let text = scrub_headers(&text, &mut removed);
+    let text = scrub_secret_values(&text, &mut removed);
     // Word by word, keeping every separator as it was.
     let mut out = String::with_capacity(text.len());
     let mut previous_key = false;
@@ -275,6 +276,94 @@ pub fn scrub(text: &str, ctx: &Context) -> (String, Removed) {
         text = next;
     }
     (text, removed)
+}
+
+/// Keys whose unquoted value is removed to the end of its line, not only its first word (a
+/// passphrase has spaces). Other secret keys keep the word rule, so a log line such as
+/// "session: resumed" loses one word, not the rest of the line.
+fn passphrase_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    ["pass", "pwd", "secret", "private_key"].iter().any(|p| k.contains(p))
+}
+
+/// A secret key's whole value: `"password": "very private passphrase"`, `password =
+/// 'x y'`, `client_secret:"x y"` lose everything between the quotes; `password: x y z`
+/// loses the rest of its line (to a `,`, `;`, `&` or `}`). The key and what follows the
+/// value are kept.
+fn scrub_secret_values(text: &str, removed: &mut Removed) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        let (start, c) = chars[i];
+        if !word(c) || (i > 0 && word(chars[i - 1].1)) {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < chars.len() && word(chars[j].1) {
+            j += 1;
+        }
+        let key = &text[start..chars.get(j).map_or(text.len(), |x| x.0)];
+        if !is_secret_key(key) {
+            i = j;
+            continue;
+        }
+        let mut k = j;
+        if k < chars.len() && matches!(chars[k].1, '"' | '\'') {
+            k += 1;
+        }
+        while k < chars.len() && matches!(chars[k].1, ' ' | '\t') {
+            k += 1;
+        }
+        if k >= chars.len() || !matches!(chars[k].1, ':' | '=') {
+            i = j;
+            continue;
+        }
+        k += 1;
+        while k < chars.len() && matches!(chars[k].1, ' ' | '\t') {
+            k += 1;
+        }
+        let Some(&(vstart, first)) = chars.get(k) else { break };
+        let (from, to) = if first == '"' || first == '\'' {
+            let mut e = k + 1;
+            while e < chars.len() && chars[e].1 != first && chars[e].1 != '\n' {
+                if chars[e].1 == '\\' {
+                    e += 1;
+                }
+                e += 1;
+            }
+            if e >= chars.len() || chars[e].1 != first {
+                i = j;
+                continue;
+            }
+            (k + 1, e)
+        } else if passphrase_key(key) && !text[vstart..].starts_with("//") {
+            let mut e = k;
+            while e < chars.len() && !matches!(chars[e].1, '\n' | '\r' | ',' | ';' | '&' | '}') {
+                e += 1;
+            }
+            while e > k && chars[e - 1].1.is_whitespace() {
+                e -= 1;
+            }
+            (k, e)
+        } else {
+            i = j;
+            continue;
+        };
+        let (a, b) = (chars[from.min(chars.len() - 1)].0, chars.get(to).map_or(text.len(), |x| x.0));
+        if from < to && !text[a..b].starts_with('[') {
+            out.push_str(&text[copied..a]);
+            out.push_str(SECRET);
+            removed.secrets += 1;
+            copied = b;
+        }
+        i = to.max(j);
+    }
+    out.push_str(&text[copied..]);
+    out
 }
 
 fn scrub_word(core: &str, previous_key: bool, home: &str, removed: &mut Removed) -> String {
@@ -423,6 +512,26 @@ pub fn check_outgoing(title: &str, body: &str, receipt_secret: Option<&str>) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_quoted_password_value_is_removed_whole() {
+        let c = Context::with("jdoe".into(), vec![]);
+        for (input, gone) in [
+            (r#"{"password": "very private passphrase"}"#, ["very", "private", "passphrase"]),
+            (r#"password = 'very private passphrase'"#, ["very", "private", "passphrase"]),
+            (r#"{"client_secret":"very private passphrase","user":"x"}"#, ["very", "private", "passphrase"]),
+            ("password: very private passphrase", ["very", "private", "passphrase"]),
+        ] {
+            let (out, removed) = scrub(input, &c);
+            for w in gone {
+                assert!(!out.contains(w), "{input} -> {out}");
+            }
+            assert!(out.contains(SECRET) && removed.secrets >= 1, "{out}");
+        }
+        // What follows the value on the line is kept.
+        let (out, _) = scrub(r#"{"password": "very private passphrase", "user": "kept"}"#, &c);
+        assert!(out.contains(r#""user": "kept""#), "{out}");
+    }
+
     use super::*;
 
     fn ctx() -> Context {
