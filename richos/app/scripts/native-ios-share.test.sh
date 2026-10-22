@@ -22,13 +22,22 @@ MACHINE_LIB="$ROOT/richos/engine/scripts/lib"
 # shellcheck source=../../engine/scripts/lib/machine-settings.sh
 . "$MACHINE_LIB/machine-settings.sh"
 richos_machine_settings || exit 2
-python3 "$MACHINE_LIB/machine_settings.py" cache >/dev/null || exit 2
+CACHE_ROOT="$(python3 "$MACHINE_LIB/machine_settings.py" cache)" || exit 2
 
 notrun() { echo "  NOT RUN  native-ios-share: $1"; exit 2; }
 [ "$(uname -s)" = Darwin ] || notrun "macOS is required"
 for tool in swift xcrun xcodebuild xcodegen node python3; do
   command -v "$tool" >/dev/null 2>&1 || notrun "$tool is unavailable"
 done
+
+# Build output is reused per checkout (a cold Debug + Release build is minutes); scratch is per run.
+KEY="$(printf '%s' "$ROOT" | shasum -a 256 | cut -c1-10)"
+CACHE="$(python3 "$MACHINE_LIB/machine_settings.py" validate "$CACHE_ROOT/richos-native-ios-proof/$KEY-share")" || exit 2
+CACHE="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$CACHE")"
+if [ "${RICHOS_SIMULATOR_CACHE_HELD:-}" != "$CACHE" ]; then
+  exec python3 "$DIR/lib/simulator_budget.py" cache "$CACHE" -- bash "${BASH_SOURCE[0]}" "$@"
+fi
+mkdir -p "$CACHE"
 mkdir -p "${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}"
 SCRATCH="$(mktemp -d "${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}/native-ios-share.XXXXXX")" || { echo '  FAIL  scratch directory'; exit 1; }
 trap 'rm -rf "$SCRATCH"' EXIT HUP INT TERM
@@ -91,7 +100,13 @@ else bad "S4 permanent application identity agrees across packaging and push" "a
 # Re-based again 2026-09-25 to include e2da1f28, f03d89dd and addaee46 (the PWA's pair-wait, Urban's
 # pairing wording and Sage's old-Mac sentence), deliberate so the PWA says and does what both native
 # apps do. Only app.js and lib/api.js moved; the preserved iPhone app and its UI are unchanged.
-TAG="preserved/mobile-ios-and-pwa-2026-09-25"
+# Re-based 2026-10-22 to main 24228716a: the PWA is the phone page the Mac serves, and it moved on
+# purpose since 2026-09-25, unseen while this suite crashed at its CACHE line (b43e608d3 until
+# eb9ed5cd0). 0552d940d scrubbed the CEO's device names (CEO 2026-09-28); e9e0cebcb to 6756cbc11
+# (2026-10-18/19) are Ray's nightly 66/67 walk fixes and their reviews (question cards, picker,
+# reopen order, Markdown, fenced code, resume) and the Oxford-comma setting (CEO 2026-10-19), which
+# added lib/markdown.js, styles.css and sw.js. The preserved iPhone app and its UI are unchanged.
+TAG="preserved/mobile-ios-and-pwa-2026-10-22"
 PRESERVED=(richos/mobile/ios richos/mobile/ui richos/web/web-app)
 NOT_PRODUCT=(richos/mobile/ios/Tests richos/mobile/ios/UITests richos/web/web-app/test)
 if git -C "$ROOT" rev-parse -q --verify "$TAG^{commit}" >/dev/null 2>&1; then
