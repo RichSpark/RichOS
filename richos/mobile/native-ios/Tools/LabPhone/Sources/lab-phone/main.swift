@@ -29,6 +29,12 @@ import RichOSFixtures
 //   --offline-for seconds the network stays off (default 3.4, the walk's).
 //   --away-before seconds the app is off screen before each try, coming back 5.5 s before "PAUSE MAC n"
 //                 (default 0; the walk's runner was away about 11 s, reading Settings, between tries).
+//   --pose file   a file Rich attached, as the phone fetches it: one message, the reply with the lab's
+//                 attached files (`lab mac` with RICHOS_MOBILE_LAB_ATTACH), then each card opened
+//                 through the core (`openRichFile`) into a folder under the lab's cache, each fetch's
+//                 end state and reason printed with every request it made. Prints
+//                 {"pose":"file","files":[{"name":..,"state":..,"reason":..,"bytes":..}]}; exit 0 when
+//                 every file came over, 1 when any did not, 2 when it could not run.
 //
 // Prints one line per event on the UTC clock (the core's `send:` account, marks, launches, the stream's
 // open, answer and first bytes, and every connection action the core receives), then one JSON line:
@@ -64,7 +70,7 @@ let offlineFor = Double(options["offline-for"] ?? "3.4") ?? -1
 let awayBefore = Double(options["away-before"] ?? "0") ?? -1
 guard awayBefore >= 0 else { fail("bad --away-before") }
 guard tries >= 1, ["fresh", "return"].contains(mode), homeAfter >= 0, hiddenFor >= 1 else { fail("bad --tries, --mode, --home-after or --hidden") }
-guard ["send", "wifi-drop"].contains(pose), offlineAt >= 0, offlineFor > 0, offlineAt + offlineFor < hiddenFor else {
+guard ["send", "wifi-drop", "file"].contains(pose), offlineAt >= 0, offlineFor > 0, offlineAt + offlineFor < hiddenFor else {
     fail("bad --pose, --offline-at or --offline-for (the network must be back before the return)")
 }
 
@@ -204,7 +210,8 @@ if let routedOrigin { say("route: the lab's loopback proxy \(routedOrigin) (no m
 
 /// A launch: a new store, network handler and URLSession over the saved state and keys.
 @MainActor func launch(_ why: String) async -> AppStore {
-    let network = NetworkEffects(transport: route, stream: route, identities: identities)
+    let network = NetworkEffects(transport: route, stream: route, identities: identities,
+                                 richFiles: URL(fileURLWithPath: labPath).appendingPathComponent("lab-phone-files", isDirectory: true))
     let store = await AppStore.launch(storage: storage, effects: network)
     store.sendLog = { say("send: " + $0) }
     store.backgroundContinuation = LoggedBackgroundTime()
@@ -238,6 +245,7 @@ if let routedOrigin { say("route: the lab's loopback proxy \(routedOrigin) (no m
     if !store.state.consentGiven { store.send(.acceptConsent) }
     guard await until("the stream", 20, { store.state.linkOpen }) else { return 2 }
     say("paired with the isolated lab")
+    if pose == "file" { return await files(store) }
 
     var perTry: [String] = []
     var replyAfterReturn: [Double] = []
@@ -317,6 +325,31 @@ if let routedOrigin { say("route: the lab's loopback proxy \(routedOrigin) (no m
                                  "replyAfterReturnSeconds": replyAfterReturn]
     print(String(decoding: try! JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
     return stayed == 0 ? 0 : 1
+}
+
+/// `--pose file`: one message, the reply's cards, each opened as a tap opens it.
+@MainActor func files(_ store: AppStore) async -> Int32 {
+    store.send(.compose(text: "send me the files"))
+    store.send(.sendDraft(clientID: UUID().uuidString.lowercased(), at: nowMs()))
+    guard await until("the reply's files", 40, { store.state.messages.contains { $0.richFile != nil } }) else { return 2 }
+    await pause(2)
+    var out: [[String: Any]] = []
+    for file in store.state.messages.compactMap(\.richFile) {
+        say("file \(file.id): open")
+        store.send(.openRichFile(id: file.id))
+        _ = await until("file \(file.id) to settle", 40, {
+            let state = store.state.fileFetches[file.id]?.state
+            return state == .kept || state == .failed
+        })
+        let fetch = store.state.fileFetches[file.id]
+        let size = (fetch?.path).flatMap { try? FileManager.default.attributesOfItem(atPath: $0)[.size] as? Int } ?? -1
+        say("file \(file.id): \(fetch?.state.rawValue ?? "none")\(fetch?.reason.map { " (\($0))" } ?? "")")
+        out.append(["name": file.name, "state": fetch?.state.rawValue ?? "none", "reason": fetch?.reason ?? "", "bytes": size])
+        store.send(.richFileViewed(id: file.id))
+    }
+    print(String(decoding: try! JSONSerialization.data(withJSONObject: ["pose": "file", "files": out], options: [.sortedKeys]),
+                 as: UTF8.self))
+    return out.allSatisfy { ($0["state"] as? String) == "kept" } ? 0 : 1
 }
 
 Task { @MainActor in exit(await run()) }
