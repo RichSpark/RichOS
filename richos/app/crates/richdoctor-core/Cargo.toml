@@ -1,0 +1,40 @@
+[package]
+name = "richdoctor-core"
+version = "1.0.0"
+edition = "2021"
+publish = false
+description = "RichDoctor V1, everything that is not a window: the restricted Claude Code adapter, its read-only support tools, the diagnostic collectors, privacy checks, the report, local storage and the delivery state machine. No GUI, no network client."
+license = "AGPL-3.0-only"
+
+# DETACHED from the app workspace, like richos-user-update: RichDoctor is a separate application
+# (PRD §3) and its tests must not change, or wait on, the RichOS workspace's lockfile. richos-core
+# is a path dependency for the pieces PRD §9 names for reuse (writer_args, the CLI resolver,
+# provider_auth::status_in, the bug reporter's scrubbing primitives and escaping).
+[workspace]
+
+[dependencies]
+richos-core = { path = "../richos-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+# Info.plist of an installed RichOS, read without executing it (PRD §3). Already the version
+# richos-user-update and the Tauri shell resolve.
+plist = "1"
+libc = "0.2"
+
+[dev-dependencies]
+
+# The live measurement of the restricted adapter (MEASURED.md). `test = true` runs its own unit
+# test with `cargo test`; the measurement itself runs only when asked for with `cargo run`.
+[[example]]
+name = "adapter_probe"
+path = "examples/adapter_probe.rs"
+test = true
+
+[lints.rust]
+unused_must_use = "warn"
+
+[lints.clippy]
+let_underscore_future = "warn"
+let_underscore_must_use = "warn"
+await_holding_lock = "warn"
