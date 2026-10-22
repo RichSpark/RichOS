@@ -1303,7 +1303,7 @@ t_done
 #
 #   1. GEOMETRY. AppleScript renders {1024, 700} as "1024700", so a fused token
 #      looks like a number and gets quoted in an audit. The fix is structural
-#      (ax.js is JavaScript and returns arrays) and the renderer REFUSES a fused
+#      (ax.py unpacks AXPosition/AXSize into numbers) and the renderer REFUSES a fused
 #      token anyway, because a silent wrong number is the failure mode.
 #   2. MATCHING. `axpress.js` matched AXTitle, `axpress2.js` added a role and
 #      still found nothing, and `axpress3.js` — the third rewrite — added
@@ -1362,8 +1362,16 @@ AXTRUNC
 
 axrun() {  # axrun <fixture> <args...> — run ax.sh against the stub guest
   local fixture="$1"; shift
-  STUB_AX_FIXTURE="$fixture" STUB_AX_SCRIPT="$TMP/ax-sent.js" STUB_LOG="$TMP/ax.log" \
+  STUB_AX_FIXTURE="$fixture" STUB_AX_SCRIPT="$TMP/ax-sent.py" STUB_LOG="$TMP/ax.log" \
     "$TESTVM_DIR/ax.sh" "$AXVM" "$@" 2>"$TMP/ax.err"
+}
+
+axparams() {  # the parameter line the guest received, decoded exactly as ax.py decodes it
+  python3 -c 'import ast, json, sys
+line = open(sys.argv[1]).readline()
+name, _, literal = line.partition(" = ")
+assert name == "AX_PARAMS_JSON", line[:80]
+print(json.dumps(json.loads(ast.literal_eval(literal)), ensure_ascii=False))' "$TMP/ax-sent.py"
 }
 
 t "ax tree: geometry is FOUR numbers, and the fused AppleScript token never appears"
@@ -1412,13 +1420,14 @@ t_done
 
 t "ax tree: --app names the process to read, and the parameters travel on STDIN"
   axrun "$TMP/ax-tree.ndjson" tree --app Safari --depth 18 >/dev/null; ok $?
-  sent="$(cat "$TMP/ax-sent.js")"
+  sent="$(axparams)"
   has "$sent" '"app": "Safari"'
   has "$sent" '"mode": "tree"'
   has "$sent" '"depth": 18'
   # ...and NOT in the command line the guest was handed.
   hasnt "$(cat "$TMP/ax.log")" '"app": "Safari"'
-  has   "$(cat "$TMP/ax.log")" "osascript -l JavaScript -"
+  # The guest runs ax.py from stdin: the command line ENDS with the interpreter.
+  case "$(tail -1 "$TMP/ax.log")" in *" python3 -") ok 0 ;; *) ok 1 "the read must end with: python3 -" ;; esac
 t_done
 
 t "ax: the read carries a deadline — a wedged app cannot hang the harness"
@@ -1426,28 +1435,25 @@ t "ax: the read carries a deadline — a wedged app cannot hang the harness"
   has "$(cat "$TMP/ax.log")" "start_new_session=True"
 t_done
 
-t "ax: what is sent to the guest is a VALID JavaScript program, parameters and all"
-  # The params block and ax.js are concatenated on this Mac and parsed in the
-  # guest; a syntax error would otherwise surface only as an osascript failure
-  # inside a VM, which is the slowest place to find one.
-  axrun "$TMP/ax-tree.ndjson" find --title "it's \"quoted\" & {braced}" >/dev/null 2>&1
-  # The captured program is kept under a `.js` name because `node --check`
-  # refuses an unknown extension before it ever looks at the syntax — which is
-  # a check that passes for the wrong reason waiting to happen.
-  if command -v node >/dev/null 2>&1; then
-    node --check "$TMP/ax-sent.js" >/dev/null 2>&1; ok $? "the generated program must parse"
-    # The title is DATA in the program, escaped by json.dumps — a quote, a brace
-    # and an apostrophe in a button's label are ordinary and must not be able to
-    # end the string or the program.
-    has "$(cat "$TMP/ax-sent.js")" 'it'"'"'s \"quoted\" & {braced}'
-  else
-    printf '       (no node on PATH — the parse check did not run)\n'
-  fi
+t "ax: what is sent to the guest is a VALID Python program, parameters and all"
+  # The params line and ax.py are concatenated on this Mac and run in the guest;
+  # a syntax error would otherwise surface only as a python3 failure inside a VM,
+  # which is the slowest place to find one.
+  axrun "$TMP/ax-tree.ndjson" find --title "it's \"quoted\" & {braced}"$'\n'"line two" >/dev/null 2>&1
+  python3 -B -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$TMP/ax-sent.py" 2>"$TMP/ax-compile.err"
+  ok $? "the generated program must compile: $(cat "$TMP/ax-compile.err")"
+  # The title is DATA in the program, a string literal decoded back to the exact
+  # label: a quote, a brace, an apostrophe and a newline in a button's label are
+  # ordinary and must not be able to end the string or the program.
+  eq "$(axparams | python3 -c 'import json,sys; print(repr(json.load(sys.stdin)["text"]))')" \
+     "$(python3 -c 'print(repr("it'"'"'s \"quoted\" & {braced}\nline two"))')"
+  eq "$(wc -l < "$TMP/ax-sent.py" | tr -d ' ')" "$(( $(wc -l < "$TESTVM_DIR/ax.py" | tr -d ' ') + 1 ))" \
+     "the parameters are ONE line in front of ax.py"
 t_done
 
 t "ax find: the criteria reach the guest and the hit comes back with its box"
   out="$(axrun "$TMP/ax-find.ndjson" find --title Settings --role AXButton)"; ok $?
-  sent="$(cat "$TMP/ax-sent.js")"
+  sent="$(axparams)"
   has "$sent" '"mode": "find"'
   has "$sent" '"text": "Settings"'
   has "$sent" '"role": "AXButton"'
@@ -1457,7 +1463,7 @@ t_done
 
 t "ax find: --contains asks for a substring, not an equality"
   axrun "$TMP/ax-find.ndjson" find --title Sett --contains >/dev/null; ok $?
-  has "$(cat "$TMP/ax-sent.js")" '"contains": true'
+  has "$(axparams)" '"contains": true'
 t_done
 
 t "ax find: something to match is required — an unfiltered find is a tree"
@@ -1466,43 +1472,17 @@ t "ax find: something to match is required — an unfiltered find is a tree"
 t_done
 
 t "ax matcher: text matches AXDescription as well as AXTitle — axpress3's lesson"
-  # Driven directly, in node, because this rule cost three rewrites of the same
-  # script and a grep of the source would prove only that a word is present.
-  if command -v node >/dev/null 2>&1; then
-    cat > "$TMP/axmatch.js" <<'MATCHJS'
-const fs = require("fs");
-const src = fs.readFileSync(process.argv[2], "utf8");
-const mod = { exports: {} };
-new Function("module", "exports", src)(mod, mod.exports);
-const { axMatches } = mod.exports;
-const node = (o) => Object.assign(
-  { d: 0, role: "AXButton", sub: "", title: "", desc: "", value: "", enabled: true }, o);
-const P = (o) => Object.assign(
-  { role: null, sub: null, text: null, value: null, contains: false }, o);
-const checks = [
-  ["title",           axMatches(P({ text: "Dark" }), node({ title: "Dark" })) === true],
-  ["description",     axMatches(P({ text: "Dark" }), node({ desc: "Dark" })) === true],
-  ["neither",         axMatches(P({ text: "Dark" }), node({ title: "Light" })) === false],
-  ["exact by default",axMatches(P({ text: "Dark" }), node({ desc: "Dark theme" })) === false],
-  ["contains",        axMatches(P({ text: "Dark", contains: true }), node({ desc: "Dark theme" })) === true],
-  ["role filters",    axMatches(P({ text: "Dark", role: "AXGroup" }), node({ desc: "Dark" })) === false],
-  ["value",           axMatches(P({ value: "42" }), node({ value: "42" })) === true],
-  ["no criteria",     axMatches(P({}), node({})) === true],
-];
-const bad = checks.filter(([, ok]) => !ok).map(([n]) => n);
-if (bad.length) { console.log("FAILED: " + bad.join(", ")); process.exit(1); }
-console.log("all " + checks.length + " matcher cases hold");
-MATCHJS
-    mout="$(node "$TMP/axmatch.js" "$TESTVM_DIR/ax.js" 2>&1)"; ok $? "$mout"
-    has "$mout" "all 8 matcher cases hold"
-  else
-    printf '       (no node on PATH — the matcher cases did not run)\n'
-  fi
+  # Driven directly, in Python, because this rule cost three rewrites of the same
+  # script and a grep of the source would prove only that a word is present. The
+  # eight cases are ax-search.test.py's Matcher class, run against ax.py itself.
+  mout="$(python3 -B "$HERE/ax-search.test.py" -v Matcher 2>&1)"; ok $? "$mout"
+  has "$mout" "test_the_eight_matcher_cases"
+  has "$mout" "OK"
 t_done
 
 t "ax click: presses by AXPress and reports what it pressed, with the box"
   out="$(axrun "$TMP/ax-click-ok.ndjson" click --title Settings)"; ok $?
-  has "$(cat "$TMP/ax-sent.js")" '"mode": "click"'
+  has "$(axparams)" '"mode": "click"'
   has "$out" "pressed AXButton"
   has "$out" "title='Settings'"
   has "$out" "pos=974 43 size=32 32"
@@ -1522,8 +1502,8 @@ t_done
 
 t "ax click --at: a coordinate click carries the frontmost refusal, like --key"
   axrun "$TMP/ax-notfront.ndjson" click --at 974,43 >/dev/null; no $?
-  has "$(cat "$TMP/ax-sent.js")" '"mode": "clickat"'
-  has "$(cat "$TMP/ax-sent.js")" '"atx": 974'
+  has "$(axparams)" '"mode": "clickat"'
+  has "$(axparams)" '"atx": 974'
   has "$(cat "$TMP/ax.err")" "would land in another process"
 t_done
 
@@ -1700,7 +1680,7 @@ t "guest.sh: a guest with no recorded address refuses by name"
 t_done
 
 t "AX search avoids history before first hit and keeps explicit matching semantics"
-  node "$HERE/ax-search.test.js" >"$TMP/search.log" 2>&1; ok $? "$(cat "$TMP/search.log")"
+  python3 -B "$HERE/ax-search.test.py" >"$TMP/search.log" 2>&1; ok $? "$(cat "$TMP/search.log")"
   python3 -B "$HERE/ax-contract.test.py" >"$TMP/ax-contract.log" 2>&1; ok $? "$(cat "$TMP/ax-contract.log")"
 t_done
 
@@ -1804,6 +1784,10 @@ t "adopt-walk: phone-only, left Registered at the boundary, each way to fail nam
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/adopt-walk.test.py" >"$TMP/adopt-walk.log" 2>&1; ok $? "$(cat "$TMP/adopt-walk.log")"
 t_done
 
+t "ax-wait: every walk's waiting find reads a find the app did not answer (unresponsive, a deadline) as not yet, through axwait.py alone; a click is sent once"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/ax-wait.test.py" >"$TMP/ax-wait.log" 2>&1; ok $? "$(cat "$TMP/ax-wait.log")"
+t_done
+
 t "asked-again-walk: two proposals for the entity with a torn answer between; a torn line is never read as a decline"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/asked-again-walk.test.py" >"$TMP/asked-again-walk.log" 2>&1; ok $? "$(cat "$TMP/asked-again-walk.log")"
 t_done
@@ -1826,8 +1810,16 @@ t "reap-walk: unrecorded pids are refused, late or surviving commands fail, a fi
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/reap-walk.test.py" >"$TMP/reap-walk.log" 2>&1; ok $? "$(cat "$TMP/reap-walk.log")"
 t_done
 
+t "connect-folder: no walk presses the Connected folders row as a menu item or keeps its own connect step (guest_deadline, exit 124)"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/connect-folder.test.py" >"$TMP/connect-folder.log" 2>&1; ok $? "$(cat "$TMP/connect-folder.log")"
+t_done
+
 t "command-walk: a settled task carrying the command's result passes; the 2026-09-27 'No work was started' record fails"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/command-walk.test.py" >"$TMP/command-walk.log" 2>&1; ok $? "$(cat "$TMP/command-walk.log")"
+t_done
+
+t "skills-walk: a settled job whose worker's Skill call and page open completed and got the page back passes; the second review's hollow record fails"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/skills-walk.test.py" >"$TMP/skills-walk.log" 2>&1; ok $? "$(cat "$TMP/skills-walk.log")"
 t_done
 
 t "first-send-walk: a first send after a relaunch that the ledger received passes; an emptied composer with no PromptReceived row is named swallowed"

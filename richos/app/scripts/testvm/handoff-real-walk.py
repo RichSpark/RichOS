@@ -62,6 +62,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest, relaunch  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('command_walk', HERE / 'command-walk.py')
 command_walk = importlib.util.module_from_spec(_spec)
@@ -102,27 +103,23 @@ JOB = ('Please have scribe do this job in the Acme repository, and have checker 
 class HandoffWalk(command_walk.CommandWalk):
     # An accessibility read that misses its deadline (ax.sh exit 124) on a busy host is "not
     # read", not "not there" and not a failed walk (runs 1 and 7: a find for the composer and for
-    # "Start the questions" ended the walk). A find is asked again up to three times; a press,
-    # whose effect is unknown after a deadline, once, only after a find says it is still there.
-    @staticmethod
-    def _deadline(exc):
-        return '(124)' in str(exc) or 'deadline' in str(exc)
-
-    def present(self, title, role='AXButton', app=None):
-        for _ in range(3):
+    # "Start the questions" ended the walk). A read with no answer is asked again up to three
+    # times (axwait.ask_again), and present() then reads it as "not seen yet"; a press, whose
+    # effect is unknown after a deadline, once, only after a find says it is still there.
+    def ax(self, mode, *args, app=None, timeout=40):
+        for attempt in range(3):
             try:
-                return super().present(title, role, app)
+                return super().ax(mode, *args, app=app, timeout=timeout)
             except StepFailed as exc:
-                if not self._deadline(exc):
+                if not axwait.ask_again(exc, mode) or attempt == 2:
                     raise
                 time.sleep(2)
-        return False
 
     def press(self, title, role='AXButton', app=None, contains=True):
         try:
             return super().press(title, role, app, contains)
         except StepFailed as exc:
-            if not self._deadline(exc):
+            if not axwait.no_answer(exc):
                 raise
             time.sleep(3)
             if not self.present(title, role, app):

@@ -19,6 +19,7 @@ spec = importlib.util.spec_from_file_location('permission_adopt', HERE / 'adopt-
 adopt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(adopt)
 from relaunch import guest, relaunch
+import axwait  # noqa: E402
 
 
 def visible(rows, role):
@@ -71,7 +72,7 @@ def run(a):
                            and row.get('h', 0) > 0 for row in rows):
                         return
                 except adopt.StepFailed as error:
-                    if 'notfound' not in str(error) and 'nothing matched' not in str(error):
+                    if not axwait.not_yet(error, 'find'):
                         raise
                 time.sleep(1)
             raise adopt.StepFailed('reply never appeared within 30 s: ' + text)

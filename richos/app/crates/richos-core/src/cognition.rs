@@ -78,6 +78,14 @@ pub trait LeaseFactory: Send + Sync {
         None
     }
 
+    /// **The digest of the user's own settings files the next lease would read**
+    /// (`user_settings::digest`; build plan 2026-10-21 item 0). A lease that read other
+    /// settings is renewed at its next boundary, never mid-turn. `None` — the default — means
+    /// this factory cannot say, and nothing is renewed on the strength of it.
+    fn user_settings_digest(&self) -> Option<String> {
+        None
+    }
+
     /// Spawn the SECOND lease — the background-work spec's work lease (§2.1).
     ///
     /// **It is a separate method rather than an argument, because the two leases differ in
@@ -238,6 +246,13 @@ pub(crate) fn account_resume_blocked(lease:&dyn Cognition)->bool {
         crate::lease_commands::CommandReading::Running(_)|crate::lease_commands::CommandReading::Unreadable))
 }
 
+/// **Did the user's own settings files change since `lease` read them?** Both digests must be
+/// known and differ; an unknown on either side renews nothing.
+pub(crate) fn user_settings_changed(factory:Option<&dyn LeaseFactory>,lease:&dyn Cognition)->bool {
+    factory.and_then(|factory|factory.user_settings_digest()).zip(lease.user_settings_digest())
+        .is_some_and(|(now,then)|now!=then)
+}
+
 /// `Send` so the durable `Spine` can be held behind a `Mutex` as Tauri managed state.
 pub trait Cognition: Send {
     /// Positive provider EOF, never inferred from silence or an API error.
@@ -251,6 +266,10 @@ pub trait Cognition: Send {
     /// **The model this lease was started on** (§119: `--model` in its argument vector).
     /// `None` for a lease that cannot say, which is never renewed for a model change.
     fn lease_model(&self) -> Option<crate::config::ModelChoice> { None }
+    /// **The digest of the user's own settings files as this lease read them**
+    /// (`user_settings::digest`). `None` for a lease that cannot say, which is never renewed
+    /// for a settings change.
+    fn user_settings_digest(&self) -> Option<String> { None }
     /// The latest usage reading this lease's own child streamed (`rate_limit_event`), and when.
     /// Read before every turn so the switch decision uses the freshest figure there is.
     fn streamed_usage(&self) -> Option<crate::quota::StreamedReading> { None }

@@ -57,7 +57,7 @@ claude login: guest logged in
 The last two lines are printed at **every** run, matched or not — see *The claude binary and
 the claude login*. Real output from `zach-claude1`, 2026-09-20.
 
-The `tailnet=` line is the guest's own name on the tailnet, and it is what makes the
+The `tailnet=` line is the guest's own name on the tailnet and it is what makes the
 **phone path** testable in here — see *The phone path in a VM*. **Since 2026-09-20 there
 is no `tailnet=not-joined` on a successful run**: a join that was asked for and did not
 happen stops `run.sh` with a `REFUSED` block naming the cause, because two nightlies
@@ -84,18 +84,18 @@ current worker might need the VM for a 5-second-long fart? Do I want HOURS OF DE
 TO BE PISSED AWAY FOR EVERY 5-SECOND FART???"*
 
 * There are **two slots** (`slots.py`): `~/.richos-testvm/guest.lock` and `guest-2.lock`.
-  This Mac has 10 cores and 24 GB, a guest takes 4 cores and 5 GB, and Apple's
+  This Mac has 10 cores and 24 GB, a guest takes 4 cores and 5 GB and Apple's
   Virtualization framework runs at most two macOS guests at once. `TESTVM_SLOTS=1` lowers
   it; nothing raises it.
 * **A slot is held only while one run executes**: boot, the run's steps, cleanup. It is
   released the instant the run ends. `run-walk.py`, `run-probes.py` and
   `gui-proof-in-vm.sh` each hold one for exactly their own run.
 * **No reservations.** Nothing keeps a guest or a slot for later, across a job, a build or
-  a debugging session. `hold-walk.py` is retired, and `run.sh` refuses to boot a guest unless
+  a debugging session. `hold-walk.py` is retired and `run.sh` refuses to boot a guest unless
   one of its own callers holds a slot. Steps found by hand become a script that takes the
   VM name as `$1` (`ax.sh "$1" tree`, `shot.sh "$1" out.png`, ...), run once under
   `run-walk.py`; the next attempt takes a free slot again. A walk that needs one guest for
-  a long observation is one run, and holds a slot for that run's length only.
+  a long observation is one run and holds a slot for that run's length only.
 * **A caller waits only while both slots are executing someone's run.** `--wait SECONDS`
   waits for a free slot (checked every 2 s) and for the CPU and memory admission (CEO ruling
   §77, one sample at least every 30 s; a refused sample releases the slot before waiting).
@@ -112,14 +112,14 @@ TO BE PISSED AWAY FOR EVERY 5-SECOND FART???"*
   (`stop.sh`): a guest never outlives its slot.
 * `./slots.py status` shows who holds which slot and for how long.
 
-**`stop.sh` is not optional.** A test instance of the app is garbage, and by CEO §54
+**`stop.sh` is not optional.** A test instance of the app is garbage and by CEO §54
 garbage is always cleaned up. `stop.sh` quits the app, verifies `pgrep` is empty, stops
-the VM, deletes the clone, and removes the run state. If any of that fails it prints a
+the VM, deletes the clone and removes the run state. If any of that fails it prints a
 massive alert naming exactly what to delete by hand.
 
 ---
 
-## Reading the guest's screen, and driving it
+## Reading the guest's screen and driving it
 
 **Added 2026-09-20, because every walk was writing these two by hand.** The CEO's
 question that day: *"How many times does Ray build the same scripts or checks from
@@ -158,7 +158,7 @@ are quoted for the guest's shell. `--` forces the literal reading for a single a
 ./ax.sh <vm> click --at 974,43          # the fallback, and it refuses unless frontmost
 ```
 
-A line of `tree` carries role, subrole, title, description, value, enabled, and the box
+A line of `tree` carries role, subrole, title, description, value, enabled and the box
 as **four separate numbers**:
 
 ```
@@ -167,29 +167,40 @@ AXWindow/AXStandardWindow title='RichOS' ... pos=0 25 size=1024 700
     AXButton title='Settings' desc='' value='' enabled=yes pos=974 43 size=32 32
 ```
 
-**The four numbers are the whole reason this is JavaScript.** AppleScript renders a list
-as a string by *concatenating* it — measured on this Mac, 2026-09-20:
+**The four numbers are never text.** AppleScript renders a list as a string by
+*concatenating* it — measured on this Mac, 2026-09-20:
 
 ```
 $ osascript -e 'set sz to {1024, 700}' -e 'return (sz as string)'
 1024700
 ```
 
-A 1024x700 window and a 102x4700 one are the same six characters, and the app derives a
-**1024x700** window in this guest, so those are not hypothetical neighbors. `ax.js` runs
-under `osascript -l JavaScript`, where `position()` and `size()` return real arrays and
-`JSON.stringify` exists, so the numbers are never adjacent in the first place. The
+A 1024x700 window and a 102x4700 one are the same six characters and the app derives a
+**1024x700** window in this guest, so those are not hypothetical neighbors. `ax.py` (run
+by `python3` in the guest) reads `AXPosition` and `AXSize` as `AXValue`s and unpacks them
+into a `CGPoint` and a `CGSize`, so the numbers are never adjacent in the first place. The
 renderer **refuses** a fused token anyway and exits 4: that failure is silent otherwise,
 because `1024700` looks like a measurement and would be quoted in an audit.
 
-**Match on the title OR the description, and `click` presses the element.** An
+**The guest reads the tree through the accessibility API, not System Events.** Until
+2026-10-21 the reader was `ax.js` under `osascript -l JavaScript` and every attribute was
+an Apple Event to System Events, which re-resolves the element from the process root each
+time: 7-26 ms per attribute shallow and 15-120 ms at depth 7 in a busy guest, so one read
+in most first-run walks crossed the 20 s deadline while the app sat idle in its run loop
+(esc-20261021T122950Z-b8b7362a, esc-20261021T133408Z-5d70a3e4). `ax.py` calls
+`AXUIElementCopyAttributeValue` on the element directly: 0.29-0.41 ms per attribute, the
+whole 98-node tree in 115-161 ms in the same guests. Keystrokes (`type`'s paste) and
+`click --at` still go through System Events, one Apple Event each. The guest needs no
+new grant: `python3` over SSH reads AX under the same Accessibility grant `osascript` used.
+
+**Match on the title OR the description and `click` presses the element.** An
 `aria-label` on a web view's control surfaces as `AXDescription`, not `AXTitle` — the
 walk that learned this wrote `axpress.js` (title), `axpress2.js` (title plus role, still
 `NOTFOUND` on buttons plainly on the screen) and `axpress3.js` (description) before it
 worked. `--contains` switches from an exact match to a substring; `--nth N` picks among
 several; `--role`, `--subrole` and `--value` narrow further. A press goes to the
-*element*, so it survives a moved window, a window that is not frontmost, and anything
-drawn over it. `--at x,y` exists for controls that expose no `AXPress`, and it carries
+*element*, so it survives a moved window, a window that is not frontmost and anything
+drawn over it. `--at x,y` exists for controls that expose no `AXPress` and it carries
 the same frontmost refusal `--key` has had since a synthetic key landed in the CEO's
 Terminal on 2026-09-19.
 
@@ -219,7 +230,7 @@ pressed AXButton title='Not now' desc='' pos=852 443 size=90 35 (matches=1)
 
 and the next `tree` showed the app had moved on to *"Where should I keep what you tell
 me?"* — the press drove the app, rather than merely reporting that it had found a button.
-`tree --app Dock` answered `windows=0 nodes=0` (the Dock has no `AXWindow`, and saying so
+`tree --app Dock` answered `windows=0 nodes=0` (the Dock has no `AXWindow` and saying so
 is not an error); `tree --app NoSuchApp` refused with `noprocess`; `guest.sh vmtools2
 'exit 42'` returned **42**; `--pull` brought the guest's `app.log` back. `stop.sh` then
 reported `clean: app quit, VM stopped, clone deleted, state removed` and `tart list`
@@ -241,7 +252,7 @@ hands the app text; nothing handed it a file.
 
 * `paste` puts the file on the guest's pasteboard the way macOS does: a `.png` as image
   data (what a screenshot to the clipboard is), anything else as a file reference (what
-  Finder's Copy is). Then Command-V, to the app under test by PID, and the text that was on
+  Finder's Copy is). Then Command-V, to the app under test by PID and the text that was on
   the pasteboard is put back.
 * `drag` places the file on the guest user's Desktop and moves it with real mouse events
   from its Finder icon to `--to x,y` (screen coordinates; take them from
@@ -249,7 +260,7 @@ hands the app text; nothing handed it a file.
 
 Both refuse unless the app's PID is frontmost, for the reason `ax.sh --key` does. The
 program travels on stdin, so a guest path with a space in it never becomes part of a
-command line, and it runs in the guest under the same guest-side deadline `ax.sh` uses.
+command line and it runs in the guest under the same guest-side deadline `ax.sh` uses.
 
 **Two things the first live runs taught it, 2026-09-24:**
 
@@ -269,10 +280,10 @@ deadline and the no-Finder rule were proven by running the test against code wit
 
 **Lock the screen, let the display sleep, walk away — the proofs keep running.** The
 completion proof for this harness was deliberately captured with the host display
-**asleep**, and the frame came back normally.
+**asleep** and the frame came back normally.
 
 The reason is structural rather than lucky: the guest runs **its own WindowServer inside
-the VM**. The host's screen — lit, dark, locked, or showing something else entirely — is
+the VM**. The host's screen — lit, dark, locked or showing something else entirely — is
 not connected to the guest's display in any way.
 
 The one thing that *would* interrupt a run is the **whole Mac** going to sleep, because
@@ -296,7 +307,7 @@ assertion dies with the VM process, so nothing is left holding the machine awake
 ./setup.sh
 ```
 
-Installs Tart, pulls the guest image, provisions it, and verifies that a capture comes
+Installs Tart, pulls the guest image, provisions it and verifies that a capture comes
 back non-black before it claims success. Re-running it is safe; `./setup.sh
 --reprovision` re-runs only the guest provisioning.
 
@@ -313,7 +324,7 @@ Disk left afterwards on this Mac: 175 GiB of 460 GiB.
 
 | # | Action | Why it cannot be automated |
 |---|---|---|
-| 1 | **Save one Tailscale auth key.** Five minutes, once, and every future guest joins the tailnet by itself — full steps in *The phone path in a VM* below. | It needs the CEO's Tailscale account. No agent may hold or borrow those credentials. |
+| 1 | **Save one Tailscale auth key.** Five minutes, once and every future guest joins the tailnet by itself — full steps in *The phone path in a VM* below. | It needs the CEO's Tailscale account. No agent may hold or borrow those credentials. |
 
 That is the whole list. It used to have a second row — *"`claude` sign-in in the guest,
 only if model turns are wanted there: `ssh admin@<guest-ip> 'claude /login'`"* — and that
@@ -321,7 +332,7 @@ row is **gone since 2026-09-20**: the login is copied from this Mac at every run
 the binary. See *The claude binary and the claude login* below.
 
 Action 1 replaces what used to be here — *"`tailscale up` prints a URL; open it once"*.
-A URL sign-in authorizes **one** guest, and a guest is deleted at the end of every run,
+A URL sign-in authorizes **one** guest and a guest is deleted at the end of every run,
 so that was a human errand per proof. An auth key is the same five minutes spent once.
 The `claude /login` row went the same way and for the same reason.
 
@@ -335,11 +346,11 @@ and the host never renders a VM window.
 
 **The problem this solves.** The app refuses to hand out a pairing code unless it can
 actually serve one: `begin_pairing` returns `PhoneError::TailnetNotReady` when
-`serving_plan` is `None` (`src-tauri/src/phone/mod.rs:858`), and `serving_plan` (`:563`)
-needs three things — a tailnet name, an origin derived from it, and a certificate
+`serving_plan` is `None` (`src-tauri/src/phone/mod.rs:858`) and `serving_plan` (`:563`)
+needs three things — a tailnet name, an origin derived from it and a certificate
 `tailscale cert` will issue. CEO §61 deleted the LAN fallback deliberately: *"any mobile
 app or PWA is utterly useless within the home network"*. So there is one path, a
-signed-out guest is not on it, and until this existed every phone proof was a window on
+signed-out guest is not on it and until this existed every phone proof was a window on
 his Mac.
 
 ### His one action
@@ -347,7 +358,7 @@ his Mac.
 Once. Nothing else about the phone path needs a person again.
 
 1. Open <https://login.tailscale.com/admin/settings/keys> → **Generate auth key**.
-2. Set it up like this, and the three switches all matter:
+2. Set it up like this and the three switches all matter:
    * **Reusable — ON.** Every run is a new guest. A single-use key works once and then
      every later run refuses.
    * **Ephemeral — ON.** The node removes itself when it stops talking to the control
@@ -365,7 +376,7 @@ Once. Nothing else about the phone path needs a person again.
    ```
 
    The file lives **outside every repository**, mode `0600`. The harness reads it, never
-   prints it, never logs it, and never puts it in a command line.
+   prints it, never logs it and never puts it in a command line.
 
 4. One switch, tailnet-wide, if it is not on already:
    <https://login.tailscale.com/admin/dns> → **HTTPS Certificates: Enable**. Without it
@@ -393,7 +404,7 @@ tailnet.sh join <vm>   →   tailnet=richos-test-a.tail1a2b3c.ts.net
   and `tailscale cert` is a mutating call. Without this the app's own certificate fetch
   is a permission error it renders as "not set up yet".
 * Then the name is **read back** from `tailscale status --json` — never constructed. A
-  name still held by a node that has not aged out becomes `<name>-1`, and every URL built
+  name still held by a node that has not aged out becomes `<name>-1` and every URL built
   from the requested name would point at somebody else's machine. `run.sh` prints what
   the daemon said.
 * Finally `tailscale cert` is warmed **as the user the app runs as, with the app's own
@@ -407,7 +418,7 @@ deliberately, so the private key never touches a disk. What the guest needs is a
 a daemon that answers the app's user. Measured in a guest: the Homebrew install is
 `/opt/homebrew/bin/tailscale`, which is candidate 3 and a symlink `is_file()` follows.
 
-### It waits for `tailscaled`, and a join that fails STOPS the run
+### It waits for `tailscaled` and a join that fails STOPS the run
 
 **Both halves are fixes for the same defect, raised by Ray on `.7`, again on `.8`
 (defect 3) and reproduced by Echo on `.9`.** `run.sh` joined as soon as ssh answered —
@@ -431,7 +442,7 @@ Mac that cannot serve."*
   took 37 s.
 * **A failed join is now a refusal.** `run.sh` prints a `REFUSED` block naming the cause
   in one line, the guest's own `tailnet.sh doctor` output taken while there is still a
-  guest to ask, and then **exits 1** and deletes the clone it created. A guest that was
+  guest to ask and then **exits 1** and deletes the clone it created. A guest that was
   already running when you called `run.sh` is left alone and named.
 
 If the proof has nothing to do with the phone, say so and it costs nothing:
@@ -443,9 +454,9 @@ If the proof has nothing to do with the phone, say so and it costs nothing:
 ### The fixture's login keychain
 
 **Ray, `.7` defect 4 and `.8` defect 5.** The fixture home's `Library/Keychains` used to
-be a symlink to the CEO's real keychain directory. That was removed, and what replaced it
+be a symlink to the CEO's real keychain directory. That was removed and what replaced it
 is an **empty directory** — which is not a keychain. `Set my phone up` then raises
-`Keychain Not Found`, and `.8` defect 2 measured **120 seconds of "Getting this Mac
+`Keychain Not Found` and `.8` defect 2 measured **120 seconds of "Getting this Mac
 ready…"** with that dialog sitting behind the sheet.
 
 `run.sh` step 3b now makes one, in the guest, in **this run's** fixture home, after the
@@ -456,15 +467,15 @@ home is copied in and before the app launches:
 ./keychain.sh check   <vm> /Users/admin/testvm/<vm>/home    # if you want to ask again
 ```
 
-**The unlock has to happen in the app's own session, and that is measured rather than
-assumed.** Keychain lock state is held by `securityd`, and an ssh login is its own
+**The unlock has to happen in the app's own session and that is measured rather than
+assumed.** Keychain lock state is held by `securityd` and an ssh login is its own
 security session — not the Aqua session `open -n -a` launches the app into. Three fixture
 homes in one guest, 2026-09-20 (`zach-kc3`):
 
 | what was done | what the app's session sees |
 |---|---|
 | nothing — the fixture as Ray met it | `UNUSABLE (no keychain at that path)` |
-| `create-keychain` + unlock **over ssh** — the documented workaround, applied literally | `UNUSABLE (no answer within 20s)` — the file is there and is the default, and the app still gets the password dialog |
+| `create-keychain` + unlock **over ssh** — the documented workaround, applied literally | `UNUSABLE (no answer within 20s)` — the file is there and is the default and the app still gets the password dialog |
 | the same, plus an unlock through `launchctl asuser` | **`usable`** |
 
 So the middle row is Ray's *"it then prompted for its password twice more, once per
@@ -472,7 +483,7 @@ pairing"*. `keychain.sh` does both unlocks and reports `gui-session=` as the ver
 `ssh-session=` line beside it is a different securityd session and is frequently
 `UNUSABLE` on a perfectly healthy guest.
 
-**Every `security` call in that script is bounded by a `perl` alarm, and that is not
+**Every `security` call in that script is bounded by a `perl` alarm and that is not
 caution.** Against a home with no keychain, `security` does not return an error — it
 raises `SecurityAgent`'s dialog inside the guest and waits for a click nothing can give
 it. The first version of `check` hung for over ten minutes on exactly that case. macOS
@@ -491,7 +502,7 @@ curl -sk https://richos-test-a.tail1a2b3c.ts.net:8443/     # from this Mac
 Inside the guest, the pairing URL opens in Safari and resolves through MagicDNS — which
 is why `--accept-dns=true` is part of the join rather than inherited from a default.
 
-### The certificate cache, and why one exists
+### The certificate cache and why one exists
 
 Every clone is a fresh node with an empty certificate store, so every run would ask the
 control plane to issue a **new** certificate for the same name. Public CAs rate-limit
@@ -507,7 +518,7 @@ is re-used only if openssl says it is for that exact name and outlives the app's
 private key with no use is garbage with a key in it.
 
 That is a private key at rest, taken deliberately: it belongs to a throwaway node
-reachable only from inside the CEO's own tailnet, and it buys back the ability to run the
+reachable only from inside the CEO's own tailnet and it buys back the ability to run the
 phone proof more than a handful of times a week.
 
 ### Cleaning up — §54 at the tailnet
@@ -523,13 +534,13 @@ the tailnet still lists, because that is the one piece of garbage nothing here c
 ./tailnet.sh doctor <vm>      # every reason the phone path is or is not available
 ```
 
-### What is verified, and what is not
+### What is verified and what is not
 
 | Claim | State |
 |---|---|
-| Refusal with no key: one action named, the guest untouched, the VM still usable | **Verified** on a live guest, 2026-09-19. A full `run.sh` with the join refusing reached a window in **43 s** (`windows=1`, capture 64.2% non-black), and printed `tailnet=not-joined` |
+| Refusal with no key: one action named, the guest untouched, the VM still usable | **Verified** on a live guest, 2026-09-19. A full `run.sh` with the join refusing reached a window in **43 s** (`windows=1`, capture 64.2% non-black) and printed `tailnet=not-joined` |
 | Two clones at once, each refusing on its own, neither disturbing the other | **Verified** 2026-09-19 — `richos-test-a` ready in **72 s**, `richos-test-b` in **66 s**, both with a window, both stopped clean |
-| `tailnet.sh doctor` against a live guest | **Verified** — reports `NeedsLogin`, and names the CLI it found (`/opt/homebrew/bin/tailscale -> ../Cellar/tailscale/1.102.4/…`) |
+| `tailnet.sh doctor` against a live guest | **Verified** — reports `NeedsLogin` and names the CLI it found (`/opt/homebrew/bin/tailscale -> ../Cellar/tailscale/1.102.4/…`) |
 | Every flag, the key-by-file handling, the name read-back, the refusal classifications | **Verified** by `test/run-tests.sh` (111 tests) against a stub guest |
 | The certificate cache's accept/refuse rules | **Verified** with openssl against generated certificates |
 | A real tailnet accepting a real key; two guests as two **nodes**; the pairing sheet in a VM | **NOT RUN** — needs the CEO's key, which no agent can produce. `tailnet.sh doctor <vm>` settles the first two in one command once the key is in place; the third is a QA walk |
@@ -552,19 +563,19 @@ cannot show — that the key never appears in a command line or in output, that 
 key refuses exactly one step without touching the guest, that the name is read back from
 the daemon, that the join waits for the daemon and does not merely sleep, that no path
 `keychain.sh` touches is ever outside the guest, that `stop.sh`'s sign-out actually signs
-out, that a fused geometry token is refused rather than printed, and that a path with a
+out, that a fused geometry token is refused rather than printed and that a path with a
 space in it survives the trip into the guest as one path.
 
 They found four real defects on their first run, including a certificate cache that
 could never hit (written under the daemon's FQDN, read under the short name) whose only
 symptom would have been a rate-limit refusal weeks later on somebody else's run. The
 2026-09-20 additions found two more **in the changes being made**: an unbounded
-`security` call that would have hung, and a `VAR=$(cmd)` under `set -e` that would have
+`security` call that would have hung and a `VAR=$(cmd)` under `set -e` that would have
 killed `run.sh` silently at exactly the failure it was being taught to shout about.
 
 **A new test here is checked against the UNFIXED code before it is trusted.** The
 2026-09-20 batch was run with the new `test/` against pristine `049d8790`'s scripts:
-42 passed, 7 failed, and the seven were the seven that were new. A new test that passes
+42 passed, 7 failed and the seven were the seven that were new. A new test that passes
 against unfixed code is testing nothing.
 
 **The screen-and-shell cases were proved the same way, by defeat.** With the fused-token
@@ -576,13 +587,13 @@ refusal deleted from `ax.sh`'s renderer, *"a FUSED geometry token is refused"* f
 
 ---
 
-## What works in the guest, and what does not
+## What works in the guest and what does not
 
 All verified on 2026-09-19 against candidate `.5` unless marked otherwise.
 
 | Capability | Status |
 |---|---|
-| App launches, window appears | **Yes** — `open -n -a` routes the launch through launchd into the auto-logged-in user's GUI session. `windows=1` reported, and the frame shows it |
+| App launches, window appears | **Yes** — `open -n -a` routes the launch through launchd into the auto-logged-in user's GUI session. `windows=1` reported and the frame shows it |
 | `screencapture` over ssh | **Yes** — 1680x1050, 64.3% non-black, once the TCC grant is written |
 | System Events AX reads | **Yes** — `window: RichOS / role: AXTextArea / title: Message to Rich`; geometry `RichOS 1024x700 at (438,92)` |
 | `tesseract` OCR | **Yes**, in-guest via `shot.sh --ocr` — it read the offer sheet's body text back. Note it cannot read from the guest's `/tmp`; everything is staged under `$HOME` |
@@ -591,13 +602,13 @@ All verified on 2026-09-19 against candidate `.5` unless marked otherwise.
 | Works with the host screen **locked/asleep** | **Yes** — the completion proof was captured with the host display asleep. The guest runs its own WindowServer; the host's screen state is irrelevant to it |
 | WebGL splash / Metal rendering | Untested in this pass — the fixture home boots straight past the splash into the home screen. See "Graphics" |
 | **Model turns (`claude`)** | **Yes, since 2026-09-20, measured** — `claude -p 'Reply with the single word READY…'` in the guest answered **`READY`** (rc 0) from a login copied in at the start of that run. It was *"no, not without a one-time human sign-in"* until then; see *The claude binary and the claude login* |
-| Audio | Out of scope. CEO §53 stands: the Mac's speakers cannot stand in for a person, and a VM's virtual audio device does not change that. Do not test barge-in here. |
+| Audio | Out of scope. CEO §53 stands: the Mac's speakers cannot stand in for a person and a VM's virtual audio device does not change that. Do not test barge-in here. |
 | Tailscale as its own node | **Yes, with the auth key** — the guest joins as `richos-test-<vm>`, which is what makes the phone path reachable in here. Without the key it stays signed out and only the phone path is unavailable. See *The phone path in a VM* |
 
 **One observation worth passing on, not a harness fault:** the app derived a
 **1024x700** window in the guest — its stated minimum — on a 1680x1050 screen, where on
 the host it derives 1400x880. If window derivation is what you are testing, test it on
-the host, or treat the guest's smaller screen as the input it is.
+the host or treat the guest's smaller screen as the input it is.
 
 ### Model turns — the honest answer
 
@@ -609,7 +620,7 @@ the host, or treat the guest's smaller screen as the input it is.
 > guest until a human runs `claude /login` in it, once.**
 
 The diagnosis was right and the conclusion was one step short. The missing piece was never
-the *login* — it was a **login keychain to put one in**, and `keychain.sh` now makes one in
+the *login* — it was a **login keychain to put one in** and `keychain.sh` now makes one in
 the fixture home at every run. So the credential is copied into that keychain from this
 Mac's own, by `claude-login.sh`, over ssh, with the value on stdin only.
 
@@ -634,18 +645,18 @@ window geometry, focus, theme and layout — still renders without one, exactly 
 stay on the same version regardless of any updates?"* and *"What happens when the Claude
 login expires in the VM?"*
 
-Both used to have the same bad answer — *it is whatever was copied in once, and nothing
+Both used to have the same bad answer — *it is whatever was copied in once and nothing
 ever looks at it again* — and both now have the same structural one: **the guest gets
-this Mac's binary and this Mac's login at the start of every run, and keeps neither
+this Mac's binary and this Mac's login at the start of every run and keeps neither
 beyond it.**
 
-#### The binary: compared at every run, and the two versions printed
+#### The binary: compared at every run and the two versions printed
 
 `setup.sh` copied `~/.local/bin/claude` into the base image once, when the image was
 built. `run.sh` never looked at it again. Meanwhile Claude Code updates itself: **2.1.274 and
 2.1.275 on the 17th, 2.1.276 and 2.1.277 on the 18th** — four versions in two days, read
 from the mtimes of `~/.local/share/claude/versions/*`. So the VM drifted a little further
-from his Mac every day, and nothing in the output ever said so.
+from his Mac every day and nothing in the output ever said so.
 
 `claude-sync.sh`, called by `run.sh` before the app starts:
 
@@ -661,7 +672,7 @@ claude: host 2.1.277 guest 2.1.277
 * **Re-measured after the copy.** `scp` returning 0 and the file being right are two
   different claims.
 * **A run that still disagrees is REFUSED** and the clone it created is cleaned up (§54).
-  A guest holding a different build is not the Mac he uses, and a model turn measured in
+  A guest holding a different build is not the Mac he uses and a model turn measured in
   it would be measuring a version nobody ships.
 
 Ask it without booting anything: `./claude-sync.sh --check <vm>`.
@@ -670,7 +681,7 @@ Ask it without booting anything: `./claude-sync.sh --check <vm>`.
 
 `claude` updates ITSELF, so a guest that started the run in sync could leave it behind
 mid-walk. The pin is `DISABLE_AUTOUPDATER=1`, on the launch and in the guest's shell
-environment — **not** the `autoUpdates: false` config key, and that is measured rather
+environment — **not** the `autoUpdates: false` config key and that is measured rather
 than preferred. The check, read out of the 2.1.277 binary, in its own order:
 
 ```js
@@ -682,7 +693,7 @@ if (config.autoUpdates === false &&
 ```
 
 The last line is the trap. The host's `claude` is a **native** install, so the copy in the
-guest is one too, and the native updater writes `installMethod:"native"` with
+guest is one too and the native updater writes `installMethod:"native"` with
 `autoUpdatesProtectedForNative:true` itself — from that moment `autoUpdates:false` is
 ignored. A config pin would have **looked set and done nothing**, which is the worst shape
 a pin can have.
@@ -702,7 +713,7 @@ sends `refreshToken`, its expiry or other credential-store entries. Both guest
 file stores and both keychain entries receive this same restricted snapshot.
 Malformed or expired source credentials are refused before any guest write.
 
-A single snapshot **can expire during a run**, so two things keep it current, and
+A single snapshot **can expire during a run**, so two things keep it current and
 in both only this Mac ever renews this Mac's login (its own lock, its own store):
 
 * **At push:** when the host's access token is within five minutes of expiry (Claude
@@ -715,14 +726,14 @@ in both only this Mac ever renews this Mac's login (its own lock, its own store)
   time** (an attribute, never the value); when this Mac has renewed, it pushes the new
   access snapshot. When the guest's copy enters the renewal window and this Mac has not
   renewed (an idle Mac makes no model calls), it asks this Mac once. `stop.sh` ends the
-  recorded pid; the keeper also ends by itself once the run state is gone, and after
+  recorded pid; the keeper also ends by itself once the run state is gone and after
   12 hours.
 
 This prevents a disposable VM from rotating the host login; it does not promise
 unattended authentication forever (a login the provider revokes stays revoked). Do not
 restore refresh-token copying. A stored item's presence or byte count proves storage
 only, not successful authentication. The keeper and the renewal are proved against a
-fake credential and a stub guest (`test/run-tests.sh "claude login"`, and
+fake credential and a stub guest (`test/run-tests.sh "claude login"` and
 `test/claude-login.mutation.py`), not against a live guest.
 
 The following measurements describe the old full-copy implementation, not live
@@ -730,15 +741,15 @@ verification of the restricted snapshot:
 
 **Measured, 2026-09-20** (`docs/verification/2026-09-20-claude-binary-and-login-in-the-test-vm.md`):
 the credential file lands at **524 bytes in the guest, matching this Mac's credential byte for
-byte in size**, and `claude -p` in that guest answered **`READY`**. The size comparison is the
+byte in size** and `claude -p` in that guest answered **`READY`**. The size comparison is the
 check that matters and it is not decoration — Ray's vm9 audit found that
 `security add-generic-password -w` reading from a pipe with no tty stores an **empty** password
 and **exits 0**, so a store's own success is not evidence that it holds anything.
 
 **Where it goes: the file store first.** `claude` keeps `.credentials.json` in its config dir
-(`CLAUDE_CONFIG_DIR` when set, `~/.claude` otherwise), and a file has no tty, no securityd and
+(`CLAUDE_CONFIG_DIR` when set, `~/.claude` otherwise) and a file has no tty, no securityd and
 no session to be on the wrong side of. Both paths are written — the fixture home's, which is
-what the app is launched with, and the guest user's own, which is what a `claude` started by
+what the app is launched with and the guest user's own, which is what a `claude` started by
 hand over ssh reads — from ONE stdin write copied inside the guest, under `umask 077`. The
 keychain item is written too, by a different mechanism from the one that failed Ray (`security
 -i` with `-X <hex>` on stdin, never `-w`), so either store alone is a login.
@@ -764,7 +775,7 @@ the account is `process.env.USER`. `run.sh` launches the app **with**
 `CLAUDE_CONFIG_DIR=<fixture home>/.claude`, so the app resolves the scoped name while a
 `claude` a tester starts by hand over ssh resolves the bare one. Writing two rows of a
 throwaway keychain costs nothing; predicting which one the process under test will ask
-for, and being wrong, costs a whole walk. The account written is the **guest's** user,
+for and being wrong, costs a whole walk. The account written is the **guest's** user,
 never the host's — an item filed under `alex` would never be found by an app running as
 `admin`.
 
@@ -778,12 +789,12 @@ the harness tests inspect every guest payload using synthetic credentials.
 The splash uses WebGL. Apple Virtualization gives the guest a paravirtualized GPU with
 Metal, so WebGL resolves — but the guest is not the host's M4 GPU and a frame is not
 guaranteed pixel-identical to `ui/tests/shots-home/home-named.png`. Treat the guest as
-authoritative for **layout, text, focus and state**, and confirm anything that depends on
+authoritative for **layout, text, focus and state** and confirm anything that depends on
 exact GPU rasterization against a host capture.
 
 ---
 
-## Where it all lives, and how to delete it
+## Where it all lives and how to delete it
 
 Everything is under **one** directory:
 
@@ -810,13 +821,13 @@ disposable per-run VM practical instead of a 62 GB copy each time.
 installed outside it. No Homebrew formula, no launch agent, no login item, no host TCC
 change.
 
-### Garbage, and CEO §54
+### Garbage and CEO §54
 
 The engine's `scratch-reaper.sh` does **not** cover this directory, deliberately: its
-first wall is containment in a declared scratch root, and the 25 GB base image must
+first wall is containment in a declared scratch root and the 25 GB base image must
 survive every sweep. So the harness cleans up after itself:
 
-* `stop.sh` is the normal path, and verifies rather than assumes.
+* `stop.sh` is the normal path and verifies rather than assumes.
 * `reap.sh` is the backstop for a run killed before it reached `stop.sh` — a quota pause,
   a crash, a terminated session. It deletes nothing by default:
 
@@ -826,7 +837,7 @@ survive every sweep. So the harness cleans up after itself:
 ./reap.sh --notice   # one line, only if there is garbage
 ```
 
-It will never delete the base image, a VM it did not create, or a **running** VM.
+It will never delete the base image, a VM it did not create or a **running** VM.
 
 ---
 
@@ -834,7 +845,7 @@ It will never delete the base image, a VM it did not create, or a **running** VM
 
 ### Nothing is executed before it is proven launchable
 
-`preflight-binary.py` checks a binary's code signature, its Gatekeeper status, and —
+`preflight-binary.py` checks a binary's code signature, its Gatekeeper status and —
 the part that matters — that every **non-weak** dynamic dependency actually resolves,
 either on disk through the binary's own `LC_RPATH` entries or in the dyld shared cache
 (tested by asking the loader, in a throwaway python process).
@@ -843,7 +854,7 @@ This exists because a bare `tart --version` on 2026-09-19 put *"tart cannot be o
 because of a problem"* on the CEO's screen. Tart 2.36.0 and 2.37.0 hard-link
 `@rpath/libswiftCompatibilitySpan.dylib`, a Swift 6.2 runtime that ships only with
 macOS 26 / Xcode 26; this host is macOS 15.6, so dyld aborts before `main`. **A version
-check is the most innocent thing you can run, and it still reached his screen** — so the
+check is the most innocent thing you can run and it still reached his screen** — so the
 rule is not "be careful with GUI apps", it is that nothing runs until its dependencies
 are proven.
 
@@ -880,9 +891,9 @@ and screen lock so that one of those three causes simply cannot happen.
 ### Quitting is by pid, never by keystroke
 
 `stop.sh` sends `kill -TERM` to the pid `run.sh` launched. System Events addresses
-whatever is **frontmost**, and on 2026-09-19 at 18:10Z a Command-Q sent that way landed
+whatever is **frontmost** and on 2026-09-19 at 18:10Z a Command-Q sent that way landed
 in the CEO's Terminal. `ax.sh --key` carries the same discipline: it resolves the app's
-pid, verifies that pid is frontmost, and refuses to send otherwise.
+pid, verifies that pid is frontmost and refuses to send otherwise.
 
 ### No third-party default is trusted
 
@@ -896,17 +907,17 @@ pid, verifies that pid is frontmost, and refuses to send otherwise.
 | `TART_HOME` | inside `~/.richos-testvm` | tart defaults to `~/.tart`; one directory means one answer to "where is the disk" and one `rm` to remove it |
 | Key install | `/usr/bin/expect` | `sshpass` is not in Homebrew core and needs a third-party tap |
 | ssh known hosts | `/dev/null` | a clone's host key changes every run; the CEO's `known_hosts` is not polluted |
-| `screencapture` | `-x` | the default plays a shutter sound, and guest audio is mixed into the host's output — it would make a noise in his room |
-| ssh | `BatchMode=yes` | without it, failed key auth falls back to a password prompt: a hang, or an askpass **window** on his screen |
+| `screencapture` | `-x` | the default plays a shutter sound and guest audio is mixed into the host's output — it would make a noise in his room |
+| ssh | `BatchMode=yes` | without it, failed key auth falls back to a password prompt: a hang or an askpass **window** on his screen |
 | `caffeinate` | `-is`, never `-dimsu` | `-d`/`-u` would keep his display lit and unlocked for the length of every test |
 | Guest staging dir | `$HOME`, not `/tmp` | Homebrew's tesseract cannot read the guest's `/tmp` |
 | `--engine` untar | **`--strip-components 1`, then a shape check** | the release tarball's one top-level member is `engine/`, so a plain untar produced `<payload>/engine/engine/…`; the app asks for `<dir>/scripts/hooks` and `<dir>/VERSION` and said *"the RichOS engine isn't on this Mac"* — which is why nightlies .7 and .8 could not measure Mac → phone |
 | `claude` auto-updates in the guest | **`DISABLE_AUTOUPDATER=1`** | the `autoUpdates:false` CONFIG key is ignored for a native install once `autoUpdatesProtectedForNative` is set, which the native updater sets itself — a config pin would look set and do nothing |
-| The guest's `claude` version | **the host's, re-checked every run** | a binary copied once into the base image is a snapshot; the host's updates four times in two days, and the VM is supposed to be his Mac |
+| The guest's `claude` version | **the host's, re-checked every run** | a binary copied once into the base image is a snapshot; the host's updates four times in two days and the VM is supposed to be his Mac |
 | Writing the credential into the guest | **`security -i` on stdin** | `add-generic-password -w <secret>` puts it in the process table and in every log of the command line; `security -i` is the mode Claude Code itself uses for the same item |
 | `tailscale up --auth-key` | `file:<path>`, never the key inline | an inline key is in the guest's process table and in every log that records a command line |
 | `tailscale up --timeout` | **90s** | the flag's own default is `0s`, documented as *"blocks forever"* — a hang with no terminal to notice it |
-| `tailscale up --operator` | the guest's console user | the app is not root, and `tailscale cert` is a mutating call it makes itself |
+| `tailscale up --operator` | the guest's console user | the app is not root and `tailscale cert` is a mutating call it makes itself |
 | `tailscale up --reset` | on | `up` refuses when an unspecified setting would change; a clone starts from a known state, not an inherited one |
 | `tailscale up --accept-dns` | **true** (the vendor default, stated) | the pairing URL is opened in Safari *inside the guest*; only MagicDNS resolves the name there |
 | `tailscale up --shields-up` | **false** (stated) | shields-up blocks inbound connections, which is exactly what a phone makes |
@@ -946,8 +957,8 @@ chmod +x "$SCRATCH/gui-boot-in-guest.sh"
 | VM never reports an IP | `cat ~/.richos-testvm/log/<vm>.log`. |
 | *"tart cannot be opened because of a problem"* | The pin was bypassed. Run `preflight-binary.py` against the binary and read what it names. |
 | Disk filling up | `./reap.sh` — clones that outlived their agent. |
-| `run.sh` says **tailnet: NOT JOINED** | Read the line after it: it names the one thing to do. Usually the auth key is missing, expired, or the file has more than the key in it. Everything except the phone path still works. |
+| `run.sh` says **tailnet: NOT JOINED** | Read the line after it: it names the one thing to do. Usually the auth key is missing, expired or the file has more than the key in it. Everything except the phone path still works. |
 | The app says **"not set up yet"** with a joined guest | `./tailnet.sh doctor <vm>`. If `certificates: no`, the tailnet's HTTPS switch is off — <https://login.tailscale.com/admin/dns>. If `backend state` is not `Running`, the join did not take. |
 | A pairing code appears but the phone cannot reach the Mac | Check the node is online from the host: `./tailnet.sh nodes`, then `curl -sk https://<name>:8443/`. A phone signed in to a *different* Tailscale account is in a different tailnet and sees nothing. |
-| `tailscale cert` refuses with a rate-limit message | The certificate cache did not hit, and the name has been issued too many times this week. `ls ~/.richos-testvm/certs/` — an entry is only re-used if it is for that exact name and outlives 720h. |
+| `tailscale cert` refuses with a rate-limit message | The certificate cache did not hit and the name has been issued too many times this week. `ls ~/.richos-testvm/certs/` — an entry is only re-used if it is for that exact name and outlives 720h. |
 | A `richos-test-*` node is still listed with no VM behind it | Expected briefly: ephemeral nodes age out after the control plane stops hearing from them. If one persists, remove it in the admin console — nothing here holds the rights to. |

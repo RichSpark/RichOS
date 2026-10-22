@@ -425,8 +425,8 @@ class DictationWalk(adopt_walk.Walk):
         guest(self.vm, 'open -a Terminal')
         time.sleep(4)
         row = self.dictate('122', 'com.apple.Terminal', 'clipboard-before-terminal')
-        # Terminal's text area through ax.js (a fresh window's buffer is one login line and the
-        # prompt, well inside the 203 characters ax.js keeps of a value). walk-157817a0a60e read
+        # Terminal's text area through ax.py (a fresh window's buffer is one login line and the
+        # prompt, well inside the 203 characters ax.py keeps of a value). walk-157817a0a60e read
         # an empty string through System Events' entire contents while the words sat at the
         # prompt (terminal-failed.png); that read stays only as the fallback.
         nodes = [n for n in self.ax('find', '--role', 'AXTextArea', '--first', app='Terminal')

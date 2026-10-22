@@ -49,6 +49,7 @@ HERE = Path(__file__).resolve().parent
 QA = HERE.parent / 'qa'
 sys.path.insert(0, str(HERE))
 from relaunch import guest, relaunch  # noqa: E402
+import axwait  # noqa: E402
 
 STEPS = ['identity', 'launch', 'first-run', 'themes', 'seed-desk', 'relaunch', 'card', 'answer']
 # `correction.rs` `asked_again_sentence(1)`, verbatim. The walk compares what is ON SCREEN with it.
@@ -161,7 +162,7 @@ class Walk:
         try:
             return self.nodes('find', *args)
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+            if axwait.not_yet(exc, 'find'):
                 return []
             raise
 

@@ -507,7 +507,49 @@ def look(src, now, session_id, th=None):
     if why:
         problems.append(why)
     stalls += _slow_steps(src, reg, now, session_id)
+    s, why = _holds(src, reg, now, session_id)
+    stalls += s
+    if why:
+        problems.append(why)
     return stalls, [p for p in problems if p]
+
+
+# ---------------------------------------------------------------------------
+# HOLDS (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-holds.md)
+# ---------------------------------------------------------------------------
+# The CEO: "WHEN WILL [THIS] STOP ONCE AND FOR ALL???" (his 2026-09-27 order sat
+# held for weeks). Every hold the registry knows (workspaces.py holds(): waits,
+# pauses, holds/<name>.json) is read here, paused agents included:
+#   HELD         no checkable end and 30 min old: told now and again every 30
+#                min (the stall repeat) until the work runs, lands or he decides
+#   RELEASE DUE  its end came true (the agent finished, the review ended, the
+#                time passed) and the work has not moved: told with the command
+# A hold whose end is pending, or is his decision (ceo:), is quiet.
+
+def _holds(src, reg, now, session_id):
+    if src.ws is None or reg.problem or not hasattr(src.ws, "holds"):
+        return [], ""
+    try:
+        found = src.ws.holds(session_id, now)
+    except Exception as exc:  # noqa: BLE001: an unread hold list is a source not read
+        return [], "the held work could not be read (%s: %s)" % (exc.__class__.__name__, str(exc)[:160])
+    quiet = _env_float("RICHOS_HOLD_REPORT_SECONDS", 30 * 60)
+    out = []
+    for h in found:
+        why = " ".join(str(h.get("why") or "not said").split())[:200]
+        lines = ["why: " + why, "what: " + str(h.get("what"))]
+        go = src.ws.hold_command(h)
+        if h["state"] == "none" and now - h["since"] >= quiet:
+            out.append(Stall("hold:%s:%d" % (h["name"], int(h["since"])), "HELD", h["name"], h["since"],
+                             "held by Rich with nothing checkable to end it (%s)" % h["source"], lines,
+                             ["make it run: " + go,
+                              "or put it to the CEO as his choice (go, or hold until a date or event); only his "
+                              "words end it: workspaces.sh release %s --ceo-word '<his words>'" % h["name"]]))
+        elif h["state"] == "due":
+            out.append(Stall("due:%s:%s" % (h["name"], h["end"]), "RELEASE DUE", h["name"], h["since"],
+                             "its end came true: %s (%s)" % (h["detail"], h["end"]), lines,
+                             ["make it run now: " + go]))
+    return out, ""
 
 
 def _proof_stall(src, reg, w, holders, slots, now, th, table):

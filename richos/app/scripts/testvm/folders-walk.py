@@ -55,6 +55,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('adopt_walk', HERE / 'adopt-walk.py')
 adopt = importlib.util.module_from_spec(_spec)
@@ -87,13 +88,13 @@ class Walk(adopt.Walk):
 
     # --- the guest's screen -----------------------------------------------------------------
     def ax(self, mode, *args, app=None, timeout=150):
-        # A read that hits ax.sh's own guest deadline on a loaded host is asked again, at most three
-        # times in all (update-relaunch-walk.py's rule); any other failure is raised as before.
+        # A read (find, tree) with no answer on a loaded host is asked again, at most three times
+        # in all; a click is sent once (axwait.ask_again); any other failure is raised as before.
         for attempt in range(3):
             try:
                 return super().ax(mode, *args, app=app, timeout=timeout)
             except StepFailed as exc:
-                if 'guest_deadline' not in str(exc) or attempt == 2:
+                if not axwait.ask_again(exc, mode) or attempt == 2:
                     raise
                 time.sleep(2)
 
@@ -102,10 +103,12 @@ class Walk(adopt.Walk):
         return '\n'.join(l for l in out.splitlines() if not l.startswith('{')).strip()
 
     def nodes(self, *args):
+        """The matching nodes, [] when nothing matched. A read with no answer raises (after ax()
+        asked it again): most callers record what is on screen, and no answer is not absence."""
         try:
             return [n for n in self.ax('find', *args) if 'x' in n and not n.get('meta')]
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+            if axwait.absent(exc):
                 return []
             raise
 
@@ -120,7 +123,14 @@ class Walk(adopt.Walk):
         return bool(self.nodes('--value', words, '--contains') or self.nodes('--title', words, '--contains'))
 
     def sheet_open(self):
-        return bool(self.nodes('--role', 'AXSheet'))
+        """Whether the folder chooser is up; None when the read had no answer (axwait.py), so
+        wait_sheet() asks again and never reads it as either open or closed."""
+        try:
+            return bool(self.nodes('--role', 'AXSheet'))
+        except StepFailed as exc:
+            if axwait.not_yet(exc, 'find'):
+                return None
+            raise
 
     def wait_sheet(self, want, seconds=20):
         end = time.monotonic() + seconds
@@ -264,20 +274,18 @@ class Walk(adopt.Walk):
         guest(self.vm, 'mkdir -p {d} && printf "Docs for Acme\\n" > {d}/brief.md'.format(d=shlex.quote(self.docs)))
         self.press('Settings', role='AXPopUpButton')
         time.sleep(2)
-        rows = self.nodes('--title', 'Connected folders', '--role', 'AXMenuItem', '--contains')
+        rows = self.nodes('--title', 'Connected folders', '--role', 'AXButton', '--contains')
         ev = {'menu_row': [{k: r.get(k) for k in ('title', 'desc', 'x', 'y', 'w', 'h')} for r in rows[:2]]}
         self.shot('2-menu-light.png')
         problems = []
         if not rows:
-            raise StepFailed('the Settings menu has no "Connected folders" row')
+            raise StepFailed('the Settings dialog has no "Connected folders" row')
         if 'Connected folders (repositories)' not in (rows[0].get('title') or '') + ' ' + (rows[0].get('desc') or ''):
             problems.append('the row does not read "Connected folders (repositories)": ' + repr(rows[0].get('title')))
         self.appearance(True)
         self.shot('2-menu-dark.png')
         self.appearance(False)
-        self.press('Connected folders', role='AXMenuItem')
-        self.wait_for('Company', role='AXPopUpButton', seconds=30)
-        time.sleep(2)
+        self.open_connected_folders(settings_open=True)
         self.shot('2-sheet-light.png')
         copy = {}
         for key, words in SHEET_COPY.items():

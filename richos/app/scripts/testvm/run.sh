@@ -5,6 +5,17 @@
 #   testvm/run.sh --bundle <RichOS.app.zip|RichOS.app> --home <fixture-home-dir>
 #                 [--vm <name>] [--keep] [--engine <engine.tar.gz>] [--no-tailnet]
 #   testvm/run.sh --no-app --home <fixture-home-dir> [--vm <name>] [--keep] [--no-tailnet]
+#   testvm/run.sh --bundle <...> --home <fixture-home-dir> --new-user [--vm <name>] [--no-tailnet]
+#
+# --new-user: the app is launched the way a person's first double-click launches it,
+# with HOME and nothing else the harness normally hands it: no RICHOS_CLAUDE_BIN, no
+# CLAUDE_CONFIG_DIR, no RICHOS_ENGINE_DIR, no DISABLE_AUTOUPDATER, no Claude login pushed
+# into the fixture home and no engine payload copied in. The fixture home has no
+# `claude` under it, so the app finds Claude Code the way it does on a new customer's
+# Mac (or installs it), fetches its engine from its own pin, and reaches Claude signed
+# out. A walk signs in later with `claude-login.sh push` when it means to. Every
+# harness default left out here is one a new user does not have: a first-run walk
+# that inherits them proves the harness, not the product (new-user-walk.py).
 #
 # --no-app: the same guest (the host's claude synced in, the host's login pushed
 # into the fixture home, a login keychain ready) and NO app launched, for a proof
@@ -24,11 +35,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib.sh"
 
-BUNDLE=""; FIXTURE_HOME=""; VM="richos-test-1"; ENGINE=""; KEEP=0; TAILNET=1; NOAPP=0
+BUNDLE=""; FIXTURE_HOME=""; VM="richos-test-1"; ENGINE=""; KEEP=0; TAILNET=1; NOAPP=0; NEWUSER=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --bundle) BUNDLE="$2"; shift 2 ;;
     --no-app) NOAPP=1; shift ;;
+    --new-user) NEWUSER=1; shift ;;
     --home)   FIXTURE_HOME="$2"; shift 2 ;;
     --vm)     VM="$2"; shift 2 ;;
     --engine) ENGINE="$2"; shift 2 ;;
@@ -42,6 +54,11 @@ while [ $# -gt 0 ]; do
     *) die "unknown argument: $1" ;;
   esac
 done
+if [ "$NEWUSER" -eq 1 ]; then
+  [ "$NOAPP" -eq 0 ] || die "--new-user launches the app as a new user does: it needs --bundle, not --no-app"
+  # A new user has no engine payload handed to them: the app fetches its own.
+  ENGINE=""
+fi
 if [ "$NOAPP" -eq 1 ]; then
   [ -z "$BUNDLE" ] || die "--no-app and --bundle contradict each other: say which one"
 else
@@ -327,7 +344,12 @@ fi
 # NOT fatal, for the same reason the keychain step is not: everything that needs
 # no model turn still renders, still screenshots and still proves what it was
 # asked to. It says so here rather than at the first model turn.
+if [ "$NEWUSER" -eq 1 ]; then
+  # A new user is signed out until they sign in; the walk signs in when it means to.
+  CLAUDE_LOGIN_LINE="claude login: guest NOT logged in (--new-user: nothing pushed)"
+else
 CLAUDE_LOGIN_LINE="$("$HERE/claude-login.sh" push "$VM" "$GUEST_HOME")" || true
+fi
 printf '%s\n' "$CLAUDE_LOGIN_LINE" >&2
 # His second sign-in (Work), the same way, with no step for him: the host folder
 # is where the app keeps Account 2 on this Mac, the host item is named for it
@@ -337,7 +359,7 @@ printf '%s\n' "$CLAUDE_LOGIN_LINE" >&2
 WORK_HOST_FOLDER="${TESTVM_WORK_HOST_FOLDER:-$HOME/Library/Application Support/com.richos.app/claude-accounts/2}"
 WORK_HOST_ITEM="Claude Code-credentials-$(printf '%s' "$WORK_HOST_FOLDER" | shasum -a 256 | cut -c1-8)"
 WORK_GUEST_FOLDER="$GUEST_HOME/claude-accounts/2"
-if /usr/bin/security find-generic-password -s "$WORK_HOST_ITEM" -a "${USER:-alex}" >/dev/null 2>&1; then
+if [ "$NEWUSER" -eq 0 ] && /usr/bin/security find-generic-password -s "$WORK_HOST_ITEM" -a "${USER:-alex}" >/dev/null 2>&1; then
   "$HERE/claude-login.sh" push --account "$WORK_HOST_ITEM" --host-folder "$WORK_HOST_FOLDER" \
     --guest-home "$GUEST_HOME" "$VM" "$WORK_GUEST_FOLDER" >&2 || true
 fi
@@ -444,15 +466,18 @@ fi
 # which refuses anything but RICHOS_ names and plain values). Unset, nothing changes.
 APP_EXTRA_ENV="$(app_env_args "${TESTVM_APP_ENV:-}")" || die "TESTVM_APP_ENV was refused; nothing was launched"
 log "launching the app in the guest's GUI session..."
+HARNESS_ENV="--env CLAUDE_CONFIG_DIR='$GUEST_HOME/.claude' \
+    --env RICHOS_CLAUDE_BIN='$TESTVM_GUEST_CLAUDE' \
+    --env $TESTVM_CLAUDE_PIN_VAR=$TESTVM_CLAUDE_PIN_VALUE \
+    ${ENGINE:+--env RICHOS_ENGINE_DIR='$PAYLOAD/engine'} \
+    $APP_MODEL_ENV"
+# --new-user: HOME and the window's activation, nothing else of the harness's (see the header).
+[ "$NEWUSER" -eq 0 ] || HARNESS_ENV=""
 guest_ssh "$VM" "rm -f '$LOGFILE'; \
   open -n -a '$APP' \
     --env HOME='$GUEST_HOME' \
     --env RICHOS_ACTIVATION=regular \
-    --env CLAUDE_CONFIG_DIR='$GUEST_HOME/.claude' \
-    --env RICHOS_CLAUDE_BIN='$TESTVM_GUEST_CLAUDE' \
-    --env $TESTVM_CLAUDE_PIN_VAR=$TESTVM_CLAUDE_PIN_VALUE \
-    ${ENGINE:+--env RICHOS_ENGINE_DIR='$PAYLOAD/engine'} \
-    $APP_MODEL_ENV \
+    $HARNESS_ENV \
     $APP_EXTRA_ENV \
     --stdout '$LOGFILE' --stderr '$LOGFILE'"
 

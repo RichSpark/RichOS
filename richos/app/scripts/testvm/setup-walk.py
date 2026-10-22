@@ -99,6 +99,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest, quit_app, relaunch  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('adopt_walk', HERE / 'adopt-walk.py')
 adopt_walk = importlib.util.module_from_spec(_spec)
@@ -289,14 +290,14 @@ class SetupWalk(adopt_walk.Walk):
         self.timeline = self.facts.get('timeline', [])
 
     def ax(self, mode, *args, app=None, timeout=40):
-        """A find that hit ax.sh's guest deadline is asked again, at most twice (voice-walk.py's
-        rule). The walk of candidate 44 lost its relaunch step to one such read on a host at
-        97% CPU, after every product check had passed."""
+        """A read with no answer is asked again, at most twice (axwait.ask_again). The walk of
+        candidate 44 lost its relaunch step to one such read on a host at 97% CPU, after every
+        product check had passed."""
         for attempt in range(3):
             try:
                 return super().ax(mode, *args, app=app, timeout=timeout)
             except StepFailed as exc:
-                if mode != 'find' or 'guest_deadline' not in str(exc) or attempt == 2:
+                if not axwait.ask_again(exc, mode) or attempt == 2:
                     raise
 
     def by_id(self, dom_id):
@@ -304,7 +305,7 @@ class SetupWalk(adopt_walk.Walk):
         try:
             nodes = self.ax('find', '--id', dom_id, '--first')
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc) or 'guest_deadline' in str(exc):
+            if axwait.not_yet(exc, 'find'):
                 return None
             raise
         nodes = [n for n in nodes if not n.get('meta')]
@@ -315,7 +316,7 @@ class SetupWalk(adopt_walk.Walk):
         try:
             return bool(self.ax('find', '--value', text, '--contains', '--first'))
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+            if axwait.not_yet(exc, 'find'):
                 return False
             raise
 
@@ -610,7 +611,7 @@ class SetupWalk(adopt_walk.Walk):
         try:
             nodes = self.ax('find', '--value', ' MB of ', '--contains', '--first')
         except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+            if axwait.not_yet(exc, 'find'):
                 return None
             raise
         for n in nodes:
@@ -801,7 +802,7 @@ class SetupWalk(adopt_walk.Walk):
             except StepFailed as exc:
                 # A click past ax.sh's guest deadline at 99.9% host CPU (walk of a73f7a263,
                 # 22:20Z); "Enter" is the home screen's own key for it.
-                if 'guest_deadline' not in str(exc):
+                if not axwait.no_answer(exc):
                     raise
                 guest(self.vm, "osascript -e 'tell application \"System Events\" to key code 36'")
             time.sleep(3)
@@ -1025,7 +1026,7 @@ class SetupWalk(adopt_walk.Walk):
                 return self.ax('click', '--title', 'Dictation feature', '--role', 'AXButton', '--in', 'sidebar',
                                '--first', '--contains')
             except StepFailed as exc:
-                if '124' not in str(exc) and 'guest_deadline' not in str(exc) or attempt == 1:
+                if not axwait.no_answer(exc) or attempt == 1:
                     raise
                 time.sleep(5)
                 crumb = self.ax('find', '--value', 'Dictation feature', '--contains', '--first')

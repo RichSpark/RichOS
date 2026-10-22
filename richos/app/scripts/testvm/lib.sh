@@ -76,12 +76,16 @@ TESTVM_DISPLAY="${TESTVM_DISPLAY:-1680x1050}"
 # with ZERO guest swap-outs and a 70 s boot (68 s at 7 GB). 5120 is that peak
 # plus 1.9 GB. At 7 GB the same guest used 3.4-4.1 GB only because macOS
 # spreads out when it has room.
-# 4096 IS THE DEFAULT SINCE 2026-10-14: a full 12-step voice walk (the heaviest
-# walk: app, voice and speech recognition) passed in a 4096 MB guest. A smaller
-# guest lets two run side by side, with slots.py's 4,096 MB memory floor kept.
+# 4096 was the default from 2026-10-14 (a 12-step voice walk passed in it) and is
+# NOT ENOUGH for a first run: in the first two minutes after boot a 4096 MB guest
+# thrashes (walk-56dbcca781c4: 500k compressions, 353k decompressions, 52k
+# pageouts in 129 s), where a 5120 MB guest of the same walk did 181k, 64k and 3k
+# in 82 s (walk-7eb7ae8b5a94; esc-20261021T133408Z-5d70a3e4, acked in scope).
+# So 5120 again; slots.py still admits a guest only if all of it fits beside the
+# running guests with its 4,096 MB floor kept.
 # tart's defaults (whatever the image baked) are not trusted.
 TESTVM_CPU="${TESTVM_CPU:-4}"
-TESTVM_RAM_MB="${TESTVM_RAM_MB:-4096}"
+TESTVM_RAM_MB="${TESTVM_RAM_MB:-5120}"
 
 # The guest account the app runs as. It must be the console (auto-login) user:
 # a window only exists inside the GUI session, and screencapture over ssh can

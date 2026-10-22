@@ -40,9 +40,10 @@ When an explicit role excludes a title/ID match, failure includes up to three
 A role-less exact selector still requires uniqueness. Do not silently resolve a
 collision by adding `--contains --first`.
 
-Traversal uses collection indexes so JXA's same-name references cannot turn
-different controls into repeated matches. Focusing can rebuild WebKit's AX tree
-and invalidate an index. If the subsequent focus read fails, the tool may refresh
+The guest side is `ax.py`, which reads each attribute with the accessibility API
+(`AXUIElementCopyAttributeValue`) on the element itself, so two controls with the
+same label are always two elements. Focusing can rebuild WebKit's AX tree and
+invalidate an element. If the subsequent focus read fails, the tool may refresh
 the original DOM ID within the same scope, requiring a complete traversal and
 one match. It never resends focus; a missing ID or uncertain refresh refuses text.
 
@@ -74,15 +75,28 @@ including remote startup and shell overhead, not a pure SSH measurement. These
 phase records are ephemeral under the configured temporary root and cleaned by
 the supervisor. Partial output is preserved; the owned command group is killed.
 `SecurityAgent` windows and a modal hiding the requested control produce `blocked`,
-distinct from `notfound`. Process errors
+distinct from `notfound`. An element whose app does not answer an attribute read
+(`kAXErrorCannotComplete`, after the AX messaging timeout) ends the read
+with `unresponsive`, never a tree with that branch missing; after a press it is
+`effect_unknown`. Process errors
 retain their exit status. `TESTVM_AX_TIMEOUT` can select a different total bound for
 a controlled comparison, but increasing it is not a recovery strategy.
+
+A read still running after 10 seconds (`TESTVM_AX_SLOW_SECONDS`; a `find` answers in
+0.01 to 0.5 s) is photographed while it is overdue, once: `sample` of the app under test,
+the read's own process (`ax.py`, the AX client), System Events (keystrokes and raw
+scripts) and the WebContent process (each main thread's heaviest path), the guest's
+second `top` sample and its memory counters, printed after an `ax_slow_read` line on
+stderr. The host adds an `ax_host_reading` line (its admission sample and the VM
+processes' CPU). The read is never retried and its deadline never moves; the snapshot
+only says whether the app was blocked or the guest was starved
+(esc-20261021T122950Z-b8b7362a).
 
 ## Fixtures and exclusive execution
 
 Use synthetic fixture homes. `fixture.py --source HOME --out NEW_HOME --kind delta`
 keeps two bound thread definitions named `Scenario A` and `Scenario B`, removes old
-turns, drafts and runtime journals, and retains entity/configuration data. The
+turns, drafts and runtime journals and retains entity/configuration data. The
 `long-history` kind preserves the conversation history for a separate AX benchmark.
 Both exclude copied keys, Claude credentials, installed update state and retired
 engine copies. The pinned engine is supplied separately to `run.sh`. Inputs stay
@@ -91,14 +105,14 @@ the source and resulting ledger hashes. The caller owns deletion of these copies
 
 `run-walk.py` holds one of the test VM's two guest slots (`slots.py`:
 `<TESTVM_ROOT>/guest.lock` and `guest-2.lock`, default root `~/.richos-testvm`) for exactly
-its own run, boot to cleanup, and measured CPU use must be below 80%. The slot is released
+its own run, boot to cleanup and measured CPU use must be below 80%. The slot is released
 the instant the run ends; nothing holds a guest between runs (the CEO, 2026-09-27). Since
 CEO ruling §77 (2026-09-22) a walk is a test run: it does not take the nightly
 `release.lock`, which stays with the nightly/release commands. `--state-dir` is still
 accepted and no longer read. Acquisition is nonblocking unless `--wait SECONDS` is given:
 then the walk waits for a free slot and retries the CPU admission for at most that long in
 total, releasing the slot while it waits on the CPU. Do not wrap a walk in `reserve.py --wait` instead: the walk samples again the
-moment the outer command admits it, and on a busy Mac that second single sample refuses
+moment the outer command admits it and on a busy Mac that second single sample refuses
 the run. With
 a slot it refuses a third running guest, creates a unique headless guest and
 keeps the slot until `stop.sh` has stopped the captured processes and deleted
@@ -146,10 +160,10 @@ On a shared host, `--admission-wait-seconds 120` allows a bounded wait for user 
 below 80% before each attempt. Each probe reads the kernel's own counters in process
 (`host_statistics` and `sysctl`, no `top`, `lsof` or other subprocess) twice, one second
 apart. User CPU excludes system time: under memory pressure the compressor and pager
-inflate system time, and that condition is judged by the memory rule instead. The
+inflate system time and that condition is judged by the memory rule instead. The
 memory rule refuses while kernel pressure is CRITICAL or swap-out during the probe is
 at least 16 MB/s; pressure, free percentage and swap in use are reported beside it.
-Probes are at least 30 seconds apart, so a waiting caller never spins, and the final
+Probes are at least 30 seconds apart, so a waiting caller never spins and the final
 probe can extend the requested wait by about one second. Actual admission time, the
 probe count, measured CPU and memory figures and informational load average are
 recorded in each capture receipt. Admission time is included in the complete scenario
@@ -158,7 +172,7 @@ before consuming a turn or sending a prompt. Load average alone
 neither establishes another active job nor blocks work on an otherwise idle CPU.
 For an explicitly controlled benchmark, `reserve.py --max-load N` retains an opt-in
 legacy load criterion. `reserve.py` alone takes no lock (§77); `run-walk.py`'s guest
-lock remains mandatory for a walk in either mode, and `reserve.py --release-lock` holds
+lock remains mandatory for a walk in either mode and `reserve.py --release-lock` holds
 the nightly lock only for work that writes nightly or release state.
 
 Each prompt contains spaced characters; the requested reply joins them. Thus the
@@ -231,14 +245,14 @@ cold and warm times and verify identical hits. Do analysis after timing captures
 Report complete scenario duration with coverage separately from these operation
 comparisons. An unfinished historical run is not an equivalent speed benchmark.
 
-## A fresh install, and work given from the phone
+## A fresh install and work given from the phone
 
 `adopt-walk.py` needs no source home: `run-walk.py --home` gets an EMPTY directory and the
 walk goes through the app's own first run (memory setup declined, a company registered
 with a folder that it makes into a repository in the guest, the business questions
 declined; the first conversation is the app's own). It then starts `adopt-watch.py` in
 the guest, pairs the guest's Safari as the phone over Tailscale (both sides press
-`They match`, Sage F1), sends a task from the phone's composer, and passes only when an
+`They match`, Sage F1), sends a task from the phone's composer and passes only when an
 assignment on that conversation leaves Registered no earlier than the phone turn's
 `TurnCompleted`, with every prompt on the conversation from the phone's intake channel.
 
@@ -253,6 +267,6 @@ cd richos/app/scripts/testvm
 clock and never the words of a prompt. `--steps` runs a subset, still as one run under
 `run-walk.py`. `hold-walk.py`, which kept a guest up for hand-driven steps, is retired
 (the CEO, 2026-09-27): a step found by hand with `ax.sh` and `shot.sh` goes into a script
-run once under `run-walk.py`, and the slot is free again while its author thinks. The phone
+run once under `run-walk.py` and the slot is free again while its author thinks. The phone
 sheet names the Tailscale account it is signed in with; screenshots of it are not for a
 public record.

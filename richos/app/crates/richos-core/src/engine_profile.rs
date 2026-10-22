@@ -127,6 +127,10 @@ pub struct EngineProfile {
     /// and the work lease (Stu) `stu`.
     pub lease_models: crate::config::LeaseModels,
     pub machine_settings: crate::machine_settings::Settings,
+    /// **What this lease takes from the user's own settings files** (§138, build plan item 0):
+    /// read by [`Self::prepare`] from the user's central folder, the same way for every user.
+    /// Empty when prepared without a user folder ([`Self::prepare_with_settings`]).
+    pub user: crate::user_settings::UserSetup,
 }
 
 /// **Which speech model the video skill transcribes with**, the value of
@@ -179,6 +183,51 @@ pub const DUTIES: [&str; 3] = ["worker", "reviewer", "consult"];
 /// hired by Dean. Outside the engine, so an engine update never touches them. The shelf
 /// itself (`engine/team/shelf/`) is never registered.
 pub const USER_TEAM: &str = "team";
+
+/// **The engine's shipped skills no lease loads**: the terminal lead's landing and worktree
+/// procedures. The app lands and makes workspaces itself (Mega Lander), so a worker told to
+/// follow them would go around it (richos-hq `docs/plans/2026-10-21-switching-to-the-app.md`
+/// §4.6).
+pub const TERMINAL_ONLY_SKILLS: [&str; 2] = ["rich-lander", "using-git-worktrees"];
+
+/// **The engine's shipped skills this lease's engine plugin carries** (CEO §138: everything he
+/// uses in the terminal is a feature of the regular app; the plan above, row S): every folder in
+/// `<engine>/skills/` holding a `SKILL.md`, read off the folder so a skill added to the engine
+/// reaches every lease, except [`TERMINAL_ONLY_SKILLS`] and the skills the standing plugin
+/// already carries in the app's own words (`skills::SKILLS`), whose engine copies name the
+/// terminal's install path. Sorted.
+pub fn shipped_skills(engine: &Path) -> Result<Vec<String>, RuntimeError> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(engine.join("skills")).map_err(|e| RuntimeError(format!("the engine's skills could not be read: {e}")))? {
+        let path = entry.map_err(|e| RuntimeError(e.to_string()))?.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else { continue };
+        if !path.join("SKILL.md").is_file() || TERMINAL_ONLY_SKILLS.contains(&name.as_str())
+            || crate::skills::SKILLS.contains(&name.as_str())
+            || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') { continue; }
+        names.push(name);
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Link each of [`shipped_skills`] into `plugin/skills/`. A link, not a copy: a skill's scripts
+/// and references stay where the engine keeps them, and retiring the lease removes only the
+/// link (`remove_dir_all` does not follow one). Measured on `claude` 2.1.306: a `--plugin-dir`
+/// whose `skills/<name>` is a link to a folder lists `<plugin>:<name>` in `system/init.skills`.
+fn link_skills(engine: &Path, plugin: &Path) -> Result<(), RuntimeError> {
+    let root = plugin.join("skills");
+    std::fs::create_dir_all(&root).map_err(|e| RuntimeError(e.to_string()))?;
+    for name in shipped_skills(engine)? {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(engine.join("skills").join(&name), root.join(&name))
+            .map_err(|e| RuntimeError(format!("the {name} skill could not be linked into the lease: {e}")))?;
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(engine.join("skills").join(&name), root.join(&name))
+            .map_err(|e| RuntimeError(format!("the {name} skill could not be linked into the lease: {e}")))?;
+    }
+    Ok(())
+}
+
 
 /// Every definition this lease registers, by name: the stock ones, then the user's. A user's
 /// file of the same name as a stock one is the user's refit of it and wins (plan §10 point 3:
@@ -321,11 +370,28 @@ impl EngineProfile {
         render_team(&self.engine,data,&self.coordination,&self.plugin,true)
     }
 
+    /// The app's lease profile: this install's machine settings, the user's own settings
+    /// files in the central folder (`company::install_central_root`) and the user's login
+    /// shell environment (`login_environment::current`).
     pub fn prepare(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result<Self, RuntimeError> {
-        Self::prepare_with_settings(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?)
+        Self::prepare_for(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?,
+            crate::company::install_central_root(), Some(crate::login_environment::current()))
     }
 
+    /// A profile that reads no user settings file, for a caller that names its own machine
+    /// settings (tests).
     pub fn prepare_with_settings(engine: &Path, data: &Path, runtime: EngineRuntime, machine_settings: crate::machine_settings::Settings) -> Result<Self, RuntimeError> {
+        Self::prepare_for(engine, data, runtime, machine_settings, None, None)
+    }
+
+    /// `user_folder` is the user's central folder: on first run the shipped `rich.md` and
+    /// `stu.md` and an empty `instructions.md` are copied there when the user has none, and
+    /// the user's files there are read into this lease (`user_settings.rs`). `None` reads none
+    /// and starts Rich and Stu from the shipped plugin. `login` is the user's login shell
+    /// environment, which every lease and hook gets (build plan item 4); `None` adds none.
+    pub fn prepare_for(engine: &Path, data: &Path, runtime: EngineRuntime, machine_settings: crate::machine_settings::Settings,
+                       user_folder: Option<PathBuf>, login: Option<std::sync::Arc<std::collections::BTreeMap<String, String>>>)
+                       -> Result<Self, RuntimeError> {
         if !engine.is_absolute() || !data.is_absolute() { return Err(RuntimeError("desktop roots must be absolute".into())); }
         for name in ["scripts/app-engine-hook.py", "scripts/provider-supervisor.py", "mega-lander/app.py", "mega-lander/DESKTOP.md"] {
             if !engine.join(name).is_file() { return Err(RuntimeError(format!("missing desktop engine entry point: {name}"))); }
@@ -378,10 +444,22 @@ impl EngineProfile {
         }
         let plugin = data.join("engine-profiles").join(uuid::Uuid::new_v4().to_string());
         render_team(&engine, &data, &coordination, &plugin,false)?;
-        write(&coordination.join("orchestration.config"), &format!(
-            "# Generated desktop coordination, not target-repository configuration.\nALLOWED_MODELS=\"opus sonnet haiku\"\nMODEL_TIERS=\"opus > sonnet > haiku\"\nSESSION_TEAMS_DIR={}\n", quote(&state.join("teams"))))?;
+        link_skills(&engine, &plugin)?;
+        // Rich's and Stu's own files are the user's from the first run on: copied once, then
+        // read into this session's plugin beside this lease's engine plugin.
+        let mut user = crate::user_settings::UserSetup::prepare(user_folder, &engine.join("app"),
+            &plugin.with_file_name(format!("{}-standing", plugin.file_name().unwrap().to_string_lossy())))?;
+        user.login = login;
+        // The Git the user's terminal runs, found on the login PATH (build plan item 8).
+        if let Some(path) = user.login.as_ref().and_then(|login| login.get("PATH")) {
+            let home = user.login.as_ref().and_then(|login| login.get("HOME")).map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+            user.git = crate::user_git::discover(path, home.as_deref(), &runtime.root);
+        }
+        write(&coordination.join("orchestration.config"),
+              &crate::user_settings::orchestration_config(user.folder.as_deref(), &quote(&state.join("teams")))?)?;
         write(&coordination.join(".gitignore"), ".claude/\norchestration.config\napp-owned-coordination.json\n")?;
-        write(&plugin.join("gitconfig"), "[user]\n\tname = RichOS\n\temail = richos@localhost\n")?;
+        write(&plugin.join("gitconfig"), &crate::user_git::system_layer(&user.git))?;
         let command = format!("{} {}", quote(&runtime.python), quote(&engine.join("scripts/app-engine-hook.py")));
         let mut hooks = serde_json::Map::new();
         // **NO `matcher` KEY, ON ANY OF THE NINE EVENTS — SO THE `PreToolUse` REGISTRATION
@@ -430,7 +508,7 @@ impl EngineProfile {
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
         Ok(Self { engine, coordination, plugin, state, runtime, work_scope: None,
                   operator_desk: None, claude_account: None, token_sink: None, speech_model: None,
-                  lease_models: crate::config::lease_models_from_config(&data), machine_settings })
+                  lease_models: crate::config::lease_models_from_config(&data), machine_settings, user })
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which
     /// do not implement that CLI entrypoint keep their canonical hooks unchanged.
@@ -516,12 +594,61 @@ impl EngineProfile {
         format!("app={}", self.plugin.join("spawn-preflight.json").display())
     }
 
+    /// **A lease's `PATH`**: the runtime first, then the user's own `PATH` (`settings.json`'s
+    /// when it sets one, otherwise the login shell's), then the system folders and the tools
+    /// folder (`runtime::search_path_with`).
+    pub fn lease_path(&self) -> String {
+        let user = self.user.settings.env.get("PATH").or_else(|| self.user.login.as_ref()?.get("PATH"));
+        let mut path = self.runtime.path_with(user.map(String::as_str));
+        // The user's Git's helpers (`git-credential-osxkeychain` and the like), last, so the
+        // runtime's Git finds the helper the user's settings name and nothing is shadowed.
+        if let Some(helpers) = self.user.git.exec_path.as_ref().map(|p| p.display().to_string())
+            .filter(|p| !p.contains(':') && !path.split(':').any(|entry| entry == p)) {
+            path.push(':');
+            path.push_str(&helpers);
+        }
+        path
+    }
+
+    /// **The folders this one lease was given, removed when it retires**: its engine plugin and
+    /// its copy of the plugin Rich and Stu start from (`user_settings::standing_plugin`).
+    pub fn remove_session_files(&self) {
+        for folder in std::iter::once(&self.plugin).chain(self.user.standing.as_ref()) {
+            if let Err(e) = std::fs::remove_dir_all(folder) {
+                if e.kind() != std::io::ErrorKind::NotFound { eprintln!("[richos] {} was not removed: {e}", folder.display()); }
+            }
+        }
+    }
+
+    /// **The plugin Rich and Stu start from**: this lease's copy carrying the user's own
+    /// `rich.md` and `stu.md` (`user_settings::standing_plugin`), or `shipped` when the
+    /// profile reads no user folder.
+    pub fn standing_plugin(&self, shipped: &Path) -> PathBuf {
+        self.user.standing.clone().unwrap_or_else(|| shipped.to_path_buf())
+    }
+
+    /// **The `--settings` a lease starts with**: the app's own keys, and the user's own hooks
+    /// from `settings.json` beside the engine plugin's, which Claude Code runs together.
+    pub fn lease_settings(&self) -> serde_json::Value {
+        // Auto-memory on (build plan item 10); where Rich and Stu keep it is their definitions'
+        // `memory:` scope (`user_settings::MEMORY_SCOPE`), in the coordination folder.
+        let mut settings = json!({"autoMemoryEnabled":true,
+            "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]});
+        if let Some(hooks) = &self.user.settings.hooks { settings["hooks"] = hooks.clone(); }
+        settings
+    }
+
     /// `provider` is the `claude` binary itself, named by the caller. It is NOT read off
     /// `command`: a product lease's program is the supervisor's Python
     /// (`lease_commands::supervisor_args`), and reading it there told every helper that Python
     /// was Claude Code — so the brief check ran `python3 --print` and failed on every dispatch
     /// (nightly 54, 2026-10-13).
     pub fn configure(&self, command: &mut Command, provider: &Path, session: &str, scope: &Path) {
+        // The user's terminal environment (the login shell's, build plan item 4), then the
+        // user's own additions (`settings.json`), under every name the app sets for itself
+        // below: those are applied after this and win.
+        let user_env = self.user.login.iter().flat_map(|login| login.iter()).chain(self.user.settings.env.iter());
+        command.envs(user_env.filter(|(name, _)| !crate::user_settings::app_owned(name)));
         crate::runtime::isolate_interpreter_environment(command);
         // App bindings replace terminal component roots and test overrides.
         // Native transcript/session readers use the provider's selected Claude account.
@@ -573,16 +700,19 @@ impl EngineProfile {
         command.env("RICHOS_APP_READ_ROOTS", serde_json::to_string(&read_roots).unwrap());
         command.arg("--plugin-dir").arg(&self.plugin)
             .args(["--permission-mode", "bypassPermissions"])
-            .arg("--settings").arg(json!({"autoMemoryEnabled":false,
-                "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]}).to_string())
-            .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
-            .env("PATH", self.runtime.path()).env_remove("CLAUDECODE")
+            .arg("--settings").arg(self.lease_settings().to_string())
+            .env_remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
+            .env("PATH", self.lease_path()).env_remove("CLAUDECODE")
             // Hooks inherit the runtime-only PATH, which excludes Claude's installer path.
             .env("RICHOS_CLAUDE_BIN", provider)
             .env("PYTHONDONTWRITEBYTECODE", "1")
-            // A settings-isolated provider must not execute terminal Git hooks
-            // or borrow a developer's identity through global Git configuration.
-            .env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", self.plugin.join("gitconfig"))
+            // Commits under the user's own name and pushes with the user's own credential
+            // helper (build plan item 8): Git reads the user's ~/.gitconfig and each
+            // repository's settings as it always does, above the app's lowest layer, which
+            // holds the identity used only when the user has none and includes the user's
+            // Git's system file (`user_git::system_layer`).
+            .env_remove("GIT_CONFIG_NOSYSTEM").env_remove("GIT_CONFIG_GLOBAL")
+            .env("GIT_CONFIG_SYSTEM", self.plugin.join("gitconfig"))
             .env("GIT_CONFIG_COUNT", "0").env_remove("GIT_CONFIG_PARAMETERS").env_remove("GIT_TEMPLATE_DIR")
             .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
             .env_remove("GIT_AUTHOR_DATE").env_remove("GIT_COMMITTER_DATE")

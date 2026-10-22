@@ -586,6 +586,7 @@ impl WorkHost {
         // This is queue cancellation, not per-tool authority on Stu's session.
         let stopped = || self.handoff_stopped(binding, message);
         self.move_to_account_in_use(backend, binding, true);
+        let _ = self.renew_for_user_settings(backend, binding);
         let input = serde_json::to_string(message).map_err(|e| e.to_string())?;
         {
             self.ensure_lease(backend, binding)?;
@@ -963,6 +964,16 @@ impl WorkHost {
         if let Err(error) = crate::session_tools::observe_account_switch(&self.message_scope(binding), &fact) {
             eprintln!("[richos] the account switch could not be passed to Stu: {error}");
         }
+    }
+
+    /// **The user's own settings files changed since Stu's session read them** (build plan
+    /// item 0): his session ends and the normal opener resumes it under the current settings,
+    /// unless something of his still runs ([`Renewal::Waits`]), when the next message asks again.
+    fn renew_for_user_settings(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) -> Renewal {
+        let changed = backend.lease.lock().unwrap().as_ref()
+            .is_some_and(|lease| crate::cognition::user_settings_changed(Some(self.factory.as_ref()), lease.as_ref()));
+        if !changed { return Renewal::NotDue; }
+        self.renew_lease(backend, binding)
     }
 
     /// The renewal for a switch, decided on the lease's own freshest reading. Kept for the
@@ -1518,6 +1529,9 @@ mod tests {
     #[derive(Default)]
     struct TeamScript {
         digest: Option<String>,
+        /// The user's settings digest the factory reports now; each lease keeps the one it
+        /// was spawned under.
+        settings: Option<String>,
         in_turn: VecDeque<Option<String>>,
         turn_results: VecDeque<&'static str>,
     }
@@ -1526,10 +1540,14 @@ mod tests {
         prompts: Arc<Mutex<Vec<String>>>,
         commands: Arc<Mutex<Option<crate::lease_commands::CommandReading>>>,
         team: Arc<Mutex<TeamScript>>,
+        settings: Option<String>,
     }
     impl Cognition for Lease {
         fn session_id(&self) -> &str {
             &self.session
+        }
+        fn user_settings_digest(&self) -> Option<String> {
+            self.settings.clone()
         }
         fn refresh_team(&mut self) -> Result<bool, CognitionError> {
             Ok(true)
@@ -1592,6 +1610,9 @@ mod tests {
         fn team_digest(&self) -> Option<String> {
             self.team.lock().unwrap().digest.clone()
         }
+        fn user_settings_digest(&self) -> Option<String> {
+            self.team.lock().unwrap().settings.clone()
+        }
         fn spawn_work(&self, _: &ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
             self.gate.wait_until_open();
             let n = self.spawns.fetch_add(1, Ordering::SeqCst);
@@ -1603,6 +1624,7 @@ mod tests {
                 },
                 prompts: self.prompts.clone(),
                 commands: self.commands.clone(),
+                settings: self.team.lock().unwrap().settings.clone(),
                 team: self.team.clone(),
             }))
         }
@@ -2635,7 +2657,7 @@ mod tests {
         assert_eq!(pending.0.work.as_ref().unwrap().assignment_id,receipt.id);
         drop(running);
         *backend.lease.lock().unwrap()=Some(Box::new(Lease {
-            session:"same-stu".into(),prompts:h.work_prompts.clone(),commands:h.commands.clone(),team:h.team.clone(),
+            session:"same-stu".into(),prompts:h.work_prompts.clone(),commands:h.commands.clone(),team:h.team.clone(),settings:None,
         }));
         h.team.lock().unwrap().turn_results.push_back("max_tokens");
         let message=crate::session_tools::Message {handoff:false,from:"rich".into(),text:"Receiving turn".into(),instruction:None,work:None};
@@ -3151,6 +3173,40 @@ mod tests {
         let facts:serde_json::Value=serde_json::from_str(&notice.text).unwrap();
         assert_eq!(facts["input_id"],format!("peer:{second_through}"),"dedup hid a different failed request");
         host.shutdown();
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// **Build plan 2026-10-21 item 0: a changed settings file renews Stu at his next message**,
+    /// never while something of his runs, and an unchanged one renews nothing.
+    #[test]
+    fn a_change_to_the_users_settings_files_renews_stu_at_his_next_message() {
+        let h = harness(0);
+        h.team.lock().unwrap().settings = Some("as first read".into());
+        every_worker_observed_ending(&h);
+        for n in 1..=3 {
+            let folder = h.state.join("evidence").join(format!("work-session-rotated-{n}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("callbacks.jsonl"), "").unwrap();
+            std::fs::write(folder.join(".lock"), "").unwrap();
+        }
+        let backend = Backend::new();
+        let message = crate::session_tools::Message {
+            handoff: false, from: "rich".into(), text: "Carry on".into(), instruction: None, work: None,
+        };
+        let run = |n| h.host.run_message(&backend, &h.binding, &message, &format!("settings-test:{n}")).unwrap();
+        run(1);
+        run(2);
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 1, "unchanged settings renewed Stu");
+        h.team.lock().unwrap().settings = Some("edited".into());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Running(1));
+        run(3);
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 1, "a renewal ended a running command");
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Clear);
+        run(4);
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 2, "the edited settings did not reach Stu's next message");
+        run(5);
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 2, "the renewed session was renewed again");
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
     }
