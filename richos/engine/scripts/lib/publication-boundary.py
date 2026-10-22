@@ -74,12 +74,20 @@ Contract with the caller (scripts/lib/publication-boundary.sh):
   here is what gets content published.
 """
 
+import array
+import bisect
 import hashlib
 import json
+import marshal
+import mmap
 import os
 import re
+import shutil
 import sys
 import subprocess
+import tempfile
+import time
+import uuid
 
 SOURCE_MAX_BYTES = 8_000_000
 import urllib.parse
@@ -570,8 +578,199 @@ def _gram_hashes(words, n, stride=1):
     return {hash(tuple(words[i:i + n])) for i in range(0, len(words) - n + 1, stride)}
 
 
+# --- THE BUILT CORPUS IS KEPT ON DISK (2026-10-21) ----------------------------
+#
+# WHY. Built from scratch, the corpus cost ~40 CPU-s and 1.3 GB on EVERY Write
+# and commit to the public repository: 26,956 private files read, 32 s of
+# speech-shape regex, 12.6 s of word splitting, 4.2 s of indexing (profiled
+# 2026-10-21 against the real private record, 1,031 members, 10.07 M words).
+# With agents writing all day that was ~9% of the whole Mac by itself, and the
+# private record barely changes between two writes.
+#
+# WHAT IS KEPT. Per private file, keyed by (size, mtime, ctime, inode, mode):
+# its speech-line count and its normalized words. Per corpus: which files are
+# members, the corpus text and its sorted window index. A file whose key is
+# unchanged is not read again; a corpus whose every file key and every
+# admission decision is unchanged is not rebuilt at all. Anything else rebuilds
+# from the kept per-file data plus the files that changed, through the SAME
+# closure code below, so every verdict is the verdict a cold build gives.
+#
+# WHERE. Outside every repository: RICHOS_PUBLICATION_CACHE_DIR when set (the
+# tests point it at their own scratch), otherwise the machine's cache root
+# (`machine_settings.py cache publication-boundary`), mode 0700, because it
+# holds derived private text exactly as sensitive as the sources it was read
+# from. A corpus whose sources sit under the system temp directory is scratch
+# and is never cached unless RICHOS_PUBLICATION_CACHE_DIR asks for it, so a
+# test run leaves nothing behind. A cache entry unused for a day is removed.
+#
+# THE ONE NEW REQUIREMENT. The kept index stores Python hash() values, which
+# are only stable across processes under a fixed PYTHONHASHSEED; main()
+# re-executes itself with PYTHONHASHSEED=0 when it will use the cache. A hash
+# is the fast path and never the verdict (see index_corpus), so the seed value
+# changes no decision.
+CACHE_VERSION = 1
+CACHE_IDLE_SECONDS = 24 * 3600
+
+
+def _under_temp(path):
+    real = os.path.realpath(path)
+    for root in {os.path.realpath(tempfile.gettempdir()), '/private/tmp', '/private/var/folders'}:
+        if real == root or real.startswith(root.rstrip('/') + '/'):
+            return True
+    return False
+
+
+def cache_root(sources):
+    """The cache directory to use for these sources, or None for no cache."""
+    forced = os.environ.get('RICHOS_PUBLICATION_CACHE_DIR')
+    if forced:
+        return forced
+    if not sources or any(_under_temp(s) for s in sources):
+        return None
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import machine_settings
+        return str(machine_settings.cache('publication-boundary'))
+    except Exception:  # noqa: BLE001 — no cache root means no cache, never a failure
+        return None
+
+
+class CachedCorpus:
+    """The corpus as main() and verbatim_run use it: truthiness, `in`, a word
+    count and its window index. The text is a str, or a read-only mapping of
+    the kept ASCII text file (normalise only ever yields [a-z0-9] and spaces)."""
+
+    def __init__(self, text, index, words):
+        self.text, self.index, self.words = text, index, words
+
+    def __bool__(self):
+        return len(self.text) > 0
+
+    def __contains__(self, s):
+        if isinstance(self.text, str):
+            return s in self.text
+        return self.text.find(s.encode('ascii')) != -1
+
+
+class SortedIndex:
+    """A sorted array of int64 window hashes, memory-mapped, searched by bisect.
+    Same membership answers as the set index_corpus builds, without rebuilding
+    or loading ten million entries per call."""
+
+    def __init__(self, path):
+        with open(path, 'rb') as fh:
+            size = os.fstat(fh.fileno()).st_size
+            self._map = mmap.mmap(fh.fileno(), 0, prot=mmap.PROT_READ) if size else b''
+        self._view = memoryview(self._map).cast('q') if size else []
+
+    def __len__(self):
+        return len(self._view)
+
+    def __contains__(self, h):
+        i = bisect.bisect_left(self._view, h)
+        return i < len(self._view) and self._view[i] == h
+
+
+class CorpusCache:
+    """One cache entry: the per-file records and the last built corpus for one
+    set of sources and parameters. Every load failure is a cache miss."""
+
+    def __init__(self, root, sources, params):
+        ident = json.dumps([CACHE_VERSION, sys.version, _code_digest(), list(sources), params])
+        self.dir = os.path.join(root, hashlib.sha256(ident.encode()).hexdigest()[:24])
+        self.files, self.words, self.result = {}, None, None
+        try:
+            with open(os.path.join(self.dir, 'meta'), 'rb') as fh:
+                meta = marshal.load(fh)
+            self.files, self.result = meta['files'], meta['result']
+        except Exception:  # noqa: BLE001 — unreadable cache: start empty
+            self.files, self.result = {}, None
+
+    def record(self, path, key):
+        rec = self.files.get(path)
+        return rec[1] if rec and rec[0] == key else None
+
+    def word_text(self, path):
+        """The kept normalized words of an unchanged file, or None."""
+        if self.words is None:
+            self.words = {}
+            gen = (self.result or {}).get('gen')
+            if gen:
+                try:
+                    with open(os.path.join(self.dir, '%s.words' % gen), 'rb') as fh:
+                        self.words = marshal.load(fh)
+                except Exception:  # noqa: BLE001 — missing words: the file is read again
+                    self.words = {}
+        return self.words.get(path)
+
+    def load_result(self, fingerprint):
+        r = self.result
+        if not r or r.get('fingerprint') != fingerprint:
+            return None
+        try:
+            index = SortedIndex(os.path.join(self.dir, '%s.index' % r['gen']))
+            with open(os.path.join(self.dir, '%s.corpus' % r['gen']), 'rb') as fh:
+                size = os.fstat(fh.fileno()).st_size
+                text = mmap.mmap(fh.fileno(), 0, prot=mmap.PROT_READ) if size else ''
+        except Exception:  # noqa: BLE001 — a missing generation is a rebuild
+            return None
+        os.utime(os.path.join(self.dir, 'meta'))
+        return CachedCorpus(text, index, r['corpus_words']), list(r['members'])
+
+    def save(self, records, words, fingerprint, members, corpus, index):
+        """Write a new generation, then point meta at it in one rename."""
+        try:
+            os.makedirs(self.dir, mode=0o700, exist_ok=True)
+            gen = uuid.uuid4().hex[:12]
+            base = os.path.join(self.dir, gen)
+            with open(base + '.words', 'wb') as fh:
+                marshal.dump(words, fh)
+            with open(base + '.corpus', 'wb') as fh:
+                fh.write(corpus.encode('ascii'))
+            with open(base + '.index', 'wb') as fh:
+                array.array('q', sorted(index)).tofile(fh)
+            meta = {'files': records, 'result': {
+                'gen': gen, 'fingerprint': fingerprint, 'members': members,
+                'corpus_words': len(corpus.split())}}
+            tmp = os.path.join(self.dir, 'meta.%s' % gen)
+            with open(tmp, 'wb') as fh:
+                marshal.dump(meta, fh)
+            os.replace(tmp, os.path.join(self.dir, 'meta'))
+            for fn in os.listdir(self.dir):
+                if fn != 'meta' and not fn.startswith(gen + '.'):
+                    try:
+                        os.unlink(os.path.join(self.dir, fn))
+                    except OSError:
+                        pass
+            _prune(os.path.dirname(self.dir), keep=self.dir)
+        except Exception:  # noqa: BLE001 — a cache that cannot be written is only slower
+            pass
+
+
+def _prune(root, keep):
+    now = time.time()
+    for name in os.listdir(root):
+        entry = os.path.join(root, name)
+        if entry == keep:
+            continue
+        try:
+            if now - os.stat(os.path.join(entry, 'meta')).st_mtime > CACHE_IDLE_SECONDS:
+                shutil.rmtree(entry, ignore_errors=True)
+        except OSError:
+            continue
+
+
+def _code_digest():
+    with open(os.path.abspath(__file__), 'rb') as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def _file_key(st):
+    return (st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino, st.st_mode)
+
+
 def build_corpus(sources, min_speech_lines, max_files, max_bytes,
-                 min_quote_words=10):
+                 min_quote_words=10, cache=None):
     """Walk the declared private trees and keep the files that ARE private
     speech: the ones that look like a recording, plus the ones that are another
     rendering of a recording already kept.
@@ -589,13 +788,17 @@ def build_corpus(sources, min_speech_lines, max_files, max_bytes,
     stopped short would let the guard pass content it simply never looked at,
     which is the original "no media committed" failure wearing a different hat.
     """
-    parts = []
-    members = []
-    # Non-member candidates, kept as gram hashes only. A file is a possible
-    # rendering only if it is long enough to reach CLOSURE_MIN_RUNS at all, so
-    # the eligibility test is arithmetic rather than a guess, and short files
-    # cost nothing.
-    pending = {}
+    # Per candidate: its file key and (speech lines, word count); the files that
+    # take part, in walk order, as members or closure candidates; and the
+    # normalized words of every file read in this run. With a cache, an
+    # unchanged file's record comes from the cache and the file is not read.
+    records = {}
+    order = []
+    fresh = {}
+    # A file is a possible rendering only if it is long enough to reach
+    # CLOSURE_MIN_WINDOWS at all, so the eligibility test is arithmetic rather
+    # than a guess, and short files cost nothing.
+    eligible_words = (CLOSURE_MIN_WINDOWS + 1) * min_quote_words
     files = 0
     total = 0
     # Media stems per directory, collected in the SAME walk as the candidates —
@@ -640,7 +843,8 @@ def build_corpus(sources, min_speech_lines, max_files, max_bytes,
             # is no longer there (a dangling link, a file removed mid-walk) has
             # nothing to compare against and is skipped.
             try:
-                size = os.path.getsize(p)
+                st = os.stat(p)
+                size = st.st_size
             except FileNotFoundError:
                 continue
             except OSError as exc:
@@ -663,17 +867,26 @@ def build_corpus(sources, min_speech_lines, max_files, max_bytes,
                     "Narrow PRIVATE_SOURCES, or raise the bound deliberately. "
                     "Refusing to scan a truncated corpus and report the result "
                     "as clean." % max_bytes)
-            try:
-                with open(p, encoding='utf-8', errors='ignore') as fh:
-                    blob = fh.read(SOURCE_MAX_BYTES)
-            except FileNotFoundError:
-                continue
-            except OSError as exc:
-                raise BrokenCorpus(
-                    "the private source %s could not be read (%s), so it is missing "
-                    "from the corpus and a quotation of it would come back CLEAN. "
-                    "Refusing instead. Make it readable, or narrow PRIVATE_SOURCES."
-                    % (p, exc.strerror or exc))
+            key = _file_key(st)
+            rec = cache.record(p, key) if cache is not None else None
+            if rec is None:
+                try:
+                    with open(p, encoding='utf-8', errors='ignore') as fh:
+                        blob = fh.read(SOURCE_MAX_BYTES)
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    raise BrokenCorpus(
+                        "the private source %s could not be read (%s), so it is missing "
+                        "from the corpus and a quotation of it would come back CLEAN. "
+                        "Refusing instead. Make it readable, or narrow PRIVATE_SOURCES."
+                        % (p, exc.strerror or exc))
+                text = ' '.join(normalise(blob))
+                rec = (speech_lines(blob, cap=min_speech_lines),
+                       text.count(' ') + 1 if text else 0)
+                fresh[p] = text
+            records[p] = (key, rec)
+            lines, nwords = rec
             # Two independent ways to be a SEED: it looks like a recording, or
             # it is named as a rendering of a recording sitting beside it. The
             # second exists because whisper's plain .txt output satisfies
@@ -681,18 +894,56 @@ def build_corpus(sources, min_speech_lines, max_files, max_bytes,
             # only rendering is plain text was therefore invisible to the corpus
             # entirely — see MEDIA_EXT above for the three real transcripts this
             # was measured against.
-            if speech_lines(blob, cap=min_speech_lines) < min_speech_lines and \
-                    not _renders_media(p, media_stems):
-                words = normalise(blob)
+            if lines < min_speech_lines and not _renders_media(p, media_stems):
                 # Arithmetic, not a guess: below this length the file cannot
                 # reach CLOSURE_MIN_WINDOWS non-overlapping windows even if
                 # every one of them matched, so it never needs hashing.
-                if len(words) >= (CLOSURE_MIN_WINDOWS + 1) * min_quote_words:
-                    pending[p] = _gram_hashes(words, min_quote_words,
-                                              stride=min_quote_words)
+                if nwords >= eligible_words:
+                    order.append((p, 'pending'))
+                else:
+                    fresh.pop(p, None)
                 continue
+            order.append((p, 'member'))
+
+    # The result depends only on which files take part, in what role and in
+    # what order, and on their contents: that is the fingerprint. Unchanged,
+    # the kept corpus and index are the answer and nothing below runs.
+    fingerprint = hashlib.sha256(marshal.dumps(
+        [(p, records[p][0], role) for p, role in order])).hexdigest()
+    if cache is not None:
+        kept = cache.load_result(fingerprint)
+        if kept is not None:
+            return kept
+
+    def text_of(path):
+        text = fresh.get(path)
+        if text is None and cache is not None:
+            text = cache.word_text(path)
+        if text is None:
+            try:
+                with open(path, encoding='utf-8', errors='ignore') as fh:
+                    text = ' '.join(normalise(fh.read(SOURCE_MAX_BYTES)))
+            except OSError:
+                return None
+        return text
+
+    parts = []
+    members = []
+    # Non-member candidates, kept as gram hashes only.
+    pending = {}
+    kept_words = {}
+    for p, role in order:
+        text = text_of(p)
+        if text is None:
+            continue
+        kept_words[p] = text
+        if role == 'pending':
+            pending[p] = _gram_hashes(text.split(), min_quote_words,
+                                      stride=min_quote_words)
+        else:
             members.append(p)
-            parts.append(' '.join(normalise(blob)))
+            parts.append(text)
+    fresh.clear()
 
     # --- the closure ------------------------------------------------------
     # Nothing to be derived FROM means nothing to derive: with no shape-detected
@@ -715,22 +966,19 @@ def build_corpus(sources, min_speech_lines, max_files, max_bytes,
                 break
             for p in admitted:
                 index |= pending.pop(p)
-                # Re-read rather than cache every candidate's word list: the
-                # admitted set is a handful of files and the blob is in the OS
-                # cache, while holding the tokens of every candidate would put
-                # the whole private tree in memory for the 99% of runs that
-                # admit nothing.
-                try:
-                    with open(p, encoding='utf-8', errors='ignore') as fh:
-                        blob = fh.read(SOURCE_MAX_BYTES)
-                except OSError:
-                    continue
+                # The words were already read (or kept) for this run, from the
+                # same version of the file the stat above saw.
                 members.append(p)
-                parts.append(' '.join(normalise(blob)))
+                parts.append(kept_words[p])
 
     # The double space is a barrier token: it stops a run from being matched
     # across the seam between two unrelated transcripts.
-    return '  '.join(parts), members
+    corpus = '  '.join(parts)
+    if cache is None:
+        return corpus, members
+    corpus_index = index_corpus(corpus, min_quote_words) if corpus else set()
+    cache.save(records, kept_words, fingerprint, members, corpus, corpus_index)
+    return CachedCorpus(corpus, corpus_index, len(corpus.split())), members
 
 
 # --- items: what the caller asked to be scanned ----------------------------
@@ -1008,12 +1256,20 @@ def main():
 
     corpus, members = '', []
     if need_corpus:
+        max_files = int(job.get('corpus_max_files', 4000))
+        max_bytes = int(job.get('corpus_max_bytes', 67108864))
+        cache = None
+        root = cache_root(sources)
+        if root is not None:
+            # The kept index holds hash() values: see THE BUILT CORPUS IS KEPT
+            # ON DISK for why this process must run under a fixed seed.
+            if os.environ.get('PYTHONHASHSEED') != '0':
+                os.execve(sys.executable, [sys.executable] + sys.argv,
+                          dict(os.environ, PYTHONHASHSEED='0'))
+            cache = CorpusCache(root, sources, [min_speech, min_quote, max_files, max_bytes])
         try:
             corpus, members = build_corpus(
-                sources, min_speech,
-                int(job.get('corpus_max_files', 4000)),
-                int(job.get('corpus_max_bytes', 67108864)),
-                min_quote,
+                sources, min_speech, max_files, max_bytes, min_quote, cache=cache,
             )
         except BrokenCorpus as exc:
             print("BROKEN\t%s" % exc)
@@ -1065,7 +1321,11 @@ def main():
               % len(sources))
         return 2
 
-    corpus_index = index_corpus(corpus, min_quote) if corpus else set()
+    if isinstance(corpus, CachedCorpus):
+        corpus_index, corpus_words = corpus.index, corpus.words
+    else:
+        corpus_index = index_corpus(corpus, min_quote) if corpus else set()
+        corpus_words = len(corpus.split())
 
     findings = []
     unread = []
@@ -1150,7 +1410,7 @@ def main():
     # thing a caller saw and "this run compared against nothing" and "this run
     # compared against four declared files" would look identical. The count is
     # of entries that PARSED, never of entries written down.
-    trailer = "CORPUS\t%d\t%d" % (len(members), len(corpus.split()))
+    trailer = "CORPUS\t%d\t%d" % (len(members), corpus_words)
     identity_trailer = "IDENTITY\t%d" % len(private_files)
     # One line per path this run could NOT read, after the verdict like the other
     # trailers (hunt P5-08): the verdict is unchanged, the omission is visible.
