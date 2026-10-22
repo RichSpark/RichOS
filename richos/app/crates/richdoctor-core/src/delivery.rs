@@ -135,6 +135,9 @@ pub fn content_sha256(title: &str, body: &str, manifest: &[Entry]) -> String {
 /// the limits, or when the body does not end with the screenshot lines and the footer.
 pub fn approve(report_id: &str, title: &str, body: &str, manifest: Vec<Entry>, relay: &str, now: u64, installation_id: &str) -> Result<Approved, Vec<crate::scrub::Problem>> {
     let problem = |d: String| vec![crate::scrub::Problem { item: "body".into(), detail: d }];
+    if !crate::util::is_uuid(installation_id) {
+        return Err(problem("RichDoctor could not make its installation ID, so the report was not sent.".into()));
+    }
     let receipt_secret = new_receipt_secret().map_err(|e| problem(format!("RichDoctor could not make a receipt: {e}")))?;
     let problems = crate::scrub::check_outgoing(title, body, Some(&receipt_secret));
     if !problems.is_empty() {
@@ -591,12 +594,14 @@ mod tests {
         e.write_header().unwrap()
     }
 
+    const INST: &str = "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b";
+
     fn approved_with(k: u8) -> (Approved, Vec<Vec<u8>>) {
         let id = "RD-7K3M-Q9VX";
         let images: Vec<Vec<u8>> = (1..=k).map(png).collect();
         let manifest: Vec<Entry> = images.iter().enumerate().map(|(i, b)| Entry::of(i as u32 + 1, b).unwrap()).collect();
         let body = format!("## What happened\n\nIt closes.\n\n{}", crate::report::ending(BASE, id, manifest.len()));
-        (approve(id, "RichOS closes at start", &body, manifest, BASE, 1_000, "inst-1").unwrap(), images)
+        (approve(id, "RichOS closes at start", &body, manifest, BASE, 1_000, INST).unwrap(), images)
     }
 
     /// A scripted relay: answers in order; records every request.
@@ -660,10 +665,12 @@ mod tests {
     fn approval_refuses_a_leak_a_missing_ending_and_too_many_images() {
         let id = "RD-7K3M-Q9VX";
         let ending = crate::report::ending(BASE, id, 0);
-        assert!(approve(id, "t", &format!("mail jane@example.com\n\n{ending}"), vec![], BASE, 1, "i").is_err());
-        assert!(approve(id, "t", "no footer", vec![], BASE, 1, "i").is_err());
+        assert!(approve(id, "t", &format!("mail jane@example.com\n\n{ending}"), vec![], BASE, 1, INST).is_err());
+        assert!(approve(id, "t", "no footer", vec![], BASE, 1, INST).is_err());
+        assert!(approve(id, "t", &format!("x\n\n{ending}"), vec![], BASE, 1, "inst-173fb086d09f").is_err(), "the relay refuses a non-UUID installation ID");
+        assert!(approve(id, "t", &format!("x\n\n{ending}"), vec![], BASE, 1, INST).is_ok());
         let (a, _) = approved_with(1);
-        assert!(approve(id, "t", &format!("x\n\n{ending}"), a.manifest.clone(), BASE, 1, "i").is_err(), "the screenshot lines must match the manifest");
+        assert!(approve(id, "t", &format!("x\n\n{ending}"), a.manifest.clone(), BASE, 1, INST).is_err(), "the screenshot lines must match the manifest");
     }
 
     #[test]

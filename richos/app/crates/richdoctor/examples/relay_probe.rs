@@ -37,7 +37,7 @@ fn report(dest: &Destination, images: &[Vec<u8>]) -> delivery::Approved {
     let id = delivery::new_report_id().unwrap();
     let manifest: Vec<Entry> = images.iter().enumerate().map(|(i, b)| Entry::of(i as u32 + 1, b).unwrap()).collect();
     let body = format!("## What happened\n\nRichOS closes before its window opens.\n\n{}", richdoctor_core::report::ending(&dest.relay, &id, manifest.len()));
-    delivery::approve(&id, "RichOS closes before its window opens", &body, manifest, &dest.relay, richdoctor_core::util::now_millis(), "inst-probe").unwrap()
+    delivery::approve(&id, "RichOS closes before its window opens", &body, manifest, &dest.relay, richdoctor_core::util::now_millis(), &richdoctor_core::util::uuid_v4().unwrap()).unwrap()
 }
 
 fn get(dest: &Destination, path: &str) -> serde_json::Value {

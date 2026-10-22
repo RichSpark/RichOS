@@ -277,11 +277,12 @@ impl Store {
     pub fn save_settings(&self, s: &Settings) -> Result<(), SaveError> {
         crate::util::write_private(&self.root.join("settings.json"), &serde_json::to_vec_pretty(s).expect("settings serialize")).map_err(|e| SaveError::of(&e))
     }
-    /// The installation id, made once.
+    /// The installation id: a random UUID, made once (the relay refuses any other shape). One
+    /// saved in an earlier shape is replaced; it is a rate-limit key only, never an identity.
     pub fn installation_id(&self) -> String {
         let mut s = self.settings();
-        if s.installation_id.is_empty() {
-            s.installation_id = crate::util::new_id("inst").unwrap_or_else(|_| "inst-unknown".into());
+        if !crate::util::is_uuid(&s.installation_id) {
+            s.installation_id = crate::util::uuid_v4().unwrap_or_default();
             self.save_settings(&s).ok();
         }
         s.installation_id
@@ -357,6 +358,27 @@ mod tests {
         (root.clone(), Store::at(&root))
     }
 
+    /// The relay's own pattern (checks.mjs `UUID`): 8-4-4-4-12 hex digits.
+    fn relay_uuid(s: &str) -> bool {
+        let parts: Vec<&str> = s.split('-').collect();
+        parts.iter().map(|p| p.len()).collect::<Vec<_>>() == [8, 4, 4, 4, 12] && parts.iter().all(|p| p.bytes().all(|b| b.is_ascii_hexdigit()))
+    }
+
+    #[test]
+    fn the_installation_id_is_the_uuid_the_relay_requires_and_stays_the_same() {
+        let (root, s) = store();
+        let id = s.installation_id();
+        assert!(relay_uuid(&id), "{id}");
+        assert_eq!(s.installation_id(), id, "made once");
+        // An installation that saved the earlier format gets a valid one.
+        let mut old = s.settings();
+        old.installation_id = "inst-173fb086d09f".into();
+        s.save_settings(&old).unwrap();
+        let fresh = s.installation_id();
+        assert!(relay_uuid(&fresh) && fresh != "inst-173fb086d09f", "{fresh}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
     #[test]
     fn a_draft_survives_quit_and_restart_owner_only() {
         use std::os::unix::fs::PermissionsExt;
@@ -395,7 +417,7 @@ mod tests {
     fn a_revision_waits_for_a_definite_non_creation_and_retires_the_old_id() {
         let mut d = Draft::new(1).unwrap();
         let body = crate::report::footer("RD-7K3M-Q9VX");
-        let approved = crate::delivery::approve("RD-7K3M-Q9VX", "t", &body, vec![], "https://report.richos.ceo", 1, "i").unwrap();
+        let approved = crate::delivery::approve("RD-7K3M-Q9VX", "t", &body, vec![], "https://report.richos.ceo", 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
         d.delivery = Some(Delivery { approved: approved.clone(), state: State::Unconfirmed { checked_at: 2 }, completion_attempted: true });
         assert!(!d.may_send_revision());
         assert!(d.retire_for_revision().is_err());
@@ -410,7 +432,7 @@ mod tests {
         let (root, s) = store();
         let mut d = Draft::new(1).unwrap();
         let body = crate::report::footer("RD-7K3M-Q9VX");
-        let approved = crate::delivery::approve("RD-7K3M-Q9VX", "Title", &body, vec![], "https://report.richos.ceo", 1, "i").unwrap();
+        let approved = crate::delivery::approve("RD-7K3M-Q9VX", "Title", &body, vec![], "https://report.richos.ceo", 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
         d.delivery = Some(Delivery { approved, state: State::Submitted { issue_url: "https://github.com/a/b/issues/1".into(), issue_number: 1, at: 10 }, completion_attempted: true });
         s.save(&mut d, 10).unwrap();
         assert_eq!(s.expire(10 + SUBMITTED_KEPT_MS - 1), 0);

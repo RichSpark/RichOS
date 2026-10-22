@@ -94,6 +94,21 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 /// A short random identifier with a prefix: `ev-1a2b3c4d5e6f`.
+/// A random (version 4) UUID, lowercase: the installation ID the relay requires
+/// (RICHDOCTOR-RELAY.md: "random UUID").
+pub fn uuid_v4() -> io::Result<String> {
+    let mut b = random_bytes(16)?;
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h = hex(&b);
+    Ok(format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32]))
+}
+
+/// The relay's UUID shape: 8-4-4-4-12 hex digits.
+pub fn is_uuid(s: &str) -> bool {
+    s.len() == 36 && s.char_indices().all(|(i, c)| if [8, 13, 18, 23].contains(&i) { c == '-' } else { c.is_ascii_hexdigit() })
+}
+
 pub fn new_id(prefix: &str) -> io::Result<String> {
     Ok(format!("{prefix}-{}", hex(&random_bytes(6)?)))
 }

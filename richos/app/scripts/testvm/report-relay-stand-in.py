@@ -23,6 +23,7 @@ Binds 127.0.0.1 only. Prints `listening <port>` when ready.
 """
 import hashlib
 import json
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -126,6 +127,9 @@ class H(BaseHTTPRequestHandler):
             b = self.body()
             if b is None or b.get("schema") != "richdoctor-report/2":
                 return self.reply(422, {"state": "rejected", "reason": "schema", "detail": "not a protocol 2 report"})
+            # The relay's own rule (checks.mjs UUID): the installation ID is a random UUID.
+            if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", str(b.get("installation_id", ""))):
+                return self.reply(400, {"state": "rejected", "reason": "schema", "detail": "The installation ID is not valid."})
             rid = b.get("report_id", "")
             r = S["reports"].get(rid)
             if r:
