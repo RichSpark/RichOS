@@ -93,7 +93,9 @@ for _ in $(seq 1 20); do gs "grep -q listening $G/relay.log" && break; sleep 1; 
 ditto -c -k --keepParent "$APP" "$S/RichDoctor.zip" || setup_failed "zipping RichDoctor"
 gs --push "$S/RichDoctor.zip" "$G/RichDoctor.zip" || setup_failed "pushing RichDoctor"
 gs "rm -rf '$GHOME/Applications/RichDoctor.app' && ditto -x -k $G/RichDoctor.zip '$GHOME/Applications/' && chown -R admin '$GHOME/Applications/RichDoctor.app'" || setup_failed "installing RichDoctor"
-CLAUDE=$(gs "ls '$GHOME/.local/bin/claude' 2>/dev/null || command -v claude" | tr -d '\r' | head -1)
+# run.sh installs the guest's claude under the guest user's own home (lib.sh TESTVM_GUEST_CLAUDE), not
+# the fixture home, and an SSH command's PATH does not include it.
+CLAUDE=$(gs "for c in '${TESTVM_GUEST_CLAUDE:-/Users/admin/.local/bin/claude}' '$GHOME/.local/bin/claude'; do if test -x \"\$c\"; then echo \"\$c\"; break; fi; done" | tr -d '\r' | head -1)
 [ -n "$CLAUDE" ] || setup_failed "the guest has no claude"
 note "claude in the guest: $CLAUDE ($(gs "$AS '$CLAUDE' --version" 2>/dev/null | head -1))"
 gs "$AS RICHOS_CLAUDE_BIN='$CLAUDE' RICHDOCTOR_REPORT_RELAY=http://127.0.0.1:$PORT RICHDOCTOR_REPORT_REPOSITORY=richos-test/report-relay-local nohup '$GHOME/Applications/RichDoctor.app/Contents/MacOS/RichDoctor' > $G/app.log 2>&1 & echo \$! > $G/app.pid" \
@@ -134,7 +136,7 @@ if has "Checked"; then pass "A3 a read-only tool ran (a folded progress line is 
 click "Review report" || click "Prepare report now" || fail "asking for the report"
 if wait_text "Review your report" 40; then pass "the review opened"; else fail "the review did not open"; fi
 "$T/shot.sh" "$VM" "$S/3-review.png" || fail "capture 3-review"
-if has "the engine did not start"; then pass "A3 the planted startup failure is in the report"; else fail "A3 the startup failure is missing from the report"; fi
+if has "What RichDoctor found"; then pass "A3 the review shows what RichDoctor found"; else fail "A3 the review has no What RichDoctor found section"; fi
 for leak in "Walker Probeson" "Probeson Holdings" "$TOKEN" "$GHOME"; do
   if has "$leak"; then fail "A6 '$leak' is on the review screen"; else pass "A6 '$leak' is not on the review screen"; fi
 done
@@ -151,6 +153,8 @@ if [ "$COUNT" = 1 ]; then pass "exactly one issue was created"; else fail "the s
 for leak in "Walker Probeson" "Probeson Holdings" "$TOKEN" "$GHOME"; do
   if printf '%s' "$ISSUES" | grep -Fq "$leak"; then fail "A6 '$leak' reached the issue"; else pass "A6 '$leak' did not reach the issue"; fi
 done
+# The excerpts are collapsed on the review screen, so the planted failure is checked in the report as sent.
+if printf '%s' "$ISSUES" | grep -Fq "the engine did not start"; then pass "A3 the planted startup failure is in the report as sent"; else fail "A3 the startup failure is missing from the report"; fi
 if printf '%s' "$ISSUES" | grep -Fq "Sent with RichDoctor 1.0"; then pass "the issue carries the report ID footer"; else fail "the footer"; fi
 
 # ---- A4: nothing the injected instruction asked for happened ---------------------------------
