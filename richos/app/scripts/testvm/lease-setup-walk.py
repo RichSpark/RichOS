@@ -29,6 +29,13 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               authored and committed by the fixture's ~/.gitconfig name and email; that commit in
               the remote; the remote's log showing the push authenticated as the fixture's user,
               and the fixture's credential helper's own log showing it was asked.
+  model       per-job model (build plan item 7). The fixture's teammate walkhaiku, whose definition
+              names haiku, asked for on sonnet for one job: PASS needs its receipt named
+              walkhaiku-sonnet-*, and the worker's own start record (subagents/agent-<id>.meta.json)
+              saying sonnet. Then on fable, with no reason given: PASS needs the receipt that asked
+              for fable to carry the app's refusal ("more expensive model") and no worker to have
+              started for it. No orchestration.config of the user's yet, so the ceiling is the
+              engine's (opus).
   config      ~/myrichos/orchestration.config written to allow only sonnet and haiku (as an
               `export` line); the generated config carries it once and plain; a job for the
               fixture's own teammate, whose definition names opus, is refused by the app with the
@@ -68,12 +75,13 @@ StepFailed = command_walk.StepFailed
 OPEN = command_walk.OPEN
 command = command_walk.command
 
-STEPS = ['identity', 'first-run', 'connect', 'copies', 'remote', 'job', 'config', 'rich-edit', 'instructions', 'memory']
+STEPS = ['identity', 'first-run', 'connect', 'copies', 'remote', 'job', 'model', 'config', 'rich-edit', 'instructions', 'memory']
 MARK = 'lease-setup-walk-login-mark'
 NAME, EMAIL = 'Walk Person', 'walk.person@example.invalid'
 REMOTE_USER, REMOTE_SECRET = 'walk-user', 'walk-secret-not-a-credential'
 PORT = 18765
 TEAMMATE = 'walkmate'
+MODEL_MATE = 'walkhaiku'
 RULE_WORD = 'PINEAPPLE'
 OWN_WORD = 'LIGHTHOUSE'
 WORK_FOLDER = 'claude-accounts/2'
@@ -83,6 +91,11 @@ JOB = ('Please run this harmless test command for me yourself with your shell to
        'git add walk.txt; git commit -q -m "Walk commit"; git push -q origin HEAD:main; git log -1 --format="%an <%ae>"')
 USER_CONFIG = "# The fixture user's own values.\nexport ALLOWED_MODELS=\"sonnet haiku\"\n"
 CONFIG_JOB = f'Please ask {TEAMMATE} to reply with the single word ready, and tell me what happened.'
+NAMED_MODEL_JOB = (f'Please ask {MODEL_MATE} to reply with the single word ready, running it on the sonnet model '
+                   'for this one job, and tell me what happened.')
+ABOVE_CEILING_JOB = (f'Please ask {MODEL_MATE} to reply with the single word ready, running it on the fable model '
+                     'for this one job. Give no reason for the model and add no acknowledgment line; if the app '
+                     'refuses it, do not retry on another model, just tell me exactly what it said.')
 
 
 def seed_home(home):
@@ -103,6 +116,9 @@ def seed_home(home):
     team.mkdir(parents=True, exist_ok=True)
     (team / f'{TEAMMATE}.md').write_text(f'---\nname: {TEAMMATE}\ndescription: Fictional walk teammate.\nmodel: opus\n'
                                          'tools: Read\n---\n\nA fictional teammate written by lease-setup-walk.py.\n')
+    (team / f'{MODEL_MATE}.md').write_text(f'---\nname: {MODEL_MATE}\ndescription: Fictional walk teammate for one-word '
+                                           'replies.\nmodel: haiku\ntools: Read\n---\n\nA fictional teammate written by '
+                                           'lease-setup-walk.py. Reply with exactly the word you are asked for.\n')
     print(f'seeded {home}')
     return 0
 
@@ -223,6 +239,77 @@ class LeaseSetupWalk(command_walk.CommandWalk):
                   'for p in glob.glob(sys.argv[1]+"/engine-state/evidence/*/callbacks.jsonl"):\n'
                   '    print(open(p, errors="replace").read())\n')
         return guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60)
+
+    def model_rows(self):
+        """The work receipts for MODEL_MATE and the SubagentStart callbacks of its type, from the guest."""
+        script = ('import json,glob,sys\n'
+                  'out={"receipts":[],"starts":[]}\n'
+                  'for p in glob.glob(sys.argv[1]+"/engine-state/work-receipts/*/*.json"):\n'
+                  '    try: r=json.load(open(p))\n'
+                  '    except Exception: continue\n'
+                  '    if r.get("request",{}).get("teammate")==sys.argv[2]:\n'
+                  '        out["receipts"].append({k:r.get(k) for k in ("name","status","agent_id","problem","request")})\n'
+                  'for p in glob.glob(sys.argv[1]+"/engine-state/evidence/*/callbacks.jsonl"):\n'
+                  '    for l in open(p):\n'
+                  '        try: c=json.loads(l).get("callback",{})\n'
+                  '        except Exception: continue\n'
+                  '        if c.get("hook_event_name")=="SubagentStart" and str(c.get("agent_type","")).endswith(":"+sys.argv[2]):\n'
+                  '            out["starts"].append({"agent_id":c.get("agent_id"),"agent_type":c.get("agent_type")})\n'
+                  'print(json.dumps(out))\n')
+        return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data) + ' ' + MODEL_MATE, 60))
+
+    def started_model(self, agent_id):
+        """The model the worker's own start record names: Claude Code's subagents/agent-<id>.meta.json
+        under the account folder it ran on (handoff-real-walk.py's agent_transcript)."""
+        found = guest(self.vm, 'find ' + shlex.quote(self.home) + ' -name ' + shlex.quote('agent-' + agent_id + '.meta.json')
+                      + ' -not -path "*/Library/Caches/*" 2>/dev/null | head -1', 120).strip()
+        if not found:
+            return None, None
+        return found, json.loads(guest(self.vm, 'cat ' + shlex.quote(found))).get('model')
+
+    def wait_for_job(self, sent, done):
+        """Until `done(rows)` or the assignment closes, within --within seconds; returns the last rows."""
+        end = time.monotonic() + self.a.within
+        rows = self.model_rows()
+        while time.monotonic() < end and not done(rows):
+            record = self.ours(sent)
+            if record and record.get('state') not in OPEN:
+                rows = self.model_rows()
+                break
+            time.sleep(5)
+            rows = self.model_rows()
+        return rows
+
+    def model(self):
+        sent = self.send(NAMED_MODEL_JOB)
+        named = lambda rows: [r for r in rows['receipts'] if (r.get('name') or '').startswith(MODEL_MATE + '-sonnet-') and r.get('agent_id')]
+        rows = self.wait_for_job(sent, named)
+        started = None
+        for receipt in named(rows):
+            path, model = self.started_model(receipt['agent_id'])
+            started = {'agent_id': receipt['agent_id'], 'meta': path, 'model': model}
+            if model:
+                break
+        first_reply = self.ours(sent)
+        sent_above = self.send(ABOVE_CEILING_JOB)
+        asked = lambda rows: [r for r in rows['receipts'] if (r.get('request') or {}).get('model') == 'fable']
+        rows = self.wait_for_job(sent_above, lambda rows: any(r.get('problem') for r in asked(rows)))
+        evidence = {'named_job': first_reply, 'started': started, 'above_job': self.ours(sent_above), 'rows': rows}
+        (self.out / 'observed-model.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        failures = []
+        if not named(rows):
+            failures.append(f'no worker receipt named {MODEL_MATE}-sonnet-* was started')
+        elif not started or not started['model'] or 'sonnet' not in started['model']:
+            failures.append('the worker\'s own start record does not say sonnet: ' + json.dumps(started))
+        refused = [r for r in asked(rows) if 'more expensive model' in (r.get('problem') or '') and not r.get('agent_id')]
+        if not refused:
+            failures.append('no receipt asking for fable carries the app\'s refusal: ' + json.dumps(asked(rows)))
+        fable_ids = {r.get('agent_id') for r in asked(rows) if r.get('agent_id')}
+        if fable_ids:
+            failures.append('a worker started on fable: ' + ', '.join(sorted(fable_ids)))
+        if failures:
+            raise StepFailed('; '.join(failures))
+        return {'started': started, 'refused': {k: refused[0].get(k) for k in ('name', 'status', 'problem')}}
 
     def config(self):
         # Written now, not seeded: until here every lease runs on the defaults, and the change

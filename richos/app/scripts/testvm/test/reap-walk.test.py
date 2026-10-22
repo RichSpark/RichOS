@@ -71,19 +71,16 @@ class Grade(unittest.TestCase):
         self.assertIn('never finished', walk.grade_normal(rows + [gone('normal-fg', 800, T + 3000)], 'normal-fg', None)[1])
         self.assertTrue(walk.grade_normal([], 'normal-fg', T)[1].startswith('REFUSED'))
 
-    def test_the_ask_is_worded_as_a_job_the_way_command_walk_words_its_task(self):
-        # command-walk.py's fixed wording registers a `task`; "tell me exactly what it prints"
-        # alone registered a `check` (the 2026-09-27 command diagnosis, proof-run-1).
-        spec_ = importlib.util.spec_from_file_location('command_walk', HERE / 'command-walk.py')
-        command_walk = importlib.util.module_from_spec(spec_)
-        spec_.loader.exec_module(command_walk)
-        for phrase in ('harmless test command', 'for me yourself with your shell tool', 'in my Acme folder',
-                       'tell me when it has finished and what it printed'):
-            self.assertIn(phrase, command_walk.TASK)
+    def test_the_ask_is_worded_as_a_job_and_never_asks_rich_to_do_it_himself(self):
+        # "tell me exactly what it prints" alone registered a `check` (the 2026-09-27 command
+        # diagnosis, proof-run-1). "for me yourself" makes it Rich's own (rich.md, a6ddf48f4):
+        # walk-2bfb274d19d0 had it handed to Stu and run by Rich's session as well.
         both, one = walk.ask_text('stop'), walk.ask_text('normal', background=False, seconds=8)
         for text in (both, one):
-            self.assertIn('for me yourself with your shell tool', text)
+            self.assertIn('harmless test command', text)
+            self.assertIn('for me with a shell tool', text)
             self.assertIn('in my Acme folder', text)
+            self.assertNotIn('yourself', text)
             self.assertNotIn('New task', text)
         self.assertIn('run_in_background: true): python3 heartbeat.py beat stop-bg /tmp/reap-walk ', both)
         self.assertIn('python3 heartbeat.py beat stop-fg /tmp/reap-walk --seconds %d ' % walk.FOREGROUND_SECONDS, both)
@@ -91,6 +88,40 @@ class Grade(unittest.TestCase):
         self.assertIn('python3 heartbeat.py beat normal-fg /tmp/reap-walk --seconds 8 ', one)
         self.assertNotIn('normal-bg', one)
         self.assertIn('tell me when it has finished and what it printed', one)
+
+    def test_a_job_handed_to_stu_whose_command_rich_ran_fails(self):
+        # walk-2bfb274d19d0 (bundle 8cdad8794): the assignment registered at 1792664832309, and
+        # both heartbeats' Bash calls came from session 45e8751c, bound as "rich", agent null.
+        job = [{'id': '786d646c-45ab-498c-8520-ac105ba41722', 'kind': 'task', 'state': 'running'}]
+        rich = {'role': 'rich', 'session': '45e8751c-61e7-4d3f-a48b-9ea5c07e226f', 'agent': None,
+                'command': 'cd Acme && python3 heartbeat.py beat stop-bg /tmp/reap-walk'}
+        stu = dict(rich, role='stu', session='stu-session')
+        helper = dict(stu, agent='a1b2')
+        why = walk.rich_ran_handed([stu, rich], job)
+        self.assertIn("Rich's own session ran its commands", why)
+        self.assertIn('786d646c', why)
+        self.assertIn('45e8751c', why)
+        self.assertIsNone(walk.rich_ran_handed([stu, helper], job))
+        # Nothing handed to Stu: Rich running it himself is no double run (and stoppable() refuses
+        # the Stop case on its own).
+        self.assertIsNone(walk.rich_ran_handed([rich], []))
+
+    def test_a_heartbeat_command_is_read_as_the_shell_splits_it(self):
+        # Review rv-20261022T114810Z-cdd66038-220d: `python3 "heartbeat.py" beat` was missed.
+        for ran in ('cd /h/Acme && python3 heartbeat.py beat stop-fg /tmp/reap-walk --seconds 300',
+                    'python3 "heartbeat.py" beat stop-fg /tmp/reap-walk',
+                    "python3  /h/Acme/heartbeat.py   'beat'  stop-bg /tmp/reap-walk",
+                    'cd /h/Acme&&python3 ./heartbeat.py beat stop-bg /tmp/reap-walk',
+                    'cd /h/Acme; PYTHONUNBUFFERED=1 /usr/bin/python3 heartbeat.py beat stop-bg /tmp/reap-walk &',
+                    './heartbeat.py beat stop-fg /tmp/reap-walk | tee /tmp/out'):
+            self.assertTrue(walk.runs_heartbeat(ran, 'stop'), ran)
+        for other in ('cat heartbeat.py', 'ls /h/Acme/heartbeat.py',
+                      'python3 heartbeat.py beat quit-fg /tmp/reap-walk',  # another step's
+                      'echo "python3 heartbeat.py beat stop-fg is my test"', 'python3 heartbeat.py',
+                      # Review rv-20261022T124912Z-7ceba023-ce38: printed, never run.
+                      "printf '%s ' python3 heartbeat.py beat stop-fg /tmp/reap-walk",
+                      "printf 'python3 \"heartbeat.py\" beat stop-fg'"):
+            self.assertFalse(walk.runs_heartbeat(other, 'stop'), other)
 
     def test_the_foreground_heartbeat_fits_one_foreground_tool_call(self):
         # Claude Code's Bash tool takes at most 600000 ms per foreground call. Asked for a 900-s
@@ -190,14 +221,16 @@ class Grade(unittest.TestCase):
     def test_a_stop_he_made_reads_as_a_stop_never_as_a_failure(self):
         # Guest walk-0ddfdbf8ff00: both Stops and the Quit left "failed ... Claude channel closed
         # (child exited?)." on his timeline (fixed in work_host.rs; the walk now guards it).
-        stopped = {'id': 'a1', 'state': 'interrupted', 'notices': [
+        stopped = {'id': 'a1', 'state': 'interrupted', 'user_stop_requested_at_ms': 1, 'notices': [
             {'kind': 'interrupted', 'text': 'Run two heartbeat.py test commands... It was stopped. Everything it had done is kept.'}]}
         self.assertIsNone(walk.told_stopped(stopped))
+        # Today's host raises no notice of its own (2002ec31b); his Stop on the record is the fact.
+        self.assertIsNone(walk.told_stopped(dict(stopped, notices=[])))
+        self.assertIn('not as a stop', walk.told_stopped(dict(stopped, notices=[], user_stop_requested_at_ms=None)))
         failed = {'id': 'a1', 'state': 'failed', 'detail': 'Claude channel closed (child exited?).', 'notices': [
             {'kind': 'failed', 'text': 'Run two... It stopped before it finished. Claude channel closed (child exited?).'}]}
         self.assertIn('failed', walk.told_stopped(failed))
         self.assertIn('still running', walk.told_stopped(dict(stopped, state='running')))
-        self.assertIn('no notice', walk.told_stopped(dict(stopped, notices=[])))
 
     def test_ps_time_is_read_past_an_hour(self):
         self.assertAlmostEqual(walk.cpu_seconds('0:01.46'), 1.46)

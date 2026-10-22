@@ -38,12 +38,11 @@ pub const FILES: [&str; 5] = [RICH, STU, INSTRUCTIONS, ORCHESTRATION_CONFIG, SET
 /// out, so every reader (first match or last match) sees one value: the app's.
 pub const APP_KEYS: [&str; 1] = ["SESSION_TEAMS_DIR"];
 
-/// The values a key gets when the user's file does not set it: what every lease had before
-/// the file existed.
-pub const DEFAULTS: [(&str, &str); 2] = [
-    ("ALLOWED_MODELS", "\"opus sonnet haiku\""),
-    ("MODEL_TIERS", "\"opus > sonnet > haiku\""),
-];
+/// The keys whose value, when the user's file does not set one, is the engine's own: its line
+/// in the shipped engine's `orchestration.config`, as written there (build plan item 7). So a
+/// new user gets the engine's full model list and order and its cost ceiling (`opus`), and a
+/// model added there reaches every user's app with the engine, with nothing to change here.
+pub const ENGINE_DEFAULTS: [&str; 3] = ["ALLOWED_MODELS", "MODEL_TIERS", "MODEL_CEILING"];
 
 /// Create `path` with `body` only when nothing is at that name; returns whether it did. An
 /// existing file, or a link of any kind, is the user's and is never written.
@@ -171,17 +170,22 @@ fn assigned_key(line: &str) -> Option<&str> {
         && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')).then_some(key)
 }
 
-/// **The coordination folder's `orchestration.config`**: [`DEFAULTS`] for each key the user's
-/// file does not set, the user's file as written (minus any [`APP_KEYS`] line), then the app's
-/// own keys. With no user file it is, byte for byte, the file every lease had before.
-pub fn orchestration_config(folder: Option<&Path>, teams: &str) -> Result<String, RuntimeError> {
+/// **The coordination folder's `orchestration.config`**: the engine's line for each
+/// [`ENGINE_DEFAULTS`] key the user's file does not set (`engine` is the shipped engine's
+/// `orchestration.config`), the user's file as written (minus any [`APP_KEYS`] line), then the
+/// app's own keys.
+pub fn orchestration_config(folder: Option<&Path>, engine: &str, teams: &str) -> Result<String, RuntimeError> {
     let user = match folder { Some(folder) => read_optional(&folder.join(ORCHESTRATION_CONFIG))?, None => None };
     let user_lines: Vec<&str> = user.as_deref().map(|text| text.lines()
         .filter(|line| assigned_key(line).is_none_or(|key| !APP_KEYS.contains(&key))).collect()).unwrap_or_default();
     let set: Vec<&str> = user_lines.iter().filter_map(|line| assigned_key(line)).collect();
     let mut out = String::from("# Generated desktop coordination, not target-repository configuration.\n");
-    for (key, value) in DEFAULTS {
-        if !set.contains(&key) { out.push_str(&format!("{key}={value}\n")); }
+    for key in ENGINE_DEFAULTS {
+        if set.contains(&key) { continue; }
+        let line = engine.lines().find(|line| !line.starts_with(char::is_whitespace) && assigned_key(line) == Some(key))
+            .ok_or_else(|| RuntimeError(format!("the engine's orchestration.config sets no {key}")))?;
+        out.push_str(line);
+        out.push('\n');
     }
     if let (Some(folder), true) = (folder, user.is_some()) {
         out.push_str(&format!("# The user's own values, from {}\n", folder.join(ORCHESTRATION_CONFIG).display()));

@@ -779,18 +779,24 @@ fn rich_s_own_instructions_name_the_file_a_standing_order_is_saved_in() {
     assert!(says.to_lowercase().contains("from now on"), "the paragraph naming {file} does not say a standing order goes there: {says}");
 }
 
-/// With no file of the user's, the generated config is the one every lease had before; with
-/// one, each key appears once: the user's value where the user set it, today's default where
-/// not, and the app's own key the app's, whatever the user's file says.
+/// With no file of the user's, the generated config carries the engine's own model list, order
+/// and cost ceiling (build plan item 7: the engine's full list, the shipped ceiling Opus); with
+/// one, each key appears once: the user's value where the user set it, the engine's where not,
+/// and the app's own key the app's, whatever the user's file says.
 #[test]
 fn the_users_orchestration_config_reaches_the_coordination_folder_beside_the_apps_own_keys() {
     let f = Scratch::new();
     let folder = f.0.join("central");
     let profile = prepare_for_user(&f, &folder);
     let teams = profile.state.join("teams");
-    let today = format!("# Generated desktop coordination, not target-repository configuration.\nALLOWED_MODELS=\"opus sonnet haiku\"\nMODEL_TIERS=\"opus > sonnet > haiku\"\nSESSION_TEAMS_DIR='{}'\n", teams.display());
+    let shipped = std::fs::read_to_string(engine().join("orchestration.config")).unwrap();
+    let engine_line = |key: &str| shipped.lines().find(|l| l.starts_with(&format!("{key}="))).unwrap().to_string();
+    assert_eq!(engine_line("ALLOWED_MODELS"), "ALLOWED_MODELS=\"fable opus sonnet haiku\"");
+    assert_eq!(engine_line("MODEL_CEILING"), "MODEL_CEILING=\"opus\"");
+    let today = format!("# Generated desktop coordination, not target-repository configuration.\n{}\n{}\n{}\nSESSION_TEAMS_DIR='{}'\n",
+        engine_line("ALLOWED_MODELS"), engine_line("MODEL_TIERS"), engine_line("MODEL_CEILING"), teams.display());
     assert_eq!(std::fs::read_to_string(profile.coordination.join("orchestration.config")).unwrap(), today,
-        "a user with no orchestration.config gets today's file");
+        "a user with no orchestration.config gets the engine's models, order and ceiling");
 
     std::fs::write(folder.join("orchestration.config"),
         "# fixture user values\nMODEL_CEILING=\"sonnet\"\nexport ALLOWED_MODELS=\"sonnet haiku\"\nSESSION_TEAMS_DIR=/fixture/elsewhere\n").unwrap();
@@ -800,7 +806,7 @@ fn the_users_orchestration_config_reaches_the_coordination_folder_beside_the_app
     // Written without `export`, so the engine's readers, which match `KEY="` at the start of a
     // line, read the user's value (second review rv-20261021T072931Z-6a246fab-ad3e, finding 2).
     assert_eq!(lines("ALLOWED_MODELS"), ["ALLOWED_MODELS=\"sonnet haiku\""], "{written}");
-    assert_eq!(lines("MODEL_TIERS"), ["MODEL_TIERS=\"opus > sonnet > haiku\""], "{written}");
+    assert_eq!(lines("MODEL_TIERS"), [engine_line("MODEL_TIERS")], "{written}");
     assert_eq!(lines("MODEL_CEILING"), ["MODEL_CEILING=\"sonnet\""], "{written}");
     assert_eq!(lines("SESSION_TEAMS_DIR"), [format!("SESSION_TEAMS_DIR='{}'", teams.display())], "{written}");
     assert!(!written.contains("/fixture/elsewhere"), "the app's own key was taken from the user's file");

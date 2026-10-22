@@ -4352,7 +4352,8 @@ fn take_operator_notices(
 #[richos_command::command]
 fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: String) -> Result<(), String> {
     let entity = assignment_scope(&state, &thread_id)?;
-    state.work.stop_assignment(entity.as_str(), &thread_id, &assignment_id)
+    let front_desk = state.control.for_thread(&thread_id).front_desk();
+    state.work.stop_assignment_and_front_desk(entity.as_str(), &thread_id, &assignment_id, front_desk)
 }
 
 /// Read the requested conversation's company. A different running conversation
@@ -5957,8 +5958,7 @@ fn claude_account_discard(state: State<AppState>, id: String) -> Result<richos_c
 /// (`provider_auth::signed_in_as`), returned, and not kept anywhere.
 #[richos_command::command]
 fn claude_account_email(state: State<AppState>, id: String) -> Result<richos_core::provider_auth::SignedInAs, String> {
-    let folder = state.quota.accounts.sign_in_folder(&id).ok_or("That account is no longer on this Mac.")?;
-    Ok(richos_core::provider_auth::signed_in_as(&resolve_claude_bin(), folder.as_deref()))
+    state.quota.account_email(&resolve_claude_bin(), &id).map_err(|e| e.ceo_message().to_string())
 }
 
 /// **Not now** on Rich's one-time suggestion of a second account (round 18, `one-nudge`).

@@ -3663,6 +3663,10 @@ impl TurnCancel for NativeCancelHandle {
         task.map_or(crate::steering::CommandStop::NotDelivered, |task| self.stop_background_command(&task))
     }
 
+    fn own_commands(&self) -> Vec<crate::steering::OwnCommand> {
+        self.reader_state.lock().unwrap().agent_tasks.own_running_commands()
+    }
+
     fn stop_background_command(&self, task_id: &str) -> crate::steering::CommandStop {
         use crate::steering::CommandStop;
         let ended = |state: &Arc<Mutex<ReaderState>>| {
@@ -4614,7 +4618,7 @@ impl Cognition for NativeCognition {
 }
 
 #[cfg(test)]
-mod native_driver_tests {
+pub(crate) mod native_driver_tests {
     use super::*;
 
     /// Process environment is shared by every test in this binary, and libtest runs them side
@@ -6864,6 +6868,14 @@ done
 
     fn doctrine_fixture() -> std::path::PathBuf {
         skills_fixture().join("agents/rich.md")
+    }
+
+    /// A [`NativeClient`] over a stand-in `claude` written from `body`, with the script's own
+    /// directory for the files it writes: for tests elsewhere in the crate.
+    pub(crate) fn fixture_client(name: &str, body: &str) -> (NativeClient, std::path::PathBuf) {
+        let script = write_script(name, body);
+        let client = NativeClient::spawn(&script, fixture_root(), &doctrine_fixture(), &skills_fixture()).unwrap();
+        (client, script.parent().unwrap().to_path_buf())
     }
 
     fn write_script(name: &str, body: &str) -> std::path::PathBuf {
