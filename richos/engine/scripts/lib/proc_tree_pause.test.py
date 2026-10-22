@@ -169,10 +169,48 @@ class Unit(unittest.TestCase):
                 raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
             return real(argv, **kw)
 
+        # process_rows reads the table from the kernel since 2026-10-22; the `ps` that is still
+        # started (a status read of owned PIDs, _alive) keeps this rule.
         with mock.patch.object(proc_tree.subprocess, "run", once_then_real):
-            rows = proc_tree.process_rows()
-        self.assertIn(os.getpid(), rows)
+            alive = proc_tree._alive({os.getpid()})
+        self.assertEqual(alive, [os.getpid()])
         self.assertEqual(calls[0], calls[1], "the same ps is asked again")
+
+    def test_the_kernel_table_is_the_table_ps_prints(self):
+        """2026-10-22: a supervisor tick reads the process table in-process, with no `ps`
+        started, and gets the rows `ps -ax -o pid=,ppid=,pgid=` prints."""
+        import proc_tree
+        started = []
+        real = subprocess.run
+
+        def counted(argv, **kw):
+            started.append(argv)
+            return real(argv, **kw)
+
+        with mock.patch.object(proc_tree.subprocess, "run", counted):
+            rows = proc_tree.process_rows()
+        if sys.platform == "darwin":
+            # Unseeded, root's unreadable processes still get the one status read (_alive).
+            self.assertEqual([a for a in started if a[:2] == ["ps", "-ax"]], [], "no ps for the table")
+        self.assertEqual(rows[os.getpid()][:2], (os.getppid(), os.getpgrp()))
+        child = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        try:
+            started.clear()
+            with mock.patch.object(proc_tree.subprocess, "run", counted):
+                table = proc_tree.process_rows(seeds={child.pid})
+            if sys.platform == "darwin":
+                self.assertEqual(started, [], "a supervisor's tick starts no process")
+            self.assertEqual(table[child.pid][:2], (os.getpid(), child.pid))
+            self.assertEqual(table[child.pid][2], proc_tree.identity(child.pid), "its birth is read natively")
+            listed = real(["ps", "-ax", "-o", "pid=,ppid=,pgid="], capture_output=True, text=True).stdout
+            shown = {int(f[0]): (int(f[1]), int(f[2])) for f in (line.split() for line in listed.splitlines())
+                     if len(f) == 3}
+            for pid in (os.getpid(), child.pid, 1):
+                self.assertEqual(rows.get(pid, table.get(pid))[:2], shown[pid], pid)
+            self.assertNotIn(0, table, "ps -ax never lists pid 0")
+        finally:
+            child.kill()
+            child.wait()
 
     def test_a_ps_that_always_hangs_still_fails(self):
         import proc_tree
