@@ -89,7 +89,7 @@ fn main() {
     let mine: Vec<String> = stored.as_array().unwrap_or(&vec![]).iter().filter(|x| x["key"].as_str().is_some_and(|k| k.starts_with(&format!("{}/", a.report_id)))).filter_map(|x| x["sha256"].as_str().map(str::to_string)).collect();
     check("1 both images stored, byte-identical to the approved ones", mine.len() == 2 && a.manifest.iter().all(|e| mine.contains(&e.sha256)), format!("{mine:?}"));
     let body = issues[0]["body"].as_str().unwrap_or("");
-    check("1 the issue carries the count and the staff links", body.contains("Screenshots shared privately with RichOS support: 2") && body.contains(&format!("{}/v1/reports/{}/attachments/2", dest.relay, a.report_id)), body.to_string());
+    check("1 the issue carries the count and the staff links", body.contains("Screenshots: 2, shared privately with RichOS support (staff sign-in required)") && body.contains(&format!("\n2. {}/v1/reports/{}/attachments/2\n", dest.relay, a.report_id)), body.to_string());
 
     // 2. Created, answer lost: reconciled, never created again.
     let b = report(&dest, &[]);

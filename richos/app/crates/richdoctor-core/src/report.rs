@@ -22,16 +22,17 @@ pub fn footer(report_id: &str) -> String {
     format!("Sent with RichDoctor {} · Report ID {report_id}", crate::footer_version())
 }
 
-/// **THE BODY'S LAST LINES** (relay protocol 2, byte for byte): with `k` screenshots, the count
-/// line and one staff-only link per image (PRD §6: "numbered support-only links to each stored
+/// **THE BODY'S LAST LINES** (relay protocol 2, byte for byte; round 40's wording): with `k`
+/// screenshots, "Screenshots: k, shared privately with RichOS support (staff sign-in required)"
+/// and one numbered staff-only link per image (PRD §6: "numbered support-only links to each stored
 /// image, tied to the report ID"), then the footer. With none, the footer alone. Written by this
 /// file only, never escaped, so the relay finds exactly these bytes.
 pub fn ending(relay: &str, report_id: &str, k: usize) -> String {
     let mut out = String::new();
     if k > 0 {
-        out.push_str(&format!("Screenshots shared privately with RichOS support: {k}\n"));
+        out.push_str(&format!("Screenshots: {k}, shared privately with RichOS support (staff sign-in required)\n"));
         for n in 1..=k {
-            out.push_str(&format!("Screenshot {n} (RichOS support staff only): {}\n", crate::delivery::attachment_link(relay, report_id, n as u32)));
+            out.push_str(&format!("{n}. {}\n", crate::delivery::attachment_link(relay, report_id, n as u32)));
         }
     }
     out.push_str(&footer(report_id));
@@ -607,7 +608,7 @@ mod tests {
         let mut r = sample(&[], None);
         r.screenshots = vec!["shot-1".into(), "shot-2".into()];
         let (_, body) = r.render();
-        assert!(body.ends_with("Screenshots shared privately with RichOS support: 2\nScreenshot 1 (RichOS support staff only): https://report.richos.ceo/v1/reports/RD-7K3M-Q9VX/attachments/1\nScreenshot 2 (RichOS support staff only): https://report.richos.ceo/v1/reports/RD-7K3M-Q9VX/attachments/2\nSent with RichDoctor 1.0 · Report ID RD-7K3M-Q9VX"), "{body}");
+        assert!(body.ends_with("Screenshots: 2, shared privately with RichOS support (staff sign-in required)\n1. https://report.richos.ceo/v1/reports/RD-7K3M-Q9VX/attachments/1\n2. https://report.richos.ceo/v1/reports/RD-7K3M-Q9VX/attachments/2\nSent with RichDoctor 1.0 · Report ID RD-7K3M-Q9VX"), "{body}");
         assert_eq!(r.problems(), vec![], "the links pass the last check");
         assert_eq!(ending("https://report.richos.ceo", "RD-7K3M-Q9VX", 0), footer("RD-7K3M-Q9VX"));
     }
