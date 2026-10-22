@@ -338,3 +338,27 @@ test('uploads go to uploads/n, outside the staff-only links, so an Access applic
   assert.equal((await f.read(payload.report_id, 1, token)).status, 200);
   assert.equal((await f.read(payload.report_id, 1)).status, 403);
 });
+
+test('the production smoke test files exactly one report with one screenshot, and never a second', async t => {
+  const { smoke, SMOKE_TITLE, CONFIRM } = await import('../dev/report-smoke-production.mjs');
+  const { PRODUCTION } = await import('../cli/report.mjs');
+  const f = await fixture(t, { repository: PRODUCTION.repository, bot: 'richos-reports[bot]' });
+  const profile = { stage: 'production', ...PRODUCTION, bucket: 'richos-report', accountId: 'a'.repeat(32), databaseId: '11111111-2222-3333-4444-555555555555',
+    appId: '123', installationId: '456', botLogin: 'richos-reports[bot]', label: 'richdoctor' };
+  const fetchImpl = async (url, init = {}) => url.startsWith('https://api.github.com/') ? f.github.fetch(url, init)
+    : url === 'https://report.richos.ceo/v1/health' ? new Response(JSON.stringify({ ok: true, service: 'richos-report', protocol: 2, accepting: true }))
+    : f.send(new Request(url, init));
+  const screenshot = readFileSync(join(__dirname, '../service/report/fixtures/relay/accept-rgb.png'));
+  const deps = { fetchImpl, screenshot, wait: async () => {} };
+  await assert.rejects(smoke({ ...profile, stage: 'test', worker: 'richos-report-test', hostname: 'report-test.example.com', repository: 'a/b', bucket: 'richos-report-test' }, { ...deps, confirm: CONFIRM }), /production route only/);
+  await assert.rejects(smoke(profile, deps), /confirmation word/);
+  assert.equal(f.posts(), 0);
+  const result = await smoke(profile, { ...deps, confirm: CONFIRM });
+  const issue = f.github.created()[0];
+  assert.equal(f.posts(), 1);
+  assert.deepEqual([result.issue, issue.title, result.withoutSignIn], ['https://github.com/WebDevBooster/richos/issues/1', SMOKE_TITLE, 403]);
+  assert(issue.body.includes(`1. ${result.screenshotLink}`) && result.screenshotLink.startsWith('https://report.richos.ceo/v1/reports/'));
+  assert.deepEqual(keys(f).length, 1, 'its one screenshot is stored');
+  await assert.rejects(smoke(profile, { ...deps, confirm: CONFIRM }), /already sent: https:\/\/github.com\/WebDevBooster\/richos\/issues\/1/);
+  assert.equal(f.posts(), 1, 'never a second production report');
+});

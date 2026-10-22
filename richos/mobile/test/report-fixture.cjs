@@ -53,7 +53,7 @@ async function fixture(t, options = {}) {
   _forgetKeys();
   let time = Date.parse('2026-10-22T12:00:00Z');
   const now = () => time, db = database(t), key = await appKey(), r2 = new FakeR2();
-  const repository = 'richos-test/report-relay-test', bot = 'richos-reports-test[bot]', origin = 'https://report.example.com';
+  const repository = options.repository || 'richos-test/report-relay-test', bot = options.bot || 'richos-reports-test[bot]', origin = 'https://report.example.com';
   const github = new FakeGitHub({ repository, bot, appId: '123', installationId: '456', publicKey: key.publicKey, now, pageSize: options.pageSize || 100 });
   // The Access team's signing key and its published certificate list.
   const staff = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
