@@ -2088,7 +2088,8 @@ The delivered engine is exercised by `tests/delivered_ecs_tests.rs`,
 `tests/delivered_loro_tests.rs` and `tests/engine_profile.rs`. Runtime delivery,
 owned processes, provider authentication and repository connections are covered
 by `tests/runtime_delivery.rs`, `tests/owned_process.rs`, `tests/provider_auth.rs`
-and `tests/repository_connection.rs`.
+and `tests/repository_connection.rs`. `tests/land_checks_user_tools.rs` runs an app
+land's merge check in a lease's environment and proves it finds the user's own tools.
 
 ## Shared voice infrastructure
 
