@@ -1635,12 +1635,16 @@ VERIFIES_OWN_INPUTS = frozenset(("engine receipts", "engine scripts/verification
 class Record:
     def __init__(self, root, logdir, items, source, identities, previous=None,
                  current_source=None, current_identity=None, current_identities=None, explain=None,
-                 current_commit=None, selection=None, seat=None):
+                 current_commit=None, selection=None, seat=None, environment=None, as_recorded=None):
         refuse_duplicates(items)  # before anything is written: a saved plan never holds one
         self.root, self.logdir = str(root), Path(logdir)
         # seat(item, snapshot): the read_seat (seat_reader) for one check, so reuse() can accept
         # a pass made in another checkout that still stands there (seat_gap). None: never.
         self.seat = seat
+        # as_recorded(item, environment, root, snapshot): (identity, read_seat) of one check here,
+        # read under the caller environment a saved run in checkout `root` recorded (RECORDED
+        # ENVIRONMENT below). None: a saved run is read only under this run's own environment.
+        self.as_recorded = as_recorded
         # What changed and who could have changed it, appended to an invalidation note, so a
         # check invalidated by another check's writes names the paths instead of only saying so.
         self.explain = explain or (lambda item: "")
@@ -1661,6 +1665,10 @@ class Record:
             # What the plan was selected from (proof-run.py selected_by): not an input of any
             # check, so exact resume (reuse) compares items, never this.
             self.plan["selection"] = selection
+        if environment is not None:
+            # The caller environment every identity of this plan was read from (RECORDED
+            # ENVIRONMENT below): not an input itself, the values its digests were taken of.
+            self.plan["environment"] = environment
         atomic(self.logdir / "plan.json", self.plan)
         self.results = {}
         for item in items:
@@ -2261,6 +2269,117 @@ def coverage(previous, items, identities, source):
     return found
 
 
+# THE RECORDED ENVIRONMENT (2026-10-22). The land of codex/first-run-reliability-20261022 at
+# 4494536289 refused the author's reconciled run five times, every time for values the two
+# shells held and the code did not ("declared execution inputs changed (environment.LANG,
+# LC_ALL, LC_CTYPE, CARGO_TARGET_DIR, RUST_LOG, SCCACHE_DIR, RICHOS_PRIVATE_FIXTURES, ...,
+# PATH, SDKROOT)"), and the lead copied the author's values into his own shell by hand between
+# attempts. One name at a time had been excused before (RUN_SCOPED_ENVIRONMENT, the Cargo root,
+# the mutation switches); the next shell always held another. So a run saves, in its plan, the
+# caller environment its identities were read from (proof-run.py recorded_environment), and a
+# pass that does not stand under this run's environment is judged again here under that one:
+# every file, tool, install and Git input is read now, so a real change still executes; only
+# what the shell held is taken as the run that made the pass held it. A run saved before this
+# records no environment in its plan; its rerun files (proof-run.py write_rerun) hold the values
+# each check it executed was started with, and run_environment takes the one that reproduces the
+# most of its saved passes' digests. A value withheld as a credential is read under this run's.
+_RERUN_VALUE = re.compile(r"^\s*(\S.*?)\s+\\$")
+_RERUN_WITHHELD = re.compile(r'^\s*\$\{([A-Za-z_][A-Za-z0-9_]*)\+"')
+
+
+def rerun_environment(path):
+    """{"values", "withheld", "argv"} of one rerun file: the `env -i` assignments it starts its
+    check with, and the check's command (after the host shield's `--`)."""
+    values, withheld, inside, argv = {}, [], False, []
+    for line in Path(path).read_text(errors="replace").splitlines():
+        if not inside:
+            inside = line.rstrip().endswith("env -i \\")
+            continue
+        found = _RERUN_VALUE.match(line)
+        if not found:
+            try:
+                words = shlex.split(line)
+            except ValueError:
+                words = []
+            argv = words[words.index("--") + 1:] if "--" in words else []
+            break
+        named = _RERUN_WITHHELD.match(line)
+        if named:
+            withheld.append(named.group(1))
+            continue
+        words = shlex.split(found.group(1))
+        if len(words) != 1 or "=" not in words[0]:
+            break
+        name, value = words[0].split("=", 1)
+        values[name] = value
+    return {"values": values, "withheld": withheld, "argv": argv} if inside else None
+
+
+def _under_nightly_conditions(argv):
+    """May this command run under a nightly gate's conditions, which replace caller values such
+    as PATH (proof-run.py nightly_gate_of: a UI suite, a run-tests.sh --only suite)?"""
+    return ((len(argv) == 2 and argv[0] == "node" and argv[1].endswith(".js"))
+            or (argv[:1] == ["scripts/run-tests.sh"] and "--only" in argv))
+
+
+def _bound(name):
+    return name not in RUN_SCOPED_ENVIRONMENT and (name in CHECKOUT_ENVIRONMENT_NAMES
+                                                   or name.startswith(CHECKOUT_ENVIRONMENT_PREFIXES))
+
+
+def run_environment(run):
+    """The caller environment the saved `run` read its identities from: its plan's own record
+    (proof-run.py recorded_environment), or for a plan saved before it recorded one, rebuilt from
+    the rerun files of that run and of the runs it reused from. None when neither says anything.
+
+    A rerun file holds one check's whole environment: the caller's, plus what the runner set
+    for that check (the Cargo settings; for a suite a nightly gate runs, that gate's values,
+    which replace the caller's PATH among others). So of the names a whole-checkout identity
+    binds, the caller held exactly those every whole-checkout pass holds (a name some pass lacks
+    was set for other checks), each with its most common value among the files of checks run
+    outside the nightly's conditions. 20261022T131701Z-vjaoaa1d: 23 of its 33 whole-checkout
+    passes ran under them, with the build's PATH; the caller's PATH is the one the other 10 hold.
+    Names no such identity binds come from the run's own file. Never a verdict: every input is
+    still read under it, and a value that is not the run's only makes its passes read changed."""
+    run = Path(run)
+    plan = read_plan(run)
+    if isinstance(plan.get("environment"), dict):
+        return plan["environment"]
+    try:
+        outcomes = json.loads((run / "outcomes.json").read_text())
+    except (OSError, ValueError):
+        return None
+    passes = [row["input"]["environment"] for row in outcomes.values()
+              if isinstance(row, dict) and row.get("state") == "passed" and isinstance(row.get("input"), dict)
+              and row["input"].get("contract") == WHOLE_CHECKOUT and isinstance(row["input"].get("environment"), dict)]
+    runs = [run]
+    for row in outcomes.values():
+        provenance = row.get("provenance") if isinstance(row, dict) else None
+        while isinstance(provenance, dict):
+            if provenance.get("run") and Path(provenance["run"]) not in runs:
+                runs.append(Path(provenance["run"]))
+            provenance = provenance.get("earlier")
+    found = []
+    for directory in runs:
+        for path in sorted((directory / "rerun").glob("*.sh")):
+            try:
+                one = rerun_environment(path)
+            except OSError:
+                continue
+            if one:
+                found.append(one)
+    if not found or not passes:
+        return None
+    outside = [one for one in found if not _under_nightly_conditions(one["argv"])] or found
+    values = {name: value for name, value in found[0]["values"].items() if not _bound(name)}
+    for name in set.intersection(*(set(environment) for environment in passes)):
+        held = [one["values"][name] for one in outside if name in one["values"]]
+        if _bound(name) and held:
+            values[name] = max(dict.fromkeys(held), key=held.count)
+    withheld = sorted({name for one in found for name in one["withheld"]})
+    return {"values": values, "withheld": withheld}
+
+
 def reuse(previous, items, record, exact=True):
     """Select exact applicable passes; leave failed evidence in its original run."""
     previous = Path(previous)
@@ -2275,6 +2394,7 @@ def reuse(previous, items, record, exact=True):
         outcomes = {}
     # One reading of another checkout per call (InputSnapshot: never shared across passes).
     snapshot = InputSnapshot()
+    recorded = _ABSENT   # run_environment(previous), read once and only when a pass needs it
     for item in items:
         if item.state == "passed":
             continue
@@ -2283,8 +2403,36 @@ def reuse(previous, items, record, exact=True):
         identity = record.identities[item.label]
         seat = getattr(record, "seat", None)
         read_seat = seat(item, snapshot) if seat is not None and not exact else None
-        reason = evidence_gap(item.label, old, identity, plan, exact, record.source, read_seat)
-        elsewhere = reason is None and made_elsewhere(old.get("input"), identity)
+        as_recorded, by_record = getattr(record, "as_recorded", None), False
+        # A pass once accepted under a recorded environment is judged ever after by the identity
+        # and environment that produced it, which its provenance carries, never by the identity
+        # the accepting run saved (review rv-20261022T143750Z-fba13982-f9d7 #1: reused through a
+        # land, a pass whose author's tool had since changed was taken without reading it again).
+        produced = old.get("provenance") if isinstance(old.get("provenance"), dict) else None
+        produced = produced if produced and isinstance(produced.get("recorded"), dict) else None
+        judged = dict(old, input=produced["input"]) if produced else old
+        if produced:
+            reason = "made under the environment of the run that produced it"
+        else:
+            reason = evidence_gap(item.label, old, identity, plan, exact, record.source, read_seat)
+        if reason and as_recorded is not None and not identity.get("fresh") and old.get("state") == "passed":
+            if produced:
+                environment, root = produced["recorded"], produced.get("root")
+            else:
+                if recorded is _ABSENT:
+                    recorded = run_environment(previous)
+                environment, root = recorded, plan["root"]
+            if environment and root:
+                # RECORDED ENVIRONMENT: the pass is judged as the run that made it started its checks.
+                try:
+                    identity, read_seat = as_recorded(item, environment, root, snapshot)
+                except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+                    reason += "; unreadable under the environment its run recorded: %s" % exc
+                else:
+                    again = evidence_gap(item.label, judged, identity, plan, exact, record.source,
+                                         read_seat if not exact else None)
+                    reason, by_record = again and again + " (read under the environment its run recorded)", not again
+        elsewhere = reason is None and made_elsewhere(judged.get("input"), identity)
         if reason is None:
             try:
                 if file_digest(old["log"]) != old["log_sha256"]:
@@ -2304,13 +2452,17 @@ def reuse(previous, items, record, exact=True):
                 item.state, item.rc, item.log = "passed", 0, str(copied)
                 item.provenance = {"run": str(previous), "source": old["source"],
                                    "receipt": old.get("receipt"), "log_sha256": old["log_sha256"],
-                                   "input": old["input"], "earlier": old.get("provenance")}
+                                   "input": judged["input"], "earlier": old.get("provenance")}
                 if elsewhere:
-                    item.provenance["seat"] = old["input"]["checkout"]
+                    item.provenance["seat"] = judged["input"]["checkout"]
+                if by_record:
+                    # The producing identity (`input`), environment and checkout, carried on to
+                    # every later reuse and read again by verify_target_receipts.
+                    item.provenance.update(recorded=environment, root=root)
                 item.reused_from = str(previous)
                 item.notes.append("validated evidence reused from " + str(previous) + (
-                    " (made in %s, where it still stands, on the same content and installs)" % old["input"]["checkout"]
-                    if elsewhere else ""))
+                    " (made in %s, where it still stands, on the same content and installs)" % judged["input"]["checkout"]
+                    if elsewhere else "") + (" (read under the environment its run recorded)" if by_record else ""))
                 record.save(item, record.source)
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 reason = "saved evidence failed validation: " + str(exc)
@@ -2406,8 +2558,19 @@ def verify_target_receipts(directory, rows, root):
             elsewhere = (provenance and provenance.get("seat")
                          and provenance.get("seat") == (provenance.get("input") or {}).get("checkout")
                          and seat_difference(provenance.get("input"), identity) is None)
+            # A pass reused under the environment its run recorded (THE RECORDED ENVIRONMENT):
+            # read again here, under that environment, exactly as reuse() read it.
+            recorded = False
+            if (provenance and isinstance(provenance.get("recorded"), dict) and not elsewhere
+                    and hasattr(runner, "identity_as_recorded")):
+                try:
+                    again, _seat = runner.identity_as_recorded(item, provenance["recorded"], provenance["root"],
+                        snapshot, SimpleNamespace(**identity["settings"]), directory)
+                    recorded = stands_in(provenance.get("input"), again)
+                except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                    recorded = False
             if (identity.get("fresh") or not provenance
-                    or not (stands_in(provenance.get("input"), identity) or elsewhere)
+                    or not (stands_in(provenance.get("input"), identity) or elsewhere or recorded)
                     or row.get("sha") != outcome.get("receipt_sha")
                     or row.get("schema") != 2 or row.get("execution_status") != "completed"
                     or row.get("verdict") != "PASS" or row.get("rc") != row.get("expected_rc")
