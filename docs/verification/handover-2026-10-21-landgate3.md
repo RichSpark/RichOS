@@ -17,8 +17,10 @@ worktree `/Users/alex/ab/richos-wt/zach-opus-landgate3`.
   held the lease while the check ran and it is gone after, the fence refused nothing of the app
   land, the checkout is clean, the assignment settled). run-walk.py: "clean: app quit, VM
   stopped, clone deleted, state removed."
-- Proof run over `cb0c7ae43..94506d9e7` was interrupted at 62 of 75 finished: 56 PASS, 0 failed,
-  the rest not run.
+- Proof run over `cb0c7ae43..94506d9e7` was interrupted: of its 75 checks, 61 passed (some reused
+  from the earlier runs), 12 were stopped by the interruption (state `cancelled`) and 2 never ran;
+  none failed (counted from that run's `outcomes.json` by its `state` field, corrected 2026-10-22
+  by zach-opus-landgate4).
 
 ## Left
 
