@@ -493,7 +493,10 @@ pub fn check_outgoing(title: &str, body: &str, receipt_secret: Option<&str>) -> 
             found("This line contains a private key.");
         }
         let chars: Vec<char> = text.chars().collect();
-        for (i, &c) in chars.iter().enumerate() {
+        // An issue title is plain text on GitHub: a bracket there is neither a link nor
+        // formatting, so a privacy placeholder ("[name removed]") is fine in it. The body's
+        // lines keep the rule.
+        for (i, &c) in chars.iter().enumerate().filter(|_| place != "title") {
             if matches!(c, '<' | '[' | ']') {
                 let slashes = chars[..i].iter().rev().take_while(|&&p| p == '\\').count();
                 if slashes % 2 == 0 {

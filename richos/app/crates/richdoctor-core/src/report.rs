@@ -476,6 +476,29 @@ mod tests {
         let (_, body) = r.render();
         assert!(body.contains("I had just updated macOS"));
     }
+
+    #[test]
+    fn a_privacy_placeholder_in_a_plain_title_can_be_sent() {
+        let ctx = Context::with("jdoe".into(), vec!["SecretCo".into()]);
+        let r = Report::build(&Input {
+            report_id: "RD-7K3M-Q9VX",
+            description: "RichOS closes when I open SecretCo.",
+            answers: &[],
+            when: "Earlier today",
+            evidence: &[],
+            drafted: None,
+            provenance: Provenance::WithoutAi,
+            screenshots: &[],
+            relay: "https://report.richos.ceo",
+            ctx: &ctx,
+        });
+        let (title, body) = r.render();
+        assert!(title.contains("[name removed]") && !title.contains("SecretCo"), "{title}");
+        let problems = scrub::check_outgoing(&title, &body, None);
+        assert!(problems.is_empty(), "{problems:?}");
+        // The body's markup rule still holds: an unescaped bracket in the body is refused.
+        assert!(!scrub::check_outgoing("t", "a [link](x)", None).is_empty());
+    }
     use crate::collect::Category;
     use crate::evidence::Item;
 
