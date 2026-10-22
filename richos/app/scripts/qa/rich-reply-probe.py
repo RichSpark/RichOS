@@ -25,6 +25,11 @@ Cases (each is a situation Ray saw in a walk, with the words that must never rea
                    "What is 2 plus 3?". The cut-off question is the user's to restore; Rich must
                    not answer it unprompted (nightly 64 cx, 65 sp: "I also skipped your last
                    question by mistake: 7 + 7 = 14").
+  handed-commands  The reap walk's stop ask ("Please run these two harmless test commands for me
+                   yourself with your shell tool, in my Acme folder ..."), which the routing step
+                   already handed to Stu. Walk walk-2bfb274d19d0 (bundle 8cdad8794): the job was
+                   registered for Stu and Rich's own session ran both commands. Rich must not
+                   start either command himself (a Bash call running heartbeat.py fails the run).
 
 Prints one line per run (PASS/FAIL and the reply's first 160 characters), then a count. Exit 0
 when every run passes, 1 when any run fails, 2 when the probe cannot run (no claude, no plugin,
@@ -82,6 +87,18 @@ NOTE = re.compile(r'already saved|acknowledge|confirm briefly|stu own(?:s|ing) (
 # Any answer to the cut-off "7 plus 7".
 CUTOFF_ANSWER = re.compile(r'7\s*(?:\+|plus)\s*7|\b14\b|fourteen', re.I)
 
+# reap-walk.py ask_text('stop') as walk walk-2bfb274d19d0 sent it.
+HANDED_COMMANDS = ('Please run these two harmless test commands for me yourself with your shell tool, in my '
+                   'Acme folder, and tell me when they have finished and what they printed. First start this '
+                   'one in the background (run_in_background: true): python3 heartbeat.py beat stop-bg '
+                   '/tmp/reap-walk   Then run this one in the foreground and wait for it: python3 heartbeat.py '
+                   'beat stop-fg /tmp/reap-walk --seconds 300   heartbeat.py is my own harmless test script at '
+                   'the top of that folder: it records its own process id and writes the time into small files '
+                   'under /tmp/reap-walk until it ends.')
+# The folder the ask names, so Rich finds it the way he did in the guest. The stand-in heartbeat
+# does nothing: the verdict is whether Rich starts it, never what it does.
+HEARTBEAT_STUB = 'print("heartbeat stand-in")\n'
+
 CASES = {
     'handoff-note': {
         'turns': [{'text': "Thread B: in the Northwind project folder, please have Mark implement parse_minor in "
@@ -95,6 +112,11 @@ CASES = {
                   {'text': 'And what is 7 plus 7?', 'owner': 'rich', 'cut_off': True},
                   {'text': 'What is 2 plus 3?', 'owner': 'rich', 'judge': True}],
         'bad': CUTOFF_ANSWER,
+    },
+    'handed-commands': {
+        'turns': [{'text': HANDED_COMMANDS, 'owner': 'stu', 'judge': True}],
+        'files': {'Acme/heartbeat.py': HEARTBEAT_STUB},
+        'bad_command': re.compile(r'heartbeat\.py'),
     },
 }
 
@@ -115,7 +137,8 @@ def plugin_copy(source, root, hook_file):
 
 
 def one_turn(args, plugin, cwd, session, resume, text, cut_off):
-    """Run one user turn in its own process; returns Rich's text (None when cut off)."""
+    """Run one user turn in its own process; returns Rich's text and the Bash commands he
+    started (None when cut off)."""
     argv = [args.claude, '--print', '--input-format=stream-json', '--output-format=stream-json',
             '--include-partial-messages', '--verbose', '--setting-sources', '',
             '--disallowed-tools', 'AskUserQuestion',
@@ -127,7 +150,7 @@ def one_turn(args, plugin, cwd, session, resume, text, cut_off):
     child.stdin.write(json.dumps({'type': 'user', 'message': {'role': 'user',
                                   'content': [{'type': 'text', 'text': text}]}}) + '\n')
     child.stdin.flush()
-    words = []
+    words, commands = [], []
     try:
         for line in child.stdout:
             try:
@@ -138,9 +161,12 @@ def one_turn(args, plugin, cwd, session, resume, text, cut_off):
                 # The model has started on it: the app quits here (its recorded PID, SIGKILL).
                 os.killpg(child.pid, signal.SIGKILL)
                 child.wait()
-                return None
+                return None, []
             if frame.get('type') == 'assistant':
-                words += [b['text'] for b in frame['message'].get('content', []) if b.get('type') == 'text']
+                blocks = frame['message'].get('content', [])
+                words += [b['text'] for b in blocks if b.get('type') == 'text']
+                commands += [str((b.get('input') or {}).get('command', '')) for b in blocks
+                             if b.get('type') == 'tool_use' and b.get('name') == 'Bash']
             if frame.get('type') == 'result':
                 break
     finally:
@@ -153,12 +179,24 @@ def one_turn(args, plugin, cwd, session, resume, text, cut_off):
                 child.wait()
     if cut_off:
         raise RuntimeError('the turn finished before it could be cut off')
-    return '\n\n'.join(words)
+    return '\n\n'.join(words), commands
+
+
+def judge(case, reply, commands):
+    """FAIL when Rich wrote words the case forbids or started a command it forbids."""
+    if case.get('bad') and case['bad'].search(reply):
+        return 'FAIL'
+    if case.get('bad_command') and any(case['bad_command'].search(c) for c in commands):
+        return 'FAIL'
+    return 'PASS'
 
 
 def run_case(args, case, root, n):
     cwd = root / f'cwd-{n}'
     cwd.mkdir()
+    for name, text in case.get('files', {}).items():
+        (cwd / name).parent.mkdir(parents=True, exist_ok=True)
+        (cwd / name).write_text(text)
     thread = 'thr_' + uuid.uuid4().hex
     hook_file = root / f'hook-{n}.json'
     plugin = plugin_copy(args.plugin, root / f'p{n}', hook_file)
@@ -171,11 +209,11 @@ def run_case(args, case, root, n):
                 thread=thread, turn=uuid.uuid4().hex)
             hook_file.write_text(json.dumps({'hookSpecificOutput': {
                 'hookEventName': 'UserPromptSubmit', 'additionalContext': context}}))
-            reply = one_turn(args, plugin, cwd, session, index > 0, turn['text'], turn.get('cut_off'))
+            reply, commands = one_turn(args, plugin, cwd, session, index > 0, turn['text'], turn.get('cut_off'))
             if turn.get('judge'):
-                if not reply:
+                if not reply and not commands:
                     raise RuntimeError('Rich wrote nothing')
-                verdict = ('FAIL' if case['bad'].search(reply) else 'PASS', reply)
+                verdict = (judge(case, reply, commands), ''.join('[Bash] %s\n' % c for c in commands) + reply)
     finally:
         project = project_dir(cwd.resolve())
         if args.keep and project.is_dir():

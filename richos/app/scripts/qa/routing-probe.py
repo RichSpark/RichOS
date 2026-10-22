@@ -27,7 +27,13 @@ Cases (each is a request Ray saw routed in a walk, and the label it must never g
                      Nightly 63 run G: "Please write a 4,000-word guide to running a coaching
                      business's first year. Write it yourself, right here." as the conversation's
                      first message, routed to Stu the same way.
-  delegated-work     The other direction, from the same run P: "please have Echo write a short
+  run-it-yourself    The reap walk's stop ask (walk walk-2bfb274d19d0, bundle 8cdad8794): "Please
+                     run these two harmless test commands for me yourself with your shell tool, in
+                     my Acme folder ..." was handed to Stu while Rich ran both commands himself.
+                     The user asked Rich; it must not be a new handoff to Stu.
+  run-it-as-a-job    The same ask without "yourself", as reap-walk.py words it now: a five-minute
+                     job, which must reach Stu.
+  delegated-work    The other direction, from the same run P: "please have Echo write a short
                      welcome email ... commit it to main and push it" is work for Stu, and
                      must reach Stu: anything but new_stu_handoff leaves it with Rich.
 
@@ -85,6 +91,32 @@ CASES = {
                     'Write it yourself, right here.'),
         'context': '',
         'bad': 'new_stu_handoff',
+    },
+    'run-it-yourself': {
+        'earlier': [],
+        # reap-walk.py ask_text('stop') as that walk sent it.
+        'request': ('Please run these two harmless test commands for me yourself with your shell tool, in my '
+                    'Acme folder, and tell me when they have finished and what they printed. First start this '
+                    'one in the background (run_in_background: true): python3 heartbeat.py beat stop-bg '
+                    '/tmp/reap-walk   Then run this one in the foreground and wait for it: python3 heartbeat.py '
+                    'beat stop-fg /tmp/reap-walk --seconds 300   heartbeat.py is my own harmless test script at '
+                    'the top of that folder: it records its own process id and writes the time into small files '
+                    'under /tmp/reap-walk until it ends.'),
+        'context': '',
+        'bad': 'new_stu_handoff',
+    },
+    'run-it-as-a-job': {
+        'earlier': [],
+        # reap-walk.py ask_text('stop') since it stopped asking Rich to do it himself.
+        'request': ('Please run these two harmless test commands for me with a shell tool, in my '
+                    'Acme folder, and tell me when they have finished and what they printed. First start this '
+                    'one in the background (run_in_background: true): python3 heartbeat.py beat stop-bg '
+                    '/tmp/reap-walk   Then run this one in the foreground and wait for it: python3 heartbeat.py '
+                    'beat stop-fg /tmp/reap-walk --seconds 300   heartbeat.py is my own harmless test script at '
+                    'the top of that folder: it records its own process id and writes the time into small files '
+                    'under /tmp/reap-walk until it ends.'),
+        'context': '',
+        'bad': 'rich_handles_message',
     },
     'delegated-work': {
         'earlier': [('What is 17 times 19?', '')],
