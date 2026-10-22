@@ -4347,7 +4347,8 @@ fn take_operator_notices(
 #[richos_command::command]
 fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: String) -> Result<(), String> {
     let entity = assignment_scope(&state, &thread_id)?;
-    state.work.stop_assignment(entity.as_str(), &thread_id, &assignment_id)
+    let front_desk = state.control.for_thread(&thread_id).front_desk();
+    state.work.stop_assignment_and_front_desk(entity.as_str(), &thread_id, &assignment_id, front_desk)
 }
 
 /// Read the requested conversation's company. A different running conversation

@@ -106,16 +106,19 @@ def pressed_at(records):
 
 def told_stopped(record):
     """None when the assignment he stopped (or quit) reads as stopped, else why not. A stop he
-    made is `interrupted` with the "was stopped" notice; guest walk-0ddfdbf8ff00 read "failed ...
-    Claude channel closed (child exited?)." for both Stops and the Quit."""
+    made is `interrupted` with his Stop on the record (`user_stop_requested_at_ms`); guest
+    walk-0ddfdbf8ff00 read "failed ... Claude channel closed (child exited?)." for both Stops and
+    the Quit. The host no longer raises an assignment notice of its own (2002ec31b, "remove
+    host-inferred job execution state": Stu is told and Rich tells him), so a notice is not
+    required; one that is there must still say it was stopped (walk-28d1d7305246 failed only on
+    the missing notice, with both commands ended inside the bound)."""
     if record.get('state') in OPEN:
         return 'the stopped assignment is still running: ' + json.dumps(record)[:400]
     notices = record.get('notices') or []
-    if not notices:
-        return 'the stopped assignment raised no notice: ' + json.dumps(record)[:400]
-    last = notices[-1]
-    if record.get('state') != 'interrupted' or last.get('kind') != 'interrupted':
-        return 'the stop was told as %s, not as a stop: %r' % (record.get('state'), last.get('text', ''))
+    last = notices[-1] if notices else {}
+    if record.get('state') != 'interrupted' or not record.get('user_stop_requested_at_ms') \
+            or (notices and last.get('kind') != 'interrupted'):
+        return 'the stop was told as %s, not as a stop: %r' % (record.get('state'), last.get('text') or record.get('detail', ''))
     return None
 
 
@@ -299,7 +302,7 @@ class Walk(adopt.Walk):
             text = guest(self.vm, 'python3 -c %s %s %s' % (shlex.quote(script), shlex.quote(self.data),
                                                             shlex.quote(assignment_id)), 60)
             record = json.loads(text) if text.strip() else {}
-            if record.get('state') not in OPEN and record.get('notices'):
+            if record.get('state') not in OPEN:
                 break
             time.sleep(1)
         return record
@@ -452,7 +455,7 @@ class Walk(adopt.Walk):
         names = started['names']
         target, why = stoppable(self.assignments_since(started['sent_ms']))
         if why:
-            raise StepFailed(why)
+            raise StepFailed('%s\n%s' % (why, self.stop_evidence()))
         # The work chip names the job's state ("1 assignment starting", "... running", "... waiting
         # to start", "1 waiting for you"; main.js renderDrillChip) and always ends its label with
         # "Open the work summary." Walk walk-21f83423b356 pressed the fixed words "assignment
@@ -462,13 +465,45 @@ class Walk(adopt.Walk):
         # The row's Stop is labeled "Stop <its title>" (work-summary.js); name this one.
         label = 'Stop ' + (target.get('title') or '')[:60]
         press = pressed_at(self.press(label))
-        evidence = self.verdict(names, press['pressed_at_ms'], BOUND_MS)
+        try:
+            evidence = self.verdict(names, press['pressed_at_ms'], BOUND_MS)
+        except StepFailed as exc:
+            seen = {r['name']: r['t_ms'] for r in self.rows() if r.get('kind') == 'seen' and r.get('name') in names}
+            raise StepFailed('%s\nheartbeats seen at (guest ms): %s; pressed at %d\n%s'
+                             % (exc, json.dumps(seen), press['pressed_at_ms'], self.stop_evidence())) from exc
         record = self.closed_record(target['id'])
         told = told_stopped(record)
         if told:
             raise StepFailed(told)
         return dict(evidence, press=press, started=started, stopped=target['id'],
-                    told=record['notices'][-1]['text'])
+                    told=(record.get('notices') or [{}])[-1].get('text'), detail=record.get('detail'))
+
+    def stop_evidence(self):
+        """What a Stop that left a command running had to go on, read before the guest is gone:
+        every assignment of the conversation (state, detail, obligation), and every Bash call the
+        heartbeats were started with (whose session, whether a helper's, its description and
+        background option), from the app's own hook evidence. A diagnostic: never the verdict."""
+        script = ('import json,glob,sys\n'
+                  'root=sys.argv[1]+"/engine-state"\n'
+                  'for p in sorted(glob.glob(root+"/assignments/*/*.json")):\n'
+                  '    try: r=json.load(open(p))\n'
+                  '    except Exception: continue\n'
+                  '    print("assignment",json.dumps({k:r.get(k) for k in ("id","obligation_id","state","detail","registered_at_ms","updated_at_ms","user_stop_requested_at_ms")}))\n'
+                  'for p in glob.glob(root+"/evidence/*/callbacks.jsonl"):\n'
+                  '    try: role=json.load(open(p.rsplit("/",1)[0]+"/binding.json")).get("role")\n'
+                  '    except Exception: role=None\n'
+                  '    for line in open(p,errors="replace"):\n'
+                  '        if "heartbeat.py beat stop-" not in line: continue\n'
+                  '        try: c=json.loads(line).get("callback",{})\n'
+                  '        except Exception: continue\n'
+                  '        if c.get("tool_name")!="Bash" or c.get("hook_event_name") not in ("PreToolUse","PostToolUse"): continue\n'
+                  '        print("bash",json.dumps({"event":c.get("hook_event_name"),"role":role,"session":c.get("session_id"),\n'
+                  '            "agent":c.get("agent_id"),"tool_use_id":c.get("tool_use_id"),"input":c.get("tool_input"),\n'
+                  '            "response":str(c.get("tool_response"))[:200]})[:900])\n')
+        try:
+            return guest(self.vm, 'python3 -c %s %s' % (shlex.quote(script), shlex.quote(self.data)), 60).strip()[-6000:]
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
+            return 'stop evidence could not be read: %s' % exc
 
     def quit(self):
         started = self.start('quit')
@@ -495,7 +530,7 @@ class Walk(adopt.Walk):
         if told:
             raise StepFailed(told)
         return dict(evidence, app_log=app_log, question=question[-800:], started=started, stopped=target['id'],
-                    told=record['notices'][-1]['text'])
+                    told=(record.get('notices') or [{}])[-1].get('text'))
 
     def crash(self):
         self.facts['app'] = self.relaunched()
