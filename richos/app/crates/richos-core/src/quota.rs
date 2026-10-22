@@ -407,7 +407,7 @@ pub enum ReadError {
     SignedInNoLimits,
 }
 impl ReadError {
-    fn message(self) -> &'static str {
+    fn ceo_message(self) -> &'static str {
         match self {
             Self::Unsupported => "Claude Code did not report subscription limits for this account.",
             Self::SignedOut => "This Claude account is not signed in on this Mac.",
@@ -517,6 +517,8 @@ pub fn normalize(response: &Value) -> Result<Vec<Window>, ReadError> {
 
 pub trait Source: Send {
     fn read(&mut self, bin: &Path, cwd: &Path) -> Result<Vec<Window>, ReadError>;
+    /// Technical evidence for the last failed read. Never used as the card's message.
+    fn diagnostic(&self) -> Option<&str> { None }
     fn disconnect(&mut self) {}
 }
 
@@ -833,7 +835,7 @@ impl Snapshot {
             }),
             refresh_interval_ms: interval,
             retry_at: self.retry_at.filter(|t| *t > now),
-            message: self.error.map(|e| e.message().into()),
+            message: self.error.map(|e| e.ceo_message().into()),
             signed_in: self.signed_in(),
             policy,
             admission,
@@ -1600,6 +1602,11 @@ impl Service {
             // for this account is shared, exactly as Account 1's is (`refresh_windows`).
             let Ok(mut source) = reader.try_lock() else { continue };
             let result = source.read(bin, &self.cwd);
+            if result.is_err() {
+                if let Some(detail) = source.diagnostic() {
+                    eprintln!("[richos] quota reader {}: {detail}", account.id);
+                }
+            }
             drop(source);
             let observed = crate::util::now_millis();
             let mut extra = self.extra.lock().unwrap();
@@ -1702,6 +1709,11 @@ impl Service {
             return self.view();
         }
         let result = source.read(bin, &self.cwd);
+        if result.is_err() {
+            if let Some(detail) = source.diagnostic() {
+                eprintln!("[richos] quota reader 1: {detail}");
+            }
+        }
         let observed = crate::util::now_millis();
         let mut snapshot = self.snapshot.lock().unwrap();
         match result {
