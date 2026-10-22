@@ -219,6 +219,16 @@ async function run() {
       check(`${theme} image: approving a revisited queue item again replaces it`, after.includes("replace_image") && !after.includes("use_image"), after.join(","));
       await page.keyboard.press("Escape");
       await settle();
+      // Codex audit of 0881b5f8f: the 10-screenshot limit applies BEFORE any file is read, so a
+      // selection of many large screenshots never holds more decoded images than the report takes.
+      const read0 = (await calls()).filter((c) => c[0] === "inspect_image").length;
+      await page.setInputFiles("#img-file", Array.from({ length: 14 }, (_, i) => ({ name: `many-${i + 1}.png`, mimeType: "image/png", buffer: PNG })));
+      await page.waitForSelector("#sheet-image:not([hidden])");
+      await settle();
+      const read = (await calls()).filter((c) => c[0] === "inspect_image").length - read0;
+      check(`${theme} image: a 14-file selection reads at most the 10 the report can take`, read <= 10, `${read} files read`);
+      await page.keyboard.press("Escape");
+      await settle();
       check(`${theme} conversation: progress names the action`, (await T("#log .progress-wrap")).includes("Checking what happened when RichOS last opened"));
       await contrast(page, "progress", theme);
       await emit({ t: "done", text: "Checked what happened when RichOS last opened" });

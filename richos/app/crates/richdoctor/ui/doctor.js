@@ -285,12 +285,18 @@
     return Q.items.length > 1 ? "Screenshot " + (Q.i + 1) + " of " + Q.items.length : "Screenshot";
   }
   function canAddHere() { return !$("s-conv").hidden || !$("s-review").hidden; }
-  function beginAdding(promises) {
-    if (!promises.length) return;
-    Promise.all(promises).then(function (entries) {
-      const room = LIM.count - S.shots.length;
-      let ok = 0;
-      entries.forEach(function (e) { if (!e.problem) { ok++; if (ok > room) e.problem = "room"; } });
+  // The 10-screenshot limit applies BEFORE any file is read, and files are read one at a time:
+  // a selection of many large screenshots never holds more decoded images than the report takes.
+  function beginAdding(files) {
+    if (!files.length) return;
+    const room = LIM.count - S.shots.length, entries = [];
+    let ok = 0;
+    files.reduce(function (p, file) {
+      return p.then(function () {
+        if (ok >= room) { entries.push({ file: file.name || "Pasted image.png", note: fmtBytes(file.size), covers: [], approved: false, declared: null, problem: "room" }); return; }
+        return fromFile(file).then(function (e) { if (!e.problem) ok++; entries.push(e); });
+      });
+    }, Promise.resolve()).then(function () {
       Q.items = entries; Q.i = 0; Q.mode = "add"; Q.from = $("s-review").hidden ? "conv" : "review";
       openQueueItem();
     });
@@ -466,7 +472,7 @@
   $("img-file").addEventListener("change", function () {
     const files = Array.from(this.files || []); this.value = "";
     if (S.replacing) { S.replacing = false; if (files.length) fromFile(files[0]).then(function (e) { Q.items.splice(Q.i, 0, e); openQueueItem(); }); else openQueueItem(); return; }
-    beginAdding(files.map(fromFile));
+    beginAdding(files);
   });
   let dragDepth = 0;
   const hasFiles = function (e) { return e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf("Files") >= 0; };
@@ -477,14 +483,14 @@
     e.preventDefault(); dragDepth = 0; $("drop").hidden = true;
     const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []); if (!files.length) return;
     if (!canAddHere()) { toast("Screenshots can be added while describing the problem or reviewing the report."); return; }
-    beginAdding(files.map(fromFile));
+    beginAdding(files);
   });
   document.addEventListener("paste", function (e) {
     const files = Array.from((e.clipboardData && e.clipboardData.files) || []).filter(function (f) { return /^image\//.test(f.type); });
     if (!files.length) return;
     if (!canAddHere()) { toast("Screenshots can be added while describing the problem or reviewing the report."); return; }
     e.preventDefault();
-    beginAdding(files.map(function (f) { return fromFile(new File([f], f.name && f.name !== "image.png" ? f.name : "Pasted image.png", { type: f.type })); }));
+    beginAdding(files.map(function (f) { return new File([f], f.name && f.name !== "image.png" ? f.name : "Pasted image.png", { type: f.type }); }));
   });
 
   // ---- review (round 39, plus round 40 §4: the Screenshots section and the two destinations) ----
