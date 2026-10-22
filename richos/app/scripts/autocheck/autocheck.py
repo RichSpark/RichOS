@@ -1584,6 +1584,33 @@ def cargo_root_as_the_run_named_it(repo, run, env):
     return {name: root for name in names if passes and all(env_.get(name) == named for env_ in passes)}
 
 
+def as_the_run_started(repo, run, env):
+    """`env` with every value the saved `run` started its checks with in place of the land's own
+    (proof_evidence run_environment: its plan's record, or its rerun files): the runner that
+    answers the preflight is the author checkout's own, which may predate reading it itself.
+
+    2026-10-22, codex/first-run-reliability-20261022 at 4494536289: five lands in a row refused
+    its unchanged passes for LANG, LC_ALL, CARGO_TARGET_DIR, RUST_LOG, SDKROOT and more, values
+    only the two shells held, and the lead copied the author's into his own between attempts.
+    The land's Git and per-run names (RUN_SCOPED_ENVIRONMENT) and the credentials a rerun file
+    withholds stay the land's. Every input is still read under it, so a real change still
+    reads changed; a run that says nothing of its environment is asked in the land's, as before."""
+    if repo is None:
+        return env
+    sys.path.insert(0, str(repo.top / "richos/app/scripts/lib"))
+    try:
+        import proof_evidence
+        recorded = proof_evidence.run_environment(run)
+        scoped = proof_evidence.RUN_SCOPED_ENVIRONMENT
+    except (ImportError, AttributeError, OSError, ValueError, KeyError, TypeError):
+        return env
+    if not recorded:
+        return env
+    keep = set(recorded.get("withheld") or ())
+    own = {k: v for k, v in env.items() if k in keep or k.startswith("GIT_") or k in scoped}
+    return {**{k: v for k, v in recorded["values"].items() if k not in LAND_ONLY}, **own}
+
+
 def coverage_of(run, repo=None):
     """(exit, summary or None, output lines, the run's checkout or None) of
     `proof-run.py --coverage RUN`, asked in the run's own checkout. Exit 2: no answer."""
@@ -1594,6 +1621,7 @@ def coverage_of(run, repo=None):
     for name in LAND_ONLY:
         env.pop(name, None)
     env.update(cargo_root_as_the_run_named_it(repo, run, env))
+    env = as_the_run_started(repo, run, env)
     try:
         root = json.loads((Path(run) / "plan.json").read_text())["root"]
     except (OSError, ValueError, KeyError, TypeError) as exc:

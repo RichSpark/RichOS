@@ -956,6 +956,177 @@ class Evidence(unittest.TestCase):
         self.assertEqual(executed, [], "the gate ran again what the author proved on the same content, "
                          "because the two shells ordered PATH differently\n" + detail)
 
+    def test_the_land_reads_an_authors_run_under_the_environment_that_run_recorded(self):
+        """2026-10-22, the land of codex/first-run-reliability-20261022 at 4494536289: the author's
+        reconciled run proved 56 of 58 on the same content, and the land refused it five times,
+        each time for values the shells held and the code did not: "declared execution inputs
+        changed (environment.LANG ..., LC_ALL, LC_CTYPE, CARGO_TARGET_DIR, RUST_LOG, SCCACHE_DIR,
+        RICHOS_PRIVATE_FIXTURES, NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S, PATH, then SDKROOT)",
+        and the lead copied the author's values into his shell by hand between attempts. Real
+        runner, ci-shard.sh and coverage verifier, Codex's shell against the lead's: a reviewed
+        recipe that binds RUST_LOG, an engine unit and a whole-checkout check pass in a linked
+        worktree; the readiness preflight, asked from the lead's shell, finds all of them proven,
+        and the gate in the main checkout reuses all of them. A real input that changed since the
+        run still executes."""
+        app, engine = self.copy_runner_fixture()
+        counter = Path(self.tmp.name) / "executions"
+        for name in ("alpha", "beta"):
+            path = engine / "scripts" / (name + ".test.sh")
+            path.write_text('#!/bin/bash\nprintf "' + name + '\\n" >> "$FIXTURE_COUNTER"\n')
+            path.chmod(0o755)
+        (self.root / "gamma.test.sh").write_text('printf "gamma\\n" >> "$FIXTURE_COUNTER"\n')
+        (self.root / "LICENSE").write_text("fixture license\n")
+        # alpha has a reviewed recipe that binds one of the names the two shells set differently.
+        self.qualification("Fixture unit appends a label; no external content read.",
+            paths=["richos/engine", "richos/app/scripts", "LICENSE"], tools=["bash", "python3", "git"],
+            environment=["FIXTURE_COUNTER", "RUST_LOG"])
+        evidence.atomic(app / "proof-inputs.json", {"schema": 1, "checks": {"engine scripts/alpha.test.sh": {
+            "paths": ["richos/engine", "richos/app/scripts", "LICENSE"], "tools": ["bash", "python3", "git"],
+            "environment": ["FIXTURE_COUNTER", "RUST_LOG"], "external": [],
+            "qualification": "qualification.json", "isolation": evidence.PRIVATE_PROFILE}}})
+        umask = os.umask(0)
+        os.umask(umask)
+        for written in self.root.rglob("*"):
+            if written.is_file() and not written.is_symlink():
+                written.chmod((0o777 if written.stat().st_mode & 0o100 else 0o666) & ~umask)
+
+        def git(*args, cwd=None):
+            return subprocess.check_output(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture",
+                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *args],
+                cwd=cwd or self.root, text=True, stderr=subprocess.PIPE).strip()
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "fixture")
+        worktree = Path(self.tmp.name) / "author-checkout"
+        git("worktree", "add", "-q", "-b", "codex/author", str(worktree))
+        shells = ("LANG", "LC_ALL", "LC_CTYPE", "CARGO_TARGET_DIR", "RICHOS_CARGO_CACHE_ROOT", "SCCACHE_DIR",
+                  "RUST_LOG", "RICHOS_PRIVATE_FIXTURES", "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S", "SDKROOT")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("RICHOS_", "GIT_")) and k not in shells}
+        env.update(RICHOS_MACHINE_WORKERS=str(Path(self.tmp.name) / "machine"),
+            RICHOS_ENGINE_PASS_DIR=str(Path(self.tmp.name) / "slot"),
+            RICHOS_PROOF_RUN_DIR=str(Path(self.tmp.name) / "history"),
+            RICHOS_PROOF_RUN_SLOTS_DIR=str(Path(self.tmp.name) / "proof-slots"),
+            CLAUDE_CONFIG_DIR=str(Path(self.tmp.name) / "config"),
+            FIXTURE_COUNTER=str(counter), PYTHONDONTWRITEBYTECODE="1")
+        caches, tools = Path(self.tmp.name) / "caches", Path(self.tmp.name) / "tools"
+        # gamma starts through a tool found on PATH: a real input outside the checkout.
+        tools.mkdir()
+        (tools / "fixture-sh").write_text('#!/bin/bash\nexec bash "$@"\n')
+        (tools / "fixture-sh").chmod(0o755)
+        # Codex's shell, as recorded-landing-environment.json has it (paths under this fixture).
+        codex = dict(env, LANG="C.UTF-8", LC_ALL="C.UTF-8", LC_CTYPE="C.UTF-8", RUST_LOG="warn",
+            CARGO_TARGET_DIR=str(caches / "cargo-target/codex"), SCCACHE_DIR=str(caches / "codex/sccache"),
+            RICHOS_PRIVATE_FIXTURES=str(Path(self.tmp.name) / "richos-hq/fixtures/echo-path"),
+            NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S="9230e2bd8b24b7ac7a0ba6774c64bf0d78ecdabbdd91d0ed627b02a587bae2df",
+            PATH=os.pathsep.join([env["PATH"], str(tools), str(Path(self.tmp.name) / "codex-cli/codex-path")]))
+        # The lead's: another locale, no Cargo root, another cache, an SDKROOT Codex had not, and
+        # another PATH.
+        lead = dict(env, LANG="en_US.UTF-8", SCCACHE_DIR=str(caches / "sccache"),
+                    SDKROOT="/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+                    PATH=os.pathsep.join([str(tools), env["PATH"]]))
+        units = ",".join("scripts/%s.test.sh" % name for name in ("alpha", "beta"))
+        commands = Path(self.tmp.name) / "commands"
+        commands.write_text("cd %s && bash scripts/ci-shard.sh --only-units %s\n" % ("richos/engine", units)
+                            + "cd . && fixture-sh gamma.test.sh\n")
+        checks = ("engine scripts/alpha.test.sh", "engine scripts/beta.test.sh", "fixture-sh")
+
+        def invoke(checkout, name, shell, *options):
+            # The shell as it is: a PATH naming the checkout binds a reviewed recipe to that
+            # place, which is not this test's subject (only the shells differ here).
+            counter.write_text("")
+            directory = Path(self.tmp.name) / name
+            result = subprocess.run([*idle_proof_run(checkout / "richos/app/scripts/proof-run.py"),
+                "--commands", str(commands), "--log-dir", str(directory), *options], cwd=checkout,
+                env=shell, text=True, capture_output=True, timeout=120)
+            detail = result.stdout + result.stderr + "\n" + "\n".join(p.read_text() for p in directory.glob("*.log"))
+            self.assertEqual(result.returncode, 0, detail)
+            rows = {row["check"]: row for row in json.loads((directory / "summary.json").read_text())["checks"]}
+            return directory, rows, sorted(counter.read_text().splitlines()), detail
+
+        def preflight(run):
+            answer = Path(self.tmp.name) / "coverage.json"
+            answer.unlink(missing_ok=True)
+            result = subprocess.run([*idle_proof_run(worktree / "richos/app/scripts/proof-run.py"),
+                "--coverage", str(run), "--summary-out", str(answer)],
+                cwd=worktree, env=lead, text=True, capture_output=True, timeout=120)
+            detail = result.stdout + result.stderr
+            self.assertTrue(answer.is_file(), detail)
+            return result.returncode, json.loads(answer.read_text()), detail
+
+        author, _rows, executed, detail = invoke(worktree, "author", codex)
+        self.assertEqual(executed, ["alpha", "beta", "gamma"], detail)
+        plan = json.loads((author / "plan.json").read_text())
+        self.assertEqual(plan["identities"]["engine scripts/alpha.test.sh"]["environment"]["RUST_LOG"],
+                         evidence.digest("warn"))
+        # A handover run's range, which a --commands run has none of (the preflight asks for one).
+        head = git("rev-parse", "HEAD", cwd=worktree)
+        evidence.atomic(author / "plan.json", dict(plan, selection={"base": head, "candidate": head, "mode": "normal"}))
+        rc, answer, detail = preflight(author)
+        self.assertEqual((rc, answer["missing"]), (0, {}), "the preflight, asked from the lead's shell, called "
+                         "unchanged passes missing for values only the two shells hold\n" + detail)
+        self.assertEqual(sorted(answer["proven"]), sorted(checks), detail)
+        _gate, rows, executed, detail = invoke(self.root, "gate", lead, "--reuse", str(author))
+        self.assertEqual(executed, [], "the gate ran again what the author proved on the same content, "
+                         "because the two shells held other values\n" + detail)
+        for check in checks:
+            self.assertEqual(rows[check]["reused_from"], str(author), detail)
+        # A real input changed since the run: the tool gamma starts through, read under the author's
+        # environment and found changed, so the preflight names it and the gate runs it again.
+        (tools / "fixture-sh").write_text('#!/bin/bash\n# a later version\nexec bash "$@"\n')
+        shutil.rmtree(Path(env["RICHOS_PROOF_RUN_DIR"]) / "input-owners", ignore_errors=True)
+        rc, answer, detail = preflight(author)
+        self.assertEqual((rc, sorted(answer["missing"])), (1, ["fixture-sh"]), detail)
+        _gate, rows, executed, detail = invoke(self.root, "tool-changed", lead, "--reuse", str(author))
+        self.assertEqual(executed, ["gamma"], "a pass made with another version of its tool was reused\n" + detail)
+        self.assertIsNone(rows["fixture-sh"]["reused_from"], detail)
+        self.assertIn("(read under the environment its run recorded)", detail)
+
+    def test_a_run_saved_before_it_recorded_its_environment_is_read_under_the_one_its_rerun_files_hold(self):
+        """The run that had to land (20261022T131701Z-vjaoaa1d) predates the recorded environment:
+        its plan has none, and the one check it executed, `cargo --bin richos-tauri`, has the only
+        rerun file in it; its other passes were reused from an earlier run, whose rerun files hold
+        theirs. A rerun file is one check's whole environment, the caller's plus what the runner set
+        for that check: the Cargo profile settings, and for a suite a nightly gate runs, the build's
+        PATH and cache root. 44 of its 54 whole-checkout passes were such suites, so the PATH most
+        passes saved is the build's, not the caller's: the caller's is what every whole-checkout
+        pass holds, each value the one the checks outside the nightly's conditions held."""
+        d = evidence.digest
+        earlier, run = Path(self.tmp.name) / "earlier", Path(self.tmp.name) / "run"
+        caller = {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PATH": "/checkout/bin:/home/.cargo/bin:/usr/bin:/bin",
+                  "CARGO_TARGET_DIR": "/caches/cargo-target/codex", "RUST_LOG": "warn",
+                  "ANDROID_HOME": "/sdk/android", "API_TOKEN": "never-written"}
+        cargo = dict(caller, CARGO_PROFILE_DEV_DEBUG="1")
+        suite = dict(caller, PATH="/home/.cargo/bin:/usr/bin:/bin", RICHOS_CARGO_CACHE_ROOT="/caches/cargo-target/codex")
+        files = ((run, cargo, "cargo --bin richos-tauri", ["cargo", "test", "--bin", "richos-tauri"]),
+                 (earlier, caller, "testvm", ["bash", "testvm.test.sh"]),
+                 *((earlier, suite, name, ["node", name]) for name in ("dialect.js", "splash.js", "scale.js")))
+        for n, (directory, env, label, argv) in enumerate(files, 1):
+            if not directory.exists():
+                directory.mkdir()
+                evidence.atomic(directory / "plan.json", {"schema": 1, "root": str(self.root), "items": [],
+                                                          "source": self.source, "identities": {}})
+            self.assertIsNotNone(runner.write_rerun(runner.Item(label, str(self.tmp.name), argv), n, str(directory), env))
+        bound = lambda env: {n: d(v) for n, v in env.items() if n not in ("ANDROID_HOME", "API_TOKEN")}
+        whole = lambda env: {"state": "passed", "exit": 0, "provenance": {"run": str(earlier), "earlier": None},
+                             "input": {"contract": evidence.WHOLE_CHECKOUT, "environment": bound(env)}}
+        evidence.atomic(run / "outcomes.json", {
+            "cargo --bin richos-tauri": dict(whole(cargo), provenance=None), "testvm": whole(caller),
+            **{name: whole(suite) for name in ("dialect.js", "splash.js", "scale.js")},
+            "recipe": {"state": "passed", "exit": 0, "input": {"contract": "a" * 64, "environment": {"LANG": d("C")}}}})
+        self.assertEqual(evidence.rerun_environment(run / "rerun/01-cargo---bin-richos-tauri.sh")["argv"],
+                         ["cargo", "test", "--bin", "richos-tauri"])
+        rebuilt = evidence.run_environment(run)
+        self.assertEqual(rebuilt["values"], {k: v for k, v in caller.items() if k != "API_TOKEN"}, rebuilt)
+        self.assertEqual(rebuilt["withheld"], ["API_TOKEN"])
+        # A plan that records its environment is read as it says, rerun files or not.
+        plan = json.loads((run / "plan.json").read_text())
+        evidence.atomic(run / "plan.json", dict(plan, environment={"values": {"LANG": "C"}, "withheld": []}))
+        self.assertEqual(evidence.run_environment(run), {"values": {"LANG": "C"}, "withheld": []})
+        # And the caller this runner records: the credential by name only, nothing of Git's or the run's.
+        recorded = runner.recorded_environment({"LANG": "C.UTF-8", "API_TOKEN": "x", "GIT_DIR": "/g",
+                                                "RICHOS_AUTOCHECK_ACTIVE": "a:1"})
+        self.assertEqual(recorded, {"values": {"LANG": "C.UTF-8"}, "withheld": ["API_TOKEN"]})
+
     def test_actual_cross_commit_coverage_rechecks_inputs_and_keeps_original_sha(self):
         self.cross_commit_coverage()
 
