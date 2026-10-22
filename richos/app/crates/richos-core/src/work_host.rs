@@ -1294,6 +1294,19 @@ impl WorkHost {
         thread: &str,
         id: &str,
     ) -> Result<(), String> {
+        self.stop_assignment_and_front_desk(entity, thread, id, None)
+    }
+
+    /// The same Stop, also reaching the conversation's front desk (`ConversationControl::
+    /// front_desk`): the shell calls Rich made in the turn that gave this job are this job's
+    /// commands too, by the instruction his hook evidence stamped on each.
+    pub fn stop_assignment_and_front_desk(
+        self: &Arc<Self>,
+        entity: &str,
+        thread: &str,
+        id: &str,
+        front_desk: Option<(String, Arc<dyn TurnCancel>)>,
+    ) -> Result<(), String> {
         let record =
             assignment::read(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
         if !record.accepts_input() {
@@ -1324,6 +1337,16 @@ impl WorkHost {
             }
             None => Vec::new(),
         };
+        if let Some((session, handle)) = &front_desk {
+            for tool in crate::work_status::front_desk_calls(&self.state, session,
+                &record.instruction_ledger_ref, &record.instruction_sha256)? {
+                // A call that started no task, or one that already ended, is no command to stop.
+                match handle.stop_worker(&tool) {
+                    CommandStop::NotDelivered => {}
+                    outcome => outcomes.push(outcome),
+                }
+            }
+        }
         outcomes.extend(targets.iter().map(|(session, tool)| match &stopper {
             Some((owner, handle)) if owner == session => handle.stop_worker(tool),
             _ => CommandStop::NotDelivered,
@@ -3608,7 +3631,7 @@ mod tests {
     fn a_jobs_stop_ends_the_foreground_command_stu_runs_for_it() {
         let h = harness(0);
         let job = assignment::register(&h.state, &registration(&h)).unwrap();
-        stop_ends_stus_foreground_command(&h, &job.id, "Run the heartbeat");
+        stop_ends_the_foreground_command(&h, &job.id, "Run the heartbeat", false);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
@@ -3623,9 +3646,22 @@ mod tests {
         let running = assignment::register(&h.state, &Registration { obligation_id: "obligation-b".into(), ..registration(&h) }).unwrap();
         assignment::advance(&h.state, "depot", "thread-one", &running.id, AssignmentState::Running, "Working.").unwrap();
         let job = assignment::register(&h.state, &registration(&h)).unwrap();
-        stop_ends_stus_foreground_command(&h, &job.id, "obligation-7: run the heartbeat");
+        stop_ends_the_foreground_command(&h, &job.id, "obligation-7: run the heartbeat", false);
         let other = assignment::read(&h.state, "depot", "thread-one", &running.id).unwrap();
         assert_eq!((other.state, other.user_stop_requested_at_ms), (AssignmentState::Running, None), "the other job is not touched");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **The job's commands on the front desk** (reap walk walk-2bfb274d19d0): the job was handed
+    /// to Stu, and Rich ran its commands himself in that same turn, the foreground one included.
+    /// Stop on the job ends Rich's command by its own task, and his turn goes on. RED at
+    /// ae213107a: the Stop reached only Stu's session, so the `sleep` outlived the bound.
+    #[test]
+    fn a_jobs_stop_ends_the_foreground_command_rich_ran_for_it() {
+        let h = harness(0);
+        let job = assignment::register(&h.state, &registration(&h)).unwrap();
+        stop_ends_the_foreground_command(&h, &job.id, "Run foreground heartbeat test for 300 seconds", true);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
@@ -3640,7 +3676,7 @@ mod tests {
         let waiting = assignment::register(&h.state, &Registration { obligation_id: "waiting-for-him".into(), ..registration(&h) }).unwrap();
         assignment::advance(&h.state, "depot", "thread-one", &waiting.id, AssignmentState::Blocked, "Which branch first?").unwrap();
         let job = assignment::register(&h.state, &registration(&h)).unwrap();
-        stop_ends_stus_foreground_command(&h, &job.id, "Run the heartbeat");
+        stop_ends_the_foreground_command(&h, &job.id, "Run the heartbeat", false);
         let other = assignment::read(&h.state, "depot", "thread-one", &waiting.id).unwrap();
         assert_eq!((other.state, other.user_stop_requested_at_ms), (AssignmentState::Blocked, None), "the waiting job is not touched");
         h.host.shutdown();
@@ -3649,7 +3685,9 @@ mod tests {
 
     /// Stu runs one foreground command (a real `sleep`) beside a helper's; Stop on `job` must
     /// end Stu's within the reap walk's bound, with only that command's `stop_task`.
-    fn stop_ends_stus_foreground_command(h: &Harness, job: &str, description: &str) {
+    /// With `front_desk`, the command is Rich's, made in the turn that gave the job (his hook
+    /// evidence says so), and the Stop reaches his session instead of Stu's.
+    fn stop_ends_the_foreground_command(h: &Harness, job: &str, description: &str, front_desk: bool) {
         let (client, dir) = crate::native::native_driver_tests::fixture_client("stop-foreground-command", &r#"
 here=$(dirname "$0")
 read -r init
@@ -3683,16 +3721,31 @@ read -r keep_alive
         let pid: i32 = std::fs::read_to_string(dir.join("command.pid")).unwrap().trim().parse().unwrap();
         let alive = || unsafe { libc::kill(pid, 0) } == 0;
         assert!(alive(), "the stand-in command must be running before Stop");
-        let backend = Backend::new();
-        {
-            let mut inner = backend.inner.lock().unwrap();
-            inner.lease_session = Some("stu-session".into());
-            let stopper: Arc<dyn TurnCancel> = handle.clone();
-            inner.peer_stopper = Some(("stu-session".into(), stopper));
-        }
-        h.host.backends.lock().unwrap().insert("thread-one".into(), backend);
+        let stopper: Arc<dyn TurnCancel> = handle.clone();
+        let desk = if front_desk {
+            let record = assignment::read(&h.state, "depot", "thread-one", job).unwrap();
+            let evidence = h.state.join("evidence/rich-session");
+            std::fs::create_dir_all(&evidence).unwrap();
+            let call = |tool: &str, reference: &str| serde_json::json!({"schema": 1,
+                "instruction": {"ledger_ref": reference, "sha256": record.instruction_sha256},
+                "callback": {"session_id": "rich-session", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                    "tool_use_id": tool, "tool_input": {"command": "python3 heartbeat.py"}}}).to_string() + "\n";
+            // A long unrelated row first, then this turn's call and another turn's.
+            std::fs::write(evidence.join("callbacks.jsonl"), "x".repeat(1024 * 1024 + 7) + "\n"
+                + &call("toolu_fg", &record.instruction_ledger_ref) + &call("toolu_other_turn", "ledger:thread-one:turn-8")).unwrap();
+            Some(("rich-session".to_string(), stopper))
+        } else {
+            let backend = Backend::new();
+            {
+                let mut inner = backend.inner.lock().unwrap();
+                inner.lease_session = Some("stu-session".into());
+                inner.peer_stopper = Some(("stu-session".into(), stopper));
+            }
+            h.host.backends.lock().unwrap().insert("thread-one".into(), backend);
+            None
+        };
         let pressed = std::time::Instant::now();
-        h.host.stop_assignment("depot", "thread-one", job).unwrap();
+        h.host.stop_assignment_and_front_desk("depot", "thread-one", job, desk).unwrap();
         // The reap walk's bound (reap-walk.py BOUND_MS), from the press.
         while alive() && pressed.elapsed() < std::time::Duration::from_millis(2000) {
             std::thread::sleep(std::time::Duration::from_millis(10));

@@ -1359,6 +1359,13 @@ impl ConversationControl {
         self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.active.clone())
     }
 
+    /// The conversation's front desk while one is resident: its session and its handle.
+    pub fn front_desk(&self)->Option<(String, Arc<dyn TurnCancel>)> {
+        let states=self.shared.inner.conversations.lock().unwrap();
+        let state=states.get(self.key())?;
+        Some((state.lease_session.clone()?, state.cancel.clone()?))
+    }
+
     pub fn lease_session(&self)->Option<String> {
         self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.lease_session.clone())
     }
