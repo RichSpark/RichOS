@@ -25,7 +25,7 @@ export function report({ title = 'RichDoctor A9 live test: harmless', body, id =
     app_version: '1.0.0', approved_at: Date.now(), title, body };
 }
 
-export async function run(profile, { token, githubToken, fetchImpl = fetch, settleMs = 60_000 } = {}) {
+export async function run(profile, { token, githubToken, fetchImpl = fetch } = {}) {
   checkProfile(profile);
   if (profile.stage !== 'test') throw Error('The live A9 run uses a test relay and test repository only');
   const base = `https://${profile.hostname}`, query = d1(profile, token, fetchImpl), started = new Date().toISOString();
@@ -69,7 +69,7 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch, sett
 
     const fresh = report({ started });
     check('disconnected before send: unknown', (await status(fresh)).body?.state === 'unknown_id');
-    const first = await create(fresh), firstAt = Date.now();
+    const first = await create(fresh);
     check('delivered with a real issue URL', first.body?.state === 'delivered'
       && first.body.issue_url === `https://github.com/${profile.repository}/issues/${first.body.issue_number}`, { issue: first.body?.issue_url });
     const issue = await (await gh(`/repos/${profile.repository}/issues/${first.body.issue_number}`)).json();
@@ -113,10 +113,8 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch, sett
     check('known reports still answer while switched off', (await status(fresh)).body?.state === 'delivered');
 
     // Reconciliation on real GitHub: the relay's record of an older report is gone (test database
-    // only), so before any create it must find the issue by its footer and create nothing. Run
-    // last: GitHub's issue listing showed a seconds-old issue late on 2026-10-22, and in real use
-    // an ID without a record was approved at least 15 minutes earlier.
-    await pause(Math.max(0, firstAt + settleMs - Date.now()));
+    // only), so before any create it must find the issue by its footer and create nothing. The
+    // issue is seconds old, as after a lost answer.
     await query('UPDATE control SET paused=0, daily_cap=1000 WHERE id=1');
     await query('DELETE FROM reports WHERE report_id=?1', [fresh.report_id]);
     const found = await create({ ...fresh, approved_at: Date.now() - 3600_000 });
