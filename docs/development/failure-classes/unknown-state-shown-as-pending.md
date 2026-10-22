@@ -64,3 +64,18 @@ either account, active or idle, before a check and after a failed check, in both
 
 A known sign-in alone does not establish that subscription limits are absent. The card and
 Technical view say only that it is signed in until a usage response establishes more.
+
+## A verdict and its message are one fact
+
+`Snapshot::auth_known` updates the boolean, the auth-specific message and obsolete figures
+together. An explicit sign-out clears old usage figures; a signed-in answer or streamed
+usage reading clears an obsolete signed-out error. Other failed usage reads still leave the
+known sign-in standing. The transition table checks messages as well as booleans and refuses
+a signed-out account retaining usage figures.
+
+Show email uses `Service::account_email`, which records the sign-in verdict from the same
+provider answer and returns the address only for its existing temporary display. No address
+or organization identifier enters the quota snapshot. The production-method test
+`revealing_an_email_keeps_only_its_auth_verdict_and_never_a_contradictory_message` exercises
+both accounts, signed in, signed out and no answer. The browser suite verifies that the
+card reflects that verdict immediately instead of contradicting its revealed address.

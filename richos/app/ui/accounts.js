@@ -304,6 +304,16 @@
     // Closed (or closed and opened again) while it was being read: nothing is shown.
     if (sheet.hidden || opens !== sheetOpens) { render(); return; }
     if (!answer || !["email", "signedOut", "unknown"].includes(answer.state) || (answer.state === "email" && !answer.email)) answer = { state: "unknown" };
+    // This is the provider's auth answer for this card. The backend keeps the same boolean;
+    // reflect it immediately, rather than contradicting the address until the next quota poll.
+    const account = multi() ? list().find(x => x.id === id) : id === "1" ? view : null;
+    if (account && answer.state !== "unknown") {
+      account.signedIn = answer.state === "email";
+      if (!account.signedIn) {
+        account.windows = []; account.checkedAt = null;
+        account.message = "This Claude account is not signed in on this Mac.";
+      } else if (account.message && /not signed in/i.test(account.message)) account.message = null;
+    }
     shown.set(id, { answer, at: Date.now() });
     wipeIn = id;
     render();

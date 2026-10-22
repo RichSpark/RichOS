@@ -528,6 +528,24 @@ async function main() {
     return "closed by × and by Escape; reopened hidden";
   });
 
+  await run.check("Show email updates the card's sign-in verdict immediately", async () => {
+    let page = await open("dark", signedOut, { emails: { "1": "reader@fixture.invalid" } });
+    await sheet(page);
+    await page.click('[data-act="email-show"]');
+    await page.waitForSelector(".acc-who-addr");
+    assertEqual(await text(page, ".acc-note"), "This account is signed in on this Mac.");
+    assertEqual(await page.locator('[data-act="sign-one"]').count(), 0);
+    await page.close();
+    page = await open("dark", two([20, 30], [10, 20]), { emails: { "2": null } });
+    await sheet(page);
+    await page.click('.acc-card[data-id="2"] [data-act="email-show"]');
+    await page.waitForSelector('.acc-card[data-id="2"] .acc-who-label');
+    assertEqual(await text(page, '.acc-card[data-id="2"] .acc-pill'), "Not signed in");
+    assertEqual(await page.locator('.acc-card[data-id="2"] .acc-meter').count(), 0);
+    assert(await page.locator('.acc-card[data-id="2"] [data-act="sign"]').isVisible());
+    await page.close();
+  });
+
   await run.check("Show email: when an account's email cannot be read, the line says so plainly and guesses nothing", async () => {
     // Home: an answer that names no address; Work: Claude Code says it is not signed in.
     const page = await open("dark", two([58, 72], [0, 12]), { emails: { "2": null } });
