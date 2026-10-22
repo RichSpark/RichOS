@@ -80,6 +80,13 @@
     phone-ios.py apps                              which RichConnect builds and test runners are installed
     phone-ios.py lock                              the phone's lock state
     phone-ios.py battery                           level, charging and external power
+    phone-ios.py crashes --out DIR [--name NAME] [--since EPOCH]
+                                                   the phone's own crash reports (devicectl's systemCrashLogs
+                                                   domain) whose file name holds NAME (default RichOSNative)
+                                                   plus every JetsamEvent (iOS ending an app for memory),
+                                                   copied to DIR, each with its exception type and the
+                                                   first frames of the crashed thread. Why an app that was
+                                                   in front is suddenly "notRunning" in a run. Reads only
     phone-ios.py syslog --seconds S --out FILE [--keep TEXT ...]
                                                    the phone's log for S seconds, keeping ONLY lines that
                                                    name RichOSNative or dev.richos.connect, plus lines
@@ -98,7 +105,7 @@
                                                    a `syslog` capture: what the app did while hidden
 
 ONLY THROUGH `rios device` (CEO, 2026-10-02: only the build users get goes on his phones and every
-test on them tests it). `run`, `approval`, `procs`, `apps`, `lock`, `battery` and `syslog` touch the
+test on them tests it). `run`, `approval`, `procs`, `apps`, `lock`, `battery`, `crashes` and `syslog` touch the
 phone, so they run as `rios device <command> ...` and refuse (exit 3) when started any other way;
 `rios device verify` runs only the Release build and refuses a bundle carrying Debug's development
 markers. `check`, `parse-log`, `summary`, `vocabulary`, `pair-steps` and `syslog-rate` touch no
@@ -1195,6 +1202,69 @@ def procs(args):
     return emit({"name": args.name, "running": mine, "count": len(mine)})
 
 
+def crash_summary(path):
+    """An .ips crash report is one JSON header line, then the JSON body: the exception type, the
+    termination reason and the crashed thread's first frames (image and symbol where present)."""
+    text = Path(path).read_text(errors="replace")
+    head, _, rest = text.partition("\n")
+    try:
+        header = json.loads(head)
+    except ValueError:
+        header = {}
+    try:
+        body = json.loads(rest)
+    except ValueError:
+        return {"bugType": header.get("bug_type"), "time": header.get("timestamp"), "readable": False}
+    images = body.get("usedImages", [])
+    frames = []
+    for thread in body.get("threads", []):
+        if not thread.get("triggered"):
+            continue
+        for f in thread.get("frames", [])[:12]:
+            image = images[f["imageIndex"]].get("name") if isinstance(f.get("imageIndex"), int) and \
+                f["imageIndex"] < len(images) else None
+            frames.append(" ".join(str(x) for x in (image, f.get("symbol"), f.get("sourceFile"),
+                                                    f.get("sourceLine")) if x is not None) or "(no image or symbol)")
+    exception = body.get("exception", {})
+    termination = body.get("termination", {})
+    return {"bugType": header.get("bug_type"), "time": header.get("timestamp"),
+            "app": header.get("app_name"), "version": header.get("app_version"),
+            "build": header.get("build_version"),
+            "exception": " ".join(str(exception.get(k)) for k in ("type", "signal", "subtype") if exception.get(k)),
+            "termination": " ".join(str(termination.get(k)) for k in ("namespace", "indicator") if termination.get(k)),
+            "crashedThread": frames,
+            "largestProcess": body.get("largestProcess")}
+
+
+def crashes(args):
+    listed = devicectl(["device", "info", "files", "--domain-type", "systemCrashLogs"], args.device)
+    rows = listed.get("files", [])
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    found = []
+    for row in rows:
+        name = str(row.get("relativePath") or row.get("name") or "")
+        base = name.rsplit("/", 1)[-1]
+        if not base.endswith(".ips") or not (args.name in base or base.startswith("JetsamEvent")):
+            continue
+        stamp = re.search(r"(\d{4}-\d{2}-\d{2}-\d{6})", base)
+        when = time.mktime(time.strptime(stamp.group(1), "%Y-%m-%d-%H%M%S")) if stamp else None
+        if args.since is not None and (when is None or when < args.since):
+            continue
+        target = out / base
+        p = subprocess.run(["xcrun", "devicectl", "device", "copy", "from", "--device", args.device,
+                            "--domain-type", "systemCrashLogs", "--source", name, "--destination", str(target)],
+                           capture_output=True, text=True, timeout=120)
+        if p.returncode != 0 or not target.exists():
+            found.append({"file": base, "copied": False, "error": (p.stderr or p.stdout).strip()[-200:]})
+            continue
+        found.append({"file": str(target), "copied": True, "at": when, **crash_summary(target)})
+    if not rows:
+        raise CannotAnswer("devicectl listed no files in systemCrashLogs (unexpected shape: "
+                           f"{sorted(listed)[:8]})")
+    return emit({"name": args.name, "since": args.since, "listed": len(rows), "reports": found})
+
+
 def apps(args):
     rows = devicectl(["device", "info", "apps"], args.device).get("apps", [])
     ours = [{"bundle": r.get("bundleIdentifier"), "version": r.get("version"), "build": r.get("bundleVersion")}
@@ -1810,6 +1880,12 @@ def main(argv):
     cl = sub.add_parser("close")
     cl.add_argument("bundle")
     cl.add_argument("--device", required=True)
+    cr = sub.add_parser("crashes")
+    cr.add_argument("--device", required=True)
+    cr.add_argument("--out", required=True)
+    cr.add_argument("--name", default="RichOSNative")
+    cr.add_argument("--since", type=float, default=None,
+                    help="only reports whose file-name time (the phone's clock) is at or after this epoch")
     for name in ("procs", "apps", "lock", "battery", "syslog", "trust", "reboot", "net"):
         s = sub.add_parser(name)
         s.add_argument("--device", required=True)
@@ -1871,7 +1947,7 @@ def main(argv):
         return {"run": run, "procs": procs, "apps": apps, "lock": lock, "battery": battery,
                 "syslog": syslog, "approval": approval, "wifi-restore": wifi_restore, "wifi-on": wifi_restore,
                 "wifi-off": wifi_off, "trust": trust,
-                "reboot": restart_phone, "launch": launch_app, "net": net, "close": close_app}[args.command](args)
+                "reboot": restart_phone, "launch": launch_app, "net": net, "close": close_app, "crashes": crashes}[args.command](args)
     except CannotAnswer as error:
         return emit({"error": str(error), **getattr(error, "extra", {})}, 2)
     except subprocess.TimeoutExpired as error:
