@@ -7267,6 +7267,154 @@ class HuntV3_07_NoTestIsCollectedTwice(unittest.TestCase):
         self.assertEqual(twice, [])
 
 
+
+class NoSilentHolds(Base):
+    """richos-hq docs/plans/2026-10-22-no-silent-holds.md, T5. The CEO: "WHEN WILL
+    [THIS] STOP ONCE AND FOR ALL???" A hold ends only when the work runs, when it
+    lands or is discarded, or by his words; Rich saying so ends nothing."""
+
+    def _pending_one(self):
+        aid, npath = self.spawn("zach-opus-p5")
+        self.commit(npath)
+        self.finish(aid)
+        return aid, npath
+
+    def test_holds_t5_release_without_his_word_or_running_work_is_refused(self):
+        ws.hold("stream-b", "Stream B of his spelling order", "", "on hold, deliberately", self.sid)
+        self.assertEqual([h["name"] for h in ws.holds(self.sid)], ["stream-b"])
+        with self.assertRaises(ws.SpecError) as cm:
+            ws.release("stream-b", session_id=self.sid)
+        self.assertIn("--ceo-word", str(cm.exception))
+        self.assertEqual([h["name"] for h in ws.holds(self.sid)], ["stream-b"])      # still held
+        ws.release("stream-b", ceo_word="park Stream B until Monday", session_id=self.sid)
+        self.assertEqual(ws.holds(self.sid), [])
+
+    def test_holds_t5_the_work_running_ends_it_and_a_false_catch_is_shown_once(self):
+        aid, _n = self.spawn("zach-opus-y")
+        ws.hold("stream-c", "Stream C", "agent:zach-opus-y", "", self.sid)
+        self.assertEqual(ws.holds(self.sid)[0]["state"], "pending")                 # Y does it: quiet
+        ws.release("stream-c", session_id=self.sid)                                   # the work runs
+        ws.hold("held-1a2b3c4d", "it goes in with the next land", "", "a reply held it", self.sid)
+        with self.assertRaises(ws.SpecError):
+            ws.release("held-1a2b3c4d", not_a_hold="short", session_id=self.sid)
+        ws.release("held-1a2b3c4d", not_a_hold="a description of a bundle that exists", session_id=self.sid)
+        self.assertEqual(ws.holds(self.sid), [])
+        first = ws.hold_lines(self.sid)
+        self.assertEqual(len([l for l in first if l.startswith("RELEASED AS NOT A HOLD")]), 1)
+        self.assertEqual(ws.hold_lines(self.sid), [])                                 # once
+        ws.hold("stream-d", "Stream D", "", "", self.sid)
+        self.spawn("zach-opus-d", extra="continues: stream-d\n")                      # a continuation runs it
+        self.assertEqual(ws.holds(self.sid), [])
+
+    def test_holds_a_message_telling_a_teammate_to_wait_is_a_hold_and_a_later_one_its_go(self):
+        """The words are scripts/lib/hold_words.py's, the one list the deferral analyzer
+        shares (2026-10-21: "wait for my go" sent to a teammate went quiet)."""
+        aid, _n = self.spawn("zach-opus-w7")
+        send = lambda text: ws.lifecycle({"hook_event_name": "PostToolUse", "tool_name": "SendMessage",
+                                          "session_id": self.sid, "tool_input": {"to": "zach-opus-w7",
+                                                                                 "message": text}}, self.entity)
+        _ctx, notes = send("Commit what you have. Then wait for my go before the walk.")
+        self.assertTrue(any(n.startswith("HOLD RECORDED on zach-opus-w7") for n in notes), notes)
+        self.assertEqual([(h["name"], h["source"]) for h in ws.holds(self.sid)], [("zach-opus-w7", "wait")])
+        # Review rv-20261022T002958Z-2ac46e09-fa4e finding 1, rechecked in
+        # rv-20261022T023129Z-cefd17cf-7c77 (fixtures/hold_edges.py): none of these is the go.
+        for text in ["What is your current status?", "What do you need before you can proceed?",
+                     "Do not resume yet; the review is still running."]:
+            send(text)
+            self.assertEqual([(h["name"], h["source"]) for h in ws.holds(self.sid)], [("zach-opus-w7", "wait")],
+                             text)
+        send("Go: run the walk now.")
+        self.assertEqual(ws.holds(self.sid), [])
+
+    def test_holds_the_gates_turn_end_message_carries_the_lines(self):
+        """The workspace gate (Stop) puts the hold lines in its systemMessage, at every turn end."""
+        ws.hold("stream-b", "Stream B of his spelling order", "", "on hold, deliberately", self.sid)
+        h = ws.read_json(ws._hold_path("stream-b"))
+        h["at"] -= 31 * 60
+        ws.write_json(ws._hold_path("stream-b"), h)
+        for _turn in range(2):
+            ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
+            self.assertTrue(ok, msg)
+            self.assertIn("HELD BY RICH, NOT BY YOU: Stream B of his spelling order since", msg)
+
+    def test_holds_a_pause_outlives_its_session(self):
+        """Review rv-20261022T013056Z-12c77c90-1291 finding 5: a manual pause, then an ordinary
+        session end, must not drop the paused work from both reporting paths."""
+        aid, _n = self.spawn("zach-opus-ps")
+        ws.pause("zach-opus-ps", "Rich's resume", self.sid)
+        self.assertEqual([h["source"] for h in ws.holds(self.sid) if h["name"] == "zach-opus-ps"], ["pause"])
+        ws.record_session_end(self.sid, "SessionEnd")
+        held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-ps"]
+        self.assertEqual([h["source"] for h in held], ["pause-ended"])
+        self.assertIn("continues: zach-opus-ps", ws.hold_command(held[0]))
+        self.assertTrue(any("the work of zach-opus-ps" in l for l in ws.hold_lines(self.sid, at=ws.now() + 31 * 60)))
+
+    def test_holds_a_repeated_wait_keeps_the_age_of_the_hold(self):
+        """Review rv-20261022T002958Z-2ac46e09-fa4e finding 2: repeating an unresolved wait every
+        20 minutes must not make a 2-hour hold look new."""
+        self._pending_one()
+        ws.wait("zach-opus-p5", "started", "real-app checks left", "", self.sid)
+        rec = self.rec("zach-opus-p5")
+        rec["waiting"]["at"] -= 139 * 60
+        ws.save_agent(rec)
+        ws.wait("zach-opus-p5", "started", "real-app checks left (still)", "", self.sid)
+        held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-p5"]
+        self.assertGreaterEqual(ws.now() - held[0]["since"], 139 * 60)
+        self.assertTrue(any("(2 h 19 min)" in l or "(2 h 20 min)" in l for l in ws.hold_lines(self.sid)))
+
+    def test_holds_a_todo_reference_is_his_only_when_it_is_on_his_page(self):
+        """Review rv-20261022T002958Z-2ac46e09-fa4e finding 3: a GitHub outage with a TODO
+        reference is not his decision; only an item his CEO-TODOs page shows waiting on him is."""
+        self._pending_one()
+        ws.wait("zach-opus-p5", "outside", "GitHub is down, the merge cannot be pushed", "CEO-TODOs 7.1", self.sid)
+        held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-p5"]
+        self.assertEqual(held[0]["state"], "none")                 # reported: not on his page
+        page = os.path.join(self.env.root, "CEO-TODOs.md")
+        with open(page, "w") as f:
+            f.write("# Your TODOs\n\n## Waiting on the CEO - his hands\n\n### 7.1 \u2014 GitHub billing\n")
+        with patch.dict(os.environ, {"RICHOS_CEO_TODOS_VIEW": page}):
+            held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-p5"]
+            self.assertEqual(held[0]["state"], "ceo")              # on his page: his decision, quiet
+
+    def test_holds_t6_a_correction_its_run_never_acted_on_stays_in_sight(self):
+        """2026-10-21 23:45Z, echo-opus-andreas2: Rich sent the fix for review finding
+        rv-20261021T233844Z-10df0b1f-1846#1, its run ended at 23:45:14Z, and the branch sat
+        at 10df0b1fc with the hole open; only the agent's own last words said so."""
+        aid, npath = self.spawn("zach-opus-c6")
+        self.commit(npath)
+        ws.lifecycle({"hook_event_name": "PostToolUse", "tool_name": "SendMessage", "session_id": self.sid,
+                      "tool_input": {"to": "zach-opus-c6", "message": "Fix review finding #1: quota.rs:702."}},
+                     self.entity)
+        self.finish(aid)                                       # its run ends before it acts on it
+        held = [h for h in ws.holds(self.sid) if h["source"] == "correction"]
+        self.assertEqual([h["name"] for h in held], ["zach-opus-c6"])
+        self.assertIn("Fix review finding #1", held[0]["why"])
+        lines = ws.hold_lines(self.sid, at=ws.now() + 31 * 60)
+        self.assertTrue(any(l.startswith("HELD BY RICH, NOT BY YOU: the correction sent to zach-opus-c6")
+                            for l in lines), lines)
+        with self.assertRaises(ws.SpecError):
+            ws.release("zach-opus-c6", session_id=self.sid)    # Rich saying so ends nothing
+        rec = self.rec("zach-opus-c6")                         # the correction was sent a minute ago
+        rec["correction"]["at"] -= 60
+        ws.save_agent(rec)
+        self.commit(npath, "fix.txt")                          # and it is acted on now
+        self.assertEqual([h for h in ws.holds(self.sid) if h["source"] == "correction"], [])
+
+    def test_holds_t6_a_changes_requested_review_handed_over_without_the_fix(self):
+        aid, npath = self.spawn("zach-opus-r6")
+        self.commit(npath)
+        tip = run("git", "-C", npath, "rev-parse", "HEAD").stdout.strip()
+        state = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "state")
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "reviews.jsonl"), "a") as f:
+            f.write(json.dumps({"id": "rv-fixture-cr", "tip": tip, "verdict": "changes-requested", "findings": 1,
+                                "trigger": "long-job", "finished_at": ws.iso()}) + "\n")
+        self.finish(aid)                                       # hands over on the reviewed tip
+        held = [h for h in ws.holds(self.sid) if h["source"] == "review"]
+        self.assertEqual([(h["name"], h["review"]) for h in held], [("zach-opus-r6", "rv-fixture-cr")])
+        ws.release("zach-opus-r6", ceo_word="ship it as it is", session_id=self.sid)
+        self.assertEqual([h for h in ws.holds(self.sid) if h["source"] == "review"], [])
+
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,
     # e.g. `workspaces.test.py Point05_Guarantee` -- one point's proof -- or a

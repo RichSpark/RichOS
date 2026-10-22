@@ -243,7 +243,7 @@ module.exports = [
       "deliberate stop as an error. It issues no instruction and asks for nothing.",
   },
   {
-    s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Restore my message, then send it again.",
+    s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. Press Restore my message, then send it again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: null,
@@ -251,7 +251,22 @@ module.exports = [
       "`InterruptionCause::Transient` — the ONE class where asking again is honest advice, " +
       "and therefore the one that still draws the card's button. It is the positive control " +
       "for the whole change: without a class that keeps the control, 'the sign-in case has " +
-      "no button' could just mean the card stopped drawing one.",
+      "no button' could just mean the card stopped drawing one. It said 'This usually fixes " +
+      "itself' until 2026-10-21, when a new user was shown it on every message of a Mac where it " +
+      "never did; the same failure again right after it is `Repeated`, the row below.",
+  },
+  {
+    s: "Rich could not answer again because Claude Code stopped before he replied, so sending again is unlikely to help. Open Settings and choose Claude accounts to check that your account is signed in on this Mac. If it is, press Bust a bug in Settings so we can see what went wrong.",
+    c: "ACTIONABLE",
+    control: "#set-btn",
+    fixture: "interruption-repeated",
+    why:
+      "`InterruptionCause::Repeated` (2026-10-21, docs/development/failure-classes/" +
+      "permanent-failure-told-as-passing.md): the lost connection again, right after the last " +
+      "one, with no answer in between. A failure that repeats is not passing, so it offers no " +
+      "retry; it names the one place that says whether the account is signed in (Claude " +
+      "accounts, which now says Not signed in with Sign in on the card) and the way to report " +
+      "it when it is. The Settings button is on screen in every view this card appears in.",
   },
   {
     s: "Rich's answer stopped early and RichOS can't tell you why. Press Restore my message, then send it again.",
@@ -525,24 +540,32 @@ module.exports = [
   {
     s:
       "I can hear sound, but I'm not getting words out of it. The microphone may be " +
-      "picking up the room rather than you. Voice is still on.",
-    c: "INFORMATIONAL",
+      "picking up the room rather than you. Please say it again closer to the microphone. I'm still listening.",
+    c: "ACTIONABLE",
+    control: "#talk-toggle",
+    fixture: "shell",
     why:
       "`VoiceNotice::SoundButNoWords`, added 2026-09-04. Three utterances in a row came " +
       "back as whisper's documented silence noise, which is the ONE path in the recognizer " +
       "thread that used to produce nothing at all: an utterance in, an eprintln out, and " +
       "the panel still saying \"listening…\". Ray measured 25+ seconds of exactly that on " +
-      "published v1.0.0. It is INFORMATIONAL rather than ACTIONABLE deliberately — it " +
-      "invents no control, because the ◉ that ends voice is already on screen with its own " +
-      "footnote two lines below the notice, and a sentence pointing at a control that is " +
-      "already offered is a request wearing a status's clothes.",
+      "published v1.0.0. It is ACTIONABLE: after repeated recognition refusals, it tells the user " +
+      "to repeat the message nearer the microphone. The open microphone is the recovery path; " +
+      "the voice toggle remains available to switch back to typing.",
   },
   {
     s:
-      "That didn't come through as speech, so I haven't sent anything. I'm still " +
-      "listening.",
-    c: "INFORMATIONAL",
+      "That didn't come through as speech, so I haven't sent anything. If you said " +
+      "something, please say it again. I'm still listening.",
+    c: "ACTIONABLE",
+    control: "#talk-toggle",
+    fixture: "shell",
     why:
+      "ACTIONABLE SINCE 2026-10-21, with its two siblings: a line saying his words may not " +
+      "have gone anywhere now says what to do, conditionally (a cough reaches this path " +
+      "too), and the open microphone (◉, #talk-toggle) is the control. The class and its " +
+      "check: docs/development/failure-classes/lost-input-without-a-next-step.md. The " +
+      "history before that change follows. " +
       "`VoiceNotice::HeardNoVoice`, added 2026-09-05. The audio-grounded gate in " +
       "`crates/richos-voice/src/voiced.rs` measured the recording and found no voice in " +
       "it, so whisper was never called and nothing was submitted. It exists because the " +
@@ -561,9 +584,18 @@ module.exports = [
   {
     s:
       "While I was speaking, I couldn't tell your voice from my own, so if you said " +
-      "something just then, it didn't reach me and I haven't sent anything. I'm listening now.",
-    c: "INFORMATIONAL",
+      "something just then, it didn't reach me and I haven't sent anything. If you did, " +
+      "please say it again now. I'm listening.",
+    c: "ACTIONABLE",
+    control: "#talk-toggle",
+    fixture: "shell",
     why:
+      "ACTIONABLE SINCE 2026-10-21. A new user on 1.2.1 got this line right after a failed " +
+      "answer (Rich had just spoken the cut-off notice through his speakers) and it ended " +
+      "with a status, so it explained a loss and gave no next step. It now says the step, " +
+      "conditionally: say it again now. The microphone is open (◉, #talk-toggle, is on " +
+      "while voice is on), so the step needs nothing else. What follows is the history of " +
+      "the sentence before that change. " +
       "`VoiceNotice::CouldNotListenWhileSpeaking`, added 2026-09-17 for audit-3 §4 #1 and " +
       "REWRITTEN the same day after Ray's candidate-.4 walk proved the first wording false " +
       "on the CEO's own rig. It used to read \"You started talking while I was still " +
@@ -589,11 +621,11 @@ module.exports = [
       "path is committed as a test fixture and replays under `cargo test` without reaching " +
       "confidence, so every spoken answer through the speakers produces one of these " +
       "discards. " +
-      "INFORMATIONAL, and it still makes NO capability claim: \"I can't hear you while I'm " +
+      "It still makes NO capability claim: \"I can't hear you while I'm " +
       "speaking\" would be false twice, because talking over him for 5.008 s cuts him off " +
       "today and a confident canceller admits the utterance outright. It still states the " +
       "consequence, because the failure it explains is the app sending the TAIL of his " +
-      "sentence as though it were the whole of it. It ends with a status rather than \"wait " +
+      "sentence as though it were the whole of it. Its step is \"say it again now\", never \"wait " +
       "until I finish\", which would be an instruction to use the product more carefully to " +
       "work around a limitation. Latched ONCE PER VOICE SESSION (`RefusalNotices`), not " +
       "per run: cleared-on-heard would mean one line after every single spoken answer, " +
@@ -606,9 +638,16 @@ module.exports = [
       "themselves on top of it.",
   },
   {
-    s: "I didn't catch that, so I haven't sent anything. I'm still listening.",
-    c: "INFORMATIONAL",
+    s: "I didn't catch that, so I haven't sent anything. Please say it again. I'm still listening.",
+    c: "ACTIONABLE",
+    control: "#talk-toggle",
+    fixture: "shell",
     why:
+      "ACTIONABLE SINCE 2026-10-21, with its two siblings: a voice WAS measured, so his words " +
+      "are lost unless he says them again, and the line now says so; the open microphone " +
+      "(◉, #talk-toggle) is the control. The class and its check: " +
+      "docs/development/failure-classes/lost-input-without-a-next-step.md. The history " +
+      "before that change follows. " +
       "`VoiceNotice::DidNotCatchThat`, added 2026-09-17 for audit-3 §4 #4. Whisper RAN and " +
       "returned non-speech noise — `(clears throat)` — which `stt::is_meaningful` refuses. " +
       "It closes an ASYMMETRY between the two refusal paths that sit side by side in " +
@@ -2939,13 +2978,27 @@ module.exports = [
     control: "#update-check",
     fixture: "updates-install-failed",
     why:
-      "`install_failure()`'s headline at updates.rs:271 — the `failed` state with kind " +
-      "`install`, which is every staging failure that is not a refused signature. He can " +
+      "`INSTALL_HEADLINE` in updates.rs (`Failure::of_journal`) — the `failed` state with kind " +
+      "`install`, which is every update-record or staging failure that is not a refused " +
+      "signature and not a busy record (the row below). He can " +
       "act, and the control is the same one the network failure names: `isSignature(v)` is " +
       "false here, so `paint()` keeps `#update-check` visible and relabels it 'Try again'. " +
       "It gets its OWN fixture rather than borrowing `updates-failed`, because the row " +
       "claims this headline renders with that control and the network fixture renders a " +
       "different headline.",
+  },
+  {
+    s: "RichOS is busy with another update task. Try again in a minute.",
+    c: "ACTIONABLE",
+    control: "#update-check",
+    fixture: "updates-busy",
+    why:
+      "`BUSY_HEADLINE` in updates.rs, the `failed` state with kind `busy`: the update record's " +
+      "lock stayed held for the updater's whole wait (`richos_user_update::PUBLICATION_WAIT`, " +
+      "5 s) by another part of RichOS. Nothing failed, so it is said as busy; until 2026-10-21 " +
+      "this was 'RichOS could not prepare this update.' over 'Resource temporarily unavailable " +
+      "(os error 35)' on a plain check. He can act: `isSignature(v)` is false, so `paint()` " +
+      "keeps `#update-check` visible as 'Try again', which the sentence names.",
   },
   {
     s: "Password-free application updates are not implemented on this platform.",
@@ -3687,6 +3740,31 @@ module.exports = [
     "s": "Folder connected. Git was set up to track its files.",
     "c": "INFORMATIONAL",
     "why": "Confirms a connection that also set up Git, because every connected folder gets Git tracking (CEO, 2026-10-06): the folder had none, so its files became the first commit. Nothing was pushed and nothing is left to do."
+  },
+  {
+    "s": "Already connected to",
+    "c": "FRAGMENT",
+    "why": "Head of the shared-folder notice on the connected folders sheet (plan item 11, round 36 screen 2), completed by the company names that already have the folder. The button beside it, Connect to <company> too, is the action."
+  },
+  {
+    "s": "Connect it here too and Rich can work in it from",
+    "c": "FRAGMENT",
+    "why": "First part of the shared-folder notice's second sentence (round 36 screen 2), completed by the company names around 'chats as well as'."
+  },
+  {
+    "s": "chats as well as",
+    "c": "FRAGMENT",
+    "why": "Middle of the shared-folder notice's second sentence (round 36 screen 2), between the two company names."
+  },
+  {
+    "s": "Nothing in the folder moves and each company keeps its own chats and notes.",
+    "c": "INFORMATIONAL",
+    "why": "Third sentence of the shared-folder notice (round 36 screen 2): says what does not change when a folder is in two companies. Nothing is left to do."
+  },
+  {
+    "s": "Folder connected. It is now in",
+    "c": "FRAGMENT",
+    "why": "Confirmation after a folder is connected to a second company (plan item 11), completed by the company names. Nothing is left to do."
   },
   {
     "s": "No project folders connected yet.",
@@ -4933,19 +5011,17 @@ module.exports = [
   {"s":"Add another Claude account","c":"INFORMATIONAL","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the inline Add account form's title with two or more accounts. tests/quota.js renders it in both themes with contrast computed."},
   {"s":"Agents hold their place and resume","c":"FRAGMENT","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the hold sentence when every account is used up and no agent is listed."},
   {"s":"At this speed the next check still comes before 100%, so the at .","c":"INFORMATIONAL","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): fast usage whose speed does not move the line; states what RichOS does. tests/quota.js renders it in both themes with contrast computed."},
-  {"s":"<section class=\"overlay-panel quota-panel\"> <header class=\"quota-heading\"><div><p class=\"quota-eyebrow\">Settings · Technical view</p> <h2 id=\"quota-title\">Claude Code quota</h2> <p id=\"quota-lede\" class=\"quota-lede\">Straight from Claude Code, shared across every app and session on this account.</p></div> <button id=\"quota-close\" type=\"button\" aria-label=\"Close Claude Code quota\">×</button></header> <div class=\"quota-body\"><div class=\"quota-windows-col\"> <div class=\"quota-toolbar\"><span id=\"quota-freshness\">Loading quota…</span> <div class=\"quota-toolbar-actions\"><button id=\"quota-account-start\" class=\"quota-btn quota-btn-quiet\" type=\"button\">+ Add account</button> <button id=\"quota-refresh\" class=\"quota-btn\" type=\"button\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M21 12a9 9 0 1 1-2.64-6.36\"/><path d=\"M21 3v6h-6\"/></svg><span id=\"quota-refresh-label\">Refresh</span></button></div></div> <p id=\"quota-message\" class=\"quota-message\" role=\"status\" hidden></p> <div id=\"quota-lanes\" class=\"quota-lanes\" role=\"list\" aria-label=\"Claude accounts\" hidden></div> <div id=\"quota-account-new\" class=\"quota-addform\" role=\"group\" aria-labelledby=\"quota-addform-title\" hidden> <p id=\"quota-addform-title\" class=\"quota-addform-title\">Add a second Claude account</p> <div id=\"quota-addform-rows\" class=\"quota-addform-rows\"> <label id=\"quota-account-current-row\" class=\"quota-addform-row\"><span>The account signed in now</span> <input id=\"quota-account-current\" type=\"text\" maxlength=\"40\" placeholder=\"A name only you see\"></label> <label class=\"quota-addform-row\"><span>The new account</span> <input id=\"quota-account-label\" type=\"text\" maxlength=\"40\" placeholder=\"A name only you see, like Work\"></label></div> <div class=\"quota-addform-actions\"><button id=\"quota-account-add\" class=\"quota-btn quota-btn-primary\" type=\"button\">Add and sign in</button> <button id=\"quota-account-cancel\" class=\"quota-btn\" type=\"button\">Cancel</button> <span class=\"quota-muted\">Claude Code signs in through your browser.</span></div></div> <p id=\"quota-account-feedback\" class=\"quota-account-feedback\" role=\"status\" aria-live=\"polite\"></p> <div id=\"quota-windows\" aria-label=\"Claude Code quota windows\"></div> <div id=\"quota-empty\" hidden><h3>Nothing to show yet.</h3><p>RichOS asks Claude Code for its own usage figures and shows exactly what comes back. <span id=\"quota-empty-why\">Claude Code has not answered yet</span>, so there is no number here: <b>not zero, not full, nothing guessed.</b></p><p id=\"quota-empty-next\">If this stays empty after a refresh, Claude Code may not be signed in on this Mac.</p></div> <p class=\"quota-legend\">The gold bar is what you have used; the tick is how far the clock has run. <b>Bar past the tick means you are spending faster than the window is passing.</b></p> <section id=\"quota-reset-offers\" class=\"quota-reset-offers\" aria-label=\"Weekly quota resets\" hidden><button id=\"quota-usage-open\" class=\"quota-btn\" type=\"button\" title=\"claude.ai/new#settings/usage\">Open Claude Usage</button></section> <p id=\"quota-reset-feedback\" role=\"status\" aria-live=\"polite\"></p> </div><form id=\"quota-policy\" class=\"quota-policy\" novalidate> <h3 id=\"quota-policy-title\">Automatic pause</h3> <div class=\"quota-switch-row\"><button id=\"quota-enabled\" class=\"quota-switch\" type=\"button\" role=\"switch\" aria-checked=\"false\" aria-label=\"Automatically pause Rich’s agents\"></button> <div class=\"quota-switch-label\"><span id=\"quota-sentence-lead\">Pause Rich’s agents once the five-hour window passes</span> <label class=\"quota-threshold\"><span class=\"sr-only\">Pause threshold, percent used</span><input id=\"quota-threshold\" inputmode=\"numeric\" type=\"text\" maxlength=\"3\" value=\"93\" aria-describedby=\"quota-validation\">% used</label><span id=\"quota-sentence-end\"><span class=\"quota-muted\">, unless the reset is under 20 minutes away.</span></span> <div id=\"quota-verbs\" class=\"quota-opts\" role=\"radiogroup\" aria-label=\"What happens at the line\" hidden> <button id=\"quota-verb-pause\" class=\"quota-opt\" type=\"button\" role=\"radio\" data-act=\"pause\" aria-checked=\"true\"><span class=\"quota-radio\" aria-hidden=\"true\"></span><span>pause Rich’s agents</span></button> <button id=\"quota-verb-switch\" class=\"quota-opt\" type=\"button\" role=\"radio\" data-act=\"switch\" aria-checked=\"false\"><span class=\"quota-radio\" aria-hidden=\"true\"></span><span id=\"quota-verb-switch-text\">switch to the next account</span></button></div> <span id=\"quota-sentence-tail\" class=\"quota-sentence-tail\" hidden>unless the reset is under 20 minutes away.</span> <p id=\"quota-hint\" class=\"quota-hint\" hidden></p> <div id=\"quota-draft-actions\" hidden><button id=\"quota-save\" class=\"quota-btn quota-btn-primary\" type=\"submit\">Save</button> <button id=\"quota-keep\" class=\"quota-btn\" type=\"button\">Keep 93%</button></div> <p id=\"quota-validation\" role=\"status\" hidden></p> </div></div> <p id=\"quota-save-status\" role=\"status\" aria-live=\"polite\" hidden></p> <div id=\"quota-status-card\" class=\"quota-status-card\"> <h4 id=\"quota-hold-status\">Loading pause status…</h4> <div id=\"quota-hold-detail\" class=\"quota-hold-detail\"></div><ul id=\"quota-held\" aria-label=\"Observed pauses\"></ul> <div class=\"quota-status-actions\"><button id=\"quota-hold-refresh\" type=\"button\" class=\"quota-btn\" hidden>Refresh now</button> <button id=\"quota-release\" type=\"button\" class=\"quota-btn\" hidden>Let them continue now</button></div> </div> <div id=\"quota-boundary-one\" class=\"quota-boundary\"><p><b>A pause is not a stop.</b> Each agent finishes the step it is on, then waits before the next, keeping its place and everything it knows. Because a step is allowed to finish, usage can climb a little past the line.</p> <p>Your conversation with Rich and any Claude Code you run outside RichOS, are never paused.</p></div> <div id=\"quota-boundary-many\" class=\"quota-boundary\" hidden><p><b>A pause is not a stop; a switch is not a restart.</b> Paused, an agent keeps its place and waits; switched, its next step runs on the next account with everything carried over.</p> <p>At <b>99%</b> of an account’s week Rich switches whatever you choose here, always to the account whose week ends soonest; when every account is used up, work waits for the soonest reset.</p></div> </form></div></section>","c":"NOT-RENDERED","why":"HTML scaffold assigned to innerHTML, never displayed as one raw string. The quota.js suite walks the rendered panel, its controls and both themes; the individually emitted state sentences are classified separately."},
+  {"s":"<section class=\"overlay-panel quota-panel\"> <header class=\"quota-heading\"><div><p class=\"quota-eyebrow\">Settings · Technical view</p> <h2 id=\"quota-title\">Claude Code quota</h2> <p id=\"quota-lede\" class=\"quota-lede\">Straight from Claude Code, shared across every app and session on this account.</p></div> <button id=\"quota-close\" type=\"button\" aria-label=\"Close Claude Code quota\">×</button></header> <div class=\"quota-body\"><div class=\"quota-windows-col\"> <div class=\"quota-toolbar\"><span id=\"quota-freshness\">Loading quota…</span> <div class=\"quota-toolbar-actions\"><button id=\"quota-account-start\" class=\"quota-btn quota-btn-quiet\" type=\"button\">+ Add account</button> <button id=\"quota-refresh\" class=\"quota-btn\" type=\"button\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M21 12a9 9 0 1 1-2.64-6.36\"/><path d=\"M21 3v6h-6\"/></svg><span id=\"quota-refresh-label\">Refresh</span></button></div></div> <p id=\"quota-message\" class=\"quota-message\" role=\"status\" hidden></p> <div id=\"quota-lanes\" class=\"quota-lanes\" role=\"list\" aria-label=\"Claude accounts\" hidden></div> <div id=\"quota-account-new\" class=\"quota-addform\" role=\"group\" aria-labelledby=\"quota-addform-title\" hidden> <p id=\"quota-addform-title\" class=\"quota-addform-title\">Add a second Claude account</p> <div id=\"quota-addform-rows\" class=\"quota-addform-rows\"> <label id=\"quota-account-current-row\" class=\"quota-addform-row\"><span>The account signed in now</span> <input id=\"quota-account-current\" type=\"text\" maxlength=\"40\" placeholder=\"A name only you see\"></label> <label class=\"quota-addform-row\"><span>The new account</span> <input id=\"quota-account-label\" type=\"text\" maxlength=\"40\" placeholder=\"A name only you see, like Work\"></label></div> <div class=\"quota-addform-actions\"><button id=\"quota-account-add\" class=\"quota-btn quota-btn-primary\" type=\"button\">Add and sign in</button> <button id=\"quota-account-cancel\" class=\"quota-btn\" type=\"button\">Cancel</button> <span class=\"quota-muted\">Claude Code signs in through your browser.</span></div></div> <p id=\"quota-account-feedback\" class=\"quota-account-feedback\" role=\"status\" aria-live=\"polite\"></p> <div id=\"quota-windows\" aria-label=\"Claude Code quota windows\"></div> <div id=\"quota-empty\" hidden><h3>Nothing to show yet.</h3><p>RichOS asks Claude Code for its own usage figures and shows exactly what comes back. <span id=\"quota-empty-why\">Claude Code has not answered yet.</span> There is no number here: <b>not zero, not full, nothing guessed.</b></p><p id=\"quota-empty-next\">If this stays empty after a refresh, Claude Code may not be signed in on this Mac.</p></div> <p class=\"quota-legend\">The gold bar is what you have used; the tick is how far the clock has run. <b>Bar past the tick means you are spending faster than the window is passing.</b></p> <section id=\"quota-reset-offers\" class=\"quota-reset-offers\" aria-label=\"Weekly quota resets\" hidden><button id=\"quota-usage-open\" class=\"quota-btn\" type=\"button\" title=\"claude.ai/new#settings/usage\">Open Claude Usage</button></section> <p id=\"quota-reset-feedback\" role=\"status\" aria-live=\"polite\"></p> </div><form id=\"quota-policy\" class=\"quota-policy\" novalidate> <h3 id=\"quota-policy-title\">Automatic pause</h3> <div class=\"quota-switch-row\"><button id=\"quota-enabled\" class=\"quota-switch\" type=\"button\" role=\"switch\" aria-checked=\"false\" aria-label=\"Automatically pause Rich’s agents\"></button> <div class=\"quota-switch-label\"><span id=\"quota-sentence-lead\">Pause Rich’s agents once the five-hour window passes</span> <label class=\"quota-threshold\"><span class=\"sr-only\">Pause threshold, percent used</span><input id=\"quota-threshold\" inputmode=\"numeric\" type=\"text\" maxlength=\"3\" value=\"93\" aria-describedby=\"quota-validation\">% used</label><span id=\"quota-sentence-end\"><span class=\"quota-muted\">, unless the reset is under 20 minutes away.</span></span> <div id=\"quota-verbs\" class=\"quota-opts\" role=\"radiogroup\" aria-label=\"What happens at the line\" hidden> <button id=\"quota-verb-pause\" class=\"quota-opt\" type=\"button\" role=\"radio\" data-act=\"pause\" aria-checked=\"true\"><span class=\"quota-radio\" aria-hidden=\"true\"></span><span>pause Rich’s agents</span></button> <button id=\"quota-verb-switch\" class=\"quota-opt\" type=\"button\" role=\"radio\" data-act=\"switch\" aria-checked=\"false\"><span class=\"quota-radio\" aria-hidden=\"true\"></span><span id=\"quota-verb-switch-text\">switch to the next account</span></button></div> <span id=\"quota-sentence-tail\" class=\"quota-sentence-tail\" hidden>unless the reset is under 20 minutes away.</span> <p id=\"quota-hint\" class=\"quota-hint\" hidden></p> <div id=\"quota-draft-actions\" hidden><button id=\"quota-save\" class=\"quota-btn quota-btn-primary\" type=\"submit\">Save</button> <button id=\"quota-keep\" class=\"quota-btn\" type=\"button\">Keep 93%</button></div> <p id=\"quota-validation\" role=\"status\" hidden></p> </div></div> <p id=\"quota-save-status\" role=\"status\" aria-live=\"polite\" hidden></p> <div id=\"quota-status-card\" class=\"quota-status-card\"> <h4 id=\"quota-hold-status\">Loading pause status…</h4> <div id=\"quota-hold-detail\" class=\"quota-hold-detail\"></div><ul id=\"quota-held\" aria-label=\"Observed pauses\"></ul> <div class=\"quota-status-actions\"><button id=\"quota-hold-refresh\" type=\"button\" class=\"quota-btn\" hidden>Refresh now</button> <button id=\"quota-release\" type=\"button\" class=\"quota-btn\" hidden>Let them continue now</button></div> </div> <div id=\"quota-boundary-one\" class=\"quota-boundary\"><p><b>A pause is not a stop.</b> Each agent finishes the step it is on, then waits before the next, keeping its place and everything it knows. Because a step is allowed to finish, usage can climb a little past the line.</p> <p>Your conversation with Rich and any Claude Code you run outside RichOS, are never paused.</p></div> <div id=\"quota-boundary-many\" class=\"quota-boundary\" hidden><p><b>A pause is not a stop; a switch is not a restart.</b> Paused, an agent keeps its place and waits; switched, its next step runs on the next account with everything carried over.</p> <p>At <b>99%</b> of an account’s week Rich switches whatever you choose here, always to the account whose week ends soonest; when every account is used up, work waits for the soonest reset.</p></div> </form></div></section>","c":"NOT-RENDERED","why":"HTML scaffold assigned to innerHTML, never displayed as one raw string. The quota.js suite walks the rendered panel, its controls and both themes; the individually emitted state sentences are classified separately."},
   {"s":"and the pause acts only on a number. Rather than wait on Claude Code, Rich’s agents keep working; the pause acts again once a reading shows the five-hour window past <b>%</b>.","c":"INFORMATIONAL","why":"Walk of nightly 36, D1 (docs/verification/2026-10-05-nightly-36-candidate-walk.md): the card when a check came back with no figures (quota.rs Admission::NoReading). It says what the pause does with no number; nothing is held, so nothing is asked of the user. tests/quota.js renders it in both themes with contrast computed."},
   {"s":"<b></b> The figures below are from ago and may have moved on.","c":"INFORMATIONAL","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the `refresh-failed` notice, also said for a null answer over earlier figures. Refresh sits in the same reading line and the notice's own tail says so."},
   {"s":"<span class=\"quota-muted\">, unless the reset is under 20 minutes away.</span>","c":"FRAGMENT","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the end of the one-account sentence, set as markup after the threshold field."},
   {"s":"Ask Claude Code","c":"CONTROL","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): Refresh's label while there is no reading at all (`unavailable`)."},
   {"s":"Change the number to move the line.","c":"ACTIONABLE","control":"#quota-threshold","fixture":null,"why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the one-account hint while the pause is on; the threshold field it names is beside it and enabled."},
   {"s":"Claude Code answered without its usage figures just now.","c":"INFORMATIONAL","why":"Walk of nightly 36, D1 (docs/verification/2026-10-05-nightly-36-candidate-walk.md): the head of the notice for a null answer over earlier figures. Refresh is in the same reading line."},
-  {"s":"Claude Code answered without its usage figures this time","c":"FRAGMENT","why":"Walk of nightly 36, D1 (docs/verification/2026-10-05-nightly-36-candidate-walk.md): the middle of the empty state's sentence after a null answer."},
-  {"s":"Claude Code has not answered yet","c":"FRAGMENT","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the middle of the `unavailable` empty state's sentence."},
+  {"s":"Claude Code answered without its usage figures this time.","c":"INFORMATIONAL","why":"A complete explanation of the missing usage reading. It stands as its own sentence before the no-number explanation; the panel provides Ask Claude Code separately."},
+  {"s":"Claude Code has not answered yet.","c":"INFORMATIONAL","why":"A complete explanation of the missing usage reading. It stands as its own sentence before the no-number explanation; the panel provides Ask Claude Code separately."},
   {"s":"Holding since .","c":"ACTIONABLE","control":"#quota-release","fixture":null,"why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the `holding` card's head; Let them continue now is on the card."},
-  {"s":"If this stays empty after a refresh, Claude Code may not be signed in on this Mac.","c":"ACTIONABLE","control":"#quota-refresh","fixture":null,"why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the `unavailable` empty state; Ask Claude Code is in the reading line above it."},
   {"s":"No current reading, so nothing is held.","c":"INFORMATIONAL","why":"Walk of nightly 36, D1 (docs/verification/2026-10-05-nightly-36-candidate-walk.md): the card when a check came back with no figures. Nothing is held; Refresh now is on the card for whoever wants a reading sooner."},
-  {"s":"No reading yet.","c":"ACTIONABLE","control":"#quota-refresh","fixture":null,"why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the reading line with no reading; Ask Claude Code is beside it."},
   {"s":"Off: the line is only drawn, not enforced.","c":"ACTIONABLE","control":"#quota-enabled","fixture":null,"why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the one-account hint while the pause is off; the switch beside the sentence turns it on."},
   {"s":"Pause Rich’s agents once the five-hour window passes","c":"FRAGMENT","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the head of the one-account sentence, before the threshold field."},
   {"s":"Releasing: the reset is away.","c":"INFORMATIONAL","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the `releasing` card's head; the pause lifts by itself."},
@@ -5023,7 +5099,6 @@ module.exports = [
   {"s":"when it reached a usage limit","c":"FRAGMENT","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): why the last switch happened."},
   {"s": "Account 1 signs in from the main sign-in.", "c": "UNREACHABLE", "why": "claude_account_sign_in refuses Account 1 by id. The quota panel draws Sign in only on added accounts (quota.js renderAccounts skips id 1), so no control sends it."},
   {"s": "Finish the sign-in in your browser.", "c": "ACTIONABLE", "control": "#quota-refresh", "fixture":null, "why": "Sign in on an added account's row starts the stock browser sign-in; Refresh reads it once it is done. Fill-first (plan richos-hq 2026-10-04 §15): the Claude accounts section of the quota panel. quota.js renders it in both themes with contrast computed."},
-  {"s": "Not read yet. Sign in, then refresh.", "c": "ACTIONABLE", "control": "#quota-refresh", "fixture":null, "why": "An added account with no reading. Its row carries Sign in, and Refresh is in the toolbar of the same panel. quota.js's two-accounts state shows the row with both buttons."},
   {"s": "· usable again", "c": "FRAGMENT", "why": "Appended to an account row's figures while the account is past its check point or refused by a limit, before the time it can be used again. The whole line is INFORMATIONAL: it states figures and a time and asks nothing."},
   {"s": "Usage limit reached", "c": "INFORMATIONAL", "why": "An account row with no figures that a usage limit refused, followed by the time it can be used again. Fill-first (plan richos-hq 2026-10-04 §15): the Claude accounts section of the quota panel. quota.js renders it in both themes with contrast computed."},
   {"s": "No allowance reported.", "c": "INFORMATIONAL", "why": "An added account that was read but reported no window. States the fact only. Fill-first (plan richos-hq 2026-10-04 §15): the Claude accounts section of the quota panel. quota.js renders it in both themes with contrast computed."},
@@ -5156,7 +5231,9 @@ module.exports = [
   {"s": "Give the new account a name, for example Work.", "c": "ACTIONABLE", "control": "#acc-nu", "fixture": null, "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): step 1's check: the field it asks for is beside it. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "It is fresh again .", "c": "FRAGMENT", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): \"It is fresh again Thu 9:00 AM.\" inside the banner's why. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "Its week is fresh again soonest, so it goes next.", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): the Next card's line: why it is next (plan answer 1). tests/accounts.js renders it in both themes with contrast computed."},
-  {"s": "No reading yet. If this account is not signed in on this Mac, sign in here.", "c": "ACTIONABLE", "control": "#accounts-sheet [data-act=\"sign-one\"]", "fixture": null, "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): the first account's card with no reading: Sign in on the card opens the app's own sign-in (the setup sheet's account step). tests/accounts.js renders it in both themes with contrast computed."},
+  {"s": "This account is not signed in on this Mac, so Rich cannot answer you yet. Sign in here.", "c": "ACTIONABLE", "control": "#accounts-sheet [data-act=\"sign-one\"]", "fixture": "accounts-signed-out", "why": "A new user's first run (2026-10-21): the card said \"In use now\" and \"No reading yet\" on a Mac where nobody had signed in. quota.rs `View::signed_in` carries Claude Code's own `auth status` verdict; `accounts.js` draws it. docs/development/failure-classes/unknown-state-shown-as-pending.md. The card in use, signed out: Sign in on the card opens the app's own sign-in."},
+  {"s": "Not signed in on this Mac", "c": "ACTIONABLE", "control": "#set-accounts-open", "fixture": "accounts-row-signed-out", "why": "A new user's first run (2026-10-21): the card said \"In use now\" and \"No reading yet\" on a Mac where nobody had signed in. quota.rs `View::signed_in` carries Claude Code's own `auth status` verdict; `accounts.js` draws it. docs/development/failure-classes/unknown-state-shown-as-pending.md. The Settings row's line, in gold: the row opens the sheet whose card has Sign in."},
+  {"s": "Checking whether this account is signed in on this Mac.", "c": "INFORMATIONAL", "fixture": "accounts-checking", "why": "A new user's first run (2026-10-21): the card said \"In use now\" and \"No reading yet\" on a Mac where nobody had signed in. quota.rs `View::signed_in` carries Claude Code's own `auth status` verdict; `accounts.js` draws it. docs/development/failure-classes/unknown-state-shown-as-pending.md. The card in use before the first check has answered; nothing to do, and it is replaced by the verdict when the check returns."},
   {"s": "Not used in the last 5 hours", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): a card's 5-hour meter at 0%. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "Rich and the team are working on this one.", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): the In use now card's line with two or more accounts (with the agents counted when any are). tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "Rich and the team do their work on your Claude account. Claude limits how much each account can do in 5 hours and in a week.", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): the sheet's lede with one account. tests/accounts.js renders it in both themes with contrast computed."},
@@ -5178,6 +5255,7 @@ module.exports = [
   {"s": "That is the account you already use as <b></b>. Sign in with your other Claude account.", "c": "ACTIONABLE", "control": "#accounts-sheet [data-act=\"sign\"]", "fixture": null, "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): an added account's Sign in came back as an account already in use; the card's Sign in is beside it. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "That name is taken. Pick a different one.", "c": "ACTIONABLE", "control": "#acc-nu", "fixture": null, "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): step 1's check: the field is beside it. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "Using , switched", "c": "FRAGMENT", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): \"Using Work, switched 11:01 AM\", the Settings row's line for six hours after a switch. INFORMATIONAL as a whole. tests/accounts.js renders it in both themes with contrast computed."},
+  {"s": "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show.", "c": "INFORMATIONAL", "why": "quota.rs `ReadError::SignedInNoLimits` (Claude Code reported no limits and its own `auth status` says this account is signed in), drawn by `accounts.js` on a card with no reading whose `signedIn` is true, in use or not, and by `quota.js` on such an account's lane in Technical view (reviews rv-20261021T213648Z-b3f0990a-85f9, rv-20261021T234558Z-10df0b1f-03b0 finding 2 and rv-20261022T014956Z-56662dcd-dcc3 finding 1). Nothing to do: the account is signed in and has no limits to show. tests/accounts.js renders it in use and not in use, and measures the card not in use in both themes with contrast computed; tests/quota.js renders the lane."},
   {"s": "Waiting its turn.", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): a Ready card's line. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "When run out, the team pauses until is fresh again . Nothing is lost.", "c": "FRAGMENT", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): the both-near banner's second sentence. tests/accounts.js renders it in both themes with contrast computed."},
   {"s": "Why: had used % of its . Nothing stopped and the team carried on.", "c": "INFORMATIONAL", "why": "Round 18 (richos-hq design/mockups/rounds/round-18/, the CEO's feedback item 9 of 2026-10-06, `accounts.js`): why it switched, the banner's body for a weekly or 5-hour switch. tests/accounts.js renders it in both themes with contrast computed."},
@@ -5509,4 +5587,17 @@ module.exports = [
   {"s":"create the speech synthesis folder: {e}","c":"NOT-RENDERED","why":"The same Pocket TTS voice download: `fetch_rich_voice`'s refusal when the voice folder cannot be created (voice_provision.rs:574). Its only caller is the background thread in `fetch_rich_voice_in_background` (:554), which writes the error with `eprintln!` (:559) and returns nothing to the webview."},
   {"s":"textarea, [contenteditable=\"\"], [contenteditable=\"true\"], [contenteditable=\"plaintext-only\"], input:not([type]), input[type=\"text\"], input[type=\"search\"], input[type=\"url\"], input[type=\"tel\"], input[type=\"email\"], input[type=\"password\"], input[type=\"number\"]","c":"NOT-RENDERED","why":"A CSS selector list, not text anyone reads: `TYPED_INTO` in no-native-menu.js:18 (the right-click fix), two string literals joined by `+` and passed to `closest()` to decide which elements are text fields. Never drawn, never shown to a person."},
   {"s":"file {n} of {total}: {last}","c":"NOT-RENDERED","why":"The same Pocket TTS voice download: `fetch_rich_voice`'s refusal after a file's last attempt failed (voice_provision.rs:595). Same single background path, same `eprintln!` at :559, never returned to the webview."},
+  {"s":"<span class=\"acc-pill is-resting\"><i></i>Sign-in not confirmed</span>","c":"INFORMATIONAL","why":"Authentication and usage readings are separate facts. This line states only what the last check established, without asserting an unknown account is signed out or lacks limits."},
+  {"s":"Ask Claude Code checks the usage figures again.","c":"INFORMATIONAL","why":"Authentication and usage readings are separate facts. This line states only what the last check established, without asserting an unknown account is signed out or lacks limits."},
+  {"s":"Close this panel, choose Claude accounts and sign in, then refresh.","c":"ACTIONABLE","control":"#quota-close","fixture":"quota-signed-out","why":"The Technical view names the actual sign-in route. Its own Close control returns to Settings, where Claude accounts opens sign-in."},
+  {"s":"No usage reading yet.","c":"INFORMATIONAL","why":"Authentication and usage readings are separate facts. This line states only what the last check established, without asserting an unknown account is signed out or lacks limits."},
+  {"s":"Not signed in on this Mac.","c":"INFORMATIONAL","why":"Authentication and usage readings are separate facts. This line states only what the last check established, without asserting an unknown account is signed out or lacks limits."},
+  {"s":"RichOS has not confirmed whether this account is signed in.","c":"INFORMATIONAL","why":"Authentication and usage readings are separate facts. This line states only what the last check established, without asserting an unknown account is signed out or lacks limits."},
+  {"s":"Signed in; no usage reading.","c":"INFORMATIONAL","why":"Authentication and usage readings are separate facts. This line states only what the last check established, without asserting an unknown account is signed out or lacks limits."},
+  {"s":"This account is not signed in on this Mac.","c":"INFORMATIONAL","why":"Authentication and usage readings are separate facts. This line states only what the last check established, without asserting an unknown account is signed out or lacks limits."},
+  {"s":"This account is signed in on this Mac.","c":"INFORMATIONAL","why":"Authentication and usage readings are separate facts. This line states only what the last check established, without asserting an unknown account is signed out or lacks limits."},
+  {"s":"Claude Code did not answer just now.","c":"ACTIONABLE","control":"#quota-refresh","fixture":null,"why":"The usage-reader verdict is rendered by the Technical quota view. quota.js tests cover the refresh control beside failed and absent readings. The account card independently presents the sign-in verdict."},
+  {"s":"Claude Code did not report subscription limits for this account.","c":"ACTIONABLE","control":"#quota-refresh","fixture":null,"why":"The usage-reader verdict is rendered by the Technical quota view. quota.js tests cover the refresh control beside failed and absent readings. The account card independently presents the sign-in verdict."},
+  {"s":"Claude Code returned quota data this version of RichOS could not read.","c":"ACTIONABLE","control":"#quota-refresh","fixture":null,"why":"The usage-reader verdict is rendered by the Technical quota view. quota.js tests cover the refresh control beside failed and absent readings. The account card independently presents the sign-in verdict."},
+  {"s": "This Claude account is not signed in on this Mac.", "c": "ACTIONABLE", "control": "#quota-close", "fixture": "quota-signed-out", "why": "The Technical quota view explains the sign-out and names the route through its own Close control to Claude accounts. The signed-out fixture verifies that Close is present beside the verdict."},
 ];

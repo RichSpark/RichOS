@@ -177,6 +177,7 @@ supervisors hold it too), so a killed run releases it once its checks are stoppe
 started by a check of a proof run works inside its caller's slot.
 """
 import argparse
+import copy
 import uuid
 import hashlib
 import importlib.util
@@ -692,20 +693,21 @@ def nightly_gate_of(item):
     return None
 
 
-def gate_conditions(gate):
-    """(conditions, missing) for `gate`, from nightly-local.py gate_conditions(), once per run."""
-    key = "gate " + gate
+def gate_conditions(gate, environ=None):
+    """(conditions, missing) for `gate`, from nightly-local.py gate_conditions(), once per run
+    (and once per other caller environment, `environ`: execution_environment)."""
+    key = "gate " + gate + ("" if environ is None else " " + proof_evidence.digest(sorted(environ.items())))
     if key not in _NIGHTLY:
         try:
-            _NIGHTLY[key] = nightly_local().gate_conditions(gate)
+            _NIGHTLY[key] = nightly_local().gate_conditions(gate, environ)
         except (OSError, ValueError) as exc:
             raise SystemExit("proof-run: cannot derive the nightly's conditions for %s: %s" % (gate, exc))
     return _NIGHTLY[key]
 
 
-def nightly_conditions(item):
+def nightly_conditions(item, caller=None):
     gate = nightly_gate_of(item)
-    return gate_conditions(gate)[0] if gate else {}
+    return gate_conditions(gate, caller)[0] if gate else {}
 
 
 def conditions_line(items):
@@ -730,17 +732,38 @@ def conditions_line(items):
     return "nightly conditions: " + "; ".join(parts)
 
 
-def execution_environment(item):
+def canonical_path(value):
+    """The PATH every check gets, whatever shell started the run: the checkout's own directories
+    as the caller placed them, then the runner's tool directories in a fixed order, then every
+    other entry in the caller's order, each once.
+
+    2026-10-22, the land of cc/zach-opus-holds3 at e8e06b8e1: the author's run on that tip, on
+    the same content, had passed 94 of 95, and the gate reused none of its whole-checkout passes,
+    "made in another checkout, where it no longer stands in its own checkout (environment.PATH)".
+    The two PATHs held the same 21 entries; the agent's shell had ~/.cargo/bin second and the
+    lead's had it last (the runner only appended a missing one). A check's PATH, and so its
+    identity, depended on which shell started the run."""
+    root = os.path.realpath(ROOT)
+    entries = [p for p in value.split(os.pathsep) if p]
+    own = [p for p in entries if os.path.realpath(p) == root or os.path.realpath(p).startswith(root + os.sep)]
+    tools = [os.path.join(os.path.expanduser("~"), ".cargo", "bin"), "/opt/homebrew/bin", "/usr/local/bin"]
+    out = []
+    for p in own + tools + [p for p in entries if p not in tools]:
+        if p not in out:
+            out.append(p)
+    return os.pathsep.join(out)
+
+
+def execution_environment(item, caller=None):
+    """The environment `item` runs in, from this runner's caller environment, or from `caller`
+    (another run's, recorded_environment) to read the check as that run started it."""
     if hasattr(item, "private_environment"):
         return {**item.private_environment, **item.env}
     # Verification must not rewrite bytecode inside its own declared inputs. The nightly's
     # conditions sit between the caller's environment and the check's own values.
-    env = {**os.environ, **nightly_conditions(item), **item.env, "PYTHONDONTWRITEBYTECODE": "1"}
-    path = env.get("PATH", "").split(os.pathsep)
-    for extra in (os.path.join(os.path.expanduser("~"), ".cargo", "bin"), "/opt/homebrew/bin", "/usr/local/bin"):
-        if extra not in path:
-            path.append(extra)
-    env["PATH"] = os.pathsep.join(p for p in path if p)
+    env = {**(os.environ if caller is None else caller), **nightly_conditions(item, caller), **item.env,
+           "PYTHONDONTWRITEBYTECODE": "1"}
+    env["PATH"] = canonical_path(env.get("PATH", ""))
     if item.argv[:1] == ["cargo"]:
         import cargo_identity
         return cargo_identity.enable_environment(env)
@@ -756,8 +779,8 @@ def recipe_of(item):
     return recipe
 
 
-def input_identity(item, args, logdir, snapshot=None):
-    environment = execution_environment(item)
+def input_identity(item, args, logdir, snapshot=None, caller=None):
+    environment = execution_environment(item, caller)
     result = proof_evidence.recipe_identity(ROOT, recipe_of(item), environment, snapshot)
     if result.get("fresh") and item.label not in proof_evidence.VERIFIES_OWN_INPUTS and item.argv:
         # No reviewed contract: keyed by the whole checkout's content, so a retry of the same
@@ -781,6 +804,52 @@ def seat_reader(item, snapshot):
     stands there on the same content (proof_evidence.seat_gap). 2026-10-21: the gate executed all
     23 checks of a branch whose author run the preflight had just read as proving it."""
     return proof_evidence.seat_reader(ROOT, item.argv, execution_environment(item), snapshot)
+
+
+def recorded_environment(environ=None):
+    """{"values", "withheld"}: the caller environment this run reads every check's identity from
+    (execution_environment), as its saved plan records it (proof_evidence THE RECORDED
+    ENVIRONMENT). Git's hook variables and the per-run names are no one else's to replay; a
+    credential's value is never written (rerun_credential), only its name."""
+    values, withheld = {}, []
+    for name, value in sorted((os.environ if environ is None else environ).items()):
+        if name.startswith("GIT_") or name in proof_evidence.RUN_SCOPED_ENVIRONMENT:
+            continue
+        if rerun_credential(name, value):
+            withheld.append(name)
+        else:
+            values[name] = value
+    return {"values": values, "withheld": withheld}
+
+
+def as_caller(recorded, root, environ=None):
+    """The caller environment a run in checkout `root` recorded (recorded_environment), named for
+    this checkout, with this process's own Git, per-run and withheld credential values kept, and
+    its own mutation switches: they are what this run asks its checks to do, not what a shell
+    held, so a pass made with them off never stands for a run with them on (stands_in)."""
+    values = {k: v for k, v in recorded["values"].items() if k not in proof_evidence.MUTATION_SWITCHES}
+    if os.path.realpath(root) != os.path.realpath(ROOT):
+        values = proof_evidence.placed(values, root, ROOT)
+    keep = set(recorded.get("withheld") or ()) | set(proof_evidence.MUTATION_SWITCHES)
+    own = {k: v for k, v in (os.environ if environ is None else environ).items()
+           if k in keep or k.startswith("GIT_") or k in proof_evidence.RUN_SCOPED_ENVIRONMENT}
+    return {**values, **own}
+
+
+def identity_as_recorded(item, recorded, root, snapshot, args, logdir):
+    """(identity, read_seat) of `item` in this checkout, read under the caller environment the
+    run in checkout `root` recorded (as_caller): what reuse() judges a pass of that run by when
+    it does not stand under this run's own environment. A private-profile check's environment
+    is built from that one again, on a copy, as run_main builds it from this run's."""
+    caller = as_caller(recorded, root)
+    probe = copy.copy(item)
+    probe.env = dict(item.env)
+    if hasattr(probe, "private_environment"):
+        del probe.private_environment
+        proof_evidence.prepare_environment(probe, ROOT, logdir, execution_environment(probe, caller), create=False)
+    environment = execution_environment(probe, caller)
+    return (input_identity(probe, args, logdir, snapshot, caller),
+            proof_evidence.seat_reader(ROOT, probe.argv, environment, snapshot))
 
 
 # The runner settings that are part of a check's identity: those that change how it runs (its
@@ -2426,6 +2495,26 @@ def author_coverage(args):
         print("proof-run: coverage: this checkout is at %s, not at the run's candidate %s" % (
             head_commit()[:12], chosen["candidate"][:12]))
         return 2
+    # THE RUN'S OWN ENVIRONMENT (proof_evidence THE RECORDED ENVIRONMENT): every check's inputs
+    # are read as the run started its checks, not as the shell asking this question holds them,
+    # so a land asked from the lead's shell never calls an unchanged pass missing for LANG or
+    # SDKROOT. A run that says nothing of it (proof_evidence.run_environment) is read under this
+    # process's, as before.
+    shell = dict(os.environ)
+    recorded = proof_evidence.run_environment(run)
+    if recorded:
+        os.environ.clear()
+        os.environ.update(as_caller(recorded, saved["root"], shell))
+    try:
+        return covered(args, run, saved, outcomes, not_run, chosen,
+                       "the run's recorded environment" if recorded else "this shell's environment")
+    finally:
+        os.environ.clear()
+        os.environ.update(shell)
+
+
+def covered(args, run, saved, outcomes, not_run, chosen, read_under):
+    """author_coverage's answer, in the environment it set."""
     started = time.monotonic()
     args.commands = None
     args.proof_for_args = [*(["--gate"] if chosen.get("mode") == "gate" else []),
@@ -2506,9 +2595,9 @@ def author_coverage(args):
             shlex.quote(ROOT), " ".join(setting_flags + args.proof_for_args), shlex.quote(run))
         print("  recovery, ONE runner job over the whole missing plan in this checkout (every proven check "
               "is reused, only the missing ones run): %s" % recovery)
-    print("  derived in %.1f s, nothing run (%s)" % (
+    print("  derived in %.1f s, nothing run (%s; inputs read under %s)" % (
         time.monotonic() - started, "the run's saved plan: the checkout reads as when it started"
-        if same_bytes else "selected again: the checkout changed since the run started"))
+        if same_bytes else "selected again: the checkout changed since the run started", read_under))
     if args.summary_out:
         proof_evidence.atomic(args.summary_out, {"run": run, "line": line, "planned": len(items),
             "proven": proven, "not_run": dict(eligible), "fresh": dict(fresh), "missing": dict(missing),
@@ -2584,8 +2673,18 @@ def runner_environment(environ):
     rule itself (cargo_identity.enable_environment, idempotent), so both launches agree. Like
     reserve.py, only where the tree holds the Cargo helpers (a test fixture's runner may not).
     And git's exec-path, which a land's hook has on PATH and a shell does not, is taken out
-    (without_git_exec_path)."""
+    (without_git_exec_path).
+
+    MUTATION PASSES ARE OFF UNLESS THE CALLER TURNS THEM ON (2026-10-22). An engineer's handover
+    run left RICHOS_MUTATION_PASSES and RICHOS_FOURTEEN_MUTANTS as the shell had them, unset, so
+    every suite's own mutation harness ran in full: 22.3% of the Mac in Hank's busy window
+    (richos-hq docs/research/2026-10-22-mac-system-cpu-after.md), work the land never asks for.
+    A name the caller has not set takes the merge gate's value (autocheck MUTATION_SWITCH, "0");
+    a value the caller set is kept, so the nightlies (nightly-engine.py PASSES_ON, nightly-local
+    mutation_units, both "1") still run every pass."""
     env = dict(environ)
+    for name in proof_evidence.MUTATION_SWITCHES:
+        env.setdefault(name, "0")
     if "PATH" in env:
         env["PATH"] = without_git_exec_path(env["PATH"])
     if all(os.path.isfile(os.path.join(HERE, "lib", name)) for name in ("cargo_identity.py", "machine_storage.py")):
@@ -2747,7 +2846,9 @@ def run_main(argv, run_state):
         args.evidence = proof_evidence.Record(ROOT, logdir, items, before,
             identities(items, baseline), args.resume, source_identity, identity, identities,
             explain=lambda item: describe_input_change(item, baseline, items), current_commit=head_commit,
-            selection=selected, seat=seat_reader)
+            selection=selected, seat=seat_reader, environment=recorded_environment(),
+            as_recorded=lambda item, recorded, root, snapshot: identity_as_recorded(
+                item, recorded, root, snapshot, args, logdir))
         args.pool = proof_evidence.Pool(proof_evidence.pool_directory(ROOT, hist_dir), args.evidence,
                                         args.retry_reason)
         started = time.monotonic()

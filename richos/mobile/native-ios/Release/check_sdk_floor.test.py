@@ -25,7 +25,7 @@ def run(sdk, platform):
 
 old = run("iphoneos18.5", "18.5")
 assert old.returncode == 1, old.stdout
-assert "FAIL  built with the iOS 26 SDK" in old.stdout and "iphoneos18.5" in old.stdout and "Xcode-26" in old.stdout, old.stdout
+assert "FAIL  built with the iOS 26 SDK" in old.stdout and "iphoneos18.5" in old.stdout and "Xcode 26" in old.stdout, old.stdout
 new = run("iphoneos26.2", "26.2")
 assert "FAIL  built with" not in new.stdout, new.stdout
 print("ok: iphoneos18.5 refused naming the SDK and Xcode; iphoneos26.2 passes the SDK check")

@@ -257,6 +257,11 @@
       "checkedOverShell": 16,
       "consideredOverShell": 20
     },
+    "repositories-shared": {
+      "//": "Round 36 screen 2 (CEO 2026-10-21, plan item 11): the connect sheet with a folder another company already has, so the gold notice and the Connect-to-too button are on screen. Set from its first run on 2026-10-21, both themes: 34 measured of 758 considered against the bare shell's 12 of 732, which is 22 and 26 over it; the plain sheet beside it (`repositories`) is 16 and 20 over, so the notice adds 6 measured nodes. Both margins are outside the three-node tolerance, so the floor can bite.",
+      "checkedOverShell": 22,
+      "consideredOverShell": 26
+    },
     "saved-work": {
       "checkedOverShell": 32,
       "consideredOverShell": 28

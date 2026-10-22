@@ -180,6 +180,50 @@ pub const DUTIES: [&str; 3] = ["worker", "reviewer", "consult"];
 /// itself (`engine/team/shelf/`) is never registered.
 pub const USER_TEAM: &str = "team";
 
+/// **The engine's shipped skills no lease loads**: the terminal lead's landing and worktree
+/// procedures. The app lands and makes workspaces itself (Mega Lander), so a worker told to
+/// follow them would go around it (richos-hq `docs/plans/2026-10-21-switching-to-the-app.md`
+/// §4.6).
+pub const TERMINAL_ONLY_SKILLS: [&str; 2] = ["rich-lander", "using-git-worktrees"];
+
+/// **The engine's shipped skills this lease's engine plugin carries** (CEO §138: everything he
+/// uses in the terminal is a feature of the regular app; the plan above, row S): every folder in
+/// `<engine>/skills/` holding a `SKILL.md`, read off the folder so a skill added to the engine
+/// reaches every lease, except [`TERMINAL_ONLY_SKILLS`] and the skills the standing plugin
+/// already carries in the app's own words (`skills::SKILLS`), whose engine copies name the
+/// terminal's install path. Sorted.
+pub fn shipped_skills(engine: &Path) -> Result<Vec<String>, RuntimeError> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(engine.join("skills")).map_err(|e| RuntimeError(format!("the engine's skills could not be read: {e}")))? {
+        let path = entry.map_err(|e| RuntimeError(e.to_string()))?.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else { continue };
+        if !path.join("SKILL.md").is_file() || TERMINAL_ONLY_SKILLS.contains(&name.as_str())
+            || crate::skills::SKILLS.contains(&name.as_str())
+            || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') { continue; }
+        names.push(name);
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Link each of [`shipped_skills`] into `plugin/skills/`. A link, not a copy: a skill's scripts
+/// and references stay where the engine keeps them, and retiring the lease removes only the
+/// link (`remove_dir_all` does not follow one). Measured on `claude` 2.1.306: a `--plugin-dir`
+/// whose `skills/<name>` is a link to a folder lists `<plugin>:<name>` in `system/init.skills`.
+fn link_skills(engine: &Path, plugin: &Path) -> Result<(), RuntimeError> {
+    let root = plugin.join("skills");
+    std::fs::create_dir_all(&root).map_err(|e| RuntimeError(e.to_string()))?;
+    for name in shipped_skills(engine)? {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(engine.join("skills").join(&name), root.join(&name))
+            .map_err(|e| RuntimeError(format!("the {name} skill could not be linked into the lease: {e}")))?;
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(engine.join("skills").join(&name), root.join(&name))
+            .map_err(|e| RuntimeError(format!("the {name} skill could not be linked into the lease: {e}")))?;
+    }
+    Ok(())
+}
+
 
 /// Every definition this lease registers, by name: the stock ones, then the user's. A user's
 /// file of the same name as a stock one is the user's refit of it and wins (plan §10 point 3:
@@ -396,6 +440,7 @@ impl EngineProfile {
         }
         let plugin = data.join("engine-profiles").join(uuid::Uuid::new_v4().to_string());
         render_team(&engine, &data, &coordination, &plugin,false)?;
+        link_skills(&engine, &plugin)?;
         // Rich's and Stu's own files are the user's from the first run on: copied once, then
         // read into this session's plugin beside this lease's engine plugin.
         let mut user = crate::user_settings::UserSetup::prepare(user_folder, &engine.join("app"),
@@ -407,8 +452,10 @@ impl EngineProfile {
                 .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
             user.git = crate::user_git::discover(path, home.as_deref(), &runtime.root);
         }
+        let shipped_config = std::fs::read_to_string(engine.join("orchestration.config"))
+            .map_err(|e| RuntimeError(format!("the engine's orchestration.config could not be read: {e}")))?;
         write(&coordination.join("orchestration.config"),
-              &crate::user_settings::orchestration_config(user.folder.as_deref(), &quote(&state.join("teams")))?)?;
+              &crate::user_settings::orchestration_config(user.folder.as_deref(), &shipped_config, &quote(&state.join("teams")))?)?;
         write(&coordination.join(".gitignore"), ".claude/\norchestration.config\napp-owned-coordination.json\n")?;
         write(&plugin.join("gitconfig"), &crate::user_git::system_layer(&user.git))?;
         let command = format!("{} {}", quote(&runtime.python), quote(&engine.join("scripts/app-engine-hook.py")));

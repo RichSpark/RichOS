@@ -2496,8 +2496,14 @@ async function loadTimeline() {
   const loadedModel = timelineModel;
   const loadedThread = activeThreadId;
   const loadedEpoch = threadViewEpoch;
-  const stale = () => loadedModel !== timelineModel || loadedThread !== activeThreadId || loadedEpoch !== threadViewEpoch;
   const techy = techyOn();
+  // THE VIEW IT ASKED FOR IS PART OF WHAT MAKES A REPLY CURRENT. A reload that asked for the
+  // technical view while it was being switched off (a turn ending during `confirmTechyScope`'s
+  // write, which bumps the epoch BEFORE the write lands) could otherwise answer after the
+  // switch-off reload and put machinery rows back on screen with the view off (review
+  // rv-20261021T195352Z-f24b36ae-2380; techy-race.js). The same holds the other way round.
+  const stale = () => loadedModel !== timelineModel || loadedThread !== activeThreadId ||
+    loadedEpoch !== threadViewEpoch || techy !== techyOn();
   let snapshot;
   try {
     if (techy) {

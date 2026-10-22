@@ -4,7 +4,9 @@
 The host supplies all roots and the active scope. There is no terminal-settings
 fallback. Provider callbacks are evidence, not proof of assignment completion.
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -113,6 +115,29 @@ def mid_job_notice(work, active, payload, root, emit):
         return False
 
 
+def held_work_context(work, root, payload):
+    """NO SILENT HOLDS in the app (richos-hq docs/plans/2026-10-22-no-silent-holds.md):
+    every turn of the app's Rich opens with the hold lines the terminal's workspace gate
+    shows at a turn end, as context in his own turn, and his instruction file (app/agents/
+    rich.md) has him tell the user. Only the conversation lease: Stu's turns carry none.
+    The registry is this conversation's own partition (RICHOS_WORKSPACES_DIR), so every
+    hold in it is this conversation's, whichever lease made it."""
+    session = str(payload.get("session_id") or "")
+    try:
+        role = json.loads((root / "evidence" / session / "binding.json").read_text()).get("role")
+    except (OSError, ValueError, AttributeError):
+        role = None
+    if role not in (None, "rich"):
+        return
+    try:
+        lines = work.W.hold_lines("")
+    except Exception as error:  # noqa: BLE001 -- an unread list is said, never silence
+        lines = [f"HOLDS NOT READ this turn ({type(error).__name__}: {str(error)[:160]})"]
+    if lines:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+                                                 "additionalContext": "\n".join(lines)}}))
+
+
 def handle(payload):
     root = Path(os.environ["RICHOS_APP_STATE"])
     # Recovery, independent reviews and both admission paths share this ledger.
@@ -146,6 +171,8 @@ def handle(payload):
         return
     ws = [sys.executable, str(ENGINE / "mega-lander/workspaces.py"), "--entity", str(coordination)]
     work = load("richos_desktop_work", ENGINE / "mega-lander/app.py")
+    if event == "UserPromptSubmit":
+        held_work_context(work, root, payload)
     if event == "PreToolUse":
         run(["/bin/bash", str(ENGINE / "scripts/hooks/guard-sealed-worktree.sh")], payload)
         work.validate_shell_target(payload)
@@ -209,6 +236,15 @@ def handle(payload):
     if event in ("SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure"):
         work.observe(scope(), payload)
     if event == "Stop":
+        # A REPLY THAT HOLDS WORK OPENS A HOLD here too (second review
+        # rv-20261022T013056Z-12c77c90-1291, finding 1): the same analyzer as the terminal's
+        # deferral notice, writing into this conversation's registry, whose lines open Rich's
+        # next turn. Its notice text is the terminal's; nothing of it is printed here.
+        held = subprocess.run([sys.executable, str(ENGINE / "scripts/hooks/guard-unasked-deferral.py")],
+                              input=json.dumps(payload), text=True, capture_output=True, timeout=20)
+        if held.returncode not in (0, 3, 4):
+            print(f"RichOS desktop engine: the hold check failed (exit {held.returncode}): "
+                  f"{held.stderr.strip()[-300:]}", file=sys.stderr)
         # Context-only priming is host machinery, not a new assignment or promise.
         # The same host grant controls mutation tools and the visible-turn analyzer.
         active = scope()
@@ -216,9 +252,74 @@ def handle(payload):
             run([sys.executable, str(ENGINE / "ass-kicker/guard-stated-actions.py")], payload)
 
 
+DECISION_RANK = {"allow": 1, "ask": 2, "defer": 3, "deny": 4}
+
+
+def one_envelope(text):
+    """Everything a PreToolUse call printed, as ONE hook answer, or None when it printed nothing.
+
+    Claude Code acts on a hook's stdout only when it is one JSON object: measured 2026-10-21 on
+    2.1.306, an Agent call whose hook printed a context object and then the answer kept its
+    original prompt, and the same answer printed alone changed it. The canonical guards this
+    hook runs forward their own output, so an Agent dispatch printed several objects and the
+    `updatedInput` below (the receipt's name, the repository's own instruction file) never
+    reached the teammate. Here every context is kept, the strictest decision wins, and the last
+    `updatedInput` (this hook's own, written after every guard) is the one passed on. A line that
+    is not a JSON object goes to stderr, where it is kept for whoever reads the log."""
+    envelope, contexts, reasons, decision, updated = {}, [], [], None, None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            obj = None
+        if not isinstance(obj, dict):
+            print(line, file=sys.stderr)
+            continue
+        specific = obj.get("hookSpecificOutput") or {}
+        envelope.update({k: v for k, v in obj.items() if k != "hookSpecificOutput"})
+        if specific.get("additionalContext"):
+            contexts.append(specific["additionalContext"])
+        if specific.get("permissionDecisionReason"):
+            reasons.append(specific["permissionDecisionReason"])
+        if DECISION_RANK.get(specific.get("permissionDecision"), 0) > DECISION_RANK.get(decision, 0):
+            decision = specific["permissionDecision"]
+        if "updatedInput" in specific:
+            updated = specific["updatedInput"]
+    if not envelope and not contexts and not reasons and decision is None and updated is None:
+        return None
+    out = {"hookEventName": "PreToolUse"}
+    if decision is not None:
+        out["permissionDecision"] = decision
+    if reasons:
+        out["permissionDecisionReason"] = "\n\n".join(reasons)
+    if updated is not None:
+        out["updatedInput"] = updated
+    if contexts:
+        out["additionalContext"] = "\n\n".join(contexts)
+    envelope["hookSpecificOutput"] = out
+    return envelope
+
+
+def main(stdin=sys.stdin, stdout=sys.stdout):
+    payload = json.load(stdin)
+    if payload.get("hook_event_name") == "PreToolUse" and payload.get("tool_name") == "Agent":
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            handle(payload)
+        envelope = one_envelope(captured.getvalue())
+        if envelope is not None:
+            stdout.write(json.dumps(envelope) + "\n")
+            stdout.flush()
+    else:
+        handle(payload)
+
+
 if __name__ == "__main__":
     try:
-        handle(json.load(sys.stdin))
+        main()
     except Exception as error:
         print(f"RichOS desktop engine: {error}", file=sys.stderr)
         raise SystemExit(2)

@@ -96,7 +96,10 @@ _mutant_body() {
     cp "$ENGINE_ROOT/scripts/lib/resolve-roots.sh" \
        "$ENGINE_ROOT/scripts/lib/resolve-main-checkout.sh" \
        "$ENGINE_ROOT/scripts/lib/seat-jurisdiction.sh" \
-       "$ENGINE_ROOT/scripts/lib/stop-hook-notice.sh" "$dir/scripts/lib/"
+       "$ENGINE_ROOT/scripts/lib/stop-hook-notice.sh" \
+       "$ENGINE_ROOT/scripts/lib/hold_words.py" "$dir/scripts/lib/"
+    mkdir -p "$dir/mega-lander"
+    cp "$ENGINE_ROOT/mega-lander/workspaces.py" "$dir/mega-lander/"
     chmod +x "$dir/scripts/hooks/"*.sh
 
     if ! python3 "$SANDBOX/mutate.py" "$dir/$rel" "$old" "$new" 2>"$dir/mutate.err"; then
@@ -207,9 +210,14 @@ mutant no-handback-discharge "2b " "$A" \
     "without it the guard fires on 12 corpus turns at 33% — including every turn where the CEO himself ordered the stop."
 
 mutant no-agent-discharge "2d " "$A" \
-    '    if "Agent" in tools:' \
+    '    if "Agent" in tools and not any(h[0] == HELD for h in hits):' \
     '    if False and "Agent" in tools:' \
     "condition 3 of the rule: a turn that starts the work is not a turn that deferred it."
+
+mutant held-discharged-by-spawn "T1a " "$A" \
+    '    if "Agent" in tools and not any(h[0] == HELD for h in hits):' \
+    '    if "Agent" in tools:' \
+    "a reply saying the work is held cannot be starting it: a spawn beside it discharges nothing (2026-10-22)."
 
 # --- 3. PRECISION: the narrowings that keep ordinary prose silent ----------
 # Every one of these is a measured decision from the 2,198-turn corpus, recorded

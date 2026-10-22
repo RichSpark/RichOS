@@ -3073,7 +3073,20 @@ impl Spine {
         stop: &Result<String, CognitionError>,
     ) -> Option<crate::upstream::UpstreamFailure> {
         if let Err(e) = stop {
-            if let Some(f) = crate::upstream::UpstreamFailure::classify_lines(&e.to_string()) {
+            let reason = e.to_string();
+            // A CAUSE WITH A ROUTE IS NOT AN OUTAGE. Claude Code writes a refused sign-in as
+            // "Failed to authenticate. API Error: 401 OAuth access token is invalid." and a
+            // refused key as "API Error: 401 Invalid API key · Please run /login": both carry the
+            // vendor's `API Error:` prefix, so the upstream reader claimed them and the person got
+            // an outage card with no sign-in route (review rv-20261021T163510Z-b612361c-0e62,
+            // finding 1). What `interruption::classify` recognizes as somebody's to fix goes to
+            // `record_interruption`, whose card names the fix.
+            use crate::interruption::InterruptionCause as Cause;
+            if matches!(crate::interruption::classify(&reason),
+                Cause::NotSignedIn | Cause::CredentialRejected | Cause::ProviderMissing) {
+                return None;
+            }
+            if let Some(f) = crate::upstream::UpstreamFailure::classify_lines(&reason) {
                 return Some(f);
             }
         }
@@ -3123,6 +3136,28 @@ impl Spine {
         }
     }
 
+    /// **Did the turn before this one in the same conversation also fail in a way that offered
+    /// another try?** The last ended turn before `turn_id` in its thread, and only when its
+    /// recorded cause was one of those (`transient`, `unknown`, or already `repeated`). Any
+    /// cause whose card invites sending again is asked this, so no such card can follow
+    /// itself in a loop (the class, `docs/development/failure-classes/
+    /// permanent-failure-told-as-passing.md`). A turn that completed in between answers no, so
+    /// one hiccup after a good answer is told as one hiccup. Read from the ledger, so a restart
+    /// in between does not reset it (2026-10-21: a new user was told "This usually fixes
+    /// itself" on every message, `InterruptionCause::Repeated`).
+    fn last_turn_offered_another_try(&self, turn_id: &str) -> bool {
+        let Some(thread) = self.ledger.turn(turn_id).map(|t| t.thread_id.clone()) else { return false };
+        let Ok(turns) = self.ledger.thread_turns(&thread) else { return false };
+        let Some(at) = turns.iter().position(|t| t.id == turn_id) else { return false };
+        turns[..at].iter().rev()
+            .find(|t| t.ended_at.is_some())
+            .and_then(|t| t.interruption.as_ref())
+            .is_some_and(|r| {
+                let before = crate::interruption::InterruptionCause::from_tag(&r.cause);
+                before.offers_retry() || before == crate::interruption::InterruptionCause::Repeated
+            })
+    }
+
     /// **CLASSIFY AN ORDINARY INTERRUPTION AND MAKE THE ANSWER DURABLE — the nightly's D2.**
     ///
     /// Called immediately after `interrupt_turn`, never before it, per
@@ -3142,7 +3177,10 @@ impl Spine {
         turn_id: &str,
         reason: &str,
     ) -> (crate::interruption::InterruptionCause, String) {
-        let cause = crate::interruption::classify(reason);
+        let mut cause = crate::interruption::classify(reason);
+        if cause.offers_retry() && self.last_turn_offered_another_try(turn_id) {
+            cause = crate::interruption::InterruptionCause::Repeated;
+        }
         let loss = self.turn_loss(turn_id);
         let record = crate::interruption::InterruptionRecord::new(cause, &loss);
         let statement=match &record.loss_message {Some(loss)=>format!("{} {loss}",record.ceo_message),None=>record.ceo_message.clone()};

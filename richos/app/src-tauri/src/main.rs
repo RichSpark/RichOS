@@ -4073,7 +4073,8 @@ fn dispatch_incoming_messages(app: &AppHandle, _thread_id: &str) -> Result<(), S
 #[richos_command::command]
 fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: String) -> Result<(), String> {
     let entity = assignment_scope(&state, &thread_id)?;
-    state.work.stop_assignment(entity.as_str(), &thread_id, &assignment_id)
+    let front_desk = state.control.for_thread(&thread_id).front_desk();
+    state.work.stop_assignment_and_front_desk(entity.as_str(), &thread_id, &assignment_id, front_desk)
 }
 
 /// Read the requested conversation's company. A different running conversation
@@ -5486,6 +5487,8 @@ fn provider_auth_status(state: State<AppState>) -> richos_core::provider_auth::A
     let bin = resolve_claude_bin();
     let view = state.provider_auth.lock().unwrap().refresh(&bin);
     state.quota.set_connecting(view.state == richos_core::provider_auth::AuthState::Connecting);
+    // The startup check's answer is the account's verdict (quota.rs `Service::sign_in_known`).
+    state.quota.sign_in_known(richos_core::claude_accounts::ACCOUNT_ONE, &view.state);
     view
 }
 #[richos_command::command]
@@ -5503,6 +5506,8 @@ fn provider_auth_poll(state: State<AppState>) -> richos_core::provider_auth::Aut
     state.quota.set_connecting(view.state == richos_core::provider_auth::AuthState::Connecting);
     // A sign-in has just completed (the window polls only while one runs): a queue held for
     // sign-in starts its first held job now, not at its next look (T3 idea 1, finished).
+    // Signed in from this moment, not from the next usage read (quota.rs `Service::sign_in_known`).
+    state.quota.sign_in_known(richos_core::claude_accounts::ACCOUNT_ONE, &view.state);
     if view.state == richos_core::provider_auth::AuthState::Connected {
         state.work.signed_in();
     }
@@ -5639,6 +5644,8 @@ fn claude_account_sign_in_poll(state: State<AppState>) -> Option<(String, richos
                 if let Err(error) = state.quota.accounts.signed_in(&id, richos_core::util::now_millis()) {
                     eprintln!("[richos] claude accounts: the adding could not be recorded ({error})");
                 }
+                // Signed in from this moment, not from the next usage read (quota.rs `Service::sign_in_known`).
+                state.quota.sign_in_known(&id, &view.state);
                 // As for Account 1's sign-in: a queue held for sign-in tries its first job now.
                 state.work.signed_in();
             }
@@ -5672,8 +5679,7 @@ fn claude_account_discard(state: State<AppState>, id: String) -> Result<richos_c
 /// (`provider_auth::signed_in_as`), returned, and not kept anywhere.
 #[richos_command::command]
 fn claude_account_email(state: State<AppState>, id: String) -> Result<richos_core::provider_auth::SignedInAs, String> {
-    let folder = state.quota.accounts.sign_in_folder(&id).ok_or("That account is no longer on this Mac.")?;
-    Ok(richos_core::provider_auth::signed_in_as(&resolve_claude_bin(), folder.as_deref()))
+    state.quota.account_email(&resolve_claude_bin(), &id).map_err(|e| e.ceo_message().to_string())
 }
 
 /// **Not now** on Rich's one-time suggestion of a second account (round 18, `one-nudge`).

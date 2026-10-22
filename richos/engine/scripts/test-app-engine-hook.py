@@ -43,6 +43,44 @@ class DesktopHooks(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
         self.assertIn("dispatch", result.stderr.lower())
 
+    def _wait_on_file(self):
+        import time
+        holds = self.root / "workspaces" / "holds"
+        holds.mkdir(parents=True)
+        (holds / "stream-b.json").write_text(json.dumps({"name": "stream-b", "what": "Stream B of his order",
+            "why": "on hold, deliberately", "end": "", "at": time.time() - 31 * 60, "session_id": "a-stu-session"}))
+
+    def test_richs_turn_opens_with_every_hold_nothing_checkable_ends(self):
+        """No silent holds (2026-10-22): the app's Rich is told in his own turn what the
+        terminal's turn end shows, including a hold Stu's lease made."""
+        self._wait_on_file()
+        result = self.hook("UserPromptSubmit", prompt="How is it going?")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("HELD BY RICH, NOT BY YOU: Stream B of his order since", context)
+        self.assertIn("Why: on hold, deliberately.", context)
+
+    def test_a_reply_holding_work_opens_a_hold_at_the_apps_turn_end(self):
+        """Second review rv-20261022T013056Z-12c77c90-1291 finding 1: the app's Stop ran only the
+        stated-actions guard, so 'Spelling work is on hold, deliberately.' opened nothing."""
+        transcript = self.root / "transcript.jsonl"
+        transcript.write_text(json.dumps({"type": "user", "isSidechain": False,
+                                          "message": {"role": "user", "content": "How is it going?"}}) + "\n")
+        result = self.hook("Stop", last_assistant_message="Spelling work is on hold, deliberately.",
+                           transcript_path=str(transcript), stop_hook_active=False)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        holds = sorted((self.root / "workspaces" / "holds").glob("held-*.json"))
+        self.assertEqual(len(holds), 1, result.stderr)
+        self.assertEqual(json.loads(holds[0].read_text())["what"], "Spelling work is on hold, deliberately.")
+
+    def test_stus_turn_carries_no_hold_lines(self):
+        self._wait_on_file()
+        (self.root / "state/evidence/fictional-session").mkdir(parents=True)
+        (self.root / "state/evidence/fictional-session/binding.json").write_text('{"role": "stu"}')
+        result = self.hook("UserPromptSubmit", prompt="Carry on.")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn("HELD BY RICH", result.stdout)
+
     def test_native_response_formatting_records_evidence_without_opening_a_work_grant(self):
         self.scope.write_text('{"version":1,"actions_allowed":false}')
         for event in ("PreToolUse", "PostToolUse"):
@@ -167,6 +205,41 @@ class DesktopHooks(unittest.TestCase):
         self.assertEqual(rich.returncode, 0, rich.stderr)
         rich_output = json.loads(rich.stdout).get("hookSpecificOutput", {}) if rich.stdout.strip() else {}
         self.assertNotIn("updatedInput", rich_output, "§129 applies to Stu's commands")
+
+
+    def test_an_agent_dispatch_answers_with_one_envelope_so_its_updated_input_reaches_the_teammate(self):
+        """Claude Code acts on a hook's stdout only when it is ONE JSON object (measured on 2.1.306:
+        an Agent hook that printed a context object before its answer left the prompt unchanged).
+        The canonical guards forward their own output, so a dispatch printed several, and the
+        repository's own instruction file never reached the worker (folder-instructions walk of
+        2026-10-21). The hook now answers an Agent call with one merged envelope."""
+        import importlib.util, io
+        spec = importlib.util.spec_from_file_location("app_engine_hook_one", ENGINE / "scripts/app-engine-hook.py")
+        hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)
+        delivered = {"subagent_type": "richos-app-engine:norm", "prompt": "the full prompt", "name": "norm-sonnet-1"}
+        def handle(payload):
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "a guard's note"}}))
+            print("a guard's plain line")
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": delivered}}))
+        hook.handle = handle
+        out = io.StringIO()
+        hook.main(io.StringIO(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Agent"})), out)
+        lines = [line for line in out.getvalue().splitlines() if line.strip()]
+        self.assertEqual(len(lines), 1, out.getvalue())
+        answer = json.loads(lines[0])["hookSpecificOutput"]
+        self.assertEqual(answer["updatedInput"], delivered)
+        self.assertEqual(answer["additionalContext"], "a guard's note")
+        self.assertNotIn("permissionDecision", answer, "merging decides nothing a guard did not")
+        # A refusal among them is never softened by a later answer.
+        def refusing(payload):
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                     "permissionDecisionReason": "refused"}}))
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                                     "updatedInput": delivered}}))
+        hook.handle = refusing
+        out = io.StringIO()
+        hook.main(io.StringIO(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Agent"})), out)
+        self.assertEqual(json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], "deny")
 
 
 if __name__ == "__main__":

@@ -613,6 +613,27 @@ impl CaptureBrain {
         building || his_recording_open
     }
 
+    /// **A reply that starts now would be heard, not discarded.** Rich has been silent for the
+    /// whole [`ECHO_LOOKBACK_FRAMES`] (an utterance born sooner carries his echo in its pre-roll
+    /// and is tainted), and no tainted recording is still open (one that is would absorb the
+    /// reply and be discarded whole when its hangover ends). `HalfDuplexDelivery` waits for this
+    /// before asking him to say it again (review rv-20261021T205407Z-bcae8bd4-dcd6).
+    pub fn takes_a_reply(&self) -> bool {
+        self.quiet_frames >= ECHO_LOOKBACK_FRAMES && !(self.recorder.is_recording() && self.tainted)
+    }
+
+    /// **He has just been asked to say it again: what he says next is kept however short.** The
+    /// 0.304 s minimum ([`crate::endpoint::MIN_SPEECH_FRAMES`]) is there so a cough is not a
+    /// sentence, but a reply to "please say it again" is often a word or two ("yes", "send it"),
+    /// and dropping it unheard lost his words a second time with no notice at all (review
+    /// rv-20261021T215433Z-1979e6d9-40f2). So the reply is treated like a fragment of an open
+    /// turn: admitted from the 7-frame (0.112 s) onset and passed on, and the recognizer still
+    /// asks it for a voice of its own, so a cough instead gets that desk's own line with its
+    /// next step. Ends, like any open turn, the moment Rich is audible again.
+    pub fn invite_reply(&mut self) {
+        self.set_turn_open(true);
+    }
+
     /// **Voice is going off: close the open recording and say what became of it** (review
     /// rv-20261013T183507Z). The capture stream is about to be destroyed, and with it whatever he
     /// said in the last 0.800 s, which the endpointer had not yet closed. It is closed here by the
@@ -1142,6 +1163,12 @@ struct Shared {
     /// may not have published the floor yet (`CaptureBrain::his_onset_building`). Written per
     /// frame by the capture callback; the speaker waits on it as on the floor.
     his_onset: AtomicBool,
+    /// A reply starting now would be heard (`CaptureBrain::takes_a_reply`). Written per frame by
+    /// the capture callback; the half-duplex line waits on it.
+    takes_a_reply: AtomicBool,
+    /// The half-duplex line has just asked him to say it again: the capture callback calls
+    /// `CaptureBrain::invite_reply` on its next frame and clears this.
+    reply_invited: AtomicBool,
     /// Voice is going off: the capture callback closes the open recording on its next frame.
     finish_capture: AtomicBool,
     /// The capture callback has closed it and sent what became of it.
@@ -1520,22 +1547,22 @@ impl VoiceNotice {
         match self {
             VoiceNotice::SoundButNoWords => {
                 "I can hear sound, but I'm not getting words out of it. The microphone may \
-                 be picking up the room rather than you. Voice is still on."
+                 be picking up the room rather than you. Please say it again closer to the \
+                 microphone. I'm still listening."
             }
             // STATES THE CONSEQUENCE, not just the observation. "I didn't catch that"
             // leaves open whether something was sent anyway, and the whole defect being
             // fixed here is the app sending a sentence he never said — so the line has to
             // close that question, in his own words, before anything else.
             //
-            // IT ENDS WITH A STATUS AND NOT AN INSTRUCTION, deliberately. "Say it again"
-            // is an imperative aimed at the reader, which makes it a request wearing a
-            // status's clothes: the affordance for saying it again is the open microphone,
-            // and there is no button to point at. So it says the mic is still open and
-            // leaves the next move where it belongs. Same discipline as `SoundButNoWords`
-            // above, whose last three words are "Voice is still on."
+            // THEN IT SAYS WHAT TO DO, since 2026-10-21. A line that tells him his words may
+            // not have gone anywhere and stops there is a dead end (the failure class in
+            // `docs/development/failure-classes/lost-input-without-a-next-step.md`, guarded
+            // by `affordances.js`). The step is conditional, because a cough reaches this
+            // path as well as a word, and the open microphone is its control.
             VoiceNotice::HeardNoVoice => {
-                "That didn't come through as speech, so I haven't sent anything. I'm still \
-                 listening."
+                "That didn't come through as speech, so I haven't sent anything. If you said \
+                 something, please say it again. I'm still listening."
             }
             // IT SAYS THE ANSWER STOPPED, not that "something went wrong". The CEO is
             // listening, not reading, and the fact he needs first is that what he heard is
@@ -1560,13 +1587,13 @@ impl VoiceNotice {
             // sent as if it were a whole sentence is the failure mode this crate has already
             // shipped once. So the line closes that question before anything else.
             //
-            // IT ENDS WITH A STATUS AND NOT AN INSTRUCTION. "Say that again" is an imperative
-            // aimed at a reader who has no button to press — the affordance for repeating
-            // himself IS the open microphone, and saying so is what tells him he can just
-            // speak. Same last three words as `HeardNoVoice`, deliberately: the two are the
+            // THEN IT SAYS WHAT TO DO, for `HeardNoVoice`'s reason, and here unconditionally:
+            // a voice WAS measured, so he did say something and it is lost unless he says it
+            // again. Same last three words as `HeardNoVoice`, deliberately: the two are the
             // same event to him, and only the cause differs.
             VoiceNotice::DidNotCatchThat => {
-                "I didn't catch that, so I haven't sent anything. I'm still listening."
+                "I didn't catch that, so I haven't sent anything. Please say it again. I'm \
+                 still listening."
             }
             // EVERY CLAUSE ABOUT THE CEO IS CONDITIONAL, and that is the whole correction.
             // The sentence this replaced opened "You started talking while I was still
@@ -1588,13 +1615,20 @@ impl VoiceNotice {
             // He watched Rich answer a fragment. "I haven't sent anything" is the fact that
             // makes that make sense.
             //
-            // IT ENDS WITH A STATUS AND NOT AN INSTRUCTION. "Wait until I finish" is an
-            // imperative, and worse, it is an instruction to use the product more carefully
-            // to work around a limitation — which is not a thing to ask of him.
+            // IT ENDS BY SAYING WHAT TO DO, since 2026-10-21. It used to end with a status
+            // ("I'm listening now.") on the argument that the open microphone is the
+            // affordance and an imperative with no button is a request. A new user on 1.2.1
+            // got this line right after a failed answer and was left with a sentence that
+            // explained a loss and gave no next step (the failure class in
+            // `docs/development/failure-classes/lost-input-without-a-next-step.md`). The step
+            // is real and has a control: the microphone is open, so whatever he said is
+            // recovered by saying it again now. It is still CONDITIONAL ("If you did"),
+            // because on this path the app cannot know whether he spoke, and it is still not
+            // "wait until I finish", which would ask him to work around a limitation.
             VoiceNotice::CouldNotListenWhileSpeaking => {
                 "While I was speaking, I couldn't tell your voice from my own, so if you \
                  said something just then, it didn't reach me and I haven't sent anything. \
-                 I'm listening now."
+                 If you did, please say it again now. I'm listening."
             }
         }
     }
@@ -1887,6 +1921,8 @@ impl VoiceController {
             his_floor: AtomicBool::new(false),
             answer_sounded: AtomicBool::new(false),
             his_onset: AtomicBool::new(false),
+            takes_a_reply: AtomicBool::new(false),
+            reply_invited: AtomicBool::new(false),
             finish_capture: AtomicBool::new(false),
             capture_finished: AtomicBool::new(false),
             drained_after_finish: AtomicBool::new(false),
@@ -1958,10 +1994,14 @@ impl VoiceController {
             }
             let speaking = cb_shared.speaking.load(Ordering::Relaxed);
             let forced = cb_force.swap(false, Ordering::Relaxed);
+            if cb_shared.reply_invited.swap(false, Ordering::Relaxed) {
+                brain.invite_reply();
+            }
             for msg in brain.push_frame(frame, speaking, forced) {
                 let _ = cap_tx.send(msg);
             }
             cb_shared.his_onset.store(brain.his_onset_building(), Ordering::Relaxed);
+            cb_shared.takes_a_reply.store(brain.takes_a_reply(), Ordering::Relaxed);
             cb_shared.set_level(brain.level());
             // Publish the canceller's live state for the supervisor and the UI without ever
             // touching the audio thread from outside it. Signed and unclamped: a negative ERLE
@@ -2588,6 +2628,9 @@ impl Drop for VoiceController {
 /// card so a later genuine refusal speaks again. It does **not** clear the half-duplex latch:
 /// that one is session-scoped for the measured reason above, and
 /// `being_heard_does_not_re_arm_the_notice_because_the_condition_is_not_an_event` holds it.
+///
+/// [`Self::reply_invited`], called when the half-duplex line is SHOWN: the line asked him to
+/// say it again, so its own card stops outranking a refusal of that repeat. Its latch stays.
 #[derive(Debug, Clone, Default)]
 pub struct RefusalNotices {
     /// The card currently standing, and therefore the authority a new one has to beat. `None`
@@ -2669,6 +2712,20 @@ impl RefusalNotices {
         self.standing = None;
     }
 
+    /// **The half-duplex line has just been SHOWN, asking him to say it again: what he says next
+    /// may be refused out loud.** The line claims its authority-3 card at the discard, so the
+    /// recognizer's lines cannot stack on it while it waits to be shown (`HalfDuplexDelivery`).
+    /// Once shown it has said what it had to say, and left standing it outranked every refusal
+    /// of the very repeat it asked for: a word whisper heard as `[BLANK_AUDIO]` got no line at
+    /// all, his words lost again in silence (review rv-20261021T225454Z-d47fcfe5-d9e7). So the
+    /// card it holds is released here and the next refusal speaks. The session-scoped
+    /// half-duplex latch is untouched, so the line itself still comes at most once.
+    pub fn reply_invited(&mut self) {
+        if self.standing == Some(VoiceNotice::CouldNotListenWhileSpeaking) {
+            self.standing = None;
+        }
+    }
+
     /// What is standing right now. The diagnostic that makes "why did it not say anything"
     /// answerable without re-reading the callers.
     pub fn standing(&self) -> Option<VoiceNotice> {
@@ -2678,6 +2735,43 @@ impl RefusalNotices {
     /// Has the half-duplex line been said in this voice session?
     pub fn half_duplex_already_said(&self) -> bool {
         self.half_duplex_said
+    }
+}
+
+/// **THE HALF-DUPLEX LINE IS SHOWN WHEN RICH CAN TAKE THE REPLY, NOT WHEN IT IS EARNED.**
+///
+/// [`VoiceNotice::CouldNotListenWhileSpeaking`] ends "please say it again now". It is earned at
+/// a tainted discard, which happens while Rich is still audible, and while he is audible a
+/// short reply is discarded the same way. Shown at once (as until 2026-10-21), it invited the
+/// user to speak into the very window that had just lost their words: measured on the
+/// committed echo-path recording, the first discard came 2.608 s into an answer with
+/// 22.336 s of it still to play (review rv-20261021T175303Z-70f43b54-a22b). So the supervisor
+/// OWES the line at the discard ([`Self::owe`]) and delivers it on the first tick a reply would
+/// be heard ([`Self::due`]): Rich no longer audible, the echo lookback past and no tainted
+/// recording still open ([`CaptureBrain::takes_a_reply`]). The budget it spends is still
+/// claimed at the discard, so the recognizer's lines cannot stack on top of it meanwhile.
+#[derive(Debug, Default)]
+pub struct HalfDuplexDelivery {
+    owed: Option<VoiceNotice>,
+}
+
+impl HalfDuplexDelivery {
+    /// The line was earned (a tainted discard claimed it). Held until [`Self::due`].
+    pub fn owe(&mut self, n: VoiceNotice) {
+        self.owed = Some(n);
+    }
+
+    /// The line to show now, if one is owed and a reply starting now would be heard: Rich is no
+    /// longer audible (`rich_audible`) AND capture would take it (`capture_takes_a_reply`, the
+    /// capture callback's latest [`CaptureBrain::takes_a_reply`]); `None` otherwise. Rich falling
+    /// silent is not enough: for 0.416 s after it an utterance still carries his echo in its
+    /// pre-roll, and an open tainted recording absorbs whatever is said until its hangover ends
+    /// (review rv-20261021T205407Z-bcae8bd4-dcd6).
+    pub fn due(&mut self, rich_audible: bool, capture_takes_a_reply: bool) -> Option<VoiceNotice> {
+        if rich_audible || !capture_takes_a_reply {
+            return None;
+        }
+        self.owed.take()
     }
 }
 
@@ -3232,6 +3326,7 @@ fn supervise(
     // Rich's first sound for an answer: from then on, what he says is a new turn, not the rest of
     // the one Rich is answering.
     let mut was_playing = false;
+    let mut half_duplex_line = HalfDuplexDelivery::default();
     let mut last_state = VoiceState::Off;
     // Rich's audible window, and the monotonic clock that drives it. `Instant`, never the wall
     // clock: a window that closes early because the system clock stepped is the defect again.
@@ -3368,11 +3463,12 @@ fn supervise(
                         // single-refusal lines cannot add themselves on top of it — which is
                         // precisely the three-cards-for-a-silent-man defect. See
                         // `RefusalNotices`.
+                        //
+                        // OWED HERE, SHOWN WHEN RICH IS NO LONGER AUDIBLE: the line ends "please
+                        // say it again now", and while Rich is still audible a short reply is
+                        // discarded the same way. See `HalfDuplexDelivery`.
                         if let Some(n) = notices.lock().ok().and_then(|mut b| b.half_duplex()) {
-                            observer.on_voice_event(&VoiceEvent::Notice {
-                                message: n.ceo_message().to_string(),
-                                at: now_millis(),
-                            });
+                            half_duplex_line.owe(n);
                         }
                     }
                 }
@@ -3496,6 +3592,15 @@ fn supervise(
         // synthesis has made no sound, and speech that starts then is his (`turn::rich_audible`).
         let playing = rich_audible(audible.is_open(), shared.answer_sounded.load(Ordering::Relaxed));
         shared.speaking.store(playing, Ordering::Relaxed);
+        if let Some(n) = half_duplex_line.due(playing, shared.takes_a_reply.load(Ordering::Relaxed)) {
+            // It asks him to say it again: keep what he says next however short, and let a
+            // refusal of it be said (`RefusalNotices::reply_invited`).
+            shared.reply_invited.store(true, Ordering::Relaxed);
+            if let Ok(mut b) = notices.lock() {
+                b.reply_invited();
+            }
+            observer.on_voice_event(&VoiceEvent::Notice { message: n.ceo_message().to_string(), at: now_millis() });
+        }
         if playing && !was_playing {
             // Rich has begun answering aloud: his next words are a new turn.
             turns.unanswered = None;
@@ -4378,6 +4483,8 @@ mod tests {
             his_floor: AtomicBool::new(false),
             answer_sounded: AtomicBool::new(false),
             his_onset: AtomicBool::new(false),
+            takes_a_reply: AtomicBool::new(false),
+            reply_invited: AtomicBool::new(false),
             finish_capture: AtomicBool::new(false),
             capture_finished: AtomicBool::new(false),
             drained_after_finish: AtomicBool::new(false),
@@ -5151,19 +5258,31 @@ mod tests {
         assert!(lower.contains("while i was speaking"), "{m}");
     }
 
-    /// INVARIANT: the line still states the CONSEQUENCE and still ends with a status rather
-    /// than an instruction — the two properties the wording change had to preserve.
+    /// INVARIANT: the line states the CONSEQUENCE and then WHAT TO DO about it (2026-10-21: a
+    /// new user was left with a loss and no next step). The step is the one the open
+    /// microphone supports, saying it again now, and never a work-around such as waiting
+    /// for Rich to finish.
     #[test]
-    fn the_half_duplex_line_states_the_consequence_and_promises_nothing() {
+    fn every_input_refusal_names_a_next_step() {
+        for notice in [VoiceNotice::HeardNoVoice, VoiceNotice::DidNotCatchThat,
+                       VoiceNotice::SoundButNoWords, VoiceNotice::CouldNotListenWhileSpeaking] {
+            assert!(notice.ceo_message().contains("say it again"), "{notice:?}: {}", notice.ceo_message());
+        }
+    }
+
+    #[test]
+    fn the_half_duplex_line_states_the_consequence_and_what_to_do() {
         let m = VoiceNotice::CouldNotListenWhileSpeaking.ceo_message();
         // The fact he is missing: those words did not arrive, and nothing was sent in his
         // name. The second half is what makes Rich answering a fragment make sense.
         assert!(m.contains("didn't reach me"), "{m}");
         assert!(m.contains("haven't sent anything"), "{m}");
-        // Ends with a status, never an instruction to work around the limitation.
-        assert!(m.ends_with("I'm listening now."), "{m}");
-        for imperative in ["wait ", "try ", "please", "say it again"] {
-            assert!(!m.to_lowercase().contains(imperative), "{m} contains {imperative:?}");
+        // The next step, conditional like everything else it says about him.
+        assert!(m.contains("If you did, please say it again now."), "{m}");
+        assert!(m.ends_with("I'm listening."), "{m}");
+        // Never an instruction to work around the limitation.
+        for workaround in ["wait ", "until i finish", "headphones", "speak louder"] {
+            assert!(!m.to_lowercase().contains(workaround), "{m} contains {workaround:?}");
         }
         // No machinery, same bar as every other notice here.
         assert!(!m.chars().any(|c| c.is_ascii_digit()), "{m}");
@@ -5745,8 +5864,9 @@ mod tests {
             assert_ne!(caught, other);
         }
         // House discipline, asserted rather than trusted: it closes the "was anything sent?"
-        // question and ends with a status rather than an instruction.
+        // question, says what to do about it (2026-10-21), and ends with the status.
         assert!(caught.contains("haven't sent anything"));
+        assert!(caught.contains("Please say it again."), "{caught}");
         assert!(caught.ends_with("I'm still listening."));
         // NAMES NO MACHINERY — the same bar `the_silent_discard_notice_names_no_control_and_no
         // _machinery` holds `SoundButNoWords` to. The transcript that was thrown away is the
@@ -5766,6 +5886,7 @@ mod tests {
         let b = VoiceNotice::SoundButNoWords.ceo_message();
         assert_ne!(a, b);
         assert!(a.contains("haven't sent anything"), "the refusal must close the send question: {a}");
+        assert!(a.contains("please say it again"), "the refusal must say what to do: {a}");
         assert!(!a.contains('/') && !a.contains("dBFS"), "machinery leaked to the CEO: {a}");
         assert!(!b.contains('/') && !b.contains("dBFS"), "machinery leaked to the CEO: {b}");
     }
@@ -5925,10 +6046,9 @@ mod tests {
         assert_eq!(SILENT_DISCARD_RUN, 3);
     }
 
-    /// INVARIANT: the notice states a condition and invents no control. The ◉ that ends
-    /// voice is already on screen with its own footnote, so a sentence pointing at a
-    /// control would be a request wearing a status's clothes — and the affordance suite
-    /// classifies this string INFORMATIONAL on exactly that reading.
+    /// The notice explains the condition, keeps listening and asks for a repeat without
+    /// inventing a control or exposing recognition machinery. The affordance suite treats
+    /// the spoken repeat as the action, through the existing voice control.
     #[test]
     fn the_silent_discard_notice_names_no_control_and_no_machinery() {
         let m = VoiceNotice::SoundButNoWords.ceo_message();
@@ -5939,7 +6059,8 @@ mod tests {
         // What it DOES say: sound arrived, words did not, and voice was not switched off
         // behind his back.
         assert!(m.contains("hear sound"), "{m}");
-        assert!(m.contains("Voice is still on"), "{m}");
+        assert!(m.contains("I'm still listening"), "{m}");
+        assert!(m.contains("Please say it again"), "{m}");
     }
 
     /// INVARIANT: the diagnostics line reports MEASURED device facts and the exact barge-in

@@ -173,6 +173,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import cpu_policy  # noqa: E402  (sibling in scripts/lib: the engine's CPU admission rule)
+import instruction_files  # noqa: E402  (sibling: the repository's own CLAUDE.md or AGENTS.md, by Claude Code's rule)
 
 CODEX_MODEL = "gpt-6.1-sol"
 CODEX_EFFORT = "high"
@@ -182,7 +183,9 @@ LIMIT_SECONDS = 60 * 60
 ADMISSION_WAIT_SECONDS = 30 * 60
 ADMISSION_SAMPLE_SECONDS = 30
 CODEX_APP_ROOTS = ("/Applications/ChatGPT.app", "~/Applications/ChatGPT.app")
-RULE_FILES = ("AGENTS.md", "docs/development/verification-retries.md")
+# The repository's own instruction file is not listed here: `instruction_files` chooses it by
+# Claude Code's rule, the same file the worker was given, and it is inlined in full.
+RULE_FILES = ("docs/development/verification-retries.md",)
 MAX_INLINE_RULE_BYTES = 64 * 1024
 MAX_INLINE_LOG_BYTES = 128 * 1024
 FIXTURE_FILE_BYTES = 1024 * 1024
@@ -714,7 +717,16 @@ def build_input(w, a, export, earlier):
             parts.append("- `%s` (P%s) %s (%s). Why: %s\n" % (fid, d.get("priority"), d.get("title"),
                                                             ", ".join(d.get("files") or []), d.get("why")))
         parts.append("\n")
-    parts.append("## The repository's own rules (as they are at the tip)\n\n")
+    parts.append("## The repository's own instructions (as they are at the tip)\n\n")
+    # The same instruction file, by the same rule, as the worker's brief (prepare in
+    # mega-lander/app.py; richos-hq docs/plans/2026-10-21-folder-instruction-files.md §5.3 item 2),
+    # read at the tip: in full, never cut. Read from the repository at the tip, never from the
+    # export: a link out of the repository (CLAUDE.md -> ../shared/CLAUDE.md) points nowhere
+    # inside the export, and the same call as prepare's resolves every link the same way.
+    for rel, text, where in instruction_files.for_repository(w.repo, w.tip):
+        label = ("tree/" + rel if where == "commit"
+                 else "%s, from the connected folder itself (not committed, so not in tree/)" % os.path.join(w.repo, rel))
+        parts.append(fence(label, text) + "\n")
     for rel in RULE_FILES:
         text = read_rule(tree, rel)
         if text is not None:

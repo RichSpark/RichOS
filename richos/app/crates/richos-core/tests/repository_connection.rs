@@ -58,6 +58,32 @@ fn a_folder_without_git_gets_git_and_its_files_become_the_first_commit(){
  assert_eq!(std::fs::read_to_string(dir.join("secret.env")).unwrap(),"TOKEN=placeholder\n");
  assert_eq!(reg.get(&id("alpha")).unwrap().connected_repositories,vec![dir.clone()]);
 }
+/// Every file under `dir`, outside `.git`, by its path relative to `dir`.
+fn files_under(dir:&std::path::Path)->Vec<PathBuf>{
+ let mut out=vec![];let mut todo=vec![dir.to_path_buf()];
+ while let Some(d)=todo.pop(){for e in std::fs::read_dir(&d).unwrap().flatten(){
+  let p=e.path();if p.file_name().is_some_and(|n|n==".git"){continue;}
+  if p.is_dir(){todo.push(p);}else{out.push(p.strip_prefix(dir).unwrap().to_path_buf());}
+ }}
+ out.sort();out
+}
+#[test]
+fn connecting_leaves_the_folders_own_instruction_files_exactly_as_they_were(){
+ // A connected folder's own CLAUDE.md, AGENTS.md and CLAUDE.local.md are the user's, for the
+ // terminal as much as for the app (richos-hq docs/plans/2026-10-21-folder-instruction-files.md
+ // §3 item 1): connecting never writes, moves, renames or deletes one, and adds none anywhere.
+ let f=Fixture::new();let dir=f.dir("their project");
+ let files=[("CLAUDE.md","# House rules\nEvery commit message ends with [house-rule].\n"),
+            ("AGENTS.md","Agents: keep changes small.\n"),("CLAUDE.local.md","My own notes, never shared.\n")];
+ for (name,text) in files {std::fs::write(dir.join(name),text).unwrap();}
+ std::fs::write(dir.join("plan.md"),"the plan\n").unwrap();
+ let before=files_under(&dir);
+ let (_,repo)=connect(&f.registry(),&id("alpha"),&dir,&f.runtime(),&[]).unwrap();
+ assert!(repo.initialized,"the folder had no Git, so this connect set it up");
+ for (name,text) in files {assert_eq!(std::fs::read_to_string(dir.join(name)).unwrap(),text,"{name} changed");}
+ assert_eq!(files_under(&dir),before,"connecting added, moved or removed a file outside .git");
+ assert!(!dir.join(".claude").exists(),"connecting made a .claude folder");
+}
 #[test]
 fn an_empty_folder_gets_git_with_an_empty_first_commit(){
  let f=Fixture::new();let dir=f.dir("fresh");
@@ -122,4 +148,23 @@ fn legacy_registry_loads_without_granting_repository_execution(){
  loaded.registry.save(&p).unwrap();
  let backups:Vec<_>=std::fs::read_dir(&f.0).unwrap().flatten().filter(|e|e.file_name().to_string_lossy().ends_with(".backup.json")).collect();
  assert_eq!(backups.len(),1);assert_eq!(std::fs::read(backups[0].path()).unwrap(),original);
+}
+#[test]
+fn a_repository_inside_the_owners_company_folder_can_still_be_shared_with_another_company(){
+ // Plan item 11, §138. Alpha's company folder is the parent and Alpha has connected a
+ // repository inside it, so Alpha owns BOTH roots. Beta may still connect that repository;
+ // any other overlap with Alpha's folder is still refused.
+ let f=Fixture::new();let home=f.dir("alpha home");let project=home.join("project");std::fs::create_dir(&project).unwrap();
+ let other=home.join("other");std::fs::create_dir(&other).unwrap();
+ let reg=EntityRegistry::new(vec![Entity::try_new("alpha","Alpha",vec![home.clone()]).unwrap(),Entity::new("beta","Beta",&[]).unwrap()]).unwrap();
+ let (reg,_)=connect(&reg,&id("alpha"),&project,&f.runtime(),&[]).unwrap();
+ let (reg,_)=connect(&reg,&id("beta"),&project,&f.runtime(),&[]).unwrap();
+ assert_eq!(reg.get(&id("beta")).unwrap().connected_repositories,vec![project.clone()]);
+ assert!(reg.get(&id("beta")).unwrap().roots.is_empty(),"roots stay exclusive to Alpha");
+ assert_eq!(reg.resolve_root(&project).unwrap().id,id("alpha"));
+ assert!(connect(&reg,&id("beta"),&other,&f.runtime(),&[]).unwrap_err().contains("overlaps"),"an unconnected folder in Alpha's folder is still refused");
+ assert!(connect(&reg,&id("beta"),&home,&f.runtime(),&[]).unwrap_err().contains("overlaps"),"Alpha's company folder itself is still refused");
+ // The registry survives a save and a load.
+ reg.save(&f.0.join("entities.json")).unwrap();
+ assert_eq!(EntityRegistry::load(&f.0.join("entities.json")).registry,reg);
 }

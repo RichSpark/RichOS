@@ -58,9 +58,13 @@ cp "$SRC_DIR/notice-unasked-deferral.sh" "$REPO/scripts/hooks/"
 cp "$SRC_DIR/guard-unasked-deferral.py" "$REPO/scripts/hooks/"
 chmod +x "$REPO/scripts/hooks/notice-unasked-deferral.sh"
 for l in resolve-roots.sh resolve-main-checkout.sh seat-jurisdiction.sh \
-         stop-hook-notice.sh; do
+         stop-hook-notice.sh hold_words.py; do
     cp "$SRC_DIR/../lib/$l" "$REPO/scripts/lib/$l" 2>/dev/null || true
 done
+# A finding opens a hold in the workspace registry (2026-10-22): the sandbox's own.
+mkdir -p "$REPO/mega-lander"
+cp "$SRC_DIR/../../mega-lander/workspaces.py" "$REPO/mega-lander/"
+export RICHOS_WORKSPACES_DIR="$SANDBOX/workspaces"
 
 HOOK="$REPO/scripts/hooks/notice-unasked-deferral.sh"
 
@@ -169,6 +173,56 @@ write_transcript Bash
 run_hook "Nothing else is outstanding. It goes in with the dialect guard's land."
 if spoke; then ok "1f  family B alone fires — bundling into a later land"
 else bad "1f  family B alone fires" "$HOUT"; fi
+
+# T1 (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-holds.md): the
+# 2026-09-27 15:30Z reply. No pattern matched it and his order sat held for
+# weeks. Now it opens a hold, and a turn end once it is 30 min old names it.
+# The turn also spawned an agent: a reply saying work is held cannot be
+# starting it, so the spawn discharges nothing here.
+rm -rf "$RICHOS_WORKSPACES_DIR/holds"       # the holds the cases above opened
+write_transcript Agent Bash
+run_hook "Stream A is running. Stream B is on hold, deliberately."
+HOLDFILE="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | head -1)"
+if spoke && names "Recorded as the hold held-" && [ -n "$HOLDFILE" ]; then
+    ok "T1a 'Stream B is on hold, deliberately.' fires, even beside a spawn, and leaves a hold"
+else bad "T1a the 2026-09-27 reply leaves a hold" "file=$HOLDFILE out=$HOUT"; fi
+python3 - "$HOLDFILE" <<'PYEOF'
+import json, sys, time
+h = json.load(open(sys.argv[1])); h["at"] = time.time() - 31 * 60; json.dump(h, open(sys.argv[1], "w"))
+PYEOF
+# The workspace gate's turn-end systemMessage is built from hold_lines() (workspaces.test.py
+# NoSilentHolds test_holds_the_gates_turn_end_message_carries_the_lines proves the gate's half).
+GOUT="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import workspaces as w; print("\n".join(w.hold_lines(sys.argv[2])))' \
+    "$REPO/mega-lander" "deadbeef-1111-4000-8000-000000000000" 2>&1)"
+if printf '%s' "$GOUT" | grep -q 'HELD BY RICH, NOT BY YOU: Stream B is on hold, deliberately. since'; then
+    ok "T1b the next turn end at +31 min names it to him, and every one after"
+else bad "T1b the turn-end line names the hold" "$GOUT"; fi
+rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+
+# Second review rv-20261022T013056Z-12c77c90-1291, finding 2: a hold put to him as a choice
+# stays recorded until he decides (no notice: he was asked); finding 3: each held piece of
+# work in one reply is its own hold.
+write_transcript Bash
+run_hook "Spelling work is on hold, deliberately. Your call: run it now or keep holding?"
+N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
+if quiet && [ "$N" = 1 ] && grep -q "held until he decides" "$RICHOS_WORKSPACES_DIR"/holds/held-*.json; then
+    ok "T1c a hold handed back to him as his choice is recorded until he decides, with no notice"
+else bad "T1c a handed-back hold is recorded" "holds=$N out=$HOUT"; fi
+rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+write_transcript Bash
+run_hook "Spelling work is on hold, deliberately. The sign-in fix is parked."
+N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
+if spoke && [ "$N" = 2 ] && grep -q "sign-in fix is parked" "$RICHOS_WORKSPACES_DIR"/holds/held-*.json; then
+    ok "T1d two held pieces of work in one reply are two holds"
+else bad "T1d each held piece is its own hold" "holds=$N out=$HOUT"; fi
+rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+write_transcript Bash
+run_hook "You killed Stream B, so Stream B is on hold."
+N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
+if quiet && [ "$N" = 0 ]; then
+    ok "T1e his own order, cited, opens no hold: the decision is his and made"
+else bad "T1e a cited order of his opens no hold" "holds=$N out=$HOUT"; fi
+rm -rf "$RICHOS_WORKSPACES_DIR/holds"
 
 # ===========================================================================
 # 2. THE THREE DISCHARGES — same text, silenced three different ways

@@ -1818,6 +1818,10 @@ t "command-walk: a settled task carrying the command's result passes; the 2026-0
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/command-walk.test.py" >"$TMP/command-walk.log" 2>&1; ok $? "$(cat "$TMP/command-walk.log")"
 t_done
 
+t "skills-walk: a settled job whose worker's Skill call and page open completed and got the page back passes; the second review's hollow record fails"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/skills-walk.test.py" >"$TMP/skills-walk.log" 2>&1; ok $? "$(cat "$TMP/skills-walk.log")"
+t_done
+
 t "first-send-walk: a first send after a relaunch that the ledger received passes; an emptied composer with no PromptReceived row is named swallowed"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/first-send-walk.test.py" >"$TMP/first-send-walk.log" 2>&1; ok $? "$(cat "$TMP/first-send-walk.log")"
 t_done
@@ -1836,6 +1840,10 @@ t_done
 
 t "setup-walk: the boot verdict, the video tools outcome and the download timeline verdict are read from their own lines"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/setup-walk.test.py" >"$TMP/setup-walk.log" 2>&1; ok $? "$(cat "$TMP/setup-walk.log")"
+t_done
+
+t "new-user-walk: every dead end a new user hit fails its step, the frame's own words are read, and the way out passes"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/new-user-walk.test.py" >"$TMP/new-user-walk.log" 2>&1; ok $? "$(cat "$TMP/new-user-walk.log")"
 t_done
 
 t "video-watch-walk: a background download is read from the boot line, every setup-walk name it calls exists, and glued sentences are told from paths"
