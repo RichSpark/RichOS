@@ -4,14 +4,15 @@ import SwiftUI
 enum TranscriptItem: Equatable, Identifiable, Sendable {
     case loadingOlder
     case beginning
-    case day(String)
+    /// `occurrence` counts the times this label has already started a run of rows above it.
+    case day(String, occurrence: Int = 0)
     case row(ScreenModel.Row, tail: Bool, focused: Bool)
 
     var id: String {
         switch self {
         case .loadingOlder: return "~loading"
         case .beginning: return "~beginning"
-        case .day(let label): return "~day-\(label)"
+        case .day(let label, let occurrence): return occurrence == 0 ? "~day-\(label)" : "~day-\(label)#\(occurrence + 1)"
         case .row(let row, _, _): return row.listID
         }
     }
@@ -19,19 +20,32 @@ enum TranscriptItem: Equatable, Identifiable, Sendable {
     /// The list round 12 draws (`app.js` `renderThread`): the loading line or the beginning, the day
     /// markers, then the messages oldest first. The last message of a run by one speaker is its
     /// "tail" and squares its outer bottom corner.
+    ///
+    /// Every id is unique: the list's diffable data source throws on a repeated identifier, which
+    /// ends the app (the iPhone walk of 2026-10-21, RichOSNative-2026-10-21-144802.ips). The rows
+    /// are in the Mac's cursor order with the phone's own unsent bubbles after them
+    /// (`ConversationReducer.ordered`), so a day can come back below a later one: a message held
+    /// offline across midnight, or a Mac whose history cursors start again. That day's marker is
+    /// drawn again under an id of its own. A second row with an id already drawn is the same line
+    /// and is not drawn twice.
     static func build(_ t: ScreenModel.Transcript, calendar: Calendar, now: Date) -> [TranscriptItem] {
         var items: [TranscriptItem] = []
         if t.loadingOlder { items.append(.loadingOlder) } else if t.reachedBeginning { items.append(.beginning) }
         // `t.cached` is not a row: the out-of-reach line is pinned under the header (`OutOfReachLine`).
+        var seen = Set<String>()
+        let rows = t.rows.filter { seen.insert($0.listID).inserted }
         var lastDay: DateComponents?
-        for (index, row) in t.rows.enumerated() {
+        var daysShown: [String: Int] = [:]
+        for (index, row) in rows.enumerated() {
             let date = Date(timeIntervalSince1970: TimeInterval(row.sentAt) / 1000)
             let day = calendar.dateComponents([.year, .month, .day], from: date)
             if day != lastDay {
-                items.append(.day(DayLabel.text(for: date, calendar: calendar, now: now)))
+                let label = DayLabel.text(for: date, calendar: calendar, now: now)
+                items.append(.day(label, occurrence: daysShown[label, default: 0]))
+                daysShown[label, default: 0] += 1
                 lastDay = day
             }
-            let next = index + 1 < t.rows.count ? t.rows[index + 1] : nil
+            let next = index + 1 < rows.count ? rows[index + 1] : nil
             items.append(.row(row, tail: next?.author != row.author, focused: row.id == t.focusedID))
         }
         return items
@@ -103,7 +117,7 @@ struct TranscriptItemView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 22).padding(.bottom, 8)
-        case .day(let label):
+        case .day(let label, _):
             DayMarker(text: label)
         case .row(let row, let tail, let focused):
             MessageRow(row: row, width: width, tail: tail, focused: focused, calendar: calendar, send: send)

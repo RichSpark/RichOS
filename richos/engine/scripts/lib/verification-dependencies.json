@@ -14963,12 +14963,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/mobile/native-ios/bin/rios",
-          "sha256": "33de37a2c372a3b874cde6d050b48e7e312415bf443399d3cc9764a2400ac792",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
           "path": "richos/mobile/native-android/bin/randroid",
           "sha256": "b49476409dd1c2aab9f574789e63ee541bdca2946e426c543bbe9a412f7fd064",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
@@ -15020,6 +15014,12 @@
           "path": "richos/app/scripts/lib/cargo_identity.py",
           "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
           "evidence": "Private-output dispatcher used by the bound app runner. Reads Cargo manifests only for its selected workspace or private fixture; fixture imports that do not enter main execute no Cargo command."
+        },
+        {
+          "root": "repository",
+          "path": "richos/mobile/native-ios/bin/rios",
+          "sha256": "30ec0c68a4bf5aa41e1678d51238534b9801c370b3803f90ee9442483b049636",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         }
       ]
     },

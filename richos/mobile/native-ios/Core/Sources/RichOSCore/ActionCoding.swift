@@ -81,14 +81,14 @@ extension Action: Codable {
         "send", "answer-question", "question-answered", "delivery-accepted", "delivery-failed", "tick", "retry", "discard", "messages-arrived",
         "reply-started", "reply-delta", "reply-finished", "older", "older-loaded", "remember-reading", "set-following", "set-composer-focus",
         "notification-open", "notification-focused", "share-take", "reply-play", "playback-started", "playback-progress",
-        "file-open", "file-stop", "file-progress", "file-arrived", "file-failed", "file-viewed",
+        "file-open", "file-stop", "file-progress", "file-arrived", "file-failed", "file-viewed", "file-not-kept",
         "playback-ended", "playback-stop", "dismiss-toast",
         "network", "health", "connection-lost", "connected", "connection-diagnosed", "mac-capabilities", "mac-question-capability", "mac-audio-capability", "pairing-revoked", "foregrounded", "backgrounded", "mac-attachment-limits", "push-registered",
         "voice-press", "voice-start-locked", "microphone-permission", "dismiss-microphone-card", "voice-move", "voice-release", "voice-locked-send",
         "voice-locked-cancel", "voice-touch-canceled", "voice-interrupted", "voice-level", "voice-settled",
         "send-kept", "discard-kept", "record-play",
         "notifications-enable", "notifications-result", "notifications-disable", "dismiss-notification-offer",
-        "notifications-previews", "forget-request", "forget-pair", "settings",
+        "notifications-previews", "forget-request", "forget-pair", "discard-and-forget", "settings",
         "update-policy", "update-dismiss", "update-open", "support", "check-updates", "privacy-policy",
         "attach-menu-open", "attach-menu-close", "attach-pick", "attach-picked", "attach-refused", "attach-denied",
         "attach-remove", "attach-notice-dismiss",
@@ -200,6 +200,7 @@ extension Action: Codable {
                 throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "forget-pair needs \"confirm\": true"))
             }
             self = .confirmForget
+        case "discard-and-forget": self = .discardUnsentAndForget
         case "settings": self = .openSystemSettings
         case "update-policy": self = .updatePolicy(w.update, voicePaused: try need(w.voicePaused, "voicePaused"))
         case "update-dismiss": self = .dismissUpdate
@@ -314,6 +315,7 @@ extension Action: Codable {
         case .setPreviews(let v): w = Wire("notifications-previews"); w.enabled = v
         case .forgetPairing: w = Wire("forget-request")
         case .confirmForget: w = Wire("forget-pair"); w.confirm = true
+        case .discardUnsentAndForget: w = Wire("discard-and-forget")
         case .openSystemSettings: w = Wire("settings")
         case .updatePolicy(let n, let paused): w = Wire("update-policy"); w.update = n; w.voicePaused = paused
         case .dismissUpdate: w = Wire("update-dismiss")

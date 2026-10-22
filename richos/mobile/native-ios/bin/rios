@@ -23,6 +23,8 @@
 #       verify <check>                one XCUITest check against the Release app (Tools/physical-device.mjs)
 #       perf --device UDID ...        cold launch and warm return on the phone (perf.py ios)
 #       run|approval|procs|apps|lock|battery|syslog ...   the walk and its reads (qa/phone-ios.py)
+#       crashes --device ID --out DIR [--since EPOCH]   the phone's crash and memory-kill reports for
+#                                     RichConnect, copied and read (qa/phone-ios.py)
 #       wifi-restore | wifi-on        read the phone's Wi-Fi switch in Settings and turn it on if off
 #       wifi-off                      turn it off; refused unless the phone is on the USB cable (over Wi-Fi
 #                                     the Mac would lose the phone); end with wifi-on and `device net`
@@ -120,7 +122,7 @@ if [ "${1:-}" = "device" ]; then
       fi
       exec "${HOLDN[@]}" python3 "$HERE/../perf/perf.py" ios "$@" ;;
     run) exec "${HOLDN[@]}" python3 "$HERE/../../app/scripts/qa/phone-ios.py" "$@" ;;
-    approval|procs|apps|lock|battery|syslog|trust|net|close|wifi-restore|wifi-on|wifi-off|reboot|launch) exec "${HOLD[@]}" python3 "$HERE/../../app/scripts/qa/phone-ios.py" "$@" ;;
+    approval|procs|apps|lock|battery|syslog|crashes|trust|net|close|wifi-restore|wifi-on|wifi-off|reboot|launch) exec "${HOLD[@]}" python3 "$HERE/../../app/scripts/qa/phone-ios.py" "$@" ;;
     verify) exec "${HOLDN[@]}" node "$HERE/Tools/physical-device.mjs" "$@" ;;
     *) exec "${HOLD[@]}" node "$HERE/Tools/physical-device.mjs" "$@" ;;
   esac
