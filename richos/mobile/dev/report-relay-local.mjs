@@ -20,17 +20,29 @@ import { reportArtifact, schemaStatements } from '../cli/report.mjs';
 
 const service = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'service');
 export const LOCAL = { repository: 'richos-test/report-relay-local', bot: 'richos-reports-local[bot]', appId: '1001', installationId: '2002' };
+// A local stand-in for the Cloudflare Access team, so staff reads can be proven against workerd.
+export const LOCAL_ACCESS = { team: 'https://richos-local.cloudflareaccess.com', aud: 'c'.repeat(64) };
 
-export async function startLocalRelay({ entry = locateMiniflare(), state, reconcileSeconds = 4, pageSize = 100, port = 0 } = {}) {
+export async function startLocalRelay({ entry = locateMiniflare(), state, reconcileSeconds = 4, abandonSeconds = null, retainSeconds = null, pageSize = 100, port = 0 } = {}) {
   if (!entry) throw Error('Cloudflare local runtime not installed (no Wrangler with Miniflare on PATH; set RICHOS_MINIFLARE)');
   if (!state) throw Error('An explicit state directory is required');
   mkdirSync(state, { recursive: true, mode: 0o700 });
   const { Miniflare, supportedCompatibilityDate } = await import(pathToFileURL(entry).href);
   const artifact = reportArtifact({ stage: 'test', worker: 'richos-report-local', accountId: '0'.repeat(32), databaseId: '00000000-0000-0000-0000-000000000000',
-    hostname: 'report-local.example.com', repository: LOCAL.repository, appId: LOCAL.appId, installationId: LOCAL.installationId, botLogin: LOCAL.bot, label: 'richdoctor' });
+    hostname: 'report-local.example.com', repository: LOCAL.repository, appId: LOCAL.appId, installationId: LOCAL.installationId, botLogin: LOCAL.bot, label: 'richdoctor',
+    bucket: 'richos-report-local', accessTeamDomain: LOCAL_ACCESS.team, accessAud: LOCAL_ACCESS.aud });
   const compatibilityDate = artifact.metadata.compatibility_date <= supportedCompatibilityDate ? artifact.metadata.compatibility_date : supportedCompatibilityDate;
   const key = await appKey();
   const github = new FakeGitHub({ ...LOCAL, publicKey: key.publicKey, pageSize });
+  const staff = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
+  const certs = JSON.stringify({ keys: [{ ...(await crypto.subtle.exportKey('jwk', staff.publicKey)), kid: 'local-staff' }] });
+  const b64 = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+  // A signed Access token for the local team; `claims` override the valid defaults.
+  async function accessToken(claims = {}) {
+    const header = b64({ alg: 'RS256', kid: 'local-staff' }), now = Math.floor(Date.now() / 1000);
+    const body = b64({ iss: LOCAL_ACCESS.team, aud: [LOCAL_ACCESS.aud], exp: now + 600, iat: now, ...claims });
+    return `${header}.${body}.${Buffer.from(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', staff.privateKey, new TextEncoder().encode(header + '.' + body))).toString('base64url')}`;
+  }
   const vars = Object.fromEntries(artifact.metadata.bindings.filter(b => b.type === 'plain_text').map(b => [b.name, b.text]));
   const ratelimits = Object.fromEntries(artifact.metadata.bindings.filter(b => b.type === 'ratelimit').map(b => [b.name, { simple: { limit: 1000, period: 60 } }]));
   const options = () => ({
@@ -38,8 +50,10 @@ export async function startLocalRelay({ entry = locateMiniflare(), state, reconc
     modulesRoot: service, compatibilityDate, cf: false, host: '127.0.0.1', port,
     modules: artifact.modules.map(module => ({ type: 'ESModule', path: join(service, module.name), contents: module.source })),
     d1Databases: { DB: 'richos-report-local' }, d1Persist: join(state, 'd1'), ratelimits,
-    bindings: { ...vars, GITHUB_APP_PRIVATE_KEY: key.pkcs1, RECONCILE_SECONDS: String(reconcileSeconds) },
-    outboundService: request => github.fetch(request),
+    r2Buckets: { IMAGES: 'richos-report-local' }, r2Persist: join(state, 'r2'),
+    bindings: { ...vars, GITHUB_APP_PRIVATE_KEY: key.pkcs1, RECONCILE_SECONDS: String(reconcileSeconds),
+      ...(abandonSeconds ? { ABANDON_SECONDS: String(abandonSeconds) } : {}), ...(retainSeconds ? { RETAIN_SECONDS: String(retainSeconds) } : {}) },
+    outboundService: request => request.url === `${LOCAL_ACCESS.team}/cdn-cgi/access/certs` ? new Response(certs, { status: 200 }) : github.fetch(request),
   });
   let mf = new Miniflare(options()), url;
   const boot = async () => {
@@ -54,7 +68,12 @@ export async function startLocalRelay({ entry = locateMiniflare(), state, reconc
     github, compatibilityDate, repository: LOCAL.repository, runtime: { miniflare: entry, requestedDate: artifact.metadata.compatibility_date },
     get url() { return url.href.replace(/\/$/, ''); }, get db() { return db; },
     fetch: (path, init) => mf.dispatchFetch(new URL(path, url).href, init),
-    control: (paused, cap, operator = 'local-runtime') => db.prepare('UPDATE control SET paused=?, daily_cap=?, operator=?, updated_at=? WHERE id=1').bind(paused, cap, operator, Date.now()).run(),
+    accessToken,
+    control: (paused, cap, operator = 'local-runtime', bytesCap = 200 * 1048576) => db.prepare('UPDATE control SET paused=?, daily_cap=?, daily_bytes_cap=?, operator=?, updated_at=? WHERE id=1')
+      .bind(paused, cap, bytesCap, operator, Date.now()).run(),
+    // One run of the scheduled cleanup, exactly as the cron trigger runs it.
+    async cleanup() { await (await mf.getWorker()).scheduled({ cron: artifact.schedules[0].cron }); },
+    bucket: async () => mf.getR2Bucket('IMAGES'),
     // Ends the workerd process mid-flight, then starts a new one on the same D1: a relay restart.
     async restart() { await mf.dispose(); mf = new Miniflare(options()); db = await boot(); },
     dispose: () => mf.dispose(),

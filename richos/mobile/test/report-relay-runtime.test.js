@@ -110,21 +110,21 @@ test('A9 in workerd: interrupted delivery always ends in one issue or an honest 
   answer = await create(report());
   assert.deepEqual([answer.state, answer.reason], ['closed', 'daily_cap']); assert(answer.retry_after_seconds > 0);
   await relay.control(1, 1000);
-  assert.deepEqual(await create(report()), { state: 'closed', reason: 'operator_off' });
+  assert.deepEqual(await create(report()), { state: 'closed', stage: 'not_sent', reason: 'operator_off' });
   assert.equal((await status(before)).state, 'delivered', 'known reports answer while switched off');
   const health = await (await relay.fetch('/v1/health')).json();
-  assert.deepEqual(health, { ok: true, service: 'richos-report', protocol: 1, accepting: false });
+  assert.deepEqual(health, { ok: true, service: 'richos-report', protocol: 2, accepting: false });
 
   // One issue per delivered report, and nothing else was ever created.
   const delivered = [before, accepted, restarted, blind, refused, largest];
   assert.equal(github.created().length, delivered.length);
   for (const payload of delivered) assert.equal(issuesFor(payload).length, 1, payload.report_id);
-  // The database holds receipt state only.
-  const rows = JSON.stringify((await relay.db.prepare('SELECT * FROM reports').all()).results);
+  // Once posted, the database holds receipt state only (a report's words stay only until it is sent).
+  const rows = JSON.stringify((await relay.db.prepare("SELECT * FROM reports WHERE state='delivered'").all()).results);
   for (const payload of delivered) { assert(!rows.includes(payload.receipt_secret)); assert(!rows.includes(payload.title)); }
 });
 
-test('the live A9 runner passes against the local stand-in and refuses a production profile', { timeout: 120000 }, async t => {
+test('the live A9 runner passes against the local stand-in and refuses a production profile', { timeout: 240000 }, async t => {
   const { locateMiniflare } = await import('../dev/policy-worker-local.mjs');
   const { startLocalRelay, LOCAL } = await import('../dev/report-relay-local.mjs');
   const { run } = await import('../dev/report-a9-live.mjs');
@@ -137,18 +137,117 @@ test('the live A9 runner passes against the local stand-in and refuses a product
   t.after(() => relay.dispose());
   const profile = { stage: 'test', worker: 'richos-report-local', hostname: 'report-local.example.com', repository: LOCAL.repository,
     accountId: '0'.repeat(32), databaseId: '00000000-0000-0000-0000-000000000000', appId: LOCAL.appId, installationId: LOCAL.installationId,
-    botLogin: LOCAL.bot, label: 'richdoctor' };
+    botLogin: LOCAL.bot, label: 'richdoctor', bucket: 'richos-report-local' };
   // The runner's three destinations, routed to the stand-in: the relay, its D1 API and GitHub.
   const fetchImpl = async (url, init = {}) => {
-    if (url.startsWith('https://report-local.example.com/')) return relay.fetch(url.slice('https://report-local.example.com'.length), init);
+    // The full https URL is kept, so the relay sees the origin its screenshot links name.
+    if (url.startsWith('https://report-local.example.com/')) return relay.fetch(url, init);
     if (url.startsWith('https://api.github.com/')) return relay.github.fetch(url, init);
     const { sql, params } = JSON.parse(init.body);
     const result = await relay.db.prepare(sql).bind(...params).all();
     return new Response(JSON.stringify({ success: true, result: [{ success: true, results: result.results, meta: result.meta }] }));
   };
-  await assert.rejects(run({ ...profile, stage: 'production', ...PRODUCTION }, { token: 't', fetchImpl }), /test relay and test repository only/);
+  await assert.rejects(run({ ...profile, stage: 'production', ...PRODUCTION, bucket: 'richos-report' }, { token: 't', fetchImpl }), /test relay and test repository only/);
   const record = await run(profile, { token: 't', fetchImpl });
   assert.equal(record.ok, true); assert(record.steps.every(step => step.ok));
-  assert.equal(relay.github.created().length, 3);
+  assert.equal(relay.github.created().length, 4);
   assert.equal((await relay.db.prepare('SELECT paused FROM control').first()).paused, 1, 'the run leaves the test relay switched off');
+});
+
+test('A9 screenshots in workerd: slow, cut and lost uploads, a restart after creation, retirement and cleanup races', { timeout: 240000 }, async t => {
+  const { locateMiniflare } = await import('../dev/policy-worker-local.mjs');
+  const { startLocalRelay } = await import('../dev/report-relay-local.mjs');
+  const { screenshotReport, registerBody, throttled, uploadInit } = await import('../dev/report-client.mjs');
+  const { largePng } = await import('../dev/report-image-fixtures.mjs');
+  const entry = locateMiniflare();
+  if (!entry) return t.skip('Cloudflare local runtime not installed (no Wrangler with Miniflare on PATH; set RICHOS_MINIFLARE)');
+  const state = mkdtempSync(join(tmpdir(), 'report-shots-'));
+  t.after(() => rmSync(state, { recursive: true, force: true }));
+  const relay = await startLocalRelay({ entry, state, reconcileSeconds: 4, abandonSeconds: 2 });
+  t.after(() => relay.dispose());
+  const { github } = relay, fixtures = join(__dirname, '../service/report/fixtures/relay');
+  const file = (name, type) => ({ bytes: require('node:fs').readFileSync(join(fixtures, name)), type });
+  const json = async response => response.json();
+  const register = payload => relay.fetch('/v1/reports', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: registerBody(payload) }).then(json);
+  const call = (payload, action) => relay.fetch(`/v1/reports/${payload.report_id}/${action}`, { method: 'POST', body: JSON.stringify({ receipt_secret: payload.receipt_secret }) }).then(json);
+  const upload = (payload, n, body, init) => relay.fetch(`/v1/reports/${payload.report_id}/attachments/${n}`, uploadInit(payload, n, body, init));
+  const staffRead = async (payload, n, token) => relay.fetch(`/v1/reports/${payload.report_id}/attachments/${n}`, { headers: token ? { 'Cf-Access-Jwt-Assertion': token } : {} });
+  const objects = async prefix => (await (await relay.bucket()).list({ prefix })).objects.length;
+  const posts = () => github.calls.filter(c => c === `POST /repos/${relay.repository}/issues`).length;
+
+  // The largest screenshot at 1 Mbit/s takes well over 30 seconds, and arrives whole.
+  const big = largePng(), started = Date.now();
+  const slow = screenshotReport({ origin: relay.url, files: [{ bytes: big, type: 'image/png' }, file('accept-baseline.jpg', 'image/jpeg')] });
+  assert(big.length > 5_000_000 && big.length <= 5 * 1048576, `largest fixture is ${big.length} bytes`);
+  assert.equal((await register(slow)).state, 'receiving');
+  let reply = await (await upload(slow, 1, throttled(big, 1_000_000))).json();
+  const seconds = (Date.now() - started) / 1000;
+  t.diagnostic(`5 MiB screenshot at 1 Mbit/s: accepted in ${seconds.toFixed(1)} s`);
+  assert(seconds > 30, `took ${seconds} s`); assert.deepEqual(reply.stored, ['1']);
+  // Cut off mid-upload: nothing stored for it; the same image again completes it.
+  const cut = await upload(slow, 2, throttled(slow.files[1], 80_000, { stopAfter: 300 })).then(r => r.status, () => 'lost');
+  t.diagnostic(`cut upload answered ${cut}`);
+  assert.deepEqual((await call(slow, 'status')).missing, ['2']);
+  // Stored, then its acknowledgment lost (the client never reads it): the retry is acknowledged, one object.
+  await upload(slow, 2);
+  reply = await (await upload(slow, 2)).json();
+  assert.equal(reply.state, 'ready'); assert.equal(await objects(slow.report_id), 2);
+  // GitHub created it, then the relay restarted before answering: reconciled, every image confirmed.
+  github.fault('create:hold');
+  const held = call(slow, 'complete').catch(() => null);
+  while (!github.held.length) await pause(20);
+  await relay.restart(); github.release(); await held;
+  let status;
+  for (let i = 0; i < 40 && status?.state !== 'delivered'; i++) { await pause(250); status = await call(slow, 'status'); }
+  assert.deepEqual([status.state, status.images_expected, status.images_confirmed], ['delivered', 2, 2]);
+  assert.equal(github.created().filter(i => i.body === slow.body).length, 1);
+  // Staff see the pixels; a direct request without Access sees nothing.
+  const pixels = await staffRead(slow, 1, await relay.accessToken());
+  assert.equal(pixels.status, 200); assert.equal(Buffer.compare(Buffer.from(await pixels.arrayBuffer()), big), 0);
+  assert.equal((await staffRead(slow, 1)).status, 403);
+  assert.equal((await staffRead(slow, 1, await relay.accessToken({ aud: ['d'.repeat(64)] }))).status, 403);
+
+  // A missing upload blocks creation; cleanup of the abandoned upload races its completion.
+  const abandoned = screenshotReport({ origin: relay.url, files: [file('accept-rgb.png', 'image/png'), file('accept-palette.png', 'image/png')] });
+  await register(abandoned); await upload(abandoned, 1);
+  assert.deepEqual((await call(abandoned, 'complete')).missing, ['2']);
+  const before = posts();
+  await pause(2500);
+  const [, completed] = await Promise.all([relay.cleanup(), upload(abandoned, 2).then(r => r.json())]);
+  t.diagnostic(`upload racing cleanup answered ${completed.state}`);
+  await relay.cleanup();
+  reply = await call(abandoned, 'complete');
+  if (reply.state === 'receiving') {
+    // Cleanup won: the unsent report resumes by uploading the same images again.
+    for (const n of reply.missing) await upload(abandoned, Number(n));
+    reply = await call(abandoned, 'complete');
+  }
+  assert.deepEqual([reply.state, reply.images_confirmed], ['delivered', 2]);
+  assert.equal(posts(), before + 1, 'one issue, with every approved image');
+
+  // Retirement: never-seen first, a delayed registration stays retired, and a retired report's
+  // stored screenshots are withdrawn at once and deleted at the next cleanup.
+  const replaced = screenshotReport({ origin: relay.url, files: [file('accept-rgb.png', 'image/png')] });
+  await register(replaced); await upload(replaced, 1);
+  assert.equal((await staffRead(replaced, 1, await relay.accessToken())).status, 200);
+  assert.equal((await call(replaced, 'retire')).state, 'retired');
+  assert.equal((await call(replaced, 'retire')).state, 'retired');
+  assert.equal((await staffRead(replaced, 1, await relay.accessToken())).status, 410);
+  await relay.cleanup();
+  assert.equal(await objects(replaced.report_id), 0);
+  const unseen = screenshotReport({ origin: relay.url, files: [file('accept-rgb.png', 'image/png')] });
+  assert.equal((await call(unseen, 'retire')).state, 'retired');
+  assert.equal((await register(unseen)).state, 'retired');
+  assert.equal((await call(unseen, 'complete')).state, 'retired');
+
+  // Uncertain creation is never cleaned up.
+  const uncertain = screenshotReport({ origin: relay.url, files: [file('accept-rgb.png', 'image/png')] });
+  await register(uncertain); await upload(uncertain, 1);
+  github.fault('create:lost'); for (let i = 0; i < 200; i++) github.fault('list:500');
+  assert.equal((await call(uncertain, 'complete')).state, 'pending');
+  await pause(2500); await relay.cleanup();
+  assert.equal(await objects(uncertain.report_id), 1, 'kept while delivery is uncertain');
+  github.faults.length = 0;
+  // One issue per report that reached GitHub, and nothing else.
+  assert.equal(github.created().length, 3);
 });

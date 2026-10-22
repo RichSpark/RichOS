@@ -7,7 +7,7 @@ const { fixture, reportId } = require('./report-fixture.cjs');
 test('health reports configuration and the off switch; a new database starts switched off', async t => {
   const f = await fixture(t);
   const health = async () => f.answer(await f.send(new Request('https://report.example.com/v1/health')));
-  assert.deepEqual((await health()).body, { ok: true, service: 'richos-report', protocol: 1, accepting: true });
+  assert.deepEqual((await health()).body, { ok: true, service: 'richos-report', protocol: 2, accepting: true });
   f.db.raw.exec('UPDATE control SET paused=1');
   assert.equal((await health()).body.accepting, false);
   f.db.raw.exec('DELETE FROM control');
@@ -23,7 +23,8 @@ test('an approved report becomes exactly one issue with its exact words; replay 
   const f = await fixture(t), payload = await f.report();
   const first = await f.answer(await f.create(payload));
   assert.equal(first.status, 201);
-  assert.deepEqual(first.body, { report_id: payload.report_id, state: 'delivered', issue_url: `https://github.com/${f.repository}/issues/1`, issue_number: 1 });
+  assert.deepEqual(first.body, { report_id: payload.report_id, state: 'delivered', stage: 'delivered', issue_url: `https://github.com/${f.repository}/issues/1`,
+    issue_number: 1, images_expected: 0, images_confirmed: 0, images_expire_at: new Date(f.now() + 365 * 86_400_000).toISOString() });
   const [issue] = f.github.created();
   assert.equal(issue.title, payload.title); assert.equal(issue.body, payload.body);
   assert.deepEqual(issue.labels, [{ name: 'richdoctor' }]);
@@ -32,7 +33,7 @@ test('an approved report becomes exactly one issue with its exact words; replay 
   assert.equal(replay.status, 200); assert.equal(replay.body.issue_url, first.body.issue_url);
   assert.deepEqual((await f.answer(await f.status(payload.report_id, payload.receipt_secret))).body, { ...first.body });
   assert.equal(f.posts(), 1);
-  // The database keeps receipt state only: no words, no secret, no installation ID.
+  // Once posted, the database keeps receipt state only: no words, no secret, no installation ID.
   const row = JSON.stringify(f.db.raw.prepare('SELECT * FROM reports').all());
   for (const value of [payload.title, 'RichOS closed', payload.receipt_secret, payload.installation_id]) assert(!row.includes(value), value);
   assert(!issue.body.includes(payload.receipt_secret));
@@ -136,7 +137,7 @@ test('A9: an incomplete or failing listing never permits recreation; the bound e
   // The answer is lost and the relay's own three listings fail.
   f.github.fault('create:lost'); for (let i = 0; i < 3; i++) f.github.fault('list:500');
   let reply = await f.answer(await f.create(payload));
-  assert.equal(reply.status, 202); assert.deepEqual(reply.body, { report_id: payload.report_id, state: 'pending', check_after_seconds: 5 });
+  assert.equal(reply.status, 202); assert.deepEqual(reply.body, { report_id: payload.report_id, state: 'pending', stage: 'creating', check_after_seconds: 5, stored: [], missing: [] });
   // Two newer bot issues fill pages 1 and 2 of the newest-first listing, so the match is on
   // page 3 behind a failing page 2.
   f.github.add('later', 'one'); f.github.add('later', 'two'); f.github.fault('list:page2');
@@ -180,11 +181,19 @@ test('A9: a recorded definitive refusal permits one new serialized attempt with 
 
 test('A9: the relay stopped mid-attempt; status decides from the persisted record alone', async t => {
   const f = await fixture(t);
-  const record = async payload => ({ reportId: payload.report_id, secretHash: await (await import('../service/report/checks.mjs')).sha256(payload.receipt_secret),
-    contentHash: payload.content_sha256, approvedAt: payload.approved_at });
+  // A pending record exactly as a create writes it before calling GitHub.
+  const begin = async (payload, attemptId) => {
+    const { sha256 } = await import('../service/report/checks.mjs');
+    await f.store.register({ reportId: payload.report_id, secretHash: await sha256(payload.receipt_secret), contentHash: payload.content_sha256, schema: 1,
+      title: payload.title, body: payload.body, approvedAt: payload.approved_at, manifest: [] });
+    const token = await f.store.acquire(payload.report_id);
+    const claimed = await f.store.claim(payload.report_id, 0, attemptId, 60_000, token);
+    await f.store.release(payload.report_id, token);
+    return claimed;
+  };
   // Stopped before the create request was recorded as sent: authoritative non-creation.
   const before = await f.report();
-  assert(await f.store.begin(await record(before), 'attempt-a', 60_000));
+  assert(await begin(before, 'attempt-a'));
   assert.equal((await f.answer(await f.status(before.report_id, before.receipt_secret))).body.state, 'pending');
   f.advance(60_000);
   assert.equal((await f.answer(await f.status(before.report_id, before.receipt_secret))).body.reason, 'delivery');
@@ -192,20 +201,20 @@ test('A9: the relay stopped mid-attempt; status decides from the persisted recor
   assert.equal(f.posts(), 1);
   // Stopped after sending, and GitHub had created it: found by its footer.
   const after = await f.report();
-  assert(await f.store.begin(await record(after), 'attempt-b', 60_000)); assert(await f.store.markSent(after.report_id, 'attempt-b'));
+  assert(await begin(after, 'attempt-b')); assert(await f.store.markSent(after.report_id, 'attempt-b'));
   f.github.add(after.title, after.body);
   f.advance(26_000);
   assert.equal((await f.answer(await f.status(after.report_id, after.receipt_secret))).body.state, 'delivered');
   // Stopped after sending, and nothing is found: never "not created", only unconfirmed.
   const lost = await f.report();
-  assert(await f.store.begin(await record(lost), 'attempt-c', 60_000)); assert(await f.store.markSent(lost.report_id, 'attempt-c'));
+  assert(await begin(lost, 'attempt-c')); assert(await f.store.markSent(lost.report_id, 'attempt-c'));
   f.advance(121_000);
   assert.equal((await f.answer(await f.status(lost.report_id, lost.receipt_secret))).body.state, 'unconfirmed');
   assert.equal((await f.answer(await f.create(lost))).body.state, 'unconfirmed');
   assert.equal(f.posts(), 1);
   // A lapsed lease cannot be used to send late.
   const late = await f.report();
-  assert(await f.store.begin(await record(late), 'attempt-d', 60_000)); f.advance(60_000);
+  assert(await begin(late, 'attempt-d')); f.advance(60_000);
   assert.equal(await f.store.markSent(late.report_id, 'attempt-d'), false);
 });
 
@@ -227,10 +236,11 @@ test('the off switch and the daily cap close new reports honestly and never bloc
   assert.equal(capped.body.retry_after_seconds, 12 * 3600, 'until the next UTC midnight');
   f.db.raw.exec('UPDATE control SET paused=1');
   const off = await f.answer(await f.create(await f.report()));
-  assert.deepEqual(off.body, { state: 'closed', reason: 'operator_off' });
+  assert.deepEqual(off.body, { state: 'closed', stage: 'not_sent', reason: 'operator_off' });
   assert.equal((await f.answer(await f.create(first))).body.state, 'delivered', 'a replay is answered while switched off');
   assert.equal((await f.answer(await f.status(first.report_id, first.receipt_secret))).body.state, 'delivered');
-  assert.equal(f.db.raw.prepare('SELECT count(*) AS n FROM reports').get().n, 1);
+  // The capped report is kept as approved and not begun (ready); the switched-off one was never stored.
+  assert.deepEqual(f.db.raw.prepare('SELECT state FROM reports ORDER BY created_at').all().map(r => r.state), ['delivered', 'ready']);
   f.db.raw.exec('UPDATE control SET paused=0, daily_cap=0');
   assert.equal((await f.answer(await f.create(await f.report()))).body.reason, 'daily_cap', 'a cap of zero creates nothing');
   assert.equal(f.posts(), 1);
@@ -273,10 +283,9 @@ test('the upload artifact is exact, carries no secret, and a test profile can ne
   const { reportArtifact, checkProfile, PRODUCTION, schemaStatements } = await import('../cli/report.mjs');
   const { createHash } = require('node:crypto'), { readFileSync } = require('node:fs'), { join } = require('node:path');
   const base = { accountId: 'a'.repeat(32), databaseId: '11111111-2222-3333-4444-555555555555', appId: '9', installationId: '8',
-    botLogin: 'richos-reports[bot]', label: 'richdoctor' };
-  const production = { ...base, stage: 'production', ...PRODUCTION };
+    botLogin: 'richos-reports[bot]', label: 'richdoctor' }, production = { ...base, stage: 'production', ...PRODUCTION, bucket: 'richos-report' };
   const artifact = reportArtifact(production);
-  assert.deepEqual(artifact.modules.map(m => m.name), ['report-worker.mjs', 'report/checks.mjs', 'report/store.mjs', 'report/github.mjs']);
+  assert.deepEqual(artifact.modules.map(m => m.name), ['report-worker.mjs', 'report/checks.mjs', 'report/images.mjs', 'report/store.mjs', 'report/github.mjs', 'report/access.mjs']);
   for (const module of artifact.modules) {
     const source = readFileSync(join(__dirname, '../service', module.name), 'utf8');
     assert.equal(module.source, source); assert.equal(module.sha256, createHash('sha256').update(source).digest('hex'));
@@ -290,12 +299,15 @@ test('the upload artifact is exact, carries no secret, and a test profile can ne
   assert(!artifact.metadata.bindings.some(b => /connect/i.test(JSON.stringify(b))), 'nothing of Connect');
   assert.throws(() => checkProfile({ ...production, repository: 'WebDevBooster/other' }), /production/);
   for (const [key, value] of Object.entries(PRODUCTION)) {
-    const test = { ...base, stage: 'test', worker: 'richos-report-test', hostname: 'report-test.richos.ceo', repository: 'richos-test/report-relay-test', [key]: value };
+    const test = { ...base, stage: 'test', worker: 'richos-report-test', hostname: 'report-test.richos.ceo', repository: 'richos-test/report-relay-test', bucket: 'richos-report-test', [key]: value };
     assert.throws(() => checkProfile(test), /test profile/, key);
   }
-  assert.equal(reportArtifact({ ...base, stage: 'test', worker: 'richos-report-test', hostname: 'report-test.richos.ceo', repository: 'richos-test/report-relay-test' }).repository, 'richos-test/report-relay-test');
-  // Three tables, one index and the switched-off control row.
-  assert.equal(schemaStatements().length, 5);
+  assert.equal(reportArtifact({ ...base, stage: 'test', worker: 'richos-report-test', hostname: 'report-test.richos.ceo', repository: 'richos-test/report-relay-test', bucket: 'richos-report-test' }).repository, 'richos-test/report-relay-test');
+  assert.throws(() => checkProfile({ ...base, stage: 'test', worker: 'richos-report-test', hostname: 'report-test.richos.ceo', repository: 'richos-test/report-relay-test', bucket: 'richos-report' }), /test profile/, 'nor the production bucket');
+  assert.deepEqual(artifact.schedules, [{ cron: '17 * * * *' }]);
+  assert.deepEqual(artifact.metadata.bindings.find(b => b.name === 'IMAGES'), { name: 'IMAGES', type: 'r2_bucket', bucket_name: 'richos-report' });
+  // Four tables, two indexes and the switched-off control row.
+  assert.equal(schemaStatements().length, 7);
 });
 
 test('operator resolve accepts only an issue the relay bot made with this report footer', async t => {
@@ -304,7 +316,7 @@ test('operator resolve accepts only an issue the relay bot made with this report
   await f.create(payload); f.github.faults.length = 0;
   const { operate } = await import('../cli/report.mjs');
   const profile = { stage: 'test', worker: 'richos-report-test', hostname: 'report-test.richos.ceo', repository: f.repository, accountId: 'a'.repeat(32),
-    databaseId: '11111111-2222-3333-4444-555555555555', appId: '123', installationId: '456', botLogin: f.bot, label: 'richdoctor' };
+    databaseId: '11111111-2222-3333-4444-555555555555', appId: '123', installationId: '456', botLogin: f.bot, label: 'richdoctor', bucket: 'richos-report-test' };
   const statements = [];
   const fake = async (url, init) => {
     if (url.startsWith('https://api.github.com/')) {
@@ -328,9 +340,9 @@ test('deploy applies the schema, uploads the exact modules, installs the key as 
   const { appKey } = await import('../dev/report-fake-github.mjs');
   const key = (await appKey()).pkcs1;
   const profile = { stage: 'test', worker: 'richos-report-test', hostname: 'richos-report-test.example-sub.workers.dev', repository: 'richos-test/report-relay-test',
-    accountId: 'a'.repeat(32), databaseId: '11111111-2222-3333-4444-555555555555', appId: '9', installationId: '8', botLogin: 'richos-reports-test[bot]', label: 'richdoctor' };
+    accountId: 'a'.repeat(32), databaseId: '11111111-2222-3333-4444-555555555555', appId: '9', installationId: '8', botLogin: 'richos-reports-test[bot]', label: 'richdoctor', bucket: 'richos-report-test' };
   const artifact = reportArtifact(profile), seen = [];
-  let parts, secret, subdomain;
+  let parts, secret, subdomain, schedules;
   const ok = result => new Response(JSON.stringify({ success: true, result }));
   const fake = async (url, init = {}) => {
     const path = url.replace(`https://api.cloudflare.com/client/v4/accounts/${profile.accountId}`, ''), method = init.method || 'GET';
@@ -338,19 +350,21 @@ test('deploy applies the schema, uploads the exact modules, installs the key as 
     if (path === '/workers/subdomain') return ok({ subdomain: 'example-sub' });
     if (path.endsWith('/query')) {
       const { sql } = JSON.parse(init.body);
-      return ok([{ success: true, results: /sqlite_master/.test(sql) ? [{ name: 'control' }, { name: 'daily' }, { name: 'reports' }] : [], meta: { changes: 0 } }]);
+      return ok([{ success: true, results: /sqlite_master/.test(sql) ? [{ name: 'attachments' }, { name: 'control' }, { name: 'daily' }, { name: 'reports' }] : [], meta: { changes: 0 } }]);
     }
     if (method === 'PUT' && path === '/workers/scripts/richos-report-test') { parts = init.body; return ok({ id: 'deployment-1' }); }
     if (path.endsWith('/secrets')) { secret = JSON.parse(init.body); return ok({}); }
     if (path.endsWith('/subdomain')) { subdomain = JSON.parse(init.body); return ok({}); }
+    if (path.endsWith('/schedules')) { schedules = JSON.parse(init.body); return ok({}); }
     if (path.endsWith('/settings')) return ok({ bindings: [...artifact.metadata.bindings, { name: 'GITHUB_APP_PRIVATE_KEY', type: 'secret_text' }], logpush: false, tail_consumers: [] });
     if (url === `https://${profile.hostname}/v1/health`) return new Response(JSON.stringify({ ok: true, service: 'richos-report', protocol: 1, accepting: false }));
     return new Response('{}', { status: 404 });
   };
   const result = await deploy(profile, { token: 't', appKey: key, fetch: fake });
   assert.deepEqual(seen.slice(0, 2), ['GET /workers/subdomain', 'POST /d1/query'], 'the schema goes first');
-  assert.deepEqual(seen.slice(-5), ['PUT /workers/scripts/richos-report-test', 'PUT /workers/scripts/richos-report-test/secrets',
-    'POST /workers/scripts/richos-report-test/subdomain', 'GET /workers/scripts/richos-report-test/settings', `GET https://${profile.hostname}/v1/health`]);
+  assert.deepEqual(seen.slice(-6), ['PUT /workers/scripts/richos-report-test', 'PUT /workers/scripts/richos-report-test/secrets',
+    'POST /workers/scripts/richos-report-test/subdomain', 'PUT /workers/scripts/richos-report-test/schedules', 'GET /workers/scripts/richos-report-test/settings', `GET https://${profile.hostname}/v1/health`]);
+  assert.deepEqual(schedules, [{ cron: '17 * * * *' }]);
   assert.deepEqual(JSON.parse(await parts.get('metadata').text()), artifact.metadata);
   for (const module of artifact.modules) assert.equal(await parts.get(module.name).text(), module.source);
   assert(!(await parts.get('metadata').text()).includes('PRIVATE KEY'), 'the key never goes into the upload');

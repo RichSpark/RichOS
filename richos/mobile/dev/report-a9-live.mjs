@@ -13,6 +13,9 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { checkProfile, d1, readToken } from '../cli/report.mjs';
+import { screenshotReport, registerBody, throttled, uploadInit } from './report-client.mjs';
+import { largePng } from './report-image-fixtures.mjs';
+const fixture = name => readFileSync(new URL('../service/report/fixtures/relay/' + name, import.meta.url));
 
 const ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
 const reportId = () => 'RD-' + [4, 4].map(n => Array.from(randomBytes(n), b => ALPHABET[b % 30]).join('')).join('-');
@@ -33,14 +36,14 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
     steps.push({ name, ok: !!ok, ...detail });
     if (!ok) throw Error(`A9 live step failed: ${name} ${JSON.stringify(detail)}`);
   };
-  let throttled = 0;
+  let resentAfterLimit = 0;
   // "limited" means this request was not processed: wait as told and send the same request again.
   const call = async (path, body, init = {}) => {
     for (let tries = 0; ; tries++) {
       const response = await fetchImpl(base + path, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...init });
       const answer = { status: response.status, body: await response.json().catch(() => null) };
       if (answer.body?.state !== 'limited' || response.status !== 429 || tries === 5) return answer;
-      throttled++; await pause(1000 * (answer.body.retry_after_seconds || 60));
+      resentAfterLimit++; await pause(1000 * (answer.body.retry_after_seconds || 60));
     }
   };
   const create = (payload, init) => call('/v1/reports', payload, init);
@@ -65,7 +68,7 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
   try {
     const health = await (await fetchImpl(base + '/v1/health', { redirect: 'error' })).json();
     check('health', health.ok === true && health.service === 'richos-report', { health });
-    await query('UPDATE control SET paused=0, operator=?1, daily_cap=1000, updated_at=?2 WHERE id=1', ['A9 live run', String(Date.now())]);
+    await query('UPDATE control SET paused=0, operator=?1, daily_cap=1000, daily_bytes_cap=209715200, updated_at=?2 WHERE id=1', ['A9 live run', String(Date.now())]);
 
     const fresh = report({ started });
     check('disconnected before send: unknown', (await status(fresh)).body?.state === 'unknown_id');
@@ -102,6 +105,35 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
     const over = await create(report({ started, body: 'x'.repeat(60001) }));
     check('one byte more is refused for size', over.status === 413 && over.body?.reason === 'size', { reply: over });
 
+    // Screenshots (protocol 2): register, then uploads, then completion, on the real service.
+    const shots = screenshotReport({ origin: base, files: [{ bytes: largePng(), type: 'image/png' }, { bytes: fixture('accept-baseline.jpg'), type: 'image/jpeg' }] });
+    const register = () => fetchImpl(base + '/v1/reports', { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' }, body: registerBody(shots) })
+      .then(async r => ({ status: r.status, body: await r.json().catch(() => null) }));
+    const put = (n, body) => fetchImpl(`${base}/v1/reports/${shots.report_id}/attachments/${n}`, { redirect: 'error', ...uploadInit(shots, n, body) })
+      .then(async r => ({ status: r.status, body: await r.json().catch(() => null) }));
+    const action = name => call(`/v1/reports/${shots.report_id}/${name}`, { receipt_secret: shots.receipt_secret });
+    check('registering creates nothing', (await register()).body?.state === 'receiving');
+    check('the same registration again answers its state (lost reply)', JSON.stringify((await register()).body?.missing) === '["1","2"]');
+    check('no issue while a screenshot is missing', JSON.stringify((await action('complete')).body?.missing) === '["1","2"]');
+    await put(2, throttled(shots.files[1], 80_000, { stopAfter: 200 })).catch(() => null);
+    check('an upload cut off stores nothing', (await action('status')).body?.missing?.includes('2'));
+    const slowStart = Date.now(), slow = await put(1, throttled(shots.files[0], 1_000_000)), slowSeconds = (Date.now() - slowStart) / 1000;
+    check('the largest screenshot at 1 Mbit/s completes beyond 30 seconds', slow.body?.stored?.includes('1') && slowSeconds > 30, { seconds: slowSeconds, bytes: shots.files[0].length });
+    check('the cut upload resumes by the same image', (await put(2)).body?.state === 'ready');
+    check('an identical upload retry is acknowledged', (await put(2)).body?.state === 'ready');
+    const done = await action('complete');
+    check('one issue with every approved screenshot', done.body?.state === 'delivered' && done.body.images_confirmed === 2 && done.body.images_expected === 2, { issue: done.body?.issue_url });
+    const shotIssue = await (await gh(`/repos/${profile.repository}/issues/${done.body.issue_number}`)).json();
+    check('the issue holds the exact words and the staff-only links', shotIssue.body === shots.body);
+    const link = `${base}/v1/reports/${shots.report_id}/attachments/1`;
+    const anonymous = await fetchImpl(link, { redirect: 'manual' });
+    check('a screenshot link without staff access shows nothing', [302, 401, 403].includes(anonymous.status) && !(anonymous.headers.get('content-type') || '').startsWith('image/'), { status: anonymous.status });
+    const unseen = screenshotReport({ origin: base, files: [{ bytes: fixture('accept-rgb.png'), type: 'image/png' }] });
+    const retireUnseen = () => call(`/v1/reports/${unseen.report_id}/retire`, { receipt_secret: unseen.receipt_secret });
+    check('retiring an ID the relay never saw is acknowledged, and again', (await retireUnseen()).body?.state === 'retired' && (await retireUnseen()).body?.state === 'retired');
+    const delayed = await fetchImpl(base + '/v1/reports', { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' }, body: registerBody(unseen) }).then(r => r.json());
+    check('a delayed registration of a retired ID stays retired', delayed.state === 'retired');
+
     const day = new Date().toISOString().slice(0, 10);
     const used = (await query('SELECT creates FROM daily WHERE day=?1', [day])).results?.[0]?.creates || 0;
     await query('UPDATE control SET daily_cap=CAST(?1 AS INTEGER) WHERE id=1', [String(used)]);
@@ -122,9 +154,9 @@ export async function run(profile, { token, githubToken, fetchImpl = fetch } = {
       && found.body.issue_url === first.body.issue_url, { reply: found.body });
 
     const issues = await botIssues();
-    for (const payload of [fresh, gone, largest]) check(`exactly one issue for ${payload.report_id}`, count(issues, payload.report_id) === 1);
-    check('nothing else was created', issues.length === 3, { created: issues.map(i => i.html_url) });
-    return { ok: true, started, finished: new Date().toISOString(), relay: base, repository: profile.repository, throttledAndResent: throttled, steps };
+    for (const payload of [fresh, gone, largest, shots]) check(`exactly one issue for ${payload.report_id}`, count(issues, payload.report_id) === 1);
+    check('nothing else was created', issues.length === 4, { created: issues.map(i => i.html_url) });
+    return { ok: true, started, finished: new Date().toISOString(), relay: base, repository: profile.repository, throttledAndResent: resentAfterLimit, steps };
   } finally {
     await query('UPDATE control SET paused=1, updated_at=?1 WHERE id=1', [String(Date.now())]).catch(() => {});
   }

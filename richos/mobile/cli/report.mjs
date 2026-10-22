@@ -1,4 +1,4 @@
-// Operator side of the RichDoctor report relay (service/report-worker.mjs, contract REPORT.md).
+// Operator side of the RichDoctor report relay (service/report-worker.mjs, contract RICHDOCTOR-RELAY.md).
 // It prepares the exact upload and talks to the relay's own D1 through Cloudflare's API with a
 // short-lived token read from a private file. Identifiers live in a private profile; the GitHub
 // App private key is a Worker secret only. Nothing here deploys, and no token reaches argv,
@@ -7,11 +7,13 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 
 export const COMPATIBILITY_DATE = '2026-09-21';
-export const MODULES = ['report-worker.mjs', 'report/checks.mjs', 'report/store.mjs', 'report/github.mjs'];
+export const MODULES = ['report-worker.mjs', 'report/checks.mjs', 'report/images.mjs', 'report/store.mjs', 'report/github.mjs', 'report/access.mjs'];
+// Hourly: delivered screenshots past their year and abandoned uploads go, and an interrupted cleanup resumes.
+export const SCHEDULE = '17 * * * *';
 // The one production identity (PRD §7). A test profile may use none of these.
 export const PRODUCTION = { worker: 'richos-report', hostname: 'report.richos.ceo', repository: 'WebDevBooster/richos' };
 // Workers rate-limit namespaces are account-wide; Connect uses 18443.
-const LIMITS = { production: ['18501', '18502'], test: ['18511', '18512'] };
+const LIMITS = { production: ['18501', '18502', '18503'], test: ['18511', '18512', '18513'] };
 
 const sha256 = text => createHash('sha256').update(text).digest('hex');
 const read = name => readFileSync(new URL('../service/' + name, import.meta.url), 'utf8');
@@ -27,7 +29,11 @@ export function checkProfile(profile) {
   if (!/^\d{1,12}$/.test(String(p.appId || '')) || !/^\d{1,14}$/.test(String(p.installationId || ''))) throw Error('Invalid GitHub App or installation ID');
   if (!/^[a-z0-9-]{1,34}\[bot\]$/.test(p.botLogin || '')) throw Error('Invalid GitHub App bot login');
   if (!/^[a-z0-9-]{1,50}$/.test(p.label || '')) throw Error('Invalid moderation label');
-  const production = Object.entries(PRODUCTION);
+  if (!/^richos-report[a-z0-9-]*$/.test(p.bucket || '')) throw Error('Invalid screenshot bucket name');
+  // Staff access: both or neither. Without them every screenshot read is refused.
+  if (!!p.accessTeamDomain !== !!p.accessAud || (p.accessTeamDomain && (!/^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/.test(p.accessTeamDomain) || !/^[a-f0-9]{64}$/.test(p.accessAud))))
+    throw Error('Invalid Cloudflare Access team domain or audience');
+  const production = Object.entries({ ...PRODUCTION, bucket: 'richos-report' });
   if (p.stage === 'production' && production.some(([k, v]) => p[k] !== v)) throw Error('A production profile names exactly the production Worker, hostname and repository');
   // A test relay can never reach the production repository, name or Worker.
   if (p.stage === 'test' && production.some(([k, v]) => p[k].toLowerCase() === v.toLowerCase())) throw Error('A test profile may not use the production Worker, hostname or repository');
@@ -43,7 +49,7 @@ export function schemaStatements() {
 // The exact multipart upload. The secret GITHUB_APP_PRIVATE_KEY is installed separately into the
 // Worker and kept across uploads by keep_bindings.
 export function reportArtifact(profile) {
-  const p = checkProfile(profile), [create, status] = LIMITS[p.stage];
+  const p = checkProfile(profile), [create, status, upload] = LIMITS[p.stage];
   const schema = read('report/schema.sql');
   return {
     stage: p.stage, worker: p.worker, hostname: p.hostname, repository: p.repository,
@@ -54,14 +60,18 @@ export function reportArtifact(profile) {
         { name: 'DB', type: 'd1', id: p.databaseId },
         { name: 'CREATE_LIMIT', type: 'ratelimit', namespace_id: create, simple: { limit: 5, period: 60 } },
         { name: 'STATUS_LIMIT', type: 'ratelimit', namespace_id: status, simple: { limit: 60, period: 60 } },
+        { name: 'UPLOAD_LIMIT', type: 'ratelimit', namespace_id: upload, simple: { limit: 30, period: 60 } },
+        { name: 'IMAGES', type: 'r2_bucket', bucket_name: p.bucket },
         ...Object.entries({ GITHUB_APP_ID: String(p.appId), GITHUB_INSTALLATION_ID: String(p.installationId), GITHUB_REPOSITORY: p.repository,
-          GITHUB_BOT_LOGIN: p.botLogin, MODERATION_LABEL: p.label }).map(([name, text]) => ({ name, type: 'plain_text', text })),
+          GITHUB_BOT_LOGIN: p.botLogin, MODERATION_LABEL: p.label,
+          ...(p.accessTeamDomain ? { ACCESS_TEAM_DOMAIN: p.accessTeamDomain, ACCESS_AUD: p.accessAud } : {}) }).map(([name, text]) => ({ name, type: 'plain_text', text })),
       ],
     },
     secrets: ['GITHUB_APP_PRIVATE_KEY'],
     modules: MODULES.map(name => { const source = read(name); return { name, type: 'application/javascript+module', source, sha256: sha256(source) }; }),
     // Only a test relay may be served on workers.dev, which needs no DNS name.
     subdomain: { enabled: p.stage === 'test' && p.hostname.endsWith('.workers.dev'), previews_enabled: false },
+    schedules: [{ cron: SCHEDULE }],
     schema: { sql: schema, sha256: sha256(schema) },
   };
 }
@@ -97,17 +107,28 @@ export async function operate(action, profile, args, { token, fetch: fetchImpl =
   const query = d1(profile, token, fetchImpl);
   if (action === 'schema') {
     for (const statement of schemaStatements()) await query(statement);
-    const names = (await query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('reports','control','daily') ORDER BY name")).results.map(r => r.name);
-    if (names.join() !== 'control,daily,reports') throw Error('Hosted schema readback is incomplete');
+    const names = (await query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('reports','attachments','control','daily') ORDER BY name")).results.map(r => r.name);
+    if (names.join() !== 'attachments,control,daily,reports') throw Error('Hosted schema readback is incomplete');
     return { tables: names, sha256: sha256(read('report/schema.sql')) };
   }
   if (action === 'control') {
-    const [mode, operator, cap] = args;
+    const [mode, operator, cap, megabytes] = args;
     if (mode === 'off') await query('UPDATE control SET paused=1, updated_at=?1 WHERE id=1', [String(Date.now())]);
-    else if (mode === 'on' && /^[A-Za-z][A-Za-z .'-]{1,60}$/.test(operator || '') && /^\d{1,6}$/.test(cap || ''))
-      await query('UPDATE control SET paused=0, operator=?1, daily_cap=CAST(?2 AS INTEGER), updated_at=?3 WHERE id=1', [operator, cap, String(Date.now())]);
-    else throw Error('Expected: control off | control on <operator name> <daily cap>');
-    return (await query('SELECT paused, daily_cap, operator, updated_at FROM control WHERE id=1')).results[0];
+    else if (mode === 'on' && /^[A-Za-z][A-Za-z .'-]{1,60}$/.test(operator || '') && /^\d{1,6}$/.test(cap || '') && /^\d{1,7}$/.test(megabytes || ''))
+      await query('UPDATE control SET paused=0, operator=?1, daily_cap=CAST(?2 AS INTEGER), daily_bytes_cap=CAST(?3 AS INTEGER) * 1048576, updated_at=?4 WHERE id=1',
+        [operator, cap, megabytes, String(Date.now())]);
+    else throw Error('Expected: control off | control on <operator name> <daily report cap> <daily screenshot megabytes>');
+    return (await query('SELECT paused, daily_cap, daily_bytes_cap, operator, updated_at FROM control WHERE id=1')).results[0];
+  }
+  if (action === 'extend') {
+    // Keeps a delivered report's screenshots longer; refused once their cleanup was claimed.
+    const [id, days] = args;
+    if (!/^RD-[2-9A-HJKMNP-TV-Z]{4}-[2-9A-HJKMNP-TV-Z]{4}$/.test(id || '') || !/^\d{1,3}$/.test(days || '')) throw Error('Expected: extend <report ID> <days from now>');
+    const now = Date.now(), until = now + Number(days) * 86_400_000;
+    const result = await query(`UPDATE reports SET expires_at=CAST(?1 AS INTEGER), updated_at=CAST(?2 AS INTEGER) WHERE report_id=?3 AND state='delivered'
+      AND cleanup IS NULL AND busy_until < CAST(?2 AS INTEGER)`, [String(until), String(now), id]);
+    if (result.meta?.changes !== 1) throw Error('Not extended: the report is not delivered, its screenshots are being or were deleted, or it is busy; try again');
+    return { reportId: id, expiresAt: new Date(until).toISOString() };
   }
   if (action === 'pending') return (await query("SELECT report_id, attempt, attempt_at, approved_at FROM reports WHERE state IN ('unconfirmed','pending') ORDER BY attempt_at")).results;
   if (action === 'resolve') {
@@ -164,6 +185,13 @@ export async function appIdentity(appId, repository, appKey, { fetch: fetchImpl 
   return { appId, botLogin: `${about.slug}[bot]`, installationId: String(installation.id), repository, permissions };
 }
 
+// The relay's own private R2 bucket for screenshots (public access stays off by default).
+export async function createBucket(accountId, bucket, { token, fetch: fetchImpl = fetch } = {}) {
+  if (!/^[a-f0-9]{32}$/.test(accountId || '') || !/^richos-report[a-z0-9-]*$/.test(bucket || '')) throw Error('Expected: create-bucket <account ID> <bucket name>');
+  const result = await cloudflare(accountId, token, fetchImpl)('POST', '/r2/buckets', { name: bucket });
+  return { bucket: result.name, created: result.creation_date || null };
+}
+
 // The relay's own D1 database, named after its Worker. Prints only the new ID for the profile.
 export async function createDatabase(accountId, worker, { token, fetch: fetchImpl = fetch } = {}) {
   if (!/^[a-f0-9]{32}$/.test(accountId || '') || !/^richos-report[a-z0-9-]*$/.test(worker || '')) throw Error('Expected: create-database <account ID> <Worker name>');
@@ -188,6 +216,7 @@ export async function deploy(profile, { token, appKey, fetch: fetchImpl = fetch 
   const uploaded = await api('PUT', `/workers/scripts/${profile.worker}`, form, null);
   await api('PUT', `/workers/scripts/${profile.worker}/secrets`, { name: 'GITHUB_APP_PRIVATE_KEY', text: appKey, type: 'secret_text' });
   await api('POST', `/workers/scripts/${profile.worker}/subdomain`, artifact.subdomain);
+  await api('PUT', `/workers/scripts/${profile.worker}/schedules`, artifact.schedules);
   const settings = await api('GET', `/workers/scripts/${profile.worker}/settings`);
   const bindings = (settings.bindings || []).map(b => `${b.name}:${b.type}`).sort();
   const expected = [...artifact.metadata.bindings.map(b => `${b.name}:${b.type}`), 'GITHUB_APP_PRIVATE_KEY:secret_text'].sort();
@@ -208,6 +237,7 @@ export async function command(action, file, rest = []) {
     if (!file) throw Error('Provide the private relay profile JSON file');
     return reportArtifact(JSON.parse(readFileSync(file, 'utf8')));
   }
+  if (action === 'create-bucket') return createBucket(file, rest[0], { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE) });
   if (action === 'create-database') return createDatabase(file, rest[0], { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE) });
   const appKey = () => {
     const keyFile = process.env.RICHOS_REPORT_APP_KEY_FILE;
