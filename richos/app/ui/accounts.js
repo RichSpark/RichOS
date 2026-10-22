@@ -229,23 +229,27 @@
     // where nobody had signed in). `signedIn` is Claude Code's own `auth status` (quota.rs
     // `View::signed_in`); with no verdict yet the card says the check is still under way, and
     // when the check answered something else it says what (`message`), never "No reading yet".
+    else if (!read(a) && a.signedIn == null) {
+      pill = `<span class="acc-pill is-resting"><i></i>Sign-in not confirmed</span>`;
+      note = a.message ? `${esc(a.message)} RichOS has not confirmed whether this account is signed in.`
+        : "Checking whether this account is signed in on this Mac.";
+    }
     else if (kind === "inuse" && a.signedIn === false) {
       pill = `<span class="acc-pill is-resting"><i></i>Not signed in</span>`;
       note = signingId === a.id ? "Finish signing in in your browser, then come back here."
         : "This account is not signed in on this Mac, so Rich cannot answer you yet. Sign in here.";
     } else if (kind === "inuse") {
       pill = `<span class="acc-pill is-inuse"><i></i>In use now</span>`;
-      note = !read(a) ? esc(a.message || "Checking whether this account is signed in on this Mac.")
+      note = !read(a) ? esc(a.message || (a.signedIn === true ? "This account is signed in on this Mac." : "Checking whether this account is signed in on this Mac."))
         : multi() ? `Rich and the team are working on this one${team}.` : `Rich and the team work on this account${n ? `${team} right now` : ""}.`;
     } else if (kind === "next") { pill = `<span class="acc-pill is-next"><i></i>Next</span>`; note = "Its week is fresh again soonest, so it goes next."; }
     else if (kind === "resting") { pill = `<span class="acc-pill is-resting"><i></i>Resting</span>`; note = "Rich can use it again once its week is fresh."; }
     else if (kind === "ready") { pill = `<span class="acc-pill"><i></i>Ready</span>`; note = "Waiting its turn."; }
     // The same signed-in verdict on a card that is not in use (handover review
     // rv-20261021T234558Z-10df0b1f-03b0, finding 2): no reading, but Claude Code says it is
-    // signed in, so it says so and what the last check said, never "Not signed in". Signed in
-    // with no reading is only ever reached through a check that reported no limits (quota.rs
-    // `Snapshot::signed_in`), so with no message since, that is still the sentence.
-    else if (a.signedIn === true) { pill = `<span class="acc-pill"><i></i>Signed in</span>`; note = esc(a.message || "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show."); }
+    // signed in, so it says so and what the last check said, never "Not signed in".
+    // Auth status alone establishes sign-in, not whether subscription limits exist.
+    else if (a.signedIn === true) { pill = `<span class="acc-pill"><i></i>Signed in</span>`; note = esc(a.message || "This account is signed in on this Mac."); }
     else { pill = `<span class="acc-pill is-resting"><i></i>Not signed in</span>`; note = signingId === a.id ? "Finish signing in in your browser, then come back here." : "Sign in to this account and Rich can use it."; }
     let acts = "";
     if (multi() && kind !== "inuse" && kind !== "arriving" && kind !== "unread" && kind !== "resting") acts += `<button class="acc-btn" type="button" data-act="use" data-id="${esc(a.id)}" aria-label="Use ${esc(a.label)} now">${ICON.swap}Use this one now</button>`;
@@ -263,7 +267,7 @@
     const look = kind === "leaving" ? "inuse" : kind === "arriving" ? "next" : kind;
     return `<article class="acc-card is-${look}" data-id="${esc(a.id)}" aria-label="${esc(nameOf(a))}"><span class="acc-spine"></span>
       <header class="acc-head"><h3 class="acc-name">${esc(nameOf(a))}</h3>${pill}<span class="acc-acts">${acts}</span></header>
-      ${who(a)}<p class="acc-note">${note}</p>${a.signedIn === false || (a.signedIn === true && !read(a)) ? "" : `<div class="acc-meters">${meter(a, "week")}${meter(a, "five")}</div>`}${confirm}</article>`;
+      ${who(a)}<p class="acc-note">${note}</p>${a.signedIn === false || !read(a) ? "" : `<div class="acc-meters">${meter(a, "week")}${meter(a, "five")}</div>`}${confirm}</article>`;
   }
   // The card's one line under its name: "Show email" at rest, the email while it shows.
   function who(a) {

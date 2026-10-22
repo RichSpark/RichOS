@@ -648,6 +648,17 @@ const FIXTURES = {
     await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
     return page;
   },
+  async "quota-signed-out"(browser) {
+    const page = await openApp(browser, undefined, { quota: SIGNED_OUT_QUOTA });
+    await page.click("#set-btn");
+    await page.click("#set-techy");
+    await page.waitForFunction(() => !document.getElementById("set-quota-open").hidden || !document.getElementById("techy-scope").hidden);
+    if (await page.locator("#techy-scope").isVisible()) await page.click("#techy-scope-confirm");
+    if (await page.locator("#set-menu").isHidden()) await page.click("#set-btn");
+    await page.click("#set-quota-open");
+    await page.waitForSelector("#quota-empty:not([hidden])");
+    return page;
+  },
   /// The same state on the Settings row, before the sheet is opened.
   async "accounts-row-signed-out"(browser) {
     const page = await openApp(browser, undefined, { quota: SIGNED_OUT_QUOTA });

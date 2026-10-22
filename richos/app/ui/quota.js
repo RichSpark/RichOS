@@ -292,10 +292,13 @@
     // A check that came back with no figures (quota.rs `empty_at`) is said as what it was:
     // Claude Code answered, without them. Round 16 draws only "has not answered yet".
     const answered = !windows.length && view.emptyAt && !view.message;
-    field("quota-empty-why").textContent = answered ? "Claude Code answered without its usage figures this time" : "Claude Code has not answered yet";
+    field("quota-empty-why").textContent = view.message || (view.signedIn === true ? "This account is signed in on this Mac."
+      : view.signedIn === false ? "This account is not signed in on this Mac."
+      : answered ? "Claude Code answered without its usage figures this time" : "Claude Code has not answered yet");
     const nextAsk = view.nextCheckAt > Date.now() ? duration(view.nextCheckAt - Date.now()) : null;
-    field("quota-empty-next").textContent = answered && nextAsk ? `RichOS asks again in ${nextAsk}; Ask Claude Code asks now.`
-      : "If this stays empty after a refresh, Claude Code may not be signed in on this Mac.";
+    field("quota-empty-next").textContent = view.signedIn === false ? "Close this panel, choose Claude accounts and sign in, then refresh."
+      : answered && nextAsk ? `RichOS asks again in ${nextAsk}; Ask Claude Code asks now.`
+      : "Ask Claude Code checks the usage figures again.";
     // Round 16 hides the ruler key while the Add account form is open.
     sheet.querySelector(".quota-legend").hidden = !windows.length || !field("quota-account-new").hidden;
   }
@@ -303,10 +306,10 @@
   // ---- the lanes ------------------------------------------------------------------------
   function accountNote(a) {
     if (isUsedUp(a)) { const limit = "Usage limit reached"; return `${limit} · usable again ${stamp(a.exhaustedUntil, true)}`; }
-    // Signed in with no reading (quota.rs `Snapshot::signed_in`, kept through a check that got no
-    // answer) is only reached through a check that reported no limits, so that is its sentence.
-    if (!a.message && a.signedIn === true) return "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show.";
-    return a.message || (a.checkedAt ? "No allowance reported." : "Not read yet. Sign in, then refresh.");
+    if (a.message) return a.message;
+    if (a.signedIn === true) return "This account is signed in on this Mac.";
+    if (a.signedIn === false) return "This account is not signed in on this Mac.";
+    return a.checkedAt ? "No allowance reported." : "Checking whether this account is signed in on this Mac.";
   }
   function figure(w, name, old) {
     const used = w ? Math.min(100, w.usedPercent) : 0;
@@ -768,7 +771,8 @@
     const now = Date.now(), age = view.checkedAt && view.windows.length ? duration(now - view.checkedAt) + " ago" : null;
     const freshness = field("quota-freshness");
     freshness.classList.toggle("is-stale", !!age && stale());
-    if (!age) freshness.replaceChildren(node("b", "", "No reading yet."));
+    if (!age) freshness.replaceChildren(node("b", "", view.signedIn === false ? "Not signed in on this Mac."
+      : view.signedIn === true ? "Signed in; no usage reading." : "No usage reading yet."));
     else {
       // The cadence: every 5 minutes at every level of use; every MINUTE while usage is fast or
       // a rise is expected, in gold (round 16's reading line, the app's measured interval).

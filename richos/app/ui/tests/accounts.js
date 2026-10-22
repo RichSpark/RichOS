@@ -199,6 +199,39 @@ async function main() {
     return "In use now, the signed-in sentence, no Sign in, no meters; not in use: Signed in, the same sentence, no Sign in, no meters";
   });
 
+  await run.check("an unknown sign-in is never labelled signed out, on either account or theme", async () => {
+    for (const theme of ["light", "dark"]) {
+      for (const [inUse, unknown] of [["1", "2"], ["2", "1"], ["1", "1"], ["2", "2"]]) {
+        for (const message of [null, "Claude Code did not answer just now."]) {
+          const quota = two([10, 20], [10, 20], { inUse });
+          Object.assign(quota.accounts.find(a => a.id === unknown), { windows: [], checkedAt: null, signedIn: null, message });
+          const page = await open(theme, quota);
+          await sheet(page);
+          const card = `#accounts-sheet .acc-card[data-id="${unknown}"]`;
+          assert(!(await text(page, card)).includes("Not signed in"), "unknown is not signed out");
+          assertEqual(await page.locator(`${card} .acc-meter`).count(), 0, "no empty meters for an unknown account");
+          const note = await text(page, `${card} .acc-note`);
+          assert(message ? note.includes(message) && note.includes("not confirmed") : note.includes("Checking whether"), "say what is known about the check");
+          await page.close();
+        }
+      }
+    }
+    return "both accounts, active and idle, before a check and after a failed check, in both themes";
+  });
+
+  await run.check("auth status alone never claims subscription limits are absent", async () => {
+    for (const inUse of ["1", "2"]) {
+      const quota = two([10, 20], [10, 20], { inUse });
+      for (const a of quota.accounts) Object.assign(a, { windows: [], checkedAt: null, signedIn: true, message: null });
+      const page = await open("dark", quota);
+      await sheet(page);
+      assertEqual(await texts(page, ".acc-note"), ["This account is signed in on this Mac.", "This account is signed in on this Mac."]);
+      assertEqual(await page.locator(".acc-meter").count(), 0);
+      assertEqual(await page.locator('#accounts-sheet [data-act="sign-one"], #accounts-sheet [data-act="sign"]').count(), 0);
+      await page.close();
+    }
+  });
+
   await run.check("Use this one now: the cards trade places, Recent changes says so, Undo puts it back; a near-full account says when Rich switches again", async () => {
     let page = await open("dark", two([58, 72], [0, 12]));
     await sheet(page);

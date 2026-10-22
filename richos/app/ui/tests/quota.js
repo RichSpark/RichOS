@@ -225,6 +225,29 @@ async function main() {
       "Claude Code did not answer just now. The figures below are from 47 min ago and may have moved on. RichOS tries again in 8 min; Refresh asks sooner.");
     await page.close();
   });
+  await run.check("Technical view keeps sign-in separate from missing usage figures", async () => {
+    for (const signedIn of [false, true, null]) {
+      const page = await open("dark", { state: "unavailable", windows: [], checkedAt: null, retryAt: null, signedIn, message: null });
+      await enableTechnical(page); await page.click("#set-quota-open");
+      await page.waitForSelector("#quota-empty:not([hidden])");
+      const text = await page.locator("#quota-empty").innerText();
+      const freshness = await page.locator("#quota-freshness").innerText();
+      if (signedIn === false) {
+        assert(text.includes("not signed in on this Mac"));
+        assert(text.includes("choose Claude accounts and sign in"));
+        assert(freshness.includes("Not signed in"));
+      } else if (signedIn === true) {
+        assert(text.includes("This account is signed in on this Mac."));
+        assert(!text.includes("may not be signed in"));
+        assert(freshness.includes("Signed in; no usage reading"));
+      } else {
+        assert(!text.includes("This account is not signed in"));
+        assertEqual(freshness.trim(), "No usage reading yet.");
+      }
+      await page.close();
+    }
+  });
+
   await run.check("inline threshold validation, Enter saves and Escape keeps without closing", async () => {
     const page = await open("dark", quota, 100, null, true);
     await enableTechnical(page); await page.click("#set-quota-open");
@@ -523,7 +546,7 @@ async function main() {
     // The lane waits with a pulse while Claude Code signs in through the browser; when the
     // sign-in ends (the preview's ends at once) it reads "Not read yet" with Sign in.
     assert((await page.locator('.quota-lane[data-id="2"]').innerText()).includes("signing in through your browser"));
-    await page.waitForFunction(() => document.querySelector('.quota-lane[data-id="2"]').textContent.includes("Not read yet"));
+    await page.waitForFunction(() => document.querySelector('.quota-lane[data-id="2"]').textContent.includes("Checking whether"));
     assertEqual(await page.locator("#quota-policy-title").innerText(), "Automatic pause or switch");
     assert(await page.locator("#quota-verbs").isVisible());
     assertEqual((await page.locator("#quota-sentence-lead").innerText()).trim(), "Once Home’s five-hour window passes");
@@ -580,7 +603,7 @@ async function main() {
       const lane = '.quota-lane[data-id="2"]';
       assertEqual(await page.locator(`${lane} [aria-label="Sign in to Work"]`).count(), 0, `no Sign in (message ${message})`);
       assertEqual(await page.locator(`${lane} .quota-lane-note`).innerText(),
-        message || "This account is signed in on this Mac. Claude Code does not report usage limits for it, so there are none to show.");
+        message || "This account is signed in on this Mac.");
       assertEqual(await page.locator(`${lane} .quota-lane-remove`).count(), 1, "Remove stays");
       await page.close();
     }
@@ -765,7 +788,7 @@ async function main() {
       await page.waitForSelector("#quota-empty", { state: "visible" });
       assert(await page.locator("#quota-account-start").isVisible(), name + ": + Add account is offered with no reading");
       assert(await page.locator("#quota-refresh").isEnabled(), name + ": Refresh is not locked");
-      assertEqual((await page.locator("#quota-freshness").innerText()).trim(), "No reading yet.");
+      assertEqual((await page.locator("#quota-freshness").innerText()).trim(), "No usage reading yet.");
       assertEqual((await page.locator("#quota-refresh").innerText()).trim(), "Ask Claude Code", "round 16's label with no reading");
       if (name === "branch") {
         assert(await page.locator("#quota-message").isHidden(), "nothing is reported as broken");
