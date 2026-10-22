@@ -87,8 +87,9 @@
 #                                       seconds (default 30): lines per second and the most repeated
 #                                       lines with the processes writing them. Changes nothing; DIR
 #                                       keeps the raw reads (never public richos: it is the phone's)
-#       texts|wait|gone|tap|node|swipe|type-file|keys|field|unlabeled|shot|burst|idle-frames|state|observe
-#                                       the walk steps (richos/app/scripts/qa/phone-android.py)
+#       launch|close|texts|wait|gone|tap|node|swipe|type-file|keys|field|unlabeled|shot|burst|idle-frames|state|observe
+#                                       the walk steps (richos/app/scripts/qa/phone-android.py); launch and
+#                                       close open and end only the TEST copy
 #       bench [chip|coremark|empty-start|all] [--runs N] [--trials N] [--ndk DIR] [--out FILE]
 #                                       hardware benchmarks: the chip, CoreMark (single/all cores),
 #                                       the cold start of an empty app (installed beside RichConnect and
@@ -550,7 +551,7 @@ PY
         ${extra[@]+"${extra[@]}"} "$@" ;;
     bench) exec "${hold[@]}" python3 "$HERE/../perf/bench/bench.py" --adb "$ADB" --serial "$serial" "$@" ;;
     hidden-send) exec "${hold[@]}" python3 "$qa/hidden-send-try.py" --adb "$ADB" --serial "$serial" "$@" ;;
-    texts|wait|gone|tap|node|swipe|type-file|keys|field|unlabeled|shot|burst|idle-frames|state|observe)
+    launch|close|texts|wait|gone|tap|node|swipe|type-file|keys|field|unlabeled|shot|burst|idle-frames|state|observe)
       exec "${hold[@]}" python3 "$qa/phone-android.py" --adb "$ADB" --serial "$serial" "$sub" "$@" ;;
     *) fail "unknown device command '$sub'; see randroid --help" ;;
   esac

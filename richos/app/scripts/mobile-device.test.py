@@ -1192,6 +1192,24 @@ def _():
         assert code == 3 and "is an emulator" in out, (code, out)
 
 
+@case("D38 launch and close: only the TEST copy is opened (its launcher activity, am start -W) or ended (am force-stop), "
+      "whatever package is named; a debuggable build is refused first")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        ph = Phone(tmp, sha="a" * 64, replies={"am start": "Status: ok\nLaunchState: COLD\nTotalTime: 412"})
+        code, out = ph.randroid("device", "--serial", "PHONE1", "launch")
+        assert code == 0 and '"totalMs": 412' in out, (code, out)
+        code, out = ph.randroid("device", "--serial", "PHONE1", "close", "--package", "dev.richos.connect")
+        assert code == 0, (code, out)
+        acts = [c for c in ph.calls if " am " in f" {c} "]
+        assert acts == ["-s PHONE1 shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "
+                        "-n dev.richos.connect.perf/dev.richos.android.app.MainActivity",
+                        "-s PHONE1 shell am force-stop dev.richos.connect.perf"], acts
+        ph.file.write_text(json.dumps({**ph.state, "debuggable": True}))
+        code, out = ph.randroid("device", "--serial", "PHONE1", "launch")
+        assert code == 3 and "DEBUGGABLE RichConnect" in out, (code, out)
+
+
 @case("D14 the test copy's install builds through the Firebase wrapper, so the copy carries notification settings (CEO 2026-10-03)")
 def _():
     with tempfile.TemporaryDirectory() as tmp:
