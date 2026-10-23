@@ -1,12 +1,12 @@
 # Reliable session evidence
 
 The shell evidence hook enables `errexit` and `pipefail` before each Bash tool
-command. A failed test followed by `; echo done`, or piped through `tail`, now
+command. A failed test followed by `; echo done` or piped through `tail`, now
 fails the tool call. Other tool arguments, including background execution and
 timeout, are preserved. The hook does not grant permission or execute commands.
 
 It uses the official [PreToolUse updatedInput contract](https://code.claude.com/docs/en/hooks#pretooluse-decision-control).
-It is registered in both the seated engine settings and the plugin hooks, and
+It is registered in both the seated engine settings and the plugin hooks and
 in the managed-hook inventory used to check plugin installations.
 Restart/resume Claude Code after installing to load the new registration.
 
@@ -50,7 +50,7 @@ Verification:
   and Zsh, tests argument preservation and inspects real ingress ledger output.
 - `scripts/hooks/ceo-inputs.test.sh` checks existing handover safety and recovery.
 - `scripts/hooks/turn-manifest.test.sh` includes its seven negative controls.
-- `ass-kicker/tests/guard-stated-actions.test.sh` checks the manifest consumer.
+- `ass-kicker/tests/ass-kicker.test.sh` checks the manifest consumer.
 - `scripts/hooks/unevaluated-payload.test.sh` checks every registered hook.
 
 The seven focused negative controls in `session-evidence.mutation.sh` restore each

@@ -41,7 +41,7 @@ NINE=(
     "scripts/hooks/guard-idle-land.test.sh"
     "scripts/hooks/guard-unresolved-claims.test.sh"
     "scripts/hooks/guard-resume-isolation.test.sh"
-    "ass-kicker/tests/guard-stated-actions.test.sh"
+    "ass-kicker/tests/ass-kicker.test.sh"
     "scripts/scratch-reaper.test.sh"
 )
 

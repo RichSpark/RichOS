@@ -3743,7 +3743,7 @@ if _section SA; then
 # one that refuses nothing. The harness carries both kinds of mutant, and an
 # unrun mutant refuses nothing. Output KEPT on failure, for CL2's reason.
 # Output KEPT on failure, with case 40's filter and for its reason.
-suite_discovered "SA1.stated-actions-gate-suite-is-discovered" "ass-kicker/tests/guard-stated-actions.test.sh"
+suite_discovered "SA1.stated-actions-gate-suite-is-discovered" "ass-kicker/tests/ass-kicker.test.sh"
 # Output KEPT on failure, with case 40's EXCLUSION filter -- the same one SA1
 # uses three lines above -- and for CL2's reason. The old `^  FAIL` anchor was
 # the narrowest in this file: it printed nothing at all when the harness died

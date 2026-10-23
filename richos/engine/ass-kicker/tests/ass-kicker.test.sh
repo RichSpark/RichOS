@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# guard-stated-actions.test.sh — regression tests for the Stop-time gate that
+# ass-kicker.test.sh — regression tests for the Stop-time gate that
 # refuses a turn whose REPORT does not match its ACTIONS
-# (scripts/hooks/guard-stated-actions.sh + ass-kicker/guard-stated-actions.py).
+# (scripts/hooks/ass-kicker.sh + ass-kicker/ass-kicker.py).
 #
 # THE REAL FAILURES ARE REPLAYED HERE BY SHAPE, WITH THE REAL SENTENCES.
 #   The two ARM 1 sentences are the lead's own words from 2026-09-02 and are
@@ -65,7 +65,7 @@
 #   RECORD
 #     (z)  an observation line is appended
 #
-# Run directly: ass-kicker/tests/guard-stated-actions.test.sh
+# Run directly: ass-kicker/tests/ass-kicker.test.sh
 # Exit 0 = all pass; exit 1 = at least one failure.
 
 set -uo pipefail
@@ -73,7 +73,7 @@ set -uo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_ROOT="$(cd "$TEST_DIR/../.." && pwd)"
 SCRIPT_DIR="$ENGINE_ROOT/scripts/hooks"
-HOOK="$SCRIPT_DIR/guard-stated-actions.sh"
+HOOK="$SCRIPT_DIR/ass-kicker.sh"
 unset CLAUDE_PROJECT_DIR
 
 PASS=0
@@ -81,7 +81,7 @@ FAIL=0
 ok()  { printf '  PASS  %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  FAIL  %s\n         %s\n' "$1" "$2"; FAIL=$((FAIL + 1)); }
 
-SANDBOX="$(mktemp -d -t guard-stated-actions.XXXXXX)"
+SANDBOX="$(mktemp -d -t ass-kicker.XXXXXX)"
 trap 'rm -rf "$SANDBOX"' EXIT
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 
@@ -268,7 +268,7 @@ FRANK="Design 4 landed, and it found something that reframes the whole eleven da
 I'm not accepting it on its summary. Frank breaks it first, and I want him attacking whether −66% is still too generous now that the platform's own record turns out to exist."
 FIN_REPORT="Both arms are in, and they answer the question that has consumed eleven days. The design holds."
 
-echo "=== guard-stated-actions: the report must match the turn ==="
+echo "=== ass-kicker: the report must match the turn ==="
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -755,15 +755,15 @@ run_hook "-" "$ZACH"
 # proves nothing).
 MIRROR="$SANDBOX/mirror"
 mkdir -p "$MIRROR/scripts/hooks" "$MIRROR/scripts/lib" "$MIRROR/ass-kicker"
-cp "$ENGINE_ROOT/ass-kicker/guard-stated-actions.py" "$MIRROR/ass-kicker/"
-cp "$SCRIPT_DIR/guard-stated-actions.sh" \
+cp "$ENGINE_ROOT/ass-kicker/ass-kicker.py" "$MIRROR/ass-kicker/"
+cp "$SCRIPT_DIR/ass-kicker.sh" \
    "$SCRIPT_DIR/turn-manifest.py" "$SCRIPT_DIR/guard-idle-land.py" "$MIRROR/scripts/hooks/"
 cp "$SCRIPT_DIR/../lib/resolve-roots.sh" "$SCRIPT_DIR/../lib/resolve-main-checkout.sh" \
    "$SCRIPT_DIR/../lib/stop-hook-notice.sh" "$MIRROR/scripts/lib/"
 BROKEN="$SANDBOX/broken"
 cp -R "$MIRROR" "$BROKEN"
 rm -f "$BROKEN/scripts/lib/resolve-roots.sh"
-run_hook "$TR_BASH" "$ZACH" false "$ENTITY" "$BROKEN/scripts/hooks/guard-stated-actions.sh"
+run_hook "$TR_BASH" "$ZACH" false "$ENTITY" "$BROKEN/scripts/hooks/ass-kicker.sh"
 if [ "$RC" -eq 0 ] && printf '%s' "$ERR" | grep -q 'BROKEN INSTALL'; then ok "x.  broken install (resolve-roots.sh absent): exit 0 + banner"
 else bad "x.  broken install" "rc=$RC err=$(printf '%s' "$ERR" | head -c 200)"; fi
 
@@ -776,7 +776,7 @@ else bad "y.  report-only" "rc=$RC err=$(printf '%s' "$ERR" | head -c 200)"; fi
 NODEP="$SANDBOX/nodep"
 cp -R "$MIRROR" "$NODEP"
 rm -f "$NODEP/scripts/hooks/guard-idle-land.py"
-run_hook "$TR_FIN" "$FIN_REPORT" false "$ENTITY" "$NODEP/scripts/hooks/guard-stated-actions.sh"
+run_hook "$TR_FIN" "$FIN_REPORT" false "$ENTITY" "$NODEP/scripts/hooks/ass-kicker.sh"
 if [ "$RC" -eq 0 ] && has_sysmsg "NOT RUNNING"; then ok "y2. guard-idle-land.py absent: the gate does not guess, exits 0, and the operator is TOLD"
 else bad "y2. dependency absent" "rc=$RC out=$(printf '%s' "$OUT" | head -c 200)"; fi
 
