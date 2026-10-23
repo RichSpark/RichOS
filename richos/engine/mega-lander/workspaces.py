@@ -6232,6 +6232,8 @@ def _review_check(todo, entities=()):
     registry = _registry_entity_map(F)
     out, refusals = {}, []
     for _repo, b, main, t in todo:
+        if F.notes_only(main, "HEAD", t):
+            continue                     # release notes only: no review is asked (F.RELEASE_NOTES)
         listed, unknown, recorded = _declared_review_listing(F, entities, main, registry)
         if unknown:
             refusals.append("=== SECOND REVIEW: %s was not merged into %s ===\n  Whether %s is reviewed cannot "

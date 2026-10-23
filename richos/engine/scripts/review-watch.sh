@@ -22,7 +22,8 @@
 #   review-watch.sh --status    is this session watched, and which reviews run
 #
 # It reviews only repositories listed in SECOND_REVIEW_REPOS in the governed
-# repository's orchestration.config. The logic: scripts/lib/review_watch.py.
+# repository's orchestration.config, and never work that changes only release
+# notes. The logic: scripts/lib/review_watch.py.
 
 set -uo pipefail
 
