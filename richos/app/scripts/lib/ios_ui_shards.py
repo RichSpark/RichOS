@@ -247,7 +247,12 @@ def retry_identity(root, runtime, devices, selectors):
                   "RICHOS_TEST_DEVICE_RUN_ID", "RICHOS_TEST_DEVICE_OWNER_PID", "RICHOS_IOS_POOL_WAIT",
                   "RICHOS_VERIFICATION_CONTAMINATION", "RICHOS_VERIFICATION_RUNNER_WAIT",
                   "RICHOS_VERIFICATION_CHECKOUT", "RICHOS_VERIFICATION_OWNER", "RICHOS_MACHINE_WORKERS",
-                  "RICHOS_SIMULATOR_CACHE_HELD"}
+                  "RICHOS_SIMULATOR_CACHE_HELD",
+                  # Ownership tags and output addresses change on every attempt. They do
+                  # not change the built app, test selection or simulator configuration.
+                  "RICHOS_PROCESS_SCOPE", "RICHOS_HOST_SHIELD_LOG", "RICHOS_HOST_SHIELD_RUNS",
+                  "RICHOS_HOST_SHIELD_TOOL", "RICHOS_PROOF_RUN_SLOT_HELD", "RICHOS_PROOF_RUN_SLOT_FDS",
+                  "RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION"}
     settings = sorted((k, v) for k, v in os.environ.items()
                       if k.startswith(("RICHOS_", "DEVELOPER_", "SDKROOT", "TOOLCHAINS"))
                       and k not in run_fields and not k.startswith(("RICHOS_WORKER_", "RICHOS_TEST_RESULTS_")))
