@@ -140,6 +140,7 @@ PLATFORM_KEY="darwin-$ARCH"
 ENGINE_ASSET="richos-engine-$ENGINE_VERSION.tar.gz"
 UPDATE_ASSET="RichOS.app.tar.gz"
 INSTALL_ASSET="RichOS-$VERSION-macos-$ARCH.zip"
+DOCTOR_ASSET="RichDoctor-macos-$ARCH.zip"
 # THE SAME BYTES UNDER A NAME THAT NEVER CHANGES, so a link can outlive a release.
 #
 # `/releases/latest/download/<name>` only resolves if <name> is identical in every release,
@@ -223,6 +224,8 @@ plan() {
   say "    $STABLE_ASSET            (the same bytes under a name that never changes)"
   say "        https://github.com/$REPO/releases/latest/download/$STABLE_ASSET"
   say "        $DOWNLOAD_BASE/$INSTALL_ASSET"
+  say "    $DOCTOR_ASSET      (standalone RichDoctor, identical to the bundled app)"
+  say "        $DOWNLOAD_BASE/$DOCTOR_ASSET"
   say "    $MANIFEST_ASSET                      (uploaded LAST)"
   say "        $DOWNLOAD_BASE/$MANIFEST_ASSET"
   say "    $SUMS_ASSET"
@@ -391,6 +394,38 @@ cmd_verify_engine() {
 }
 
 # ---------------------------------------------------------------------------------------
+# Use the payload sealed inside this release's RichOS, rather than a mutable build-cache
+# copy. The same signed app must be available when RichOS cannot open to install it.
+stage_richdoctor() (
+  local payload="$1/Contents/Resources/RichDoctor/RichDoctor.app.tar.gz"
+  [ -f "$payload" ] || die "the RichDoctor payload is missing; no standalone download can be staged" 1
+  doctor_workspace="$(mktemp -d "${TMPDIR:?TMPDIR must name the configured scratch directory}/richdoctor-release.XXXXXX")" \
+    || die "could not create the RichDoctor archive workspace" 1
+  trap 'rm -rf "$doctor_workspace"' EXIT
+  python3 "$here/lib/updater_tar.py" verify "$payload" \
+    || die "the bundled RichDoctor payload is invalid" 1
+  mkdir -p "$doctor_workspace/source" "$doctor_workspace/check"
+  /usr/bin/tar -xzf "$payload" -C "$doctor_workspace/source" \
+    || die "the bundled RichDoctor could not be extracted" 1
+  [ -d "$doctor_workspace/source/RichDoctor.app" ] || die "the payload does not contain RichDoctor.app" 1
+  /usr/bin/ditto -c -k --keepParent "$doctor_workspace/source/RichDoctor.app" "$doctor_workspace/$DOCTOR_ASSET" \
+    || die "RichDoctor could not be archived" 1
+  /usr/bin/ditto -x -k "$doctor_workspace/$DOCTOR_ASSET" "$doctor_workspace/check" \
+    || die "the standalone RichDoctor archive does not open" 1
+  local app="$doctor_workspace/check/RichDoctor.app"
+  codesign --verify --deep --strict "$app" 2>/dev/null \
+    || die "the standalone RichDoctor fails signature verification" 1
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist" 2>/dev/null)" = "com.richos.richdoctor" ] \
+    || die "the standalone archive has the wrong app identity" 1
+  if [ "$NOTARIZE" = "1" ]; then
+    xcrun stapler validate "$app" >/dev/null 2>&1 \
+      || die "the standalone RichDoctor has no valid stapled ticket" 1
+  fi
+  mv "$doctor_workspace/$DOCTOR_ASSET" "$OUT/$DOCTOR_ASSET" \
+    || die "the standalone RichDoctor archive could not be staged" 1
+  say "standalone download: $DOCTOR_ASSET (extracted signature verified)"
+)
+
 cmd_app() {
   # Run again, and not out of belt-and-braces: `engine` and `app` are separate invocations
   # with an upload and a network verification between them, and the tree can move in that
@@ -578,6 +613,8 @@ $(printf '%s' "$dirty" | sed 's/^/    /')" 1
   say "  extracted and checked: codesign OK; stapled ticket: $staple_verdict"
   say "  Gatekeeper on the extracted copy: $spctl_verdict"
 
+  stage_richdoctor "$bundle" || exit 1
+
   # ---- stage everything that will be published ----------------------------------------
   cp "$tarball"  "$OUT/$UPDATE_ASSET"
   cp "$sig"      "$OUT/$UPDATE_ASSET.sig"
@@ -610,7 +647,7 @@ $(printf '%s' "$dirty" | sed 's/^/    /')" 1
   say ""
   say "  gh release upload $TAG --repo $REPO \\"
   say "      '$OUT/$UPDATE_ASSET' '$OUT/$UPDATE_ASSET.sig' \\"
-  say "      '$OUT/$INSTALL_ASSET' '$OUT/$STABLE_ASSET' '$OUT/$SUMS_ASSET'"
+  say "      '$OUT/$INSTALL_ASSET' '$OUT/$STABLE_ASSET' '$OUT/$DOCTOR_ASSET' '$OUT/$SUMS_ASSET'"
   say "  gh release upload $TAG --repo $REPO '$OUT/$MANIFEST_ASSET'"
   say "  richos/app/scripts/make-release.sh verify-release --tag $TAG"
   rule

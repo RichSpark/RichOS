@@ -592,6 +592,21 @@ class GitTests(GitFixture):
             n.finish(info, out)
         self.assertEqual(n.remote_tags(), set())
 
+    def test_finish_publishes_the_standalone_doctor_with_candidate_assets(self):
+        info = self.reserve()
+        out = Path(self.temp.name) / "doctor"
+        name, content = "RichDoctor-macos-aarch64.zip", b"signed Doctor archive fixture"
+
+        def stage_doctor(*args, **kwargs):
+            self.fake_external(*args, **kwargs)
+            if args[0] == "bash" and args[2] == "app":
+                (out / name).write_bytes(content)
+
+        with patch.object(n, "execute", side_effect=stage_doctor):
+            n.build(info, out)
+        n.finish(info, out)
+        self.assertEqual(self.asset_bytes[info["tag"], name], content)
+
     def test_promotion_resumes_after_tag_and_after_partial_upload(self):
         info = self.reserve()
         out = Path(self.temp.name) / "resume"

@@ -34,12 +34,13 @@
 #       was verified
 #   R9  `app` with a good receipt and no signing key refuses
 #   R10 `verify-release` with nothing staged refuses
+#   R11-R14 standalone Doctor round-trip, missing payload, invalid signature and missing ticket
 #
 # The refusal journeys use the real release script and names gate in a small tracked
 # tree. Scanning the entire working repository four times tests no additional ordering
 # behavior. A planted hit below proves the real gate still refuses before the pin check.
 # Full-tree privacy remains a production release gate and has its own owning suite.
-# run-tests: inputs richos/app/scripts/make-release.sh richos/app/scripts/lib/worktree-resource.sh richos/app/src-tauri/Cargo.toml richos/app/src-tauri/tauri.conf.json richos/engine/VERSION richos/engine/scripts/named-persons.sh richos/engine/scripts/lib/named-persons.sh richos/engine/scripts/lib/named-persons.py
+# run-tests: inputs richos/app/scripts/make-release.sh richos/app/scripts/lib/updater_tar.py richos/app/scripts/lib/worktree-resource.sh richos/app/src-tauri/Cargo.toml richos/app/src-tauri/tauri.conf.json richos/engine/VERSION richos/engine/scripts/named-persons.sh richos/engine/scripts/lib/named-persons.sh richos/engine/scripts/lib/named-persons.py
 # run-tests: covers richos/app/scripts/make-release.sh
 set -uo pipefail
 
@@ -55,6 +56,8 @@ FIXTURE="$TMP/repo"
 mkdir -p "$FIXTURE/richos/app/scripts" "$FIXTURE/richos/app/src-tauri" \
          "$FIXTURE/richos/engine/scripts/lib"
 cp "$SRC_DIR/make-release.sh" "$FIXTURE/richos/app/scripts/"
+mkdir -p "$FIXTURE/richos/app/scripts/lib"
+cp "$SRC_DIR/lib/updater_tar.py" "$FIXTURE/richos/app/scripts/lib/"
 cp "$APP/src-tauri/Cargo.toml" "$APP/src-tauri/tauri.conf.json" "$FIXTURE/richos/app/src-tauri/"
 cp "$APP/../engine/VERSION" "$FIXTURE/richos/engine/"
 cp "$APP/../engine/scripts/named-persons.sh" "$FIXTURE/richos/engine/scripts/"
@@ -126,6 +129,7 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$APP/src-tauri/Cargo.toml" | hea
 if [ "$CODE" = 0 ] \
    && printf '%s' "$OUT" | grep -Fq "$VERSION" \
    && printf '%s' "$OUT" | grep -Fq "releases/latest/download/latest.json" \
+   && printf '%s' "$OUT" | grep -Eq 'RichDoctor-macos-(aarch64|x86_64)\.zip' \
    && [ ! -d "$OUTDIR" ]; then
   ok "R1 plan names the version ($VERSION) and the endpoint, and creates nothing"
 else
@@ -258,6 +262,64 @@ expect "R9 app with a good receipt and no signing key refuses" 2 "no updater sig
 EMPTY="$TMP/empty"; mkdir -p "$EMPTY"
 run "${REL[@]}" verify-release --tag "$TAG" --out "$EMPTY"
 expect "R10 verify-release with nothing staged refuses" 2 "no SHA256SUMS"
+
+# The standalone artifact uses the sealed payload, not a second build. Exercise the real
+# archiver and macOS signature verifier with a tiny ad-hoc signed app, never the user's app.
+DOCTOR_HOST="$TMP/host/RichOS.app"
+DOCTOR_DIR="$TMP/original/RichDoctor.app"
+DOCTOR_OUT="$TMP/doctor-staging"
+DOCTOR_PAYLOAD="$DOCTOR_HOST/Contents/Resources/RichDoctor/RichDoctor.app.tar.gz"
+mkdir -p "$DOCTOR_DIR/Contents/MacOS" "$(dirname "$DOCTOR_PAYLOAD")" "$DOCTOR_OUT"
+cp /usr/bin/true "$DOCTOR_DIR/Contents/MacOS/richdoctor"
+python3 - "$DOCTOR_DIR/Contents/Info.plist" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], 'wb') as out:
+    plistlib.dump({'CFBundleIdentifier': 'com.richos.richdoctor', 'CFBundleExecutable': 'richdoctor',
+                  'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': '1.0.0'}, out)
+PY
+codesign --force --sign - --timestamp=none "$DOCTOR_DIR" >/dev/null 2>&1 || exit 1
+python3 "$SRC_DIR/lib/updater_tar.py" build "$DOCTOR_DIR" "$DOCTOR_PAYLOAD" >/dev/null || exit 1
+stage_doctor_fixture() (
+  local notarize="${1:-0}"
+  export TMPDIR="$TMP/doctor-scratch/"
+  mkdir -p "$TMPDIR"
+  # `plan` is read-only and leaves the real staging functions available to this shell.
+  set -- plan --out "$DOCTOR_OUT" --no-notarize
+  # SCRIPT is the isolated copy of make-release.sh made above.
+  # shellcheck disable=SC1090
+  . "$SCRIPT" >/dev/null
+  # Consumed by stage_richdoctor in that sourced release script.
+  # shellcheck disable=SC2034
+  NOTARIZE="$notarize"
+  stage_richdoctor "$DOCTOR_HOST" || return $?
+  write_sums
+)
+run stage_doctor_fixture
+expect "R11 standalone Doctor archive is staged and checksummed" 0 "standalone download: RichDoctor-macos-"
+doctor_zip="$(find "$DOCTOR_OUT" -name 'RichDoctor-macos-*.zip' -type f)"
+if [ -n "$doctor_zip" ] \
+   && /usr/bin/ditto -x -k "$doctor_zip" "$TMP/doctor-download" \
+   && cmp -s "$DOCTOR_DIR/Contents/MacOS/richdoctor" "$TMP/doctor-download/RichDoctor.app/Contents/MacOS/richdoctor" \
+   && codesign --verify --deep --strict "$TMP/doctor-download/RichDoctor.app" 2>/dev/null \
+   && (cd "$DOCTOR_OUT" && /usr/bin/shasum -a 256 -c SHA256SUMS >/dev/null); then
+  ok "R11 downloaded archive preserves the signed executable and has a valid checksum"
+else
+  bad "R11 downloaded archive preserves the signed executable and has a valid checksum"
+fi
+run stage_doctor_fixture 1
+expect "R12 notarized release refuses an unstapled standalone Doctor" 1 "no valid stapled ticket"
+rm "$DOCTOR_PAYLOAD"
+run stage_doctor_fixture
+expect "R13 missing bundled Doctor cannot silently omit the separate download" 1 "payload is missing"
+printf 'damaged fixture\n' >> "$DOCTOR_DIR/Contents/MacOS/richdoctor"
+python3 "$SRC_DIR/lib/updater_tar.py" build "$DOCTOR_DIR" "$DOCTOR_PAYLOAD" >/dev/null || exit 1
+run stage_doctor_fixture
+expect "R14 damaged Doctor signature cannot be published" 1 "fails signature verification"
+if [ -z "$(find "$TMP/doctor-scratch" -mindepth 1 -print -quit)" ]; then
+  ok "R15 standalone archive workspaces are removed on success and refusal"
+else
+  bad "R15 standalone archive workspaces are removed on success and refusal"
+fi
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then
