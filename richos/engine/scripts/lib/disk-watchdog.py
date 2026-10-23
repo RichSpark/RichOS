@@ -743,12 +743,19 @@ def main():
     if mode == "check" and os.environ.get("DISK_WATCHDOG_SCHEDULED") == "1":
         # THE INSTALLED JOB ONLY. A terminal --check, and any test suite, reads
         # and prints; it never writes the escalation ledger.
+        kept_scopes = set((assoc or {}).get("scopes") or [])
         assoc = bridge_cleanup_escalation(cleanup_problems, prev, now, stamp, log_path,
                                           reaper_cmd, reaper_state_path)
-        if assoc is not None and cleanup_problems and not assoc.get("scopes"):
-            assoc["scopes"] = sorted(set(
-                u.get("scope") for u in (published.get("unresolved") or [])
-                if isinstance(u, dict) and str(u.get("scope") or "").startswith("/")))
+        if assoc is not None:
+            # EVERY ROOT THAT EVER FAILED STAYS ON THE ACTION, across ticks and
+            # into a replacement, until a healthy scheduled run has inspected it
+            # (the check above): §54's "told until it is gone". A later failure in
+            # another root joins; it never waits for the list to be empty.
+            failed = set()
+            if published.get("source") == "launchd":
+                failed = {u.get("scope") for u in (published.get("unresolved") or [])
+                          if isinstance(u, dict) and str(u.get("scope") or "").startswith("/")}
+            assoc["scopes"] = sorted(kept_scopes | set(assoc.get("scopes") or []) | failed)
     # --- THREE PILES, THREE ANSWERS, AND ONLY ONE OF THEM IS AN ALARM -------
     #
     # CEO, 2026-09-19, on one line that ran all three together: "And what is

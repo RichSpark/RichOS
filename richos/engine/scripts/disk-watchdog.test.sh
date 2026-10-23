@@ -1540,6 +1540,69 @@ else
     bad "W23m recovery covering the scope did not close $ID3"
 fi
 
+# W24 — EVERY FAILED ROOT STAYS ON THE ACTION UNTIL IT IS INSPECTED HEALTHY
+# ===========================================================================
+# Mid-job review rv-20261023T222724Z-e6524552-e592 #2: the action recorded failed
+# scopes only while its list was empty, so a second root's failure never joined,
+# and a failed deletion was published as the label "deletion", which no run can
+# inspect. A healthy run of root A then cleared the action while root B's residue
+# stayed. Every failed root now joins the action and clears only when a healthy
+# scheduled run has inspected it.
+REAL="$(cd "$W_DIR" && pwd -P)"
+SA="$REAL/scope-a"; SB="$REAL/scope-b"; SC="$REAL/scope-c"
+mkdir -p "$SA" "$SB" "$SC"
+healthy_reaper_state "$RS" '"outcome": "unresolved", "roots": ["'"$SA"'", "'"$SB"'"], "unresolved": [{"scope": "'"$SA"'", "cause": "inspection unavailable"}]'
+run_wd_scheduled >/dev/null 2>&1
+ID4="$(wd_assoc)"
+healthy_reaper_state "$RS" '"outcome": "unresolved", "roots": ["'"$SA"'", "'"$SB"'"], "unresolved": [{"scope": "'"$SB"'", "cause": "inspection unavailable"}]'
+run_wd_scheduled >/dev/null 2>&1
+healthy_reaper_state "$RS" '"roots": ["'"$SA"'"]'
+run_wd_scheduled >/dev/null 2>&1
+OUT="$(run_wd --alert)"; RC=$?
+if [ -n "$ID4" ] && [ "$(wd_assoc)" = "$ID4" ] && [ "$RC" = "1" ] \
+   && printf '%s' "$OUT" | grep -q "scope-b: the last healthy run did not inspect it"; then
+    ok "W24  a second root's failure joins the action; a healthy run of the first root alone does not clear it"
+else
+    bad "W24  root B's failure was lost (rc=$RC assoc=$(wd_assoc) first=$ID4)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -6
+fi
+# A failed deletion, published by the reaper's own grouping, names its root.
+python3 - "$RS" "$SC" "$SCRIPT_DIR/lib/scratch-reaper.py" <<'PY'
+import importlib.util, json, sys, time
+from types import SimpleNamespace
+sys.path.insert(0, sys.argv[3].rsplit("/", 1)[0])
+spec = importlib.util.spec_from_file_location("srt_reaper", sys.argv[3])
+sr = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sr)
+rows = sr.unresolved_rows(SimpleNamespace(roots=[sys.argv[2]], entries=[], deferred_skipped=0),
+                          [sys.argv[2] + "/leftover: permission denied"])
+now = int(time.time())
+json.dump({"source": "launchd", "outcome": "unresolved", "roots": [sys.argv[2]],
+           "unresolved": rows, "last_apply_epoch": now, "result_epoch": now,
+           "last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))},
+          open(sys.argv[1], "w"))
+PY
+run_wd_scheduled >/dev/null 2>&1
+healthy_reaper_state "$RS" '"roots": ["'"$SA"'", "'"$SB"'"]'
+run_wd_scheduled >/dev/null 2>&1
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$(wd_assoc)" = "$ID4" ] && [ "$RC" = "1" ] \
+   && printf '%s' "$OUT" | grep -q "scope-c: the last healthy run did not inspect it"; then
+    ok "W24a a failed deletion is held by its root until a healthy run inspects that root"
+else
+    bad "W24a a failed deletion's root was dropped (rc=$RC assoc=$(wd_assoc))"
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("unresolved"))' "$RS" | sed 's/^/        /'
+fi
+healthy_reaper_state "$RS" '"roots": ["'"$SA"'", "'"$SB"'", "'"$SC"'"]'
+run_wd_scheduled >/dev/null 2>&1
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "0" ] && [ -z "$(wd_assoc)" ] \
+   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "EscalationAck" and r.get("id") == "'"$ID4"'" and "Recovered" in r.get("disposition", "")])')" = "1" ]; then
+    ok "W24b a healthy run inspecting every failed root clears it and closes the one action"
+else
+    bad "W24b recovery of all failed roots did not close $ID4 (rc=$RC assoc=$(wd_assoc))"
+fi
+
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

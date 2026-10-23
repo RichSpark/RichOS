@@ -4156,10 +4156,17 @@ def unresolved_rows(reaper, failures):
                       % (g["count"], g["class"], "y" if g["count"] == 1 else "ies",
                          human(g["bytes"]), g.pop("example"), g.pop("why")[:200]))
         out.append(g)
-    if failures:
-        out.append({"scope": "deletion", "count": len(failures),
-                    "cause": "%d deletion(s) failed, e.g. %s"
-                             % (len(failures), str(failures[0])[:200])})
+    # A FAILED DELETION IS NAMED BY THE ROOT IT HAPPENED IN, like everything above:
+    # the watchdog keeps an action open until a healthy run has inspected every
+    # root that failed, and a label that is not a path could never be inspected.
+    # Each failure reads "<path>: <error>" (apply()).
+    failed = {}
+    for f in failures:
+        scope = scope_of(str(f).split(": ", 1)[0])
+        failed.setdefault(scope, []).append(str(f))
+    for scope, rows in failed.items():
+        out.append({"scope": scope, "class": "deletion", "count": len(rows),
+                    "cause": "%d deletion(s) failed, e.g. %s" % (len(rows), rows[0][:200])})
     if reaper.deferred_skipped:
         out.append({"scope": "deny-by-default arm", "count": reaper.deferred_skipped,
                     "cause": "%d entries were not reached before the run's budget ran out"
