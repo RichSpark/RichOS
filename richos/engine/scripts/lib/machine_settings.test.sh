@@ -77,7 +77,7 @@ class Settings(unittest.TestCase):
   spec=importlib.util.spec_from_file_location('fixture_reaper',pathlib.Path(sys.argv[1],'scratch-reaper.py'))
   R=importlib.util.module_from_spec(spec);spec.loader.exec_module(R)
   class Walls:
-   def check(self,*args):return None
+   def check(self,*args,**kwargs):return None
   with tempfile.TemporaryDirectory() as root:
    base=pathlib.Path(root).resolve();job=base/'nightly/home.noindex/tmp';job.mkdir(parents=True)
    allocator=job/'richos-scratch';dead=allocator/'dead';live=allocator/'live'

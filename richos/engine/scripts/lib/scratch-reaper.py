@@ -500,6 +500,69 @@ def inside(child, parent):
     return child == parent or child.startswith(parent + "/")
 
 
+def _gitdir_target(pointer_file):
+    """The realpath a `gitdir:` pointer file names, or '' if it names none."""
+    try:
+        with open(pointer_file, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(4096).strip()
+    except OSError:
+        return ""
+    if not text.startswith("gitdir:"):
+        return ""
+    target = text[len("gitdir:"):].strip()
+    if not os.path.isabs(target):
+        target = os.path.join(os.path.dirname(pointer_file), target)
+    return os.path.realpath(target)
+
+
+def repositories_reach_outside(tree):
+    """'' when every .git under `tree` is a repository wholly inside it, else why not.
+
+    A test suite's fixture is a repository it made inside its own allocation. A
+    `.git` FILE pointing elsewhere is a checkout of somebody's repository, and a
+    repository whose linked worktrees live outside `tree` would leave those
+    checkouts without an object store if it were deleted. Either is refused. A
+    tree that cannot be read is refused too: unreadable is not proof.
+    """
+    real = os.path.realpath(tree)
+    stack = [real]
+    while stack:
+        cur = stack.pop()
+        try:
+            entries = list(os.scandir(cur))
+        except OSError as exc:
+            return "%s could not be read (%s)" % (cur, exc)
+        for e in entries:
+            if e.name == ".git":
+                if e.is_file(follow_symlinks=False):
+                    target = _gitdir_target(e.path)
+                    if not target or not inside(target, real):
+                        return ("%s is a linked checkout of a repository outside this "
+                                "allocation (%s)" % (cur, target or "unreadable pointer"))
+                elif e.is_dir(follow_symlinks=False):
+                    for pointer in glob.glob(os.path.join(e.path, "worktrees", "*", "gitdir")):
+                        target = _gitdir_target_line(pointer)
+                        if not target or not inside(target, real):
+                            return ("%s has a linked worktree outside this allocation (%s)"
+                                    % (e.path, target or "unreadable"))
+                else:
+                    return "%s is a .git that is neither a file nor a directory" % e.path
+                continue
+            if e.is_dir(follow_symlinks=False):
+                stack.append(e.path)
+    return ""
+
+
+def _gitdir_target_line(pointer):
+    """A repository's worktrees/<name>/gitdir holds one absolute path, no prefix."""
+    try:
+        with open(pointer, encoding="utf-8", errors="replace") as fh:
+            target = fh.read(4096).strip()
+    except OSError:
+        return ""
+    return os.path.realpath(target) if target else ""
+
+
 # ---------------------------------------------------------------------------
 # the allocator's ledger — added 2026-09-18
 # ---------------------------------------------------------------------------
@@ -1350,7 +1413,21 @@ class Reaper(object):
                             "not all of them are, so nothing here is quit)"))
                 continue
 
-            refused = walls.check(path, has_git)
+            # A REPOSITORY INSIDE AN ENDED ALLOCATION IS ITS TEST FIXTURE, but only
+            # when the allocator's own ledger row says this directory was allocated
+            # (the name alone is never enough) and every repository in it is wholly
+            # inside it. A suite killed by SIGKILL cannot run its trap, and wall 2
+            # used to keep its fixture repositories until a person deleted them.
+            fixture = False
+            if has_git and row:
+                outside = repositories_reach_outside(path)
+                if outside:
+                    self.add(path, "scratch-alloc", size, INDETERMINATE,
+                             "wall 2: pid %d is ENDED and the ledger records this "
+                             "allocation, but %s" % (pid or 0, outside))
+                    continue
+                fixture = True
+            refused = walls.check(path, has_git, git_is_fixture=fixture)
             if refused:
                 self.add(path, "scratch-alloc", size, INDETERMINATE, refused)
                 continue

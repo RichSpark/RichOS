@@ -32,9 +32,14 @@
 #   G8   kill -9 MID-HARNESS. A real allocation, a real SIGKILL, and then the
 #        real sweeper. The EXIT trap cannot run, so this is the exact condition
 #        of 2026-09-17 — and the sandbox must still be reaped, by the sweeper,
-#        with no session and no cooperation from the dead process.
+#        with no session and no cooperation from the dead process. The sandbox
+#        holds a fixture repository, as the engine's own suites' sandboxes do.
 #   G9   CONTROL for G8 — while the owner is ALIVE the same sandbox is kept.
 #        Without it G8 passes against a sweeper that deletes everything.
+#   G10  CONTROL — an ended directory under the allocator root with NO ledger
+#        row and a .git is kept: a name alone never makes a repository a fixture.
+#   G11  CONTROL — an ended, ledger-recorded allocation holding a linked
+#        checkout of a repository OUTSIDE it is kept.
 #
 # Exit 0 = every case passed; exit 1 = at least one failed.
 
@@ -191,6 +196,9 @@ cat >"$VICTIM_SCRIPT" <<VICTIM_EOF
 #!/usr/bin/env bash
 . "$ENGINE/scripts/lib/scratch.sh"
 D="\$(scratch_new killed-mid-harness)"
+# A fixture repository, as operator-fences-suite, quota-watch-test and
+# resource-waits-test build inside their allocations.
+mkdir -p "\$D/fixture-repo/.git/objects"
 printf '%s\n' "\$D" >"$VICTIM_OUT"
 # A trap that WOULD clean up, deliberately present, so this proves the SWEEPER
 # and not the trap: SIGKILL does not run it. This is the whole point.
@@ -267,6 +275,29 @@ CFG
             bad "G8  a SIGKILLed harness's sandbox SURVIVED the sweep. This is"
             bad "     2026-09-17 exactly: the EXIT trap cannot run and nothing else did."
         fi
+    fi
+
+    # G10 / G11: ended owners (a pid that cannot be running), age floor 0, nothing open.
+    ROOT_DIR="$(dirname "$VICTIM_DIR")"
+    NOROW="$ROOT_DIR/99999990-noledger-aaaaaaaa"
+    mkdir -p "$NOROW/repo/.git/objects"
+    OUTSIDE_REPO="$SANDBOX/outside-repo"
+    mkdir -p "$OUTSIDE_REPO/.git/worktrees/linked"
+    LINKED="$ROOT_DIR/99999991-linked-bbbbbbbb"
+    mkdir -p "$LINKED/checkout"
+    printf 'gitdir: %s/.git/worktrees/linked\n' "$OUTSIDE_REPO" >"$LINKED/checkout/.git"
+    printf '{"path":"%s","label":"linked","pid":99999991,"ppid":1,"session":"","cwd":"","created":"2026-01-01T00:00:00Z","ttl_minutes":1,"event":"new"}\n' \
+        "$LINKED" >>"$(scratch_ledger)"
+    sweep >/dev/null 2>&1 || true
+    if [ -d "$NOROW/repo/.git" ]; then
+        ok "G10 CONTROL: a .git under the allocator root with no ledger row is kept"
+    else
+        bad "G10 a repository with no ledger row was deleted on its NAME alone"
+    fi
+    if [ -f "$LINKED/checkout/.git" ]; then
+        ok "G11 CONTROL: an ended allocation holding a checkout of an outside repository is kept"
+    else
+        bad "G11 a linked checkout of a repository outside the allocation was deleted"
     fi
 fi
 
