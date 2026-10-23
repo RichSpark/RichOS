@@ -178,8 +178,23 @@ def sessions_dir():
     return os.path.join(base, "sessions")
 
 
+# The system tool directories, appended to PATH when missing. lsof lives in
+# /usr/sbin on macOS, and the scheduled job's PATH (launchd's, set by the plist
+# install writes) does not carry /usr/sbin. Measured 2026-10-23 under a launchd
+# job with that PATH and ProcessType Background: `lsof` raised FileNotFoundError,
+# while /usr/sbin/lsof answered with exit 0 in 0.51 s. Every scheduled run since
+# reported "THE OPEN-FILE TABLE COULD NOT BE READ" and decided nothing under
+# $TMPDIR or /private/tmp. Appended, never prepended, so a caller's own PATH
+# still wins.
+_SYSTEM_TOOL_DIRS = ("/usr/sbin", "/sbin")
+
+
 def _ps_env():
-    return dict(os.environ, LC_ALL="C", LANG="C", TZ="UTC0")
+    env = dict(os.environ, LC_ALL="C", LANG="C", TZ="UTC0")
+    path = [d for d in (env.get("PATH") or "").split(os.pathsep) if d]
+    path += [d for d in _SYSTEM_TOOL_DIRS if d not in path]
+    env["PATH"] = os.pathsep.join(path)
+    return env
 
 
 def session_process_names():
