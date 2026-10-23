@@ -787,7 +787,35 @@ def recipe_of(item):
 def input_identity(item, args, logdir, snapshot=None, caller=None):
     environment = execution_environment(item, caller)
     result = proof_evidence.recipe_identity(ROOT, recipe_of(item), environment, snapshot)
-    if result.get("fresh") and item.label not in proof_evidence.VERIFIES_OWN_INPUTS and item.argv:
+    native_toolchain_failed = False
+    if item.label == "native-ios-ui" and not result.get("fresh"):
+        # /usr/bin/xcodebuild is a shim: its bytes alone do not identify the selected
+        # Xcode, SDK or simulator runtime. Read their identities without booting a device.
+        import ios_ui_shards
+        commands = (("xcode-select", "-p"), ("xcodebuild", "-version"),
+                    ("xcodegen", "--version"), ("swiftc", "--version"),
+                    ("xcrun", "--find", "swiftc"),
+                    ("xcrun", "--sdk", "iphonesimulator", "--show-sdk-build-version"),
+                    ("xcrun", "simctl", "list", "runtimes", "available", "-j"))
+        try:
+            toolchain = [
+                subprocess.check_output(command, env=environment, text=True,
+                                        stderr=subprocess.STDOUT, timeout=15).strip()
+                for command in commands]
+            # simctl updates lastUsage whenever a runtime is used. Bind its build and
+            # configuration, not that timestamp, and canonicalize JSON object ordering.
+            runtimes = json.loads(toolchain[-1])
+            for runtime in runtimes["runtimes"]:
+                runtime.pop("lastUsage", None)
+            toolchain[-1] = runtimes
+            result["native_toolchain"] = proof_evidence.digest(toolchain)
+            result["native_environment"] = proof_evidence.digest(ios_ui_shards.retry_settings(
+                {**environment, "RICHOS_TEST_SCOPE": "full"}))
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+            result = {"fresh": "native toolchain identity unavailable: " + str(exc)}
+            native_toolchain_failed = True
+    if (result.get("fresh") and not native_toolchain_failed
+            and item.label not in proof_evidence.VERIFIES_OWN_INPUTS and item.argv):
         # No reviewed contract: keyed by the whole checkout's content, so a retry of the same
         # tree (--resume, a refused land tried again, the push after it) keeps what passed
         # (proof_evidence.WHOLE_CHECKOUT). Engine units too (2026-10-02): they were `fresh`, so

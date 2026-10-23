@@ -15037,8 +15037,8 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "6ce1aac412d14a7d7f815567b3ae6882ad70c31023521d7cb6334fd3b438d174",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+          "sha256": "540d6e49814a4ba3915dc1418fba876e83838132a6cab8786dc5e8b596dc7b4f",
+          "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         }
       ]
     },
@@ -15166,8 +15166,8 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "6ce1aac412d14a7d7f815567b3ae6882ad70c31023521d7cb6334fd3b438d174",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+          "sha256": "540d6e49814a4ba3915dc1418fba876e83838132a6cab8786dc5e8b596dc7b4f",
+          "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         },
         {
           "root": "repository",

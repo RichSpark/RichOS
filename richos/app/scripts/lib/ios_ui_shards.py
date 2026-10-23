@@ -229,6 +229,23 @@ def attribution(bundle, rows, build_stamp, out, runner=subprocess.run):
     return bad
 
 
+def retry_settings(environment=None):
+    """Semantic native-test settings, excluding invocation ownership and output locations."""
+    run_fields = {"RICHOS_AUTOCHECK_ACTIVE", "RICHOS_AUTOCHECK_RETRY_REASON", "RICHOS_PROOF_RUN",
+                  "RICHOS_TEST_DEVICE_RUN_ID", "RICHOS_TEST_DEVICE_OWNER_PID", "RICHOS_IOS_POOL_WAIT",
+                  "RICHOS_VERIFICATION_CONTAMINATION", "RICHOS_VERIFICATION_RUNNER_WAIT",
+                  "RICHOS_VERIFICATION_CHECKOUT", "RICHOS_VERIFICATION_OWNER", "RICHOS_MACHINE_WORKERS",
+                  "RICHOS_SIMULATOR_CACHE_HELD",
+                  # Ownership tags and output addresses change on every attempt. They do
+                  # not change the built app, test selection or simulator configuration.
+                  "RICHOS_PROCESS_SCOPE", "RICHOS_HOST_SHIELD_LOG", "RICHOS_HOST_SHIELD_RUNS",
+                  "RICHOS_HOST_SHIELD_TOOL", "RICHOS_PROOF_RUN_SLOT_HELD", "RICHOS_PROOF_RUN_SLOT_FDS",
+                  "RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION"}
+    return sorted((k, v) for k, v in (os.environ if environment is None else environment).items()
+                      if k.startswith(("RICHOS_", "DEVELOPER_", "SDKROOT", "TOOLCHAINS"))
+                      and k not in run_fields and not k.startswith(("RICHOS_WORKER_", "RICHOS_TEST_RESULTS_")))
+
+
 def retry_identity(root, runtime, devices, selectors):
     """Bind retained cases to actual files (including untracked source), tools and settings."""
     root = Path(root)
@@ -243,21 +260,8 @@ def retry_identity(root, runtime, devices, selectors):
     hashes = [(str(p.relative_to(root)), hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(files)]
     tools = [(shutil.which(name), subprocess.check_output([name, flag], text=True))
              for name, flag in (("xcodebuild", "-version"), ("xcodegen", "--version"), ("swiftc", "--version"))]
-    run_fields = {"RICHOS_AUTOCHECK_ACTIVE", "RICHOS_AUTOCHECK_RETRY_REASON", "RICHOS_PROOF_RUN",
-                  "RICHOS_TEST_DEVICE_RUN_ID", "RICHOS_TEST_DEVICE_OWNER_PID", "RICHOS_IOS_POOL_WAIT",
-                  "RICHOS_VERIFICATION_CONTAMINATION", "RICHOS_VERIFICATION_RUNNER_WAIT",
-                  "RICHOS_VERIFICATION_CHECKOUT", "RICHOS_VERIFICATION_OWNER", "RICHOS_MACHINE_WORKERS",
-                  "RICHOS_SIMULATOR_CACHE_HELD",
-                  # Ownership tags and output addresses change on every attempt. They do
-                  # not change the built app, test selection or simulator configuration.
-                  "RICHOS_PROCESS_SCOPE", "RICHOS_HOST_SHIELD_LOG", "RICHOS_HOST_SHIELD_RUNS",
-                  "RICHOS_HOST_SHIELD_TOOL", "RICHOS_PROOF_RUN_SLOT_HELD", "RICHOS_PROOF_RUN_SLOT_FDS",
-                  "RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION"}
-    settings = sorted((k, v) for k, v in os.environ.items()
-                      if k.startswith(("RICHOS_", "DEVELOPER_", "SDKROOT", "TOOLCHAINS"))
-                      and k not in run_fields and not k.startswith(("RICHOS_WORKER_", "RICHOS_TEST_RESULTS_")))
     return hashlib.sha256(json.dumps([str(root.resolve()), hashes, tools, runtime,
-                                     devices, selectors, settings, "UTC", "en_US"]).encode()).hexdigest()
+                                     devices, selectors, retry_settings(), "UTC", "en_US"]).encode()).hexdigest()
 
 
 def retained(work, i, build_stamp, runner=subprocess.run):
