@@ -213,8 +213,10 @@ pub fn issue_link_ok(url: &str, number: Option<u64>, repository: &str) -> Option
 /// The approved image `n`'s bytes, from the draft (the caller's loader).
 pub type Images<'a> = &'a dyn Fn(&Entry) -> Option<Vec<u8>>;
 
-/// What one relay answer means: the issue link on the configured repository (`delivered`, or
-/// `created_checking_images`: the issue exists), a step that went through (`next`), or not sent.
+/// What one relay answer means: `delivered` with the issue link on the configured repository
+/// (the issue and every screenshot confirmed), a step that went through (`next`), or not sent.
+/// Anything else, `created_checking_images` (fewer screenshots confirmed than sent) included,
+/// is not sent: Send again is offered.
 fn read(t: &Transport, next: &[&str], repository: &str, now: u64) -> Result<Option<State>, State> {
     let not_sent = |why: NotSent| State::NotSent { why, at: now };
     match t {
@@ -228,7 +230,7 @@ fn read(t: &Transport, next: &[&str], repository: &str, now: u64) -> Result<Opti
                 if next.contains(&state) {
                     return Ok(None);
                 }
-                if let (true, Some(u)) = (matches!(state, "delivered" | "created_checking_images"), b["issue_url"].as_str()) {
+                if let (true, Some(u)) = (state == "delivered", b["issue_url"].as_str()) {
                     if let Some(n) = issue_link_ok(u, b["issue_number"].as_u64(), repository) {
                         return Ok(Some(State::Submitted { issue_url: u.to_string(), issue_number: n, at: now }));
                     }
@@ -359,6 +361,21 @@ mod tests {
         assert_eq!(register["manifest"][1]["filename"], "screenshot-2.png");
         assert_eq!((&sent[1].2, &sent[2].2), (&images[0], &images[1]), "the screenshots exactly as approved");
         assert_eq!(sent[3].1["receipt_secret"], register["receipt_secret"], "one receipt for the whole send");
+    }
+
+    /// The live relay answers `created_checking_images` when fewer screenshots were confirmed
+    /// than sent (report-worker.mjs view()): that is not "Report submitted".
+    #[test]
+    fn an_issue_with_screenshots_not_all_confirmed_is_not_sent() {
+        let (a, images) = approved_with(1);
+        let r = script(vec![
+            ok(json!({"state": "ready", "missing": []})),
+            ok(json!({"state": "ready", "missing": []})),
+            ok(json!({"state": "created_checking_images", "issue_url": LINK, "issue_number": 42, "images_confirmed": 0, "images_expected": 1})),
+        ]);
+        let s = send(&a, &|e: &Entry| images.get(e.order as usize - 1).cloned(), &dest(), &r, 5);
+        assert!(matches!(s, State::NotSent { .. }), "only delivered is success: {s:?}");
+        assert!(s.may_send(), "Send again is offered");
     }
 
     #[test]
