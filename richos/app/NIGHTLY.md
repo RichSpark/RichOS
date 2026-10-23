@@ -13,7 +13,7 @@ python3 richos/app/scripts/nightly-local.py check
 ```
 
 To build a nightly with the full release gates and have the lead finish publication
-after QA and changelog review:
+after QA and Newt’s completed notes:
 
 ```sh
 python3 richos/app/scripts/nightly-local.py release --gates-at-once all --simulated-phones 2
@@ -59,8 +59,9 @@ CEO ruling, 2026-09-17 (`ceo-decisions.md` §45 addendum 2): QA walks the
 nightly's own candidate before it is published; publication happens only on a
 READY verdict. Both `build` and `release` stop at the signed candidate and
 automatically request its changelog worker. `release` retains its full-gate policy;
-`build` can reuse qualified gates. Rich publishes after the accepted candidate’s
-notes have been independently reviewed, landed and pushed to main:
+`build` can reuse qualified gates. Rich publishes after QA accepts the candidate,
+Newt finishes its source facts and notes and the matching entry is landed and
+pushed to main:
 
 ```sh
 python3 richos/app/scripts/nightly-local.py build --gates-at-once all --simulated-phones 2
