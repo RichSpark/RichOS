@@ -2084,6 +2084,12 @@ See [rollback record](../../docs/verification/owned-outcome/ROLLBACK-2026-09-09.
 
 `crates/richos-user-update/tests/startup_exec.rs` covers the update startup executor.
 
+`crates/richdoctor-core/tests/session.rs` covers RichDoctor's restricted Claude Code session
+against a stand-in CLI: the inventory check at the first message, failure naming and that
+stopping a session ends its whole process group. `crates/richdoctor-core/tests/profile_fixtures.rs`
+checks the shared screenshot format profile against the golden fixtures RichDoctor and the
+reporting relay both read (`richos/mobile/service/report/fixtures/`).
+
 The delivered engine is exercised by `tests/delivered_ecs_tests.rs`,
 `tests/delivered_loro_tests.rs` and `tests/engine_profile.rs`. Runtime delivery,
 owned processes, provider authentication and repository connections are covered

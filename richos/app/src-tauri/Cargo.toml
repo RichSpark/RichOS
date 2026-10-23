@@ -70,6 +70,9 @@ richos-core = { path = "../crates/richos-core" }
 richos-command = { path = "../crates/richos-command" }
 # Owner-only publication; never invokes the updater plugin's privileged macOS installer.
 richos-user-update = { path = "../crates/richos-user-update" }
+# RichDoctor's bundled install (src/richdoctor_install.rs): its installer only. Pure Rust over
+# crates already in this lockfile (plist, flate2, tar, sha2).
+richdoctor-core = { path = "../crates/richdoctor-core" }
 # Voice mode: native audio (cpal) + local whisper.cpp + macOS `say`. Kept OUT of the
 # richos-core workspace so `cargo test -p richos-core` never builds an audio stack.
 richos-voice = { path = "../crates/richos-voice" }

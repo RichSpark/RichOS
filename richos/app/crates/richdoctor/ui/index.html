@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!--
+  RichDoctor's help window: round 39 (richos-hq design/mockups/rounds/round-39/) and round 40's
+  screenshot flow (round-40/), built as drawn, copy included. The faces and tokens are the RichOS app's own files (fonts/fonts.css and
+  tokens.css, copied from richos/app/ui by crates/richdoctor/build.rs); doctor.css holds the round's
+  layouts; doctor.js drives the screens from the app's commands and events.
+-->
+<meta charset="utf-8">
+<title>RichDoctor</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="doctor.css">
+</head>
+<body>
+<div id="win" aria-label="RichDoctor">
+    <div id="wintitle" data-tauri-drag-region></div>
+    <div id="winbody">
+      <!-- 1. First opening -->
+      <section class="screen" id="s-first" aria-labelledby="first-h">
+        <div class="scroll">
+          <div id="unsaved-slot-first"></div>
+          <div class="brand"><img alt="" src="icon-128.png"><div><h1 id="first-h">RichDoctor</h1><p class="sub">Report a RichOS problem, even when RichOS cannot open.</p></div></div>
+          <div id="resume-card" class="card" hidden style="margin-bottom:20px">
+            <h2>Continue your unfinished report?</h2>
+            <p id="resume-desc" style="margin:6px 0 2px"></p>
+            <p class="soft" style="margin:0" id="resume-when"></p>
+            <div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn" data-act="new-report">Start a new report</button><button class="btn primary" data-act="resume">Continue</button></div>
+          </div>
+          <p id="richos-line" class="soft"></p>
+          <label class="lbl" for="desc">What went wrong?</label>
+          <div class="field"><textarea id="desc" rows="3" placeholder="For example: RichOS closes before its window opens." aria-describedby="desc-help"></textarea></div>
+          <p id="desc-help" class="soft" style="margin:8px 0 18px">A sentence or two is enough. RichDoctor asks the rest one question at a time.</p>
+          <div class="card">
+            <p><b>To help prepare your report</b>, RichDoctor can collect relevant RichOS diagnostic information from this Mac, remove private details it recognizes, and use your Claude Code account to ask a few questions and draft the report. Choosing Continue allows that investigation.</p>
+            <p><b>Nothing becomes public</b> until you have read the exact report and chosen Send report.</p>
+            <label class="check" style="margin-top:4px"><input type="checkbox" id="no-diag"><span>Do not collect diagnostic information from this Mac. The report will contain only what you describe.</span></label>
+          </div>
+          <div class="spacer"></div>
+          <div class="row" id="login-row">
+            <button class="sw" id="login-sw" role="switch" aria-checked="true" aria-labelledby="login-lbl" aria-describedby="login-help"></button>
+            <div class="grow"><div id="login-lbl" style="font-weight:600">Start at login</div><p id="login-help" class="soft" style="margin:0">RichDoctor can be ready in the menu bar when your Mac starts. It does nothing until you open it. You can change this in its menu.</p></div>
+          </div>
+        </div>
+        <div class="foot"><p id="first-foot-note" class="grow">Uses your own Claude Code account. No setup, commands, or GitHub login needed.</p><button class="btn" data-act="no-ai">Prepare without AI</button><button class="btn primary" data-act="continue">Continue</button></div>
+      </section>
+
+      <!-- 2. The conversation -->
+      <section class="screen" id="s-conv" aria-label="Help conversation" hidden>
+        <div class="scroll">
+          <div id="unsaved-slot-conv"></div>
+          <div class="id-row"><img alt="" src="icon-128.png"><div><div style="font-weight:600">RichDoctor</div><div class="soft" id="conv-sub">Investigating with your Claude Code account</div></div></div>
+          <div class="log" id="log" role="log" aria-live="polite" aria-relevant="additions"></div>
+          <div id="answer" class="answer" hidden>
+            <div class="field"><textarea id="answer-field" rows="1" aria-label="Your answer" placeholder="Type an answer, or choose one above"></textarea></div>
+            <button class="btn" data-act="send-answer">Answer</button>
+          </div>
+        </div>
+        <div class="foot">
+          <button class="btn link" data-act="cancel-inv" id="conv-cancel">Cancel</button>
+          <button class="btn link" data-act="add-shots" id="conv-image" aria-describedby="conv-image-help"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M3 14l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg><span>Add screenshots</span></button>
+          <span id="conv-image-help" hidden>PNG or JPEG files you have already made. You check each one before it is used. You can also drop or paste them here.</span>
+          <div class="grow"></div>
+          <button class="btn" data-act="prepare-now" id="conv-prepare">Prepare report now</button>
+          <button class="btn primary" data-act="to-review" id="conv-review" hidden>Review report</button>
+        </div>
+      </section>
+
+      <!-- 3. Review -->
+      <section class="screen" id="s-review" aria-labelledby="rv-h" hidden>
+        <div class="scroll">
+          <div id="unsaved-slot-review"></div>
+          <div id="rv-banner"></div>
+          <h1 id="rv-h" style="margin-bottom:6px">Review your report</h1>
+          <p class="soft" style="margin-bottom:18px">This is the exact text that will be sent, and every screenshot exactly as it will be shared. Change or remove anything. Private details RichDoctor recognized were already removed; it cannot know every private name or fact, so read it once.</p>
+          <div id="rv-notes"></div>
+          <div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="soft">Title</span><button class="btn link" id="rv-exact-toggle" aria-pressed="false" data-act="toggle-exact">Show as it will be sent</button></div>
+          <div class="rv-title" id="rv-title" contenteditable="true" spellcheck="false" aria-label="Report title, editable"></div>
+          <div id="rv-sections"></div>
+          <div id="rv-exact" class="well" hidden><div class="exact" id="rv-exact-text"></div></div>
+          <div class="spacer"></div>
+          <div class="well pub" id="rv-pub"></div>
+        </div>
+        <div class="foot" id="rv-foot">
+          <button class="btn link" data-act="back-conv" id="rv-back">Back</button>
+          <div class="grow"></div>
+          <button class="btn" data-act="save-later" id="rv-save">Save for later</button>
+          <button class="btn primary" data-act="send" id="rv-send">Send report</button>
+          <button class="btn primary" data-act="save-edit" id="rv-save-edit" hidden>Save edit</button>
+        </div>
+      </section>
+
+      <!-- 4. Delivery result -->
+      <section class="screen" id="s-result" aria-live="polite" hidden>
+        <div class="scroll">
+          <div id="unsaved-slot-result"></div>
+          <div id="result-body"></div>
+        </div>
+        <div class="foot" id="result-foot"></div>
+      </section>
+
+      <!-- 5. Saved reports -->
+      <section class="screen" id="s-saved" aria-labelledby="saved-h" hidden>
+        <div class="scroll">
+          <div id="unsaved-slot-saved"></div>
+          <h1 id="saved-h" style="margin-bottom:6px">Saved reports</h1>
+          <p class="soft" style="margin-bottom:18px">Reports are kept on this Mac until you send or delete them. A sent report's local copy is removed 30 days after sending; its link stays.</p>
+          <div class="list" id="saved-list"></div>
+        </div>
+        <div class="foot"><div class="grow"></div><button class="btn" data-act="close-saved">Done</button></div>
+      </section>
+
+      <!-- sheets -->
+      <!-- dropping files on the window -->
+      <div id="drop" hidden aria-hidden="true"><div class="zone"><svg viewBox="0 0 20 20" aria-hidden="true" class="big"><rect x="2.5" y="4" width="15" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M3 14l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg><p><b>Drop screenshots to add them</b></p><p class="soft">PNG or JPEG. You check each one before it is used.</p></div></div>
+      <!-- the Mac's own open panel: PNG or JPEG, several at a time -->
+      <input type="file" id="img-file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" multiple hidden>
+
+      <!-- the image review: one sheet, one image at a time, in two steps -->
+      <div class="sheet-scrim" id="sheet-image" hidden>
+        <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="img-h">
+          <div class="sh-body">
+            <div class="queue" id="img-queue" role="group" aria-label="Screenshots being added"></div>
+            <h2 id="img-h"></h2>
+            <p id="img-p"></p>
+            <div id="img-cover" hidden>
+              <div class="img-stage" id="img-stage" aria-label="Screenshot preview. Press C to add a cover." tabindex="0"><img id="img-work" alt="" draggable="false"></div>
+              <div class="img-tools"><button class="btn" data-act="add-cover">Add a cover</button><span class="soft">Keyboard: <span class="kbd">C</span> adds a cover, arrow keys move it, <span class="kbd">Shift</span> + arrows resize it, <span class="kbd">Delete</span> removes it.</span></div>
+            </div>
+            <div id="img-check" hidden>
+              <div class="final"><img id="img-final" alt=""></div>
+              <div class="final-meta"><span class="badge" id="img-final-n">1</span><p id="img-final-meta"></p></div>
+              <div id="img-fit"></div>
+            </div>
+            <div id="img-problem" class="problem" role="status" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M10 2.8l8 14H2z"/><path stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M10 8v4"/><circle cx="10" cy="14.3" r="1" fill="currentColor"/></svg><div id="img-problem-text"></div></div>
+          </div>
+          <div class="sh-foot" id="img-foot"></div>
+        </div>
+      </div>
+
+      <div class="sheet-scrim" id="sheet-email" hidden>
+        <div class="sheet narrow" role="dialog" aria-modal="true" aria-labelledby="em-h">
+          <div class="sh-body" id="em-body"></div>
+          <div class="sh-foot" id="em-foot"></div>
+        </div>
+      </div>
+
+      <div class="sheet-scrim" id="sheet-delete" hidden>
+        <div class="sheet narrow" role="dialog" aria-modal="true" aria-labelledby="del-h">
+          <div class="sh-body"><h2 id="del-h">Delete this report from this Mac?</h2><p id="del-p"></p></div>
+          <div class="sh-foot"><div class="grow"></div><button class="btn" data-act="close-sheet">Cancel</button><button class="btn danger" data-act="confirm-delete">Delete local copy</button></div>
+        </div>
+      </div>
+
+      <div class="sheet-scrim" id="sheet-save" hidden>
+        <div class="sheet narrow" role="dialog" aria-modal="true" aria-labelledby="sv-h">
+          <div class="sh-body"><h2 id="sv-h">Save report and screenshots</h2><p id="sv-p"></p></div>
+          <div class="sh-foot"><div class="grow"></div><button class="btn" data-act="close-sheet">Cancel</button><button class="btn primary" data-act="confirm-save">Save…</button></div>
+        </div>
+      </div>
+
+      <div id="toast" role="status" hidden></div>
+    </div>
+  </div>
+<script src="doctor.js"></script>
+</body>
+</html>
