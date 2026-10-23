@@ -573,7 +573,7 @@
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/hooks/guard-stated-actions.sh",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/hooks/ass-kicker.sh",
             "timeout": 20
           },
           {

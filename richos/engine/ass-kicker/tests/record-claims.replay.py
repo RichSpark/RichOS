@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""record-claims.replay.py — replay ARM 3 of guard-stated-actions.py over real
+"""record-claims.replay.py — replay ARM 3 of ass-kicker.py over real
 lead transcripts, exactly as the Stop payload would present each turn end.
 
     python3 ass-kicker/tests/record-claims.replay.py <transcripts-dir> \
@@ -30,7 +30,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-spec = importlib.util.spec_from_file_location("gsa", os.path.join(HERE, "..", "guard-stated-actions.py"))
+spec = importlib.util.spec_from_file_location("gsa", os.path.join(HERE, "..", "ass-kicker.py"))
 gsa = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gsa)
 

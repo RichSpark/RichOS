@@ -1298,7 +1298,7 @@ notice-ceo-unasked.sh|Stop
 notice-unasked-deferral.sh|Stop
 guard-agent-state-claims.sh|Stop
 guard-idle-land.sh|Stop
-guard-stated-actions.sh|Stop
+ass-kicker.sh|Stop
 commit-ceo-inputs.sh|UserPromptSubmit
 left-off-report.sh|UserPromptSubmit
 failure-type-lookup.sh|UserPromptSubmit

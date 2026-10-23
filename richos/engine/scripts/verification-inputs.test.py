@@ -1861,7 +1861,7 @@ class Closure(unittest.TestCase):
         document = json.loads((HERE / 'lib/verification-dependencies.json').read_text())
         graph = inputs.Dependencies(HERE.parent, document)
         units = ('scripts/hooks/unstarted-rows.test.sh',
-                 'ass-kicker/tests/guard-stated-actions.test.sh',
+                 'ass-kicker/tests/ass-kicker.test.sh',
                  'scripts/hooks/contract-integrity.test.sh:SA')
         for unit in units:
             closure = graph.closure(document['units'][unit])
@@ -1872,7 +1872,7 @@ class Closure(unittest.TestCase):
         for helper, affected in (
                 ('scripts/hooks/unstarted-rows.mutation.sh', units[:1]),
                 ('scripts/lib/row-currency.py#fixture-records', units[:1]),
-                ('ass-kicker/guard-stated-actions.py', units[1:]),
+                ('ass-kicker/ass-kicker.py', units[1:]),
                 ('scripts/lib/stop-session-recovery.py', units[1:]),
                 ('ass-kicker/tests/stated-actions.mutation.sh', units[2:])):
             previous = document['nodes'].pop(helper)

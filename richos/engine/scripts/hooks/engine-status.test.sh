@@ -383,7 +383,7 @@ expect_fraction "1a  baseline: banner reports ${EXPECT_N}/${EXPECT_N}, matching 
 # ledgers, read at last) and notice-mechanical-findings.sh (the Stop-time sweep
 # that turns a skipped suite, an unrun harness or an untested hook into a row of
 # the working record).
-# 47 -> 48 on 2026-09-02: guard-stated-actions.sh was wired on Stop — the
+# 47 -> 48 on 2026-09-02: ass-kicker.sh was wired on Stop — the
 # guard that refuses a turn whose REPORT does not match its ACTIONS: a stated
 # dispatch the turn never made ("Frank breaks it first", no Agent call), or a
 # teammate's completion answered with a report and nothing started or declared.
@@ -971,7 +971,7 @@ guard-resume-isolation.sh
 guard-row-currency-commits.sh
 guard-sealed-worktree.sh
 guard-stale-staging.sh
-guard-stated-actions.sh
+ass-kicker.sh
 guard-stop-live-work.sh
 guard-unresolved-claims.sh
 guard-vendoring-commits.sh

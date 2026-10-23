@@ -107,7 +107,7 @@ class EvidenceTests(unittest.TestCase):
         env = {**own_home(self.root), "RICHOS_SA_ENTITY_ROOT": str(self.root),
                "RICHOS_SA_TEAMS_DIR": str(self.root / "teams")}
         def check():
-            return subprocess.run([sys.executable, str(ENGINE / "ass-kicker/guard-stated-actions.py")],
+            return subprocess.run([sys.executable, str(ENGINE / "ass-kicker/ass-kicker.py")],
                                   input=json.dumps(stop), text=True, capture_output=True, env=env)
         self.assertEqual(check().returncode, 2)
         self.event("PreToolUse", tool_use_id="launch", tool_name="Agent",
