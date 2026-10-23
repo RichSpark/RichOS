@@ -3186,7 +3186,7 @@
       "qualification_unit": "engine scripts/hooks/guard-unresolved-claims.test.sh",
       "isolation": "private-home-v1"
     },
-    "engine ass-kicker/tests/guard-stated-actions.test.sh": {
+    "engine ass-kicker/tests/ass-kicker.test.sh": {
       "paths": [
         "richos/engine",
         "richos/app/scripts"
@@ -3245,7 +3245,7 @@
       "environment": [],
       "external": [],
       "qualification": "docs/development/verification-input-qualifications.json",
-      "qualification_unit": "engine ass-kicker/tests/guard-stated-actions.test.sh",
+      "qualification_unit": "engine ass-kicker/tests/ass-kicker.test.sh",
       "isolation": "private-home-v1"
     },
     "engine scripts/hooks/guard-worktree-removal.test.sh": {

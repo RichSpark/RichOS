@@ -5964,6 +5964,7 @@ def merge_and_land(ref, me="", message=""):
     chain = _chain(rec)
     merged = []
     todo = []
+    bases = {}                  # {tip: the integration branch's tip it merges into}
     for repo, b in _branch_targets(chain):
         main = main_checkout(repo)
         target, tip, why_not = integration_target(chain, repo)
@@ -5975,11 +5976,12 @@ def merge_and_land(ref, me="", message=""):
         if not t or is_ancestor(main, t, tip):
             continue
         todo.append((repo, b, main, t))
+        bases[t] = tip
     # A branch whose tip another branch of this work already contains comes in
     # with that one, so it is neither merged nor reviewed on its own.
     todo = [x for x in todo
             if not any(y[2] == x[2] and y[3] != x[3] and is_ancestor(x[2], x[3], y[3]) for y in todo)]
-    reviews = _review_check(todo, _governing_entities(chain))
+    reviews = _review_check(todo, _governing_entities(chain), bases)
     for main in sorted({x[2] for x in todo}):
         _bring_fence_current(main)
     taken = []                  # [(main, holder args)]: the leases THIS command took, released at its end
@@ -6213,7 +6215,7 @@ def _bring_fence_current(main):
                          "(%s).\n" % (main, ", ".join(replaced)))
 
 
-def _review_check(todo, entities=()):
+def _review_check(todo, entities=(), bases=None):
     """NO WORK LANDS WITHOUT A PASSING REVIEW OF EXACTLY ITS TIP (CEO §113;
     richos-hq plan 2026-10-09 §2.5 and §4 row 3). For every branch about to be
     merged into a reviewed repository (_review_ledgers: one the SECOND_REVIEW_REPOS
@@ -6224,14 +6226,18 @@ def _review_check(todo, entities=()):
     cannot be established is refused as well. Asked here before git's merge
     gate spends its minutes, with the fence on, off or not installed; the fence
     asks the same question of a plain `git merge`. `entities`: the governing
-    entities (_governing_entities). Returns {tip: the merge message's review
-    paragraph}."""
+    entities (_governing_entities). `bases`: {tip: the integration branch's
+    tip}; a branch whose changes over it are all release notes is asked
+    nothing (F.notes_only), against the main checkout's HEAD when absent.
+    Returns {tip: the merge message's review paragraph}."""
     if not todo:
         return {}
     F = _fence_program()
     registry = _registry_entity_map(F)
     out, refusals = {}, []
     for _repo, b, main, t in todo:
+        if F.notes_only(main, (bases or {}).get(t) or "HEAD", t):
+            continue                     # release notes only: no review is asked (F.RELEASE_NOTES)
         listed, unknown, recorded = _declared_review_listing(F, entities, main, registry)
         if unknown:
             refusals.append("=== SECOND REVIEW: %s was not merged into %s ===\n  Whether %s is reviewed cannot "

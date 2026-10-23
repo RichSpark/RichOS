@@ -11,7 +11,7 @@
 # CASE — not merely somewhere.
 #
 # Three things are asserted per mutant:
-#   1. guard-stated-actions.test.sh FAILS,
+#   1. ass-kicker.test.sh FAILS,
 #   2. the SPECIFIC case fails (a red elsewhere is an unrelated red),
 #   3. the mutation actually applied (a needle that matched nothing gives a
 #      green run that looks like a green run, which is the same trap again).
@@ -71,10 +71,10 @@ MUT_WALL_T0="$(sw_now_ms)"
 build() {
     local dir="$1"
     mkdir -p "$dir/scripts/hooks" "$dir/scripts/lib" "$dir/ass-kicker/tests"
-    cp "$ENGINE_ROOT/ass-kicker/guard-stated-actions.py" "$dir/ass-kicker/"
-    cp "$ENGINE_ROOT/ass-kicker/tests/guard-stated-actions.test.sh" \
+    cp "$ENGINE_ROOT/ass-kicker/ass-kicker.py" "$dir/ass-kicker/"
+    cp "$ENGINE_ROOT/ass-kicker/tests/ass-kicker.test.sh" \
        "$ENGINE_ROOT/ass-kicker/tests/record-claims.replay.py" "$dir/ass-kicker/tests/"
-    cp "$ENGINE_ROOT/scripts/hooks/guard-stated-actions.sh" \
+    cp "$ENGINE_ROOT/scripts/hooks/ass-kicker.sh" \
        "$ENGINE_ROOT/scripts/hooks/turn-manifest.py" \
        "$ENGINE_ROOT/scripts/hooks/guard-idle-land.py" "$dir/scripts/hooks/"
     cp "$ENGINE_ROOT/scripts/lib/resolve-roots.sh" \
@@ -85,7 +85,7 @@ build() {
 
 # A missing relocation dependency must not count as a killed mutant.
 build "$SANDBOX/control"
-if ! bash "$SANDBOX/control/ass-kicker/tests/guard-stated-actions.test.sh" >"$SANDBOX/control/out.txt" 2>&1; then
+if ! bash "$SANDBOX/control/ass-kicker/tests/ass-kicker.test.sh" >"$SANDBOX/control/out.txt" 2>&1; then
     echo "FATAL: the intact stated-actions sandbox is red; mutation results would be meaningless." >&2
     cat "$SANDBOX/control/out.txt" >&2
     exit 1
@@ -101,7 +101,7 @@ _mutant_body() {
         return 1
     fi
 
-    bash "$dir/ass-kicker/tests/guard-stated-actions.test.sh" >"$dir/out.txt" 2>&1
+    bash "$dir/ass-kicker/tests/ass-kicker.test.sh" >"$dir/out.txt" 2>&1
     local rc=$?
     if [ "$rc" -eq 0 ]; then
         printf '  FAIL  %s — the suite still PASSED without this property.\n' "$name"
@@ -127,8 +127,8 @@ mutant() {
 
 echo "=== stated-actions gate: every property, proven load-bearing by removing it ==="
 
-H="scripts/hooks/guard-stated-actions.sh"
-P="ass-kicker/guard-stated-actions.py"
+H="scripts/hooks/ass-kicker.sh"
+P="ass-kicker/ass-kicker.py"
 
 # --- 1. IT BLOCKS ----------------------------------------------------------
 mutant does-not-block "a." "$P" \

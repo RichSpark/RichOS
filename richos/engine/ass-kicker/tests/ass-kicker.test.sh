@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# guard-stated-actions.test.sh — regression tests for the Stop-time gate that
+# ass-kicker.test.sh — regression tests for the Stop-time gate that
 # refuses a turn whose REPORT does not match its ACTIONS
-# (scripts/hooks/guard-stated-actions.sh + ass-kicker/guard-stated-actions.py).
+# (scripts/hooks/ass-kicker.sh + ass-kicker/ass-kicker.py).
 #
 # THE REAL FAILURES ARE REPLAYED HERE BY SHAPE, WITH THE REAL SENTENCES.
 #   The two ARM 1 sentences are the lead's own words from 2026-09-02 and are
@@ -65,7 +65,7 @@
 #   RECORD
 #     (z)  an observation line is appended
 #
-# Run directly: ass-kicker/tests/guard-stated-actions.test.sh
+# Run directly: ass-kicker/tests/ass-kicker.test.sh
 # Exit 0 = all pass; exit 1 = at least one failure.
 
 set -uo pipefail
@@ -73,7 +73,7 @@ set -uo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_ROOT="$(cd "$TEST_DIR/../.." && pwd)"
 SCRIPT_DIR="$ENGINE_ROOT/scripts/hooks"
-HOOK="$SCRIPT_DIR/guard-stated-actions.sh"
+HOOK="$SCRIPT_DIR/ass-kicker.sh"
 unset CLAUDE_PROJECT_DIR
 
 PASS=0
@@ -81,7 +81,7 @@ FAIL=0
 ok()  { printf '  PASS  %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  FAIL  %s\n         %s\n' "$1" "$2"; FAIL=$((FAIL + 1)); }
 
-SANDBOX="$(mktemp -d -t guard-stated-actions.XXXXXX)"
+SANDBOX="$(mktemp -d -t ass-kicker.XXXXXX)"
 trap 'rm -rf "$SANDBOX"' EXIT
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 
@@ -268,7 +268,7 @@ FRANK="Design 4 landed, and it found something that reframes the whole eleven da
 I'm not accepting it on its summary. Frank breaks it first, and I want him attacking whether −66% is still too generous now that the platform's own record turns out to exist."
 FIN_REPORT="Both arms are in, and they answer the question that has consumed eleven days. The design holds."
 
-echo "=== guard-stated-actions: the report must match the turn ==="
+echo "=== ass-kicker: the report must match the turn ==="
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -639,6 +639,44 @@ mk_tr "$TR_ADD_U" "[{\"prompt\":\"go\"},{\"bash\":$(js "cd $ENTITY && echo x >> 
 run_hook "$TR_ADD_U" "Noted. The numbering goes in after the next nightly: \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
 silent && ok "R48. review 5: a tracked note file committed after 'git add -u': SILENT" || bad "R48. add -u" "rc=$RC out=$OUT"
 
+# CEO 2026-10-23: "So, it wasn't on your fucking follow-up list?" A reply that
+# puts an item on the follow-up list is backed only by a committed change to it.
+FUP_REPO="$SANDBOX/richos-hq"
+mkdir -p "$FUP_REPO/docs/plans"
+git -C "$FUP_REPO" init -q -b main . >/dev/null 2>&1
+git -C "$FUP_REPO" config user.email t@t.t >/dev/null 2>&1
+git -C "$FUP_REPO" config user.name t >/dev/null 2>&1
+git -C "$FUP_REPO" config core.hooksPath "$SANDBOX/nohooks" >/dev/null 2>&1
+printf '# follow-ups\n' > "$FUP_REPO/docs/plans/follow-ups.md"
+git -C "$FUP_REPO" add -A >/dev/null 2>&1; git -C "$FUP_REPO" commit -qm seed >/dev/null 2>&1
+TR_FUP_COMMIT="$SANDBOX/fup-commit.jsonl"
+mk_tr "$TR_FUP_COMMIT" "[{\"prompt\":\"go\"},{\"bash\":$(js "cd $FUP_REPO && cat >> docs/plans/follow-ups.md <<'EOF'
+- number the next nightly
+EOF")},{\"bashout\":[$(js "cd $FUP_REPO && git add docs/plans/follow-ups.md && git commit -m 'follow-up'"),\"[main 4b1d9e2a] follow-up\"]}]"
+
+run_hook "$TR_MEM_WRITE" "That's on the follow-up list for after the nightly"
+alerted 'follow-ups.md' && ok "R49. 2026-10-23: 'That's on the follow-up list for after the nightly', memory write only: ALERTED" || bad "R49. on the follow-up list" "rc=$RC out=$OUT"
+
+run_hook "$TR_BASH" "I've added it to the follow-ups."
+alerted 'follow-ups.md' && ok "R50. 'added to the follow-ups' in a turn that wrote nothing: ALERTED" || bad "R50. added to the follow-ups" "rc=$RC out=$OUT"
+
+run_hook "$TR_REPO_COMMIT" "I've added it to the follow-ups."
+alerted 'follow-ups.md' && ok "R51. 'added to the follow-ups' backed only by a commit to ANOTHER file: ALERTED" || bad "R51. other file" "rc=$RC out=$OUT"
+
+run_hook "$TR_FUP_COMMIT" "That's on the follow-up list for after the nightly"
+silent && ok "R52. 'on the follow-up list' with a committed change to the follow-up list in this turn: SILENT" || bad "R52. list committed" "rc=$RC out=$OUT"
+
+# A negation, modal or subordinate word in an EARLIER clause does not silence
+# the claim: only the claim's own clause is checked.
+run_hook "$TR_BASH" "It isn't in tonight's release, but it's on the follow-up list for after the nightly."
+alerted 'follow-ups.md' && ok "R53. 'isn't' in an earlier clause, then 'on the follow-up list': ALERTED" || bad "R53. earlier negation" "rc=$RC out=$OUT"
+
+run_hook "$TR_BASH" "The fix will ship later; I've added it to the follow-ups."
+alerted 'follow-ups.md' && ok "R54. 'will' in an earlier clause, then 'added to the follow-ups': ALERTED" || bad "R54. earlier modal" "rc=$RC out=$OUT"
+
+run_hook "$TR_BASH" "After checking the release, I've added it to the follow-ups."
+alerted 'follow-ups.md' && ok "R55. a completed 'After checking X,' preface, then 'added to the follow-ups': ALERTED" || bad "R55. completed preface" "rc=$RC out=$OUT"
+
 run_hook "$TR_MEM_WRITE" "Noted that the build is green."
 silent && ok "R39. 'Noted that the build is green.' stays an acknowledgment: SILENT" || bad "R39. noted that" "rc=$RC out=$OUT"
 
@@ -717,15 +755,15 @@ run_hook "-" "$ZACH"
 # proves nothing).
 MIRROR="$SANDBOX/mirror"
 mkdir -p "$MIRROR/scripts/hooks" "$MIRROR/scripts/lib" "$MIRROR/ass-kicker"
-cp "$ENGINE_ROOT/ass-kicker/guard-stated-actions.py" "$MIRROR/ass-kicker/"
-cp "$SCRIPT_DIR/guard-stated-actions.sh" \
+cp "$ENGINE_ROOT/ass-kicker/ass-kicker.py" "$MIRROR/ass-kicker/"
+cp "$SCRIPT_DIR/ass-kicker.sh" \
    "$SCRIPT_DIR/turn-manifest.py" "$SCRIPT_DIR/guard-idle-land.py" "$MIRROR/scripts/hooks/"
 cp "$SCRIPT_DIR/../lib/resolve-roots.sh" "$SCRIPT_DIR/../lib/resolve-main-checkout.sh" \
    "$SCRIPT_DIR/../lib/stop-hook-notice.sh" "$MIRROR/scripts/lib/"
 BROKEN="$SANDBOX/broken"
 cp -R "$MIRROR" "$BROKEN"
 rm -f "$BROKEN/scripts/lib/resolve-roots.sh"
-run_hook "$TR_BASH" "$ZACH" false "$ENTITY" "$BROKEN/scripts/hooks/guard-stated-actions.sh"
+run_hook "$TR_BASH" "$ZACH" false "$ENTITY" "$BROKEN/scripts/hooks/ass-kicker.sh"
 if [ "$RC" -eq 0 ] && printf '%s' "$ERR" | grep -q 'BROKEN INSTALL'; then ok "x.  broken install (resolve-roots.sh absent): exit 0 + banner"
 else bad "x.  broken install" "rc=$RC err=$(printf '%s' "$ERR" | head -c 200)"; fi
 
@@ -738,7 +776,7 @@ else bad "y.  report-only" "rc=$RC err=$(printf '%s' "$ERR" | head -c 200)"; fi
 NODEP="$SANDBOX/nodep"
 cp -R "$MIRROR" "$NODEP"
 rm -f "$NODEP/scripts/hooks/guard-idle-land.py"
-run_hook "$TR_FIN" "$FIN_REPORT" false "$ENTITY" "$NODEP/scripts/hooks/guard-stated-actions.sh"
+run_hook "$TR_FIN" "$FIN_REPORT" false "$ENTITY" "$NODEP/scripts/hooks/ass-kicker.sh"
 if [ "$RC" -eq 0 ] && has_sysmsg "NOT RUNNING"; then ok "y2. guard-idle-land.py absent: the gate does not guess, exits 0, and the operator is TOLD"
 else bad "y2. dependency absent" "rc=$RC out=$(printf '%s' "$OUT" | head -c 200)"; fi
 
