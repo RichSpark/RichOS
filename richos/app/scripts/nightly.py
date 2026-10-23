@@ -1262,10 +1262,19 @@ def changelog_request(info):
                    previous_source=previous[1] if previous else None)
     if previous:
         git("merge-base", "--is-ancestor", previous[1], info["source_commit"])
+        paths = git("diff", "--no-ext-diff", "--no-renames", "--name-status", "-z",
+                    previous[1], info["source_commit"]).split("\0")
+        request["changed_files"] = [{"status": paths[i], "path": paths[i + 1]}
+                                    for i in range(0, len(paths) - 1, 2)]
+    else:
+        paths = git("ls-tree", "--full-tree", "-r", "--name-only", "-z",
+                    info["source_commit"]).split("\0")
+        request["changed_files"] = [{"status": "A", "path": path} for path in paths if path]
     revision = (previous[1] + ".." if previous else "") + info["source_commit"]
-    # Include ordinary commits as well as merges. Release-branch lands and empty ranges
-    # are both valid; the writer consolidates user-visible changes, not Git operations.
-    request["changes"] = git("log", "--reverse", "--format=%H%n%s%n%b%x1e", revision)
+    # The net implementation is the starting point, including deletions and excluding
+    # reverted changes. History is a compact lookup index, never the release facts.
+    # Keep ordinary commits and merges; full messages remain available with git show.
+    request["changes"] = git("log", "--reverse", "--format=%H %s", revision)
     return request
 
 
@@ -1879,7 +1888,7 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--source", type=Path, help="the candidate's immutable build checkout")
-    p = sub.add_parser("notes-draft", help="write reviewed prose on the worker's branch, never main")
+    p = sub.add_parser("notes-draft", help="write candidate prose on the worker's branch, never main")
     p.add_argument("--request", type=Path, required=True)
     p.add_argument("--entry", type=Path, required=True)
     sub.add_parser("check-rules")

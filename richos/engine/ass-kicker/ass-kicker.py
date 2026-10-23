@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""guard-stated-actions.py — THE ANALYSIS HALF of the Stop-time check that a
+"""ass-kicker.py — THE ANALYSIS HALF of the Stop-time check that a
 turn's REPORT agrees with the turn's ACTIONS, in three arms:
 
   ARM 1  STATED, NOT TAKEN   the text states an action; the tool calls do not
@@ -75,7 +75,7 @@ what the claim says it does; a session the workspace gate holds in recovery
 (every Stop guard stands down there, by that gate's own contract); a write by
 a command shape none of the parsers know.
 
-Called by guard-stated-actions.sh, which has already resolved the two roots,
+Called by ass-kicker.sh, which has already resolved the two roots,
 read orchestration.config and decided that this repository adopted the engine.
 This file reads the turn, reconciles the report against the tool calls, and
 returns the verdict. It never decides whether to run.
@@ -1689,7 +1689,7 @@ def main():
     out.append("")
     out.append("  Arms 1 and 2 stand down on the re-fire, so they refuse a turn at most")
     out.append("  once. Fix the reply and finish the turn. Do not weaken or unwire this hook.")
-    out.append("(hook: scripts/hooks/guard-stated-actions.sh)")
+    out.append("(hook: scripts/hooks/ass-kicker.sh)")
     sys.stderr.write("\n".join(out) + "\n")
     return 2 if enforce else 0
 

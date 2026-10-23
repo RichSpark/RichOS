@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# guard-stated-actions.sh — BLOCKING Stop hook. Refuses to let a turn end when
+# ass-kicker.sh — BLOCKING Stop hook. Refuses to let a turn end when
 # its REPORT does not match its ACTIONS, in three arms:
 #
 #   ARM 1  STATED, NOT TAKEN    the final text states an action ("Frank breaks
@@ -41,7 +41,7 @@
 #   CLEAN over 14 unlanded commits.
 #
 # THE PREDICATES, THE MEASUREMENT AND WHAT WAS REFUSED are in the module
-#   docstring of guard-stated-actions.py, the analysis half. READ THAT FILE;
+#   docstring of ass-kicker.py, the analysis half. READ THAT FILE;
 #   this one is the wiring. The numbers in one paragraph, from a replay of
 #   1,275 real turns (19 sessions, 2026-07-27 to 2026-09-02) through the
 #   shipped analyzer — method and adjudication in stated-actions.corpus.md:
@@ -87,16 +87,16 @@
 #      teammate finished and the turn ends undeclared having started nothing,
 #      or the report claims a record the turn did not write or does not locate
 #
-# Self-test:  scripts/hooks/guard-stated-actions.sh --self-test
+# Self-test:  scripts/hooks/ass-kicker.sh --self-test
 
 set -eo pipefail
 
-HOOK_TAG="(hook: scripts/hooks/guard-stated-actions.sh)"
+HOOK_TAG="(hook: scripts/hooks/ass-kicker.sh)"
 
 # --- self-test dispatch ---------------------------------------------------
 if [ "${1:-}" = "--self-test" ]; then
     _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    exec bash "$_SELF_DIR/../../ass-kicker/tests/guard-stated-actions.test.sh"
+    exec bash "$_SELF_DIR/../../ass-kicker/tests/ass-kicker.test.sh"
 fi
 
 # --- ROOT RESOLUTION -------------------------------------------------------
@@ -141,7 +141,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _RR_LIB="$SCRIPT_DIR/../lib/resolve-roots.sh"
 if [ ! -f "$_RR_LIB" ]; then
     _RR_MSG="=== RICHOS ENGINE: BROKEN INSTALL — ENFORCEMENT IS NOT ACTIVE ===
-  hook: scripts/hooks/guard-stated-actions.sh
+  hook: scripts/hooks/ass-kicker.sh
   scripts/lib/resolve-roots.sh is missing at: $_RR_LIB
   Without it this guard cannot tell WHICH REPOSITORY it governs.
   It will not guess, and it will not carry on quietly — a defense
@@ -205,10 +205,10 @@ else
     # A guard that cannot tell which repository it governs is not a guard, and
     # is not entitled to be quiet. The full banner still goes to stderr, where
     # the transcript keeps it for forensics; the operator gets the one line.
-    stop_notice_init "guard-stated-actions.sh" "" "$INPUT"
+    stop_notice_init "ass-kicker.sh" "" "$INPUT"
     stop_notice_abnormal "root-failure" \
         "STATED-ACTIONS GATE — NOT RUNNING: could not resolve which repository it governs, so no report this session was checked against the turn's own tool calls. $HOOK_TAG"
-    root_failure_banner "scripts/hooks/guard-stated-actions.sh" >&2
+    root_failure_banner "scripts/hooks/ass-kicker.sh" >&2
     exit 0
 fi
 
@@ -219,7 +219,7 @@ CONFIG="$ENTITY_ROOT/orchestration.config"
 # so an adopter can run the gate and read its own numbers before arming it.
 : "${STATED_ACTIONS_ENFORCE:=1}"
 
-stop_notice_init "guard-stated-actions.sh" "$ENTITY_ROOT" "$INPUT"
+stop_notice_init "ass-kicker.sh" "$ENTITY_ROOT" "$INPUT"
 # --- UNEVALUATED-PAYLOAD NOTICE --------------------------------------------
 # A turn that ends without this check having run must not look like a turn that
 # ran it and found nothing. The sentence comes from
@@ -235,7 +235,7 @@ if [ -f "$_UE_LIB" ]; then
         # ONE LINE for the call itself, deliberately: stop-hook-visibility.test.sh
         # proves its case 3a by sed-ing out every such call, and a multi-line
         # continuation would leave the argument lines behind as orphaned commands.
-        _UE_MSG="$(unevaluated_sentence "guard-stated-actions.sh" \
+        _UE_MSG="$(unevaluated_sentence "ass-kicker.sh" \
             "whether this turn stated an action it did not take" \
             "$_UE_REASON" turn)"
         stop_notice_abnormal "payload-unreadable:$_UE_REASON" "$_UE_MSG"
@@ -259,7 +259,7 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 0
 fi
 
-ANALYZER="$SCRIPT_DIR/../../ass-kicker/guard-stated-actions.py"
+ANALYZER="$SCRIPT_DIR/../../ass-kicker/ass-kicker.py"
 if [ ! -f "$ANALYZER" ]; then
     stop_notice_abnormal "no-analyzer" \
         "STATED-ACTIONS GATE — NOT RUNNING: the analyzer is missing at $ANALYZER, so turns are ending unchecked this session. An unchecked turn is not a clean one. $HOOK_TAG"

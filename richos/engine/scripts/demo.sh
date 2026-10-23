@@ -409,7 +409,7 @@ DEMO_FILES+=(
     "scripts/hooks/guard-agent-state-claims.py"
     "scripts/hooks/guard-unasked-deferral.py"
     "scripts/hooks/turn-manifest.py"
-    "ass-kicker/guard-stated-actions.py"
+    "ass-kicker/ass-kicker.py"
     "ass-kicker/brief-provenance.py"
     "ass-kicker/brief-scope.py"
     # The waiver-repetition analyzer, for the same reason as the five above:

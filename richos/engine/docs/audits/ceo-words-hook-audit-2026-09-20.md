@@ -1,4 +1,4 @@
-# Which hooks read the CEO's words, and what they decide from them
+# Which hooks read the CEO's words and what they decide from them
 
 **Audited at `dd6fb305` (richos main), 2026-09-20. 172 files: every non-test
 script under `scripts/hooks/` and `scripts/lib/`, plus the three `ass-kicker/`
@@ -13,7 +13,7 @@ FROM MY WORDS???"*
 In one line: **a hook may check what Rich DID; it never decides what the CEO
 MEANT.**
 
-## The premise this audit was given, and what it turned out to be
+## The premise this audit was given and what it turned out to be
 
 The brief recorded, marked unverified, that the only hook reading his words was
 `scripts/hooks/guard-stop-live-work.sh`, on the strength of one grep:
@@ -22,7 +22,7 @@ The brief recorded, marked unverified, that the only hook reading his words was
 grep -lE '"role": ?"user"' hooks/*.sh lib/*.py     ->  0 hits
 ```
 
-**That grep was wrong, and its zero was meaningless.** The harness writes a
+**That grep was wrong and its zero was meaningless.** The harness writes a
 transcript record as `{"type": "user", ...}`, never `"role": "user"`, so the
 pattern could not match the very file it was run to confirm. The audit therefore
 re-derived the question from the shapes that actually occur:
@@ -34,24 +34,24 @@ last_user_message   promptSource   origin.kind   get("origin")   transcript_path
 
 run over all 172 files, with comment-only lines discarded, then every hit read
 in context. Re-runnable: the script is in the commit message of this file's
-commit, and each row below names the line that classified it.
+commit and each row below names the line that classified it.
 
 ## What was found
 
 | class | count | meaning |
 |---|---|---|
-| **(a)** reads tool input, Rich's brief or reply, or files on disk | 164 | never sees a sentence the CEO typed |
-| **(a), was (b)-decides** — the removals in this pass | 2 | `scripts/hooks/guard-idle-land.py` + `ass-kicker/guard-stated-actions.py` |
+| **(a)** reads tool input, Rich's brief or reply or files on disk | 164 | never sees a sentence the CEO typed |
+| **(a), was (b)-decides** — the removals in this pass | 2 | `scripts/hooks/guard-idle-land.py` + `ass-kicker/ass-kicker.py` |
 | **(b)-quote** — reads his words, quotes them, decides nothing from them | 2 | `scripts/hooks/left-off-report.sh` + `scripts/lib/left-off.py` |
-| **(b)-literal** — reads his message for a FILE PATH he typed, and acts | 2 | `scripts/hooks/commit-ceo-inputs.sh` + its analyzer — **left in place, escalated** |
+| **(b)-literal** — reads his message for a FILE PATH he typed and acts | 2 | `scripts/hooks/commit-ceo-inputs.sh` + its analyzer — **left in place, escalated** |
 | n/a — writes or fixtures a transcript, never reads one | 2 | `scripts/lib/app-evidence.py`, `scripts/hooks/contract-integrity-probe.sh` |
 
-**Exactly one live branch in the engine decided anything from his sentences, and
+**Exactly one live branch in the engine decided anything from his sentences and
 it is gone.** `scripts/hooks/guard-idle-land.py` carried `HOLD_RE`, `OFF_DUTY_RE` and
 `hold_signal()` — "hold", "stand down", "don't dispatch", "going to bed",
 "calling it a night" — and TERM 3b, which stood that BLOCKING gate down on a
-match; `read_turn()` collected his prompts as `said` to feed it, and
-`ass-kicker/guard-stated-actions.py` imported the same predicate for its ARM 2
+match; `read_turn()` collected his prompts as `said` to feed it and
+`ass-kicker/ass-kicker.py` imported the same predicate for its ARM 2
 `ceo-owed` verdict. Deleted, not narrowed: the regexes, the function, the term,
 the collection, the import site. The return dict now has **no `said` key**, so a
 caller reaching for his words gets a `KeyError` at the line that reaches rather
@@ -63,11 +63,11 @@ operator` — **the suppressor never fired once.** What it protected is still
 protected, by the orchestrator's own act: `stop-declared: ceo-owns-it — <reason>`,
 written in its own final message and shown to him every time.
 
-**The defense the deleted code made for itself, and why it does not survive the
+**The defense the deleted code made for itself and why it does not survive the
 ruling.** It argued the error was one-directional: the predicate could only ever
 stand a gate DOWN, never accuse anybody, so a false positive cost one un-fired
 gate. That is true. It is also beside the point — **standing a blocking gate
-down IS a decision**, and it was being taken from a sentence he typed for a
+down IS a decision** and it was being taken from a sentence he typed for a
 person to read. A direction of error is a property of a mistake; the ruling is
 about who is entitled to make the judgment at all.
 
@@ -76,7 +76,7 @@ about who is entitled to make the judgment at all.
 **`scripts/hooks/left-off-report.sh` + `scripts/lib/left-off.py` — (b)-quote, KEPT.** They read his
 past turns and reproduce the last one **verbatim** under the heading `HIS LAST
 MESSAGE BEFORE THE GAP`. Nothing is inferred from the text: the report fires on
-`(now - anchor_when)` in seconds, and the only content-derived branch is
+`(now - anchor_when)` in seconds and the only content-derived branch is
 `drop_current_prompt()`, a byte-identity comparison that avoids quoting his
 message back to him in the same turn he sent it. Quoting him is what the brief
 explicitly allows; this is the whole of what they do.
@@ -86,33 +86,33 @@ is a genuine collision between two of his rulings and it is not mine to settle.
 It reads his `UserPromptSubmit` message, extracts **path literals** (absolute,
 `~`-rooted, backticked, quoted — `candidates()` line 235, whose own header says
 `BARE WORDS ARE NEVER GUESSED AT`; there is no intent predicate anywhere in the
-file), and **commits** any file he handed over that the record is not holding.
+file) and **commits** any file he handed over that the record is not holding.
 That is a decision taken from his message. It is also the mechanism he ordered
 by name on 2026-09-05 — *"'it does not commit for you': Then who commits for me?
 Santa Claus?"* — after a specification driving live changes to a public
 repository sat untracked on his disk.
 
-The distinction I would draw, and it is a claim, not a finding: recognizing a
+The distinction I would draw and it is a claim, not a finding: recognizing a
 **path he typed** is recognizing a reference, not deciding a meaning, in the way
 that `HOLD_RE` decided he had ordered a stop. But it is still his message
-steering a hook, so it is named here rather than quietly kept, and the call is
+steering a hook, so it is named here rather than quietly kept and the call is
 his. Escalation raised the same day; ledger id in the final handoff.
 
-## Two things this audit checked because the brief named them, and cleared
+## Two things this audit checked because the brief named them and cleared
 
 * **`scripts/hooks/guard-ceo-ask-first.sh`, `scripts/lib/ceo-asks.py`,
   `scripts/lib/ceo-todos.py`, `scripts/hooks/notice-ceo-asks.sh`** — a TODO is discharged by **Rich asking**, witnessed at
   `PostToolUse[AskUserQuestion]` from the call's own `tool_input` (the question
-  Rich wrote). **His answer is never read**, and no reply of his is parsed to
+  Rich wrote). **His answer is never read** and no reply of his is parsed to
   mark anything answered.
 * **`scripts/lib/ceo-ruled.sh` and its analyzer,
   `scripts/hooks/guard-ceo-ruled-ask.sh`, `scripts/hooks/notice-ceo-ruled-prose.sh`** — these match Rich's pending question against
   the **headings** of rulings in the CEO decisions page and the open-items page of the PRIVATE record
-  repository, and in this repository's own `CLAUDE.md`. Those are Rich-authored records, and the anchor is a title, not
+  repository and in this repository's own `CLAUDE.md`. Those are Rich-authored records and the anchor is a title, not
   his speech. the ceo-ruled analyzer's own header is explicit that it does not attempt
   to decide whether a ruling ANSWERS a question, "no text predicate can".
 * **`scripts/hooks/notice-unasked-deferral.sh` /
-  `scripts/hooks/guard-unasked-deferral.py`, `scripts/hooks/guard-stated-actions.sh`,
+  `scripts/hooks/guard-unasked-deferral.py`, `scripts/hooks/ass-kicker.sh`,
   `scripts/hooks/guard-brief-scope.sh`** — all classify the
   **orchestrator's** `last_assistant_message` or its Agent brief. In
   `scripts/hooks/guard-unasked-deferral.py` a `type == "user"` record is read as a **turn
@@ -124,7 +124,7 @@ his. Escalation raised the same day; ledger id in the final handoff.
 ## How to re-run this
 
 The twelve files that read the transcript and are classed (a) were each checked
-twice: once for the pattern set, and once for a content read of a user record —
+twice: once for the pattern set and once for a content read of a user record —
 
 ```
 grep -nE '"user"|"assistant"|type.*==.*user|role.*user' <file>
@@ -186,8 +186,8 @@ session**, not this one.
 | `scripts/hooks/guard-row-currency-commits.sh` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
 | `scripts/hooks/guard-sealed-worktree.sh` | a | TOOL INPUT — the orchestrator's own Agent brief | no | `ti.get("prompt")` at -, where `ti` is tool_input: the brief Rich wrote, not a message the CEO typed |
 | `scripts/hooks/guard-stale-staging.sh` | a | TOOL INPUT — the orchestrator's own Agent brief | no | `ti.get("prompt")` at 323, where `ti` is tool_input: the brief Rich wrote, not a message the CEO typed |
-| `scripts/hooks/guard-stated-actions.py` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
-| `scripts/hooks/guard-stated-actions.sh` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
+| `scripts/hooks/ass-kicker.py` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
+| `scripts/hooks/ass-kicker.sh` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
 | `scripts/hooks/guard-stop-live-work.sh` | a | tool input + the ack ledger | no | same landed change; not touched by this audit |
 | `scripts/hooks/guard-unasked-deferral.py` | a | the orchestrator's last_assistant_message | no — his turn is a BOUNDARY, never content | 367 `if rec.get("type") == "user": ... break` (stops the backward walk); 416 `text = payload.get("last_assistant_message")` is the classified text |
 | `scripts/hooks/guard-unresolved-claims.py` | a | the transcript, joined on TOOL CALLS / agent ids | no | 1 non-comment hit(s), first: 1151:    blob, turn_tools = read_transcript(payload.get("transcript_path"), |
@@ -326,7 +326,7 @@ session**, not this one.
 | `scripts/lib/vendored-material.sh` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
 | `scripts/lib/workspaces.py` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
 | `scripts/lib/worktree-ledger.py` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
-| `ass-kicker/guard-stated-actions.py` | a (was b-decides) | tool calls + the orchestrator's own final message | no | 614: the idle.hold_signal(turn["said"]) call DELETED this commit |
+| `ass-kicker/ass-kicker.py` | a (was b-decides) | tool calls + the orchestrator's own final message | no | 614: the idle.hold_signal(turn["said"]) call DELETED this commit |
 | `ass-kicker/brief-scope.py` | a | TOOL INPUT — the orchestrator's own Agent brief | no | `ti.get("prompt")` at 876, where `ti` is tool_input: the brief Rich wrote, not a message the CEO typed |
 | `ass-kicker/brief-provenance.py` | a | TOOL INPUT — the orchestrator's own Agent brief | no | `ti.get("prompt")` at 1448, where `ti` is tool_input: the brief Rich wrote, not a message the CEO typed |
 
@@ -340,7 +340,7 @@ The operator asked, on 2026-09-26, what must always happen whenever he mentions 
 and "failure" close to each other. That rule is stated in terms of his WORDS, so reading his
 message for those two words is the rule itself, not an inference about what he meant. The class is
 the one this page already uses for `scripts/hooks/commit-ceo-inputs.sh`: a literal reference
-recognized in his message, acted on. Nothing in either file classifies intent, tone or topic, and
+recognized in his message, acted on. Nothing in either file classifies intent, tone or topic and
 neither decides which failure type applies; that judgment stays with the lead.
 
 | file | class | reads | decides from his words? | evidence |
@@ -362,7 +362,7 @@ on the real ledger). His rule is quoted in its header and refusal; it is not a p
 | file | class | reads | decides from his words? | evidence |
 |---|---|---|---|---|
 | `scripts/hooks/guard-resource-waits.sh` | a | payload `agent_id` / `stop_hook_active`, orchestration.config; hands the rest to the .py | no | the wrapper passes `RESOURCE_WAIT_MINUTES` and reads one `RW` verdict line |
-| `scripts/lib/resource_waits.py` | a | wait records, `ps`, `<TESTVM_ROOT>` state, and teammates' escalation titles, questions and meanwhile lines | no: a teammate's literal wait claim, never his message | 568 `WAIT_CLAIM.finditer(whole)`; 925 `payload.get("agent_id")` is the only payload field it decides on |
+| `scripts/lib/resource_waits.py` | a | wait records, `ps`, `<TESTVM_ROOT>` state and teammates' escalation titles, questions and meanwhile lines | no: a teammate's literal wait claim, never his message | 568 `WAIT_CLAIM.finditer(whole)`; 925 `payload.get("agent_id")` is the only payload field it decides on |
 
 ## Addendum, 2026-10-09: one hook added after this audit, classified the same way
 
@@ -371,7 +371,7 @@ this page's classes. It is a declaration for the next audit to check, not a find
 
 The hook hands a second-review verdict to the running teammate whose work it is. It never reads the
 operator's messages or any transcript; it reads the payload's `agent_id`, second-review's verdict
-ledger and the workspace registry, and it never blocks.
+ledger and the workspace registry and it never blocks.
 
 | file | class | reads | decides from his words? | evidence |
 |---|---|---|---|---|

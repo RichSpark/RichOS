@@ -77,7 +77,7 @@ if event in ("SessionStart","SubagentStart","SubagentStop","PostToolUse","Sessio
         sys.stderr.write(result.stderr)
         sys.exit(2)
 if event=="Stop":
-    result=subprocess.run([sys.executable,str(engine/"ass-kicker/guard-stated-actions.py")],
+    result=subprocess.run([sys.executable,str(engine/"ass-kicker/ass-kicker.py")],
                           input=json.dumps(p),text=True,capture_output=True)
     with (root/"guard-results.jsonl").open("a") as f:
         f.write(json.dumps({"exit":result.returncode})+"\\n")

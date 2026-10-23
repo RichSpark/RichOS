@@ -169,7 +169,7 @@ scripts/hooks/guard-main-checkout-writes.test.sh	1.8	linux-run-34945072758
 scripts/hooks/guard-model-ceiling.test.sh	68.9	linux-run-34945072758
 scripts/hooks/guard-resume-isolation.test.sh	10.8	linux-run-34945072758
 scripts/hooks/guard-sealed-worktree.test.sh	36.9	linux-run-34945072758
-ass-kicker/tests/guard-stated-actions.test.sh	7.1	linux-run-34945072758
+ass-kicker/tests/ass-kicker.test.sh	7.1	linux-run-34945072758
 scripts/hooks/guard-stop-live-work.test.sh	2.4	linux-run-34945072758
 scripts/hooks/guard-unresolved-claims.test.sh	13.6	linux-run-34945072758
 scripts/hooks/guard-vendoring-commits.test.sh	42.4	linux-run-34945072758

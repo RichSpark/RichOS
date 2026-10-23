@@ -40,11 +40,11 @@ and require the corresponding regression case to fail.
   claims remain unflagged. A known mention-versus-use false positive is tested
   explicitly rather than hidden in a precision claim.
 - **An agent reports that another worker is taking an action without dispatching
-  or messaging that worker.** The [stated-action suite](tests/guard-stated-actions.test.sh)
+  or messaging that worker.** The [stated-action suite](tests/ass-kicker.test.sh)
   tests the narrow report patterns and benign alternatives through the Stop
   hook. The [historical corpus report](docs/stated-actions.corpus.md) records the
   original measurement. Its numbers are dated observations, not a new benchmark.
-- **An agent claims something was recorded, saved or made a rule, and nothing
+- **An agent claims something was recorded, saved or made a rule and nothing
   durable was written.** ARM 3 of the same Stop hook is an alert, never a
   refusal: one line in the lead's own context, nothing shown to the CEO. It is
   tested by the same suite (cases R1 to R33). The corpus report's
@@ -67,7 +67,7 @@ Stated-action analysis uses shared transcript and stop-declaration readers.
 |---|---|
 | `brief-provenance.py` | Provenance annotation and the shared capability predicate |
 | `brief-scope.py` | Specification, verdict and dispatch checks |
-| `guard-stated-actions.py` | Analysis of reports and tool activity |
+| `ass-kicker.py` | Analysis of reports and tool activity |
 | `tests/` | Behavioral, mutation and relocation tests |
 | `fixtures/` | Committed historical acceptance inputs |
 | `docs/` | Existing corpus evidence |
@@ -92,7 +92,7 @@ From the engine directory, with Python 3, Bash and Git available:
 ```sh
 bash ass-kicker/tests/brief-provenance.test.sh
 bash ass-kicker/tests/brief-scope.test.sh
-bash ass-kicker/tests/guard-stated-actions.test.sh
+bash ass-kicker/tests/ass-kicker.test.sh
 bash ass-kicker/tests/stated-actions.mutation.sh
 bash ass-kicker/tests/relocation.test.sh
 bash scripts/hooks/notice-claim-capability.test.sh
@@ -102,7 +102,7 @@ bash scripts/hooks/claim-capability-delivery.mutation.sh
 The scope suite includes its mutation harness. Set `RICHOS_MUTATION_INNER=1`
 only when deliberately running behavioral checks separately from mutations.
 `RICHOS_MUTANT_JOBS` bounds mutation concurrency. The stated-action self-test
-also remains available as `scripts/hooks/guard-stated-actions.sh --self-test`.
+also remains available as `scripts/hooks/ass-kicker.sh --self-test`.
 
 Tests construct temporary repositories and state. The required acceptance
 fixture is committed here. An optional comparison with its original source
