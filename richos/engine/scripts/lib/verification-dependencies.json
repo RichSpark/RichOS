@@ -2483,7 +2483,7 @@
     },
     "scripts/hooks/guard-unasked-deferral.py": {
       "source": "scripts/hooks/guard-unasked-deferral.py",
-      "sha256": "18e218204b3d80f6122195675c69f7803a7538d7aeb98654ea1188c3240ec8a0",
+      "sha256": "bc631e4e5c9859763099ff41d9559cfacaede042ad705eb5a12ecb26b8e52920",
       "evidence": "Standard-library predicate reads the supplied JSON payload and transcript. It parses quoted constructions and tool-use records as data, with no config or subprocess helper. No silent holds (2026-10-22): imports scripts/lib/hold_words.py at load (family D) and, only when a finding fires, loads mega-lander/workspaces.py by fixed path and calls hold(), which writes <RICHOS_WORKSPACES_DIR>/holds/held-<hash>.json (the suite sandboxes RICHOS_WORKSPACES_DIR).",
       "keys": [],
       "edges": [
@@ -2516,7 +2516,7 @@
     },
     "scripts/hooks/unasked-deferral.test.sh": {
       "source": "scripts/hooks/unasked-deferral.test.sh",
-      "sha256": "83d6e5f70df51b258bc4f1e957a207acfb1097213913eb9b865624434dd1f759",
+      "sha256": "3e671c59371b8f713bbf6755ea846dca3e447aa8974683d8f960b72b107ea4dc",
       "evidence": "Every hook invocation targets a generated entity config and transcript; the missing-root case terminates before reading settings. Nested mutations rerun this same fixture constructor, replacing all configuration rather than inheriting production values. No silent holds (2026-10-22): the suite also copies scripts/lib/hold_words.py and mega-lander/workspaces.py into its sandbox and calls its hold_lines() for T1b.",
       "keys": [],
       "edges": [
@@ -2534,7 +2534,7 @@
     },
     "scripts/hooks/unasked-deferral.mutation.sh": {
       "source": "scripts/hooks/unasked-deferral.mutation.sh",
-      "sha256": "032b301935fd5c802a428b0f0ad3ce3b90f4b462aa48b405e272ec9e67da3c92",
+      "sha256": "53e7a79f3fc03ee3c14b6df5da9f52bdeffa4d65f9104213ab6869eb31c64cae",
       "evidence": "Copies only the fixed hook, analyzer, test and four named root/notice helpers. Its generated mutator replaces literal source needles. The copied test constructs its own entity config before execution; the callback has no additional engine dependency.",
       "keys": [],
       "edges": [
@@ -16358,7 +16358,7 @@
     },
     "scripts/lib/hold_words.py": {
       "source": "scripts/lib/hold_words.py",
-      "sha256": "e3a2713aa9d0684da4f875e6ebb75a5f581ccf96276b4910ebefa366996b9951",
+      "sha256": "ff2b4b097d13d7c6731059d641ad1194837f26da49c50fb206ecbd56a6b8b5d5",
       "evidence": "One compiled regular expression and a find() over it; standard-library re only. No configuration key, environment variable, file or execution edge.",
       "keys": [],
       "edges": []
@@ -17187,7 +17187,7 @@
         "scripts/lib/protected-ref-moves.py": "d4b8e7c1cb3553a722541124159906f4f9d7284aa94d311c2d4c0b2c6974c95c",
         "scripts/hooks/protected-ref-moves.test.sh": "fe6929dc70eeb05f5c17f6e2d7cba139e61b9e7f0f796f9fe2c0cc288daa45d2",
         "scripts/hooks/notice-unasked-deferral.sh": "39940710ca2ec7cc23ba366f721886453b467289e7aff3cdfd32bf6b869d6988",
-        "scripts/hooks/guard-unasked-deferral.py": "18e218204b3d80f6122195675c69f7803a7538d7aeb98654ea1188c3240ec8a0",
+        "scripts/hooks/guard-unasked-deferral.py": "bc631e4e5c9859763099ff41d9559cfacaede042ad705eb5a12ecb26b8e52920",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
         "scripts/hooks/notice-unstarted-rows.sh": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
@@ -17862,7 +17862,7 @@
         "scripts/lib/protected-ref-moves.py": "d4b8e7c1cb3553a722541124159906f4f9d7284aa94d311c2d4c0b2c6974c95c",
         "scripts/hooks/protected-ref-moves.test.sh": "fe6929dc70eeb05f5c17f6e2d7cba139e61b9e7f0f796f9fe2c0cc288daa45d2",
         "scripts/hooks/notice-unasked-deferral.sh": "39940710ca2ec7cc23ba366f721886453b467289e7aff3cdfd32bf6b869d6988",
-        "scripts/hooks/guard-unasked-deferral.py": "18e218204b3d80f6122195675c69f7803a7538d7aeb98654ea1188c3240ec8a0",
+        "scripts/hooks/guard-unasked-deferral.py": "bc631e4e5c9859763099ff41d9559cfacaede042ad705eb5a12ecb26b8e52920",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
         "scripts/hooks/notice-unstarted-rows.sh": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",
         "scripts/lib/unstarted-rows.sh": "9e464447df24f370a6803610c9e0a7fafb336eda673dc2ff9527847cb79d3809",

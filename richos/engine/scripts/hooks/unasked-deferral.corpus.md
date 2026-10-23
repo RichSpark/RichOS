@@ -2,7 +2,7 @@
 
 `guard-unasked-deferral.py` states a precision figure in its header. A figure in
 a header is a claim; this file is the method behind it. Anyone who doubts the
-number can reproduce it in about two minutes, and anyone who WIDENS the
+number can reproduce it in about two minutes and anyone who WIDENS the
 construction set is expected to re-run it before shipping.
 
 ## The corpus
@@ -19,13 +19,13 @@ transcript directories on this machine on 2026-08-31:
 ```
 
 Those are the orchestrator's OWN sessions. Subagent sidechains are excluded:
-this guard is about the lead's language, and a teammate's prose is a different
+this guard is about the lead's language and a teammate's prose is a different
 register that would pollute the measurement in both directions.
 
 **The specimen turn is in it** — session `042f3850-8b30-478e-97c3-9c991a83fa86`,
 which is the 2026-08-31 turn the CEO had to ask about a third time.
 
-## What a "turn" is, and why it is defined this way
+## What a "turn" is and why it is defined this way
 
 A turn = the run of assistant records following a REAL user prompt, up to the
 next real user prompt. A `user` record whose content is entirely `tool_result`
@@ -58,11 +58,11 @@ they can be rewritten rather than trusted:
    MATTERS. Every construction in the shipped set and every one in the REFUSED
    table was judged by reading its hits, not by looking at a count.
 3. **audit** — for each turn matching the SHIPPED set, print the construction,
-   the discharge that fired (or `None`), and the surrounding text. The result is
-   hand-adjudicated: genuine unilateral deferral, or not.
+   the discharge that fired (or `None`) and the surrounding text. The result is
+   hand-adjudicated: genuine unilateral deferral or not.
 
 Import the analyzer directly rather than re-implementing it — `find_deferrals`
-and `discharge` are the two entry points, and a measurement of a re-implementation
+and `discharge` are the two entry points and a measurement of a re-implementation
 measures the re-implementation:
 
 ```python
@@ -97,10 +97,10 @@ The three:
    there would tangle."*
 3. *"I'm queueing the fix rather than dispatching it now: it lives in
    `intake_sweep` inside `build-roster.py`, which the Eric Masi work currently
-   owns, and two agents in that file is how the merge conflicts start."*
+   owns and two agents in that file is how the merge conflicts start."*
 
 All three share the shape: the grounds are the orchestrator's own (collision,
-load, ordering), the reasoning is sound, and NONE of them is put to the CEO.
+load, ordering), the reasoning is sound and NONE of them is put to the CEO.
 That is the defect — not the deferring.
 
 **Recall, stated because a precision figure alone is a half-truth.** Hand-reading
@@ -109,22 +109,22 @@ It fires on 3.
 
 - One is lost to the **Agent-spawn discharge**: *"Understood — the PR is
   authorized. I'm sequencing it deliberately rather than firing it off now."*
-  That turn spawned an unrelated agent, and a Stop hook cannot tell which thing
+  That turn spawned an unrelated agent and a Stop hook cannot tell which thing
   a spawn started. Named as a blind spot in the analyzer's header rather than
   engineered around.
 - One is lost to the **`postponing-it` family being deleted** — *"I'm holding
   this a beat so it's built against a streaming interface."* See below.
 
-**n = 3 is small, and the small n is the point.** This defect is rare in the
+**n = 3 is small and the small n is the point.** This defect is rare in the
 record and loud when it happens, so the only useful tuning target was zero false
 alarms. A guard that cried wolf on ordinary sequencing prose would be switched
-off within a day, and a switched-off guard is exactly the failure mode that
+off within a day and a switched-off guard is exactly the failure mode that
 produced the defect.
 
-## The family that was written, measured, and then deleted
+## The family that was written, measured and then deleted
 
 `postponing-it` — `I'm (holding|parking|queueing|deferring|shelving|sequencing|
-serializing) <it|that|the X>` — was implemented, run, and **cut at 4 genuine out
+serializing) <it|that|the X>` — was implemented, run and **cut at 4 genuine out
 of 9 hits (44%)**.
 
 Its false alarms are not marginal; they are plainly correct pipeline holds:
@@ -151,6 +151,30 @@ NOT open" heading dominates), `I'll X once Y completes` (0/9), `when it's done`
 mostly the CEO or a process waiting), `in the same commit as` (0/1), bare
 `rather than <gerund>` (3/6 — the rest are design choices), bare `X goes in
 with Y` (1/3).
+
+## Re-run, 2026-10-23: sentences that hold nothing
+
+Six hold records opened that day; two came from replies DENYING a hold ("Nothing
+of yours is on hold.", "none of your work is on hold.") and one from "I'm not
+starting anything alongside that", which names no work. Two narrowings, measured
+with the same extract and probe over every lead turn in the femcboost project
+directory (11,545 turns):
+
+- **Family D, a denied hold word** (`hold_words.held()`): the word right after a
+  subject saying nothing is held ("nothing", "none of your work", "no teammate")
+  or a negated verb ("is not", "no longer") holds nothing. 8 hits fewer, all 8
+  denials, e.g. *"No teammate was on hold, so there's nothing to resume."*
+  *"Nothing new: the latest notice is a repeat about a branch that's on hold."*
+  still opens a hold: the colon ends the denial.
+- **Family A, an object that names no work** (`_NOTHING_MORE`): "anything /
+  anyone" followed by else, new, alongside, in parallel, on the side or on top.
+  22 hits fewer, all of them "nothing more runs" statements (quota, CPU, his own
+  stop orders). *"I'm not spawning anything for it right now"* still fires.
+
+The specimen and the corpus's genuine deferrals still match. Unchanged and
+judged real: *"I'm not starting the reviewers yet"*, *"I'm not running it now"*
+(a land put behind the nightly) and *"Then I parked everything behind the
+nightly and the stable"*: each says his work is not running.
 
 ## When to re-run this
 
