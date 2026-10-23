@@ -21,7 +21,12 @@ So this driver merges the two documents as JSON, three ways, and then regenerate
      pin becomes the sha256 of that result, which is what renew-verification-pins.py would write
      once the merge is on disk. A pin is a `sha256` beside a `path`/`source`, or a value in a
      `sources` map.
-  3. Anything else both sides changed differently is a real conflict: the driver leaves git's own
+  3. A review note (`evidence`, `review`) both sides extended is kept with both additions, ours
+     first, when each side only appended to the base note: a renewal appends its sentence, so two
+     parallel renewals of one entry did exactly that (2026-10-22, cc/zach-opus-folderfiles2 and
+     cc/zach-opus-landgate4 on nodes/mega-lander/app.py#land-lock-fixtures). A note either side
+     rewrote or shortened is a real conflict: a deleted sentence is never brought back.
+  4. Anything else both sides changed differently is a real conflict: the driver leaves git's own
      conflict markers in the file (`git merge-file`) and exits 1, exactly as without it.
 
 The other side's commit is read from the merge itself: MERGE_HEAD when git has written it, else
@@ -157,7 +162,34 @@ def merge(base, ours, theirs, where, pins):
     if isinstance(ours, str) and isinstance(theirs, str) and PIN.fullmatch(ours) and PIN.fullmatch(theirs):
         pins.append(where)
         return ours
+    notes = appended_notes(base, ours, theirs) if where and where[-1] in NOTES else None
+    if notes is not None:
+        return notes
     raise Conflict("/".join(map(str, where)))
+
+
+# A review note (`evidence` in the dependency map, `review` in the qualifications map) is a running
+# record: every renewal appends its own sentence to what was there. Two branches renewing one entry
+# in parallel therefore each extend the same base note; both additions are kept, ours first.
+NOTES = ("evidence", "review")
+
+
+def appended_notes(base, ours, theirs):
+    """Both notes kept when each side only appended to the base note, else None (a real conflict)."""
+    if not all(isinstance(v, str) for v in (base, ours, theirs)):
+        return None
+    # Both must extend the base: a side that shortened or rewrote the note made a decision the
+    # driver never overrides (one side deleting a sentence the other kept is a conflict).
+    if not (ours.startswith(base) and theirs.startswith(base)):
+        return None
+    if theirs.startswith(ours):
+        return theirs
+    if ours.startswith(theirs):
+        return ours
+    added = theirs[len(base):]
+    if base and not added[:1].isspace() and not ours[-1:].isspace():
+        added = " " + added
+    return ours + added
 
 
 def pin_path_of(document, where):

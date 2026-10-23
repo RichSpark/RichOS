@@ -1180,6 +1180,36 @@ async function main() {
     return passed + " cells passed (" + (targets.length - skipped.size) + " places x " + MODES.length + " input modes); left out, the first-run questions (Settings cannot be pressed over them): " + [...skipped].join(", ");
   });
 
+  // ---- the instructions question (CEO 2026-10-22; review rv-20261022T132946Z-3284b71e-753a, finding 1) ----
+  await run.check("with the instructions question up, Bust a bug opens on top of it and takes typing", async () => {
+    // The real question (ui/instructions-update.js), not one made from its selector: at z-index
+    // 299 its scrim lay over the report panel (298) and the panel could not be clicked.
+    const page = await open("dark");
+    try {
+      await page.evaluate(() => window.RichInstructionsUpdate.show([{ name: "rich.md", path: "~/myrichos/rich.md" }]));
+      await page.waitForSelector("#instructions-update:not([hidden])");
+      await bustABug(page);
+      await page.waitForSelector("#bugdock-msgs .bug-rich .tl-prose");
+      await page.evaluate(() => Promise.all(document.getAnimations()
+        .filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#bugdock"))
+        .map((a) => a.finished.catch(() => null))));
+      const top = await page.evaluate(() => {
+        const input = document.getElementById("bugdock-input");
+        const r = input.getBoundingClientRect();
+        const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return { input: h === input || input.contains(h) ? "ON-TOP" : "COVERED by " + (h ? h.tagName.toLowerCase() + (h.id ? "#" + h.id : "." + String(h.className).split(" ")[0]) : "nothing"),
+          questionUp: !document.getElementById("instructions-update").hidden };
+      });
+      assertEqual(top.input, "ON-TOP", "the report's answer box is under the instructions question");
+      await page.click("#bugdock-input");
+      await page.keyboard.type("The question covers the screen.");
+      assertEqual(await page.inputValue("#bugdock-input"), "The question covers the screen.", "the report did not take typing");
+      return "the report is on top of the question" + (top.questionUp ? ", which stays up behind it" : "") + ", and takes typing";
+    } finally {
+      await page.close();
+    }
+  });
+
   // ---- the reviews of 4cc6e34db (rv-20261010T150420Z-4cc6e34d-84f1) and cac278721 (rv-20261010T153832Z-cac27872-e986, rv-20261010T153823Z-cac27872-1b7a) ----
   await run.check("with Dictation waiting for a different key, Bust a bug ends that wait: the panel's report takes typing and Enter, and a function key from the tool's tap leaves Dictation's key alone", async () => {
     // Settings, Dictation, Press a different key, Settings, Bust a bug. A report in the panel takes

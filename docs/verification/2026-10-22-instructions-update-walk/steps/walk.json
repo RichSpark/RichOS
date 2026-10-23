@@ -1,0 +1,20 @@
+[
+  {"op": "guest", "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); ls -la \"$h/myrichos\"; tail -c 120 \"$h/myrichos/rich.md\""},
+  {"op": "until", "args": ["find", "--value", "You previously modified", "--contains", "--first"], "contains": "You previously modified", "seconds": 180},
+  {"op": "wait", "seconds": 2},
+  {"op": "shot", "name": "1-question-dark", "ocr": true},
+  {"op": "pointer", "points": ["1068,657", "1068,657"]},
+  {"op": "wait", "seconds": 3},
+  {"op": "shot", "name": "2-updating-dark", "ocr": true},
+  {"op": "guest", "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); for i in $(seq 1 180); do grep -q 'Their instructions file is' \"$h/myrichos/rich.md\" && break; sleep 5; done; grep -c 'Their instructions file is' \"$h/myrichos/rich.md\""},
+  {"op": "wait", "seconds": 6},
+  {"op": "shot", "name": "3-before-and-after-dark", "ocr": true},
+  {"op": "guest", "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); cp \"$h/myrichos/rich.md\" /Users/admin/rich-after.md; cp \"$h/myrichos/.richos/instructions-record.json\" /Users/admin/instructions-record.json; ls -la \"$h/myrichos\" \"$h/myrichos/.richos\""},
+  {"op": "pull", "src": "/Users/admin/rich-after.md", "dest": "rich-after.md"},
+  {"op": "pull", "src": "/Users/admin/instructions-record.json", "dest": "instructions-record.json"},
+  {"op": "guest", "command": "grep -c 'Fixture user rule: sign every reply with the word heron.' /Users/admin/rich-after.md"},
+  {"op": "guest", "command": "grep -c 'Their instructions file is' /Users/admin/rich-after.md"},
+  {"op": "pointer", "points": ["1390,878", "1390,878"]},
+  {"op": "wait", "seconds": 2},
+  {"op": "shot", "name": "4-after-done-dark", "ocr": true}
+]

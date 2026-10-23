@@ -4026,6 +4026,11 @@ fn main() {
             // --- a job's result said on its own (2026-10-15) — appended ---
             // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
             set_oxford_comma,
+            // --- improved Rich and Stu instructions reach every user (CEO 2026-10-22) — appended ---
+            instructions_update_question,
+            decline_instructions_update,
+            update_instructions_file,
+            instructions_file_open,
             // --- a file Rich puts in front of the user (§138, item 12) — appended ---
             rich_files_host::rich_file_open,
             rich_files_host::rich_file_reveal,
@@ -4363,7 +4368,8 @@ fn take_operator_notices(
 #[richos_command::command]
 fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: String) -> Result<(), String> {
     let entity = assignment_scope(&state, &thread_id)?;
-    state.work.stop_assignment(entity.as_str(), &thread_id, &assignment_id)
+    let front_desk = state.control.for_thread(&thread_id).front_desk();
+    state.work.stop_assignment_and_front_desk(entity.as_str(), &thread_id, &assignment_id, front_desk)
 }
 
 /// Read the requested conversation's company. A different running conversation
@@ -5776,6 +5782,8 @@ fn provider_auth_status(state: State<AppState>) -> richos_core::provider_auth::A
     let bin = resolve_claude_bin();
     let view = state.provider_auth.lock().unwrap().refresh(&bin);
     state.quota.set_connecting(view.state == richos_core::provider_auth::AuthState::Connecting);
+    // The startup check's answer is the account's verdict (quota.rs `Service::sign_in_known`).
+    state.quota.sign_in_known(richos_core::claude_accounts::ACCOUNT_ONE, &view.state);
     view
 }
 #[richos_command::command]
@@ -5793,6 +5801,8 @@ fn provider_auth_poll(state: State<AppState>) -> richos_core::provider_auth::Aut
     state.quota.set_connecting(view.state == richos_core::provider_auth::AuthState::Connecting);
     // A sign-in has just completed (the window polls only while one runs): a queue held for
     // sign-in starts its first held job now, not at its next look (T3 idea 1, finished).
+    // Signed in from this moment, not from the next usage read (quota.rs `Service::sign_in_known`).
+    state.quota.sign_in_known(richos_core::claude_accounts::ACCOUNT_ONE, &view.state);
     if view.state == richos_core::provider_auth::AuthState::Connected {
         state.work.signed_in();
     }
@@ -5929,6 +5939,8 @@ fn claude_account_sign_in_poll(state: State<AppState>) -> Option<(String, richos
                 if let Err(error) = state.quota.accounts.signed_in(&id, richos_core::util::now_millis()) {
                     eprintln!("[richos] claude accounts: the adding could not be recorded ({error})");
                 }
+                // Signed in from this moment, not from the next usage read (quota.rs `Service::sign_in_known`).
+                state.quota.sign_in_known(&id, &view.state);
                 // As for Account 1's sign-in: a queue held for sign-in tries its first job now.
                 state.work.signed_in();
             }
@@ -5962,8 +5974,7 @@ fn claude_account_discard(state: State<AppState>, id: String) -> Result<richos_c
 /// (`provider_auth::signed_in_as`), returned, and not kept anywhere.
 #[richos_command::command]
 fn claude_account_email(state: State<AppState>, id: String) -> Result<richos_core::provider_auth::SignedInAs, String> {
-    let folder = state.quota.accounts.sign_in_folder(&id).ok_or("That account is no longer on this Mac.")?;
-    Ok(richos_core::provider_auth::signed_in_as(&resolve_claude_bin(), folder.as_deref()))
+    state.quota.account_email(&resolve_claude_bin(), &id).map_err(|e| e.ceo_message().to_string())
 }
 
 /// **Not now** on Rich's one-time suggestion of a second account (round 18, `one-nudge`).
@@ -10071,6 +10082,64 @@ fn codex_reviews_set(state: State<'_, AppState>, on: bool) -> Result<richos_core
     let probe = richos_core::codex_reviews::Probe::system(&richos_core::codex_reviews::search_path());
     richos_core::codex_reviews::set(&state.data_dir, &probe, on)
         .map_err(|e| format!("the Codex review setting could not be saved: {e}"))
+}
+
+/// **Whether to ask about the user's changed `rich.md`/`stu.md`** (CEO, 2026-10-22), asked by the
+/// window when it opens (`ui/instructions-update.js`): the changed copies, each with where it is,
+/// or none. The same check every lease runs at its start (`instructions_update::check`), so
+/// copies the user never changed are updated by it.
+#[richos_command::command]
+fn instructions_update_question(state: State<'_, AppState>) -> Vec<richos_core::instructions_update::Asked> {
+    let Some(folder) = richos_core::company::install_central_root() else { return Vec::new() };
+    let shipped = state.engine_dir.lock().map(|dir| dir.join("app")).unwrap_or_default();
+    richos_core::instructions_update::question(&folder, &shipped).unwrap_or_else(|e| {
+        eprintln!("[richos] the newer shipped instructions could not be checked: {}", e.0);
+        Vec::new()
+    })
+}
+
+/// **No.** Nothing changes, and the question is not asked again for this version.
+#[richos_command::command]
+fn decline_instructions_update(state: State<'_, AppState>) -> Result<(), String> {
+    let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;
+    let shipped = state.engine_dir.lock().map(|dir| dir.join("app")).map_err(|_| "the engine is unavailable".to_string())?;
+    richos_core::instructions_update::decline(&folder, &shipped).map_err(|e| e.0)
+}
+
+/// **OK, for one file** (the screen updates them one after another): the session that updates it
+/// (`instructions_update::rewrite_with_rich`), on the Claude account in use. Returns the file
+/// before and after for the before-and-after screen (`instructions_update::UpdatedFile`).
+#[richos_command::command]
+fn update_instructions_file(state: State<'_, AppState>, name: String) -> Result<richos_core::instructions_update::UpdatedFile, String> {
+    let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;
+    let engine = state.engine_dir.lock().map(|dir| dir.clone()).map_err(|_| "the engine is unavailable".to_string())?;
+    let bin = state.claude_bin.lock().map(|bin| bin.clone()).unwrap_or_else(|_| PathBuf::from("claude"));
+    let runtime = richos_core::runtime::verify_engine(&engine).map_err(|e| e.to_string())?;
+    let mut profile = richos_core::engine_profile::EngineProfile::prepare(&engine, &state.data_dir, runtime).map_err(|e| e.0)?;
+    profile.claude_account = Some(state.quota.lease_account());
+    profile.token_sink = Some(state.quota.token_sink());
+    let updated = richos_core::instructions_update::accept(&folder, &engine.join("app"), &name,
+        |update| richos_core::instructions_update::rewrite_with_rich(&bin, &profile, update));
+    profile.remove_session_files();
+    updated
+}
+
+/// **Open the file** or **Show in Finder** on the before-and-after screen: `rich.md` or `stu.md`
+/// in the user's folder, and nothing else, opened in the Mac's default app for it or selected in
+/// a Finder window.
+#[richos_command::command]
+fn instructions_file_open(name: String, reveal: bool) -> Result<(), String> {
+    if ![richos_core::user_settings::RICH, richos_core::user_settings::STU].contains(&name.as_str()) {
+        return Err(format!("{name} is not one of the instruction files"));
+    }
+    let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;
+    let mut open = std::process::Command::new("/usr/bin/open");
+    if reveal { open.arg("-R"); }
+    match open.arg(folder.join(&name)).status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("{name} could not be opened ({status})")),
+        Err(e) => Err(format!("{name} could not be opened: {e}")),
+    }
 }
 
 #[cfg(test)]

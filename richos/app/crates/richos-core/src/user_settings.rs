@@ -9,8 +9,10 @@
 //!
 //! - [`RICH`] and [`STU`]: Rich's and Stu's instructions. On first run the app copies its
 //!   shipped `rich.md` and `stu.md` here ([`provision`]); from then on every session of Rich
-//!   and Stu starts from these copies ([`standing_plugin`]), never from the shipped ones, and
-//!   the app never writes them again. The user's files ARE what runs.
+//!   and Stu starts from these copies ([`standing_plugin`]), never from the shipped ones. The
+//!   user's files ARE what runs. When a new version ships improved ones, a copy the user never
+//!   changed is updated, and a changed one only when the user says OK
+//!   (`instructions_update.rs`).
 //! - [`INSTRUCTIONS`]: the user's own standing instructions, created empty on first run.
 //! - [`ORCHESTRATION_CONFIG`]: the user's values for the engine's checks. The coordination
 //!   folder's generated config is that file plus the app's own keys ([`orchestration_config`]).
@@ -36,12 +38,11 @@ pub const FILES: [&str; 5] = [RICH, STU, INSTRUCTIONS, ORCHESTRATION_CONFIG, SET
 /// out, so every reader (first match or last match) sees one value: the app's.
 pub const APP_KEYS: [&str; 1] = ["SESSION_TEAMS_DIR"];
 
-/// The values a key gets when the user's file does not set it: what every lease had before
-/// the file existed.
-pub const DEFAULTS: [(&str, &str); 2] = [
-    ("ALLOWED_MODELS", "\"opus sonnet haiku\""),
-    ("MODEL_TIERS", "\"opus > sonnet > haiku\""),
-];
+/// The keys whose value, when the user's file does not set one, is the engine's own: its line
+/// in the shipped engine's `orchestration.config`, as written there (build plan item 7). So a
+/// new user gets the engine's full model list and order and its cost ceiling (`opus`), and a
+/// model added there reaches every user's app with the engine, with nothing to change here.
+pub const ENGINE_DEFAULTS: [&str; 3] = ["ALLOWED_MODELS", "MODEL_TIERS", "MODEL_CEILING"];
 
 /// Create `path` with `body` only when nothing is at that name; returns whether it did. An
 /// existing file, or a link of any kind, is the user's and is never written.
@@ -59,9 +60,10 @@ fn create_once(path: &Path, body: &[u8]) -> Result<bool, RuntimeError> {
 }
 
 /// **First run: copy the shipped `rich.md` and `stu.md`, and an empty `instructions.md`, into
-/// the user's folder**, each only when the user has none. `shipped` is the shipped plugin root
-/// (`<engine>/app`). Returns the names it created. Nothing the user has is ever written; a
-/// newer shipped file is never applied over the user's copy.
+/// the user's folder**, each only when the user has none, and record what each copy was made
+/// from. `shipped` is the shipped plugin root (`<engine>/app`). Returns the names it created.
+/// Then a copy the user never changed is brought to a newer shipped version
+/// (`instructions_update::check`); a changed one is never written here.
 pub fn provision(folder: &Path, shipped: &Path) -> Result<Vec<&'static str>, RuntimeError> {
     std::fs::create_dir_all(folder).map_err(|e| RuntimeError(format!("{} could not be created: {e}", folder.display())))?;
     let mut created = Vec::new();
@@ -69,9 +71,16 @@ pub fn provision(folder: &Path, shipped: &Path) -> Result<Vec<&'static str>, Run
         if std::fs::symlink_metadata(folder.join(name)).is_ok() { continue; }
         let body = std::fs::read(shipped.join("agents").join(name))
             .map_err(|e| RuntimeError(format!("the shipped {name} could not be read: {e}")))?;
-        if create_once(&folder.join(name), &body)? { created.push(name); }
+        if create_once(&folder.join(name), &body)? {
+            crate::instructions_update::record_copy(folder, name, &String::from_utf8_lossy(&body))?;
+            created.push(name);
+        }
     }
     if create_once(&folder.join(INSTRUCTIONS), b"")? { created.push(INSTRUCTIONS); }
+    // A failed check never stops a session: the user's files are used as they are.
+    if let Err(e) = crate::instructions_update::check(folder, shipped) {
+        eprintln!("[richos] the newer shipped instructions could not be checked: {}", e.0);
+    }
     Ok(created)
 }
 
@@ -161,17 +170,22 @@ fn assigned_key(line: &str) -> Option<&str> {
         && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')).then_some(key)
 }
 
-/// **The coordination folder's `orchestration.config`**: [`DEFAULTS`] for each key the user's
-/// file does not set, the user's file as written (minus any [`APP_KEYS`] line), then the app's
-/// own keys. With no user file it is, byte for byte, the file every lease had before.
-pub fn orchestration_config(folder: Option<&Path>, teams: &str) -> Result<String, RuntimeError> {
+/// **The coordination folder's `orchestration.config`**: the engine's line for each
+/// [`ENGINE_DEFAULTS`] key the user's file does not set (`engine` is the shipped engine's
+/// `orchestration.config`), the user's file as written (minus any [`APP_KEYS`] line), then the
+/// app's own keys.
+pub fn orchestration_config(folder: Option<&Path>, engine: &str, teams: &str) -> Result<String, RuntimeError> {
     let user = match folder { Some(folder) => read_optional(&folder.join(ORCHESTRATION_CONFIG))?, None => None };
     let user_lines: Vec<&str> = user.as_deref().map(|text| text.lines()
         .filter(|line| assigned_key(line).is_none_or(|key| !APP_KEYS.contains(&key))).collect()).unwrap_or_default();
     let set: Vec<&str> = user_lines.iter().filter_map(|line| assigned_key(line)).collect();
     let mut out = String::from("# Generated desktop coordination, not target-repository configuration.\n");
-    for (key, value) in DEFAULTS {
-        if !set.contains(&key) { out.push_str(&format!("{key}={value}\n")); }
+    for key in ENGINE_DEFAULTS {
+        if set.contains(&key) { continue; }
+        let line = engine.lines().find(|line| !line.starts_with(char::is_whitespace) && assigned_key(line) == Some(key))
+            .ok_or_else(|| RuntimeError(format!("the engine's orchestration.config sets no {key}")))?;
+        out.push_str(line);
+        out.push('\n');
     }
     if let (Some(folder), true) = (folder, user.is_some()) {
         out.push_str(&format!("# The user's own values, from {}\n", folder.join(ORCHESTRATION_CONFIG).display()));

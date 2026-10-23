@@ -37,7 +37,10 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
 
 THE GRADE REFUSES a case whose pids were not recorded by the commands themselves (the reason P15's
 reap-lead-crash half regraded to PREMISE-FALSE): a heartbeat records its own pid, group and start
-before it beats, and a case with none is REFUSED, never passed. Exit 0 when every step passes.
+before it beats, and a case with none is REFUSED, never passed. A job handed to Stu whose
+command a session bound as Rich's started FAILS at once (walk-2bfb274d19d0): each step's
+evidence names the role, session and helper that started every heartbeat. Exit 0 when every
+step passes.
 Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
 import argparse
@@ -103,16 +106,19 @@ def pressed_at(records):
 
 def told_stopped(record):
     """None when the assignment he stopped (or quit) reads as stopped, else why not. A stop he
-    made is `interrupted` with the "was stopped" notice; guest walk-0ddfdbf8ff00 read "failed ...
-    Claude channel closed (child exited?)." for both Stops and the Quit."""
+    made is `interrupted` with his Stop on the record (`user_stop_requested_at_ms`); guest
+    walk-0ddfdbf8ff00 read "failed ... Claude channel closed (child exited?)." for both Stops and
+    the Quit. The host no longer raises an assignment notice of its own (2002ec31b, "remove
+    host-inferred job execution state": Stu is told and Rich tells him), so a notice is not
+    required; one that is there must still say it was stopped (walk-28d1d7305246 failed only on
+    the missing notice, with both commands ended inside the bound)."""
     if record.get('state') in OPEN:
         return 'the stopped assignment is still running: ' + json.dumps(record)[:400]
     notices = record.get('notices') or []
-    if not notices:
-        return 'the stopped assignment raised no notice: ' + json.dumps(record)[:400]
-    last = notices[-1]
-    if record.get('state') != 'interrupted' or last.get('kind') != 'interrupted':
-        return 'the stop was told as %s, not as a stop: %r' % (record.get('state'), last.get('text', ''))
+    last = notices[-1] if notices else {}
+    if record.get('state') != 'interrupted' or not record.get('user_stop_requested_at_ms') \
+            or (notices and last.get('kind') != 'interrupted'):
+        return 'the stop was told as %s, not as a stop: %r' % (record.get('state'), last.get('text') or record.get('detail', ''))
     return None
 
 
@@ -140,21 +146,60 @@ def recorded(rows, names, since_ms):
 
 
 def ask_text(tag, background=True, seconds=FOREGROUND_SECONDS):
-    """What he types to have the heartbeats run: worded as a job to be done, the way
-    command-walk.py's fixed wording is, so the front desk registers a `task` and the back end's
-    lease runs them. "Tell me what it prints" alone was registered as a `check` there (the
-    2026-09-27 command diagnosis, proof-run-1)."""
+    """What he types to have the heartbeats run: worded as a job to be done, so it is handed to
+    Stu and his side runs them. "Tell me what it prints" alone was registered as a `check` (the
+    2026-09-27 command diagnosis, proof-run-1). Never "for me yourself": since a6ddf48f4 a request
+    he asks Rich to do himself is Rich's (rich.md), and walk walk-2bfb274d19d0 (bundle 8cdad8794)
+    had the job handed to Stu and both commands run by Rich's own session."""
     fg = 'python3 heartbeat.py beat %s-fg %s --seconds %d' % (tag, BEATS, seconds)
     tail = ('heartbeat.py is my own harmless test script at the top of that folder: it records its own '
             'process id and writes the time into small files under %s until it ends.' % BEATS)
     if background:
-        return ('Please run these two harmless test commands for me yourself with your shell tool, in my '
+        return ('Please run these two harmless test commands for me with a shell tool, in my '
                 'Acme folder, and tell me when they have finished and what they printed. First start this '
                 'one in the background (run_in_background: true): python3 heartbeat.py beat %s-bg %s   '
                 'Then run this one in the foreground and wait for it: %s   %s' % (tag, BEATS, fg, tail))
-    return ('Please run this harmless test command for me yourself with your shell tool, in my Acme '
+    return ('Please run this harmless test command for me with a shell tool, in my Acme '
             'folder, in the foreground, and tell me when it has finished and what it printed: %s   %s'
             % (fg, tail))
+
+
+def runs_heartbeat(command, tag):
+    """Does this shell command run one of the ask's heartbeats (`heartbeat.py beat <tag>-...`)?
+    Read as the shell splits it, so quoting and spacing never hide one (review
+    rv-20261022T114810Z-cdd66038-220d: `python3 "heartbeat.py" beat` was missed). Only as the program a shell segment runs (`python3 heartbeat.py beat ...` or
+    `./heartbeat.py beat ...`), never as words printed by another program (review
+    rv-20261022T124912Z-7ceba023-ce38: `printf '%s ' python3 heartbeat.py beat ...`)."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()')
+        lexer.whitespace_split, lexer.commenters = True, '#'
+        words = list(lexer)
+    except ValueError:
+        words = command.split()
+    segment = []
+    for word in words + [';']:
+        if word and set(word) <= set(';&|()'):
+            program = [w for w in segment if '=' not in w.split('/')[0]]  # skip VAR=value
+            if program and program[0].rsplit('/', 1)[-1].startswith('python'):
+                program = program[1:]
+            if (program[:1] and program[0].rsplit('/', 1)[-1] == 'heartbeat.py' and program[1:2] == ['beat']
+                    and (program[2:3] or [''])[0].startswith(tag + '-')):
+                return True
+            segment = []
+        else:
+            segment.append(word)
+    return False
+
+
+def rich_ran_handed(calls, assignments):
+    """None, or why the run is wrong: a job was handed to Stu (an assignment registered) and a
+    session bound as Rich's started one of its commands. When Rich hands a job to Stu, its
+    commands are run by Stu's side only (CEO §139); walk-2bfb274d19d0 saw Rich run both."""
+    mine = [c for c in calls if c.get('role') == 'rich']
+    if not assignments or not mine:
+        return None
+    return ("the job was handed to Stu (%s) and Rich's own session ran its commands: %s"
+            % (', '.join(a.get('id') or '?' for a in assignments), json.dumps(mine)[:1200]))
 
 
 # --- the grade, pure, so test/reap-walk.test.py can hold it to its rules without a guest ---------
@@ -257,10 +302,33 @@ class Walk(adopt.Walk):
             text = guest(self.vm, 'python3 -c %s %s %s' % (shlex.quote(script), shlex.quote(self.data),
                                                             shlex.quote(assignment_id)), 60)
             record = json.loads(text) if text.strip() else {}
-            if record.get('state') not in OPEN and record.get('notices'):
+            if record.get('state') not in OPEN:
                 break
             time.sleep(1)
         return record
+
+    def commands_run(self, tag):
+        """Every Bash call that started one of this ask's heartbeats, from the app's own hook
+        evidence (<engine-state>/evidence/<session>/callbacks.jsonl): the role its session is
+        bound as (binding.json: rich or stu), the session, the helper agent if any, and the
+        command. Read after the heartbeats recorded themselves, so their calls are on disk."""
+        script = ('import json,glob,sys\n'
+                  'root,tag=sys.argv[1]+"/engine-state",sys.argv[2]\n'
+                  'out=[]\n'
+                  'for p in glob.glob(root+"/evidence/*/callbacks.jsonl"):\n'
+                  '    try: role=json.load(open(p.rsplit("/",1)[0]+"/binding.json")).get("role")\n'
+                  '    except Exception: role=None\n'
+                  '    for line in open(p,errors="replace"):\n'
+                  '        if "heartbeat.py" not in line: continue\n'
+                  '        try: c=json.loads(line).get("callback",{})\n'
+                  '        except Exception: continue\n'
+                  '        if c.get("tool_name")!="Bash" or c.get("hook_event_name")!="PreToolUse": continue\n'
+                  '        out.append({"role":role,"session":c.get("session_id"),"agent":c.get("agent_id"),\n'
+                  '                    "command":str((c.get("tool_input") or {}).get("command",""))[:2000]})\n'
+                  'print(json.dumps(out))\n')
+        calls = json.loads(guest(self.vm, 'python3 -c %s %s %s' % (shlex.quote(script), shlex.quote(self.data),
+                                                                   shlex.quote(tag)), 60))
+        return [c for c in calls if runs_heartbeat(c['command'], tag)]
 
     def approve_pending(self):
         """Open the work summary when something waits for him, and approve every request there."""
@@ -290,7 +358,14 @@ class Walk(adopt.Walk):
         approved = 0
         while time.monotonic() < end:
             if recorded(self.rows(), names, sent):
-                return {'names': names, 'approved': approved, 'sent_ms': sent, 'assignments': self.assignments_since(sent)}
+                assignments, calls = self.assignments_since(sent), self.commands_run(tag)
+                # In the walk's log at once: a later verdict that fails keeps who ran them.
+                print('run_by %s %s' % (tag, json.dumps({'assignments': assignments, 'calls': calls})), flush=True)
+                wrong = rich_ran_handed(calls, assignments)
+                if wrong:
+                    raise StepFailed(wrong)
+                return {'names': names, 'approved': approved, 'sent_ms': sent, 'assignments': assignments,
+                        'run_by': calls}
             approved += self.approve_pending()
             time.sleep(3)
         raise StepFailed('prerequisite unavailable: %s never recorded itself within %d s (approved %d request(s))'
@@ -308,10 +383,30 @@ class Walk(adopt.Walk):
         return relaunch(self.vm, environment={'ANTHROPIC_MODEL': model} if model else None)
 
     def enter(self):
-        if self.present('Talk to Rich'):
-            self.press('Talk to Rich')
-        time.sleep(2)
-        self.press(self.facts.get('thread_title') or 'Running')
+        # Every caller has just relaunched the app, and a launch with a company opens on the HOME
+        # screen (asked-again-walk.py waits up to 90 s for it). Its door is waited for, not
+        # checked once: checked before home was drawn, it was skipped, and the walk then waited
+        # on the home screen for a conversation row (walk-45ed47dcaab0's screenshot,
+        # esc-20261021T213902Z-b513879e).
+        self.wait_for('Talk to Rich', seconds=90)
+        self.press('Talk to Rich')
+        # The door opens the company's last conversation itself: walk-5a4e3ff2c768 showed
+        # "Acme / Onboarding" with its composer and the sidebar closed, so the row the walk then
+        # waited for was not on screen. The row is pressed only when the door opened another one.
+        self.wait_for('Message to Rich', role='AXTextArea')
+        title = self.facts.get('thread_title') or 'Running'
+        # The crumb is static text, whose words are its AXValue (walk-08aeea74dab4's tree:
+        # {"role": "AXStaticText", "title": "", "value": "Onboarding"}), never its title.
+        try:
+            if self.ax('find', '--value', title, '--role', 'AXStaticText', '--first'):
+                return
+        except StepFailed as exc:
+            if not adopt.axwait.not_yet(exc, 'find'):
+                raise
+        # Waited for before it is pressed: a press is never asked again (axwait.py), and right
+        # after a relaunch the app may not answer one read (esc-20261021T205850Z-48c70d7d).
+        self.wait_for(title)
+        self.press(title)
 
     # --- steps --------------------------------------------------------------------------------
     def connect(self):
@@ -360,18 +455,55 @@ class Walk(adopt.Walk):
         names = started['names']
         target, why = stoppable(self.assignments_since(started['sent_ms']))
         if why:
-            raise StepFailed(why)
-        self.press('waiting for you') if self.present('waiting for you') else self.press('assignment running')
+            raise StepFailed('%s\n%s' % (why, self.stop_evidence()))
+        # The work chip names the job's state ("1 assignment starting", "... running", "... waiting
+        # to start", "1 waiting for you"; main.js renderDrillChip) and always ends its label with
+        # "Open the work summary." Walk walk-21f83423b356 pressed the fixed words "assignment
+        # running" while the chip said another state; the chip's own ending is pressed instead.
+        self.wait_for('Open the work summary')
+        self.press('Open the work summary')
         # The row's Stop is labeled "Stop <its title>" (work-summary.js); name this one.
         label = 'Stop ' + (target.get('title') or '')[:60]
         press = pressed_at(self.press(label))
-        evidence = self.verdict(names, press['pressed_at_ms'], BOUND_MS)
+        try:
+            evidence = self.verdict(names, press['pressed_at_ms'], BOUND_MS)
+        except StepFailed as exc:
+            seen = {r['name']: r['t_ms'] for r in self.rows() if r.get('kind') == 'seen' and r.get('name') in names}
+            raise StepFailed('%s\nheartbeats seen at (guest ms): %s; pressed at %d\n%s'
+                             % (exc, json.dumps(seen), press['pressed_at_ms'], self.stop_evidence())) from exc
         record = self.closed_record(target['id'])
         told = told_stopped(record)
         if told:
             raise StepFailed(told)
         return dict(evidence, press=press, started=started, stopped=target['id'],
-                    told=record['notices'][-1]['text'])
+                    told=(record.get('notices') or [{}])[-1].get('text'), detail=record.get('detail'))
+
+    def stop_evidence(self):
+        """What a Stop that left a command running had to go on, read before the guest is gone:
+        every assignment of the conversation (state, detail, obligation), and every Bash call the
+        heartbeats were started with (whose session, whether a helper's, its description and
+        background option), from the app's own hook evidence. A diagnostic: never the verdict."""
+        script = ('import json,glob,sys\n'
+                  'root=sys.argv[1]+"/engine-state"\n'
+                  'for p in sorted(glob.glob(root+"/assignments/*/*.json")):\n'
+                  '    try: r=json.load(open(p))\n'
+                  '    except Exception: continue\n'
+                  '    print("assignment",json.dumps({k:r.get(k) for k in ("id","obligation_id","state","detail","registered_at_ms","updated_at_ms","user_stop_requested_at_ms")}))\n'
+                  'for p in glob.glob(root+"/evidence/*/callbacks.jsonl"):\n'
+                  '    try: role=json.load(open(p.rsplit("/",1)[0]+"/binding.json")).get("role")\n'
+                  '    except Exception: role=None\n'
+                  '    for line in open(p,errors="replace"):\n'
+                  '        if "heartbeat.py beat stop-" not in line: continue\n'
+                  '        try: c=json.loads(line).get("callback",{})\n'
+                  '        except Exception: continue\n'
+                  '        if c.get("tool_name")!="Bash" or c.get("hook_event_name") not in ("PreToolUse","PostToolUse"): continue\n'
+                  '        print("bash",json.dumps({"event":c.get("hook_event_name"),"role":role,"session":c.get("session_id"),\n'
+                  '            "agent":c.get("agent_id"),"tool_use_id":c.get("tool_use_id"),"input":c.get("tool_input"),\n'
+                  '            "response":str(c.get("tool_response"))[:200]})[:900])\n')
+        try:
+            return guest(self.vm, 'python3 -c %s %s' % (shlex.quote(script), shlex.quote(self.data)), 60).strip()[-6000:]
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
+            return 'stop evidence could not be read: %s' % exc
 
     def quit(self):
         started = self.start('quit')
@@ -398,7 +530,7 @@ class Walk(adopt.Walk):
         if told:
             raise StepFailed(told)
         return dict(evidence, app_log=app_log, question=question[-800:], started=started, stopped=target['id'],
-                    told=record['notices'][-1]['text'])
+                    told=(record.get('notices') or [{}])[-1].get('text'))
 
     def crash(self):
         self.facts['app'] = self.relaunched()
