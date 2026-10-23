@@ -122,7 +122,7 @@ fn bounded(s: &str, n: usize) -> String {
     out
 }
 
-fn first_sentence_title(description: &str) -> String {
+pub fn first_sentence_title(description: &str) -> String {
     let d = description.trim();
     let end = d.find(['.', '!', '?', '\n']).unwrap_or(d.len());
     let t = d[..end].trim();

@@ -57,9 +57,6 @@ struct Inner {
     resumed: bool,
 }
 
-/// Approved is final (§140): changing an approved report means a new report.
-const FINAL: &str = "This report was approved and can't be changed. Start a new report to change it.";
-
 /// The fixed facts of this Mac and this run.
 pub struct Env {
     pub store: Store,
@@ -754,9 +751,6 @@ impl Engine {
     pub fn edit(&self, section: &str, text: &str) -> Result<Value, String> {
         let mut inner = self.inner.lock().unwrap();
         let d = inner.draft.as_mut().ok_or("no report")?;
-        if d.delivery.is_some() {
-            return Err(FINAL.into());
-        }
         d.report.as_mut().ok_or("no report")?.edit(section, text)?;
         self.save(&mut inner);
         let d = inner.draft.as_ref().unwrap();
@@ -765,7 +759,7 @@ impl Engine {
 
     pub fn set_excerpt(&self, id: &str, removed: bool) -> Value {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(r) = inner.draft.as_mut().filter(|d| d.delivery.is_none()).and_then(|d| d.report.as_mut()) {
+        if let Some(r) = inner.draft.as_mut().and_then(|d| d.report.as_mut()) {
             r.set_excerpt_removed(id, removed);
         }
         self.save(&mut inner);
@@ -846,9 +840,9 @@ impl Engine {
     // send
     // -----------------------------------------------------------------------------------
 
-    /// **SEND REPORT** (§140, dead simple): approve the exact reviewed text and screenshot set
-    /// under the report ID, save it, and send it straight through. Approved is final. A report
-    /// that was not sent is sent again from the start under a fresh report ID (a rare duplicate
+    /// **SEND REPORT** (§140, dead simple): send what the review screen shows at this moment,
+    /// straight through, under the report ID. The person can always edit and press Send again: a
+    /// report that was not sent is sent from the start under a fresh report ID (a rare duplicate
     /// issue is acceptable); one that was submitted, or is being sent, is not sent again.
     pub fn send_report(&self) -> Result<(), String> {
         let dest = self.env.dest.clone()?;
@@ -874,19 +868,22 @@ impl Engine {
         Ok(())
     }
 
-    /// **SEND AGAIN** after "Not sent yet": the same report, from the start, under a fresh ID.
+    /// **SEND AGAIN** after "Not sent yet": the report as it is now, from the start, under a fresh ID.
     pub fn try_again(&self) -> Result<(), String> {
         self.send_report()
     }
 
-    /// Freeze and save the current report as approved, or say why not. Nothing is sent unless
-    /// the approval is saved first.
+    /// Take the report as it is now and save it before anything is sent, or say why not. An empty
+    /// title is sent as the first sentence of what happened.
     fn approve_and_save(&self, dest: &Destination) -> Result<delivery::Approved, String> {
         let mut inner = self.inner.lock().unwrap();
         let d = inner.draft.as_mut().ok_or("no report")?;
         let manifest = self.env.store.manifest(d)?;
         let r = d.report.as_ref().ok_or("no report")?;
         let (title, body) = r.render();
+        // An empty title is sent as the first sentence of what the review screen says happened
+        // (the words Claude and the person kept; "RichOS problem report" when there are none).
+        let title = if title.trim().is_empty() { report::first_sentence_title(&r.what_happened) } else { title };
         let approved = delivery::approve(&r.report_id, &title, &body, manifest, &dest.relay, util::now_millis(), &self.env.store.installation_id())
             .map_err(|p| p.iter().map(|p| format!("{}: {}", p.item, p.detail)).collect::<Vec<_>>().join(" "))?;
         // Sending from the moment it is approved; a quit before it ends reads as not sent at the
@@ -931,8 +928,8 @@ impl Engine {
         }
     }
 
-    /// The one request, from the approved report's own screenshots (approved is final, so the
-    /// draft's screenshots are the approved ones).
+    /// Send it straight through, the screenshots read from the draft and checked against what was
+    /// taken for this send (one changed meanwhile stops it as not sent).
     fn deliver(&self, draft_id: &str, approved: delivery::Approved, dest: Destination) {
         self.set_state(draft_id, &State::Sending);
         let Some(d) = self.env.store.load(draft_id) else { return };
@@ -1041,9 +1038,6 @@ impl Engine {
         {
             let mut inner = self.inner.lock().unwrap();
             let d = inner.draft.as_mut().ok_or("no report")?;
-            if d.delivery.is_some() {
-                return Err(FINAL.into());
-            }
             if replacing.is_some_and(|i| i >= d.screenshots.len()) {
                 return Err("no such screenshot".into());
             }
@@ -1095,9 +1089,6 @@ impl Engine {
     pub fn remove_image(&self, index: usize) -> Result<(), String> {
         let mut inner = self.inner.lock().unwrap();
         let d = inner.draft.as_mut().ok_or("no report")?;
-        if d.delivery.is_some() {
-            return Err(FINAL.into());
-        }
         if index >= d.screenshots.len() {
             return Err("no such screenshot".into());
         }
@@ -1285,7 +1276,6 @@ fn left_words(state: &State) -> String {
 }
 
 pub fn review_view(d: &Draft, r: &Report) -> Value {
-    let mode = if d.delivery.is_some() { "approved" } else { "draft" };
     let mut notes = Vec::new();
     match (r.provenance, d.ai_failure) {
         (Provenance::AiFailed, Some(f)) => notes.push(format!("Claude Code stopped part way ({}). This report was prepared from your answers and what was collected; unanswered questions are listed under Missing information. Claude did not check it for private details: review it by hand before you send it.", f.message().trim_end_matches('.').to_lowercase().replacen("richdoctor", "RichDoctor", 1).replacen("claude code", "Claude Code", 1))),
@@ -1299,7 +1289,7 @@ pub fn review_view(d: &Draft, r: &Report) -> Value {
     let (title, body) = r.render();
     let old_id = d.delivery.as_ref().map(|x| x.approved.report_id.clone());
     json!({
-        "mode": mode,
+        "mode": "draft",
         "report_id": r.report_id,
         "old_id": old_id,
         "title": r.title,
@@ -2027,7 +2017,6 @@ mod tests {
         let s = relay.st.0.lock().unwrap();
         assert_eq!((s.issues, s.stored.len()), (1, 2), "one issue, both screenshots stored");
         drop(s);
-        assert!(e.edit("what_happened", "changed after sending").is_err(), "approved is final");
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -2079,6 +2068,24 @@ mod tests {
         e.open(&d.id).unwrap();
         let notes = e.review()["notes"].to_string();
         assert!(notes.contains("Claude did not check"), "{notes}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// The CEO, 2026-10-23: no lock that a cleared title can get stuck behind. An empty title is
+    /// sent as the first sentence of what happened, as the review shows it, and files an issue.
+    #[test]
+    fn an_empty_title_is_sent_as_the_first_sentence_of_what_happened_and_files_an_issue() {
+        let root = scratch("empty-title");
+        let relay = FakeRelay::start();
+        let (e, _) = engine_for(&root, &relay);
+        let mut d = draft_for(&relay);
+        e.env().store.save(&mut d, 1).unwrap();
+        e.open(&d.id).unwrap();
+        e.edit("title", "").unwrap();
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "submitted", "{v}");
+        let title = relay.st.0.lock().unwrap().registered["title"].as_str().unwrap_or("").to_string();
+        assert_eq!(title, "RichOS closes before opening", "the first sentence of what happened");
         std::fs::remove_dir_all(root).ok();
     }
 

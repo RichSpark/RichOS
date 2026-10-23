@@ -2,17 +2,16 @@
 //! §140, 2026-10-22: "dead-simple as possible, avoid any over-engineering and ensure that the
 //! core functionality always works").
 //!
-//!   - **Approved is final.** [`approve`] freezes the exact title, body and screenshot manifest
-//!     under a report ID; the engine saves it before anything is sent and refuses every edit of an
-//!     approved report afterwards (changing it means a new report).
+//!   - **Send sends what the review shows.** [`approve`] takes the exact title, body and
+//!     screenshot manifest at that moment under a report ID; the engine saves it before anything is
+//!     sent. The report stays editable: the person can change it and press Send again.
 //!   - **Send runs the live relay's calls straight through** ([`send`]; the relay is
 //!     `richos/mobile/service/RICHDOCTOR-RELAY.md`, protocol 2): register the approved text and
 //!     manifest, upload each approved screenshot, complete. The relay stores the screenshots
 //!     privately and files one GitHub issue whose numbered staff-only links are the body's last
 //!     lines ([`crate::report::ending`]). The issue link is "Report submitted"; anything else at
 //!     any step is "Not sent yet", with the relay's reason when it gives one.
-//!   - **Send again** starts over under a fresh report ID (the engine approves the same report
-//!     again with it). A rare duplicate issue is acceptable; the team closes it. Nothing about a
+//!   - **Send again** starts over under a fresh report ID, with the report as it is then. A rare duplicate issue is acceptable; the team closes it. Nothing about a
 //!     send is kept for later: its one-time receipt lives only for the calls of that send.
 use crate::image_profile::Entry;
 use serde::{Deserialize, Serialize};

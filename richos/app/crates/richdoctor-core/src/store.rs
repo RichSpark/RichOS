@@ -118,20 +118,11 @@ impl Store {
     }
 }
 
-/// The approved report and where it stands. Approved is final: the draft's report and
-/// screenshots are not changed once this exists.
+/// The report as last sent (or being sent) and where that send stands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delivery {
     pub approved: Approved,
-    /// A state this version does not know (one saved by an earlier build) reads as not sent, so
-    /// the report stays and can be sent again: never a lost report.
-    #[serde(deserialize_with = "state_or_not_sent")]
     pub state: State,
-}
-
-fn state_or_not_sent<'de, D: serde::Deserializer<'de>>(d: D) -> Result<State, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    Ok(serde_json::from_value(v).unwrap_or(State::NotSent { why: crate::delivery::NotSent::NoAnswer, at: 0 }))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -399,25 +390,6 @@ mod tests {
         assert!(!e.disk_full);
         assert_eq!(e.sentence(), "RichDoctor could not write to its folder.");
         std::fs::set_permissions(root.join("drafts"), std::fs::Permissions::from_mode(0o700)).unwrap();
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn a_report_saved_by_an_earlier_build_is_kept_and_can_be_sent_again() {
-        let (root, s) = store();
-        let mut d = Draft::new(1).unwrap();
-        let body = crate::report::footer("RD-7K3M-Q9VX");
-        let approved = crate::delivery::approve("RD-7K3M-Q9VX", "t", &body, vec![], "https://report.richos.ceo", 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
-        d.delivery = Some(Delivery { approved, state: State::Sending });
-        s.save(&mut d, 2).unwrap();
-        // The earlier build's record: a state this one does not have, and its extra fields.
-        let file = s.draft_dir(&d.id).join("draft.json");
-        let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-        v["delivery"]["state"] = serde_json::json!({"state": "unconfirmed", "checked_at": 2});
-        v["delivery"]["completion_attempted"] = serde_json::json!(true);
-        std::fs::write(&file, serde_json::to_vec(&v).unwrap()).unwrap();
-        let back = s.load(&d.id).expect("the report is kept");
-        assert!(back.delivery.unwrap().state.may_send());
         std::fs::remove_dir_all(root).ok();
     }
 

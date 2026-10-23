@@ -650,13 +650,13 @@
       acts = '<button class="btn link" data-act="saved">Saved reports</button><div class="grow"></div><button class="btn" data-act="view-report">' + G.out + '<span>View report</span></button><button class="btn primary" data-act="done">Done</button>';
     } else if (v.kind === "notsent") {
       html = '<div class="result"><div class="mark" style="color:var(--attention)">' + G.dash + '</div><div><h1>Not sent yet</h1><p class="why"></p><p class="kept"></p>' + kv(id) + "</div></div>";
-      acts = '<button class="btn primary" data-act="try-again">Send again</button><button class="btn" data-act="save-file">Save report</button><button class="btn" data-act="email">Email support</button><div class="grow"></div><button class="btn link" data-act="saved">Saved reports</button>';
+      acts = '<button class="btn primary" data-act="try-again">Send again</button><button class="btn" data-act="edit-report">Edit report</button><button class="btn" data-act="save-file">Save report</button><button class="btn" data-act="email">Email support</button><div class="grow"></div><button class="btn link" data-act="saved">Saved reports</button>';
     }
     body.innerHTML = html; foot.innerHTML = acts;
     if (v.kind === "submitted") body.querySelector(".issue").textContent = v.extra.issue_url.replace("https://", "");
     if (v.kind === "notsent") {
       body.querySelector(".why").textContent = v.extra.reason;
-      body.querySelector(".kept").textContent = "Your approved report" + (n ? " and its " + plural(n, "screenshot") + " are" : " is") + " kept on this Mac. Send again sends it from the start under a new report ID.";
+      body.querySelector(".kept").textContent = "Your approved report" + (n ? " and its " + plural(n, "screenshot") + " are" : " is") + " kept on this Mac. Edit it if you like; Send again sends it as it is then, under a new report ID.";
     }
     body.appendChild(approvedWell(v));
     show("s-result");
@@ -831,6 +831,7 @@
       case "send": invoke("send_report").catch(fail); break;
       case "save-edit": invoke("save_later").then(function () { toast("Edit saved on this Mac. The first report is still being checked."); invoke("delivery").then(renderResult); }); break;
       case "try-again": invoke("try_again").catch(fail); break;
+      case "edit-report": reopenReview(); break;
       case "email": openEmail(); break;
       case "open-mail": case "open-mail-anyway": {
         const n = S.plan ? S.plan.count : S.shots.length;

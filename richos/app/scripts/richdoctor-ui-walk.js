@@ -319,7 +319,7 @@ async function run() {
         check(`${theme} result ${kind}: heading`, (await T("#result-body h1")) === want);
         check(`${theme} result ${kind}: the report ID`, (await T("#result-body .kv")).includes("RD-7K3M-Q9VX"));
         const foot = await T("#result-foot");
-        if (kind === "notsent") check(`${theme} result notsent: the observed reason and Send again`, (await T("#result-body .why")).startsWith("Your Mac is not connected") && foot.includes("Send again") && foot.includes("Email support"));
+        if (kind === "notsent") check(`${theme} result notsent: the observed reason and Send again`, (await T("#result-body .why")).startsWith("Your Mac is not connected") && foot.includes("Send again") && foot.includes("Edit report") && foot.includes("Email support"));
         if (kind === "submitted") check(`${theme} result submitted: the public link and the receipt count`, (await T("#result-body .issue")) === "github.com/WebDevBooster/richos/issues/412" && (await T("#result-body .kv")).includes("2 screenshots received"));
         await contrast(page, "result-" + kind, theme);
       }
