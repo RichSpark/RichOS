@@ -666,6 +666,17 @@ alerted 'follow-ups.md' && ok "R51. 'added to the follow-ups' backed only by a c
 run_hook "$TR_FUP_COMMIT" "That's on the follow-up list for after the nightly"
 silent && ok "R52. 'on the follow-up list' with a committed change to the follow-up list in this turn: SILENT" || bad "R52. list committed" "rc=$RC out=$OUT"
 
+# A negation, modal or subordinate word in an EARLIER clause does not silence
+# the claim: only the claim's own clause is checked.
+run_hook "$TR_BASH" "It isn't in tonight's release, but it's on the follow-up list for after the nightly."
+alerted 'follow-ups.md' && ok "R53. 'isn't' in an earlier clause, then 'on the follow-up list': ALERTED" || bad "R53. earlier negation" "rc=$RC out=$OUT"
+
+run_hook "$TR_BASH" "The fix will ship later; I've added it to the follow-ups."
+alerted 'follow-ups.md' && ok "R54. 'will' in an earlier clause, then 'added to the follow-ups': ALERTED" || bad "R54. earlier modal" "rc=$RC out=$OUT"
+
+run_hook "$TR_BASH" "After checking the release, I've added it to the follow-ups."
+alerted 'follow-ups.md' && ok "R55. a completed 'After checking X,' preface, then 'added to the follow-ups': ALERTED" || bad "R55. completed preface" "rc=$RC out=$OUT"
+
 run_hook "$TR_MEM_WRITE" "Noted that the build is green."
 silent && ok "R39. 'Noted that the build is green.' stays an acknowledgment: SILENT" || bad "R39. noted that" "rc=$RC out=$OUT"
 

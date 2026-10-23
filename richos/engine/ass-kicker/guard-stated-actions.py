@@ -863,6 +863,9 @@ FOLLOWUPS_FILE = "richos-hq/docs/plans/follow-ups.md"
 # list?"). Backed only by a committed change to FOLLOWUPS_FILE in this turn.
 FOLLOWUP_LIST_CLAIM_RE = re.compile(r"\b(?:on|added\s+(?:\w+\s+)?to)\s+(?:my|the)\s+"
                                     r"(?:follow-?up\s+list|follow-?ups(?:\s+list)?)\b", re.I)
+# A completed preface before the claim's clause ("After checking the release,
+# I've added it ...") neither denies nor conditions the claim.
+FOLLOWUP_PREFACE_RE = re.compile(r"\b(?:after|before|once|when|since)\s+\w+ing\b[^,]*,", re.I)
 RULE_NOUN_RE = re.compile(r"\b(?:rules?|rulings?|lessons?|doctrine|standing\s+(?:instruction|order)s?)\b", re.I)
 NOTES_POINTER_RE = re.compile(r"\b(?:in|to|into)\s+(?:my\s+|the\s+)?(?:notes|memory)\b", re.I)
 # From the corpus (ass-kicker/docs/stated-actions.corpus.md, ARM 3).
@@ -897,6 +900,15 @@ def clean_keep_lists(message):
 
 def _before(rx, clause, pos):
     return bool(rx.search(clause[:pos]))
+
+
+def _own_clause_before(sentence, pos):
+    """The claim's own clause up to pos: the text after the last ARM 3 clause
+    boundary, with a completed preface ("After checking X,") removed."""
+    start = 0
+    for m in ARM3_CLAUSE_RE.finditer(sentence, 0, pos):
+        start = m.end()
+    return FOLLOWUP_PREFACE_RE.sub(" ", sentence[start:pos])
 
 
 def _arm3_clauses(sentence):
@@ -935,8 +947,8 @@ def record_claims(message):
             out.append(("note", note[:300]))
             continue
         ml = FOLLOWUP_LIST_CLAIM_RE.search(s)
-        if ml and not (_before(ARM3_NEG_RE, s, ml.start()) or _before(ARM3_MODAL_RE, s, ml.start())
-                       or _before(ARM3_SUBORD_RE, s, ml.start())):
+        own = _own_clause_before(s, ml.start()) if ml else ""
+        if ml and not (ARM3_NEG_RE.search(own) or ARM3_MODAL_RE.search(own) or ARM3_SUBORD_RE.search(own)):
             out.append(("list", s[:300]))
             continue
         third = third_subject(s)
