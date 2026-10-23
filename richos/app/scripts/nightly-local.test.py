@@ -3572,7 +3572,9 @@ class PublishedReportTests(unittest.TestCase):
         self.assertEqual(row["id"], first)
         self.assertIn("before publication", row["title"])
         self.assertIn("Keep rejected drafts off main", row["question"])
-        self.assertIn("second-review and land", row["question"])
+        self.assertIn("establish the release facts from the pinned implementation", row["question"])
+        self.assertIn("complete changed-file inventory before writing", row["question"])
+        self.assertNotIn("second-review", row["question"])
         self.assertIn("publish --run fixture-run", row["question"])
         self.assertIn("No CEO", row["question"])
         self.assertIn("then immediately run nightly-local.py publish --run", row["question"])
@@ -3667,9 +3669,9 @@ class PublishedReportTests(unittest.TestCase):
         self.assertEqual(self.started, [])
         self.main_untouched()
 
-    def test_the_brief_keeps_rejected_notes_off_main_and_requires_editorial_review(self):
+    def test_the_brief_keeps_rejected_notes_off_main_and_makes_newt_own_source_facts(self):
         brief = (m.ROOT / m.CHANGELOG_WORKER_BRIEF).read_text()
-        for text in ("<TAG>", "<REQUEST>", "QA accepts", "independently review",
+        for text in ("<TAG>", "<REQUEST>", "QA accepts", "facts.md", "changed_files",
                      "Never land a rejected", "changelog-instructions.md", "notes-draft"):
             self.assertIn(text, brief)
 

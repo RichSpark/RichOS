@@ -119,17 +119,21 @@ A completed build saves its exact-candidate notes request under
 `~/.richos-nightly/changelogs/<build-commit>/request.json`, outside the sealed
 candidate. A durable escalation starts Rich’s dedicated release-notes writer while
 QA walks the build. The writer follows `scripts/changelog-instructions.md`, writes
-on its own branch and hands over. Rejected drafts never land. A replacement still
+on its own branch and hands over. The request supplies the exact net changed-file
+inventory and a compact commit index. Newt establishes the before/after behavior,
+actors and conditions from the pinned implementation and acceptance evidence before
+writing. Its private facts account covers included, combined and excluded changes.
+Rejected drafts never land. A replacement still
 compares with the last successfully published release of its channel.
 
-After acceptance and independent review, Rich lands the corresponding Markdown
+After QA acceptance and Newt’s completed source-facts work, Rich lands the corresponding Markdown
 entry and its record in `docs/release-notes.json` together. `publish` reads remote
 main and requires the matching version, source commit, build commit, baseline and
 prose. The same prose appears in the GitHub release body at creation. A usage hold
 can delay publication, but cannot leave a public release waiting for its notes.
 
 If the baseline changes before the release body is public, regenerate the request
-and review replacement notes. The draft command updates the recognized unpublished
+and have Newt update the source facts and replacement notes. The draft command updates the recognized unpublished
 entry and registry together. Once a release body is public, its notes are retained
 on upload retries. Each entry carries its own GitHub release link. Rich publishes
 as the very next step after landing and keeps the same release job open until the

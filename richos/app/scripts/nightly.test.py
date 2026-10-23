@@ -1000,6 +1000,46 @@ class ChangelogTests(GitFixture):
         self.assertNotEqual(replacement["build_commit"], request["build_commit"])
         self.assertEqual(n.remote_tags(), set())
 
+    def test_history_is_a_compact_index_and_inventory_is_the_pinned_net_implementation(self):
+        for name in ("behavior.txt", "removed.txt"):
+            (self.repo / name).write_text("before\n")
+        n.git("add", ".")
+        n.git("commit", "-qm", "published source")
+        baseline = n.git("rev-parse", "HEAD")
+        (self.repo / "behavior.txt").write_text("project instructions reach workers only\n")
+        (self.repo / "removed.txt").unlink()
+        (self.repo / "user feature.txt").write_text("recover after the connection returns\n")
+        (self.repo / "reverted.txt").write_text("temporary implementation\n")
+        n.git("add", "-A")
+        n.git("commit", "-qm", "Misleading author account", "-m", "UNESTABLISHED_BODY_CLAIM")
+        (self.repo / "reverted.txt").unlink()
+        n.git("add", "-A")
+        n.git("commit", "-qm", "remove the temporary behavior")
+        info, _ = self.candidate()
+        n.git("checkout", "-q", "main")
+        (self.repo / "later.txt").write_text("not in this candidate\n")
+        n.git("add", ".")
+        n.git("commit", "-qm", "future behavior")
+        with patch.object(n, "published_changelog_base", return_value=("v5.0.0", baseline)):
+            request = n.changelog_request(info)
+        self.assertEqual(request["changed_files"], [
+            {"status": "M", "path": "behavior.txt"},
+            {"status": "D", "path": "removed.txt"},
+            {"status": "A", "path": "user feature.txt"},
+        ])
+        self.assertIn("Misleading author account", request["changes"])
+        self.assertNotIn("UNESTABLISHED_BODY_CLAIM", request["changes"])
+        self.assertNotIn("future behavior", request["changes"])
+
+    def test_first_release_inventory_is_source_files_not_packaging_or_the_current_checkout(self):
+        info, _ = self.candidate()
+        (self.repo / "untracked later file").write_text("not shipped\n")
+        request = n.changelog_request(info)
+        source_files = n.git("ls-tree", "-r", "--name-only", info["source_commit"]).splitlines()
+        self.assertEqual(request["changed_files"],
+                         [{"status": "A", "path": name} for name in source_files])
+        self.assertNotIn(str(n.PROVENANCE), source_files)
+
     def test_stale_baseline_refuses_and_empty_ranges_are_valid(self):
         info, out = self.candidate()
         self.approve(info)
@@ -1010,6 +1050,7 @@ class ChangelogTests(GitFixture):
                 n.finish(info, out)
             request = n.changelog_request(info)
             self.assertEqual(request["changes"], "")
+            self.assertEqual(request["changed_files"], [])
         self.assertNotIn(info["tag"], self.releases)
 
     def test_stable_uses_previous_stable_not_the_promoted_nightly(self):
@@ -1022,6 +1063,7 @@ class ChangelogTests(GitFixture):
         self.assertTrue(read.call_args.args[0].endswith("/releases/latest"))
         self.assertEqual(request["previous_tag"], "v5.0.0")
         self.assertEqual(request["changes"], "")
+        self.assertEqual(request["changed_files"], [])
 
     def test_stable_publishes_approved_notes_and_completed_publish_is_retryable(self):
         (self.repo / n.CONFIG).write_text(n.json_text(

@@ -1639,14 +1639,16 @@ class Runner:
         question = (f"Start Newt, the Release Notes Writer, with this exact command: `{start}`. "
                     f"The brief already names the tag and request. The candidate's run is "
                     f"{info['run_id']}. Draft now while QA walks it. Keep rejected drafts off main. "
-                    "After QA acceptance, second-review and land the matching notes and record, "
+                    "Newt must establish the release facts from the pinned implementation and account for "
+                    "the complete changed-file inventory before writing. After QA acceptance, "
+                    "land the matching notes and record, "
                     f"then immediately run nightly-local.py publish --run {info['run_id']} yourself. "
                     "Keep this job open until the release body and installable channel are verified. "
                     "Retry a failed upload with the same candidate and notes; if deliberately "
                     "abandoned after landing, remove its entry and record through the normal gate "
                     "before closing this job. No CEO changelog decision or intervention is needed.")
         raised = self.raise_release_job(title, question,
-                                       "QA may continue. Publication requires these reviewed notes.")
+                                       "QA may continue. Newt owns the source facts and complete user-facing notes.")
         temporary = sent.with_suffix(".json.part")
         try:
             temporary.write_text(json.dumps({"request_sha256": digest, "escalation": raised}) + "\n")
