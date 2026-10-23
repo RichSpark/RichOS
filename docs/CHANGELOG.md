@@ -2,6 +2,33 @@
 
 What changed in each stable version of RichOS, newest first; nightly builds are in the [nightly changelog](CHANGELOG-NIGHTLY.md).
 
+## 1.2.2
+
+[GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.2)
+
+- Added RichDoctor, a small menu bar app that RichOS installs beside itself for reporting a RichOS problem even when RichOS will not open: describe what went wrong, add screenshots and read the exact report before you choose to send it
+- Added Rich's and Stu's instructions and your own standing instructions as files in your RichOS folder: edit them and both follow the changes without a restart; Rich saves a "from now on" order there for you
+- Added asking you before a later RichOS version updates Rich's or Stu's instructions that you changed, with a before and after that marks every edit; a copy you never changed is updated by itself
+- Added connecting one project folder to more than one company in Connected project folders: RichOS tells you before you connect it and each folder shows which other companies have it
+- Added the full set of skills RichOS ships to Rich, Stu and their teammates, such as copywriting, front-end design, browser testing and iPhone and Android app development
+- Added memory for Rich and Stu, so what they learn carries into later conversations
+- Added Rich telling you in his reply when work has been on hold for 30 minutes with nothing set to end it; he asks whether to go ahead or keep holding it until a date or event
+- Changed the commands Rich and the team run to use your Mac's own setup: the tools and settings your Terminal has, plus your own Git name and saved Git sign-in for commits and pushes
+- Changed merging finished work into your project to run the project's own merge checks, as a merge in Terminal does; a failed check merges nothing and its own words say why
+- Changed how Rich and Stu work for you: Rich answers exactly what you asked, checks a result before saying it is done and never asks you to run a command; Stu has a new screen mocked up for you to choose before it is built
+- Improved the work teammates do in your project folders: they follow each project's own instruction file, as they would in Terminal
+- Improved Talk to Rich when it misses what you said: it asks you to say it again; if Rich was talking over you, it waits until he stops and keeps even a one-word reply
+- Fixed Rename in a chat's menu doing nothing: the chat's own row now turns into a text field that saves with Enter and cancels with Esc; the sidebar, the chat header and the company overview all show the new title
+- Fixed the first message typed right after reopening RichOS vanishing; messages sent before the conversation opens now reach Rich in the order you sent them
+- Fixed Rich, Stu and their teammates stopping for good when the internet connection dropped; they now wait for it to come back and carry on where they stopped
+- Fixed messages failing over and over with "This usually fixes itself" when no Claude account was signed in on your Mac or its sign-in had expired; RichOS now sends you to Settings, Claude accounts to sign in and a failure that repeats says what to check instead of asking you to send again
+- Fixed Settings, Claude accounts saying "No reading yet" for an account that was not signed in; it now says Not signed in with a Sign in button and never offers Sign in to an account that is signed in
+- Fixed Settings, Updates saying "RichOS could not prepare this update" when another update task was only busy; it now waits a moment and, if it is still busy, says so
+- Fixed RichOS saying "RichOS could not open" when you opened it again while it was going back to the previous version
+- Fixed Quit and stop the work leaving its jobs to resume at the next launch
+- Fixed stopping a job leaving the commands Rich and Stu were running for it still going
+- Fixed technical rows coming back into the conversation when you switched Technical view off just as a reply finished
+
 ## 1.2.1
 
 [GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.1)
