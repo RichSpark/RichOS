@@ -24,6 +24,7 @@ What changed in each stable version of RichOS, newest first; nightly builds are 
 - Fixed messages failing over and over with "This usually fixes itself" when no Claude account was signed in on your Mac or its sign-in had expired; RichOS now sends you to Settings, Claude accounts to sign in and a failure that repeats says what to check instead of asking you to send again
 - Fixed Settings, Claude accounts saying "No reading yet" for an account that was not signed in; it now says Not signed in with a Sign in button and never offers Sign in to an account that is signed in
 - Fixed Settings, Updates saying "RichOS could not prepare this update" when another update task was only busy; it now waits a moment and, if it is still busy, says so
+- Fixed RichOS saying "RichOS could not open" when you opened it again while it was going back to the previous version
 - Fixed Quit and stop the work leaving its jobs to resume at the next launch
 - Fixed stopping a job leaving the commands Rich and Stu were running for it still going
 - Fixed technical rows coming back into the conversation when you switched Technical view off just as a reply finished
