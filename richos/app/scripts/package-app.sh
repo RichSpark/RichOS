@@ -1402,6 +1402,83 @@ connect_overlay="$(python3 "$here/prepare-connect-helper.py")" || exit 1
 build_args+=(--config "$connect_overlay")
 
 # ---------------------------------------------------------------------------
+# RICHDOCTOR: THE SEPARATE SUPPORT APP THIS RICHOS CARRIES AND INSTALLS BESIDE ITSELF
+# ---------------------------------------------------------------------------
+# richos-hq docs/prds/2026-10-22-richdoctor-v1.md §3: "the existing RichOS download/update
+# carries the signed RichDoctor app as a sealed install payload". It is built here from
+# crates/richdoctor, signed the same way as RichOS (ad-hoc, or the same Developer ID with the
+# hardened runtime and a timestamp, and notarized and stapled when RichOS is), verified, and
+# archived with ONE RichDoctor.app root by the same archiver the update payload uses
+# (lib/updater_tar.py). The archive and its version go into RichOS's Resources/RichDoctor/
+# through a config overlay, so RichOS's own signature seals them; src-tauri/src/
+# richdoctor_install.rs installs it at launch. The verified RichDoctor.app is also left where
+# it was built, as the separate download (PRD §3: "the separate download supplies the
+# identical signed app directly").
+#
+# RICHOS_WITHOUT_RICHDOCTOR=1 skips it, loudly: that RichOS installs no RichDoctor.
+richdoctor_dir="$app_dir/crates/richdoctor"
+if [ "${RICHOS_WITHOUT_RICHDOCTOR:-}" = "1" ]; then
+  say ""
+  say "  RICHOS_WITHOUT_RICHDOCTOR=1 — this RichOS carries NO RichDoctor and installs none."
+else
+  say ""
+  say "building RichDoctor, the separate support app this RichOS installs beside itself..."
+  if ! (cd "$richdoctor_dir" && ${build_launch[@]+"${build_launch[@]}"} cargo tauri build --no-sign --bundles app); then
+    warn ""
+    warn "RichDoctor did not build — nothing was packaged. The output above is the reason."
+    exit 4
+  fi
+  . "$here/lib/cargo-target.sh"
+  rd_app="$(cargo_target_dir "$richdoctor_dir")/release/bundle/macos/RichDoctor.app"
+  if [ ! -d "$rd_app" ]; then
+    warn "the RichDoctor build exited 0 but $rd_app is not there — refusing to continue."
+    exit 1
+  fi
+  # The same build-machine path check as RichOS's, before the signature.
+  if ! python3 "$here/lib/no_host_paths.py" "$rd_app" --reviewed-text && [ "${RICHOS_ALLOW_HOST_PATHS:-}" != "1" ]; then
+    warn "RichDoctor carries build-machine paths — refusing to sign it."
+    exit 1
+  fi
+  if [ "$sign_mode" = "developer-id" ]; then
+    codesign --force --sign "$wanted" --options runtime --timestamp "$rd_app" || { warn "RichDoctor could not be signed."; exit 1; }
+    if [ "${RICHOS_NOTARIZE:-}" = "1" ]; then
+      rd_zip="$(mktemp -d)/RichDoctor.zip"
+      /usr/bin/ditto -c -k --keepParent "$rd_app" "$rd_zip" || exit 1
+      rd_submit="$(xcrun notarytool submit "$rd_zip" "${notary_args[@]}" --wait --output-format json 2>&1 || true)"
+      rm -rf "$(dirname "$rd_zip")"
+      printf '%s\n' "$rd_submit" | sed 's/^/    /'
+      if [ "$(printf '%s' "$rd_submit" | sed -n 's/.*"status" *: *"\([^"]*\)".*/\1/p' | head -1)" != "Accepted" ]; then
+        warn "RichDoctor's notarization was not accepted — refusing to carry an un-notarized RichDoctor."
+        exit 1
+      fi
+      xcrun stapler staple "$rd_app" || { warn "RichDoctor's ticket would not staple."; exit 1; }
+    fi
+  else
+    codesign --force --sign - --timestamp=none "$rd_app" || { warn "RichDoctor could not be ad-hoc signed."; exit 1; }
+  fi
+  if ! codesign --verify --deep --strict "$rd_app"; then
+    warn "RichDoctor's signature does not verify — refusing to carry it."
+    exit 1
+  fi
+  rd_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$rd_app/Contents/Info.plist" 2>/dev/null || true)"
+  rd_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$rd_app/Contents/Info.plist" 2>/dev/null || true)"
+  rd_floor="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$rd_app/Contents/Info.plist" 2>/dev/null || true)"
+  rd_ui="$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$rd_app/Contents/Info.plist" 2>/dev/null || true)"
+  if [ "$rd_id" != "com.richos.richdoctor" ] || [ -z "$rd_version" ] || [ "$rd_floor" != "13.0" ] || [ "$rd_ui" != "true" ]; then
+    warn "RichDoctor's Info.plist is not what it must be: identifier '$rd_id', version '$rd_version', macOS floor '$rd_floor', menu bar only '$rd_ui'."
+    exit 1
+  fi
+  rd_payload="$(mktemp -d)/RichDoctor"
+  mkdir -p "$rd_payload"
+  python3 "$here/lib/updater_tar.py" build "$rd_app" "$rd_payload/RichDoctor.app.tar.gz" || exit 1
+  python3 "$here/lib/updater_tar.py" verify "$rd_payload/RichDoctor.app.tar.gz" || exit 1
+  printf '%s\n' "$rd_version" > "$rd_payload/version"
+  build_args+=(--config "{\"bundle\":{\"resources\":{\"$rd_payload/RichDoctor.app.tar.gz\":\"RichDoctor/RichDoctor.app.tar.gz\",\"$rd_payload/version\":\"RichDoctor/version\"}}}")
+  say "  RichDoctor $rd_version: signed ($sign_mode), verified, carried as Resources/RichDoctor/RichDoctor.app.tar.gz"
+  say "  the separate download: $rd_app"
+fi
+
+# ---------------------------------------------------------------------------
 # THE SOURCE COMMIT, DERIVED BEFORE THE BUILD so it can be compiled INTO it.
 # ---------------------------------------------------------------------------
 #

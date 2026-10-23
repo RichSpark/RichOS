@@ -1816,7 +1816,11 @@ fn escaped(text: &str) -> String {
 /// means nothing in a bug report and is dropped (review rv-20261010T204141Z-53407e2a-dc94: a line
 /// indented four spaces was a code block, where the escapes show), so no line is a code block and
 /// every escape is on the line's real first character.
-fn escaped_lines(text: &str) -> String {
+///
+/// Public for RichDoctor (richos-hq/docs/prds/2026-10-22-richdoctor-v1.md (the private record) §9: reuse the
+/// tested primitives rather than copy them), whose reports must escape exactly as Bust a bug's
+/// do: the shared reporting relay rejects any `<`, `[` or `]` this did not escape.
+pub fn escaped_lines(text: &str) -> String {
     text.split('\n')
         .map(|line| {
             let rest = line.trim_start_matches([' ', '\t']);

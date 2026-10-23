@@ -812,21 +812,6 @@ pub fn record_stop_observation(state:&Path,entity:&str,thread:&str,id:&str,detai
     update(state,entity,thread,id,|record|{record.detail=detail;})
 }
 
-/// An explicit operator report after the caller verified its completion evidence.
-/// Transport, process exit and permission answers have no arbitrary job-state writer.
-pub(crate) fn record_operator_report(state:&Path,entity:&str,thread:&str,report:&crate::operator_report::ReportRecord)->Result<Assignment,AssignmentError> {
-    if report.entity_id!=entity || report.thread_id!=thread {return Err(AssignmentError("The report belongs to another conversation".into()))}
-    let id=report.handle.as_deref().ok_or_else(||AssignmentError("The report names no assignment".into()))?;
-    let to=match report.kind.as_str() {
-        "outcome"=>AssignmentState::Settled,"failed"=>AssignmentState::Failed,
-        _=>return Err(AssignmentError("Only an explicit completion report ends work".into())),
-    };
-    update(state,&report.entity_id,&report.thread_id,id,|record|{
-        if record.user_stop_requested_at_ms.is_some() {return}
-        record.state=to;record.detail=report.text.clone();record.updated_at_ms=report.at_ms;record.waiting_sentence=false;
-    })
-}
-
 #[cfg(test)]
 pub fn advance(
     state: &Path,

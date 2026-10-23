@@ -3620,7 +3620,13 @@
         "/usr/bin/stat",
         "curl",
         "uname",
-        "mv"
+        "mv",
+        "/usr/bin/codesign",
+        "/usr/bin/xcrun",
+        "/usr/bin/ditto",
+        "/usr/bin/tar",
+        "/usr/bin/true",
+        "/usr/libexec/PlistBuddy"
       ],
       "environment": [],
       "external": [],

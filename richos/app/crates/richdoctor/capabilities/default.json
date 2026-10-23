@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The help window's permissions: Tauri's core set (events, window) and nothing else. The dialog plugin is driven from Rust only (Save report) and none of its commands is granted to the page, so the page cannot open or write a file by itself.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

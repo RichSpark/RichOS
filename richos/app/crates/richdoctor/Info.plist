@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  RichDoctor's additions to the Info.plist Tauri generates.
+
+  LSUIElement: RichDoctor lives in the menu bar (round 39 section 1). A quiet login launch shows
+  only the menu bar item, with no Dock icon and no window; the app becomes a regular app with the
+  window when the person opens it (main.rs switches the activation policy).
+
+  No privacy usage strings: the core journey needs no microphone, camera, Accessibility or Full
+  Disk Access (PRD section 3), so none is ever asked for.
+-->
+<plist version="1.0">
+  <dict>
+    <key>LSUIElement</key>
+    <true/>
+  </dict>
+</plist>

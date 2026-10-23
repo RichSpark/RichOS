@@ -17,6 +17,8 @@ mod startup_alert;
 mod update_startup;
 /// The relaunch into a downloaded update once nothing is running (CEO feedback 2026-10-06, item 1).
 mod update_relaunch;
+/// RichDoctor installed or refreshed beside RichOS, in the background (RichDoctor PRD §3).
+mod richdoctor_install;
 // HOW BIG THE WINDOW OPENS AND WHERE — derived from the display it opens on, never from a
 // constant. `docs/hardware-choices-2026-09-10.md` D2. Deliberately free of every Tauri type
 // so the arithmetic is unit-testable and can be dry-run with no window created at all
@@ -277,36 +279,6 @@ impl richos_core::output::OutputObserver for TauriOutputEmitter {
 /// exactly that. Nothing else reads it; the visibility is the gate.
 pub const EVENT_WORK_NOTICE: &str = "rich://work-notice";
 
-/// **His team said something** — an operator install's push lane (the operator-client record's
-/// §7 item 1). Best-effort like `rich://work-notice`: the notice is on disk before this is
-/// emitted, and `take_operator_notices` reads the durable copy. `pub` for the documentation gate.
-pub const EVENT_OPERATOR_NOTICE: &str = "rich://operator-notice";
-
-/// **One request to the PINNED engine's continuity store**, the one the register opens an
-/// assignment's obligation in (`assignment_tools.rs`), through a bridge made on first use and
-/// kept. Closing an obligation goes through it: his team's settlement on an operator install,
-/// and an assignment the product's back end handled itself (`work_host::AnsweredClose`).
-fn engine_store_call(engine_cell: Arc<Mutex<PathBuf>>, data_dir: &Path) -> richos_core::operator_runtime::EcsCall {
-    let bridge: Arc<Mutex<Option<richos_core::ecs::EcsBridge>>> = Arc::new(Mutex::new(None));
-    let ecs_state = data_dir.join("ecs");
-    Box::new(move |command, fields| {
-        let made = {
-            let mut held = bridge.lock().map_err(|_| "the engine's store could not be reached".to_string())?;
-            if held.is_none() {
-                let dir = engine_cell.lock().map(|d| d.clone()).map_err(|_| "the engine could not be located".to_string())?;
-                let runtime = richos_core::runtime::verify_engine(&dir).map_err(|e| e.to_string())?;
-                *held = Some(richos_core::ecs::EcsBridge::new(&runtime.python, &dir, &ecs_state).map_err(|e| e.0)?);
-            }
-            held.clone().expect("made above")
-        };
-        made.request(command, fields).map_err(|e| e.0)
-    })
-}
-
-/// **His team's desk, built once at launch on an operator install** (the operator-client
-/// record's §7 items 1-3). Returns the desk, the socket its front-desk tools reach it through,
-/// and the access the front desk's lease is given. A socket that cannot be served costs the
-/// front desk its three tools and is said on the boot log; the desk itself still takes work.
 /// **THE SECOND REVIEW STARTS BY ITSELF, IN THE APP** (automatic second review, slice 4;
 /// richos-hq `docs/plans/2026-10-09-automatic-second-review-and-t3-ideas.md` §4 row 4 and Sage's
 /// check beside it). The engine's review-watch runs as this host's own child
@@ -345,120 +317,6 @@ fn ensure_app_review_watch(engine: &Path, data_dir: &Path, claude: &Path, at_lau
         Ok(pid) if at_launch => eprintln!("[richos] second review: monitoring started (process {pid})"),
         Ok(_) => {}
         Err(e) => eprintln!("[richos] second review: the app's review-watch could not start ({e})"),
-    }
-}
-
-/// **His team's install: the same watcher over his team's registry, its notices delivered by
-/// this host** (Sage's check §1.3). Each notice goes to the lead whose session started the work,
-/// as a message the host sends ([`richos_core::operator_desk::OperatorDesk::tell_lead`]), so the
-/// turn it starts is one the host can attribute.
-fn ensure_operator_review_watch(desk: &Arc<richos_core::operator_desk::OperatorDesk>, data_dir: &Path) {
-    let declaration = desk.declaration().clone();
-    let weak = Arc::downgrade(desk);
-    // True only once the lead was told: the watcher records a verdict delivered on that
-    // acknowledgment alone, and tells a refused one again at its next look.
-    let sink: richos_core::review_watch::NoticeSink = Arc::new(move |notice: richos_core::review_watch::Notice| {
-        let Some(desk) = weak.upgrade() else { return false };
-        match desk.tell_lead(&notice.session, &notice.text) {
-            Ok(_) => true,
-            Err(e) => {
-                eprintln!("[richos] his team: a second-review notice was not delivered ({e}); it is told again at the next look");
-                false
-            }
-        }
-    });
-    let launch = richos_core::review_watch::Launch {
-        python: PathBuf::from("python3"),
-        engine: declaration.engine_root.clone(),
-        state: data_dir.join("engine-state"),
-        environment: declaration.environment.clone(),
-        mode: richos_core::review_watch::Mode::Operator {
-            config: declaration.entity_root.join("orchestration.config"),
-            sink,
-        },
-    };
-    match richos_core::review_watch::ensure(&launch) {
-        Ok(pid) => eprintln!("[richos] his team: the second review's watcher runs as pid {pid}"),
-        Err(e) => eprintln!("[richos] his team: the second review's watcher could not start ({e})"),
-    }
-}
-
-/// **His team's install: quota-watch, stall-watch and codex-watch, run the same way**
-/// (`richos_core::team_watch`): the host's own children from launch to quit, each notice sent
-/// to his team's lead as a message the host sends
-/// ([`richos_core::operator_desk::OperatorDesk::tell_team`]), or kept until a lead starts.
-fn ensure_operator_team_watch(desk: &Arc<richos_core::operator_desk::OperatorDesk>, data_dir: &Path) {
-    let declaration = desk.declaration().clone();
-    let weak = Arc::downgrade(desk);
-    let sink: richos_core::team_watch::NoticeSink = Arc::new(move |watcher: richos_core::team_watch::Watcher, text: String| {
-        let Some(desk) = weak.upgrade() else {
-            eprintln!("[richos] his team: a {} notice came after his team was closed", watcher.name());
-            return;
-        };
-        if let Err(e) = desk.tell_team(&text) {
-            eprintln!("[richos] his team: a {} notice was neither delivered nor kept ({e})", watcher.name());
-        }
-    });
-    let launch = richos_core::team_watch::Launch {
-        engine: declaration.engine_root.clone(),
-        entity: declaration.entity_root.clone(),
-        state: data_dir.join("engine-state"),
-        lead: desk.team_watch_lead(),
-        environment: richos_core::operator_declaration::script_environment(&declaration),
-        sink,
-    };
-    for watcher in richos_core::team_watch::Watcher::ALL {
-        match richos_core::team_watch::ensure(&launch, watcher) {
-            Ok(pid) => eprintln!("[richos] his team: {} runs as pid {pid}", watcher.name()),
-            Err(e) => eprintln!("[richos] his team: {} could not start ({e})", watcher.name()),
-        }
-    }
-}
-
-fn operator_desk_at_boot(
-    declaration: richos_core::operator_declaration::Declaration,
-    data_dir: &Path,
-    app: AppHandle,
-    engine_cell: Arc<Mutex<PathBuf>>,
-) -> (
-    Option<Arc<richos_core::operator_desk::OperatorDesk>>,
-    Option<richos_core::operator_desk_tools::DeskSocket>,
-    Option<richos_core::operator_desk_tools::DeskAccess>,
-) {
-    let push: richos_core::operator_runtime::NoticePush = Box::new(move |key, notice| {
-        // Best-effort, like rich://work-notice: the notice is on disk before this runs.
-        if let Err(e) = app.emit(EVENT_OPERATOR_NOTICE, serde_json::json!({"threadId": key.thread_id, "notice": notice})) {
-            eprintln!("[richos] his team: a notice could not be pushed to the window ({e}); it is held on disk");
-        }
-    });
-    let settle = Arc::new(richos_core::operator_runtime::EcsSettle::with(engine_store_call(engine_cell, data_dir)));
-    let origins = Arc::new(richos_core::operator_desk::LedgerOrigins::new(&data_dir.join("conversation-ledger.jsonl")));
-    let executable = std::env::current_exe().unwrap_or_else(|e| {
-        eprintln!("[richos] his team: this app's own path could not be read ({e}); his leads' report tool will not start");
-        PathBuf::from("/nonexistent/RichOS")
-    });
-    // (h): the lead's `can_use_tool` has nowhere to go but a refusal until the permission desk
-    // route is built; in the declared bypass mode P14 measured nothing reaching it at all.
-    let listed = declaration.origins.clone();
-    let token = richos_core::operator_desk_tools::new_token();
-    // F6: the leads' own token, good for a named stop and nothing else, so a stop he gives to
-    // whichever lead is in front of him is executed there, once.
-    let lead_token = richos_core::operator_desk_tools::new_token();
-    let path = richos_core::operator_desk_tools::socket_path(&data_dir.join("operator"));
-    let lead_desk = richos_core::operator_report::LeadDesk { socket: path.clone(), token: lead_token.clone() };
-    let desk = richos_core::operator_desk::OperatorDesk::for_app(declaration, data_dir, &executable, settle, origins, Some(push),
-                                                                 Arc::new(richos_core::operator_lead::NoPermissionDesk),
-                                                                 Some(lead_desk));
-    desk.start_default_retirement();
-    eprintln!("[richos] his team: operator install; each conversation's lead starts on its next assignment (log {})",
-              desk.log_path().display());
-    match richos_core::operator_desk_tools::DeskSocket::serve_with_lead(desk.clone(), &path, &token, Some(&lead_token)) {
-        Ok(socket) => (Some(desk), Some(socket),
-                       Some(richos_core::operator_desk_tools::DeskAccess { socket: path, token, origins: listed })),
-        Err(e) => {
-            eprintln!("[richos] his team: the front desk's stop and read could not be offered ({e}) at {}", path.display());
-            (Some(desk), None, None)
-        }
     }
 }
 
@@ -600,11 +458,6 @@ struct EngineLeaseFactory {
     /// `spawn_chat` because a lease is spawned mid-turn, from inside the spine's mutex, and
     /// reading global state there is what this file keeps off the hot path on purpose.
     explicit_engine: bool,
-    /// **His team's desk, for the front desk's `richos_operator` tools** — `Some` only on an
-    /// install whose `operator.json` passed the gate at launch (the operator-client record's
-    /// §7 item 2). Given to the CONVERSATION lease only (`spawn_chat`); `None` everywhere else,
-    /// which leaves the front desk's tools exactly what they were.
-    operator_desk: Option<richos_core::operator_desk_tools::DeskAccess>,
 }
 
 impl LeaseFactory for EngineLeaseFactory {
@@ -664,25 +517,6 @@ impl LeaseFactory for EngineLeaseFactory {
     /// host reports it in those words rather than leaving it to surface later as a worker
     /// that never speaks.
     fn spawn_work(&self, binding: &richos_core::entity::ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
-        // **THE OPERATOR GATE** (operator back-end spec r2 (f); CEO ruling §86). No
-        // `operator.json` in this install's data folder is the product path, byte for byte
-        // what ran before this line existed. A present file never falls back to the customer
-        // worker (Frank's B8): broken refuses with its one sentence.
-        //
-        // **A valid one never reaches this far on an install that launched with it.** His
-        // team's desk is built at launch (`operator_desk_at_boot`) and the work host hands it
-        // every assignment (`WorkHost::set_operator`), so no work lease is ever asked for. This
-        // arm is reached only by a declaration that appeared AFTER launch, and it refuses with
-        // the sentence that says so rather than half-honoring it.
-        match richos_core::operator_declaration::gate(&self.data_dir) {
-            richos_core::operator_declaration::Gate::Product => {}
-            richos_core::operator_declaration::Gate::Refused(refusal) => {
-                return Err(CognitionError::Io(refusal.sentence()));
-            }
-            richos_core::operator_declaration::Gate::Operator(_) => {
-                return Err(CognitionError::Io(richos_core::operator_declaration::SWITCHED_ON_AFTER_LAUNCH.to_string()));
-            }
-        }
         let dir = self
             .engine_dir
             .lock()
@@ -785,7 +619,6 @@ impl EngineLeaseFactory {
         if let Some(binding) = binding { profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?; }
         profile.install_quota_gate(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
 
-        profile.operator_desk = self.operator_desk.clone();
         // Fill-first: the conversation lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
@@ -815,13 +648,6 @@ struct AppState {
     /// the whole of a turn (`:561`, still held at `:582`), which is the whole of §0 row 3.
     /// Read WITHOUT that lock everywhere it is read, like `control`.
     work: Arc<richos_core::work_host::WorkHost>,
-    /// **His team, on an operator install** (the operator-client record's §7 item 1): the desk
-    /// that relays each assignment to its conversation's lead. `None` on every product install,
-    /// and decided once, at launch.
-    operator: Option<Arc<richos_core::operator_desk::OperatorDesk>>,
-    /// The socket the front desk's `richos_operator` tools reach that desk through. Kept here
-    /// so it lives exactly as long as the app, and closed at exit.
-    operator_socket: Option<richos_core::operator_desk_tools::DeskSocket>,
     /// **He has been asked about the running work and said quit** (background-work spec
     /// §2.5a). The `ExitRequested` arm reads it on the second pass; without it the same arm
     /// would prevent the same quit for ever.
@@ -2327,40 +2153,6 @@ fn main() {
         }
         return;
     }
-    // HIS LEAD'S REPORT TOOL (`richos-core`'s `operator_report.rs`; operator back-end spec r2
-    // (c)), the same shape as the three servers around it. Only an operator lead is ever given
-    // it (`operator_profile::mcp_config`), and only on an install whose `operator.json` passed
-    // the gate; nothing in the product path names this argument.
-    if first.as_deref() == Some(std::ffi::OsStr::new("--operator-mcp")) {
-        let result = args.next().ok_or_else(|| "Missing report scope".to_string())
-            .and_then(|scope| richos_core::operator_report::run_stdio(Path::new(&scope))
-                .map_err(|e| e.to_string()));
-        if let Err(error) = result {
-            startup_alert::cannot_start(
-                &format!("operator report server: {error}"),
-                "RichOS could not start the helper your team reports to you through.",
-            );
-            std::process::exit(1);
-        }
-        return;
-    }
-    // HIS TEAM'S TOOLS ON THE FRONT DESK (`richos-core`'s `operator_desk_tools.rs`; the
-    // operator-client record's §7 item 2): stop named agents, stop his team's turn, read what it
-    // is doing. Only a front desk on an install whose `operator.json` passed the gate at launch
-    // is ever given it (`EngineProfile::operator_desk`); nothing in the product path names it.
-    if first.as_deref() == Some(std::ffi::OsStr::new("--operator-desk-mcp")) {
-        let result = args.next().ok_or_else(|| "Missing operator scope".to_string())
-            .and_then(|scope| richos_core::operator_desk_tools::run_stdio(Path::new(&scope))
-                .map_err(|e| e.to_string()));
-        if let Err(error) = result {
-            startup_alert::cannot_start(
-                &format!("operator desk tool server: {error}"),
-                "RichOS could not start the helper it uses to stop or check on your team.",
-            );
-            std::process::exit(1);
-        }
-        return;
-    }
     if first.as_deref() == Some(std::ffi::OsStr::new("--onboarding-mcp")) {
         let result = args.next().ok_or_else(|| "Missing onboarding scope".to_string())
             .and_then(|scope| richos_core::onboarding_tools::run_stdio(Path::new(&scope))
@@ -2383,6 +2175,9 @@ fn main() {
         }
         return;
     }
+    // RICHDOCTOR (PRD 2026-10-22 §3): installed or refreshed beside this RichOS on a background
+    // thread, before any setting or engine exists; nothing below waits for it.
+    richdoctor_install::start();
     tauri::Builder::default()
         // =================================================================================
         // THE MENU, AND THE ONE ITEM IN IT THIS APP HAS TO OWN — background-work spec §2.5
@@ -3235,27 +3030,6 @@ fn main() {
                 resolution.source,
                 Some(engine::EngineSource::EnvEngineDir) | Some(engine::EngineSource::EnvEngineRoot)
             );
-            // ==============================================================================
-            // HIS TEAM, ON AN OPERATOR INSTALL — decided once, here (operator back-end spec r3
-            // (f); the operator-client record's §7 items 1-3)
-            //
-            // No `operator.json` (every customer, and his app today): nothing below exists and
-            // this launch is the product, byte for byte. A broken one: nothing below exists
-            // either, and `spawn_work` refuses every assignment with its one sentence. A valid
-            // one: his team's desk, the socket its front-desk tools reach it through, and the
-            // spine keeping the mouth each sentence came through so a phone assignment can be
-            // told from one given at the desk.
-            // ==============================================================================
-            let (operator_desk, operator_socket, operator_access) =
-                match richos_core::operator_declaration::gate(&data_dir) {
-                    richos_core::operator_declaration::Gate::Operator(declaration) => {
-                        operator_desk_at_boot(*declaration, &data_dir, app.handle().clone(), Arc::clone(&engine_cell))
-                    }
-                    _ => (None, None, None),
-                };
-            if operator_desk.is_some() {
-                spine.keep_intake_channel(true);
-            }
             let lease_factory = || EngineLeaseFactory {
                 quota: quota.clone(),
 
@@ -3263,7 +3037,6 @@ fn main() {
                 engine_dir: Arc::clone(&engine_cell),
                 data_dir: data_dir.clone(),
                 explicit_engine,
-                operator_desk: operator_access.clone(),
             };
             spine.set_lease_factory(Box::new(lease_factory()));
             // **THE WORK HOST — the background-work spec §2.1's second lease, and a SECOND
@@ -3284,18 +3057,11 @@ fn main() {
             // The back end's written files — its own, its workers', its commands' — reach the
             // assignment's thread's output list after every back-end turn (PRD §4.1 (b)).
             work.set_output_store(output_store.clone());
-            if let Some(desk) = &operator_desk {
-                work.set_operator(desk.clone());
-            }
             work.start();
             eprintln!("[richos] compute connection: starts with the first cancellable request over {}", claude_bin.display());
             // The second review's watcher, the host's own child, from launch to quit (slice 4).
             if let Some(dir) = boot_engine.as_deref() {
                 ensure_app_review_watch(dir, &data_dir, &claude_bin, true);
-            }
-            if let Some(desk) = &operator_desk {
-                ensure_operator_review_watch(desk, &data_dir);
-                ensure_operator_team_watch(desk, &data_dir);
             }
 
             // Release grants from the old process. Stu owns job recovery through his inbox.
@@ -3591,8 +3357,6 @@ fn main() {
                 quota: quota.clone(),
 
                 work,
-                operator: operator_desk,
-                operator_socket,
                 quit_confirmed: std::sync::atomic::AtomicBool::new(false),
                 // The SAME decision the window was built from, carried rather than
                 // re-derived: two readings of "may this launch take the screen" is two
@@ -3817,7 +3581,6 @@ fn main() {
             get_work_status,
             get_assignments,
             take_work_notices,
-            take_operator_notices,
             stop_assignment,
             raise_proactive_message,
             // --- loro (2026-08-29) — appended, never reordered ---
@@ -4130,17 +3893,6 @@ fn main() {
                     // The shutdown itself rewrites no job: an open one became `interrupted`
                     // above only if he chose to stop the work, and stays open otherwise;
                     // nothing becomes `settled` on the way out.
-                    // **HIS TEAM ENDS WITH THE APP, by its own quit path** (r3 (q) item 2): each
-                    // lead's supervisor gets SIGTERM and reaps the lead's whole tree, and only
-                    // after every lead has gone is the claim given up (e item 3), so his
-                    // terminal can take his team back the moment this process is gone.
-                    if let Some(desk) = &state.operator {
-                        let quits = desk.quit();
-                        eprintln!("[richos] his team: {} lead(s) ended by the quit path; the claim is released.", quits.len());
-                    }
-                    if let Some(socket) = &state.operator_socket {
-                        socket.close();
-                    }
                     state.work.shutdown();
                     // **EVERY LEASE'S TOOL COMMANDS END WITH THE APP, by its supervisor's reap**
                     // (reap gap C1, 1.3(c)): each supervisor gets SIGTERM, ends its tool shells
@@ -4156,13 +3908,6 @@ fn main() {
                     let watchers = richos_core::review_watch::stop_all();
                     if !watchers.is_empty() {
                         eprintln!("[richos] quit: the second review's watcher(s) {watchers:?} ended.");
-                    }
-                    // **HIS TEAM'S QUOTA, STALL AND CODEX WATCHERS END WITH THE APP** the same way,
-                    // within `team_watch::STOP_BOUND`; a notice they print after his team quit is
-                    // kept for its next lead.
-                    let watchers = richos_core::team_watch::stop_all();
-                    if !watchers.is_empty() {
-                        eprintln!("[richos] quit: his team's watcher(s) {watchers:?} ended.");
                     }
                     if let Err(e) = state.launch.lock().unwrap().note_clean_exit() {
                         eprintln!("[richos] launch record: could not mark a clean exit: {e}");
@@ -4344,20 +4089,6 @@ fn dispatch_incoming_messages(app: &AppHandle, _thread_id: &str) -> Result<(), S
         if let Err(error)=drain_incoming_messages(&state.spine,&state.work) { eprintln!("[richos] incoming message: {error}"); }
     });
     Ok(())
-}
-
-/// **What his team said on this conversation that the window has not shown yet** — the seam
-/// the operator notice surface reads when a conversation opens (the operator-client record's
-/// §7 item 1: *"`take_pending` feeds the notice surface on launch"*; the surface itself is
-/// item 4, Art's). Reads AND marks, like `take_work_notices`. Empty on a product install.
-#[richos_command::command]
-fn take_operator_notices(
-    state: State<AppState>,
-    thread_id: String,
-) -> Result<Vec<richos_core::operator_runtime::OperatorNotice>, String> {
-    let Some(desk) = &state.operator else { return Ok(Vec::new()) };
-    let entity = assignment_scope(&state, &thread_id)?;
-    desk.take_pending(&richos_core::operator_host::ConversationKey { entity_id: entity.as_str().to_string(), thread_id })
 }
 
 /// **The per-assignment stop** (spec §4.2). Not `stop_turn`, which is the conversation's
@@ -6764,94 +6495,6 @@ fn rename_thread(app: AppHandle, state: State<AppState>, thread_id: String, titl
 }
 
 #[cfg(test)]
-mod operator_gate_tests {
-    //! **N1, the negative control, at the seam where the back end opens** (operator back-end
-    //! spec r2 §6, verification step 3; CEO ruling §86: off by default for everyone).
-    //!
-    //! The work lease factory is driven for real, against an engine directory that does not
-    //! exist, so the product path runs until its own first refusal and no process is
-    //! spawned. Without `operator.json` that refusal is the product path's own, word for
-    //! word, which is what "starts exactly as it does today" can be measured as here. With a
-    //! broken or a valid file the gate answers first and the product path never starts.
-    use super::*;
-    use richos_core::entity::{Entity, EntityId, EntityRegistry};
-
-    fn fixture(tag: &str) -> (PathBuf, richos_core::entity::ThreadBinding, EngineLeaseFactory) {
-        let root = std::env::temp_dir().join(format!("richos-operator-gate-{tag}-{}-{}", std::process::id(), richos_core::util::now_millis()));
-        let data = root.join("data");
-        std::fs::create_dir_all(&data).unwrap();
-        let ledger = Ledger::open(root.join("ledger.jsonl")).expect("open ledger");
-        let mut spine = Spine::new(ledger);
-        spine.set_entity_registry(EntityRegistry::new(vec![
-            Entity::new("femcboost", "FemcBoost", &["/fixture/ab/femcboost"]).unwrap(),
-        ]).unwrap());
-        let thread = spine.create_thread("Gate", &EntityId::parse("femcboost").unwrap()).unwrap();
-        let binding = spine.ledger().thread_binding(&thread).unwrap();
-        let factory = EngineLeaseFactory {
-            quota: Arc::new(richos_core::quota::Service::open(&data).unwrap()),
-            claude_bin: Arc::new(Mutex::new(PathBuf::from("/nonexistent/claude"))),
-            engine_dir: Arc::new(Mutex::new(root.join("no-engine-here"))),
-            data_dir: data,
-            explicit_engine: false,
-            operator_desk: None,
-        };
-        (root, binding, factory)
-    }
-
-    fn io_error(result: Result<Box<dyn Cognition>, CognitionError>) -> String {
-        match result {
-            Err(CognitionError::Io(why)) => why,
-            Err(other) => panic!("expected an Io refusal, got {other:?}"),
-            Ok(_) => panic!("nothing can start against an engine that is not there"),
-        }
-    }
-
-    #[test]
-    fn without_the_declaration_the_work_lease_takes_exactly_todays_path() {
-        let (root, binding, factory) = fixture("absent");
-        let why = io_error(factory.spawn_work(&binding));
-        // The product path's own first refusal for this engine directory, computed by the
-        // same two calls the factory makes in the same order (the release gate, which a
-        // development build without a pin passes, then the runtime check) — so the gate added
-        // nothing and took nothing away.
-        let dir = root.join("no-engine-here");
-        let expected = richos_core::setup::engine_boot_refusal_demand(
-            &dir,
-            false,
-            richos_core::setup::EngineDemand::pinned(richos_core::setup::engine_pin().as_ref()),
-        ).unwrap_or_else(|| match richos_core::runtime::verify_engine(&dir) {
-            Err(e) => e.to_string(),
-            Ok(_) => panic!("a missing engine cannot verify"),
-        });
-        assert_eq!(why, expected);
-        assert!(!why.contains("Your team"), "the operator gate spoke on an install with no declaration: {why}");
-        // And the product path really started: it renders the standing instruction first.
-        assert!(!richos_core::doctrine::doctrine_path(&factory.data_dir).exists(),
-            "the product must not generate or compile role instructions");
-        assert!(!factory.data_dir.join(richos_core::operator_declaration::DECLARATION_FILE).exists());
-        if let Err(error) = std::fs::remove_dir_all(&root) { eprintln!("fixture cleanup: {error}"); }
-    }
-
-    #[test]
-    fn a_broken_declaration_refuses_before_the_product_path_starts() {
-        let (root, binding, factory) = fixture("broken");
-        std::fs::write(factory.data_dir.join(richos_core::operator_declaration::DECLARATION_FILE), "{").unwrap();
-        // Quota initialization already published its snapshot. The gate must leave
-        // that existing file untouched and must not render the product doctrine.
-        let snapshot = factory.data_dir.join("engine-state/claude-quota.json");
-        let before = std::fs::read(&snapshot).unwrap();
-        let why = io_error(factory.spawn_work(&binding));
-        assert!(why.starts_with("Your team is switched off on this Mac because "), "{why}");
-        // The product path renders the standing instruction first thing; it never ran.
-        assert!(!richos_core::doctrine::doctrine_path(&factory.data_dir).exists());
-        assert_eq!(std::fs::read(&snapshot).unwrap(), before);
-        let written: std::collections::BTreeSet<_> = std::fs::read_dir(&factory.data_dir).unwrap().map(|e| e.unwrap().file_name()).collect();
-        assert_eq!(written, [std::ffi::OsString::from("engine-state"), std::ffi::OsString::from(richos_core::operator_declaration::DECLARATION_FILE)].into_iter().collect());
-        if let Err(error) = std::fs::remove_dir_all(&root) { eprintln!("fixture cleanup: {error}"); }
-    }
-}
-
-#[cfg(test)]
 mod send_wait_tests {
     //! **The boundary that nothing wrote down, and what it cost.** See
     //! [`super::spine_wait_notice`] and the block above it.
@@ -8290,30 +7933,11 @@ fn stop_turn(state: State<AppState>, expected_turn_id: Option<String>, expected_
     // nightly 65, item 9; review rv-20261018T050016Z-78f97c9d-30c4).
     let thread=view.stop_conversation(expected_thread_id.as_deref());
     let control=thread.map(|thread|state.control.for_thread(thread));
-    let team_key=state.operator.as_ref().and_then(|_| {
-        let binding=view.ledger().thread_binding(thread?).ok()?;
-        Some(richos_core::operator_host::ConversationKey {
-            entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string(),
-        })
-    });
     let outcome=match (control,expected_turn_id.as_deref()) {
         (Some(control),Some(expected))=>control.request_stop_for(expected),
         (Some(control),None)=>control.request_stop(),
         (None,_)=>Ok(StopOutcome::NothingRunning),
     }.map_err(|e|e.to_string())?;
-    // **HIS ESC, on an operator install, is his team's too** (r3 (d) item 6): the lead's turn in
-    // that conversation ends and its agents keep running (r4 §1.2). AFTER the front desk's stop
-    // and on its own thread, so a lead slow to answer the interrupt never delays the stop he
-    // sees; what his team did is said on the conversation by the desk.
-    if let (Some(desk), Some(key)) = (state.operator.clone(), team_key) {
-        let spawned = std::thread::Builder::new().name("richos-operator-esc".into()).spawn(move || {
-            let said = desk.interrupt(&key);
-            eprintln!("[richos] his team: Esc in {}: {said}", key.thread_id);
-        });
-        if let Err(e) = spawned {
-            eprintln!("[richos] his team: the Esc could not be sent to your team ({e})");
-        }
-    }
     match outcome {
         StopOutcome::NothingRunning => {
             Ok(StopReport { stopped: false, turn_id: None, requested_at: None, reached_lease: false })
@@ -9914,11 +9538,6 @@ fn registered_work(state: &AppState) -> lifecycle::Registered {
             + usize::from(!state.control.pending_intake().is_empty()),
         awaiting_you: work.awaiting_you,
         readable: work.readable,
-        // **His team, on an operator install** (r3 (m)), read from the leads' own streams:
-        // this runs inside the exit callback, which must answer at once, so no script is run
-        // here (`OperatorHost::team_from_stream`). It names the agents the quit would stop.
-        team: state.operator.as_ref()
-            .and_then(|desk| richos_core::work_gate::operator_quit_sentence(&desk.team_from_stream())),
         // Commands Rich started, on every live lease (reap gap C5): a few small files, no lock.
         commands: richos_core::lease_commands::LiveLeases::process().reading(),
     }

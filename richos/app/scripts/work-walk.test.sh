@@ -9,7 +9,8 @@
 # and the question worker's pass. What can be proved without a guest is proved here: it builds as
 # the product would (every crash point empty) and as the matrix builds it (crash-points), it
 # serves the back end's question tool exactly as the app does, and it refuses to host without an
-# engine, writing nothing. W4's grading is proved by operator-probes/test/run-tests.sh.
+# engine, writing nothing. W4's guest runner was retired and then deleted with the operator
+# probes (2026-10-21).
 #
 # run-tests: inputs richos/app/scripts/work-walk.test.sh richos/app/crates/richos-core richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/lib/cargo-target.sh
 # run-tests: covers richos/app/crates/richos-core/examples/work_walk.rs

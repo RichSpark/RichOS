@@ -49,56 +49,6 @@ fn restarted_stu_can_reenter_a_saved_turn_after_a_question_answer() {
     assert!(restarted.brief(&resumed, Some(seat)).is_ok());
 }
 
-/// **The app's answer close against the REAL engine** (bgdone2 item 1): the obligation is opened
-/// the way the register opens it, on the conversation's own per-thread seat; his next turn
-/// makes that binding stale; `EcsAnsweredClose` still closes it, and the host's own settle
-/// reading then says Settled. An assignment with a helper on its work seat is refused, and
-/// stays open. The unit tests pin the request to a fake store; this pins it to the verb.
-#[test]
-fn an_answered_assignment_closes_in_the_real_engine_and_one_with_a_helper_does_not() {
-    use richos_core::cognition::ObligationState;
-    use richos_core::work_host::AnsweredClose;
-    let (fixture, bridge) = fixture();
-    let seat = richos_core::ecs::ceo_seat("thread-a").unwrap();
-    let first = bridge.bind("depot", "thread-a", "session-a", "turn-a", Some(&seat), "ceo").unwrap();
-    for id in ["work-ran-it", "work-coded-it"] {
-        let open = richos_core::ecs::seated_request(Some(&seat), json!({"binding": first,
-            "request_id": format!("assignment-obligation:{id}"),
-            "checkpoint": {"statements": [{"verb": "commitment", "fields": {"id": id, "title": id}}]}}));
-        assert_eq!(bridge.request("checkpoint", open).unwrap()["accepted"], true);
-    }
-    // A helper was prepared for the second: its work unit sits on that assignment's work seat.
-    let work_seat = "work-seat:work-coded-it";
-    let work = bridge.bind("depot", "thread-a", "session-w", "work-coded-it", Some(work_seat), "worker").unwrap();
-    bridge.request("observe", richos_core::ecs::seated_request(Some(work_seat), json!({"binding": work,
-        "request_id": "prep-1", "source_ref": "app-dispatch:prep-1",
-        "work": {"authority": "richos-provider-v1", "work_unit_id": "wu-prep-1", "external_id": "receipt-1",
-                 "title": "code it", "owner": "work", "status": "started"}}))).unwrap();
-    // His next turn: the binding the obligations were opened under is stale from here.
-    let now = bridge.bind("depot", "thread-a", "session-a", "turn-b", Some(&seat), "ceo").unwrap();
-    assert!(bridge.obligation_state(&first, Some(&seat), "work-ran-it").is_err(), "the first binding is still current");
-
-    let state = fixture.0.join("app-state");
-    let record = |obligation: &str| {
-        let receipt = richos_core::assignment::register_kind(&state, &richos_core::assignment::Registration {
-            entity_id: "depot".into(), thread_id: "thread-a".into(), obligation_id: obligation.into(),
-            instruction_ledger_ref: "ledger:thread-a:turn-a".into(), instruction_sha256: "0".repeat(64),
-            title: obligation.into(), repositories: vec![], needs_screen: false,
-        }, richos_core::assignment::AssignmentKind::Task).unwrap();
-        richos_core::assignment::read(&state, "depot", "thread-a", &receipt.id).unwrap()
-    };
-    let store = bridge.clone();
-    let close = richos_core::operator_runtime::EcsAnsweredClose::with(Box::new(move |command, fields| {
-        store.request(command, fields).map_err(|e| e.0)
-    }));
-    close.close_answered(&record("work-ran-it"), "It ran and printed one line: 82208dc init.").unwrap();
-    assert_eq!(bridge.obligation_state(&now, Some(&seat), "work-ran-it").unwrap(), ObligationState::Settled);
-
-    let refused = close.close_answered(&record("work-coded-it"), "Done.").unwrap_err();
-    assert!(refused.contains("helper"), "{refused}");
-    assert_eq!(bridge.obligation_state(&now, Some(&seat), "work-coded-it").unwrap(), ObligationState::Open);
-}
-
 #[test]
 fn component_errors_never_look_like_an_empty_store() {
     let (_fixture, bridge) = fixture();

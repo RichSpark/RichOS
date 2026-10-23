@@ -1,0 +1,64 @@
+[package]
+name = "richdoctor"
+version = "1.0.0"
+edition = "2021"
+publish = false
+description = "RichDoctor: the separate macOS companion that reports a broken RichOS (richos-hq docs/prds/2026-10-22-richdoctor-v1.md). The window, the menu bar item, the login item and the HTTPS transport over richdoctor-core."
+license = "AGPL-3.0-only"
+
+# DETACHED, like src-tauri and richos-user-update: RichDoctor is its own signed application with
+# its own executable and identifier (PRD §3). Its dependencies are the Tauri shell's, at the
+# versions that shell's lockfile already resolves (this lockfile was seeded from it), so the
+# shared Cargo cache builds them once.
+[workspace]
+
+[lib]
+name = "richdoctor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "RichDoctor"
+path = "src/main.rs"
+
+[features]
+default = ["custom-protocol"]
+# The production context, as in src-tauri/Cargo.toml: a plain `cargo build` must be the
+# shipping program, never the dev build that reads frontend files off disk.
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+richdoctor-core = { path = "../richdoctor-core" }
+richos-core = { path = "../richos-core" }
+tauri = { version = "2", features = ["tray-icon"] }
+# Decode a screenshot to its pixels and write a new PNG from them (no metadata survives), and
+# read the menu bar template icon. The version the shell's lockfile already holds (beneath tray-icon).
+png = "0.17"
+tauri-plugin-dialog = "2.7.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+tokio = { version = "1", features = ["time", "rt", "rt-multi-thread", "net", "io-util", "sync"] }
+# The relay's HTTPS client: the same crate, version and feature set the Tauri shell already uses
+# (src-tauri/Cargo.toml explains why exactly these), with ring as the one TLS provider.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider"] }
+# The upload body as a stream of chunks, for real progress and the 60-second stall bound; both
+# already in the shell's lockfile beneath tauri and reqwest.
+futures-util = { version = "0.3", default-features = false }
+bytes = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# SMAppService (the login item), NSSharingService (Email support), NSPasteboard (Copy): reached
+# through objc2's runtime and `msg_send!` only, as src-tauri does, no framework crate.
+objc2 = "0.6"
+
+[lints.rust]
+unused_must_use = "warn"
+
+[lints.clippy]
+let_underscore_future = "warn"
+let_underscore_must_use = "warn"
+await_holding_lock = "warn"
