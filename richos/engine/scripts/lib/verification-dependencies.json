@@ -7589,7 +7589,7 @@
     },
     "scripts/hooks/stop-hook-visibility.test.sh": {
       "source": "scripts/hooks/stop-hook-visibility.test.sh",
-      "sha256": "4e018f57ede905cd195b5447d26035f827a490ce8fbfc68602c63c3cffa8667d",
+      "sha256": "16da455d879dbeadb36be04c657706733b5209bcd4c751ec53302b9d19c60544",
       "evidence": "Reviewed full suite: derives Stop inventory from actual hooks JSON and compares seated settings, runs each fixed hook over fresh unadopted root fixtures, mutates one notice call then exercises the notice helper with literal commands. Disk alert is exceptional: the first loop still reads real selected watchdog config; only the noise-control loop replaces it.",
       "keys": [],
       "edges": [
@@ -17444,7 +17444,7 @@
       ],
       "evidence": "Enumerates, executes and compares every Stop registration on both surfaces. Duplicate-key validation inspects all JSON objects, so parser metadata failures remain conservative. Actual Stop command changes select this suite; non-Stop commands do not change the enumerated set.",
       "sources": {
-        "scripts/hooks/stop-hook-visibility.test.sh": "4e018f57ede905cd195b5447d26035f827a490ce8fbfc68602c63c3cffa8667d",
+        "scripts/hooks/stop-hook-visibility.test.sh": "16da455d879dbeadb36be04c657706733b5209bcd4c751ec53302b9d19c60544",
         "scripts/lib/registered-hooks.sh": "73e390bacc85aef935d4da0f4b132ebb6790a83d55310a46c1c602614afe0a83",
         "scripts/lib/stop-hook-notice.sh": "f1431988b7e290d871da89518cd3c6c2bfc455558517862097659472ddcf409d",
         "scripts/hooks/guard-agent-state-claims.sh": "b7a14acc4ff57cdec91821f6fd74b3c745deb18a0bd256ac7d60a3e7dd35dd7e",

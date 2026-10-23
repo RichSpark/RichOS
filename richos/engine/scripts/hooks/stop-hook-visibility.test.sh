@@ -406,9 +406,14 @@ done
 # derived set, which broke the moment a fourth Stop hook landed whose name sorts
 # first and which carries no stop_notice_abnormal call to mutate: the "mutation"
 # changed nothing and the case reported a control it had not performed.
+# The subject must also be one the mutation below removes EVERY call from:
+# ass-kicker.sh sorts first since its rename (2026-10-23) and makes one call
+# inside $(...), which the line-start sed cannot reach.
 FIRST_HOOK=""
 for h in $STOP_HOOKS; do
-    if grep -q 'stop_notice_abnormal ' "$ENGINE_ROOT/scripts/hooks/$h" 2>/dev/null; then
+    if grep -q 'stop_notice_abnormal ' "$ENGINE_ROOT/scripts/hooks/$h" 2>/dev/null \
+        && ! sed 's/^\( *\)stop_notice_abnormal .*$/\1echo "MUTANT stood down" >\&2/' \
+            "$ENGINE_ROOT/scripts/hooks/$h" | grep -q 'stop_notice_abnormal '; then
         FIRST_HOOK="$h"
         break
     fi
