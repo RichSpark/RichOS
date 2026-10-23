@@ -15,6 +15,32 @@ HOLD_WORDS_RE = re.compile(
     r"until\s+I\s+say(?:\s+so)?|"
     r"wait\s+for\s+my\s+(?:go|word|signal|ok|okay|green\s+light))\b", re.I)
 
+# A hold word that a sentence DENIES holds nothing (2026-10-23: "Nothing of yours is on
+# hold." and "none of your work is on hold." each opened a hold only his words could
+# end). Denied: right before the word, a subject that says nothing is held ("nothing",
+# "none of your work", "no teammate") with at most its verb, or a negated verb ("is
+# not", "isn't", "no longer", "do not"). Anything between them, a comma or "and",
+# leaves it a hold: "Nothing new: the branch is on hold." still is one. The normal ways
+# of writing it are denials too (second review rv-20261023T204623Z-591cbe58-c2b4 #2): a
+# relative clause before the verb ("Nothing you asked for is on hold."), the passive
+# ("None of your work is being put on hold.") and markdown emphasis ("**on hold**").
+_VERB = r"(?:is|are|was|were|gets|got|has\s+been|have\s+been)"
+_DENIED_BEFORE_RE = re.compile(
+    r"(?:\b(?:nothing|none|nobody|no\s+one|no\s+\w+)(?:\s+of\s+(?:\w+\s+){0,3}?\w+)?(?:'s|’s)?"
+    r"(?:\s+(?:that|which|who|you|I|we|he|she|they)(?:\s+(?!(?:and|but|or|so|then)\b)\w+){1,3}"
+    r"\s+" + _VERB + r"|\s+" + _VERB + r")?"
+    r"|\bnot|n't|n’t|\bno\s+longer|\bnever)"
+    r"(?:\s+(?:still|currently|now|yet|being|been|put|placed|kept|left)){0,3}\s+$", re.I)
+_EMPHASIS_RE = re.compile(r"(?<!\w)[*_~`]+|[*_~`]+(?!\w)")
+
+
+def held(text):
+    """The hold-word matches in text that the sentence does not deny."""
+    text = text or ""
+    return [m for m in HOLD_WORDS_RE.finditer(text)
+            if not _DENIED_BEFORE_RE.search(
+                _EMPHASIS_RE.sub("", text[max(0, m.start() - 80):m.start()]))]
+
 
 # The go that ends such a hold: an imperative that OPENS a sentence ("Go: run the walk
 # now.", "Please continue.", "You can go ahead."). A word inside a question or a negation
@@ -30,8 +56,8 @@ def _sentences(text):
 
 
 def find(text):
-    """The first hold-word match in text, or None."""
-    return HOLD_WORDS_RE.search(text or "")
+    """The first hold-word match in text that the sentence does not deny, or None."""
+    return next(iter(held(text)), None)
 
 
 def is_go(text):

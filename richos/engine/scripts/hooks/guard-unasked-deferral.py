@@ -196,6 +196,7 @@ import json
 import os
 import re
 import sys
+import types
 
 # ---------------------------------------------------------------------------
 # QUOTATION STRIPPING — see "QUOTED IS NOT USED" above.
@@ -235,6 +236,19 @@ _NOW = (r"(?:right now|just now|now|yet|today|at the moment|for now|for the "
         r"moment|this turn|this pass|in this pass|immediately|before (?:that|"
         r"these|those))")
 
+# An object that names no work, only "nothing more": "I'm not starting anything
+# alongside that" (2026-10-23) says how much runs at once and holds no piece of
+# work, so the hold it opened ("I'm not starting") could never end by that work
+# running. "I'm not spawning anything for it" still names the work and still fires,
+# and so does work named after the qualifier: "I'm not spawning anyone else for the
+# sign-in review right now" (second review rv-20261023T204623Z-591cbe58-c2b4 #1). Only
+# a clause that ENDS there, at most "that"/"it" and a now-marker later, names nothing.
+_MORE = r"(?:else|new|alongside|in\s+parallel|on\s+the\s+side|on\s+top)"
+_NOTHING_MORE = (r"(?!\s+(?:anything|anyone|anybody)(?:\s+" + _MORE + r")+"
+                 r"(?:\s+(?:of\s+|with\s+|to\s+)?(?:that|this|it|them|those|these))?"
+                 r"(?:\s+" + _NOW + r")?"
+                 r"\s*(?:[.!?;:,)\n]|$|\s+(?:and|but|while|until|because|since|so|as)\b))")
+
 CONSTRUCTIONS = [
     # ---------------------------------------------------------------- family A
     # FIRST-PERSON REFUSAL TO START WORK.
@@ -245,7 +259,7 @@ CONSTRUCTIONS = [
     # all have a different subject.
     ("not-starting-it-now",
      r"\b(?:I'm|I am|I'll|I will)\s+(?:\w+\s+){0,3}?not\s+" + _ACT +
-     r"\b[^.\n]{0,80}?\b" + _NOW + r"\b"),
+     r"\b" + _NOTHING_MORE + r"[^.\n]{0,80}?\b" + _NOW + r"\b"),
 
     # The same act, with the postponement carried by the verb instead of a
     # now-marker: "I'm not spawning a fourth agent", "I'm not dispatching
@@ -254,7 +268,7 @@ CONSTRUCTIONS = [
     # long sentence cannot drag an unrelated negation in.
     ("not-dispatching",
      r"\b(?:I'm|I am)\s+(?:\w+\s+){0,2}?not\s+"
-     r"(?:spawning|dispatching|launching|kicking off|starting)\b"),
+     r"(?:spawning|dispatching|launching|kicking off|starting)\b" + _NOTHING_MORE),
 
     # ---------------------------------------------------------------- family B
     # BUNDLING THE ITEM INTO A LATER BATCH — the specimen's second half.
@@ -291,7 +305,8 @@ _COMPILED = [(name, re.compile(pat, re.I)) for name, pat in CONSTRUCTIONS]
 HELD = "held-in-a-reply"
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 import hold_words  # noqa: E402
-_COMPILED.append((HELD, hold_words.HOLD_WORDS_RE))
+# The hold words a sentence does not deny: "Nothing of yours is on hold." holds nothing.
+_COMPILED.append((HELD, types.SimpleNamespace(search=hold_words.find)))
 
 
 def find_deferrals(text):
@@ -377,7 +392,7 @@ def held_pieces(text, hits):
     out, seen = [], set()
     for name, quoted in hits:
         quotes = [_sentence(text, scan, m.start(), m.end()) or quoted
-                  for m in hold_words.HOLD_WORDS_RE.finditer(scan)] if name == HELD else [quoted]
+                  for m in hold_words.held(scan)] if name == HELD else [quoted]
         for q in quotes:
             q = q if len(q) <= 120 else q[:117] + "..."
             if q not in seen:
