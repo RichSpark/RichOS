@@ -2703,11 +2703,17 @@ class Reaper(object):
         app_root = self.codex_app_root()
         attached, why_not = self.codex_attachments()
         cwds = self.ws._process_cwds(strict=True)
+        # What is in use inside a checkout whatever the user's cwd: open files,
+        # mapped libraries, running executables. One read, kept to these roots.
+        opened = cw.open_paths(env=_ps_env())
+        if opened is not None:
+            prefixes = tuple(os.path.realpath(r).rstrip("/") + "/" for r in roots)
+            opened = {p for p in opened if p.startswith(prefixes)}
         found, husks = cw.checkouts(roots)
         self.roots.extend(roots)
         for path in found:
             check_deadline()
-            action, why, info = cw.decide(path, self.ws, app_root, attached, cwds)
+            action, why, info = cw.decide(path, self.ws, app_root, attached, cwds, opened)
             if attached is None and why_not and action == cw.UNDECIDED:
                 why = "%s (%s)" % (why, why_not)
             e = Entry(path, "codex-worktree", measure(path)[0] if action == DELETE else 0,
@@ -3413,7 +3419,8 @@ class Reaper(object):
                 kept, err = codex_worktrees().close(
                     e.path, getattr(e, "close_info", {}), self.ws, self.codex_app_root(),
                     lambda: self.codex_attachments()[0],
-                    lambda: self.ws._process_cwds(strict=True))
+                    lambda: self.ws._process_cwds(strict=True),
+                    lambda: codex_worktrees().open_paths(env=_ps_env()))
                 if kept:
                     lines.append("%s KEPT %s class=%s why=%s" % (stamp, e.path, e.klass, kept))
                     continue

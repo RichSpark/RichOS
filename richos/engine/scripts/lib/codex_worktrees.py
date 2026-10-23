@@ -20,7 +20,9 @@ WHAT CLOSES (all of it, rechecked at deletion time):
     checkout does not have, other than what the repository declares regenerable
     (`#regenerable:` in its root .gitignore), by the workspace engine's own
     `uncommitted()` and pattern rule;
-  * no process has its working directory inside it;
+  * no process has its working directory inside it, and the open-file table
+    shows nothing inside it in use: no open file, mapped library or running
+    executable (a reader whose working directory is elsewhere still keeps it);
   * for a checkout under the app's root: the app's own attachment records
     (read-only, from a consistent snapshot) show no LIVE attachment for it. A
     live attachment is closed only by its owning chat's archive_worktree, which
@@ -132,6 +134,27 @@ def attachments(codex_home):
         shutil.rmtree(snap, ignore_errors=True)
 
 
+def open_paths(env=None, timeout=120):
+    """Every path the whole machine's open-file table shows in use, or None.
+
+    `lsof -F n` names each open file, each mapped library, each process's running
+    executable (its txt entry) and each working directory, so one read answers
+    "is anything in this checkout in use" whatever the process's own cwd is. Exit 1
+    is lsof's normal answer when some processes cannot be listed; what it could
+    list still answers. A table naming nothing is not a table (lsof always lists
+    itself), so it is None, never "nothing is open". `env` is the caller's PATH
+    for lsof, which lives in /usr/sbin, outside launchd's default PATH."""
+    try:
+        r = subprocess.run(["lsof", "-n", "-P", "-F", "n"], capture_output=True, text=True,
+                           timeout=timeout, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode not in (0, 1):
+        return None
+    paths = {line[1:] for line in r.stdout.splitlines() if line.startswith("n/")}
+    return paths or None
+
+
 def regenerable(repo, ws):
     """The repository's own `#regenerable:` patterns, read from main's .gitignore."""
     rc, out, _err = _git(repo, "show", "main:.gitignore")
@@ -140,8 +163,12 @@ def regenerable(repo, ws):
     return [m.group(1) for m in (ws._REGENERABLE_RE.match(l.strip()) for l in out.splitlines()) if m]
 
 
-def decide(path, ws, app_root, attached, cwds):
-    """(action, why, info) for one checkout. info carries what closing needs."""
+def decide(path, ws, app_root, attached, cwds, opened=None):
+    """(action, why, info) for one checkout. info carries what closing needs.
+
+    `opened` is open_paths() (or the caller's own read of the same table); None,
+    including not passed, means it could not be read, and the checkout stays
+    undecided."""
     real = os.path.realpath(path)
     repo = repository_of(real)
     if not repo:
@@ -187,6 +214,13 @@ def decide(path, ws, app_root, attached, cwds):
                   if cwd and (os.path.realpath(cwd) + "/").startswith(real + "/"))
     if busy:
         return KEEP, "process %s works in it" % ", ".join(str(p) for p in busy[:5]), {}
+    if opened is None:
+        return UNDECIDED, "the open-file table could not be read, so a process using a file " \
+                          "or running a program in it cannot be ruled out", {}
+    held = sorted(p for p in opened if p == real or p.startswith(real + "/"))
+    if held:
+        return KEEP, "a process has %d path(s) in it in use (%s)" % (
+            len(held), ", ".join(os.path.relpath(p, real) for p in held[:3])), {}
     if in_app:
         if attached is None:
             return UNDECIDED, "the Codex app's attachment records cannot be read, so whether " \
@@ -196,16 +230,20 @@ def decide(path, ws, app_root, attached, cwds):
                               "chat's archive_worktree may close it, and dispatching that " \
                               "needs the CEO's standing authorization (cleanup PRD section 3)", {}
     return DELETE, "%s worktree on %s: all its commits are in main, nothing uncommitted or " \
-                   "unpreserved, no process in it%s" % (
+                   "unpreserved, nothing in it in use%s" % (
                        "an app-managed" if in_app else "a plain Codex",
                        branch or "a detached HEAD",
                        ", and no live app attachment" if in_app else ""), \
         {"repo": repo, "branch": branch if branch.startswith(CODEX_PREFIX) else ""}
 
 
-def close(path, info, ws, app_root, attached_fn, cwds_fn):
-    """('', '') closed; (why_kept, '') a recheck now keeps it; ('', error) failed."""
-    action, why, now_info = decide(path, ws, app_root, attached_fn(), cwds_fn())
+def close(path, info, ws, app_root, attached_fn, cwds_fn, opened_fn=None):
+    """('', '') closed; (why_kept, '') a recheck now keeps it; ('', error) failed.
+
+    Every check is read fresh here, the open-file table included; without an
+    `opened_fn` the table counts as unread and nothing closes."""
+    action, why, now_info = decide(path, ws, app_root, attached_fn(), cwds_fn(),
+                                   opened_fn() if opened_fn else None)
     if action != DELETE:
         return "at deletion time: " + why, ""
     repo = now_info["repo"]

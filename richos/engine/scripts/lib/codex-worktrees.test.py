@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -65,6 +66,8 @@ class CodexWorktrees(unittest.TestCase):
         for p in self.sleepers:
             p.kill()
             p.wait()
+            if p.stdin:
+                p.stdin.close()
         shutil.rmtree(self.base, ignore_errors=True)
 
     def attach(self, kind, path):
@@ -92,12 +95,28 @@ class CodexWorktrees(unittest.TestCase):
     def decide(self, path):
         attached, why = cw.attachments(str(self.home))
         self.assertEqual(why, "")
-        return cw.decide(str(path), ws, str(self.app), attached, ws._process_cwds(strict=True))
+        return cw.decide(str(path), ws, str(self.app), attached, ws._process_cwds(strict=True),
+                         cw.open_paths(env=ws._ps_env()))
 
     def close(self, path):
         return cw.close(str(path), {}, ws, str(self.app),
                         lambda: cw.attachments(str(self.home))[0],
-                        lambda: ws._process_cwds(strict=True))
+                        lambda: ws._process_cwds(strict=True),
+                        lambda: cw.open_paths(env=ws._ps_env()))
+
+    def user(self, argv, holds):
+        """A process whose working directory is OUTSIDE every checkout, started and
+        waited for until the open-file table shows it using `holds`."""
+        p = subprocess.Popen(argv, cwd=str(self.base), stdin=subprocess.PIPE,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.sleepers.append(p)
+        for _ in range(100):
+            if str(holds) in (cw.open_paths(env=ws._ps_env()) or ()):
+                return p
+            if p.poll() is not None:
+                break
+            time.sleep(0.1)
+        self.fail("the user process never showed %s in use" % holds)
 
     def test_merged_clean_plain_worktree_closes_with_its_branch(self):
         wt = self.worktree(self.plain, "done", "codex/done")
@@ -136,6 +155,51 @@ class CodexWorktrees(unittest.TestCase):
             self.assertIn(want, why)
             self.assertTrue(path.exists())
 
+    def test_a_file_in_use_from_outside_keeps_it(self):
+        # Mid-job review rv-20261023T222724Z-e6524552-e592 #1: a merged, clean
+        # checkout with a live reader whose cwd is elsewhere was planned DELETE
+        # and closed from under the reader.
+        wt = self.worktree(self.plain, "read", "codex/read")
+        reader = self.user([sys.executable, "-c", "import sys; f = open(sys.argv[1]); sys.stdin.read()",
+                            str(wt / "read.txt")], wt / "read.txt")
+        action, why, _info = self.decide(wt)
+        self.assertEqual(action, cw.KEEP, why)
+        self.assertIn("in use", why)
+        self.assertTrue(self.close(wt)[0].startswith("at deletion time"))
+        self.assertTrue(wt.exists())
+        self.assertIsNone(reader.poll())
+
+    def test_a_program_running_from_it_keeps_it(self):
+        # Build output executed from elsewhere: only the executable is in the checkout.
+        # A copied system binary is killed at launch on macOS (measured: exit 137),
+        # so the program is compiled here, as real build output would be.
+        cc = shutil.which("cc")
+        if not cc:
+            self.skipTest("no C compiler to build a program inside the checkout")
+        wt = self.worktree(self.plain, "run", "codex/run")
+        (wt / "build").mkdir()
+        src = self.base / "tool.c"
+        src.write_text("#include <unistd.h>\nint main(void){char c; return (int)read(0, &c, 1);}\n")
+        subprocess.run([cc, "-o", str(wt / "build" / "tool"), str(src)], check=True,
+                       capture_output=True)
+        self.user([str(wt / "build" / "tool")], wt / "build" / "tool")
+        action, why, _info = self.decide(wt)
+        self.assertEqual(action, cw.KEEP, why)
+        self.assertIn("build/tool", why)
+
+    def test_an_unreadable_open_file_table_is_undecided(self):
+        wt = self.worktree(self.plain, "blind", "codex/blind")
+        attached, _why = cw.attachments(str(self.home))
+        action, why, _info = cw.decide(str(wt), ws, str(self.app), attached,
+                                       ws._process_cwds(strict=True), None)
+        self.assertEqual(action, cw.UNDECIDED, why)
+        self.assertIn("open-file table", why)
+        # And a closer that is given no way to read it closes nothing.
+        kept, err = cw.close(str(wt), {}, ws, str(self.app), lambda: attached,
+                             lambda: ws._process_cwds(strict=True))
+        self.assertTrue(kept.startswith("at deletion time"), (kept, err))
+        self.assertTrue(wt.exists())
+
     def test_app_managed_live_attachment_is_unresolved_not_deleted(self):
         wt = self.worktree(self.app, "live", "codex/live")
         self.attach("worktree", wt)
@@ -162,8 +226,10 @@ class CodexWorktrees(unittest.TestCase):
         self.db.write_bytes(b"not a database")
         attached, why = cw.attachments(str(self.home))
         self.assertIsNone(attached)
-        action, why, _info = cw.decide(str(wt), ws, str(self.app), attached, ws._process_cwds(strict=True))
+        action, why, _info = cw.decide(str(wt), ws, str(self.app), attached, ws._process_cwds(strict=True),
+                                       cw.open_paths(env=ws._ps_env()))
         self.assertEqual(action, cw.UNDECIDED)
+        self.assertIn("attachment records", why)
         self.assertTrue(wt.exists())
 
     def test_a_change_after_planning_keeps_it(self):
