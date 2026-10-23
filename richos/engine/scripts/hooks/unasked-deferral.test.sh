@@ -253,6 +253,20 @@ run_hook "I'm not spawning anything for it right now."
 if spoke; then ok "T2e POSITIVE CONTROL: 'not spawning anything for it right now' still fires"
 else bad "T2e work named after 'anything' still fires" "$HOUT"; fi
 rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+# Second review rv-20261023T204623Z-591cbe58-c2b4: #1, work named after "anyone else" /
+# "anything new" is still a deferral; #2, denials written the normal ways open nothing.
+for t in "T2f|I'm not spawning anyone else for the sign-in review right now." \
+         "T2g|I'm not starting anything new on your requested sign-in fix today."; do
+    write_transcript Bash
+    run_hook "${t#*|}"
+    N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
+    if spoke && [ "$N" -ge 1 ]; then ok "${t%%|*} work named after the qualifier still fires and holds: ${t#*|}"
+    else bad "${t%%|*} work named after the qualifier still fires and holds: ${t#*|}" "holds=$N out=$HOUT"; fi
+    rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+done
+no_hold_case T2h "Nothing you asked for is on hold." "a relative clause before the verb"
+no_hold_case T2i "Nothing of yours is **on hold**." "markdown emphasis on the hold word"
+no_hold_case T2j "None of your work is being put on hold." "the passive"
 
 # ===========================================================================
 # 2. THE THREE DISCHARGES — same text, silenced three different ways

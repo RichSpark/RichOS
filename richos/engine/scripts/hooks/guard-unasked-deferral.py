@@ -239,9 +239,15 @@ _NOW = (r"(?:right now|just now|now|yet|today|at the moment|for now|for the "
 # An object that names no work, only "nothing more": "I'm not starting anything
 # alongside that" (2026-10-23) says how much runs at once and holds no piece of
 # work, so the hold it opened ("I'm not starting") could never end by that work
-# running. "I'm not spawning anything for it" still names the work and still fires.
-_NOTHING_MORE = (r"(?!\s+(?:anything|anyone|anybody)\s+(?:else|new|alongside|"
-                 r"in\s+parallel|on\s+the\s+side|on\s+top)\b)")
+# running. "I'm not spawning anything for it" still names the work and still fires,
+# and so does work named after the qualifier: "I'm not spawning anyone else for the
+# sign-in review right now" (second review rv-20261023T204623Z-591cbe58-c2b4 #1). Only
+# a clause that ENDS there, at most "that"/"it" and a now-marker later, names nothing.
+_MORE = r"(?:else|new|alongside|in\s+parallel|on\s+the\s+side|on\s+top)"
+_NOTHING_MORE = (r"(?!\s+(?:anything|anyone|anybody)(?:\s+" + _MORE + r")+"
+                 r"(?:\s+(?:of\s+|with\s+|to\s+)?(?:that|this|it|them|those|these))?"
+                 r"(?:\s+" + _NOW + r")?"
+                 r"\s*(?:[.!?;:,)\n]|$|\s+(?:and|but|while|until|because|since|so|as)\b))")
 
 CONSTRUCTIONS = [
     # ---------------------------------------------------------------- family A

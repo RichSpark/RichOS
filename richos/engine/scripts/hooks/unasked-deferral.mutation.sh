@@ -200,9 +200,19 @@ mutant blocking "1d " "$H" \
 
 # --- T2. A SENTENCE THAT HOLDS NOTHING OPENS NO HOLD (2026-10-23) ----------
 mutant denial-is-a-hold "T2a " "scripts/lib/hold_words.py" \
-    '            if not _DENIED_BEFORE_RE.search(text[max(0, m.start() - 80):m.start()])]' \
-    '            ]' \
+    '_DENIED_BEFORE_RE = re.compile(' \
+    '_DENIED_BEFORE_RE = re.compile(r"(?!)" + ' \
     "'Nothing of yours is on hold.' opened a hold only his words could end, repeated every 30 minutes."
+
+mutant emphasis-is-a-hold "T2i " "scripts/lib/hold_words.py" \
+    '                _EMPHASIS_RE.sub("", text[max(0, m.start() - 80):m.start()]))]' \
+    '                text[max(0, m.start() - 80):m.start()])]' \
+    "'Nothing of yours is **on hold**.' (markdown bold) opened a hold the plain sentence did not."
+
+mutant named-work-is-nothing-more "T2f " "$A" \
+    '                 r"\s*(?:[.!?;:,)\n]|$|\s+(?:and|but|while|until|because|since|so|as)\b))")' \
+    '                 r")")' \
+    "'I'm not spawning anyone else for the sign-in review right now' refuses named work; it opened no hold."
 
 mutant nothing-more-is-a-hold "T2c " "$A" \
     '     r"(?:spawning|dispatching|launching|kicking off|starting)\b" + _NOTHING_MORE),' \
