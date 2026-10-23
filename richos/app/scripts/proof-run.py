@@ -855,15 +855,28 @@ def recorded_environment(environ=None):
     return {"values": values, "withheld": withheld}
 
 
+# What the runner hands every check itself when its caller has none (supply_runtime,
+# supply_speech_models). They are in each check's item.env, which a saved plan does not carry, so
+# the coverage verifier, rebuilding the items, finds them only in its own environment: that of
+# the `engine receipts` check, which the runner started with them.
+RUNNER_SUPPLIED = ("RICHOS_RUNTIME_DIR", "RICHOS_GUI_SPEECH_MODELS")
+
+
 def as_caller(recorded, root, environ=None):
     """The caller environment a run in checkout `root` recorded (recorded_environment), named for
     this checkout, with this process's own Git, per-run and withheld credential values kept, and
     its own mutation switches: they are what this run asks its checks to do, not what a shell
-    held, so a pass made with them off never stands for a run with them on (stands_in)."""
+    held, so a pass made with them off never stands for a run with them on (stands_in). So are
+    the values this run supplies its checks (RUNNER_SUPPLIED), where this process holds them.
+
+    2026-10-23, runs 20261023T200918Z-bq9lv1qe and 20261023T213406Z-qfskgufe: reuse() read a
+    pass under the recorded environment with the runner's supplied values (item.env), and the
+    verifier, whose items carry none, without them; so `engine receipts` refused as
+    "unqualified historical receipt" every engine unit reuse() had accepted that way."""
     values = {k: v for k, v in recorded["values"].items() if k not in proof_evidence.MUTATION_SWITCHES}
     if os.path.realpath(root) != os.path.realpath(ROOT):
         values = proof_evidence.placed(values, root, ROOT)
-    keep = set(recorded.get("withheld") or ()) | set(proof_evidence.MUTATION_SWITCHES)
+    keep = set(recorded.get("withheld") or ()) | set(proof_evidence.MUTATION_SWITCHES) | set(RUNNER_SUPPLIED)
     own = {k: v for k, v in (os.environ if environ is None else environ).items()
            if k in keep or k.startswith("GIT_") or k in proof_evidence.RUN_SCOPED_ENVIRONMENT}
     return {**values, **own}

@@ -1081,6 +1081,73 @@ class Evidence(unittest.TestCase):
         self.assertIsNone(rows["fixture-sh"]["reused_from"], detail)
         self.assertIn("(read under the environment its run recorded)", detail)
 
+    def test_the_coverage_verifier_accepts_what_reuse_accepted_under_a_recorded_environment(self):
+        """2026-10-23, the land of codex/iphone-verification-loop-20261023 at e14ecb3f6: runs
+        20261023T200918Z-bq9lv1qe and 20261023T213406Z-qfskgufe, offered Codex's earlier run of the
+        same checkout and content, reused its engine units under the environment that run recorded,
+        and `engine receipts` then refused both lands: "unqualified historical receipt for
+        scripts/lib/testdevices.test.sh". The same refusal stopped Codex's own run at 12:22Z
+        (20261023T121325Z-8zqcv2m4, merge-verification-pins). The runner hands every check the
+        speech models (supply_speech_models) and the runtime (supply_runtime) itself when its
+        caller has none, so they are in every identity and in no recorded environment; reuse()
+        read the pass again with them, and the verifier, whose own environment is the check's and
+        carries them, read it again without them. Real runner, ci-shard.sh and verifier, one
+        checkout, Codex's shell and then the lead's."""
+        app, engine = self.copy_runner_fixture()
+        counter = Path(self.tmp.name) / "executions"
+        path = engine / "scripts/beta.test.sh"
+        path.write_text('#!/bin/bash\nprintf "beta\\n" >> "$FIXTURE_COUNTER"\n')
+        path.chmod(0o755)
+        (self.root / "LICENSE").write_text("fixture license\n")
+        # Both pinned speech models present, so the runner supplies them to every check.
+        home = Path(self.tmp.name) / "home"
+        (home / "Models/Whisper").mkdir(parents=True)
+        for name in ("ggml-small.en.bin", "ggml-large-v3-turbo-q5_0.bin"):
+            (home / "Models/Whisper" / name).write_text("fixture model\n")
+        umask = os.umask(0)
+        os.umask(umask)
+        for written in self.root.rglob("*"):
+            if written.is_file() and not written.is_symlink():
+                written.chmod((0o777 if written.stat().st_mode & 0o100 else 0o666) & ~umask)
+
+        def git(*args):
+            subprocess.check_output(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture",
+                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *args],
+                cwd=self.root, stderr=subprocess.PIPE)
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "fixture")
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("RICHOS_", "GIT_")) and k not in ("LANG", "LC_ALL", "LC_CTYPE", "RUST_LOG")}
+        env.update(HOME=str(home), RICHOS_MACHINE_WORKERS=str(Path(self.tmp.name) / "machine"),
+            RICHOS_ENGINE_PASS_DIR=str(Path(self.tmp.name) / "slot"),
+            RICHOS_PROOF_RUN_DIR=str(Path(self.tmp.name) / "history"),
+            RICHOS_PROOF_RUN_SLOTS_DIR=str(Path(self.tmp.name) / "proof-slots"),
+            CLAUDE_CONFIG_DIR=str(Path(self.tmp.name) / "config"),
+            FIXTURE_COUNTER=str(counter), PYTHONDONTWRITEBYTECODE="1")
+        codex = dict(env, LANG="C.UTF-8", LC_ALL="C.UTF-8", LC_CTYPE="C.UTF-8", RUST_LOG="warn")
+        lead = dict(env, LANG="en_GB.UTF-8")
+        commands = Path(self.tmp.name) / "commands"
+        commands.write_text("cd %s && bash scripts/ci-shard.sh --only-units %s\n" % ("richos/engine", "scripts/beta.test.sh"))
+
+        def invoke(name, shell, *options):
+            counter.write_text("")
+            directory = Path(self.tmp.name) / name
+            result = subprocess.run([*idle_proof_run(self.root / "richos/app/scripts/proof-run.py"),
+                "--commands", str(commands), "--log-dir", str(directory), *options], cwd=self.root,
+                env=shell, text=True, capture_output=True, timeout=120)
+            detail = result.stdout + result.stderr + "\n" + "\n".join(p.read_text() for p in directory.glob("*.log"))
+            return directory, result.returncode, sorted(counter.read_text().splitlines()), detail
+
+        author, rc, executed, detail = invoke("author", codex)
+        self.assertEqual((rc, executed), (0, ["beta"]), detail)
+        identity = json.loads((author / "plan.json").read_text())["identities"]["engine scripts/beta.test.sh"]
+        self.assertIn("RICHOS_GUI_SPEECH_MODELS", identity["environment"], detail)
+        _gate, rc, executed, detail = invoke("gate", lead, "--reuse", str(author))
+        self.assertEqual(executed, [], "the unchanged unit executed again\n" + detail)
+        self.assertIn("(read under the environment its run recorded)", detail)
+        self.assertEqual(rc, 0, "the verifier refused a pass reuse() accepted\n" + detail)
+
     def test_a_pass_reused_under_a_recorded_environment_is_judged_by_its_producing_inputs_ever_after(self):
         """Review rv-20261022T143750Z-fba13982-f9d7 #1, its fixture: a land reused the author's
         pass under the author's recorded environment and saved its own input identity; the
