@@ -30,6 +30,15 @@ final class InteractionTests: XCTestCase {
         XCTAssertEqual(newestRow(app), newest, message, file: file, line: line)
     }
 
+    /// Once the hint or card is gone, the list shows exactly the rows it showed before: what scrolled
+    /// off the top was moved, not lost.
+    private func assertRowsReturn(_ app: XCUIApplication, to before: Set<String>, _ message: String,
+                                  file: StaticString = #filePath, line: UInt = #line) {
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, rows(app) != before { Thread.sleep(forTimeInterval: 0.1) }
+        XCTAssertEqual(rows(app), before, message, file: file, line: line)
+    }
+
     private func assertNewVoice(_ app: XCUIApplication, after before: Set<String>,
                                 file: StaticString = #filePath, line: UInt = #line) {
         // UICollectionView recycles off-screen rows. Its visible count need not grow on Send.
@@ -95,6 +104,7 @@ final class InteractionTests: XCTestCase {
         // TooShortLineTests covers the latch; this check proves appearance and disappearance.
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: line)
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 3), .completed, "the too-short line never left")
+        assertRowsReturn(app, to: before, "the rows the hint moved did not come back after it left")
     }
 
     func testSlideLeftCancelsAndSendsNothing() throws {
@@ -296,6 +306,7 @@ final class InteractionTests: XCTestCase {
         assertOnScreenAndHittable(notNow, in: app, "Not now")
         notNow.tap()
         XCTAssertTrue(card.waitForNonExistence(timeout: 3), "Not now did not take the card down")
+        assertRowsReturn(app, to: before, "the rows the card moved did not come back after Not now")
         orb(app).press(forDuration: 0.4)
         XCTAssertTrue(card.waitForExistence(timeout: 3), "the next press did not bring the card back")
         keepScreenshot(app, name: "d03-mic-denied-after-press")
