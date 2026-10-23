@@ -1088,6 +1088,8 @@ class Reaper(object):
         self.skip_build_caches = False
         # And the Codex worktree arm, which runs git status in every Codex checkout.
         self.skip_codex = False
+        # And the named-agent scratch report, which measures every leftover entry.
+        self.skip_named = False
         # A LAND'S SCOPED SWEEP (--agent). None for every other run. When set,
         # scan_agent() replaces scan(), and apply() collects nothing it did not
         # plan: no test devices, no Docker. See scan_agent.
@@ -1995,6 +1997,62 @@ class Reaper(object):
                     continue            # separate scoped/Claude-root collection owns it
                 self._unknown.append((path, root))
 
+    def live_agent_names(self):
+        """Names of registered agents whose run has not finished (paused counts as
+        not finished), or None when the agent registry cannot be read."""
+        try:
+            if self.ws.damaged_records(include_done=False):
+                return None
+            cache = {}
+            return {r.get("name") for r in self.ws.all_agents()
+                    if not self.ws.finished_state(r, cache)[0]}
+        except Exception:
+            return None
+
+    def scan_named_scratch(self, walls):
+        """NAMED-AGENT SCRATCH LEFT BEHIND, REPORTED AND NEVER DELETED HERE.
+
+        <agent root>/<name> is collected only by a land's scoped sweep (scan_agent),
+        so the scratch of an agent that was stopped or shelved and never landed was
+        neither collected nor reported (review rv-20261023T232303Z-ba744b07-d444 #2).
+        Each child older than the age floor whose name no unfinished registered agent
+        carries is an undecided entry: the published result stays unresolved for
+        this root, and the lead is told, until it is gone."""
+        if self.skip_named:
+            return
+        roots = [r for r in self.cfg.get("agent_roots", []) if r and os.path.isdir(r)]
+        live = self.live_agent_names() if roots else set()
+        for root in roots:
+            self.roots.append(root)
+            try:
+                names = sorted(os.listdir(root))
+            except OSError as exc:
+                self.add(root, "agent-named", 0, INDETERMINATE,
+                         "the named-agent scratch root could not be listed (%s)" % exc)
+                continue
+            for name in names:
+                check_deadline()
+                path = os.path.join(root, name)
+                if live is not None and name in live:
+                    self.add(path, "agent-named", 0, KEEP,
+                             "named for %s, whose run has not finished" % name)
+                    continue
+                size, newest, _has_git = measure(path)
+                if self.now - newest < self.floor:
+                    self.add(path, "agent-named", size, KEEP,
+                             "named scratch written %d min ago, inside the %d min floor"
+                             % ((self.now - newest) // 60, self.cfg["age_floor_minutes"]))
+                    continue
+                if live is None:
+                    self.add(path, "agent-named", size, INDETERMINATE,
+                             "named-agent scratch, and the agent registry cannot be read "
+                             "to tell whether %s is still running" % name)
+                    continue
+                self.add(path, "agent-named", size, INDETERMINATE,
+                         "named-agent scratch no running agent carries (%s was stopped, "
+                         "shelved or never landed). Only a land's sweep deletes named "
+                         "scratch, so remove it by hand once nothing needs it" % name)
+
     def scan_deferred_unknown(self, walls):
         """THE DEFERRED DENY-BY-DEFAULT PASS, and the ONE arm allowed to be cut
         short without failing the run.
@@ -2762,6 +2820,7 @@ class Reaper(object):
         self.scan_scratch_root(walls)
         self.scan_tmp(walls)
         self.scan_shared_tmp(walls)
+        self.scan_named_scratch(walls)
         self.scan_nightly(walls)
         self.scan_kept(walls)
         self.scan_build_caches(walls)
@@ -4237,6 +4296,7 @@ def main(argv=None):
         reaper.skip_unknown_arm = bool(args.notice)
         reaper.skip_build_caches = bool(args.notice)
         reaper.skip_codex = bool(args.notice)
+        reaper.skip_named = bool(args.notice)
         if args.process_only:
             reaper.scope = {"kind": "process", "name": "process"}
             reaper.scan_scratch_root(Walls([os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]))

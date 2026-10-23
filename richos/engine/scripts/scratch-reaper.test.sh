@@ -2988,6 +2988,53 @@ else
 fi
 
 # ===========================================================================
+# S39 — NAMED-AGENT SCRATCH NO RUNNING AGENT CARRIES IS UNRESOLVED UNTIL IT IS GONE
+# ===========================================================================
+# Handover review rv-20261023T232303Z-ba744b07-d444 #2. Only a land's scoped sweep
+# collects <agent root>/<name>, and the scheduled sweep excluded that root, so a
+# stopped or shelved agent's scratch was neither collected nor reported: published
+# HEALTHY with the residue still there. It is reported now, never deleted here.
+world named
+start_claude; PID_N="$LAST_CLAUDE"
+register "$W_SESSIONS" "$PID_N" "$SID_LIVE"
+SF="$W_HOME/state/scratch-reaper-state.json"
+NAMED="$W_BULK/tmp/claude"
+sed -i.bak 's/^SCRATCH_AGE_FLOOR_MINUTES=.*/SCRATCH_AGE_FLOOR_MINUTES="60"/' "$W_CFG"
+# A producer that wrote its output and finished, never landed.
+python3 -B -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True); p.write_text("disposable fixture output")' \
+    "$NAMED/finished-agent/disposable-output.txt"
+stale "$NAMED/live-agent"
+mkdir -p "$NAMED/fresh-agent"
+printf 'just written\n' >"$NAMED/fresh-agent/out.txt"
+backdate "$NAMED/finished-agent"
+mkdir -p "$W_HOME/state/workspaces/agents"
+printf '{"key": "k-live", "name": "live-agent", "workspaces": []}\n' >"$W_HOME/state/workspaces/agents/k-live.json"
+OUT="$(RICHOS_WORKSPACES_DIR="$W_HOME/state/workspaces" run_scheduled --apply)"
+if state_is 'st.get("outcome") == "unresolved" and [(u.get("scope"), u.get("count")) for u in st.get("unresolved", []) if u.get("class") == "agent-named"] == [("'"$NAMED"'", 1)] and "finished-agent" in str(st["unresolved"])' \
+   && [ -f "$NAMED/finished-agent/disposable-output.txt" ]; then
+    ok "S39  a finished agent's named scratch is published UNRESOLVED for its root, and not deleted"
+else
+    bad "S39  a finished agent's named scratch was not reported (or was deleted)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | tail -8
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+if [ -f "$NAMED/live-agent/payload.txt" ] && [ -f "$NAMED/fresh-agent/out.txt" ]; then
+    ok "S39a CONTROL: a running agent's and a just-written directory are kept and not reported"
+else
+    bad "S39a a running agent's or a fresh named directory was deleted"
+fi
+rm -rf "$NAMED/finished-agent"
+RICHOS_WORKSPACES_DIR="$W_HOME/state/workspaces" run_scheduled --apply >/dev/null 2>&1
+if state_is 'not any(u.get("class") == "agent-named" for u in st.get("unresolved", []))'; then
+    ok "S39b CONTROL: once the leftover is gone, the named root clears"
+else
+    bad "S39b the named root stayed unresolved after its leftover was removed"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+kill "$PID_N" >/dev/null 2>&1 || true
+wait "$PID_N" 2>/dev/null || true
+
+# ===========================================================================
 # S33 — THIS SUITE NEVER SCANNED THE WHOLE MAC'S OPEN-FILE TABLE
 # ===========================================================================
 # The scoped lsof at the top of this file only helps if the reaper actually
