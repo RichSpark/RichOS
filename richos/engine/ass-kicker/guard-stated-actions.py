@@ -858,6 +858,11 @@ FUTURE_RE = re.compile(r"\b(?:goes?\s+in|going\s+in|will|I'll|we'll|it'll|after|
 NOTES_CLAIM_RE = re.compile(r"\b(?:it|this|that|they|these)(?:'s|\s+is|\s+are|'re)\s+(?:now\s+|also\s+|just\s+|only\s+)?"
                             r"(?:in|on)\s+(?:my|the)\s+(?:private\s+)?(?:follow-?up\s+)?notes?\b", re.I)
 FOLLOWUPS_FILE = "richos-hq/docs/plans/follow-ups.md"
+# "That's on the follow-up list", "added to the follow-ups", "going on the
+# follow-up list" (CEO 2026-10-23: "So, it wasn't on your fucking follow-up
+# list?"). Backed only by a committed change to FOLLOWUPS_FILE in this turn.
+FOLLOWUP_LIST_CLAIM_RE = re.compile(r"\b(?:on|added\s+(?:\w+\s+)?to)\s+(?:my|the)\s+"
+                                    r"(?:follow-?up\s+list|follow-?ups(?:\s+list)?)\b", re.I)
 RULE_NOUN_RE = re.compile(r"\b(?:rules?|rulings?|lessons?|doctrine|standing\s+(?:instruction|order)s?)\b", re.I)
 NOTES_POINTER_RE = re.compile(r"\b(?:in|to|into)\s+(?:my\s+|the\s+)?(?:notes|memory)\b", re.I)
 # From the corpus (ass-kicker/docs/stated-actions.corpus.md, ARM 3).
@@ -905,7 +910,8 @@ def _arm3_clauses(sentence):
 
 def record_claims(message):
     """[(kind, sentence)] — kind is 'act' (a record made in this turn) or
-    'state' (a record said to exist already). One entry per sentence."""
+    'state' (a record said to exist already), 'note' or 'list' (said to be on
+    the follow-up list). One entry per sentence."""
     out = []
     sents = [x.strip() for x in SENTENCE_SPLIT_RE.split(clean_keep_lists(message))]
     for idx, s in enumerate(sents):
@@ -927,6 +933,11 @@ def record_claims(message):
                 note = s
         if note is not None:
             out.append(("note", note[:300]))
+            continue
+        ml = FOLLOWUP_LIST_CLAIM_RE.search(s)
+        if ml and not (_before(ARM3_NEG_RE, s, ml.start()) or _before(ARM3_MODAL_RE, s, ml.start())
+                       or _before(ARM3_SUBORD_RE, s, ml.start())):
+            out.append(("list", s[:300]))
             continue
         third = third_subject(s)
         kind = None
@@ -1289,6 +1300,15 @@ def judge_record_claims(claims, writes, raw):
                                                       "repository file the reply names, with its commit, "
                                                       "backs it" % wrote()))
             continue
+        if kind == "list":
+            # "On the follow-up list": only a committed change to the list itself.
+            on_list = [p for p, k in durable if k == "repo"
+                       and (p == FOLLOWUPS_FILE or p.endswith("/" + FOLLOWUPS_FILE))]
+            if not (writes["committed"] and any(_staged_in_commit(p, traffic) for p in on_list)):
+                failing.append((sentence, "followup", "an item is said to be on the follow-up list, and "
+                                                      "this turn wrote %s. Only a committed change to %s "
+                                                      "backs it" % (wrote(), FOLLOWUPS_FILE)))
+            continue
         if kind == "state":
             # A citation names its place where it is made, not somewhere else
             # in the reply: "it is written in the three places I read: the
@@ -1437,7 +1457,8 @@ def arm3_alert_line(v):
             rule_tail = (". Lead: put the rule in CLAUDE.md or richos-hq/wiki/ceo-decisions.md, "
                          "committed, in this turn")
         elif code == "followup":
-            what = ("a promise or follow-up called noted is in no committed repository file the reply "
+            what = ("a promise or follow-up called noted, or said to be on the follow-up list, is in no "
+                    "committed repository file the reply "
                     "names (memory and ECS do not count). Lead: write it to %s, commit it, and name "
                     "the file and the commit" % FOLLOWUPS_FILE)
         elif code == "private":

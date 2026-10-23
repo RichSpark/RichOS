@@ -639,6 +639,33 @@ mk_tr "$TR_ADD_U" "[{\"prompt\":\"go\"},{\"bash\":$(js "cd $ENTITY && echo x >> 
 run_hook "$TR_ADD_U" "Noted. The numbering goes in after the next nightly: \`wiki/ceo-decisions.md\`, commit \`cf7e16b7\`."
 silent && ok "R48. review 5: a tracked note file committed after 'git add -u': SILENT" || bad "R48. add -u" "rc=$RC out=$OUT"
 
+# CEO 2026-10-23: "So, it wasn't on your fucking follow-up list?" A reply that
+# puts an item on the follow-up list is backed only by a committed change to it.
+FUP_REPO="$SANDBOX/richos-hq"
+mkdir -p "$FUP_REPO/docs/plans"
+git -C "$FUP_REPO" init -q -b main . >/dev/null 2>&1
+git -C "$FUP_REPO" config user.email t@t.t >/dev/null 2>&1
+git -C "$FUP_REPO" config user.name t >/dev/null 2>&1
+git -C "$FUP_REPO" config core.hooksPath "$SANDBOX/nohooks" >/dev/null 2>&1
+printf '# follow-ups\n' > "$FUP_REPO/docs/plans/follow-ups.md"
+git -C "$FUP_REPO" add -A >/dev/null 2>&1; git -C "$FUP_REPO" commit -qm seed >/dev/null 2>&1
+TR_FUP_COMMIT="$SANDBOX/fup-commit.jsonl"
+mk_tr "$TR_FUP_COMMIT" "[{\"prompt\":\"go\"},{\"bash\":$(js "cd $FUP_REPO && cat >> docs/plans/follow-ups.md <<'EOF'
+- number the next nightly
+EOF")},{\"bashout\":[$(js "cd $FUP_REPO && git add docs/plans/follow-ups.md && git commit -m 'follow-up'"),\"[main 4b1d9e2a] follow-up\"]}]"
+
+run_hook "$TR_MEM_WRITE" "That's on the follow-up list for after the nightly"
+alerted 'follow-ups.md' && ok "R49. 2026-10-23: 'That's on the follow-up list for after the nightly', memory write only: ALERTED" || bad "R49. on the follow-up list" "rc=$RC out=$OUT"
+
+run_hook "$TR_BASH" "I've added it to the follow-ups."
+alerted 'follow-ups.md' && ok "R50. 'added to the follow-ups' in a turn that wrote nothing: ALERTED" || bad "R50. added to the follow-ups" "rc=$RC out=$OUT"
+
+run_hook "$TR_REPO_COMMIT" "I've added it to the follow-ups."
+alerted 'follow-ups.md' && ok "R51. 'added to the follow-ups' backed only by a commit to ANOTHER file: ALERTED" || bad "R51. other file" "rc=$RC out=$OUT"
+
+run_hook "$TR_FUP_COMMIT" "That's on the follow-up list for after the nightly"
+silent && ok "R52. 'on the follow-up list' with a committed change to the follow-up list in this turn: SILENT" || bad "R52. list committed" "rc=$RC out=$OUT"
+
 run_hook "$TR_MEM_WRITE" "Noted that the build is green."
 silent && ok "R39. 'Noted that the build is green.' stays an acknowledgment: SILENT" || bad "R39. noted that" "rc=$RC out=$OUT"
 
