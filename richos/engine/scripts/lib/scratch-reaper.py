@@ -996,6 +996,21 @@ def build_caches():
     return _BUILD_CACHES[0]
 
 
+_CODEX_WORKTREES = []
+
+
+def codex_worktrees():
+    """lib/codex_worktrees.py (Codex's finished worktrees, cleanup PRD A6), by path."""
+    if not _CODEX_WORKTREES:
+        spec = importlib.util.spec_from_file_location(
+            "richos_codex_worktrees",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "codex_worktrees.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _CODEX_WORKTREES.append(mod)
+    return _CODEX_WORKTREES[0]
+
+
 def human(n):
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024 or unit == "TB":
@@ -1071,6 +1086,8 @@ class Reaper(object):
         # Set by --notice too: the build-cache arm walks the external drive's caches,
         # which a session-start banner must not pay for.
         self.skip_build_caches = False
+        # And the Codex worktree arm, which runs git status in every Codex checkout.
+        self.skip_codex = False
         # A LAND'S SCOPED SWEEP (--agent). None for every other run. When set,
         # scan_agent() replaces scan(), and apply() collects nothing it did not
         # plan: no test devices, no Docker. See scan_agent.
@@ -2658,6 +2675,64 @@ class Reaper(object):
             e.unit_keys = [k for k, _u in idle]
             self.entries.append(e)
 
+    def codex_app_root(self):
+        home = self.cfg.get("codex_home") or ""
+        return os.path.realpath(os.path.join(home, "worktrees")) if home else ""
+
+    def codex_attachments(self):
+        home = self.cfg.get("codex_home") or ""
+        if not home:
+            return {"live": set(), "archived": set()}, ""
+        return codex_worktrees().attachments(home)
+
+    def scan_codex_worktrees(self, walls):
+        """CODEX'S FINISHED WORKTREES (cleanup PRD section 3, A6), from the declared
+        Codex worktree roots only; the decision and the closing are lib/codex_worktrees.py.
+
+        A worktree that closes is planned DELETE and closed in apply() by git itself
+        after every check is repeated. A finished worktree a Codex chat still has
+        attached is UNDECIDED: only that chat's archive_worktree may close it. Kept
+        work (unmerged, uncommitted, active, ignored material) is KEEP with its reason.
+        """
+        roots = [r for r in self.cfg.get("codex_worktree_roots") or [] if os.path.isdir(r)]
+        if not roots or self.skip_codex:
+            return
+        # Never take git's optional index lock in someone else's checkout.
+        os.environ["GIT_OPTIONAL_LOCKS"] = "0"
+        cw = codex_worktrees()
+        app_root = self.codex_app_root()
+        attached, why_not = self.codex_attachments()
+        cwds = self.ws._process_cwds(strict=True)
+        found, husks = cw.checkouts(roots)
+        self.roots.extend(roots)
+        for path in found:
+            check_deadline()
+            action, why, info = cw.decide(path, self.ws, app_root, attached, cwds)
+            if attached is None and why_not and action == cw.UNDECIDED:
+                why = "%s (%s)" % (why, why_not)
+            e = Entry(path, "codex-worktree", measure(path)[0] if action == DELETE else 0,
+                      action, why)
+            e.close_info = info
+            self.entries.append(e)
+        for husk in husks:
+            real = os.path.realpath(husk)
+            if attached is None:
+                self.add(husk, "codex-husk", 0, INDETERMINATE,
+                         "an emptied worktree parent, but the Codex app's attachment "
+                         "records cannot be read (%s)" % why_not)
+            elif any((p + "/").startswith(real + "/") for p in attached["live"]):
+                self.add(husk, "codex-husk", 0, INDETERMINATE,
+                         "an emptied worktree parent that a live Codex attachment still "
+                         "names; the app has lost the checkout it shows that chat")
+            else:
+                refused = walls.check(husk, False)
+                if refused:
+                    self.add(husk, "codex-husk", 0, INDETERMINATE, refused)
+                else:
+                    self.add(husk, "codex-husk", 0, DELETE,
+                             "a worktree parent holding nothing but the Codex app's "
+                             "marker, and no live attachment names anything in it")
+
     # --- running it ------------------------------------------------------
 
     def scan(self):
@@ -2669,7 +2744,8 @@ class Reaper(object):
         kept = [self.cfg["kept_dir"]] if self.cfg.get("kept_dir") else []
         caches = [self.cfg["build_cache_root"]] if self.cfg.get("build_cache_root") else []
         cargo = [r for r in self.cfg.get("cargo_target_roots", []) if os.path.isdir(r)]
-        walls = Walls(roots + [tmp] + nightly + shared + kept + caches + cargo)
+        codex = [r for r in self.cfg.get("codex_worktree_roots", []) if os.path.isdir(r)]
+        walls = Walls(roots + [tmp] + nightly + shared + kept + caches + cargo + codex)
         # FIRST, so the other arms can skip what it has already claimed. A path
         # decided twice would be counted twice in the verdict, and a standing
         # failure is precisely a path another arm would otherwise report as KEEP.
@@ -2683,6 +2759,7 @@ class Reaper(object):
         self.scan_nightly(walls)
         self.scan_kept(walls)
         self.scan_build_caches(walls)
+        self.scan_codex_worktrees(walls)
         self.scan_campaign_roots(walls)
         self.scan_docker_containers(walls)
         # LAST, ALWAYS. It is the only expensive arm and the only one that may be
@@ -3308,8 +3385,11 @@ class Reaper(object):
         # decided to delete. It never reaches a live peer's instance.
         # A cargo-units row names a profile directory that is NOT deleted, only some of its
         # units, so an app running from it is not inside anything being removed.
+        # A Codex worktree is closed by git after a recheck that keeps any with a
+        # process in it, so no app instance there is quit on the plan's word.
         for line in self.collect_test_instances([e.path for e in order
-                                                 if e.klass != "cargo-units"], stamp):
+                                                 if e.klass not in ("cargo-units",
+                                                                    "codex-worktree")], stamp):
             lines.append(line)
             if " FAILED test-instance " in line:
                 failures.append(line.split("error=", 1)[-1])
@@ -3326,6 +3406,26 @@ class Reaper(object):
         if self.scope is None:
             lines.extend(self.collect_test_devices(stamp))
         for e in order:
+            if e.klass == "codex-worktree":
+                # CLOSED BY GIT, NOT rmtree, after every check is repeated now
+                # (lib/codex_worktrees.py close): a checkout that changed since the
+                # plan is kept, and git itself refuses a dirty one or an unmerged branch.
+                kept, err = codex_worktrees().close(
+                    e.path, getattr(e, "close_info", {}), self.ws, self.codex_app_root(),
+                    lambda: self.codex_attachments()[0],
+                    lambda: self.ws._process_cwds(strict=True))
+                if kept:
+                    lines.append("%s KEPT %s class=%s why=%s" % (stamp, e.path, e.klass, kept))
+                    continue
+                if err:
+                    failures.append("%s: %s" % (e.path, err))
+                    lines.append("%s FAILED %s class=%s error=%s" % (stamp, e.path, e.klass, err))
+                    continue
+                deleted += 1
+                freed += e.size
+                lines.append("%s DELETED %s bytes=%d class=%s why=%s"
+                             % (stamp, e.path, e.size, e.klass, e.why))
+                continue
             if e.klass == "cargo-units":
                 # UNITS, NOT THE DIRECTORY. Re-measured and deleted under Cargo's own
                 # lock (lib/build_caches.py), so a build that started since the plan
@@ -3830,6 +3930,22 @@ def config_from_env(process_only=False):
             raise Fatal("SCRATCH_BULK_TMP_ROOTS names %r, which is not a directory "
                         "below RICHOS_BULK_ROOT (%s)." % (rel, bulk_root))
         producer_roots.append(real)
+    # CODEX'S OWN WORKTREE ROOTS (cleanup PRD A6): each absolute (the Codex app's
+    # root under its home) or relative to RICHOS_BULK_ROOT. Empty fallback: an
+    # engine whose config predates the keys closes no Codex worktree.
+    codex_roots = []
+    for entry in (os.environ.get("SCRATCH_CODEX_WORKTREE_ROOTS") or "").split():
+        if os.path.isabs(entry):
+            codex_roots.append(os.path.realpath(entry))
+            continue
+        if not bulk_root:
+            continue
+        real = os.path.realpath(os.path.join(bulk_root, entry))
+        if not inside(real, bulk_root) or real == bulk_root:
+            raise Fatal("SCRATCH_CODEX_WORKTREE_ROOTS names %r, which is not a directory "
+                        "below RICHOS_BULK_ROOT (%s)." % (entry, bulk_root))
+        codex_roots.append(real)
+    codex_home = (os.environ.get("SCRATCH_CODEX_HOME") or "").strip()
     def need(name):
         v = (os.environ.get(name) or "").strip()
         if not v:
@@ -3915,6 +4031,8 @@ def config_from_env(process_only=False):
                                if p not in [os.path.realpath(q) for q in
                                             opt("SCRATCH_SHARED_TMP_ROOTS", "").split()]],
         "producer_tmp_roots": producer_roots,
+        "codex_worktree_roots": codex_roots,
+        "codex_home": os.path.realpath(os.path.expanduser(codex_home)) if codex_home else "",
         # Allocator labels whose producers make only fixture repositories (PRD R1).
         # Empty fallback: no repository in an allocation is ever taken as a fixture.
         "fixture_repo_labels": opt("SCRATCH_FIXTURE_REPO_LABELS", "").split(),
@@ -4104,6 +4222,7 @@ def main(argv=None):
         # from the last full pass, which the scheduled job publishes.
         reaper.skip_unknown_arm = bool(args.notice)
         reaper.skip_build_caches = bool(args.notice)
+        reaper.skip_codex = bool(args.notice)
         if args.process_only:
             reaper.scope = {"kind": "process", "name": "process"}
             reaper.scan_scratch_root(Walls([os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]))

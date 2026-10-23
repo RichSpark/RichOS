@@ -246,6 +246,15 @@ command -v python3 >/dev/null 2>&1 || {
     exit 2
 }
 
+# THE SYSTEM TOOL DIRECTORIES, for every program this job runs. lsof is in
+# /usr/sbin, which the plist's PATH leaves out; scratch-reaper.py appends it for its
+# own children, but workspaces.py's process listing (used for Codex worktrees)
+# looks lsof up on this PATH and would answer "unknown" for every checkout.
+case ":$PATH:" in
+    *:/usr/sbin:*) ;;
+    *) PATH="$PATH:/usr/sbin:/sbin"; export PATH ;;
+esac
+
 # THE INSTALLED JOB'S MARK, decided here and handed on (cleanup PRD R3/R4). launchd
 # names the job in XPC_SERVICE_NAME. Measured 2026-10-23 under a throwaway launchd
 # job: this shell sees the label, a Python it EXECs sees it too, but a Python started

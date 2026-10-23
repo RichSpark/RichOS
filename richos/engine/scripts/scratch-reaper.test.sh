@@ -257,14 +257,18 @@ if not real or not root or os.path.basename(os.path.dirname(real)) == "scoped-bi
     sys.stderr.write("scoped lsof: no real lsof or no suite root; refusing to "
                      "scan the whole machine\n")
     sys.exit(97)
-ps = subprocess.run(["ps", "-Ao", "pid=,ppid="], capture_output=True, text=True)
+ps = subprocess.Popen(["ps", "-Ao", "pid=,ppid="], stdout=subprocess.PIPE, text=True)
+listing, _ = ps.communicate()
 if ps.returncode != 0:
     sys.stderr.write("scoped lsof: ps failed; refusing to guess the tree\n")
     sys.exit(98)
+# The ps above has exited by now, and `lsof -p` exits 1 when any pid it was
+# given is gone, which a strict caller (the cwd listing) rightly reads as no
+# answer. It is never part of the tree asked about.
 children = {}
-for line in ps.stdout.splitlines():
+for line in listing.splitlines():
     parts = line.split()
-    if len(parts) == 2:
+    if len(parts) == 2 and parts[0] != str(ps.pid):
         children.setdefault(parts[1], []).append(parts[0])
 tree, stack = [], [root]
 while stack:
@@ -2903,6 +2907,85 @@ else
 fi
 kill "$PID_H" >/dev/null 2>&1 || true
 wait "$PID_H" 2>/dev/null || true
+
+# ===========================================================================
+# S37 — CODEX'S FINISHED WORKTREES CLOSE THROUGH THE SCHEDULED SWEEP (PRD A6)
+# ===========================================================================
+# The workspace engine never touches codex/ (its point 2), so nothing collected
+# Codex's worktrees: measured 2026-10-23, about 67 GB in 104 checkouts. Only the
+# declared Codex roots are looked in. A merged, clean, idle plain worktree closes
+# through git (checkout and branch); an unmerged one is kept; a finished one a
+# Codex chat still has attached is undecided (only that chat may archive it); a
+# parent left holding only the app's marker goes. The decision is
+# lib/codex_worktrees.py; lib/codex-worktrees.test.py has the full set of controls.
+world codexwt
+CX_HOME="$W_ROOT/codex-home"
+CX_PLAIN="$W_ROOT/plain-worktrees"
+CX_REPO="$W_ROOT/repo"
+mkdir -p "$CX_HOME/worktrees" "$CX_PLAIN" "$CX_REPO"
+{
+    echo "SCRATCH_CODEX_HOME=\"$CX_HOME\""
+    echo "SCRATCH_CODEX_WORKTREE_ROOTS=\"$CX_HOME/worktrees $CX_PLAIN\""
+} >>"$W_CFG"
+cxgit() {
+    GIT_CONFIG_GLOBAL="$W_ROOT/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+    GIT_AUTHOR_NAME=Fixture GIT_AUTHOR_EMAIL=f@example.invalid \
+    GIT_COMMITTER_NAME=Fixture GIT_COMMITTER_EMAIL=f@example.invalid \
+    git -C "$@" >/dev/null 2>&1
+}
+printf '[init]\n\tdefaultBranch = main\n' >"$W_ROOT/gitconfig"
+cxgit "$CX_REPO" init -q
+printf 'a\n' >"$CX_REPO/a.txt"
+cxgit "$CX_REPO" add -A
+cxgit "$CX_REPO" commit -q -m base
+cx_worktree() {            # <root> <task> <branch> <merge: 1|0>
+    local wt="$1/$2/repo"
+    mkdir -p "$1/$2"
+    printf '%s\n' "$2" >"$1/$2/.codex-worktree-name"
+    cxgit "$CX_REPO" worktree add -q -b "$3" "$wt" main
+    printf '%s\n' "$2" >"$wt/$2.txt"
+    cxgit "$wt" add -A
+    cxgit "$wt" commit -q -m "$2"
+    [ "$4" = "1" ] && cxgit "$CX_REPO" merge -q --no-ff -m "merge $2" "$3"
+    printf '%s\n' "$wt"
+}
+WT_DONE="$(cx_worktree "$CX_PLAIN" done codex/done 1)"
+WT_OPEN="$(cx_worktree "$CX_PLAIN" open codex/open 0)"
+WT_LIVE="$(cx_worktree "$CX_HOME/worktrees" live codex/live 1)"
+mkdir -p "$CX_HOME/worktrees/gone"
+printf 'gone\n' >"$CX_HOME/worktrees/gone/.codex-worktree-name"
+python3 - "$CX_HOME/state_5.sqlite" "$WT_LIVE" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("create table thread_attachments (id text primary key, thread_id text not null, "
+            "attachment_type text not null, identity_key text not null, payload text not null, "
+            "created_at integer not null)")
+con.execute("insert into thread_attachments values ('a1', 't1', 'worktree', ?, '{}', 0)", (sys.argv[2],))
+con.commit()
+PY
+OUT="$(run --apply)"
+if [ ! -d "$WT_DONE" ] && ! cxgit "$CX_REPO" rev-parse --verify -q refs/heads/codex/done; then
+    ok "S37  a merged, clean, idle plain Codex worktree closes with its branch"
+else
+    bad "S37  a finished plain Codex worktree was not closed"
+    printf '%s\n' "$OUT" | grep -i codex | sed 's/^/        /' | head -8
+fi
+if [ -f "$WT_OPEN/open.txt" ]; then
+    ok "S37a CONTROL: an unmerged Codex worktree is kept"
+else
+    bad "S37a an unmerged Codex worktree was deleted"
+fi
+if [ -f "$WT_LIVE/live.txt" ] && printf '%s' "$OUT" | grep -q 'archive_worktree'; then
+    ok "S37b a finished worktree a chat still has attached is undecided, not deleted"
+else
+    bad "S37b an attached Codex worktree was deleted or not reported"
+    printf '%s\n' "$OUT" | grep -i codex | sed 's/^/        /' | head -8
+fi
+if [ ! -d "$CX_HOME/worktrees/gone" ]; then
+    ok "S37c a parent holding only the app's marker goes"
+else
+    bad "S37c an emptied Codex worktree parent survived"
+fi
 
 # ===========================================================================
 # S33 — THIS SUITE NEVER SCANNED THE WHOLE MAC'S OPEN-FILE TABLE
