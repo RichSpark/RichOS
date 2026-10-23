@@ -73,6 +73,15 @@ echo "=== mutation-harness guard tests ==="
 export TMPDIR="$SANDBOX/tmp"
 export CLAUDE_CONFIG_DIR="$SANDBOX/claude"
 mkdir -p "$TMPDIR" "$CLAUDE_CONFIG_DIR/state"
+# AND ITS OWN MACHINE SETTINGS. G8's sweep is the real reaper with --apply; with the
+# operator's settings file it swept the REAL build caches and bulk-drive temp roots.
+mkdir -p "$SANDBOX/bulk"
+printf 'RICHOS_BULK_ROOT=%s\n' "$SANDBOX/bulk" >"$SANDBOX/machine.env"
+export RICHOS_ENV_FILE="$SANDBOX/machine.env"
+for _k in RICHOS_MACHINE_SETTINGS_RESOLVED $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import machine_settings; print(" ".join(machine_settings.KEYS))' "$LIB_DIR"); do
+    unset "$_k"
+done
+unset _k
 
 # shellcheck source=mutation-harness.sh
 . "$ENGINE/scripts/lib/mutation-harness.sh"

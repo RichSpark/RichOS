@@ -2984,7 +2984,7 @@
     },
     "scripts/lib/mutation-harness-guards.test.sh": {
       "source": "scripts/lib/mutation-harness-guards.test.sh",
-      "sha256": "dafcfffd42024f5c9e4f15c2751fcaa6a3f7f6381706a185bc183a811cd5ac8d",
+      "sha256": "a0c0705e3d05b75ce880c4607ebd3283793e22364ed660cc22e103902d1e65da",
       "evidence": "Sources fixed mutation and scratch helpers. The real-engine copy is only asserted to contain a config file and hook directory; no copied reader executes. The generated victim sources scratch.sh only. Both actual reaper invocations explicitly select the complete literal sweep.config, including downstream appinstances fallback. Direct scratch allocator calls use the caller environment/default TTL; this test does not source shipped settings. Environment identity is an R3 input, not a real-config value edge.",
       "keys": [],
       "edges": [
@@ -3003,7 +3003,7 @@
     },
     "scripts/scratch-reaper.test.sh": {
       "source": "scripts/scratch-reaper.test.sh",
-      "sha256": "669e1d697b7d065baa64c8b72297881b14a4a263478ff45193d3be69e19a16f2",
+      "sha256": "0521fdea5a6f27192d702ecd39b035ab67068aa2014f93d66116bc02d2a01b6a",
       "evidence": "world creates literal configuration and every run supplies W_CFG through SCRATCH_REAPER_CONFIG, including the appinstances fallback. Inline mutations change only that fixture. Device/Docker/process adapters and test app binaries are generated locally. The final mutation harness copies the engine then re-enters this same literal-config test. Its lsof adapter is generated locally too: it runs the real lsof narrowed to the suite's own process tree and reads only the SRT_* environment the suite exports, never configuration. Renewed 2026-09-30 (P5-68): S17 and S17b rewrite the fixture W_CFG's SCRATCH_LEGACY_AGE_HOURS to the literal 2 and restore it afterwards.",
       "keys": [],
       "edges": [
@@ -17076,7 +17076,7 @@
         "scripts/row-currency-lint.sh": "47b26a433c2a96e69844fdca03b263c37bd0f80bbbbeeacd87dd4117feef1167",
         "scripts/scratch-reaper.mutation.sh": "8ef0a08373e7aed2c4f3388e701a29346b51ad2862108b8170d35f4d9c0ef6e4",
         "scripts/scratch-reaper.sh": "1cdefb018a15be05c60b6dd257678573d2135230ceb58cfaef0fcd9c835975b1",
-        "scripts/scratch-reaper.test.sh": "669e1d697b7d065baa64c8b72297881b14a4a263478ff45193d3be69e19a16f2",
+        "scripts/scratch-reaper.test.sh": "0521fdea5a6f27192d702ecd39b035ab67068aa2014f93d66116bc02d2a01b6a",
         "scripts/scratch-sweep.sh": "3f6dd28f4e86d24e3fca7fe1f8f7cb68a63e604b05e1ad2ad918b5a7eee6f241",
         "scripts/unstarted-rows-lint.sh": "4b654eefa4fb775ba218fbee15595b415684c7a90e2168eedf864c07f142e58e",
         "scripts/hooks/dispatch-pretooluse.manifest": "50818b9e68379300f0922b76a78f5c4d4b3d6e88f8aae6ed08271c95b498afbc",

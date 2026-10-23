@@ -383,6 +383,13 @@ bad() { printf '  FAIL  %s\n' "$1"; FAIL=$((FAIL + 1)); }
 [ -f "$REAPER" ] || { echo "FATAL: missing $REAPER" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 required" >&2; exit 1; }
 
+# Settings a caller exported (a proof run exports the bulk root) would override each
+# world's own settings file, so none of them reaches a world.
+for _k in RICHOS_MACHINE_SETTINGS_RESOLVED $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import machine_settings; print(" ".join(machine_settings.KEYS))' "$SCRIPT_DIR/lib"); do
+    unset "$_k"
+done
+unset _k
+
 echo "=== scratch-reaper tests ==="
 
 # ---------------------------------------------------------------------------
@@ -463,6 +470,13 @@ world() {                  # <name> -> exports W_*
     W_TMP="$W_ROOT/tmp"
     W_NIGHTLY="$W_ROOT/nightly"
     W_FAKE_HOME=""
+    # THE WORLD'S OWN MACHINE SETTINGS. Without them the reaper read the operator's
+    # private settings file, so every --apply here swept the REAL build caches (and,
+    # once producer temp roots were added, would have swept Codex's and the gates'
+    # temp roots with this suite's scoped lsof, which cannot see their holders).
+    W_BULK="$W_ROOT/bulk"
+    mkdir -p "$W_BULK"
+    printf 'RICHOS_BULK_ROOT=%s\n' "$W_BULK" >"$W_ROOT/machine.env"
     mkdir -p "$W_SCRATCH" "$W_SESSIONS" "$W_HOME/state" "$W_TMP" "$W_NIGHTLY"
     {
         echo 'SCRATCH_REAPER_ENABLE="1"'
@@ -508,6 +522,7 @@ alloc() {                  # <dir-name> <pid> <label>
 }
 
 run() {                    # run the reaper in the current world
+    RICHOS_ENV_FILE="$W_ROOT/machine.env" \
     SCRATCH_REAPER_CONFIG="$W_CFG" \
     RICHOS_SESSIONS_DIR="$W_SESSIONS" \
     CLAUDE_CONFIG_DIR="$W_HOME" \
