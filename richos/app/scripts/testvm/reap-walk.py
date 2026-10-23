@@ -17,7 +17,9 @@ process group, out of reach of the old group kill), and nothing that was not end
 
 WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   identity      the running app says it was built from --expect-sha
-  first-run     adopt-walk.py's first run: memory setup declined, company Acme with a Git folder
+  review-watch  the second review started by itself: the app's review-watch child is recorded
+                with a live pid (main.rs ensure_app_review_watch)
+  first-run    adopt-walk.py's first run: memory setup declined, company Acme with a Git folder
   connect       Settings -> Connected folders -> Acme's folder, so an assignment has a real
                 repository (without it the front desk has been seen to invent one)
   seed          reap-guest.py copied into the repository as heartbeat.py, and into the payload
@@ -62,8 +64,8 @@ adopt = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(adopt)
 StepFailed, command = adopt.StepFailed, adopt.command
 
-STEPS = ['identity', 'first-run', 'connect', 'seed', 'watch', 'unrelated', 'normal', 'stop', 'quit',
-         'crash', 'claude-crash', 'idle-cpu', 'unrelated-alive']
+STEPS = ['identity', 'review-watch', 'first-run', 'connect', 'seed', 'watch', 'unrelated', 'normal', 'stop',
+         'quit', 'crash', 'claude-crash', 'idle-cpu', 'unrelated-alive']
 BEATS = '/tmp/reap-walk'
 # What goes into his repository as heartbeat.py: the heartbeat alone. The back end reads a script
 # before running it; given the whole guest helper it declined (guest walk-1a978b4e081b).
@@ -502,6 +504,24 @@ class Walk(adopt.Walk):
         self.press(title)
 
     # --- steps --------------------------------------------------------------------------------
+    def review_watch(self):
+        """The second review starts by itself: the app's own review-watch child (main.rs
+        `ensure_app_review_watch`) is recorded with a live pid running the watcher in app mode."""
+        path = self.engine_state + '/review-watch/host-child-app.json'
+        end = time.monotonic() + 60
+        while time.monotonic() < end:
+            text = guest(self.vm, 'cat ' + shlex.quote(path) + ' 2>/dev/null || true').strip()
+            if text:
+                pid = int(json.loads(text)['pid'])
+                alive = guest(self.vm, 'kill -0 %d 2>/dev/null && echo yes || echo no' % pid).strip() == 'yes'
+                args = guest(self.vm, 'ps -o args= -p %d || true' % pid).strip()
+                if alive and 'review_watch.py' in args and '--app-state' in args:
+                    return {'pid': pid, 'args': args}
+                raise StepFailed('the recorded review-watch pid is not the app watcher: %d alive=%s %r'
+                                 % (pid, alive, args))
+            time.sleep(2)
+        raise StepFailed('no review-watch child was recorded at ' + path)
+
     def connect(self):
         """The folder through the shared connect step (adopt-walk.py connect_folder)."""
         self.connect_folder()
@@ -568,6 +588,8 @@ class Walk(adopt.Walk):
         told = told_stopped(record)
         if told:
             raise StepFailed(told)
+        # `detail` is work_host.rs `stop_detail`: "The recorded workers stopped." when the Stop
+        # reached each worker the job launched (the task book and the stop_task frame).
         return dict(evidence, press=press, started=started, stopped=target['id'],
                     told=(record.get('notices') or [{}])[-1].get('text'), detail=record.get('detail'))
 

@@ -9,12 +9,12 @@ This is the whole contract the UI needs — **no Rust reading required.** The Ru
 truth is `richos/app/crates/richos-core/src/stream.rs` (event names as constants) +
 `richos/app/src-tauri/src/main.rs` (`TauriEmitter`).
 
-> **SIX FAMILIES, and this document covers all six.** The five events below are the
+> **SIX FAMILIES and this document covers all six.** The five events below are the
 > shipping calm view and are **unchanged**. `rich://machinery` (further down) is the
 > opt-in technical family. [The additive live-work family](#the-additive-live-work-family-13)
 > — seven typed §13 events — was added on 2026-08-29 and is what a Codex-style timeline
 > renderer should be written against. [Voice mode](#voice-mode-richvoice-) is the fourth,
-> emitted by a different crate while voice mode is running, and
+> emitted by a different crate while voice mode is running and
 > [the staging desk](#the-staging-desk-richcorrection-staged) is the fifth, joined on
 > 2026-08-30 by [the loro correction desk](#the-loro-correction-desk-richloro-proposed) —
 > the same job, a different payload. **A UI that
@@ -22,20 +22,20 @@ truth is `richos/app/crates/richos-core/src/stream.rs` (event names as constants
 > byte-for-byte by `crates/richos-core/tests/live_event_tests.rs`. Clean output is
 > guaranteed by the spine:
 **only assistant-message text is ever emitted on the events below** — never tool calls,
-worker chatter, shell, or hook output.
+worker chatter, shell or hook output.
 
 *(Every count in that paragraph has been wrong at some point — "three families" and "six
 typed events" until 2026-08-30, each written when it was true and left behind by the commit
 that changed it, with the voice family never mentioned at all.
 `richos/app/ui/tests/docs-claims.js` now joins this document's event names to the
-`pub const … = "rich://…"` the Rust source declares, and it earned its keep immediately: it
+`pub const … = "rich://…"` the Rust source declares and it earned its keep immediately: it
 caught `rich://correction-staged` the same day the staging desk landed, before anybody had
 to notice.)*
 
 That guarantee is **structural, not a convention**: machinery is not a `StreamEvent` at
 all. It is a second, separate family on its own event name — see
 [Machinery: `rich://machinery`](#machinery-richmachinery) at the end of this document. **A
-UI that does not subscribe to it cannot accidentally render machinery**, and the default
+UI that does not subscribe to it cannot accidentally render machinery** and the default
 calm view does not subscribe. Do not add it to the default subscription list.
 
 ## Events
@@ -54,12 +54,12 @@ turn (and ignore anything for a thread it isn't showing). Timestamps `at` are ep
 `tier` is `interrupt_now | digest | silent` (`AttentionTier`, `ledger.rs`). §5.1 of the
 front-end UX direction governs what each one may do: `interrupt_now` is rare and may notify;
 `digest` is the normal batched message; **`silent` never appears in the conversation and
-never notifies** — it exists in the ledger for a CEO who goes looking, and there is no
+never notifies** — it exists in the ledger for a CEO who goes looking and there is no
 activity view for it yet.
 
 **This event was undocumented here until 2026-08-30**, while this page called itself the
 whole contract the UI needs. It has been declared in `stream.rs` beside the other four since
-the proactive seam landed, and `richos/app/ui/main.js` has always subscribed to it. Nothing was
+the proactive seam landed and `richos/app/ui/main.js` has always subscribed to it. Nothing was
 broken by the omission; a second UI written from this page alone would simply never have
 heard Rich speak first.
 
@@ -77,13 +77,13 @@ heard Rich speak first.
 - **`seq` is NOT contiguous.** As of the machinery routing commit it is ONE counter per
   turn, shared with `rich://machinery`, so that the true order of "text, then a tool call,
   then more text" is reconstructible from a single sequence. If Rich runs a tool between
-  two sentences you will see `seq` 3 then `seq` 7. **Never treat a gap as a lost chunk, and
+  two sentences you will see `seq` 3 then `seq` 7. **Never treat a gap as a lost chunk and
   never use `seq` as an array index.** Order by it; do not count with it.
-- **`seq` is now durable, and retroactivity is the same story as machinery's.** Each
+- **`seq` is now durable and retroactivity is the same story as machinery's.** Each
   `rich://chunk`'s position is persisted with its delta (`AssistantDelta.seq`), so the
   interleaving of text and tool calls can be rebuilt after a restart instead of only being
   visible live. A delta written before that commit has **no** recorded position: the text
-  is intact, its place in the turn is unknown, and it is reported as unknown (`null`)
+  is intact, its place in the turn is unknown and it is reported as unknown (`null`)
   rather than as position 0. A consumer rebuilding a past turn must expect an unpositioned
   run and must not assume it came first.
 - `rich://turn-error` may still be preceded by `rich://chunk` events — a partial reply that
@@ -130,7 +130,7 @@ treat it as the reconciled snapshot, not the primary render path.
 
 ## Machinery: `rich://machinery`
 
-**The default conversation view does NOT subscribe to this event, and must not.** It is a
+**The default conversation view does NOT subscribe to this event and must not.** It is a
 separate family carrying every non-text frame the agent emits — tool calls, thinking,
 permission requests, session metadata — for the opt-in technical view. Contract:
 `richos-hq/docs/plans/richos-techy-mode-2026-08-26.md`; Rust source of truth:
@@ -166,7 +166,7 @@ Five rules for whoever renders this:
 1. **Order by `(turnId, seq)`. Never by `at`.** Millisecond timestamps collide inside a
    streaming turn.
 2. **Merge by `toolCallId`, last-write-wins per field PRESENT.** A tool call arrives as
-   several events: the first has a placeholder title (`"Terminal"`) and no arguments, and
+   several events: the first has a placeholder title (`"Terminal"`) and no arguments and
    most later ones carry no `status` at all. One `toolCallId` is ONE row, never two — and
    a whole-record overwrite would blank the status you already had.
    **`compaction` merges the same way and its key is NOT a vendor id**
@@ -181,7 +181,7 @@ Five rules for whoever renders this:
 5. **`kind: "unknown"` is not an error.** It is a kind that has no typed route yet; the
    vendor's own kind name is in `title`. Render it as one dim line.
 6. **`turnId: null` on a NON-internal record is between-turn traffic** (techy-mode §1.5):
-   what the session said at start-up, or after a turn's answer had already gone back. It
+   what the session said at start-up or after a turn's answer had already gone back. It
    belongs to the THREAD and to no exchange in it, so it does NOT belong in the
    conversation stream — `get_machinery` puts it in `timeline.betweenTurns`, its own lane,
    and `richos/app/ui/` draws it as its own section below the conversation. Ordering inside that
@@ -189,19 +189,19 @@ Five rules for whoever renders this:
    when one is replaced, so sorting by it would interleave two leases wrongly.
 
 Rules 3 and 6 are one distinction, not two: `turnId: null` says only that the record has no
-turn, and `internal` is what says whether it may ever be seen.
+turn and `internal` is what says whether it may ever be seen.
 
 **Retroactivity, stated honestly:** retention began at the routing commit. A thread that
-ran before it has no machinery at all, and the honest empty state is *"No machinery was
-recorded for this conversation."* — not an error, and not a blank pane. It is one of
-**four** states, and they are deliberately not one sentence: `recorded`,
+ran before it has no machinery at all and the honest empty state is *"No machinery was
+recorded for this conversation."* — not an error and not a blank pane. It is one of
+**four** states and they are deliberately not one sentence: `recorded`,
 `nothing_recorded`, `not_retained` (nothing on this install) and `unreadable` (the store
 is there and the OS refused it). Serving the second over the fourth is the product lying
 about its own record.
 
 ### The technical view reads this store; it does not subscribe to this event
 
-**As of 2026-08-30 nothing in `richos/app/ui/` listens to `rich://machinery`, and that is
+**As of 2026-08-30 nothing in `richos/app/ui/` listens to `rich://machinery` and that is
 deliberate.** The opt-in technical view (techy mode) is served by three commands, not by
 this event:
 
@@ -212,8 +212,8 @@ this event:
 | `techy_mode` / `set_techy_mode` / `set_techy_default` | The per-thread toggle and the global default. `set_techy_mode(enabled: null)` CLEARS a pin. |
 
 The reason to keep the reload path rather than subscribe: the sentence at the top of this
-section — *"the default conversation view does NOT subscribe to this event, and must
-not"* — is a structural fact today, and a renderer that subscribed conditionally would
+section — *"the default conversation view does NOT subscribe to this event and must
+not"* — is a structural fact today and a renderer that subscribed conditionally would
 make it a runtime branch. The cost is named: while a turn is running, its rows arrive
 through the calm live family without their technical half and gain it when the turn ends.
 
@@ -226,9 +226,9 @@ changed — same names, same payload keys, same ordering, same shared `seq`. Rus
 truth: `richos/app/crates/richos-core/src/live.rs` (event names as constants, payloads, the
 gate); relay: `richos/app/src-tauri/src/events.rs`.
 
-### What is live, and what is deferred
+### What is live and what is deferred
 
-§13 lists eleven events. **Seven are emitted. Four are not, and are not emitted at all** —
+§13 lists eleven events. **Seven are emitted. Four are not and are not emitted at all** —
 not as an empty or "unknown" version, because for those the arrival of the event would
 itself be the claim. §22: *"If the source signal does not exist, build the signal first or
 show unknown."*
@@ -255,7 +255,7 @@ its own, because it is the same family, the same fence and the same gate.
 | `rich://approval-resolved` | **DEFERRED** | Same. |
 | `rich://artifact-upserted` | **DEFERRED** | Checked, not assumed: nothing in the ledger, the journal or machinery records an output as a deliverable. Artifacts and source provenance are Phase 5. |
 
-### The fence — on every payload, and what to do with it
+### The fence — on every payload and what to do with it
 
 Every event carries `entityId`, `threadId`, `turnId` and `bindingRevision`. §13: *"The
 renderer rejects events that do not match the immutable binding."* Concretely:
@@ -267,11 +267,11 @@ renderer rejects events that do not match the immutable binding."* Concretely:
   Comparing it for equality would make you reject every live event after any thread
   switch. Reject anything **older** than your current activation; accept at or above.
 - A payload can never be built from a loose thread id: the fence's only constructor takes
-  a binding the ledger issued, and it is private to richos-core.
+  a binding the ledger issued and it is private to richos-core.
 
 ### `visibility` — and why you cannot leak from this family
 
-Every payload carries `visibility`, and on this family **it is always `"ceo"`** — because
+Every payload carries `visibility` and on this family **it is always `"ceo"`** — because
 the spine refuses to emit anything else here. This is the *calm* family:
 
 - **Internal** items (re-prime, rotation, model reasoning, a Tier-3 silent proactive
@@ -284,16 +284,16 @@ the spine refuses to emit anything else here. This is the *calm* family:
 
 Keep carrying the field. Do not default it.
 
-### `phase` — **it may be `"unknown"`, and today it always is for streamed replies**
+### `phase` — **it may be `"unknown"` and today it always is for streamed replies**
 
 ```jsonc
 { "messageId": "turn_37…:text:0", "phase": "unknown", … }
 ```
 
 `phase` is one of `"commentary" | "final" | "proactive" | "recovery" | "unknown"`. **Today
-every streamed message is `"unknown"`, and a renderer must not treat that as "final".**
+every streamed message is `"unknown"` and a renderer must not treat that as "final".**
 
-This is measured, not assumed, and it was re-measured when the ACP adapter was deleted
+This is measured, not assumed and it was re-measured when the ACP adapter was deleted
 (`wiki/ceo-decisions.md` §16) rather than assumed to have survived the move.
 `docs/verification/acp-emission-probe-2026-08-28.md` §2 is the complete union of inbound ACP
 traffic across five runs: 52 `agent_message_chunk`s and **zero** message-open, message-close
@@ -319,7 +319,7 @@ present in the JSON precisely so nobody writes `phase ?? "final"`.
 `"proactive"`, because the ledger records it as one. `"commentary"`, `"final"` and
 `"recovery"` are currently unreachable values.
 
-### Messages: ids, runs, and what closes one
+### Messages: ids, runs and what closes one
 
 A turn's prose is **one message per contiguous run of the shared `seq` counter** — a run
 ends wherever a tool call took the positions in between. A turn where Rich talks, works,
@@ -328,7 +328,7 @@ then talks again produces two messages, not one.
 - `messageId` is `{turnId}:text:{runIndex}` — **the same id a reload projects from the
   ledger.** A cold reopen re-states what you already rendered; it does not duplicate it
   (§13: *"repeated event IDs are idempotent"*).
-- `seq` on `message-started` is the run's first position in the shared counter, or `null`
+- `seq` on `message-started` is the run's first position in the shared counter or `null`
   when the position was never recorded. **Never zero by default.**
 - A message is closed by `message-completed` when the tool call starts, not at turn end —
   so *"commentary, then activity"* is live-accurate.
@@ -337,13 +337,13 @@ then talks again produces two messages, not one.
 - A turn that fails mid-stream still closes its open message: the partial text is already
   durable.
 
-### `turn-status`: the states that exist, and the four that do not
+### `turn-status`: the states that exist and the four that do not
 
 `status` is one of `queued | working | recovering | completed | failed | stopped`.
 
 §11 names ten states. Four are **never emitted** because nothing can produce them:
 `draft` (UI state before a durable turn), `streaming_final` (needs the phase signal that
-does not exist), `waiting_for_user` (§9.4 has no signal — see below), and `stopping`. Do
+does not exist), `waiting_for_user` (§9.4 has no signal — see below) and `stopping`. Do
 not write branches for them yet.
 
 **`stopped` joined this list on 2026-08-29 (slice 6).** It is emitted only after
@@ -351,7 +351,7 @@ not write branches for them yet.
 the intake log *before* the lease was cancelled (`steering.rs`). There is no path from a
 crash to this status, which is what makes §6.1's `You stopped after {duration}` — an
 attribution to the CEO — safe to render. A crash or a rotation still produces
-`work_duration state: "interrupted"` on a reload, and **which one it was is still not
+`work_duration state: "interrupted"` on a reload and **which one it was is still not
 recorded**; the only thing that state can now say for certain is that it was not the CEO.
 
 The renderer sends `stop_turn({ expectedThreadId })` for the conversation it displays.
@@ -369,8 +369,8 @@ from that return is a statement of recorded fact rather than an optimistic guess
 control persists Stop without taking the conversation spine. Native reply waits also run
 outside that lock. The actual terminal result determines Stopped versus Completed.
 
-**`waiting_for_user` (§9.4) STILL HAS NO SIGNAL, and slice 6 did not invent one.** §22 lists
-worker waiting state under "must not be faked", `worker_status.rs` refuses to infer it, and
+**`waiting_for_user` (§9.4) STILL HAS NO SIGNAL and slice 6 did not invent one.** §22 lists
+worker waiting state under "must not be faked", `worker_status.rs` refuses to infer it and
 `TeammateIdle` cannot distinguish "paused for input" from "finished for good". It is not
 merely unimplemented: implementing it would also break §6.3's timer, which pauses in that
 state — `Turn::active_ms` is `ended_at - started_at` and is exact today precisely *because*
@@ -386,7 +386,7 @@ accumulated active time, not extend it.
 
 **Mid-turn crash — the one place this contract goes beyond §13.** When the compute lease
 dies mid-turn and an automatic replay is possible, the crashed turn emits `recovering`
-(not `failed`: it is about to be superseded, and a reload will not render it at all), and
+(not `failed`: it is about to be superseded and a reload will not render it at all) and
 the replacement turn's `queued` carries **`supersedesTurnId`**. That field is a **merge
 instruction, not an announcement** — merge the two turn ids into one exchange. Without it
 you would draw the CEO's single prompt twice. Do not surface it as "we reconnected"; §21's
@@ -408,13 +408,13 @@ several times as it moves `queued → completed`. Order by `(turnId, sequence)`,
 - `summary` is a semantic line built from the activity type alone — *"Ran a command"*,
   *"Read 8 files"*. Never the command, never the output. Rolling up *"Read 8 files"* across
   several rows is the renderer's job.
-- **A COMPACTION IS AN ACTIVITY ROW, and it is the one `system` frame that reaches this
+- **A COMPACTION IS AN ACTIVITY ROW and it is the one `system` frame that reaches this
   family.** The child pauses mid-turn to compact its own context — measured 38.1-62.0s over 16
   boundaries — and says so on `system/status` with `status: "compacting"`, repeating every
   30.000s until it ends with a `compact_result`. Its row reads *"Making room to keep going"*
-  while it runs, then *"Made room to keep going"* or *"Kept going without making room"*, and
+  while it runs, then *"Made room to keep going"* or *"Kept going without making room"* and
   both endings are `state: "completed"` because what ended is the PAUSE. `activityType` is
-  `other`: none of section 12's types fits, and the words come from the kind instead. Measured
+  `other`: none of section 12's types fits and the words come from the kind instead. Measured
   and derived in `docs/verification/compaction-notice-2026-09-06/`.
 - `sequence` is the OPENING record's position in the shared per-turn counter, so an
   activity row interleaves correctly with `message-delta`s ordered by the same counter.
@@ -425,13 +425,13 @@ several times as it moves `queued → completed`. Order by `(turnId, sequence)`,
 `session_info_update` are untyped vendor kinds; as of 2026-08-29 they are **technical**, so
 they do not appear on this family at all. They previously projected as CEO rows reading
 *"Worked"* — one live turn produced six of them against one real command. They are still
-routed, retained, and rendered in technical mode with their vendor kind.
+routed, retained and rendered in technical mode with their vendor kind.
 
 ### `worker-upserted`: the delegation you see while it is happening
 
 Added 2026-08-29. It was deferred while there was no worker lifecycle signal anywhere;
 the engine's four emitters now write `worker-events.jsonl`
-(`richos/engine/docs/worker-lifecycle-events.md`), and a `Task` tool call is joined to it **by
+(`richos/engine/docs/worker-lifecycle-events.md`) and a `Task` tool call is joined to it **by
 identity**. Before this the join ran only inside `get_timeline`, so a delegation reached
 the screen after a snapshot read and showed as a nameless *"Worked"* row for the rest of
 the turn. The §26 fixture measured the gap: **0 chips live, 3 after the snapshot.**
@@ -448,29 +448,29 @@ into it, `detail` already removed) plus `at`, so:
   emitter admits a lifecycle row only when its `session_id` matches the tool call's; a
   renderer never has to think about it, but never key anything on `agentId` alone either.
 - **A row may arrive as `activity` first and become `worker_activity` later, under the
-  same id.** The `agentId` is extractable only from the tool result, and the engine's
+  same id.** The `agentId` is extractable only from the tool result and the engine's
   `created` hook writes at about that same instant in another process — so a delegation
   whose lifecycle row lands late is drawn as an ordinary activity row and upgraded at the
-  next observation. **Replace the item on a kind change; do not merge over it**, or the
+  next observation. **Replace the item on a kind change; do not merge over it** or the
   activity row's `summary` / `state` / `activityType` cling to a worker row where they mean
   something else.
 
 `worker.state` is `pending_init | running | unknown` and **nothing else in practice**:
 
 - `run_ended` crosses the wire as **`unknown`**, never `completed`. The reason a run ended
-  is not observable anywhere in the hook set, and `unknown` is the honest superset of
+  is not observable anywhere in the hook set and `unknown` is the honest superset of
   completed, interrupted and failed. Render it as *Ended · outcome not recorded*.
 - `waiting`, `interrupted`, `failed` and `completed` are in the type because they are §12's
   vocabulary. **Nothing constructs them.** If one ever arrives, it is a new signal, not a
   default.
 - There is no `completedAt`, no `resultRef`, no `errorRef` and **no duration**: §22 forbids
-  faking elapsed active time, and the wall-clock spread between the first and last
+  faking elapsed active time and the wall-clock spread between the first and last
   lifecycle rows is not active time.
 
 **THE ONE STALENESS LIMIT, STATED.** This event is emitted when machinery arrives and once
 more at the turn's end — there is no poll and no timer. A worker's state changes through
 hook writes that produce no agent traffic at all, so between two tool calls a chip can be up
-to one tool call behind. It is never wrong about a worker that was never witnessed, and the
+to one tool call behind. It is never wrong about a worker that was never witnessed and the
 turn-end emission means the last live row is the row an immediate reload projects.
 
 ### `thread-summary-updated`
@@ -479,18 +479,18 @@ turn-end emission means the last live row is the row an immediate reload project
 `thread::summaries` computes the sidebar, so a live row and a re-listed row cannot
 disagree. §3.2's `waiting for CEO`, `completed while away` and `archived` are **not
 emitted**: the first has no state to be in, the second needs a per-thread seen marker that
-does not exist, and the third needs an archive that does not exist. Emitted at turn
+does not exist and the third needs an archive that does not exist. Emitted at turn
 transitions only, so it always carries a real `turnId`.
 
 ### Ordering and durability
 
-- **Every event is emitted after the durable write that makes it true**, and several read
+- **Every event is emitted after the durable write that makes it true** and several read
   their content back out of the ledger rather than from the value in hand. What is on the
   wire is what survived, not what was intended.
 - Sequences are monotonic within one item stream; repeated ids are idempotent.
 - **Missed events never block the spine.** The ledger is the source of truth; a webview
   that is not listening never stalls or fails a turn. On reconnect, take a snapshot
-  (`get_messages`, and the typed timeline) and resume — do not replay from memory.
+  (`get_messages` and the typed timeline) and resume — do not replay from memory.
 
 ### Seeing it for real
 
@@ -506,23 +506,23 @@ installed and signed in; no npm, no adapter.
 
 ## Voice mode: `rich://voice-*`
 
-The fourth family, and the only one emitted by a different crate:
+The fourth family and the only one emitted by a different crate:
 `richos/app/crates/richos-voice/src/event.rs` declares the names and payloads;
 `TauriVoiceEmitter` in `richos/app/src-tauri/src/main.rs` relays them to the webview verbatim.
 
 `rich://voice-model` is the one exception to that sentence and it is worth saying where: it is
 declared in `crates/richos-voice/src/provision.rs` rather than `event.rs`, because it reports on
-getting the speech model onto the machine rather than on the audio pipeline, and it is emitted
+getting the speech model onto the machine rather than on the audio pipeline and it is emitted
 through `voice_provision.rs`'s `ModelObserver` rather than through `VoiceObserver`. Same `rich://`
 convention, same camelCase payload, different subject.
 
 | Event name | When | Payload |
 |---|---|---|
-| `rich://voice-state` | The mic state changed, a new input level is available, or the input went silent / came back. | `{ state, level, bargeInArmed, noAudio, at }` |
+| `rich://voice-state` | The mic state changed, a new input level is available or the input went silent / came back. | `{ state, level, bargeInArmed, noAudio, at }` |
 | `rich://voice-transcript` | An utterance was recognized and **already submitted to the spine as a turn**. | `{ text, durationMs, latencyMs, at }` |
-| `rich://voice-error` | Voice mode could not start, or had to stop. | `{ message, at }` |
+| `rich://voice-error` | Voice mode could not start or had to stop. | `{ message, at }` |
 | `rich://voice-model` | Progress and outcome of getting the speech model this machine needs. `phase` is one of `started`, `progress`, `verifying`, `installed`, `failed`. | `{ phase, modelId, received, total, totalLabel, message, askAgain, at }` |
-| `rich://voice-notice` | Voice mode is **running**, but not the way it would on a better machine — today, that it started on a lighter recognizer than the best one, because the more accurate one is too slow here, there is not enough free memory for it, or the machine's speed could not be measured (`hardware.rs`, `Resolution::ceo_message`). Emitted **once**, at voice-mode start, and only when the product made that choice on the CEO's behalf. | `{ message, at }` |
+| `rich://voice-notice` | Voice mode is **running**, but not the way it would on a better machine — today, that it started on a lighter recognizer than the best one, because the more accurate one is too slow here, there is not enough free memory for it or the machine's speed could not be measured (`hardware.rs`, `Resolution::ceo_message`). Emitted **once**, at voice-mode start and only when the product made that choice on the CEO's behalf. | `{ message, at }` |
 
 Speech decoder initialization runs silently ahead of capture. Starting capture joins
 that initialization before opening the microphone, so the first transcript does not pay
@@ -534,29 +534,29 @@ Seven things a renderer of this family has to know, all of them structural rathe
 stylistic:
 
 1. **`state` is the mic's real state, never an optimistic one.** It is one of
-   `off | listening | hearing | thinking | speaking`, and the panel is driven only by this
+   `off | listening | hearing | thinking | speaking` and the panel is driven only by this
    event — pressing the toggle does not turn the dot on, the device reporting open does.
 2. **`noAudio` is a FIELD of the state event, not an error.** It is the post-open silent
    input verdict: the stream is open and healthy but has delivered nothing above -80.00 dBFS
    for 3.008 s. It is not fatal and it clears by itself the moment audio returns.
 3. **A transcript is not a request to send anything.** By the time it arrives the words are
    already a turn on the same thread, through the same `Spine::submit_prompt` typed text
-   uses — so voice and text are one durable conversation, and the reply arrives on the calm
+   uses — so voice and text are one durable conversation and the reply arrives on the calm
    family above like any other. `durationMs` and `latencyMs` are measured, never estimated.
 4. **`message` on `voice-error` and on `voice-notice` is always a calm, Rich-voiced line.**
    Device names, exit codes and file paths go to stderr and never to the CEO.
-5. **`voice-notice` is not a quieter `voice-error`, and the two must not share a handler.**
+5. **`voice-notice` is not a quieter `voice-error` and the two must not share a handler.**
    They carry the same payload shape and mean opposite things: an error says voice stopped,
    a notice says voice works and has made a choice for him. The `voice-error` handler takes
    the panel out of voice mode, so a notice routed there would end the conversation it is
    reporting on. And unlike the other three, a notice is **not** dropped when the voice panel
    is closed — it is a sentence in the thread about a decision that holds for the whole
-   session. It is silent when the machine got the best recognizer on the ladder, and when an engineer named the model outright.
+   session. It is silent when the machine got the best recognizer on the ladder and when an engineer named the model outright.
 
 6. **`verifying` is its own phase and is not cosmetic.** The transfer is finished and the sha256
    is being taken over 487,614,201 bytes, which costs about a second per 500 MB. A bar sitting at
    100% under the download's own words is where a person decides the app has hung.
-7. **`askAgain` decides whether a control appears, and it is NOT "will the backend retry".**
+7. **`askAgain` decides whether a control appears and it is NOT "will the backend retry".**
    Those are different questions and conflating them shipped an instruction with no control: a
    captive portal must never be retried automatically (the next attempt fetches the same login
    page) and the CEO absolutely must be able to ask again once he has signed in — which
@@ -579,23 +579,23 @@ the payload); the relay is in `richos/app/src-tauri/src/main.rs`.
 
 | Event name | When | Payload |
 |---|---|---|
-| `rich://correction-staged` | The CEO said something that looked like a correction, and it has been written down as a QUESTION. | one `Staged`: `{ candidates: [...], withheld: [...] }` |
+| `rich://correction-staged` | The CEO said something that looked like a correction and it has been written down as a QUESTION. | one `Staged`: `{ candidates: [...], withheld: [...] }` |
 
-It is deliberately **not** a §13 event. §13 lists eleven, this is none of them, and a
+It is deliberately **not** a §13 event. §13 lists eleven, this is none of them and a
 subscription list is the proof of what a surface carries — inventing a twelfth would
 misrepresent the brief.
 
 Four rules for whoever renders it, all of them the ruling rather than taste:
 
 1. **Nothing has been learned.** `ceo-decisions.md` §7: *"Nothing is ever learned
-   silently."* This event announces a question, and `confirm` is the only path to a
+   silently."* This event announces a question and `confirm` is the only path to a
    vocabulary write. Render it as an ask — never as a notification that something changed.
 2. **Ask it in the words you were given.** Each candidate carries a built `prompt`
-   (*"Add "X" to your vocabulary?"*, or *"… (you corrected this before)"* once
+   (*"Add "X" to your vocabulary?"* or *"… (you corrected this before)"* once
    `declinedBefore > 0`), so every surface asks identically and a second ask does not read
    as amnesia.
 3. **A candidate carries its own `threadId` and `turnId`, captured at STAGE time.** Do not
-   re-derive them when he answers: the active thread can move while a question waits, and a
+   re-derive them when he answers: the active thread can move while a question waits and a
    candidate re-scoped to wherever he happens to be looking has laundered itself across an
    entity boundary.
 4. **`withheld` is not an error and is not a candidate.** It is the pairs the gate refused,
@@ -605,7 +605,7 @@ Four rules for whoever renders it, all of them the ruling rather than taste:
 The payload is camelCase like every other family. A candidate is
 `{ key, at, threadId, turnId, utterance, ask, declinedBefore, prompt }`, where `ask` carries
 the detector's own reading — `from`, `to`, `frame`, the two similarity legs, which `leg` let
-it through, and an `anchor` that is **evidence and never a gate** (`null` simply means there
+it through and an `anchor` that is **evidence and never a gate** (`null` simply means there
 is nothing to quote).
 
 **Missing this event costs a prompt, never a record.** The question is already durable on
@@ -622,22 +622,22 @@ sink and the payload); the relay is in `richos/app/src-tauri/src/main.rs`.
 
 | Event name | When | Payload |
 |---|---|---|
-| `rich://loro-proposed` | The CEO said a RECORDED BELIEF is wrong, it resolved to exactly one record, and a proposal against that record is now awaiting him. | one `Proposal` |
+| `rich://loro-proposed` | The CEO said a RECORDED BELIEF is wrong, it resolved to exactly one record and a proposal against that record is now awaiting him. | one `Proposal` |
 
 **A separate name from `rich://correction-staged`, on purpose.** The two announce the same
-KIND of thing — a question the CEO has not answered — and carry different payloads, and a
+KIND of thing — a question the CEO has not answered — and carry different payloads and a
 subscription list is the proof of what a surface renders. A renderer that wants both
 subscribes to both; one that renders only the vocabulary ask is unaffected by this existing.
 
 Four rules for whoever renders it, all of them the ruling rather than taste:
 
 1. **Nothing has been written.** `CorrectionDesk::propose` runs the loro writer with
-   `--dry-run` and stores what WOULD be written; `confirm` is the only path to a write, and
+   `--dry-run` and stores what WOULD be written; `confirm` is the only path to a write and
    there is no argument any caller can pass to skip it (`ceo-decisions.md` §7).
 2. **Show `preview` verbatim, in a `<pre>`.** It is the WRITER's own `--dry-run` bytes. A
    preview generated by anything else would be a description of a write rather than the
-   write, and it is what the CEO is approving.
-3. **Name the record.** `write.recordRef` is what would be superseded, and the whole
+   write and it is what the CEO is approving.
+3. **Name the record.** `write.recordRef` is what would be superseded and the whole
    difference between a correction and a corruption is that it is the right one. Render it.
 4. **`why` is the CEO's own sentence, verbatim** — the detector composes nothing. It is also
    the body of the superseding record, so a surface that paraphrases it is paraphrasing what
@@ -653,19 +653,19 @@ desk's own JSONL, fsynced, before the observer is called.
 ## The update path: `rich://update`
 
 The seventh family, added 2026-08-31 with the updater (RICH-TODOs row 12). Source of truth:
-`richos/app/src-tauri/src/updates.rs` — the constant `EVENT_UPDATE`, the `UpdateView` payload, and
+`richos/app/src-tauri/src/updates.rs` — the constant `EVENT_UPDATE`, the `UpdateView` payload and
 the single `transition()` chokepoint every state change in that file goes through.
 
 | Event name | When | Payload |
 |---|---|---|
-| `rich://update` | The update state changed: a check started or finished, a download moved, the signature was verified, an install landed, or any of it failed. | one `UpdateView` |
+| `rich://update` | The update state changed: a check started or finished, a download moved, the signature was verified, an install landed or any of it failed. | one `UpdateView` |
 
 **Emitted from the automatic launch check as well as from the buttons**, which is the point
-of it being an event at all: RichOS checks by itself three seconds after launch, and the mark
+of it being an event at all: RichOS checks by itself three seconds after launch and the mark
 on the settings button has to appear whether or not anyone had a menu open.
 
 `UpdateView` is flat rather than a tagged union, deliberately, because it is ALSO the return
-value of the `update_state` command — a surface that attaches late, or reconnects mid-download,
+value of the `update_state` command — a surface that attaches late or reconnects mid-download,
 paints correctly from one read:
 
 ```
@@ -680,18 +680,18 @@ paints correctly from one read:
 Four rules for whoever renders it:
 
 1. **`unconfigured` is not an error and not "up to date".** It means no update server has
-   been chosen, and rendering that as a network failure would report a decision as a defect.
+   been chosen and rendering that as a network failure would report a decision as a defect.
    Since 2026-09-04 the shipped `plugins.updater` endpoint is a real one — GitHub Releases,
    `richos/app/UPDATES.md` — so a shipping build no longer reaches this state; a build pointed at
    the RFC 2606 `updates.richos.invalid` host through `RICHOS_UPDATE_ENDPOINT` still does,
    and the state stays for it.
 2. **`totalBytes: null` means DO NOT DRAW A PERCENTAGE.** The server sent no `Content-Length`.
    A determinate bar over an invented denominator is a lie that looks like a measurement;
-   show bytes, or an indeterminate bar with no `aria-valuenow`.
+   show bytes or an indeterminate bar with no `aria-valuenow`.
 3. **`failure.kind === "signature"` MUST NOT BE OFFERED A RETRY.** It means the bytes on the
    wire are not the bytes we signed. Every other kind (`offline`, `network`, `manifest`,
    `install`, `configuration`, `other`) is plausibly transient and may be retried; this one
-   refuses identically every time, and a button that invites someone to keep pressing until a
+   refuses identically every time and a button that invites someone to keep pressing until a
    security check passes is the wrong control.
 4. **`failure.headline` is for the CEO and `failure.detail` is the vendor's own error text.**
    Show the headline; keep the detail one click away rather than dropping it. An error that
@@ -702,7 +702,7 @@ Four rules for whoever renders it:
 same best-effort posture every other emitter in this shell takes.
 
 **The webview holds no updater permission.** These four commands — `update_state`,
-`update_check`, `update_install`, `update_relaunch` — are this app's own, and
+`update_check`, `update_install`, `update_relaunch` — are this app's own and
 `capabilities/default.json` grants no `plugin:updater|*` command to the page. A frontend
 cannot start a download or an install by itself.
 
@@ -715,22 +715,22 @@ observer the work host is given.
 
 | Event name | When | Payload |
 |---|---|---|
-| `rich://work-notice` | A background assignment has something to say: it is ready for him to approve, it finished, it failed, or it was stopped. Raised by the WORK lease, outside any conversation turn. | `{ threadId, notice: { assignmentId, title, kind, text, raisedAtMs } }` |
+| `rich://work-notice` | A background assignment has something to say: it is ready for him to approve, it finished, it failed or it was stopped. Raised by the WORK lease, outside any conversation turn. | `{ threadId, notice: { assignmentId, title, kind, text, raisedAtMs } }` |
 
 `kind` is one of `ready-to-approve`, `settled`, `failed`, `interrupted`.
 
-**This event is the SECOND-best half of the return path, and the document says so because a
+**This event is the SECOND-best half of the return path and the document says so because a
 renderer that treated it as the whole of it would drop results.** The durable half is the
 notice held on the assignment's own record until it has been delivered, read with
 `take_work_notices` — which both reads AND marks. That is what makes a result survive him
-closing the conversation, switching threads, or quitting and coming back; this event only
+closing the conversation, switching threads or quitting and coming back; this event only
 covers the case where he is already looking.
 
 Three rules for whoever renders it:
 
-1. **NEVER MID-SENTENCE.** A notice arriving while a turn is running, or while a voice
+1. **NEVER MID-SENTENCE.** A notice arriving while a turn is running or while a voice
    exchange is in progress, is HELD and said at the boundary. There are two ways to be
-   mid-sentence, so there are two flushes: the turn's terminal event, and voice going quiet.
+   mid-sentence, so there are two flushes: the turn's terminal event and voice going quiet.
    Nothing times out and nothing is discarded — `take_work_notices` would hand the same
    notice over again if the held copy were lost, because the durable flag is only set when
    the backend hands it out.
@@ -740,14 +740,14 @@ Three rules for whoever renders it:
    a decision of his on some step the desk could not put in front of him (a command, a write
    outside its workspace). It is not a completion and must never be rendered as one. Neither is
    `failed`, which since the same ruling also covers a job that ran and did not land. Only
-   `settled` is a completion, and its sentence carries what landed.
+   `settled` is a completion and its sentence carries what landed.
 3. **It is an attributed local line, never Rich's own turn text.** It renders through the same
    path `rich://voice-notice` uses — a local notice with a synthetic turn id and no turn
-   record — so it can never grow a duration row claiming work that never happened, and the
+   record — so it can never grow a duration row claiming work that never happened and the
    next snapshot drops it. The record it came from is the evidence; the line is not.
 
 **Missing this event costs a moment, never a message.** The notice is on disk before the emit
-is attempted, and the surface reads the durable store when the conversation opens and again at
+is attempted and the surface reads the durable store when the conversation opens and again at
 every turn boundary.
 
 **Stu's reports enter the ordinary conversation.** The host accepts each peer message
@@ -756,51 +756,6 @@ on his normal conversation connection and decides what to tell the user. His aut
 reply follows the ordinary turn, streaming and voice paths. There is no separate result
 writer or work-result speech event. Opening a conversation or restarting the app retains
 accepted input and pending peer messages.
-
-## His team, on an operator install: `rich://operator-notice`
-
-Added 2026-09-26 with the shell wiring of the operator back end (the operator-client record of
-2026-09-25, §7 item 1, in the private richos-hq repository). Source of truth:
-`richos/app/src-tauri/src/main.rs` — the constant `EVENT_OPERATOR_NOTICE` and
-`operator_desk_at_boot`; the notices themselves are `richos-core`'s
-`operator_runtime::OperatorNotice`, written by `operator_host.rs`.
-
-| Event name | When | Payload |
-|---|---|---|
-| `rich://operator-notice` | His team (one lead per conversation) said something: an update or its turn's own final words, a question, an answer, an outcome or failure on an assignment, one of his engine's alarms, or something about the team itself (it ended, a stop's result, his Esc). Only on an install whose `operator.json` passed the gate at launch; never on any other. | `{ threadId, notice: { at_ms, handle, kind, text, delivered_at_ms } }` |
-
-`kind` is one of `update`, `question`, `answer`, `outcome`, `failed`, `alarm`, `team`.
-`handle` is the assignment the notice is about, or `null` for the conversation.
-
-**The same two halves as `rich://work-notice`, for the same reason.** The notice is appended to
-`<app data>/operator/<entity>/<thread>/notices.jsonl` before this is emitted, and
-`take_operator_notices` reads AND marks the durable copy.
-
-**The surface** (`ui/main.js` "HIS TEAM, ON AN OPERATOR INSTALL", drawn by `ui/timeline.js`'s
-`renderLocalNotice`, proved by `ui/tests/operator-notice.js`) keeps the work lane's three rules
-through the work lane's own functions: held while a turn runs or voice is mid-sentence and
-drawn at the boundary; placed by `at_ms`; an attributed local line, never Rich's own turn text.
-The durable read runs when a conversation opens, at every turn boundary, and on this event.
-What it adds is the from-line above the words, chosen by `kind` and never by parsing the text:
-
-| `kind` | From-line | Left rule |
-|---|---|---|
-| `update` | Your team | `--attention` |
-| `question` | Your team asks you | `--attention` |
-| `answer` | Your team answered | `--attention` |
-| `outcome` | Your team reported back (never "done": what landed is in its own words) | `--attention` |
-| `failed` | Your team could not finish | `--danger` |
-| `alarm` | Alarm (his engine's, not his team's) | `--danger` |
-| `team` | About your team (RichOS speaking about it, as "I") | `--attention` |
-
-An unknown `kind` is drawn as "About your team". When `handle` names an assignment the window
-can read, its title follows the from-line; the handle itself never reaches the screen.
-
-**One report, one card.** A report that closes an assignment is raised on the assignment's
-record (the work lane) AND said here, with the same words (`operator_host.rs`
-`settle_handle`). The surface keys each line by conversation, assignment and exact words;
-whichever lane arrives second draws nothing, and if it is this one, the card already on screen
-gains the from-line. A line with no `handle` is never merged.
 
 ## Quitting while work runs: `rich://quit-question`
 
@@ -813,11 +768,11 @@ and both sentences in `richos/app/src-tauri/src/lifecycle.rs`.
 |---|---|---|
 | `rich://quit-question` | He chose Quit while an assignment is running or waiting for him. The exit has ALREADY been prevented; this asks him what to do about it. | `{ say, quit, stay }` — the question and the two control labels, all three in his own terms |
 
-**The order is the whole of it, and it is not a preference.** The runtime reads the answer to
+**The order is the whole of it and it is not a preference.** The runtime reads the answer to
 `ExitRequested` synchronously — `let recv = rx.try_recv();`
 (`tauri-runtime-wry-2.11.4/src/lib.rs:4318`, `:4361`) — so an empty channel is not `Prevent`.
 A handler that waited for this question to be answered would have quit before it was asked.
-So the shell prevents first, returns, and emits this afterwards, from its own thread.
+So the shell prevents first, returns and emits this afterwards, from its own thread.
 
 Two rules for whoever renders it:
 
@@ -841,17 +796,17 @@ drag-and-drop events.
 
 | Event name | When | Payload |
 |---|---|---|
-| `rich://file-drag` | A drag carrying files entered the window (`enter`), or left it or landed (`leave`). | `{ phase, count }`: `phase` is `enter` or `leave`; `count` is how many paths the drag carries, 0 on `leave` |
+| `rich://file-drag` | A drag carrying files entered the window (`enter`) or left it or landed (`leave`). | `{ phase, count }`: `phase` is `enter` or `leave`; `count` is how many paths the drag carries, 0 on `leave` |
 | `rich://file-drop` | Files landed on the window. | `{ drop, files: [{ index, name }] }`: a drop number and each file's display name, **never its path** |
 
-**The page never receives a path, and cannot name one.** The window's drag-and-drop handler
+**The page never receives a path and cannot name one.** The window's drag-and-drop handler
 takes the drop before the webview sees it, so the paths arrive in Rust. They are kept there,
-per drop, and the page asks for a file by `(drop, index)` with `attach_dropped_file`; each path
+per drop and the page asks for a file by `(drop, index)` with `attach_dropped_file`; each path
 is handed out once. No command takes a path from the page. A paste is the other way in: the
-page already holds the bytes, and `attach_pasted_file` takes them as a raw body.
+page already holds the bytes and `attach_pasted_file` takes them as a raw body.
 
 **What the page does with them** is `ui/attachments.js`: a chip per file on the composer, a
-remove control per chip, and on Send `commit_attachments`, which moves the files into the
+remove control per chip and on Send `commit_attachments`, which moves the files into the
 conversation's folder and returns the words Rich receives, in the same shape the phone's
 attachments reach him (`phone/attachments.rs`, `describe_from`).
 
@@ -865,7 +820,7 @@ appended to `<app-data>/output/<thread_id>.jsonl`.
 
 | Event name | When | Payload |
 |---|---|---|
-| `rich://output` | A witness recorded a file this thread produced that the record did not hold yet: Rich's own write, the back end's, a worker's, or a file a command made. | `{ threadId, added: [Entry], count }`: the entries the new rows touched, re-stated from the disk, and the thread's file count after the append |
+| `rich://output` | A witness recorded a file this thread produced that the record did not hold yet: Rich's own write, the back end's, a worker's or a file a command made. | `{ threadId, added: [Entry], count }`: the entries the new rows touched, re-stated from the disk and the thread's file count after the append |
 
 **Witnessed, never inferred.** Nothing Rich says reaches this event; a file is listed because a
 witness saw the write (§4.1). An append that holds nothing new emits nothing. The record on disk
@@ -878,11 +833,11 @@ The twelfth family, added 2026-10-08 for the Dictation sheet and its Settings ro
 slice 2; the plan is in the private record, not in this repository). Source of truth:
 `richos/app/src-tauri/src/dictation_app.rs`, the constant `EVENT`, emitted by the listener the
 app sets on its `Link` (the socket to whichever dictation tool holds the key in this login
-session) each time that tool says something, and once when its socket closes.
+session) each time that tool says something and once when its socket closes.
 
 | Event name | When | Payload |
 |---|---|---|
-| `rich://dictation` | The tool's state moved (on, listening, writing, a problem, its key tap made), it said it is about to listen, or its socket closed. | `{ changed: true }` |
+| `rich://dictation` | The tool's state moved (on, listening, writing, a problem, its key tap made), it said it is about to listen or its socket closed. | `{ changed: true }` |
 | `rich://dictation` | Key capture answered: while "Press a different key" waits, the tool's key tap reports the F-key pressed instead of acting on it. | `{ key }`, 1 to 19 |
 
 **A nudge, not a record.** The window reads the facts again with `dictation_status` when it hears
@@ -906,5 +861,5 @@ the Rich panel. No report is offered for sending without Rich's check (review
 rv-20261009T162841Z-69294215-70e6 finding 2).
 
 Request a feature (CEO 2026-10-11, round 24) uses the same event for an idea: `post` is `"idea"`
-(a discussion in RichOS's GitHub Discussions, under Ideas) or `"bug"` (an issue), and the window
+(a discussion in RichOS's GitHub Discussions, under Ideas) or `"bug"` (an issue) and the window
 draws the card and Rich's words for that kind. A delivery's `number` is then the discussion's.

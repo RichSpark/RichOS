@@ -392,7 +392,7 @@ pub enum Event {
         /// **`None` is "not recorded", never "the desk"**, the same three-state discipline as
         /// `rich_audible` above: every product turn, every turn written before this field
         /// existed, and every internal or proactive turn reads back as `None`, and a reader
-        /// that must decide who may give work (`operator_host::Origin::of_turn`) treats it as
+        /// that must decide who may give work treats it as
         /// no origin at all. That is what keeps a phone sentence recorded before the keeping
         /// began from being read as one typed at the desk.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -413,7 +413,7 @@ pub enum Event {
         /// note, transcribed by the Mac at intake (`steering::IntakeRecord::Channel`'s
         /// `voice_note`). `source` stays `Text` for it: `Jam` is the desk's live voice mode, and
         /// changing it would also change what the engine is told (`native.rs`) and the desk
-        /// voice origin (`operator_host.rs`), which this field leaves alone. Kept so
+        /// voice origin, which this field leaves alone. Kept so
         /// every row of the turn, the live one that can beat the phone's receipt included, is a
         /// voice row from its first appearance instead of a text row that turns into one.
         ///

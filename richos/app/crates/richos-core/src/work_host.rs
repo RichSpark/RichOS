@@ -16,15 +16,6 @@ pub trait WorkNotifier: Send + Sync {
     /// conversation shows for Rich, for the conversation `thread_id`.
     fn overload_retry(&self, _thread_id: &str, _sentence: &str) {}
 }
-pub trait OperatorIntake: Send + Sync {
-    fn take(&self, record: Assignment);
-    fn stop(&self, entity: &str, thread: &str, id: &str) -> Result<(), String>;
-}
-// Retained for the separate operator client's verified report completion adapter.
-pub trait AnsweredClose: Send + Sync {
-    fn close_answered(&self, record: &Assignment, answer: &str) -> Result<(), String>;
-}
-pub type LeadSink<'a> = &'a dyn Fn(&crate::questions::Delivery) -> Result<String, String>;
 pub const ROTATION_WAITS_FOR_COMMANDS: std::time::Duration = std::time::Duration::from_secs(600);
 /// **How often an idle back end checks that Stu is on the account in use** (review
 /// rv-20261019T005929Z-e3d9ad03-3e7b, finding 2). A switch decided while Stu is idle, by Rich's
@@ -124,10 +115,8 @@ pub struct WorkHost {
     backends: Mutex<std::collections::HashMap<String, Arc<Backend>>>,
     closing: Mutex<bool>,
     notifier: Arc<dyn WorkNotifier>,
-    seen: Mutex<std::collections::HashSet<String>>,
     screen: Mutex<Arc<dyn crate::screen::ScreenSource>>,
     quota: Mutex<Option<Arc<crate::quota::Service>>>,
-    operator: Mutex<Option<Arc<dyn OperatorIntake>>>,
     output: Mutex<Option<crate::output::OutputStore>>,
     retry_clock: Mutex<Arc<dyn crate::upstream::RetryClock>>,
 }
@@ -143,10 +132,8 @@ impl WorkHost {
             backends: Mutex::new(Default::default()),
             closing: Mutex::new(false),
             notifier,
-            seen: Mutex::new(Default::default()),
             screen: Mutex::new(Arc::new(crate::screen::UnknownScreen)),
             quota: Mutex::new(None),
-            operator: Mutex::new(None),
             output: Mutex::new(None),
             retry_clock: Mutex::new(Arc::new(crate::upstream::SystemRetryClock)),
         })
@@ -391,10 +378,6 @@ impl WorkHost {
         *self.quota.lock().unwrap() = Some(quota);
     }
 
-    pub fn set_operator(&self, intake: Arc<dyn OperatorIntake>) {
-        *self.operator.lock().unwrap() = Some(intake);
-    }
-
     pub fn set_screen(&self, screen: Arc<dyn crate::screen::ScreenSource>) {
         *self.screen.lock().unwrap() = screen;
     }
@@ -432,7 +415,7 @@ impl WorkHost {
         let result = (|| {
             if let Some(session)=session.as_deref() {
                 for answer in crate::question_work::pending(&self.state)?.into_iter().filter(|answer|
-                    !answer.asker.starts_with("operator:") && answer.entity_id==binding.entity_id().as_str() && answer.thread_id==binding.thread_id()) {
+                    answer.entity_id==binding.entity_id().as_str() && answer.thread_id==binding.thread_id()) {
                     let input_id=format!("answer:{}",answer.id);
                     if crate::session_tools::previous_attempt(&scope,"stu",&input_id)?.as_ref()
                         .and_then(|attempt|attempt["session_id"].as_str())==Some(session) {continue}
@@ -682,31 +665,7 @@ impl WorkHost {
     pub fn adopt_registered(self: &Arc<Self>, binding: &ThreadBinding) -> usize {
         self.wake_messages(binding);
         // Desktop work is dispatched only through Stu's durable peer input.
-        // The separate operator client retains its explicit assignment intake.
-        if self.operator.lock().unwrap().is_none() {
-            return 0;
-        }
-        let Ok(rows) = assignment::read_all(
-            &self.state,
-            &binding.entity_id().to_string(),
-            binding.thread_id(),
-        ) else {
-            return 0;
-        };
-        let mut adopted = 0;
-        for record in rows
-            .into_iter()
-            .filter(|row| row.state == AssignmentState::Registered)
-        {
-            if self.seen.lock().unwrap().contains(&record.id) {
-                continue;
-            }
-            if let Some(operator) = self.operator.lock().unwrap().clone() {
-                operator.take(record);
-                adopted += 1;
-            }
-        }
-        adopted
+        0
     }
 
     fn backend_for(self: &Arc<Self>, thread: &str) -> Option<Arc<Backend>> {
@@ -740,12 +699,8 @@ impl WorkHost {
     pub fn deliver_team_answers(
         self: &Arc<Self>,
         binding_for: &dyn Fn(&str) -> Option<ThreadBinding>,
-        lead: Option<LeadSink<'_>>,
     ) {
         for delivery in crate::question_work::pending(&self.state).unwrap_or_default() {
-            if delivery.asker.starts_with("operator:") {
-                continue;
-            }
             if let Some(binding) = binding_for(&delivery.thread_id) {
                 drop(self.queue_question_answer(&binding, &delivery));
             }
@@ -759,11 +714,7 @@ impl WorkHost {
                 continue;
             };
             if let Err(error) = store.deliver(&entity, &thread, &asker, |d| {
-                if d.asker.starts_with("operator:") {
-                    lead.ok_or("Your team is unavailable")?(d)
-                } else {
-                    self.queue_question_answer(&binding, d)
-                }
+                self.queue_question_answer(&binding, d)
             }) {
                 eprintln!("[richos] team answer remains saved: {error}");
             }
@@ -1141,8 +1092,7 @@ impl WorkHost {
                             .unwrap_or_default()
                             .into_iter()
                             .find(|d| {
-                                !d.asker.starts_with("operator:")
-                                    && d.entity_id == binding.entity_id().as_str()
+                                d.entity_id == binding.entity_id().as_str()
                                     && d.thread_id == binding.thread_id()
                                     && live_session.as_deref().is_none_or(|session| {
                                         match crate::session_tools::previous_attempt(&self.message_scope(&binding), "stu", &format!("answer:{}", d.id)) {
@@ -1265,9 +1215,6 @@ impl WorkHost {
     pub fn background_work(&self) -> crate::work_gate::BackgroundWork {
         match self.open_assignments() {
             Ok(open) => {
-                if self.operator.lock().unwrap().is_some() {
-                    return crate::work_gate::BackgroundWork::nothing();
-                }
                 let awaiting_you = open
                     .iter()
                     .filter(|row| row.reported_state() == Some(AssignmentState::Blocked))
@@ -1315,9 +1262,6 @@ impl WorkHost {
         }
         let stopped = assignment::record_user_stop(&self.state, entity, thread, id)
             .map_err(|e| e.to_string())?;
-        if let Some(operator) = self.operator.lock().unwrap().clone() {
-            return operator.stop(entity, thread, id);
-        }
         let stopper = self
             .backend(thread)
             .and_then(|b| b.inner.lock().unwrap().peer_stopper.clone());
@@ -3937,7 +3881,8 @@ mod tests {
 
     /// With `before_its_task`, Stop is pressed after the call and before its `task_started`,
     /// which the stand-in sends 1 s later (Claude Code's foreground task comes seconds after
-    /// the call).
+    /// the call). Without it the task still comes 0.2 s after the call: on a loaded Mac
+    /// (2026-10-23) the test read the call before its task and failed with task_id "".
     fn stop_ends_the_command(h: &Harness, job: &str, description: &str, front_desk: bool, before_its_task: bool) {
         let (client, dir) = crate::native::native_driver_tests::fixture_client("stop-foreground-command", &r#"
 here=$(dirname "$0")
@@ -3961,15 +3906,19 @@ printf '%s\n' "{\"type\":\"control_response\",\"response\":{\"subtype\":\"succes
 printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"bforeground","tool_use_id":"toolu_fg","status":"stopped"}'
 printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn"}'
 read -r keep_alive
-"#.replace("DESCRIPTION", description).replace("TASK_DELAY", if before_its_task { "sleep 1" } else { ":" }));
+"#.replace("DESCRIPTION", description).replace("TASK_DELAY", if before_its_task { "sleep 1" } else { "sleep 0.2" }));
         let handle = client.cancel_handle();
         let turn = std::thread::spawn(move || {
             let ended = client.prompt("run the job's commands", &mut |_| {});
             (client, ended)
         });
-        until("Stu's foreground command never started", || handle.own_commands().len() == 1);
+        // The call is seen before its task_started is read, so wait for the task too.
+        let task = if before_its_task { "" } else { "bforeground" };
+        until("Stu's foreground command never started", || {
+            let own = handle.own_commands();
+            own.len() == 1 && own[0].task_id == task
+        });
         assert_eq!(handle.own_commands()[0].tool_use_id, "toolu_fg", "a helper's command is not Stu's own");
-        assert_eq!(handle.own_commands()[0].task_id, if before_its_task { "" } else { "bforeground" });
         assert_eq!(handle.own_commands()[0].description, description, "the job travels in the call's own description");
         let pid: i32 = std::fs::read_to_string(dir.join("command.pid")).unwrap().trim().parse().unwrap();
         let alive = || unsafe { libc::kill(pid, 0) } == 0;

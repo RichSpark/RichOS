@@ -19,8 +19,8 @@
 #
 # --no-app: the same guest (the host's claude synced in, the host's login pushed
 # into the fixture home, a login keychain ready) and NO app launched, for a proof
-# about `claude` itself rather than about the app: the operator probes
-# (operator-probes/run-probes.py). It prints `pid=none` and nothing is drawn.
+# about `claude` itself rather than about the app (`run-walk.py --no-app`). It
+# prints `pid=none` and nothing is drawn.
 #
 # Prints, on success:
 #   vm=<name> ip=<guest ip> pid=<app pid IN THE GUEST> ssh=<user@ip> elapsed=<s>
@@ -74,7 +74,7 @@ fi
 # the current worker might need the VM for a 5-second-long fart?"* A guest booted here by
 # hand is a guest nobody else can see or be scheduled around, kept up while its owner
 # thinks. So this boots only for a caller that holds one of the two guest slots
-# (slots.py): run-walk.py, run-probes.py, gui-proof-in-vm.sh, or `slots.py run -- ...`.
+# (slots.py): run-walk.py, gui-proof-in-vm.sh, or `slots.py run -- ...`.
 # The slot is recorded in the run state below, and a slot released with its guest still
 # up stops that guest (a guest never outlives its slot).
 SLOT="$(python3 "$HERE/slots.py" check 2>&1)" || die "no guest is booted outside a guest slot: $SLOT.

@@ -226,59 +226,23 @@ pub mod assignment_tools;
 pub mod status_tools;
 pub mod session_tools;
 pub mod work_host;
+/// `agent_tasks` — the task book: which of the provider's own background tasks is which and how
+/// each last stood, read off the stream, and the `stop_task` frame that stops one of them. The
+/// regular app's Stop of one worker and its worker status run on it.
+pub mod agent_tasks;
+/// `hook_alarms` — the engine's alarms (a hook's `systemMessage`) read off a lease's stream,
+/// verbatim, and delivered once across every lease (ruling §138: every user's app runs the
+/// engine's full checks, and their alarms reach the user as work notices).
+pub mod hook_alarms;
 /// `review_watch` — the engine's review-watch run as the HOST's own child (automatic second
-/// review, slice 4): mid-job reviews of the app's workers, and on an operator install the
-/// notices for his team's leads, sent as messages of the host's own.
+/// review, slice 4): mid-job reviews of the app's workers.
 pub mod review_watch;
-/// `team_watch` — the engine's quota-watch, stall-watch and codex-watch run as the HOST's own
-/// children on his team's install, their notices sent to his team's lead as messages of the
-/// host's own (his team's lead runs with `--print`, where plugin monitors never start).
-pub mod team_watch;
 /// `codex_reviews` — the Settings switch "Let Codex review your team's work" (round 20.2, ruling
 /// §114): the user's choice, saved where the app's review-watch reads it, and what the Mac reports
 /// about Codex (installed, signed in), from Codex's own `login status`.
 pub mod codex_reviews;
 
 pub mod read_view;
-
-/// **HIS TEAM BEHIND THE APP, ON HIS MAC ONLY** (CEO ruling §86; the operator back-end spec
-/// r2, richos-hq `docs/plans/2026-09-24-operator-back-end-spec-r2.md`). Off by default for
-/// everyone: nothing here runs unless the install's data folder holds `operator.json`.
-///   - `operator_declaration` — the gate (f): absent is the product, present and broken
-///                    refuses background work, and nothing falls back to the customer worker.
-pub mod operator_declaration;
-///   - `operator_profile` — his lead's arguments and environment, built from empty, and the
-///                    init check it passes before it takes work ((b), (i)).
-pub mod operator_profile;
-///   - `operator_frames` — his engine's alarms read off the lead's hook frames, verbatim and
-///                    delivered once across every lead ((r)).
-pub mod operator_frames;
-///   - `operator_report` — `richos_operator.report`, the tool his lead tells him things with;
-///                    every "landed" is checked in Git before it is said ((c)).
-pub mod operator_report;
-///   - `operator_lead` — the operator client: his lead over stream-json, declaring the per-task
-///                    stop, never setting `priority`, kept on every error ((g), (r), (d)).
-pub mod operator_lead;
-///   - `operator_claim` — the lead claim's app side: the terminal and the app never run his team
-///                    at once, by the file contract the engine side reads ((e), G11).
-pub mod operator_claim;
-///   - `operator_snapshot` — the digest of what a lead read at start, so a stale lead is retired
-///                    at its next idle moment ((q) item 4).
-///   - `operator_host` — one lead per conversation: relay, never hold; only a report settles;
-///                    named stops, the Esc, the read, team liveness, idle retirement ((g), (c),
-///                    (d), (o), (m), (q), (r), (s), e4; the §88 answer seam).
-pub mod operator_host;
-pub mod operator_snapshot;
-///   - `operator_runtime` — the host's seams for real: his engine's scripts from the declared
-///                    root, the launcher with the claim, `operator-complete`, durable notices.
-pub mod operator_runtime;
-///   - `operator_desk` — his team wired into the app: every adopted assignment relayed with its
-///                    handle, his words and the origin the ledger kept; his stops, Esc and reads;
-///                    the idle timer; the quit path (the operator-client record's §7 items 1-3).
-pub mod operator_desk;
-///   - `operator_desk_tools` — the front desk's `richos_operator` tools (stop, interrupt, read)
-///                    and the token-guarded socket they reach the live desk through.
-pub mod operator_desk_tools;
 
 /// **NOTHING TELLS ANYONE ABOUT DICTATION UNTIL DICTATION IS THERE** (dictation plan revision 2,
 /// richos-hq `docs/plans/2026-10-08-dictation-anywhere.md`, minor 2 and section 9: "Nothing

@@ -239,6 +239,80 @@ class Grade(unittest.TestCase):
         self.assertAlmostEqual(walk.cpu_seconds(' 1:02:03.50\n'), 3723.5)
 
 
+class Enter(unittest.TestCase):
+    """enter() after a relaunch: the conversation's row is waited for before it is pressed, so a
+    read the relaunched app did not answer is asked again (axwait) instead of ending the step.
+    esc-20261021T205850Z-48c70d7d: the press of "Onboarding" got 'unresponsive' on AXWindows."""
+
+    def walk_on(self, finds):
+        w = walk.Walk.__new__(walk.Walk)
+        w.facts, w.calls, w.pressed, w.args = {'thread_title': 'Onboarding'}, [], [], []
+        def ax(mode, *a, **k):
+            w.calls.append((mode, a[1] if len(a) > 1 else None))
+            w.args.append(a)
+            if mode == 'click':
+                w.pressed.append(a[1])
+                return [{'clicked': True}]
+            answer = finds.pop(0) if finds else True
+            if isinstance(answer, Exception):
+                raise answer
+            return [{'title': a[1]}] if answer else []
+        w.ax = ax
+        w.shown_title = lambda: w.facts['thread_title']
+        return w
+
+    def setUp(self):
+        self.sleep, self.mono = walk.adopt.time.sleep, walk.adopt.time.monotonic
+        self.rsleep = walk.time.sleep
+        self.now = 0.0
+        def sleep(s):
+            self.now += s
+        walk.adopt.time.sleep = walk.time.sleep = sleep
+        walk.adopt.time.monotonic = lambda: self.now
+
+    def tearDown(self):
+        walk.adopt.time.sleep, walk.adopt.time.monotonic = self.sleep, self.mono
+        walk.time.sleep = self.rsleep
+
+    def test_stop_opens_the_work_summary_by_the_chip_label_every_state_ends_with(self):
+        """walk-21f83423b356: "assignment running" is one state's words; the chip's label
+        always ends "Open the work summary." (main.js renderDrillChip)."""
+        source = (HERE / 'reap-walk.py').read_text()
+        body = source[source.index('    def stop(self'):source.index('    def quit(self')]
+        self.assertIn("self.wait_for('Open the work summary')", body)
+        self.assertNotIn("'assignment running'", body)
+        chip = (HERE.parent.parent / 'ui' / 'main.js').read_text()
+        self.assertIn('". Open the work summary."', chip)
+
+    # The finds, in order: the home door, the conversation's composer, the conversation's
+    # title in its crumb, and (only when another conversation opened) its row.
+
+    def test_the_door_opens_the_conversation_and_no_row_is_pressed(self):
+        """walk-5a4e3ff2c768: the door opened "Acme / Onboarding" with the sidebar closed."""
+        w = self.walk_on([True, True, True])
+        w.enter_conversation()
+        self.assertEqual(w.pressed, ['Talk to Rich'])
+        self.assertEqual(w.calls[-1], ('find', 'Onboarding'))
+        # walk-08aeea74dab4: the crumb's words are its AXValue, so it is matched by value.
+        self.assertEqual(w.args[-1][:4], ('--value', 'Onboarding', '--role', 'AXStaticText'))
+
+    def test_the_home_door_is_waited_for_when_home_is_not_drawn_yet(self):
+        """walk-45ed47dcaab0: checked once before home was drawn, the door was skipped and
+        the walk waited on the home screen for a conversation row."""
+        w = self.walk_on([False, False, True, True, True])
+        w.enter_conversation()
+        self.assertEqual(w.pressed, ['Talk to Rich'])
+        self.assertEqual(w.calls[:3], [('find', 'Talk to Rich')] * 3)
+
+    def test_an_unanswered_read_of_the_row_is_asked_again_before_the_press(self):
+        unanswered = walk.StepFailed('command failed (1): ax.sh find\n{"error": "unresponsive", "detail": '
+                                     '"did not answer for AXWindows (kAXErrorCannotComplete)"}')
+        w = self.walk_on([True, True, False, unanswered, True])
+        w.enter_conversation()
+        self.assertEqual(w.pressed, ['Talk to Rich', 'Onboarding'])
+        self.assertEqual(w.calls[-2:], [('find', 'Onboarding'), ('click', 'Onboarding')])
+
+
 class NotStarted(unittest.TestCase):
     """walk-56a6baace66a: the quit step's ask never started its commands, and the timeout kept no
     job list, no reply, no screen: nobody could say whether it became a job. The saving itself."""

@@ -101,10 +101,6 @@ pub struct EngineProfile {
     pub state: PathBuf,
     pub runtime: EngineRuntime,
     pub work_scope: Option<(String, String)>,
-    /// **His team's desk, for the front desk's `richos_operator` tools** (the operator-client
-    /// record's §7 item 2). Set by the shell on an operator install only; `None` everywhere
-    /// else, which leaves the front desk's server list exactly what it was.
-    pub operator_desk: Option<crate::operator_desk_tools::DeskAccess>,
     /// **Fill-first: the Claude account this lease runs under.** Set by the shell from the
     /// account in use (`quota::Service::lease_account`). An added account's folder reaches
     /// the provider as `CLAUDE_CONFIG_DIR` in [`Self::configure`]; Account 1 has no folder and
@@ -328,7 +324,7 @@ fn teammate_from(file_name: &str, body: &str) -> Teammate {
 /// **The digest of the team a lease registers** (proto-teammate shelf plan §1 and §6, slice 5):
 /// every name and definition [`active_team`] returns, so it moves exactly when the next lease
 /// would register something different, and never for a file that would not be registered (the
-/// shelf, a duty name, a temporary file, a link). The design is `operator_snapshot.rs`'s, digest
+/// shelf, a duty name, a temporary file, a link). The design is the retired operator snapshot's, digest
 /// the definitions a session loaded and refresh them when the digest moves; its file set is
 /// the operator's, so the code is not shared. Each part is length-prefixed, so no two teams
 /// share a digest by where one body ends and the next name starts.
@@ -509,7 +505,7 @@ impl EngineProfile {
         write(&plugin.join("spawn-preflight.json"),
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
         Ok(Self { engine, coordination, plugin, state, runtime, work_scope: None,
-                  operator_desk: None, claude_account: None, token_sink: None, speech_model: None,
+                  claude_account: None, token_sink: None, speech_model: None,
                   lease_models: crate::config::lease_models_from_config(&data), machine_settings, user })
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which

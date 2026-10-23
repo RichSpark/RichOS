@@ -26,10 +26,9 @@ unicode-normalization = "0.1"
 libc = "0.2"
 
 [features]
-# The crash matrix's abort points for his answers to his team (`operator_host::crash_point`) and to
-# a work job (`work_host`'s, and its one `work_fault`), compiled only into the `operator_walk` and
-# `work_walk` builds the VM crash matrices hand the guest. No product build enables it; without it
-# every point is an empty inline function.
+# The crash matrix's abort points for his answers to a work job (`work_host`'s, and its one
+# `work_fault`), compiled only into the `work_walk` build the VM crash matrix hands the guest. No
+# product build enables it; without it every point is an empty inline function.
 crash-points = []
 
 # `test = true` runs an example's own setup test with `cargo test -p richos-core`, so an example

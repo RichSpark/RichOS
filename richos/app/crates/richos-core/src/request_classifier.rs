@@ -275,7 +275,7 @@ pub(crate) mod tests {
             runtime:crate::runtime::EngineRuntime {root:PathBuf::from("/usr"),python:PathBuf::from("/usr/bin/python3"),
                 node:PathBuf::from("/usr/bin/false"),git:PathBuf::from("/usr/bin/git"),versions:Default::default()},
             work_scope:None,
-            operator_desk:None,claude_account:None,token_sink:None,speech_model:None,
+            claude_account:None,token_sink:None,speech_model:None,
             lease_models:Default::default(),machine_settings:Default::default(),
         };
         (root,bin,profile,skills)
