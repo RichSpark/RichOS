@@ -42,6 +42,7 @@
 # Full-tree privacy remains a production release gate and has its own owning suite.
 # run-tests: inputs richos/app/scripts/make-release.sh richos/app/scripts/lib/updater_tar.py richos/app/scripts/lib/worktree-resource.sh richos/app/src-tauri/Cargo.toml richos/app/src-tauri/tauri.conf.json richos/engine/VERSION richos/engine/scripts/named-persons.sh richos/engine/scripts/lib/named-persons.sh richos/engine/scripts/lib/named-persons.py
 # run-tests: covers richos/app/scripts/make-release.sh
+# run-tests: no-host-screen: its /Contents/MacOS/ matches are a fixture RichDoctor.app under mktemp that is copied, signed, archived and verified, never executed or opened
 set -uo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
