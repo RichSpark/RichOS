@@ -3763,7 +3763,22 @@ def _make_writable(path):
     return cleared
 
 
+# The deletion log keeps one previous file, as quota_watch.py's poll log does, so
+# the cleanup's own record cannot become a pile (cleanup PRD R4). Measured
+# 2026-10-23: 63 MB, never trimmed.
+LOG_MAX_BYTES = 16 * 1024 * 1024
+
+
+def rotate_log(path, limit=LOG_MAX_BYTES):
+    try:
+        if os.path.getsize(path) > limit:
+            os.replace(path, path + ".1")
+    except OSError:
+        pass
+
+
 def write_log(path, lines):
+    rotate_log(path)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a", encoding="utf-8") as fh:
@@ -3962,6 +3977,67 @@ def default_state():
         or os.path.join(state_base(), "scratch-reaper-state.json")
 
 
+# THE ONE CONTEXT THAT PUBLISHES CLEANUP HEALTH (cleanup PRD R3/R4): the installed
+# launchd job, whether it fired at a calendar slot or by `launchctl kickstart`.
+# scratch-reaper.sh reads launchd's XPC_SERVICE_NAME and hands the fact on as
+# SCRATCH_REAPER_SCHEDULED (why the shell and not this program: see there). An
+# interactive --apply prints its result and records failed deletions, but never
+# writes or clears the unattended result: on 2026-10-23 a manual run at 16:42Z
+# overwrote the state the failing scheduled runs had published, and the record
+# then described a run the scheduler never made.
+def unattended():
+    return os.environ.get("SCRATCH_REAPER_SCHEDULED") == "1"
+
+
+def unresolved_rows(reaper, failures):
+    """What kept this run from being a completed cleanup, grouped by the inspected
+    root and class it happened in, each with one example and its reason. An entry
+    a verified rule KEEPs is not here; an undecided one, a failed deletion and an
+    entry the run never reached are."""
+    roots = sorted(set(os.path.realpath(r) for r in reaper.roots), key=len, reverse=True)
+
+    def scope_of(path):
+        real = os.path.realpath(path)
+        return next((r for r in roots if inside(real, r)), real)
+
+    groups = {}
+    for e in reaper.entries:
+        if e.action != INDETERMINATE:
+            continue
+        key = (scope_of(e.path), e.klass)
+        g = groups.setdefault(key, {"scope": key[0], "class": e.klass, "count": 0,
+                                    "bytes": 0, "example": e.path, "why": e.why})
+        g["count"] += 1
+        g["bytes"] += e.size
+    out = []
+    for g in groups.values():
+        g["cause"] = ("%d undecided %s entr%s (%s), e.g. %s: %s"
+                      % (g["count"], g["class"], "y" if g["count"] == 1 else "ies",
+                         human(g["bytes"]), g.pop("example"), g.pop("why")[:200]))
+        out.append(g)
+    if failures:
+        out.append({"scope": "deletion", "count": len(failures),
+                    "cause": "%d deletion(s) failed, e.g. %s"
+                             % (len(failures), str(failures[0])[:200])})
+    if reaper.deferred_skipped:
+        out.append({"scope": "deny-by-default arm", "count": reaper.deferred_skipped,
+                    "cause": "%d entries were not reached before the run's budget ran out"
+                             % reaper.deferred_skipped})
+    return sorted(out, key=lambda r: (r["scope"], r.get("class", "")))
+
+
+def publish_refusal(cause):
+    """A scheduled run that refused to run publishes that, keeping the time of the
+    last run the scheduled job completed (a manual run's time is never kept)."""
+    prev = read_failures(default_state())
+    payload = {k: prev[k] for k in ("last_apply", "last_apply_epoch")
+               if prev.get("source") == "launchd" and k in prev}
+    payload.update({"source": "launchd", "outcome": "unresolved",
+                    "result_epoch": int(time.time()), "roots": [],
+                    "unresolved": [{"scope": "run", "cause": str(cause)[:300]}]})
+    write_state(default_state(), payload)
+
+
 def write_state(path, payload):
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -4023,6 +4099,8 @@ def main(argv=None):
             reaper.scan()
     except Fatal as exc:
         sys.stderr.write("scratch-reaper: %s\n" % exc)
+        if args.apply and not args.process_only and args.agent is None and unattended():
+            publish_refusal("the scheduled run refused to start: %s" % exc)
         return 2
     except Deadline:
         if args.notice:
@@ -4101,14 +4179,26 @@ def main(argv=None):
                           key=lambda e: -e.size)[:5]
     split["by_hand"]["paths"] = [{"path": e.path, "bytes": e.size,
                                   "why": e.why} for e in by_hand_rows]
+    failures = []
     if args.apply:
         deleted, freed, failures = reaper.apply(args.log or default_log())
         n_failures = len(failures)
     # THE STATE FILE DESCRIBES THE LAST FULL PASS, and the watchdog reads it as
     # such: a land's scoped sweep looked at one agent's scratch, and publishing
-    # its numbers would tell the watchdog the scheduled job had just run.
-    if args.apply and reaper.scope is None:
+    # its numbers would tell the watchdog the scheduled job had just run. And
+    # ONLY THE INSTALLED JOB PUBLISHES IT (cleanup PRD R3/R4): a manual --apply
+    # prints its result and never replaces or clears the unattended one.
+    if args.apply and reaper.scope is None and unattended():
+        unresolved = unresolved_rows(reaper, failures)
         write_state(default_state(), {
+            # source/outcome/unresolved/roots: the cleanup health the watchdog
+            # turns into one owner action. `healthy` means every candidate was
+            # decided and nothing failed; a deliberate KEEP is not a failure.
+            "source": "launchd",
+            "outcome": "unresolved" if unresolved else "healthy",
+            "unresolved": unresolved,
+            "roots": sorted(set(reaper.roots)),
+            "result_epoch": int(time.time()),
             "last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "last_apply_epoch": int(time.time()),
             "deleted": deleted, "freed": freed,

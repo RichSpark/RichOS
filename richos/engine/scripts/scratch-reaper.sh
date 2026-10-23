@@ -245,4 +245,28 @@ command -v python3 >/dev/null 2>&1 || {
     echo "scratch-reaper: python3 is not on PATH; the scan cannot run." >&2
     exit 2
 }
+
+# THE INSTALLED JOB'S MARK, decided here and handed on (cleanup PRD R3/R4). launchd
+# names the job in XPC_SERVICE_NAME. Measured 2026-10-23 under a throwaway launchd
+# job: this shell sees the label, a Python it EXECs sees it too, but a Python started
+# as a child reads "0". So the shell, which always sees launchd's value, decides,
+# and the variable is set or cleared here only: a manual run never inherits it.
+if [ "${XPC_SERVICE_NAME:-}" = "$LABEL" ]; then
+    export SCRATCH_REAPER_SCHEDULED=1
+else
+    unset SCRATCH_REAPER_SCHEDULED
+fi
+
+# THE SCHEDULED JOB'S OWN OUTPUT LOG keeps one previous file, like the deletion
+# log (cleanup PRD R4): launchd appends every run's plan to it, and on
+# 2026-10-23 it held 35 MB. Renamed only when launchd started this run.
+if [ "${SCRATCH_REAPER_SCHEDULED:-}" = "1" ]; then
+    # The state directory every other state file resolves (CLAUDE_CONFIG_DIR, else
+    # ~/.claude): the plist's path under launchd, and never a live file in a test.
+    _LL="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/scratch-reaper-launchd.log"
+    if [ "$(stat -f %z "$_LL" 2>/dev/null || echo 0)" -gt 16777216 ]; then
+        mv -f "$_LL" "$_LL.1" 2>/dev/null || true
+    fi
+    unset _LL
+fi
 exec python3 "$LIB" "${PASS_ARGS[@]+"${PASS_ARGS[@]}"}"

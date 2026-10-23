@@ -532,6 +532,31 @@ run() {                    # run the reaper in the current world
     RICHOS_ANDROID_CACHES_ROOT="$NO_DEVICES/android" \
     bash "$REAPER" "$@" 2>&1
 }
+# THE INSTALLED JOB, as scratch-reaper.sh runs the program once launchd has named it
+# (cleanup PRD R4). launchd's XPC_SERVICE_NAME cannot be handed to a child on this
+# OS: measured 2026-10-23, any child process, bash or Python, reads it as "0"; only
+# launchd's own job process and what it execs see the label. So this does what the
+# shell does after deciding: export the world's declarations and
+# SCRATCH_REAPER_SCHEDULED=1, and run the program. S36 proves the shell refuses a
+# caller's own SCRATCH_REAPER_SCHEDULED.
+run_scheduled() {
+    (
+        set -a
+        # shellcheck disable=SC1090
+        . "$W_CFG"
+        set +a
+        export SCRATCH_REAPER_SCHEDULED=1
+        RICHOS_ENV_FILE="$W_ROOT/machine.env" \
+        SCRATCH_REAPER_CONFIG="$W_CFG" \
+        RICHOS_SESSIONS_DIR="$W_SESSIONS" \
+        CLAUDE_CONFIG_DIR="$W_HOME" \
+        TMPDIR="$W_TMP" \
+        HOME="${W_FAKE_HOME:-$HOME}" \
+        RICHOS_SIMCTL="$NO_DEVICES/simctl" \
+        RICHOS_ANDROID_CACHES_ROOT="$NO_DEVICES/android" \
+        python3 "$SCRIPT_DIR/lib/scratch-reaper.py" "$@" 2>&1
+    )
+}
 # W_FAKE_HOME IS EMPTY IN EVERY WORLD BUT S31's, and it has to be RESET by
 # world() rather than merely set by the case that wants it: a shell variable set
 # in one case is still set in the next, and a suite where case 30 changes what
@@ -1818,7 +1843,7 @@ deny_world skipstate
 start_claude; PID_D11="$LAST_CLAUDE"
 register "$W_SESSIONS" "$PID_D11" "$SID_LIVE"
 stale "$W_TMP/zforeign.published"
-run --apply >/dev/null 2>&1
+run_scheduled --apply >/dev/null 2>&1
 SFILE="$W_HOME/state/scratch-reaper-state.json"
 if python3 - "$SFILE" <<'PY'
 import json, sys
@@ -2654,7 +2679,7 @@ case "$OUT" in
 esac
 # THE PUBLISHED RECORD CARRIES THE SPLIT AND THE PATHS, because the watchdog
 # reads that file and cannot say WHICH 12.8 GB from a total.
-run --apply >/dev/null 2>&1
+run_scheduled --apply >/dev/null 2>&1
 if python3 - "$W_HOME/state/scratch-reaper-state.json" <<'PY'
 import json, sys
 try:
@@ -2794,6 +2819,90 @@ else
 fi
 kill "$PID_BR" >/dev/null 2>&1 || true
 wait "$PID_BR" 2>/dev/null || true
+
+# ===========================================================================
+# S36 — ONLY THE SCHEDULED JOB PUBLISHES CLEANUP HEALTH, AND IT SAYS WHAT HAPPENED
+# ===========================================================================
+# Cleanup PRD R3/R4, A3. On 2026-10-23 every scheduled run for days had been
+# unable to read the open-file table (lsof was not on launchd's PATH), and a
+# manual --apply at 16:42Z then overwrote the published state with its own
+# result. The scheduled result now says healthy or unresolved and why; a manual
+# run neither writes nor clears it; a refused run publishes the refusal and keeps
+# the time of the last run the scheduled job completed.
+world health
+start_claude; PID_H="$LAST_CLAUDE"
+register "$W_SESSIONS" "$PID_H" "$SID_LIVE"
+SF="$W_HOME/state/scratch-reaper-state.json"
+# One undecided entry: a repository under the allocator root with no ledger row.
+mkdir -p "$W_TMP/richos-scratch/99999993-norow-cccccccc/repo/.git"
+state_is() {               # <python expression over st> — exit 0 when it holds
+    python3 - "$SF" "$1" <<'PY'
+import json, sys
+try:
+    st = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+sys.exit(0 if eval(sys.argv[2], {"st": st}) else 1)
+PY
+}
+# Through the shell, with the handoff forged by the caller: the shell decides from
+# launchd's own name, so a manual run publishes nothing.
+( export SCRATCH_REAPER_SCHEDULED=1; run --apply ) >/dev/null 2>&1
+if [ ! -f "$SF" ]; then
+    ok "S36  an interactive --apply publishes no cleanup result, even with the handoff forged"
+else
+    bad "S36  a manual --apply wrote the scheduled job's result"
+fi
+OUT="$(run_scheduled --apply)"
+if state_is 'st.get("source") == "launchd" and st.get("outcome") == "unresolved" and any(u.get("class") == "scratch-alloc" and "richos-scratch" in u.get("scope", "") for u in st.get("unresolved", []))'; then
+    ok "S36a the scheduled run publishes UNRESOLVED, naming the scope and class"
+else
+    bad "S36a an undecided entry did not make the scheduled result unresolved"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | tail -12
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+rm -rf "$W_TMP/richos-scratch/99999993-norow-cccccccc"
+run --apply >/dev/null 2>&1
+if state_is 'st.get("outcome") == "unresolved"'; then
+    ok "S36b a manual --apply after the failure does not clear it"
+else
+    bad "S36b a manual run cleared the scheduled failure"
+fi
+run_scheduled --apply >/dev/null 2>&1
+if state_is 'st.get("outcome") == "healthy" and st.get("unresolved") == [] and st.get("last_apply_epoch")'; then
+    ok "S36c the next scheduled run, with nothing undecided, publishes HEALTHY"
+else
+    bad "S36c a clean scheduled run did not publish healthy"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+HEALTHY_AT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["last_apply_epoch"])' "$SF")"
+# A3: inspection unavailable under the scheduled job (an lsof that cannot answer).
+BLIND36="$W_ROOT/blindbin"
+mkdir -p "$BLIND36"
+printf '#!/bin/sh\nexit 9\n' >"$BLIND36/lsof"
+chmod +x "$BLIND36/lsof"
+stale "$W_TMP/zzz-health-blind"
+echo 'SCRATCH_TMP_DENY_BY_DEFAULT="1"' >>"$W_CFG"
+SRT_BLIND_LSOF="$BLIND36/lsof" PATH="$BLIND36:$PATH" run_scheduled --apply >/dev/null 2>&1
+if state_is 'st.get("outcome") == "unresolved" and any("OPEN-FILE TABLE COULD NOT BE READ" in u.get("cause", "") for u in st.get("unresolved", []))'; then
+    ok "S36d an unreadable open-file table under the scheduled job is UNRESOLVED, with that cause"
+else
+    bad "S36d a blind scheduled run was published as anything but unresolved"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+# A refused scheduled run: an undeclared threshold. The last COMPLETED run is the
+# blind one just above (it finished, unresolved), so that is the time to keep.
+HEALTHY_AT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["last_apply_epoch"])' "$SF")"
+sed -i.bak '/^SCRATCH_AGE_FLOOR_MINUTES=/d' "$W_CFG"
+run_scheduled --apply >/dev/null 2>&1
+if state_is "st.get('outcome') == 'unresolved' and st['unresolved'][0]['scope'] == 'run' and 'not declared' in st['unresolved'][0]['cause'] and st.get('last_apply_epoch') == $HEALTHY_AT"; then
+    ok "S36e a refused scheduled run publishes the refusal and keeps the last completed run's time"
+else
+    bad "S36e a refused scheduled run left health untouched or moved its completion time"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+kill "$PID_H" >/dev/null 2>&1 || true
+wait "$PID_H" 2>/dev/null || true
 
 # ===========================================================================
 # S33 — THIS SUITE NEVER SCANNED THE WHOLE MAC'S OPEN-FILE TABLE
