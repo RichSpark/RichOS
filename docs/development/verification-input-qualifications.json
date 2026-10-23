@@ -2649,7 +2649,7 @@
         "richos/engine/scripts/hooks/ass-kicker.sh": "67958c5559f0271a699ee95462636009f5547ad1212124139137827b0a6006c1",
         "richos/engine/ass-kicker/ass-kicker.py": "172ff6854cec5ff12c733475009b894b6f280cf62a9279da6a8ea8be5379e767",
         "richos/engine/scripts/hooks/guard-idle-land.py": "ea764cf458a3e64f661ee9a789a79afe6c32c53ee94b218239b863c3522a8ec3",
-        "richos/engine/mega-lander/workspaces.py": "23e3932a71334f35fb7f0528a87b7113c80ed0a4f9bca69e740e70087e6f9ac7",
+        "richos/engine/mega-lander/workspaces.py": "5256c33dbff6b63e9f6e2a31db60b3a1581827115f3325a3c2635a1df3afd326",
         "richos/engine/scripts/hooks/turn-manifest.py": "d1b643da2dd56eda896adf3ce9d96a2ac3943353e98ba977edf684c74d4efc01",
         "richos/engine/scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
         "richos/engine/scripts/lib/stop-session-recovery.py": "7f73be10acfee2d62a9f05115a20d8c64bfd63764a4fffb084675ca14a4d7ed2",
