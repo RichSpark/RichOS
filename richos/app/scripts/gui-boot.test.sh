@@ -71,6 +71,7 @@
 #   C3  ...declaring the product's own bundle identifier, read the product's own way
 #   C4  ...as a file that satisfies the shape `bundle_plist` demands, and that parses
 #   C5  ...and, on the machine, declaring the version the binary says it is
+#   C6  the machine's claude stand-in starts by a plain execve under launchd's PATH
 #   D1  an active-display count of 0 is REFUSED by the precondition, never passed
 #   D2  ...a count of one or more is accepted
 #   D3  ...a count that could not be measured says exactly that, and is read as neither
@@ -1229,6 +1230,65 @@ else
   bad "B0 complete delivered machine could be provisioned" "public component/runtime provisioning failed"
   exit 1
 fi
+
+# C6 — THE CLAUDE STAND-IN MUST START AS NODE, NOT AS SHELL. gui_machine writes it with
+# `#!<node>`, and in the test guest the only `node` is the delivered runtime's `bin/node`, a
+# `#!/bin/sh` wrapper (it sets OPENSSL_MODULES, then execs ../node/bin/node). macOS will not
+# take a script as another script's interpreter: execve answers ENOEXEC, and the app's spawn
+# (Rust's Command, like execvp) then hands the stand-in to /bin/sh, which runs the JavaScript
+# as shell. Nightly 71's proof (run 20261023T101237Z-84442061) failed B2 on exactly that:
+# `quota reader 1: initialize: exit status: 2 ... line 2: //: is a directory`. Nightly 70
+# had the same broken stand-in; its quota reader failed silently until 766f54932 printed why.
+#
+# The interpreter goes through /usr/bin/env, a real executable, which execs the same absolute
+# node whether it is a wrapper or a binary. It is set HERE and not in lib/gui-launch.sh on
+# purpose: `publish` accepts a boot proof from a descendant of the candidate that changes only
+# this file (nightly-local.py only_the_checker_changed), so the fix needs no rebuild.
+#
+# The case then starts the stand-in the way the kernel sees it: python's subprocess calls
+# execve and never falls back to /bin/sh, so an interpreter macOS refuses is a red case here
+# instead of a JavaScript file run as shell inside the boot.
+stand_in_interpreter() {   # stand_in_interpreter <claude stand-in>
+  case "$(head -1 "$1")" in
+    '#!/usr/bin/env '*) ;;
+    '#!/'*) sed -i '' "1s|^#!|#!/usr/bin/env |" "$1" ;;
+  esac
+}
+stand_in_case() {   # stand_in_case <claude stand-in>
+  local stand_in="$1" out
+  if out="$(python3 -I - "$stand_in" 2>&1 <<'PY'
+import json, select, subprocess, sys
+try:
+    child = subprocess.Popen([sys.argv[1], "--print"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"})
+except OSError as error:
+    sys.exit(f"execve refused the stand-in: {error}")
+child.stdin.write(b'{"type":"control_request","request_id":"quota-1","request":{"subtype":"initialize"}}\n')
+child.stdin.flush()
+ready, _, _ = select.select([child.stdout], [], [], 10)
+line = child.stdout.readline() if ready else b""
+child.stdin.close()
+try:
+    child.wait(timeout=10)
+except subprocess.TimeoutExpired:
+    child.kill()
+    child.wait()
+try:
+    reply = json.loads(line)
+except ValueError:
+    sys.exit(f"no reply to initialize (exit {child.returncode}); stderr: {child.stderr.read()[:300]!r}")
+if reply.get("type") != "control_response" or reply["response"].get("request_id") != "quota-1":
+    sys.exit(f"not an answer to initialize: {line[:300]!r}")
+PY
+)"; then
+    ok "C6 the claude stand-in starts by a plain execve under launchd's PATH and answers initialize"
+  else
+    bad "C6 the claude stand-in starts by a plain execve under launchd's PATH" "$out; its first line: $(head -1 "$stand_in")"
+  fi
+}
+stand_in_interpreter "$MACHINE/.local/bin/claude" \
+  || bad "C6 the claude stand-in starts by a plain execve" "could not set its interpreter line"
+stand_in_case "$MACHINE/.local/bin/claude"
 
 # C5 — THE ONE CAPABILITY CASE THAT NEEDS THE BINARY, so it lives here rather than with
 # C1-C4. The bundle on the machine has to declare the version the binary reports for itself:
