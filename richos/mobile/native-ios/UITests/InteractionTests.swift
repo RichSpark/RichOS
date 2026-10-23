@@ -9,15 +9,34 @@ final class InteractionTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Every row on screen, read from ONE snapshot of the app's hierarchy. `allElementsBoundByIndex`
+    /// resolves each element with its own query, so a list that moves between two resolutions (a row
+    /// inserted, then a card raising the bottom inset and scrolling rows off the top on the iPhone SE)
+    /// fails with "No matches found for Element at index N". A snapshot's values are all taken at once.
+    private func rowSnapshots(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) -> [XCUIElementSnapshot] {
+        let root: XCUIElementSnapshot
+        do {
+            root = try app.snapshot()
+        } catch {
+            XCTFail("could not read the screen: \(error)", file: file, line: line)
+            return []
+        }
+        var found: [XCUIElementSnapshot] = []
+        var pending = root.children
+        while let node = pending.popLast() {
+            if node.identifier.hasPrefix("row.") { found.append(node) }
+            pending.append(contentsOf: node.children)
+        }
+        return found
+    }
+
     private func rows(_ app: XCUIApplication) -> Set<String> {
-        Set(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'row.'"))
-            .allElementsBoundByIndex.map(\.identifier))
+        Set(rowSnapshots(app).map(\.identifier))
     }
 
     /// The lowest row on screen: the newest message, while the list follows it.
     private func newestRow(_ app: XCUIApplication) -> String? {
-        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'row.'"))
-            .allElementsBoundByIndex.max { $0.frame.maxY < $1.frame.maxY }?.identifier
+        rowSnapshots(app).max { $0.frame.maxY < $1.frame.maxY }?.identifier
     }
 
     /// Nothing was sent: no row the list did not show before, and the newest message is still the one
