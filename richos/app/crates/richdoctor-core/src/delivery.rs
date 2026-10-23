@@ -98,18 +98,13 @@ pub struct Approved {
     pub installation_id: String,
 }
 
-/// Freeze the approved text and screenshot manifest under `report_id`. Refused when the text
-/// breaks what the relay needs to publish at all ([`crate::scrub::check_outgoing`]), when the
-/// manifest breaks the limits, or when the body does not end with the screenshot lines and the
-/// footer.
+/// Freeze the approved text and screenshot manifest under `report_id`, exactly as the person
+/// reviewed it. Refused only when the manifest breaks the limits or the body does not end with
+/// the screenshot lines and the footer.
 pub fn approve(report_id: &str, title: &str, body: &str, manifest: Vec<Entry>, relay: &str, now: u64, installation_id: &str) -> Result<Approved, Vec<crate::scrub::Problem>> {
     let problem = |d: String| vec![crate::scrub::Problem { item: "body".into(), detail: d }];
     if !crate::util::is_uuid(installation_id) {
         return Err(problem("RichDoctor could not make its installation ID, so the report was not sent.".into()));
-    }
-    let problems = crate::scrub::check_outgoing(title, body, None);
-    if !problems.is_empty() {
-        return Err(problems);
     }
     crate::image_profile::check_set(&manifest).map_err(|e| problem(format!("The screenshots are over the limit: {e}.")))?;
     if !body.ends_with(&crate::report::ending(relay, report_id, manifest.len())) {
@@ -400,11 +395,19 @@ mod tests {
         assert!(!is_report_id("RD-0000-1111"));
     }
 
+    /// PRD V7 C4: no scanner veto after Claude and the person's review.
     #[test]
-    fn approval_refuses_a_leak_a_missing_ending_and_too_many_images() {
+    fn approval_sends_what_was_reviewed() {
         let id = "RD-7K3M-Q9VX";
         let ending = crate::report::ending(BASE, id, 0);
-        assert!(approve(id, "t", &format!("mail jane@example.com\n\n{ending}"), vec![], BASE, 1, INST).is_err());
+        let kept = richos_core::bug_report::escaped_lines("mail jane@example.com, the file /Users/jane/notes.txt");
+        assert!(approve(id, "t", &format!("{kept}\n\n{ending}"), vec![], BASE, 1, INST).is_ok(), "the reviewed words go");
+    }
+
+    #[test]
+    fn approval_refuses_a_missing_ending_and_too_many_images() {
+        let id = "RD-7K3M-Q9VX";
+        let ending = crate::report::ending(BASE, id, 0);
         assert!(approve(id, "t", "no footer", vec![], BASE, 1, INST).is_err());
         assert!(approve(id, "t", &format!("x\n\n{ending}"), vec![], BASE, 1, "inst-173fb086d09f").is_err(), "the relay refuses a non-UUID installation ID");
         assert!(approve(id, "t", &format!("x\n\n{ending}"), vec![], BASE, 1, INST).is_ok());

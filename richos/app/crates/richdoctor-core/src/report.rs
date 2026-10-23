@@ -131,8 +131,10 @@ fn first_sentence_title(description: &str) -> String {
 
 impl Report {
     /// **BUILD THE REPORT** from the person's words, the evidence and, when there is one,
-    /// Claude's draft. Host code decides the structure; Claude's words are scrubbed like the
-    /// person's; evidence is quoted from the sanitized items, never from Claude.
+    /// Claude's draft. Host code decides the structure. PRD V7 C4, as Bust a bug does it: the
+    /// sweep ran FIRST, on everything Claude was given, and it runs on the person's own words
+    /// that go in; Claude's words are the LAST word and are used as written. Evidence is quoted
+    /// from the swept items, never from Claude.
     pub fn build(input: &Input) -> Report {
         let mut removals: Vec<(String, Removed)> = Vec::new();
         let mut clean = |text: &str, source: &str| -> String {
@@ -143,9 +145,16 @@ impl Report {
             out
         };
         let d = input.drafted;
-        let title = clean(&bounded(d.map(|d| d.title.as_str()).filter(|t| !t.is_empty()).unwrap_or(&first_sentence_title(input.description)), TITLE_MAX_CHARS), "title");
-        let what = d.map(|d| d.what_happened.clone()).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| input.description.trim().to_string());
-        let mut what_happened = clean(&what, "your description");
+        let title = match d.map(|d| d.title.as_str()).filter(|t| !t.is_empty()) {
+            Some(t) => bounded(t, TITLE_MAX_CHARS),
+            None => clean(&bounded(&first_sentence_title(input.description), TITLE_MAX_CHARS), "title"),
+        };
+        let what = d.map(|d| d.what_happened.clone()).filter(|t| !t.trim().is_empty());
+        let mut what_happened = match &what {
+            Some(w) => w.clone(),
+            None => clean(input.description.trim(), "your description"),
+        };
+        let what = what.unwrap_or_else(|| input.description.trim().to_string());
         if d.is_some() && !what.contains(input.description.trim()) {
             // The person's own words stay in the report, beside Claude's summary of them.
             let own = clean(input.description.trim(), "your description");
@@ -155,10 +164,13 @@ impl Report {
         // the person expected, and what they were doing just before (the steps).
         let answered = |q: &str| input.answers.iter().find(|(question, _)| question == q).and_then(|(_, a)| a.as_deref()).map(str::trim).filter(|a| !a.is_empty());
         let expected = match d {
-            Some(d) => clean(&d.expected, "your answers"),
+            Some(d) => d.expected.clone(),
             None => clean(answered(WITHOUT_AI_QUESTIONS[1]).unwrap_or(""), "your answers"),
         };
-        let when = clean(if d.is_some_and(|d| !d.when.is_empty()) { &d.unwrap().when } else { input.when }, "your answers");
+        let when = match d.filter(|d| !d.when.is_empty()) {
+            Some(d) => d.when.clone(),
+            None => clean(input.when, "your answers"),
+        };
         // Without Claude's draft, the answers the person gave to Claude's own questions stay in the
         // report (the built-in questions above have their own sections, the time its own).
         if d.is_none() {
@@ -174,7 +186,7 @@ impl Report {
             }
         }
         let steps: Vec<String> = match d {
-            Some(d) => d.steps.iter().map(|s| clean(s, "your answers")).collect(),
+            Some(d) => d.steps.clone(),
             None => answered(WITHOUT_AI_QUESTIONS[2]).map(|a| vec![format!("Just before it happened: {}", clean(a, "your answers"))]).unwrap_or_default(),
         };
 
@@ -206,7 +218,7 @@ impl Report {
                 .map(|c| {
                     let sources: Vec<String> = c.evidence.iter().filter_map(|id| input.evidence.iter().find(|i| &i.id == id)).map(|i| i.source.to_lowercase()).collect();
                     let basis = if sources.is_empty() { " (a guess; no evidence names it)".to_string() } else { format!(" (from the {})", sources.join(" and the ")) };
-                    format!("{}{basis}", clean(&c.text, "Claude's draft"))
+                    format!("{}{basis}", c.text)
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n"),
@@ -223,7 +235,7 @@ impl Report {
         missing.push(RUNTIME_LOG_GAP.into());
         if let Some(d) = d {
             for m in &d.missing {
-                missing.push(clean(m, "Claude's draft"));
+                missing.push(m.clone());
             }
         }
         for (question, answer) in input.answers {
@@ -256,8 +268,8 @@ impl Report {
         report
     }
 
-    /// Replace one section with the person's edit, scrubbed like everything else, and fit the
-    /// size budget again. `versions` and the excerpts are evidence: they can be removed or
+    /// Replace one section with the person's edit, exactly as they wrote it (PRD V7 C4: what is
+    /// sent is the text the person reviewed), and fit the size budget again. `versions` and the excerpts are evidence: they can be removed or
     /// shortened, never rewritten into something the evidence did not say.
     /// **WHAT HAPPENED, AS IT IS SENT**: the description, then "Expected: ..." and the numbered
     /// steps when there are any. The review shows this one text, so everything in it can be
@@ -304,11 +316,8 @@ impl Report {
         self.what_happened = rest.trim_end().to_string();
     }
 
-    pub fn edit(&mut self, section: &str, text: &str, ctx: &Context) -> Result<(), String> {
-        let (clean, removed) = scrub::scrub(text, ctx);
-        if removed.total() > 0 {
-            self.removals.push(("your edit".into(), removed));
-        }
+    pub fn edit(&mut self, section: &str, text: &str) -> Result<(), String> {
+        let clean = text.to_string();
         match section {
             "title" => self.title = bounded(clean.trim(), TITLE_MAX_CHARS),
             "what_happened" => self.set_what_happened(&clean),
@@ -399,12 +408,6 @@ impl Report {
     pub fn exact(&self) -> String {
         let (t, b) = self.render();
         format!("{t}\n\n{b}")
-    }
-
-    /// What the last mechanical check finds in the rendered text ([`scrub::check_outgoing`]).
-    pub fn problems(&self) -> Vec<scrub::Problem> {
-        let (t, b) = self.render();
-        scrub::check_outgoing(&t, &b, None)
     }
 
     /// The review's note on what was removed automatically: "1 file path (startup log), 1
@@ -552,12 +555,8 @@ mod tests {
             relay: "https://report.richos.ceo",
             ctx: &ctx,
         });
-        let (title, body) = r.render();
+        let (title, _) = r.render();
         assert!(title.contains("[name removed]") && !title.contains("SecretCo"), "{title}");
-        let problems = scrub::check_outgoing(&title, &body, None);
-        assert!(problems.is_empty(), "{problems:?}");
-        // The body's markup rule still holds: an unescaped bracket in the body is refused.
-        assert!(!scrub::check_outgoing("t", "a [link](x)", None).is_empty());
     }
     use crate::collect::Category;
     use crate::evidence::Item;
@@ -604,7 +603,6 @@ mod tests {
         assert!(body.contains(RUNTIME_LOG_GAP));
         assert!(!body.contains("Jane") && !body.contains("/Users/jdoe"), "the description is scrubbed:\n{body}");
         assert!(body.contains("\\[path removed\\]") && body.contains("\\[name removed\\]"));
-        assert_eq!(r.problems(), vec![], "a built report passes the last check");
         assert!(r.removal_note().unwrap().starts_with("Removed automatically before this review: 1 file path (your description), 1 name (your description)"), "{:?}", r.removal_note());
     }
 
@@ -620,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn claudes_draft_is_scrubbed_and_causes_name_their_evidence() {
+    fn claudes_draft_is_used_as_written_and_causes_name_their_evidence() {
         let ev = [item(Category::StartupCrash, "Crash record", "Exception: EXC_CRASH SIGABRT")];
         let d = Drafted {
             title: "RichOS quits at launch for Jane Doe".into(),
@@ -630,22 +628,34 @@ mod tests {
             ..Default::default()
         };
         let r = sample(&ev, Some(&d));
-        assert_eq!(r.title, "RichOS quits at launch for [name removed]");
+        assert_eq!(r.title, "RichOS quits at launch for Jane Doe", "Claude has the last word (PRD V7 C4)");
         assert!(r.causes.contains("An abort during startup (from the crash record)") && r.causes.contains("A damaged install (a guess; no evidence names it)"), "{}", r.causes);
         assert!(r.what_happened.contains("In the person's words:"), "the person's own words are kept");
     }
 
+    /// PRD V7 C4 (the CEO's order, as Bust a bug does it): the sweep runs on what goes TO
+    /// Claude; Claude's draft is the last word on what is private, and the text the person
+    /// reviews, their own edits included, is sent exactly.
     #[test]
-    fn an_edit_is_scrubbed_and_a_removed_excerpt_is_not_sent() {
+    fn claudes_draft_and_the_persons_edit_are_sent_as_reviewed() {
+        let drafted = Drafted { title: "RichOS closes".into(), what_happened: "The window closes; the person had written to help@example.com about it".into(), ..Default::default() };
+        let mut r = sample(&[], Some(&drafted));
+        let body = r.render().1;
+        assert!(body.contains("help@") && body.contains("example.com about it"), "Claude kept it, so it goes as Claude wrote it: {body}");
+        r.edit("what_happened", "It broke. Mail me at jane@example.com").unwrap();
+        let body = r.render().1;
+        assert!(body.contains("jane@") && body.contains("example.com"), "the person's edit is sent as they reviewed it: {body}");
+    }
+
+    #[test]
+    fn a_removed_excerpt_is_not_sent() {
         let ev = [item(Category::StartupCrash, "Launch record", "No start recorded")];
         let mut r = sample(&ev, None);
-        r.edit("what_happened", "It broke. Mail me at jane@example.com", &Context::default()).unwrap();
-        assert!(!r.render().1.contains("jane@"));
         r.set_excerpt_removed(&ev[0].id, true);
         assert!(!r.render().1.contains("No start recorded"));
         r.set_excerpt_removed(&ev[0].id, false);
         assert!(r.render().1.contains("No start recorded"));
-        assert!(r.edit("nonsense", "x", &Context::default()).is_err());
+        assert!(r.edit("nonsense", "x").is_err());
     }
 
     #[test]
@@ -668,7 +678,6 @@ mod tests {
         r.screenshots = vec!["shot-1".into(), "shot-2".into()];
         let (_, body) = r.render();
         assert!(body.ends_with("Screenshots: 2, shared privately with RichOS support (staff sign-in required)\n1. https://report.richos.ceo/v1/reports/RD-7K3M-Q9VX/attachments/1\n2. https://report.richos.ceo/v1/reports/RD-7K3M-Q9VX/attachments/2\nSent with RichDoctor 1.0 · Report ID RD-7K3M-Q9VX"), "{body}");
-        assert_eq!(r.problems(), vec![], "the links pass the last check");
         assert_eq!(ending("https://report.richos.ceo", "RD-7K3M-Q9VX", 0), footer("RD-7K3M-Q9VX"));
     }
 

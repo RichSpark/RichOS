@@ -1,10 +1,9 @@
 //! **PRIVATE DETAILS OUT, BEFORE ANYTHING SEES THE TEXT** (PRD §6), and the last mechanical
 //! check on the exact outgoing bytes.
 //!
-//! Data passes four boundaries (PRD §6): local read-only extraction, then THIS deterministic
-//! filtering and scrubbing before any evidence reaches Claude, then the person's review with
-//! another mechanical check after every AI or human edit ([`check_outgoing`]), then the
-//! approved, immutable payload.
+//! PRD V7 C4, the CEO's order, as Bust a bug does it: THIS sweep runs FIRST, before anything
+//! reaches Claude; the person's Claude Code makes the contextual call LAST; then the person
+//! reviews, and what they approved is sent exactly. Nothing scans the words after Claude.
 //!
 //! [`scrub`] replaces, in this order: PEM private-key blocks; the values of `Authorization`,
 //! `Cookie`, `Set-Cookie`, `X-Api-Key` and `Bearer`; secret-shaped tokens (Anthropic, OpenAI,
@@ -469,7 +468,7 @@ fn split_keep(text: &str) -> Vec<&str> {
 }
 
 // ---------------------------------------------------------------------------------------
-// THE LAST MECHANICAL CHECK, ON THE EXACT OUTGOING BYTES
+// THE REPORT'S SIZE LIMITS
 // ---------------------------------------------------------------------------------------
 
 /// The final title cap (PRD §5).
@@ -477,88 +476,12 @@ pub const TITLE_MAX_CHARS: usize = 200;
 /// The final body cap, footer and escaping included (PRD §5).
 pub const BODY_MAX_BYTES: usize = 60_000;
 
-/// One thing the last check found, with where it is.
+/// Why an approval was refused, with where.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
     /// `"title"` or `"line N"` (1-based), as the relay names it.
     pub item: String,
     pub detail: String,
-}
-
-/// **THE LAST CHECK** (PRD §6 boundary 3), run after every AI or human edit and again on the
-/// frozen payload at Send. It mirrors the reporting relay's own content rules (agreed with the
-/// relay owner, `cc/zach-opus-reportrelay1` `richos/mobile/service/RICHDOCTOR-RELAY.md`), so a report this
-/// passes is one the relay accepts on content: no secret-shaped text, no email address but
-/// support's, no `/Users/<name>/` path, no unescaped `<`, `[` or `]`, every `@` followed by a
-/// zero-width space, no control characters, the size limits. It never changes the text; the
-/// person sees what it found and removes it.
-pub fn check_outgoing(title: &str, body: &str, receipt_secret: Option<&str>) -> Vec<Problem> {
-    let mut out = Vec::new();
-    if title.chars().count() > TITLE_MAX_CHARS {
-        out.push(Problem { item: "title".into(), detail: format!("The title is longer than {TITLE_MAX_CHARS} characters.") });
-    }
-    if title.trim().is_empty() {
-        out.push(Problem { item: "title".into(), detail: "The report needs a title.".into() });
-    }
-    if title.chars().any(char::is_control) {
-        out.push(Problem { item: "title".into(), detail: "The title contains a control character.".into() });
-    }
-    if body.len() > BODY_MAX_BYTES {
-        out.push(Problem { item: "body".into(), detail: "The report is longer than the size limit.".into() });
-    }
-    for (place, text) in std::iter::once(("title".to_string(), title)).chain(body.split('\n').enumerate().map(|(i, l)| (format!("line {}", i + 1), l))) {
-        let unbroken = text.replace('\u{200B}', "");
-        let mut found = |detail: &str| out.push(Problem { item: place.clone(), detail: detail.into() });
-        if place != "title" && text.chars().any(|c| c.is_control() && c != '\t') {
-            found("This line contains a control character.");
-        }
-        if let Some(secret) = receipt_secret {
-            if !secret.is_empty() && text.contains(secret) {
-                found("This line contains the report's private receipt.");
-            }
-        }
-        for word in unbroken.split(|c: char| c.is_whitespace() || "()\"'`,;<>".contains(c)) {
-            let core = word.trim_matches(|c: char| ".:!?\\[]{}*_~".contains(c));
-            if secret_shaped(core) {
-                found("This line looks like it contains a password or access key.");
-            }
-            if let Some((s, e)) = is_email(core) {
-                if !core[s..e].eq_ignore_ascii_case(SUPPORT_ADDRESS) {
-                    found("This line contains an email address.");
-                }
-            }
-            if is_personal_path(core) && core.contains("/Users/") {
-                found("This line contains a file path that names a person's folder.");
-            }
-        }
-        let lower = unbroken.to_ascii_lowercase();
-        let header_value = HEADER_KEYS.iter().any(|k| lower.find(k).is_some_and(|i| !lower[i + k.len()..].trim_start().starts_with("\\[credential")));
-        let bearer = lower.contains("bearer ") && !lower.contains("bearer \\[credential");
-        if header_value || bearer {
-            found("This line looks like it contains a login credential.");
-        }
-        if text.contains("-----BEGIN") && text.contains("PRIVATE KEY") {
-            found("This line contains a private key.");
-        }
-        let chars: Vec<char> = text.chars().collect();
-        // An issue title is plain text on GitHub: a bracket there is neither a link nor
-        // formatting, so a privacy placeholder ("[name removed]") is fine in it. The body's
-        // lines keep the rule.
-        for (i, &c) in chars.iter().enumerate().filter(|_| place != "title") {
-            if matches!(c, '<' | '[' | ']') {
-                let slashes = chars[..i].iter().rev().take_while(|&&p| p == '\\').count();
-                if slashes % 2 == 0 {
-                    found("This line has a mark that GitHub would read as a link or as formatting.");
-                    break;
-                }
-            }
-        }
-        if chars.iter().enumerate().any(|(i, &c)| c == '@' && chars.get(i + 1) != Some(&'\u{200B}')) {
-            found("This line would mention someone on GitHub.");
-        }
-    }
-    out.dedup();
-    out
 }
 
 #[cfg(test)]
@@ -684,22 +607,5 @@ mod tests {
         let raw = "Jane at /Users/jdoe/x token: abc";
         assert_eq!(scrub(raw, &ctx()), scrub(raw, &ctx()));
         assert!(!scrub(raw, &ctx()).0.contains("abc"));
-    }
-
-    #[test]
-    fn the_last_check_passes_scrubbed_escaped_text_and_names_every_leak_by_line() {
-        let (clean, _) = scrub("failure at /Users/jdoe/x for jane@example.com", &ctx());
-        let body = format!("{}\n\nSent with RichDoctor 1.0 · Report ID RD-7K3M-Q9VX", richos_core::bug_report::escaped_lines(&clean));
-        assert_eq!(check_outgoing("RichOS closes at start", &body, None), vec![]);
-        let leaks = format!("line one\nmail me at jane@example.com\n/Users/jdoe/Desktop\n[a link](https://x)\nhi @octocat\n{}\nAuthorization: Basic Zm9v", fake("github"));
-        let found = check_outgoing("ok", &leaks, None);
-        let lines: Vec<&str> = found.iter().map(|p| p.item.as_str()).collect();
-        for want in ["line 2", "line 3", "line 4", "line 5", "line 6", "line 7"] {
-            assert!(lines.contains(&want), "{want} in {found:?}");
-        }
-        assert!(!lines.contains(&"line 1"));
-        assert!(!check_outgoing("ok", "my receipt is SeCrEt-123", Some("SeCrEt-123")).is_empty());
-        assert!(!check_outgoing(&"x".repeat(201), "", None).is_empty());
-        assert!(!check_outgoing("ok", &"x".repeat(BODY_MAX_BYTES + 1), None).is_empty());
     }
 }

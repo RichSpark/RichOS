@@ -550,14 +550,10 @@
   function paintReview(v) {
     const notes = $("rv-notes"); notes.innerHTML = "";
     v.notes.forEach(function (t) { notes.appendChild(note(t)); });
-    v.problems.forEach(function (p) {
-      notes.appendChild(note("This needs a change before it can be sent: " + p.detail + (p.line ? " The line: “" + p.line + "”" : ""), G.warn));
-    });
     $("rv-banner").innerHTML = "";
     $("rv-send").hidden = false;
     $("rv-save-edit").hidden = true;
     $("rv-back").hidden = v.mode !== "draft"; $("rv-save").hidden = v.mode !== "draft";
-    $("rv-send").disabled = v.problems.length > 0;
     $("rv-exact").hidden = true; $("rv-sections").hidden = false; $("rv-title").hidden = false;
     $("rv-exact-toggle").setAttribute("aria-pressed", "false"); $("rv-exact-toggle").textContent = "Show as it will be sent";
     $("rv-title").textContent = v.title;

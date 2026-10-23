@@ -268,10 +268,6 @@ async function run() {
       await page.click("#rv-exact-toggle");
       check(`${theme} review: the exact text is the same bytes`, (await T("#rv-exact-text")) === REVIEW.exact && (await page.getAttribute("#rv-exact-toggle", "aria-pressed")) === "true");
       await page.click("#rv-exact-toggle");
-      await page.evaluate((v) => { window.__TAURI__.core.invoke = ((orig) => function (c, a) { return c === "review" ? Promise.resolve(v) : orig(c, a); })(window.__TAURI__.core.invoke); }, Object.assign({}, REVIEW, { problems: [{ item: "line 9", detail: "This line contains an email address.", line: "mail me at someone@example.com" }] }));
-      await emit({ t: "review" });
-      await settle();
-      check(`${theme} review: a privacy problem blocks Send and names the line`, (await page.locator("#rv-send").isDisabled()) && (await T("#rv-notes")).includes("mail me at someone@example.com"));
       // Round 40 §4: the review with its screenshots and both destinations
       await page.evaluate((v) => { window.__TAURI__.core.invoke = ((orig) => function (c, a) { if (c === "review") return Promise.resolve(v.review); if (c === "images") return Promise.resolve(v.images); return orig(c, a); })(window.__TAURI__.core.invoke); }, { review: Object.assign({}, REVIEW, { shots: [SHOT(1), SHOT(2)] }), images: [SHOT(1), SHOT(2)] });
       await emit({ t: "review" });

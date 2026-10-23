@@ -752,13 +752,12 @@ impl Engine {
     }
 
     pub fn edit(&self, section: &str, text: &str) -> Result<Value, String> {
-        let c = ctx(&self.env);
         let mut inner = self.inner.lock().unwrap();
         let d = inner.draft.as_mut().ok_or("no report")?;
         if d.delivery.is_some() {
             return Err(FINAL.into());
         }
-        d.report.as_mut().ok_or("no report")?.edit(section, text, &c)?;
+        d.report.as_mut().ok_or("no report")?.edit(section, text)?;
         self.save(&mut inner);
         let d = inner.draft.as_ref().unwrap();
         Ok(review_view(d, d.report.as_ref().unwrap()))
@@ -1289,8 +1288,8 @@ pub fn review_view(d: &Draft, r: &Report) -> Value {
     let mode = if d.delivery.is_some() { "approved" } else { "draft" };
     let mut notes = Vec::new();
     match (r.provenance, d.ai_failure) {
-        (Provenance::AiFailed, Some(f)) => notes.push(format!("Claude Code stopped part way ({}). This report was prepared from your answers and what was collected; unanswered questions are listed under Missing information.", f.message().trim_end_matches('.').to_lowercase().replacen("richdoctor", "RichDoctor", 1).replacen("claude code", "Claude Code", 1))),
-        (Provenance::AiFailed, None) | (Provenance::WithoutAi, _) => notes.push("Prepared without AI. Questions Claude would have asked are listed under Missing information; add anything you know.".into()),
+        (Provenance::AiFailed, Some(f)) => notes.push(format!("Claude Code stopped part way ({}). This report was prepared from your answers and what was collected; unanswered questions are listed under Missing information. Claude did not check it for private details: review it by hand before you send it.", f.message().trim_end_matches('.').to_lowercase().replacen("richdoctor", "RichDoctor", 1).replacen("claude code", "Claude Code", 1))),
+        (Provenance::AiFailed, None) | (Provenance::WithoutAi, _) => notes.push("Prepared without AI, so Claude did not check it for private details: you review it by hand. Remove anything private before you send it. Questions Claude would have asked are listed under Missing information; add anything you know.".into()),
         _ => {}
     }
     if let Some(n) = r.removal_note() {
@@ -1298,13 +1297,6 @@ pub fn review_view(d: &Draft, r: &Report) -> Value {
     }
     notes.extend(r.shortened.iter().cloned());
     let (title, body) = r.render();
-    let problems: Vec<Value> = scrub::check_outgoing(&title, &body, None)
-        .iter()
-        .map(|p| {
-            let line = p.item.strip_prefix("line ").and_then(|n| n.parse::<usize>().ok()).and_then(|n| body.split('\n').nth(n - 1)).map(|l| l.replace('\u{200B}', "").replace('\\', ""));
-            json!({"item": p.item, "detail": p.detail, "line": line})
-        })
-        .collect();
     let old_id = d.delivery.as_ref().map(|x| x.approved.report_id.clone());
     json!({
         "mode": mode,
@@ -1325,7 +1317,6 @@ pub fn review_view(d: &Draft, r: &Report) -> Value {
         "footer": report::footer(&r.report_id),
         "notes": notes,
         "exact": format!("{title}\n\n{body}"),
-        "problems": problems,
     })
 }
 
@@ -2074,6 +2065,20 @@ mod tests {
         assert_eq!(sent, exact, "the text the person reviewed, byte for byte");
         assert_eq!(s.stored.iter().map(|x| x.1.clone()).collect::<Vec<_>>(), shots, "the approved screenshots' bytes, in order");
         drop(s);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// PRD V7 C4: without AI, the review says plainly that the person checks it by hand.
+    #[test]
+    fn the_review_without_ai_says_it_was_reviewed_by_hand() {
+        let root = scratch("by-hand");
+        let (e, _) = engine_at(&root, None);
+        let mut d = reviewed_draft("");
+        d.report.as_mut().unwrap().provenance = Provenance::WithoutAi;
+        e.env().store.save(&mut d, 1).unwrap();
+        e.open(&d.id).unwrap();
+        let notes = e.review()["notes"].to_string();
+        assert!(notes.contains("Claude did not check"), "{notes}");
         std::fs::remove_dir_all(root).ok();
     }
 
