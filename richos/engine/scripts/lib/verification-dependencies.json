@@ -8430,7 +8430,7 @@
     },
     "mega-lander/tests/workspace-stopped-ending.test.sh": {
       "source": "mega-lander/tests/workspace-stopped-ending.test.sh",
-      "sha256": "6b30ffee5cd67f9293007e0651d8345292ed202c7014d43b85ee22268d4fcc69",
+      "sha256": "2c0cb046762e56410eff73c9c47763350cdb1b5603baf739886e489356c49332",
       "evidence": "Full suite copies the real engine config into its private adopted repo without replacing policy values. Literal Agent/lifecycle messages and metadata simulate native states; only captured sleep processes are started. The finite assertion evals use fixed shell expressions and fixture paths, never config-derived commands. All invoked guards, creator and integration/discard/pause CLI paths are bound.",
       "keys": [],
       "edges": [
