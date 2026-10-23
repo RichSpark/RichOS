@@ -63,9 +63,9 @@ fn run(store: Store) {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            boot, start, answer, cancel, retry, prepare, review, edit, excerpt, save_later, send_report, try_again, check_status, delivery, saved,
+            boot, start, answer, cancel, retry, prepare, review, edit, excerpt, save_later, send_report, try_again, delivery, saved,
             open_saved, resume_pending, delete_saved, set_login, mail_available, open_mail, copy_report, copy_address, save_report_file, open_issue,
-            use_image, remove_image, images, close_help, inspect_image, prepare_image, replace_image, cancel_upload, email_plan, note_added
+            use_image, remove_image, images, close_help, inspect_image, prepare_image, replace_image, email_plan, note_added
         ])
         .setup(move |app| {
             app.set_activation_policy(ActivationPolicy::Accessory);
@@ -123,7 +123,7 @@ fn run(store: Store) {
                 store.save_settings(&settings).ok();
             }
             engine.expire();
-            engine.check_in_flight();
+            engine.interrupted_sends_not_sent();
             if !quiet {
                 open_window(&handle, None);
             }
@@ -313,11 +313,6 @@ fn try_again(engine: State<Engine>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn check_status(engine: State<Engine>) -> Result<(), String> {
-    engine.check_status()
-}
-
-#[tauri::command]
 fn delivery(engine: State<Engine>) -> Value {
     engine.delivery()
 }
@@ -443,12 +438,6 @@ fn prepare_image(engine: State<Engine>, image_base64: String) -> Result<Value, S
 #[tauri::command]
 fn replace_image(engine: State<Engine>, index: usize, image_base64: String, covers: u32, reduced: Option<bool>) -> Result<Value, String> {
     engine.replace_image(index, &image_base64, covers, reduced.unwrap_or(false))
-}
-
-/// Cancel during Sending screenshots.
-#[tauri::command]
-fn cancel_upload(engine: State<Engine>) -> bool {
-    engine.cancel_upload()
 }
 
 /// What Email support would carry, for its sheet.

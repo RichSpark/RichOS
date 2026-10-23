@@ -1,32 +1,20 @@
-//! **DELIVERY: ONE APPROVED REPORT, ITS SCREENSHOTS, ONE ID, AN HONEST STATE** (PRD version 6
-//! §6 to §8; round 39 §5).
+//! **SENDING: ONE APPROVED REPORT, ONE REQUEST, THE ISSUE LINK OR "NOT SENT"** (the CEO's
+//! §140, 2026-10-22: "dead-simple as possible, avoid any over-engineering and ensure that the
+//! core functionality always works").
 //!
-//! The wire contract is the reporting relay's, agreed on 2026-10-22 with its owner
-//! (`zach-opus-reportrelay1`). Its authority is `richos/mobile/service/RICHDOCTOR-RELAY.md` on
-//! `cc/zach-opus-reportrelay1`, protocol 2: one Send report is
-//!
-//!   1. **register** (`POST /v1/reports`, schema `richdoctor-report/2`): the approved text, the
-//!      screenshot manifest, the report ID and the receipt secret. It never creates an issue;
-//!   2. **upload** each approved image (`PUT /v1/reports/{id}/uploads/{n}`, the secret in the
-//!      `X-Receipt-Secret` header, never the URL);
-//!   3. **complete** (`POST /v1/reports/{id}/complete`), which creates the issue only when every
-//!      approved image is stored, and never creates a text-only issue for a report with images.
-//!
-//! Every reply carries `state`, `stage`, `stored` and `missing`. The rules this file enforces:
-//!
-//!   - The app generates the report ID and an unguessable receipt secret and saves them with the
-//!     approved bytes BEFORE the first request ([`approve`]; the caller saves before
-//!     [`attempt`]). The content hash covers the exact text and the manifest.
-//!   - Only `delivered` with an issue link on the configured repository AND every approved image
-//!     confirmed is "Report submitted". An issue with fewer confirmed images is "Report created;
-//!     checking screenshots" with its real link; nothing creates another issue.
-//!   - A lost or unclear answer is checked by status, for at most two minutes from the attempt,
-//!     then "Delivery could not be confirmed". It never creates twice.
-//!   - Try again re-sends the same ID, secret, text and images, after a definite "not sent" only.
-//!   - A changed revision first RETIRES the earlier ID at the relay ([`retire`]); only a
-//!     `retired` answer lets the revision be sent.
-//!   - The receipt secret is never shown, logged or put in the report.
-use crate::image_profile::{canonical, Entry};
+//!   - **Approved is final.** [`approve`] freezes the exact title, body and screenshot manifest
+//!     under a report ID; the engine saves it before anything is sent and refuses every edit of an
+//!     approved report afterwards (changing it means a new report).
+//!   - **Send runs the live relay's calls straight through** ([`send`]; the relay is
+//!     `richos/mobile/service/RICHDOCTOR-RELAY.md`, protocol 2): register the approved text and
+//!     manifest, upload each approved screenshot, complete. The relay stores the screenshots
+//!     privately and files one GitHub issue whose numbered staff-only links are the body's last
+//!     lines ([`crate::report::ending`]). The issue link is "Report submitted"; anything else at
+//!     any step is "Not sent yet", with the relay's reason when it gives one.
+//!   - **Send again** starts over under a fresh report ID (the engine approves the same report
+//!     again with it). A rare duplicate issue is acceptable; the team closes it. Nothing about a
+//!     send is kept for later: its one-time receipt lives only for the calls of that send.
+use crate::image_profile::Entry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -41,15 +29,8 @@ pub const REPOSITORY: &str = "WebDevBooster/richos";
 pub const RELAY_ENV: &str = "RICHDOCTOR_REPORT_RELAY";
 pub const REPOSITORY_ENV: &str = "RICHDOCTOR_REPORT_REPOSITORY";
 
-/// A register, status, complete or retire request's local bound (PRD §8).
-pub const REQUEST_BOUND: Duration = Duration::from_secs(30);
-/// An image upload's no-progress bound and absolute cap (PRD §8).
-pub const UPLOAD_STALL: Duration = Duration::from_secs(60);
-pub const UPLOAD_CAP: Duration = Duration::from_secs(300);
-/// Automatic reconciliation's bound per attempt (PRD §7).
-pub const RECONCILE_BOUND_MS: u64 = 120_000;
-/// How often to ask while pending, when the relay does not say.
-pub const CHECK_EVERY_MS: u64 = 5_000;
+/// One call's bound: a screenshot upload is up to 5 MiB (PRD §8's upload cap).
+pub const SEND_BOUND: Duration = Duration::from_secs(300);
 
 /// Where reports go.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,77 +78,56 @@ pub fn is_report_id(s: &str) -> bool {
     b.len() == 12 && s.starts_with("RD-") && b[7] == b'-' && b[3..7].iter().chain(&b[8..12]).all(|c| ID_ALPHABET.contains(c))
 }
 
-/// The receipt secret: 32 random bytes, base64url, 43 characters.
-pub fn new_receipt_secret() -> std::io::Result<String> {
-    Ok(crate::util::base64url(&crate::util::random_bytes(32)?))
-}
-
 /// The staff-only link the issue carries for screenshot `n` (the relay's read route, behind
 /// Cloudflare Access): `<relay>/v1/reports/<id>/attachments/<n>`.
 pub fn attachment_link(relay: &str, report_id: &str, n: u32) -> String {
     format!("{}/v1/reports/{report_id}/attachments/{n}", relay.trim_end_matches('/'))
 }
 
-/// **THE IMMUTABLE APPROVED PAYLOAD.** Made once, at Send report, from the exact text and
-/// screenshot set the person approved, and saved before any request is made.
+/// **THE APPROVED REPORT**, final: the exact title, body and screenshot manifest the person
+/// approved, under its report ID.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Approved {
     pub report_id: String,
-    /// Private. Never shown, logged or put in the report.
-    pub receipt_secret: String,
     pub title: String,
     pub body: String,
-    /// The approved screenshots, in order (their bytes are the draft's `shots/<n>.<ext>`).
+    /// The approved screenshots, in order (their bytes are the draft's `shots/<id>`).
     #[serde(default)]
     pub manifest: Vec<Entry>,
-    /// hex sha256 of `title + "\n\n" + body + "\n\n" + canonical(manifest)`.
-    pub content_sha256: String,
     pub approved_at: u64,
     pub installation_id: String,
 }
 
-pub fn content_sha256(title: &str, body: &str, manifest: &[Entry]) -> String {
-    crate::util::sha256_hex(format!("{title}\n\n{body}\n\n{}", canonical(manifest)).as_bytes())
-}
-
-/// Freeze the approved bytes and images under a new ID and secret. Refused when the last
-/// mechanical check finds anything ([`crate::scrub::check_outgoing`]), when the manifest breaks
-/// the limits, or when the body does not end with the screenshot lines and the footer.
+/// Freeze the approved text and screenshot manifest under `report_id`. Refused when the text
+/// breaks what the relay needs to publish at all ([`crate::scrub::check_outgoing`]), when the
+/// manifest breaks the limits, or when the body does not end with the screenshot lines and the
+/// footer.
 pub fn approve(report_id: &str, title: &str, body: &str, manifest: Vec<Entry>, relay: &str, now: u64, installation_id: &str) -> Result<Approved, Vec<crate::scrub::Problem>> {
     let problem = |d: String| vec![crate::scrub::Problem { item: "body".into(), detail: d }];
     if !crate::util::is_uuid(installation_id) {
         return Err(problem("RichDoctor could not make its installation ID, so the report was not sent.".into()));
     }
-    let receipt_secret = new_receipt_secret().map_err(|e| problem(format!("RichDoctor could not make a receipt: {e}")))?;
-    let problems = crate::scrub::check_outgoing(title, body, Some(&receipt_secret));
+    let problems = crate::scrub::check_outgoing(title, body, None);
     if !problems.is_empty() {
         return Err(problems);
     }
     crate::image_profile::check_set(&manifest).map_err(|e| problem(format!("The screenshots are over the limit: {e}.")))?;
-    let ending = crate::report::ending(relay, report_id, manifest.len());
-    if !body.ends_with(&ending) {
+    if !body.ends_with(&crate::report::ending(relay, report_id, manifest.len())) {
         return Err(problem("The report's screenshot lines or its report ID footer are missing.".into()));
     }
-    Ok(Approved {
-        report_id: report_id.into(),
-        receipt_secret,
-        title: title.into(),
-        body: body.into(),
-        content_sha256: content_sha256(title, body, &manifest),
-        manifest,
-        approved_at: now,
-        installation_id: installation_id.into(),
-    })
+    Ok(Approved { report_id: report_id.into(), title: title.into(), body: body.into(), manifest, approved_at: now, installation_id: installation_id.into() })
 }
 
 impl Approved {
-    /// The register request's body (the contract's field names).
-    pub fn register_body(&self) -> Value {
+    /// The registration's body (the relay's field names): the approved text and manifest, the
+    /// fingerprint over them, and this send's one-time receipt.
+    pub fn register_body(&self, receipt_secret: &str) -> Value {
+        let content = crate::util::sha256_hex(format!("{}\n\n{}\n\n{}", self.title, self.body, crate::image_profile::canonical(&self.manifest)).as_bytes());
         json!({
             "schema": "richdoctor-report/2",
             "report_id": self.report_id,
-            "receipt_secret": self.receipt_secret,
-            "content_sha256": self.content_sha256,
+            "receipt_secret": receipt_secret,
+            "content_sha256": content,
             "installation_id": self.installation_id,
             "app_version": crate::VERSION,
             "approved_at": self.approved_at,
@@ -176,120 +136,57 @@ impl Approved {
             "manifest": self.manifest,
         })
     }
-    pub fn secret_body(&self) -> Value {
-        json!({ "receipt_secret": self.receipt_secret })
-    }
 }
 
-/// Why a report was definitely not sent, in the words round 39 shows.
+/// Why a report was not sent, in plain words.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "cause", rename_all = "kebab-case")]
 pub enum NotSent {
     /// The Mac is confirmed offline.
     Offline,
-    /// The service asked to wait. `until` is when, when it said.
-    Busy { until: Option<u64> },
-    /// The connection failed and the cause is not known (nothing reached the service).
+    /// The connection failed before anything reached the service.
     Unreachable,
-    /// The service refused the content; the person must change it.
-    Rejected { reason: String, detail: String, item: Option<String> },
-    /// The service could not create it (GitHub refused, or the attempt stopped first).
-    Refused { until: Option<u64> },
-    /// The service is not taking reports right now (operator switch or daily cap).
-    Closed { until: Option<u64> },
-    /// The service has no record of the report, or never began creating it.
-    NotReceived,
-    /// A screenshot upload did not finish (it stalled, hit its cap or was canceled); the
-    /// approved images are kept and Try again resumes with the ones still missing.
-    UploadStopped { item: String, why: String },
-    /// This report ID was retired (a revision replaced it). It cannot be sent.
-    Retired,
-    /// The person canceled while the screenshots were being sent (round 40: Cancel during
-    /// Sending screenshots). Nothing public was created; Send report resumes it.
-    Canceled,
-    /// RichDoctor could not save, on this Mac, that it was about to ask for the issue to be
-    /// created, so it did not ask: the saved record must never say "no completion was sent"
-    /// after one was. Nothing was filed; Try again sends it once the folder can be written.
-    NotSaved,
+    /// No answer came back (a timeout, a connection lost on the way): it may or may not have
+    /// been filed.
+    NoAnswer,
+    /// The service answered without filing it, with its reason when it gave one.
+    Refused { detail: String, until: Option<u64> },
+    /// An approved screenshot could not be read on this Mac, so nothing was sent.
+    Screenshot { item: String },
 }
 
 impl NotSent {
-    /// The plain reason (round 39's "Not sent yet, by cause").
+    /// The plain reason ("Not sent yet").
     pub fn reason(&self) -> String {
-        let at = |until: &Option<u64>| until.map(crate::util::local_clock);
         match self {
-            NotSent::Offline => "Your Mac is not connected to the internet. Try again when you are online.".into(),
-            NotSent::Busy { until } => match at(until) {
-                Some(t) => format!("The reporting service is busy and asked RichDoctor to wait. You can try again after {t}."),
-                None => "The reporting service is busy and asked RichDoctor to wait. You can try again in a few minutes.".into(),
+            NotSent::Offline => "Your Mac is not connected to the internet. Send again when you are online.".into(),
+            NotSent::Unreachable => "RichDoctor could not reach the reporting service. Send again or email support.".into(),
+            NotSent::NoAnswer => "RichDoctor did not hear back from the reporting service, so it may not have been filed. Send again or email support.".into(),
+            NotSent::Refused { detail, until } => match until.map(crate::util::local_clock) {
+                Some(t) => format!("The reporting service did not file it: {} You can send again after {t}.", detail.trim()),
+                None => format!("The reporting service did not file it: {} Send again or email support.", detail.trim()),
             },
-            NotSent::Unreachable => "RichDoctor could not reach the reporting service. The connection failed; the cause is not known.".into(),
-            NotSent::Rejected { detail, .. } => format!("The reporting service did not accept the report: {}", detail.trim()),
-            NotSent::Refused { until } => match at(until) {
-                Some(t) => format!("The reporting service could not file the report this time. You can try again after {t}."),
-                None => "The reporting service could not file the report this time. You can try again.".into(),
-            },
-            NotSent::Closed { until } => match at(until) {
-                Some(t) => format!("The reporting service is not taking reports right now. You can try again after {t}."),
-                None => "The reporting service is not taking reports right now. You can try again later.".into(),
-            },
-            NotSent::NotReceived => "The reporting service did not receive the report. You can send it again.".into(),
-            NotSent::UploadStopped { item, why } => format!("{} did not finish uploading: {why} Nothing was filed. Your report and its screenshots are kept; Try again sends the rest.", capitalized(item)),
-            NotSent::Retired => "This copy of the report was replaced by a revised one, so it is not sent.".into(),
-            NotSent::Canceled => "You canceled sending. Nothing public was created; your report and its screenshots are kept on this Mac.".into(),
-            NotSent::NotSaved => "RichDoctor could not save its progress on this Mac, so it stopped before filing the report. Nothing was filed. Free some disk space, then choose Try again.".into(),
+            NotSent::Screenshot { item } => format!("{item} could not be read on this Mac, so nothing was sent. Email support, or start a new report."),
         }
     }
-    /// Whether the fix is in the content: round 39 offers Review report instead of Try again.
-    pub fn needs_review(&self) -> bool {
-        matches!(self, NotSent::Rejected { reason, .. } if ["content", "size", "schema", "attachment"].contains(&reason.as_str())) || matches!(self, NotSent::Retired)
-    }
 }
 
-fn capitalized(s: &str) -> String {
-    let mut c = s.chars();
-    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
-}
-
-/// **THE DISTINCT STATES** (PRD §8): sending, sending screenshots, checking, unconfirmed,
-/// created with screenshots being checked, submitted, not sent.
+/// Where an approved report is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum State {
-    /// Approved and saved; the first request is being made.
+    /// Approved and saved; the one request is out.
     Sending,
-    /// The screenshots are uploading, before any issue exists.
-    SendingScreenshots { done: u32, total: u32 },
-    /// The completion request (the one that may create the issue) is about to be made. The
-    /// caller saves this BEFORE the request: it is the durable proof of whether completion was
-    /// ever attempted (the V6 handover's clarification 1).
-    Creating,
-    /// The answer was unclear; status is being asked, within the two-minute bound.
-    Checking { since: u64 },
-    /// The bound passed without a definite answer. The issue may exist.
-    Unconfirmed { checked_at: u64 },
-    /// The issue exists (its link is real) and not every approved image is confirmed yet.
-    CreatedCheckingImages { issue_url: String, issue_number: u64, confirmed: u32, expected: u32, at: u64 },
-    /// A matching issue link was confirmed with every approved image.
+    /// The relay answered with the issue's link on the configured repository.
     Submitted { issue_url: String, issue_number: u64, at: u64 },
-    /// Definitely not created.
+    /// Not filed, as far as RichDoctor knows: Send again sends the same report.
     NotSent { why: NotSent, at: u64 },
 }
 
 impl State {
-    /// Try again with the same ID, secret, text and images: only after a definite "not sent"
-    /// whose fix is not in the content.
-    pub fn permits_try_again(&self) -> bool {
-        matches!(self, State::NotSent { why, .. } if !why.needs_review())
-    }
-    /// Whether a changed revision may be offered for sending: the earlier one is definitely not
-    /// created. The relay's retirement ([`retire`]) still has to say `retired` before it goes.
-    pub fn permits_revision(&self) -> bool {
+    /// Whether Send again is offered: anything but submitted (and not while sending).
+    pub fn may_send(&self) -> bool {
         matches!(self, State::NotSent { .. })
-    }
-    /// Whether delivery is unresolved: edits may be saved, nothing may be sent.
-    pub fn unresolved(&self) -> bool {
-        matches!(self, State::Sending | State::SendingScreenshots { .. } | State::Creating | State::Checking { .. } | State::Unconfirmed { .. } | State::CreatedCheckingImages { .. })
     }
 }
 
@@ -303,36 +200,12 @@ pub enum Transport {
     NotConnected { offline: bool },
     /// The request may have reached the service: a timeout or a connection lost mid-way.
     Unclear,
-    /// An upload made no progress for [`UPLOAD_STALL`], ran past [`UPLOAD_CAP`] or was canceled.
-    Stopped(String),
-}
-
-/// What the per-image list hears while screenshots are sent (round 40 §5: Waiting, a real
-/// percentage, Received, Received earlier).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "t", rename_all = "kebab-case")]
-pub enum Upload {
-    /// The relay's answer to registration: these images are still to send; every other one in
-    /// the manifest was received earlier under this report ID.
-    Plan { missing: Vec<String> },
-    /// One image's bytes sent so far, of its whole size.
-    Bytes { id: String, sent: u64, total: u64 },
-    /// The relay confirmed it stored this image.
-    Received { id: String },
 }
 
 /// The HTTPS seam: the app crate makes the requests, tests make them up.
 pub trait Relay {
     fn post(&self, url: &str, body: &Value) -> Transport;
-    /// Upload `bytes` with `headers`; `progress` hears the bytes sent so far.
-    fn put(&self, url: &str, headers: &[(String, String)], bytes: Vec<u8>, progress: &mut dyn FnMut(u64)) -> Transport;
-    /// Whether the person canceled sending. Checked before each upload and before the
-    /// completion request; a transport also ends an upload in progress when it is set.
-    fn canceled(&self) -> bool {
-        false
-    }
-    /// Hears the per-image progress.
-    fn heard(&self, _event: Upload) {}
+    fn put(&self, url: &str, headers: &[(String, String)], bytes: Vec<u8>) -> Transport;
 }
 
 /// An issue link is accepted only on the configured repository, as a plain issue number.
@@ -342,311 +215,82 @@ pub fn issue_link_ok(url: &str, number: Option<u64>, repository: &str) -> Option
     (n > 0 && number.is_none_or(|k| k == n)).then_some(n)
 }
 
-/// What one answer means.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Reading {
-    Done(State),
-    /// Creation is pending: ask again after this many milliseconds.
-    Pending(u64),
-    /// Registered and not created: these screenshots are still missing (empty: ready).
-    Receiving { missing: Vec<String> },
-    /// Not a definite answer: keep checking.
-    Unclear,
-}
-
-fn ids(v: &Value) -> Vec<String> {
-    v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string).or_else(|| x.as_u64().map(|n| n.to_string()))).collect()).unwrap_or_default()
-}
-
-/// Read one relay answer about `expect`. `now` stamps the state.
-///
-/// Every reply names its report (RICHDOCTOR-RELAY.md): one that names another report ID is
-/// never this report's answer, and a success must name this one. "Report submitted" needs the
-/// issue link AND the relay's confirmed and expected counts both equal to this approval's own
-/// screenshot count; anything less is "created, checking screenshots" against that count
-/// (Codex audit of 0881b5f8f #3).
-pub fn read(t: &Transport, expect: &Approved, repository: &str, now: u64) -> Reading {
-    let not_sent = |why: NotSent| Reading::Done(State::NotSent { why, at: now });
-    let until = |s: Option<u64>| s.map(|s| now + s * 1000);
-    match t {
-        Transport::NotConnected { offline: true } => not_sent(NotSent::Offline),
-        Transport::NotConnected { offline: false } => not_sent(NotSent::Unreachable),
-        Transport::Unclear | Transport::Stopped(_) => Reading::Unclear,
-        Transport::Answer { body: None, .. } => Reading::Unclear,
-        Transport::Answer { body: Some(b), retry_after, .. } => {
-            let secs = b["retry_after_seconds"].as_u64().or(*retry_after);
-            let named = b["report_id"].as_str();
-            if named.is_some_and(|id| id != expect.report_id) {
-                return Reading::Unclear;
-            }
-            let ours = named.is_some();
-            let k = expect.manifest.len() as u32;
-            let link = || b["issue_url"].as_str().and_then(|u| issue_link_ok(u, b["issue_number"].as_u64(), repository).map(|n| (u.to_string(), n)));
-            let count = |key: &str| b[key].as_u64().map(|n| n as u32);
-            let checking = |(u, n): (String, u64)| Reading::Done(State::CreatedCheckingImages { issue_url: u, issue_number: n, confirmed: count("images_confirmed").unwrap_or(0).min(k), expected: k, at: now });
-            match b["state"].as_str() {
-                Some("delivered") => match (ours, link(), count("images_confirmed"), count("images_expected")) {
-                    // This report, and every screenshot of this approval confirmed (or none approved).
-                    (true, Some((u, n)), Some(c), Some(e)) if c == k && e == k => Reading::Done(State::Submitted { issue_url: u, issue_number: n, at: now }),
-                    (true, Some(issue), ..) => checking(issue),
-                    // Not named as this report, or no link on the right repository: not a success.
-                    _ => Reading::Unclear,
-                },
-                Some("created_checking_images") => match (ours, link()) {
-                    (true, Some(issue)) => checking(issue),
-                    _ => Reading::Unclear,
-                },
-                Some("receiving") | Some("ready") => Reading::Receiving { missing: ids(&b["missing"]) },
-                Some("pending") | Some("creating") => Reading::Pending(b["check_after_seconds"].as_u64().map(|s| s * 1000).unwrap_or(CHECK_EVERY_MS)),
-                Some("unconfirmed") => Reading::Done(State::Unconfirmed { checked_at: now }),
-                Some("rejected") => {
-                    let reason = b["reason"].as_str().unwrap_or("content").to_string();
-                    if reason == "delivery" {
-                        not_sent(NotSent::Refused { until: until(secs) })
-                    } else {
-                        let detail = b["detail"].as_str().map(|d| d.chars().take(400).collect()).unwrap_or_else(|| "it found something it could not publish.".into());
-                        not_sent(NotSent::Rejected { reason, detail, item: b["item"].as_str().map(str::to_string) })
-                    }
-                }
-                Some("limited") => not_sent(NotSent::Busy { until: until(secs) }),
-                Some("closed") => not_sent(NotSent::Closed { until: until(secs) }),
-                Some("unknown_id") => not_sent(NotSent::NotReceived),
-                Some("retired") => not_sent(NotSent::Retired),
-                // conflict, forbidden, anything new: never a reason to create again.
-                _ => Reading::Unclear,
-            }
-        }
-    }
-}
-
 /// The approved image `n`'s bytes, from the draft (the caller's loader).
 pub type Images<'a> = &'a dyn Fn(&Entry) -> Option<Vec<u8>>;
 
-/// Upload every image in `missing`, in manifest order. `Ok(())` when the relay answers that
-/// none is missing; `Err(state)` for the state to show.
-/// How often one upload is resent after a "limited" answer, and the longest wait slept through.
-const UPLOAD_WAITS: u32 = 3;
-const UPLOAD_WAIT_MAX_MS: u64 = 30_000;
-
-fn upload(approved: &Approved, missing: Vec<String>, images: Images, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State) -> bool) -> Result<(), State> {
-    let total = approved.manifest.len() as u32;
-    let mut missing = missing;
-    relay.heard(Upload::Plan { missing: missing.clone() });
-    // Twice at most: an identical retry of an image that was stored answers the same.
-    for _round in 0..2 {
-        if missing.is_empty() {
-            return Ok(());
-        }
-        let round: Vec<&Entry> = approved.manifest.iter().filter(|e| missing.contains(&e.attachment_id)).collect();
-        for entry in round {
-            if !missing.contains(&entry.attachment_id) {
-                continue;
+/// What one relay answer means: the issue link on the configured repository (`delivered`, or
+/// `created_checking_images`: the issue exists), a step that went through (`next`), or not sent.
+fn read(t: &Transport, next: &[&str], repository: &str, now: u64) -> Result<Option<State>, State> {
+    let not_sent = |why: NotSent| State::NotSent { why, at: now };
+    match t {
+        Transport::NotConnected { offline: true } => Err(not_sent(NotSent::Offline)),
+        Transport::NotConnected { offline: false } => Err(not_sent(NotSent::Unreachable)),
+        Transport::Unclear => Err(not_sent(NotSent::NoAnswer)),
+        Transport::Answer { status, body, retry_after } => {
+            let b = body.clone().unwrap_or(Value::Null);
+            let state = b["state"].as_str().unwrap_or("");
+            if (200..300).contains(status) {
+                if next.contains(&state) {
+                    return Ok(None);
+                }
+                if let (true, Some(u)) = (matches!(state, "delivered" | "created_checking_images"), b["issue_url"].as_str()) {
+                    if let Some(n) = issue_link_ok(u, b["issue_number"].as_u64(), repository) {
+                        return Ok(Some(State::Submitted { issue_url: u.to_string(), issue_number: n, at: now }));
+                    }
+                }
             }
-            if relay.canceled() {
-                return Err(State::NotSent { why: NotSent::Canceled, at: clock() });
-            }
-            let done = total - missing.len() as u32;
-            on_state(&State::SendingScreenshots { done, total });
-            let item = format!("screenshot {}", entry.order);
-            let Some(bytes) = images(entry) else {
-                return Err(State::NotSent { why: NotSent::UploadStopped { item, why: "its saved copy on this Mac could not be read.".into() }, at: clock() });
+            let detail = match (b["detail"].as_str(), state) {
+                (Some(d), _) => d.chars().take(400).collect(),
+                (None, "limited") => "it is busy right now.".into(),
+                (None, "closed") => "it is not taking reports right now.".into(),
+                _ => "it could not be filed this time.".into(),
             };
-            if crate::util::sha256_hex(&bytes) != entry.sha256 {
-                return Err(State::NotSent { why: NotSent::UploadStopped { item, why: "its saved copy on this Mac is not the approved image.".into() }, at: clock() });
-            }
-            let headers = vec![
-                ("X-Receipt-Secret".to_string(), approved.receipt_secret.clone()),
-                ("Content-Type".to_string(), entry.media_type.clone()),
-                ("X-Content-SHA256".to_string(), entry.sha256.clone()),
-            ];
-            // Uploads have their own path: Cloudflare Access protects the staff read path
-            // (/attachments/{n}) by path alone, whatever the method, so an upload there would be
-            // sent to its login in production.
-            let url = format!("{}/v1/reports/{}/uploads/{}", dest.relay, approved.report_id, entry.attachment_id);
-            let mut waits = 0;
-            loop {
-                let size = bytes.len() as u64;
-                let t = relay.put(&url, &headers, bytes.clone(), &mut |sent| relay.heard(Upload::Bytes { id: entry.attachment_id.clone(), sent, total: size }));
-                if let Transport::Stopped(why) = &t {
-                    if relay.canceled() {
-                        return Err(State::NotSent { why: NotSent::Canceled, at: clock() });
-                    }
-                    return Err(State::NotSent { why: NotSent::UploadStopped { item, why: why.clone() }, at: clock() });
-                }
-                match read(&t, approved, &dest.repository, clock()) {
-                    Reading::Receiving { missing: m } => {
-                        for id in missing.iter().filter(|id| !m.contains(id)) {
-                            relay.heard(Upload::Received { id: id.clone() });
-                        }
-                        missing = m;
-                    }
-                    // "limited": the upload met the receipt lock or a running cleanup. The same
-                    // upload is sent again after the short wait the relay asked for; a long one
-                    // is shown to the person instead of slept through.
-                    Reading::Done(State::NotSent { why: NotSent::Busy { until: Some(u) }, .. }) if waits < UPLOAD_WAITS && u.saturating_sub(clock()) <= UPLOAD_WAIT_MAX_MS => {
-                        waits += 1;
-                        sleep(u.saturating_sub(clock()));
-                        continue;
-                    }
-                    Reading::Done(s) => return Err(s),
-                    Reading::Pending(_) => return Err(State::Checking { since: clock() }),
-                    Reading::Unclear => {} // asked again in the next round
-                }
-                break;
-            }
+            let until = b["retry_after_seconds"].as_u64().or(*retry_after).map(|s| now + s * 1000);
+            Err(not_sent(NotSent::Refused { detail, until }))
         }
-    }
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(State::NotSent { why: NotSent::UploadStopped { item: format!("screenshot {}", missing[0]), why: "the reporting service did not confirm it was stored.".into() }, at: clock() })
     }
 }
 
-/// **ONE ATTEMPT** (one Send report, or one Try again): register, upload the missing images,
-/// complete; then, on anything but a definite answer, ask status until a definite answer or
-/// [`RECONCILE_BOUND_MS`] after the attempt began, then "could not be confirmed". It never
-/// creates twice. `retry` is Try again: a register that answers the report's earlier definite
-/// refusal goes on to complete, which the relay allows from that state. `on_state` shows and
-/// saves each state and answers whether it was saved: completion is asked for only after
-/// [`State::Creating`] was.
-pub fn attempt(approved: &Approved, images: Images, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State) -> bool, retry: bool) -> State {
-    let begun = clock();
-    on_state(&State::Sending);
-    let registered = relay.post(&format!("{}/v1/reports", dest.relay), &approved.register_body());
-    let missing = match read(&registered, approved, &dest.repository, clock()) {
-        Reading::Receiving { missing } => missing,
-        Reading::Done(State::NotSent { why, .. }) if retry && matches!(why, NotSent::Refused { .. } | NotSent::Closed { .. } | NotSent::Busy { .. }) => match &registered {
-            Transport::Answer { body: Some(b), .. } => ids(&b["missing"]),
-            _ => Vec::new(),
-        },
-        Reading::Done(s) => {
-            on_state(&s);
-            return s;
+/// **SEND** the approved report, straight through: every approved screenshot read and checked
+/// against its manifest hash, then register, upload each, complete. Returns where it stands.
+pub fn send(approved: &Approved, images: Images, dest: &Destination, relay: &dyn Relay, now: u64) -> State {
+    let mut bytes = Vec::with_capacity(approved.manifest.len());
+    for e in &approved.manifest {
+        match images(e).filter(|b| crate::util::sha256_hex(b) == e.sha256) {
+            Some(b) => bytes.push(b),
+            None => return State::NotSent { why: NotSent::Screenshot { item: format!("Screenshot {}", e.order) }, at: now },
         }
-        Reading::Pending(ms) => return reconcile(approved, dest, relay, clock, sleep, on_state, begun, ms),
-        // Unclear: whether it registered is checked by status, which never creates.
-        Reading::Unclear => match check(approved, dest, relay, clock()) {
-            Reading::Receiving { missing } => missing,
-            Reading::Done(s) => {
-                on_state(&s);
-                return s;
-            }
-            _ => return reconcile(approved, dest, relay, clock, sleep, on_state, begun, CHECK_EVERY_MS),
-        },
+    }
+    let Ok(secret) = crate::util::random_bytes(32).map(|b| crate::util::base64url(&b)) else {
+        return State::NotSent { why: NotSent::Refused { detail: "RichDoctor could not make the report's one-time key.".into(), until: None }, at: now };
     };
-    if let Err(s) = upload(approved, missing, images, dest, relay, clock, sleep, on_state) {
-        on_state(&s);
+    let base = format!("{}/v1/reports", dest.relay);
+    let steps = ["receiving", "ready"];
+    if let Err(s) = read(&relay.post(&base, &approved.register_body(&secret)), &steps, &dest.repository, now) {
         return s;
     }
-    if relay.canceled() {
-        let s = State::NotSent { why: NotSent::Canceled, at: clock() };
-        on_state(&s);
-        return s;
-    }
-    // The proof that completion was asked for is saved BEFORE the request that can create the
-    // issue. When it cannot be saved the request is not made: after a restart the saved "never
-    // asked" would otherwise be taken as proof that no issue exists.
-    if !on_state(&State::Creating) {
-        let s = State::NotSent { why: NotSent::NotSaved, at: clock() };
-        on_state(&s);
-        return s;
-    }
-    let complete = |relay: &dyn Relay| relay.post(&format!("{}/v1/reports/{}/complete", dest.relay, approved.report_id), &approved.secret_body());
-    let mut answer = complete(relay);
-    // The relay found an image missing after all (a cleanup, a lost write): upload it once more.
-    if let Reading::Receiving { missing } = read(&answer, approved, &dest.repository, clock()) {
-        if !missing.is_empty() {
-            if let Err(s) = upload(approved, missing, images, dest, relay, clock, sleep, on_state) {
-                on_state(&s);
-                return s;
-            }
-        }
-        answer = complete(relay);
-    }
-    match read(&answer, approved, &dest.repository, clock()) {
-        Reading::Done(s) => {
-            on_state(&s);
-            s
-        }
-        Reading::Receiving { .. } => {
-            let s = State::NotSent { why: NotSent::NotReceived, at: clock() };
-            on_state(&s);
-            s
-        }
-        Reading::Pending(ms) => reconcile(approved, dest, relay, clock, sleep, on_state, begun, ms),
-        Reading::Unclear => reconcile(approved, dest, relay, clock, sleep, on_state, begun, CHECK_EVERY_MS),
-    }
-}
-
-/// Ask status until a definite answer, within the two-minute bound of the attempt.
-#[allow(clippy::too_many_arguments)]
-fn reconcile(approved: &Approved, dest: &Destination, relay: &dyn Relay, clock: &dyn Fn() -> u64, sleep: &dyn Fn(u64), on_state: &mut dyn FnMut(&State) -> bool, begun: u64, first_wait: u64) -> State {
-    let mut wait = first_wait;
-    on_state(&State::Checking { since: clock() });
-    loop {
-        if clock() + wait > begun + RECONCILE_BOUND_MS {
-            let s = State::Unconfirmed { checked_at: clock() };
-            on_state(&s);
+    for (e, b) in approved.manifest.iter().zip(bytes) {
+        let headers = [("X-Receipt-Secret".to_string(), secret.clone()), ("Content-Type".to_string(), e.media_type.clone()), ("X-Content-SHA256".to_string(), e.sha256.clone())];
+        let url = format!("{base}/{}/uploads/{}", approved.report_id, e.attachment_id);
+        if let Err(s) = read(&relay.put(&url, &headers, b), &steps, &dest.repository, now) {
             return s;
         }
-        sleep(wait);
-        match check(approved, dest, relay, clock()) {
-            Reading::Done(State::NotSent { why: NotSent::Offline | NotSent::Unreachable | NotSent::Busy { .. }, .. }) | Reading::Unclear => wait = CHECK_EVERY_MS,
-            Reading::Pending(ms) => wait = ms,
-            // Registered and never created: creation did not begin, a definite non-creation.
-            Reading::Receiving { .. } => {
-                let s = State::NotSent { why: NotSent::NotReceived, at: clock() };
-                on_state(&s);
-                return s;
-            }
-            Reading::Done(s) => {
-                on_state(&s);
-                return s;
-            }
-        }
     }
-}
-
-/// **CHECK STATUS** once, for the same report and ID. Never creates.
-pub fn check(approved: &Approved, dest: &Destination, relay: &dyn Relay, now: u64) -> Reading {
-    let t = relay.post(&format!("{}/v1/reports/{}/status", dest.relay, approved.report_id), &approved.secret_body());
-    read(&t, approved, &dest.repository, now)
-}
-
-/// What a status check during "could not be confirmed" or "checking screenshots" leaves: a
-/// definite answer replaces it; anything else keeps it, with the time checked (round 39:
-/// "Still not confirmed, checked at 9:47 AM. The report ID has not changed.").
-pub fn after_check(reading: Reading, current: &State, now: u64) -> State {
-    match reading {
-        Reading::Done(s @ (State::Submitted { .. } | State::CreatedCheckingImages { .. } | State::NotSent { why: NotSent::Rejected { .. } | NotSent::Refused { .. } | NotSent::Closed { .. } | NotSent::NotReceived | NotSent::Retired, .. })) => s,
-        Reading::Receiving { .. } => State::NotSent { why: NotSent::NotReceived, at: now },
-        _ => match current {
-            State::CreatedCheckingImages { .. } => current.clone(),
-            _ => State::Unconfirmed { checked_at: now },
-        },
-    }
-}
-
-/// **RETIRE THE EARLIER ID** before a changed revision is sent (PRD §7). `Ok(())` only when the
-/// relay answered `retired`; otherwise the earlier report's real state, which the person sees
-/// instead of the revision being sent.
-pub fn retire(approved: &Approved, dest: &Destination, relay: &dyn Relay, now: u64) -> Result<(), State> {
-    let t = relay.post(&format!("{}/v1/reports/{}/retire", dest.relay, approved.report_id), &approved.secret_body());
-    match read(&t, approved, &dest.repository, now) {
-        Reading::Done(State::NotSent { why: NotSent::Retired, .. }) => Ok(()),
-        Reading::Done(s) => Err(s),
-        // Lost or unclear: the earlier report's state is checked, never assumed.
-        _ => Err(State::Checking { since: now }),
+    let done = relay.post(&format!("{base}/{}/complete", approved.report_id), &json!({ "receipt_secret": secret }));
+    match read(&done, &[], &dest.repository, now) {
+        Ok(Some(s)) | Err(s) => s,
+        Ok(None) => State::NotSent { why: NotSent::Refused { detail: "it could not be filed this time.".into(), until: None }, at: now },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
 
     const BASE: &str = "http://127.0.0.1:9";
+    const INST: &str = "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b";
+    const LINK: &str = "https://github.com/WebDevBooster/richos-test/issues/42";
 
     fn dest() -> Destination {
         Destination { relay: BASE.into(), repository: "WebDevBooster/richos-test".into() }
@@ -655,19 +299,13 @@ mod tests {
     fn png(n: u8) -> Vec<u8> {
         let mut out = Vec::new();
         {
-            let mut e = png_encoder(&mut out);
-            e.write_image_data(&[n, 0, 0, 255]).unwrap();
+            let mut e = png::Encoder::new(&mut out, 1, 1);
+            e.set_color(png::ColorType::Rgba);
+            e.set_depth(png::BitDepth::Eight);
+            e.write_header().unwrap().write_image_data(&[n, 0, 0, 255]).unwrap();
         }
         out
     }
-    fn png_encoder(out: &mut Vec<u8>) -> png::Writer<&mut Vec<u8>> {
-        let mut e = png::Encoder::new(out, 1, 1);
-        e.set_color(png::ColorType::Rgba);
-        e.set_depth(png::BitDepth::Eight);
-        e.write_header().unwrap()
-    }
-
-    const INST: &str = "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b";
 
     fn approved_with(k: u8) -> (Approved, Vec<Vec<u8>>) {
         let id = "RD-7K3M-Q9VX";
@@ -677,32 +315,20 @@ mod tests {
         (approve(id, "RichOS closes at start", &body, manifest, BASE, 1_000, INST).unwrap(), images)
     }
 
-    /// A scripted relay: answers in order; records every request.
+    /// A scripted relay: answers in order; keeps every request (an upload's body as its bytes).
     struct Script {
         answers: RefCell<Vec<Transport>>,
-        log: RefCell<Vec<(String, String)>>,
-        events: RefCell<Vec<Upload>>,
-        /// Cancel after this many uploads (None: never).
-        cancel_after: Option<usize>,
+        sent: RefCell<Vec<(String, Value, Vec<u8>)>>,
     }
     impl Relay for Script {
-        fn post(&self, url: &str, _body: &Value) -> Transport {
-            self.log.borrow_mut().push(("POST".into(), url.trim_start_matches(BASE).into()));
+        fn post(&self, url: &str, body: &Value) -> Transport {
+            self.sent.borrow_mut().push((format!("POST {}", url.trim_start_matches(BASE)), body.clone(), vec![]));
             self.next()
         }
-        fn put(&self, url: &str, headers: &[(String, String)], _bytes: Vec<u8>, _p: &mut dyn FnMut(u64)) -> Transport {
+        fn put(&self, url: &str, headers: &[(String, String)], bytes: Vec<u8>) -> Transport {
             assert!(headers.iter().any(|(k, _)| k == "X-Receipt-Secret"));
-            assert!(!url.contains("secret"), "the secret is never in a URL");
-            self.log.borrow_mut().push(("PUT".into(), url.trim_start_matches(BASE).into()));
-            _p(_bytes.len() as u64 / 2);
-            _p(_bytes.len() as u64);
+            self.sent.borrow_mut().push((format!("PUT {}", url.trim_start_matches(BASE)), Value::Null, bytes));
             self.next()
-        }
-        fn canceled(&self) -> bool {
-            self.cancel_after.is_some_and(|n| self.log.borrow().iter().filter(|(m, _)| m == "PUT").count() >= n)
-        }
-        fn heard(&self, e: Upload) {
-            self.events.borrow_mut().push(e);
         }
     }
     impl Script {
@@ -710,55 +336,68 @@ mod tests {
             let mut a = self.answers.borrow_mut();
             if a.is_empty() { Transport::Unclear } else { a.remove(0) }
         }
-        fn count(&self, what: &str) -> usize {
-            self.log.borrow().iter().filter(|(_, u)| u.ends_with(what)).count()
-        }
     }
     fn script(answers: Vec<Transport>) -> Script {
-        Script { answers: RefCell::new(answers), log: RefCell::new(vec![]), events: RefCell::new(vec![]), cancel_after: None }
+        Script { answers: RefCell::new(answers), sent: RefCell::new(vec![]) }
     }
-    /// A relay reply; like every real one it names its report (the fixtures' RD-7K3M-Q9VX).
-    fn j(mut v: Value) -> Transport {
-        if v.get("report_id").is_none() {
-            v["report_id"] = json!("RD-7K3M-Q9VX");
-        }
-        Transport::Answer { status: 200, body: Some(v), retry_after: None }
+    fn ok(v: Value) -> Transport {
+        Transport::Answer { status: 201, body: Some(v), retry_after: None }
     }
-    fn run(a: &Approved, images: &[Vec<u8>], relay: &Script, retry: bool) -> (State, Vec<State>) {
-        let now = Cell::new(10_000u64);
-        let mut seen = Vec::new();
-        let loader = |e: &Entry| images.get(e.order as usize - 1).cloned();
-        let s = attempt(
-            a,
-            &loader,
-            &dest(),
-            relay,
-            &|| now.get(),
-            &|ms| now.set(now.get() + ms),
-            &mut |s| {
-                seen.push(s.clone());
-                true
-            },
-            retry,
-        );
-        (s, seen)
-    }
-    const LINK: &str = "https://github.com/WebDevBooster/richos-test/issues/42";
 
     #[test]
-    fn ids_secrets_and_the_hash_over_text_and_manifest() {
+    fn send_registers_uploads_and_completes_straight_through_with_the_approved_text_and_screenshots() {
+        let (a, images) = approved_with(2);
+        let r = script(vec![
+            ok(json!({"state": "receiving", "missing": ["1", "2"]})),
+            ok(json!({"state": "receiving", "missing": ["2"]})),
+            ok(json!({"state": "ready", "missing": []})),
+            ok(json!({"state": "delivered", "issue_url": LINK, "issue_number": 42})),
+        ]);
+        let s = send(&a, &|e: &Entry| images.get(e.order as usize - 1).cloned(), &dest(), &r, 5);
+        assert!(matches!(s, State::Submitted { issue_number: 42, .. }), "{s:?}");
+        let sent = r.sent.borrow();
+        let calls: Vec<&str> = sent.iter().map(|c| c.0.as_str()).collect();
+        assert_eq!(calls, ["POST /v1/reports", "PUT /v1/reports/RD-7K3M-Q9VX/uploads/1", "PUT /v1/reports/RD-7K3M-Q9VX/uploads/2", "POST /v1/reports/RD-7K3M-Q9VX/complete"]);
+        let register = &sent[0].1;
+        assert_eq!((register["title"].as_str(), register["body"].as_str()), (Some(a.title.as_str()), Some(a.body.as_str())), "the approved text, exactly");
+        assert_eq!(register["schema"], "richdoctor-report/2");
+        assert_eq!(register["manifest"][1]["filename"], "screenshot-2.png");
+        assert_eq!((&sent[1].2, &sent[2].2), (&images[0], &images[1]), "the screenshots exactly as approved");
+        assert_eq!(sent[3].1["receipt_secret"], register["receipt_secret"], "one receipt for the whole send");
+    }
+
+    #[test]
+    fn anything_but_the_issue_link_is_not_sent_and_says_why() {
+        let (a, images) = approved_with(1);
+        let load = |e: &Entry| images.get(e.order as usize - 1).cloned();
+        // Each answer stops the send where it comes: at registration here.
+        for (answer, words) in [
+            (Transport::NotConnected { offline: true }, "not connected to the internet"),
+            (Transport::NotConnected { offline: false }, "could not reach"),
+            (Transport::Unclear, "did not hear back"),
+            (Transport::Answer { status: 503, body: Some(json!({"error": "closed", "detail": "Reports are paused for today."})), retry_after: None }, "Reports are paused for today."),
+            (Transport::Answer { status: 500, body: None, retry_after: None }, "could not be filed this time"),
+            // A link on another repository is not this report's issue.
+            (ok(json!({"state": "delivered", "issue_url": "https://github.com/someone/else/issues/1", "issue_number": 1})), "could not be filed"),
+        ] {
+            let s = send(&a, &load, &dest(), &script(vec![answer]), 5);
+            let State::NotSent { why, .. } = &s else { panic!("{s:?}") };
+            assert!(why.reason().contains(words), "{words}: {}", why.reason());
+            assert!(s.may_send(), "Send again is offered");
+        }
+        // A screenshot that is not the approved one: nothing is sent at all.
+        let r = script(vec![]);
+        let s = send(&a, &|_: &Entry| Some(png(99)), &dest(), &r, 5);
+        assert!(matches!(s, State::NotSent { why: NotSent::Screenshot { .. }, .. }), "{s:?}");
+        assert!(r.sent.borrow().is_empty());
+    }
+
+    #[test]
+    fn ids_are_readable_and_random() {
         for _ in 0..50 {
             assert!(is_report_id(&new_report_id().unwrap()));
         }
         assert!(!is_report_id("RD-0000-1111"));
-        assert_eq!(new_receipt_secret().unwrap().len(), 43);
-        let (a, _) = approved_with(2);
-        assert_eq!(a.content_sha256, crate::util::sha256_hex(format!("{}\n\n{}\n\n{}", a.title, a.body, canonical(&a.manifest)).as_bytes()));
-        let (t, _) = approved_with(0);
-        assert_eq!(t.content_sha256, crate::util::sha256_hex(format!("{}\n\n{}\n\n[]", t.title, t.body).as_bytes()));
-        assert_eq!(a.register_body()["schema"], "richdoctor-report/2");
-        assert_eq!(a.register_body()["manifest"][1]["filename"], "screenshot-2.png");
-        assert!(!a.body.contains(&a.receipt_secret));
     }
 
     #[test]
@@ -771,244 +410,6 @@ mod tests {
         assert!(approve(id, "t", &format!("x\n\n{ending}"), vec![], BASE, 1, INST).is_ok());
         let (a, _) = approved_with(1);
         assert!(approve(id, "t", &format!("x\n\n{ending}"), a.manifest.clone(), BASE, 1, INST).is_err(), "the screenshot lines must match the manifest");
-    }
-
-    #[test]
-    fn register_upload_complete_and_submitted_only_with_every_image() {
-        let (a, images) = approved_with(2);
-        let r = script(vec![
-            j(json!({"state":"receiving","stage":"receiving","stored":[],"missing":["1","2"]})),
-            j(json!({"state":"receiving","stage":"receiving","stored":["1"],"missing":["2"]})),
-            j(json!({"state":"ready","stage":"ready","stored":["1","2"],"missing":[]})),
-            j(json!({"state":"delivered","stage":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":2,"images_expected":2})),
-        ]);
-        let (s, seen) = run(&a, &images, &r, false);
-        assert!(matches!(s, State::Submitted { issue_number: 42, .. }), "{s:?}");
-        let order: Vec<String> = r.log.borrow().iter().map(|(m, u)| format!("{m} {u}")).collect();
-        assert_eq!(order, ["POST /v1/reports", "PUT /v1/reports/RD-7K3M-Q9VX/uploads/1", "PUT /v1/reports/RD-7K3M-Q9VX/uploads/2", "POST /v1/reports/RD-7K3M-Q9VX/complete"]);
-        assert!(seen.contains(&State::SendingScreenshots { done: 1, total: 2 }));
-    }
-
-    /// Codex audit of 0881b5f8f #1: a "Creating" state that could not be saved stops the
-    /// completion request, so the saved record never wrongly proves nothing was created.
-    #[test]
-    fn an_unsaved_creating_state_makes_no_completion_request() {
-        let (a, images) = approved_with(1);
-        let r = script(vec![
-            j(json!({"state":"receiving","stored":[],"missing":["1"]})),
-            j(json!({"state":"ready","stored":["1"],"missing":[]})),
-            j(json!({"state":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":1,"images_expected":1})),
-        ]);
-        let now = Cell::new(10_000u64);
-        let loader = |e: &Entry| images.get(e.order as usize - 1).cloned();
-        let s = attempt(&a, &loader, &dest(), &r, &|| now.get(), &|ms| now.set(now.get() + ms), &mut |s| !matches!(s, State::Creating), false);
-        assert_eq!(r.count("/complete"), 0, "no completion request without its saved proof");
-        assert!(matches!(s, State::NotSent { why: NotSent::NotSaved, .. }), "{s:?}");
-        assert!(s.permits_try_again());
-    }
-
-    /// Codex audit of 0881b5f8f #3: "delivered" is "Report submitted" only for this report's ID
-    /// and every screenshot of this approval, never for another ID, a missing ID or absent counts.
-    #[test]
-    fn a_receipt_counts_only_for_this_report_and_its_exact_screenshots() {
-        let raw = |v: Value| Transport::Answer { status: 200, body: Some(v), retry_after: None };
-        let ready = |a: &Approved| raw(json!({"report_id": a.report_id, "state": "ready", "stored": a.manifest.iter().map(|e| e.attachment_id.clone()).collect::<Vec<_>>(), "missing": []}));
-        let submitted = |s: &State| matches!(s, State::Submitted { .. });
-        // Another report's success.
-        let (a, images) = approved_with(1);
-        let r = script(vec![ready(&a), raw(json!({"report_id": "RD-2222-2222", "state": "delivered", "issue_url": LINK, "issue_number": 42, "images_confirmed": 1, "images_expected": 1}))]);
-        let (s, _) = run(&a, &images, &r, false);
-        assert!(!submitted(&s), "another report's receipt: {s:?}");
-        // No report ID, and no counts (None == None) for a report without screenshots.
-        let (a, images) = approved_with(0);
-        let r = script(vec![ready(&a), raw(json!({"state": "delivered", "issue_url": LINK, "issue_number": 42}))]);
-        let (s, _) = run(&a, &images, &r, false);
-        assert!(!submitted(&s), "a receipt that names no report and counts nothing: {s:?}");
-        // This report, but counts for a different screenshot set.
-        let (a, images) = approved_with(2);
-        let r = script(vec![ready(&a), raw(json!({"report_id": a.report_id, "state": "delivered", "issue_url": LINK, "issue_number": 42, "images_confirmed": 1, "images_expected": 1}))]);
-        let (s, _) = run(&a, &images, &r, false);
-        assert!(matches!(s, State::CreatedCheckingImages { confirmed: 1, expected: 2, .. }), "one of two approved screenshots: {s:?}");
-        // This report and both of its screenshots: submitted.
-        let r = script(vec![ready(&a), raw(json!({"report_id": a.report_id, "state": "delivered", "issue_url": LINK, "issue_number": 42, "images_confirmed": 2, "images_expected": 2}))]);
-        let (s, _) = run(&a, &images, &r, false);
-        assert!(submitted(&s), "{s:?}");
-    }
-
-    #[test]
-    fn an_issue_with_fewer_confirmed_images_is_created_checking_screenshots() {
-        let (a, images) = approved_with(1);
-        let r = script(vec![
-            j(json!({"state":"ready","stored":["1"],"missing":[]})),
-            j(json!({"state":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":0,"images_expected":1})),
-        ]);
-        let (s, _) = run(&a, &images, &r, false);
-        assert!(matches!(s, State::CreatedCheckingImages { confirmed: 0, expected: 1, .. }), "{s:?}");
-        assert!(s.unresolved() && !s.permits_try_again());
-        assert_eq!(r.count("/uploads/1"), 0, "a stored image is not sent again");
-    }
-
-    #[test]
-    fn a_stalled_upload_creates_nothing_and_try_again_resumes_the_missing_image() {
-        let (a, images) = approved_with(2);
-        let r = script(vec![
-            j(json!({"state":"receiving","stored":[],"missing":["1","2"]})),
-            j(json!({"state":"receiving","stored":["1"],"missing":["2"]})),
-            Transport::Stopped("it made no progress for 60 seconds.".into()),
-        ]);
-        let (s, _) = run(&a, &images, &r, false);
-        let State::NotSent { why: NotSent::UploadStopped { ref item, .. }, .. } = s else { panic!("{s:?}") };
-        assert_eq!(item, "screenshot 2");
-        assert_eq!(r.count("/complete"), 0, "no issue without every approved image");
-        assert!(s.permits_try_again());
-        let again = script(vec![
-            j(json!({"state":"receiving","stored":["1"],"missing":["2"]})),
-            j(json!({"state":"ready","stored":["1","2"],"missing":[]})),
-            j(json!({"state":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":2,"images_expected":2})),
-        ]);
-        let (s, _) = run(&a, &images, &again, true);
-        assert!(matches!(s, State::Submitted { .. }));
-        assert_eq!(again.count("/uploads/1"), 0);
-        assert_eq!(again.count("/uploads/2"), 1);
-    }
-
-    #[test]
-    fn the_per_image_list_hears_the_plan_real_bytes_and_each_receipt() {
-        let (a, images) = approved_with(2);
-        let r = script(vec![
-            j(json!({"state":"receiving","stored":["1"],"missing":["2"]})),
-            j(json!({"state":"ready","stored":["1","2"],"missing":[]})),
-            j(json!({"state":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":2,"images_expected":2})),
-        ]);
-        let (s, _) = run(&a, &images, &r, true);
-        assert!(matches!(s, State::Submitted { .. }), "{s:?}");
-        let ev = r.events.borrow();
-        // Image 1 was received earlier: only 2 is planned, and only 2 is sent.
-        assert_eq!(ev[0], Upload::Plan { missing: vec!["2".into()] });
-        let size = images[1].len() as u64;
-        assert!(ev.contains(&Upload::Bytes { id: "2".into(), sent: size, total: size }));
-        assert_eq!(ev.last(), Some(&Upload::Received { id: "2".into() }));
-        assert_eq!(r.count("/uploads/1"), 0);
-    }
-
-    #[test]
-    fn cancel_during_sending_screenshots_creates_nothing_and_send_resumes_the_rest() {
-        let (a, images) = approved_with(3);
-        let mut r = script(vec![
-            j(json!({"state":"receiving","stored":[],"missing":["1","2","3"]})),
-            j(json!({"state":"receiving","stored":["1"],"missing":["2","3"]})),
-        ]);
-        r.cancel_after = Some(1);
-        let (s, _) = run(&a, &images, &r, false);
-        assert!(matches!(s, State::NotSent { why: NotSent::Canceled, .. }), "{s:?}");
-        assert_eq!(r.count("/complete"), 0, "nothing public after a cancel");
-        assert_eq!(r.count("/uploads/2"), 0, "no upload starts after a cancel");
-        assert!(s.permits_try_again() && s.permits_revision());
-        let again = script(vec![
-            j(json!({"state":"receiving","stored":["1"],"missing":["2","3"]})),
-            j(json!({"state":"receiving","stored":["1","2"],"missing":["3"]})),
-            j(json!({"state":"ready","stored":["1","2","3"],"missing":[]})),
-            j(json!({"state":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":3,"images_expected":3})),
-        ]);
-        let (s, _) = run(&a, &images, &again, true);
-        assert!(matches!(s, State::Submitted { .. }), "{s:?}");
-        assert_eq!(again.count("/uploads/1"), 0, "a received image is not sent again");
-        // A cancel after the last upload and before completion creates nothing either.
-        let (b, images) = approved_with(1);
-        let mut late = script(vec![
-            j(json!({"state":"receiving","stored":[],"missing":["1"]})),
-            j(json!({"state":"ready","stored":["1"],"missing":[]})),
-        ]);
-        late.cancel_after = Some(1);
-        let (s, _) = run(&b, &images, &late, false);
-        assert!(matches!(s, State::NotSent { why: NotSent::Canceled, .. }), "{s:?}");
-        assert_eq!(late.count("/complete"), 0);
-    }
-
-    #[test]
-    fn a_limited_upload_is_resent_after_the_wait_the_relay_asked_for() {
-        // The relay answers "limited" when an upload meets its receipt lock or a running
-        // cleanup (RICHDOCTOR-RELAY.md): the same upload is sent again after retry_after_seconds.
-        let (a, images) = approved_with(1);
-        let r = script(vec![
-            j(json!({"state":"receiving","stored":[],"missing":["1"]})),
-            Transport::Answer { status: 429, body: Some(json!({"state":"limited","retry_after_seconds":2})), retry_after: Some(2) },
-            j(json!({"state":"ready","stored":["1"],"missing":[]})),
-            j(json!({"state":"delivered","issue_url":LINK,"issue_number":42,"images_confirmed":1,"images_expected":1})),
-        ]);
-        let (s, _) = run(&a, &images, &r, false);
-        assert!(matches!(s, State::Submitted { .. }), "{s:?}");
-        assert_eq!(r.count("/uploads/1"), 2);
-        // A long wait is not slept through: the person sees when to try again.
-        let r = script(vec![
-            j(json!({"state":"receiving","stored":[],"missing":["1"]})),
-            Transport::Answer { status: 429, body: Some(json!({"state":"limited","retry_after_seconds":900})), retry_after: Some(900) },
-        ]);
-        let (s, _) = run(&a, &images, &r, false);
-        assert!(matches!(s, State::NotSent { why: NotSent::Busy { until: Some(_) }, .. }), "{s:?}");
-        assert_eq!(r.count("/complete"), 0);
-    }
-
-    #[test]
-    fn a_lost_complete_is_checked_never_created_again_and_bounded() {
-        let (a, images) = approved_with(0);
-        let r = script(vec![j(json!({"state":"ready","stored":[],"missing":[]})), Transport::Unclear]);
-        let (s, _) = run(&a, &images, &r, false);
-        assert!(matches!(s, State::Unconfirmed { .. }));
-        assert_eq!(r.count("/complete"), 1);
-        assert!(r.log.borrow().len() <= 2 + 24, "{}", r.log.borrow().len());
-        let r = script(vec![j(json!({"state":"ready","missing":[]})), Transport::Unclear, j(json!({"state":"pending"})), j(json!({"state":"delivered","issue_url":LINK,"images_confirmed":0,"images_expected":0}))]);
-        let (s, _) = run(&a, &images, &r, false);
-        assert!(matches!(s, State::Submitted { .. }), "{s:?}");
-    }
-
-    #[test]
-    fn definite_refusals_say_why_and_allow_the_right_next_step() {
-        let (a, images) = approved_with(0);
-        let cases = [
-            (Transport::NotConnected { offline: true }, "Your Mac is not connected to the internet.", true, true),
-            (Transport::NotConnected { offline: false }, "the cause is not known", true, true),
-            (Transport::Answer { status: 429, body: Some(json!({"state":"limited"})), retry_after: Some(60) }, "busy", true, true),
-            (j(json!({"state":"rejected","reason":"content","detail":"one line looks like it contains a password."})), "did not accept", false, true),
-            (j(json!({"state":"rejected","reason":"attachment","detail":"screenshot 1 has metadata.","item":"screenshot 1"})), "did not accept", false, true),
-            (j(json!({"state":"closed","reason":"daily_cap","retry_after_seconds":3600})), "not taking reports", true, true),
-            (j(json!({"state":"retired"})), "replaced by a revised one", false, true),
-        ];
-        for (answer, words, try_again, revision) in cases {
-            let r = script(vec![answer]);
-            let (s, _) = run(&a, &images, &r, false);
-            let State::NotSent { why, .. } = &s else { panic!("{s:?}") };
-            assert!(why.reason().contains(words), "{} / {words}", why.reason());
-            assert_eq!(s.permits_try_again(), try_again, "{words}");
-            assert_eq!(s.permits_revision(), revision, "{words}");
-        }
-    }
-
-    #[test]
-    fn a_conflict_or_an_unknown_state_is_never_success_nor_a_new_create() {
-        let (a, images) = approved_with(0);
-        for answer in [j(json!({"state":"conflict"})), j(json!({"state":"delivered"})), j(json!({"state":"teleported"})), Transport::Answer { status: 502, body: None, retry_after: None }] {
-            let r = script(vec![j(json!({"state":"ready","missing":[]})), answer]);
-            let (s, _) = run(&a, &images, &r, false);
-            assert!(matches!(s, State::Unconfirmed { .. }), "{s:?}");
-            assert_eq!(r.count("/complete"), 1);
-        }
-    }
-
-    #[test]
-    fn retirement_must_be_acknowledged() {
-        let (a, _) = approved_with(0);
-        assert_eq!(retire(&a, &dest(), &script(vec![j(json!({"state":"retired"}))]), 5), Ok(()));
-        assert!(matches!(retire(&a, &dest(), &script(vec![j(json!({"state":"delivered","issue_url":LINK,"images_confirmed":0,"images_expected":0}))]), 5), Err(State::Submitted { .. })));
-        assert!(matches!(retire(&a, &dest(), &script(vec![Transport::Unclear]), 5), Err(State::Checking { .. })));
-    }
-
-    #[test]
-    fn a_status_check_keeps_the_uncertain_state_unless_the_answer_is_definite() {
-        assert!(matches!(after_check(Reading::Unclear, &State::Unconfirmed { checked_at: 1 }, 5), State::Unconfirmed { checked_at: 5 }));
-        assert!(matches!(after_check(read(&j(json!({"state":"unknown_id"})), &approved_with(0).0, "a/b", 5), &State::Unconfirmed { checked_at: 1 }, 5), State::NotSent { why: NotSent::NotReceived, .. }));
-        let created = State::CreatedCheckingImages { issue_url: LINK.into(), issue_number: 42, confirmed: 0, expected: 1, at: 1 };
-        assert_eq!(after_check(Reading::Unclear, &created, 5), created);
     }
 
     #[test]

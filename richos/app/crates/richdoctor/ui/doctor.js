@@ -28,7 +28,7 @@
   // ---- state ---------------------------------------------------------------------------------
   const S = { boot: null, busy: false, unsaved: null, review: null, delivery: null, deleteId: null, deleteKind: null, lastQuestionChoices: null,
     // round 40: the approved screenshots, the files that could not be used, Claude helping, a Cancel asked for
-    shots: [], notAdded: [], claudeHelping: false, cancelAsked: false, removedUploaded: false, plan: null };
+    shots: [], notAdded: [], claudeHelping: false, plan: null };
 
   function el(html) { const d = document.createElement("div"); d.innerHTML = html; return d.firstElementChild; }
   function show(id) {
@@ -178,13 +178,9 @@
       case "review": invoke("review").then(function (v) { renderReview(v); }); break;
       case "storage": S.unsaved = e.ok ? null : e.sentence; unsavedBanner(); break;
       case "delivery": renderResult(e.view); break;
-      case "checking-status": renderChecking(e.report_id); break;
       case "login": renderLogin(e.on, e.denied); break;
       case "go": if (e.screen === "saved") renderSaved(); break;
       case "send-refused": toast(e.why); break;
-      case "upload":
-        if (S.delivery && S.delivery.kind === "uploading") { S.delivery.rows = e.rows; paintUpload(S.delivery); }
-        break;
     }
   }
   T.event.listen("doctor", function (ev) { onEvent(ev.payload, false); });
@@ -557,20 +553,9 @@
     v.problems.forEach(function (p) {
       notes.appendChild(note("This needs a change before it can be sent: " + p.detail + (p.line ? " The line: “" + p.line + "”" : ""), G.warn));
     });
-    const banner = $("rv-banner"); banner.innerHTML = "";
-    const received = v.received || 0;
-    if (v.mode === "revision-uncertain") {
-      const b = boldNote("Editing a copy.", "Your first report (" + v.old_id + ") may already have reached the team, and RichDoctor is checking. This edit, text and screenshots, is saved on this Mac and cannot be sent as a replacement until that is known.", G.quest);
-      b.style.border = "1px solid var(--gold)"; banner.appendChild(b);
-    } else if (v.mode === "revision-notsent") {
-      banner.appendChild(boldNote("Revised report.", "The earlier one (" + v.old_id + ") was not sent. Sending this one gives it a new report ID and retires the old one on this Mac."));
-    } else if (v.mode === "revision-upload" && v.changed) {
-      banner.appendChild(boldNote("Changed after an interrupted send.", "This report now differs from the earlier attempt (" + v.old_id + "), which created nothing public. Send report sends it as a revised report with a new report ID; the " + plural(received, "screenshot") + " that reached the support service under the old ID " + (received === 1 ? "is" : "are") + " sent again under the new one." + (S.removedUploaded ? " A screenshot you removed had already reached the support service: retiring the earlier report ID stops any further access to it, but a copy already viewed or downloaded by the team cannot be recalled." : "")));
-    } else if (v.mode === "revision-upload") {
-      banner.appendChild(boldNote("After an interrupted send.", "Nothing public was created for " + v.old_id + "; " + plural(received, "screenshot") + " of " + (v.attempt || S.shots.length) + " already reached the support service. Send this report unchanged and RichDoctor resumes with the missing screenshots. Change anything, text or screenshots, and it becomes a revised report with a new report ID."));
-    }
-    $("rv-send").hidden = v.mode === "revision-uncertain";
-    $("rv-save-edit").hidden = v.mode !== "revision-uncertain";
+    $("rv-banner").innerHTML = "";
+    $("rv-send").hidden = false;
+    $("rv-save-edit").hidden = true;
     $("rv-back").hidden = v.mode !== "draft"; $("rv-save").hidden = v.mode !== "draft";
     $("rv-send").disabled = v.problems.length > 0;
     $("rv-exact").hidden = true; $("rv-sections").hidden = false; $("rv-title").hidden = false;
@@ -638,53 +623,7 @@
   function kv(id, extra) {
     return '<dl class="kv"><dt>Report ID</dt><dd class="mono">' + esc(id) + (extra || "") + "</dd><dt>On this Mac</dt><dd>" + storageLine() + "</dd></dl>";
   }
-  function renderChecking(id) {
-    $("result-body").innerHTML = '<div class="result"><div class="mark gold"><span class="spin" aria-hidden="true"></span></div><div><h1>Checking status…</h1><p></p></div></div>';
-    $("result-body").querySelector("p").textContent = "Asking the reporting service about report " + id + ". Nothing is sent again.";
-    $("result-foot").innerHTML = "";
-    show("s-result");
-  }
   function viewShots(v) { return (v.shots || []).map(function (f) { const s = S.shots.find(function (x) { return x.n === f.n; }); return s || fromSaved(Object.assign({ url: "" }, f)); }); }
-  // states: per image { st: "wait"|"live"|"ok"|"earlier"|"stopped"|"unsure", p: 0..1, word }
-  function shotRows(v, states) {
-    const list = el('<div class="shots" role="list" aria-label="Screenshots"></div>');
-    viewShots(v).forEach(function (s, i) {
-      const st = states[i] || { st: "wait", p: 0, word: "Waiting" };
-      const glyph = st.st === "ok" || st.st === "earlier" ? G.checkc : st.st === "stopped" ? G.dash : st.st === "unsure" ? G.quest : st.st === "live" ? '<span class="spin" aria-hidden="true"></span>' : "";
-      const row = el('<div class="shot" role="listitem"><span class="badge" aria-hidden="true"></span><img alt=""><div class="meta"><b></b><span></span><div class="pbar" aria-hidden="true"><i></i></div></div><span class="state"></span></div>');
-      row.querySelector(".badge").textContent = s.n;
-      if (st.st === "wait") row.querySelector(".badge").classList.add("soft");
-      if (s.final.src) row.querySelector("img").src = s.final.src; else row.querySelector("img").remove();
-      row.querySelector("img") && (row.querySelector("img").alt = "Screenshot " + s.n);
-      row.querySelector(".meta b").textContent = s.name;
-      row.querySelector(".meta span").textContent = fmtBytes(s.final.bytes);
-      const bar = row.querySelector(".pbar");
-      if (st.st === "ok" || st.st === "earlier") bar.classList.add("done");
-      if (st.st === "stopped") bar.classList.add("stopped");
-      bar.querySelector("i").style.width = Math.round(st.p * 100) + "%";
-      const word = row.querySelector(".state"); word.className = "state " + (st.st === "earlier" ? "ok" : st.st); word.innerHTML = glyph; word.appendChild(document.createTextNode(st.word));
-      list.appendChild(row);
-    });
-    return list;
-  }
-  function rowStates(rows, finalWords) {
-    return (rows || []).map(function (r) {
-      const p = r.total ? Math.min(1, r.sent / r.total) : 0;
-      if (r.st === "ok") return { st: "ok", p: 1, word: finalWords || "Received" };
-      if (r.st === "earlier") return { st: "earlier", p: 1, word: "Received earlier" };
-      if (r.st === "live") return { st: "live", p: p, word: Math.round(p * 100) + "%" };
-      if (r.st === "stopped") return { st: "stopped", p: p, word: "Stopped" };
-      return { st: "wait", p: 0, word: "Waiting" };
-    });
-  }
-  function paintUpload(v) {
-    const host = $("up-rows"); if (!host) return;
-    const rows = v.rows || [];
-    const n = rows.length, got = rows.filter(function (r) { return r.st === "ok" || r.st === "earlier"; }).length;
-    const live = rows.findIndex(function (r) { return r.st === "live"; });
-    host.innerHTML = ""; host.appendChild(shotRows(v, rowStates(rows)));
-    $("up-sum").textContent = plural(got, "screenshot") + " of " + n + " received" + (live >= 0 ? " · sending screenshot " + (live + 1) : "");
-  }
   function approvedWell(v) {
     const n = (v.shots || []).length;
     const ap = el('<div class="approved well"><p class="lab"></p><p class="t"></p><p class="x"></p><p class="more"></p></div>');
@@ -699,85 +638,31 @@
     ap.querySelector(".more").textContent = v.summary.replace("the report ID footer", (n ? plural(n, "screenshot") : "no screenshots") + ", the report ID footer").replace("The exact text is", n ? "The exact text and the screenshots are" : "The exact text is");
     return ap;
   }
+  // Sending, Report submitted, or Not sent yet with Send again (§140: dead simple).
   function renderResult(v) {
     if (!v) return;
-    const prev = S.delivery;
     S.delivery = v;
-    // Cancel during Sending screenshots returns to the review with everything kept (round 40 §5).
-    if (v.kind === "notsent" && v.extra.canceled && S.cancelAsked) {
-      S.cancelAsked = false;
-      toast("Canceled. Your report and screenshots are kept on this Mac; nothing public was created.");
-      invoke("review").then(renderReview);
-      return;
-    }
-    if (v.kind === "uploading" && prev && prev.kind === "uploading" && !$("s-result").hidden && $("up-rows")) { paintUpload(v); return; }
     const body = $("result-body"), foot = $("result-foot");
     const id = v.report_id;
     const n = (v.shots || []).length;
     let html = "", acts = "";
-    if (v.kind === "uploading") {
-      html = '<div class="result"><div class="mark gold"><span class="spin" aria-hidden="true"></span></div><div><h1>Sending screenshots…</h1><p>Your ' + plural(n, "approved screenshot") + " " + (n === 1 ? "goes" : "go") + " to the RichOS support team first. The public report is created only after " + (n === 1 ? "it has" : "all of them have") + ' arrived; nothing public exists yet.</p><p class="soft" id="up-sum" aria-live="polite"></p>' + kv(id) + '<div id="up-rows" style="margin-top:14px"></div></div></div>';
-      acts = '<p class="grow">Cancel keeps the report and the screenshots on this Mac. Nothing public is created.</p><button class="btn" data-act="cancel-upload">Cancel</button>';
-    } else if (v.kind === "sending") {
-      html = '<div class="result"><div class="mark gold"><span class="spin" aria-hidden="true"></span></div><div><h1>Sending your report…</h1><p>' + (n ? "All " + plural(n, "screenshot") + " arrived. " : "") + "Your approved report is on its way to the RichOS team’s reporting service. You can close this window: once the service accepts it, delivery continues on its own.</p>" + kv(id) + "</div></div>";
+    if (v.kind === "sending") {
+      html = '<div class="result"><div class="mark gold"><span class="spin" aria-hidden="true"></span></div><div><h1>Sending your report…</h1><p>Your approved report' + (n ? " and its " + plural(n, "screenshot") + " are" : " is") + " on the way to the RichOS team’s reporting service.</p>" + kv(id) + "</div></div>";
       acts = '<p class="grow">The result is kept in Saved reports.</p>';
-    } else if (v.kind === "created-checking") {
-      html = '<div class="result"><div class="mark gold"><span class="spin" aria-hidden="true"></span></div><div><h1>Report created; checking screenshots</h1><p>Your report is on GitHub. RichDoctor is confirming that the support team can open all ' + plural(n, "screenshot") + ', which takes up to two minutes. No second report is created.</p><dl class="kv"><dt>Report ID</dt><dd class="mono">' + esc(id) + '</dd><dt>Public report</dt><dd><a href="#" data-act="view-report" class="issue"></a></dd><dt>On this Mac</dt><dd>' + storageLine() + "</dd></dl></div></div>";
-      acts = '<p class="grow">You can close this window. The result is in Saved reports.</p><button class="btn" data-act="view-report">' + G.out + "<span>View report</span></button>";
-    } else if (v.kind === "created") {
-      const c = v.extra.confirmed, x = v.extra.expected;
-      const missing = Array.from({ length: Math.max(0, x - c) }, function (_, i) { return c + i + 1; });
-      html = '<div class="result"><div class="mark" style="color:var(--accent-text)">' + G.quest + '</div><div><h1>Report created; checking screenshots</h1><p class="why"></p><dl class="kv"><dt>Report ID</dt><dd class="mono">' + esc(id) + ' <span class="soft">· include it if you ask support for help</span></dd><dt>Public report</dt><dd><a href="#" data-act="view-report" class="issue"></a></dd><dt>Screenshots</dt><dd>' + c + " of " + x + " confirmed</dd><dt>On this Mac</dt><dd>" + storageLine() + '</dd></dl><div id="created-rows" style="margin-top:14px"></div></div></div>';
-      acts = '<button class="btn primary" data-act="check-status">Check status</button><button class="btn" data-act="email">Email support</button><div class="grow"></div><button class="btn" data-act="view-report">' + G.out + '<span>View report</span></button><button class="btn link" data-act="saved">Saved reports</button>';
-      S.createdMissing = missing;
-    } else if (v.kind === "checking") {
-      html = '<div class="result"><div class="mark gold"><span class="spin" aria-hidden="true"></span></div><div><h1>Checking whether your report was received</h1><p>The reporting service did not give a clear answer. RichDoctor is checking whether the report arrived, which takes up to two minutes. It will not send the report a second time.' + (n ? " Your " + plural(n, "screenshot") + " already reached the support service under this report ID." : "") + "</p>" + kv(id) + "</div></div>";
-      acts = '<p class="grow">You can close this window. The result is in Saved reports.</p><button class="btn" data-act="saved">Saved reports</button>';
     } else if (v.kind === "submitted") {
       html = '<div class="result"><div class="mark" style="color:var(--success)">' + G.check + '</div><div><h1>Report submitted</h1><p>The RichOS team has your report' + (n ? " and your " + plural(n, "screenshot") : "") + '. This does not yet mean the cause is known or the issue is fixed.</p><dl class="kv"><dt>Report ID</dt><dd class="mono">' + esc(id) + ' <span class="soft">· include it if you ask support for help</span></dd><dt>Public report</dt><dd><a href="#" data-act="view-report" class="issue"></a></dd><dt>Screenshots</dt><dd>' + (n ? '<span class="status ok">' + G.checkc + plural(n, "screenshot") + ' received</span> <span class="soft">· shared privately with RichOS support, kept for one year</span>' : "none") + "</dd></dl></div></div>";
       acts = '<button class="btn link" data-act="saved">Saved reports</button><div class="grow"></div><button class="btn" data-act="view-report">' + G.out + '<span>View report</span></button><button class="btn primary" data-act="done">Done</button>';
     } else if (v.kind === "notsent") {
-      const up = v.extra.upload && n > 0;
-      html = '<div class="result"><div class="mark" style="color:var(--attention)">' + G.dash + '</div><div><h1>Not sent yet</h1><p class="why"></p><p class="kept"></p>' + kv(id) + (up ? '<div id="ns-rows" style="margin-top:14px"></div><div id="ns-reduce"></div>' : "") + "</div></div>";
-      if (up) acts = '<button class="btn primary" data-act="resume-upload">Resume sending</button><button class="btn" data-act="review-shots">Review screenshots</button><button class="btn" data-act="email">Email support</button><div class="grow"></div><button class="btn link" data-act="saved">Saved reports</button>';
-      else acts = (v.extra.review ? '<button class="btn primary" data-act="edit-notsent">Review report</button>' : (v.extra.try_again ? '<button class="btn primary" data-act="try-again">Try again</button>' : "")) + '<button class="btn" data-act="save-file">Save report</button><button class="btn" data-act="email">Email support</button><div class="grow"></div><button class="btn link" data-act="saved">Saved reports</button>';
-    } else if (v.kind === "unconfirmed") {
-      html = '<div class="result"><div class="mark" style="color:var(--accent-text)">' + G.quest + '</div><div><h1>Delivery could not be confirmed</h1><p>Your report may already have reached the RichOS team. RichDoctor could not confirm it within two minutes. To avoid filing it twice, Send report is not offered; Check status asks the service about this same report, and RichDoctor checks again whenever you open it.</p>' + kv(id) + '<p class="soft" style="margin-top:12px"></p></div></div>';
-      acts = '<button class="btn primary" data-act="check-status">Check status</button><button class="btn" data-act="email">Email support</button><button class="btn" data-act="edit-uncertain">Edit report</button><div class="grow"></div><button class="btn link" data-act="saved">Saved reports</button>';
-      if (prev && prev.kind === "unconfirmed" && v.extra.checked_at) toast("Still not confirmed, checked at " + v.extra.checked_at + ". The report ID has not changed.");
+      html = '<div class="result"><div class="mark" style="color:var(--attention)">' + G.dash + '</div><div><h1>Not sent yet</h1><p class="why"></p><p class="kept"></p>' + kv(id) + "</div></div>";
+      acts = '<button class="btn primary" data-act="try-again">Send again</button><button class="btn" data-act="save-file">Save report</button><button class="btn" data-act="email">Email support</button><div class="grow"></div><button class="btn link" data-act="saved">Saved reports</button>';
     }
     body.innerHTML = html; foot.innerHTML = acts;
-    if (v.kind === "uploading") paintUpload(v);
-    if (v.kind === "submitted" || v.kind === "created-checking" || v.kind === "created") body.querySelector(".issue").textContent = v.extra.issue_url.replace("https://", "");
-    if (v.kind === "created") {
-      const c = v.extra.confirmed, x = v.extra.expected;
-      body.querySelector(".why").textContent = "Your report is on GitHub, but RichDoctor could not confirm within two minutes that the support team can open " + (x - c === 1 ? "screenshot " + x + " of " + x : (x - c) + " of the " + x + " screenshots") + ". The team has been told to check this report. Your screenshots stay on this Mac, and no second report is created; Check status asks again about this same report.";
-      const states = viewShots(v).map(function (s, i) { return i < c ? { st: "ok", p: 1, word: "Confirmed" } : { st: "unsure", p: 1, word: "Not confirmed" }; });
-      $("created-rows").appendChild(shotRows(v, states));
-    }
-    if (v.kind === "unconfirmed") body.querySelector(".soft").textContent = (n ? "Your " + plural(n, "screenshot") + " reached the support service under this report ID before the report was sent; they are not sent again. " : "") + "If you need help sooner, email support and include the report ID. Edits you make are saved on this Mac and cannot be sent as a replacement until RichDoctor knows whether the first report arrived.";
+    if (v.kind === "submitted") body.querySelector(".issue").textContent = v.extra.issue_url.replace("https://", "");
     if (v.kind === "notsent") {
-      const up = v.extra.upload && n > 0;
-      const rows = (prev && prev.rows && prev.report_id === v.report_id && prev.rows.length) ? (v.rows && v.rows.some(function (r) { return r.st === "stopped" || r.st === "live"; }) ? v.rows : prev.rows) : v.rows;
-      const states = rowStates(rows);
-      const stoppedAt = states.findIndex(function (s) { return s.st === "stopped" || s.st === "live"; });
-      const got = states.filter(function (s) { return s.st === "ok" || s.st === "earlier"; }).length;
-      if (up && !v.extra.canceled) {
-        const k = stoppedAt >= 0 ? stoppedAt + 1 : (v.extra.item ? +String(v.extra.item).replace(/\D+/g, "") : got + 1);
-        const arrived = got ? (got === 1 ? "Screenshot 1 arrived and does not need to be sent again." : plural(got, "screenshot") + " arrived and do not need to be sent again.") : "";
-        body.querySelector(".why").textContent = (v.extra.toolong ? "Screenshot " + k + " of " + n + " did not finish within five minutes, the longest RichDoctor waits for one image. " : "Sending stopped while screenshot " + k + " of " + n + " was on its way: no progress for 60 seconds, and the cause is not known. ") + (arrived ? arrived + " " : "") + "The public report was not created, because it is created only once every screenshot has arrived.";
-        if (stoppedAt >= 0) states[stoppedAt].st = "stopped", states[stoppedAt].word = "Stopped";
-        if (v.extra.toolong) {
-          const r = el('<div class="row" style="margin-top:12px"><span class="grow"></span><button class="btn" data-act="reduce-shot"></button></div>');
-          r.querySelector("span").textContent = "Screenshot " + k + " may be too large for this connection. A smaller copy needs your approval again before it is sent.";
-          r.querySelector("button").textContent = "Reduce screenshot " + k; r.querySelector("button").dataset.n = k;
-          $("ns-reduce").appendChild(r);
-        }
-      } else body.querySelector(".why").textContent = v.extra.reason;
-      body.querySelector(".kept").textContent = up ? "Nothing public was created. Your approved report and all " + plural(n, "screenshot") + " are kept exactly as you reviewed them." : "Nothing was sent. Your approved report" + (n ? " and its " + plural(n, "screenshot") + " are" : " is") + " kept exactly as you reviewed " + (n ? "them" : "it") + ".";
-      if (up) $("ns-rows").appendChild(shotRows(v, states));
+      body.querySelector(".why").textContent = v.extra.reason;
+      body.querySelector(".kept").textContent = "Your approved report" + (n ? " and its " + plural(n, "screenshot") + " are" : " is") + " kept on this Mac. Send again sends it from the start under a new report ID.";
     }
-    if (v.kind !== "uploading" && v.kind !== "created-checking") body.appendChild(approvedWell(v));
+    body.appendChild(approvedWell(v));
     show("s-result");
   }
 
@@ -787,7 +672,7 @@
       const list = $("saved-list"); list.innerHTML = "";
       const glyph = { submitted: G.checkc, unconfirmed: G.quest, created: G.quest, notsent: G.dash, saved: G.doc };
       const cls = { submitted: "ok", unconfirmed: "unsure", created: "unsure", notsent: "notsent", saved: "saved" };
-      const actWords = { view: "View report", resume: "Resume", check: "Check status", try: "Try again", review: "Review report", "resume-upload": "Resume sending" };
+      const actWords = { view: "View report", resume: "Resume", try: "Send again" };
       data.rows.concat(data.sent).forEach(function (r) {
         const it = el('<div class="item"><div class="t"></div><div class="acts"></div><div class="d"></div><div class="st"></div></div>');
         it.querySelector(".t").textContent = r.title;
@@ -928,10 +813,8 @@
       case "inspect-shot": inspectShot(+b.dataset.n, false); break;
       case "remove-shot": {
         const n = +b.dataset.n;
-        const up = S.review && S.review.mode === "revision-upload" && n <= (S.review.received || 0);
-        if (up) S.removedUploaded = true;
         invoke("remove_image", { index: n - 1 }).then(function () {
-          toast(up ? "Screenshot removed from this report. It had already reached the support service; see the note at the top." : "Screenshot removed. It will not be shared.");
+          toast("Screenshot removed. It will not be shared.");
           reopenReview();
         }).catch(fail);
         break;
@@ -952,10 +835,6 @@
       case "send": invoke("send_report").catch(fail); break;
       case "save-edit": invoke("save_later").then(function () { toast("Edit saved on this Mac. The first report is still being checked."); invoke("delivery").then(renderResult); }); break;
       case "try-again": invoke("try_again").catch(fail); break;
-      case "resume-upload": invoke("try_again").catch(fail); break;
-      case "cancel-upload": S.cancelAsked = true; invoke("cancel_upload").then(function (ok) { if (!ok) S.cancelAsked = false; }); break;
-      case "review-shots": case "edit-notsent": case "edit-uncertain": reopenReview(); break;
-      case "check-status": invoke("check_status").catch(fail); break;
       case "email": openEmail(); break;
       case "open-mail": case "open-mail-anyway": {
         const n = S.plan ? S.plan.count : S.shots.length;
@@ -977,11 +856,9 @@
       case "saved": renderSaved(); break;
       case "close-saved": invoke("boot").then(function (v) { S.boot = v; renderFirst(); }); break;
       case "row-view": invoke("open_issue", { url: b.dataset.url }).catch(fail); break;
-      case "row-resume": case "row-check": case "row-try": case "row-review": case "row-resume-upload":
+      case "row-resume": case "row-try":
         openSaved(b.dataset.id, function () {
-          if (act === "row-try" || act === "row-resume-upload") invoke("try_again").catch(fail);
-          if (act === "row-review") reopenReview();
-          if (act === "row-check") invoke("check_status").catch(fail);
+          if (act === "row-try") invoke("try_again").catch(fail);
         });
         break;
       case "delete": {

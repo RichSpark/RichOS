@@ -103,7 +103,7 @@ const BOOT = { installation: "Found RichOS 1.2.1 (nightly 68) in Applications.",
 const SAVED = { rows: [
   { id: "d-0123456789ab", title: "RichOS 1.2.1 closes before its window opens", date: "October 22, 2026", left: "sent at 8:52 AM", state: "submitted", state_words: "Report submitted", action: "view", issue_url: "https://github.com/WebDevBooster/richos/issues/412" },
   { id: "d-0123456789ac", title: "Rich's answer stops mid-way", date: "October 20, 2026", left: "draft, interrupted during the investigation", state: "saved", state_words: "Saved on this Mac", action: "resume", issue_url: null },
-  { id: "d-0123456789ad", title: "RichScribe stops transcribing mid-sentence", date: "October 18, 2026", left: "approved, checked at 9:41 AM", state: "unconfirmed", state_words: "Delivery could not be confirmed", action: "check", issue_url: null },
+  { id: "d-0123456789ad", title: "RichScribe stops transcribing mid-sentence", date: "October 18, 2026", left: "approved, sending", state: "sending", state_words: "Sending", action: "resume", issue_url: null },
   { id: "d-0123456789ae", title: "RichOS window went blank after the Mac woke up", date: "October 15, 2026", left: "approved, not sent yet", state: "notsent", state_words: "Not sent yet · connection failed", action: "try", issue_url: null },
 ], sent: [] };
 
@@ -127,7 +127,7 @@ async function run() {
       const errors = [];
       page.on("pageerror", (e) => errors.push(String(e)));
       page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
-      await page.addInitScript(backend, JSON.stringify({ replies: { boot: BOOT, review: REVIEW, saved: SAVED, excerpt: Object.assign({}, REVIEW, { excerpts: [Object.assign({}, REVIEW.excerpts[0]), Object.assign({}, REVIEW.excerpts[1], { removed: true })] }), mail_available: true, delivery: DELIVERY("unconfirmed", { checked_at: "9:47 AM" }), images: [], email_plan: { count: 0, bytes: 0, parts: 1, names: [] }, cancel_upload: true } }));
+      await page.addInitScript(backend, JSON.stringify({ replies: { boot: BOOT, review: REVIEW, saved: SAVED, excerpt: Object.assign({}, REVIEW, { excerpts: [Object.assign({}, REVIEW.excerpts[0]), Object.assign({}, REVIEW.excerpts[1], { removed: true })] }), mail_available: true, delivery: DELIVERY("notsent", { reason: "RichDoctor could not reach the reporting service. Send again, or email support.", try_again: true }), images: [], email_plan: { count: 0, bytes: 0, parts: 1, names: [] } } }));
       await page.goto("file://" + path.join(dir, "index.html"));
       await page.evaluate(() => document.fonts.ready);
       const T = (sel) => page.locator(sel).first().innerText();
@@ -272,12 +272,6 @@ async function run() {
       await emit({ t: "review" });
       await settle();
       check(`${theme} review: a privacy problem blocks Send and names the line`, (await page.locator("#rv-send").isDisabled()) && (await T("#rv-notes")).includes("mail me at someone@example.com"));
-      await page.evaluate((v) => { window.__TAURI__.core.invoke = ((orig) => function (c, a) { return c === "review" ? Promise.resolve(v) : orig(c, a); })(window.__TAURI__.core.invoke); }, Object.assign({}, REVIEW, { mode: "revision-uncertain", old_id: "RD-7K3M-Q9VX" }));
-      await emit({ t: "review" });
-      await settle();
-      check(`${theme} revision during uncertainty: Editing a copy, Save edit, no Send`, (await T("#rv-banner")).includes("Editing a copy.") && !(await visible("#rv-send")) && (await visible("#rv-save-edit")));
-      await contrast(page, "review-uncertain", theme);
-
       // Round 40 §4: the review with its screenshots and both destinations
       await page.evaluate((v) => { window.__TAURI__.core.invoke = ((orig) => function (c, a) { if (c === "review") return Promise.resolve(v.review); if (c === "images") return Promise.resolve(v.images); return orig(c, a); })(window.__TAURI__.core.invoke); }, { review: Object.assign({}, REVIEW, { shots: [SHOT(1), SHOT(2)] }), images: [SHOT(1), SHOT(2)] });
       await emit({ t: "review" });
@@ -291,12 +285,6 @@ async function run() {
       check(`${theme} inspect: read-only, exactly as it will be shared`, (await T("#img-h")) === "Screenshot 2, exactly as it will be shared" && (await T("#img-foot")).includes("Edit covers") && (await T("#img-foot")).includes("Done"));
       await page.click('[data-act="img-done"]');
       await settle();
-      await page.evaluate((v) => { window.__TAURI__.core.invoke = ((orig) => function (c, a) { if (c === "review") return Promise.resolve(v); return orig(c, a); })(window.__TAURI__.core.invoke); }, Object.assign({}, REVIEW, { mode: "revision-upload", old_id: "RD-7K3M-Q9VX", received: 1, attempt: 2, changed: false, shots: [SHOT(1), SHOT(2)] }));
-      await emit({ t: "review" });
-      await page.waitForSelector("#rv-banner .note");
-      check(`${theme} review after an interrupted send: unchanged resumes`, (await T("#rv-banner")).includes("After an interrupted send.") && (await T("#rv-banner")).includes("1 screenshot of 2 already reached the support service"));
-      await contrast(page, "review-upload", theme);
-
       // Audit R2: a reopened draft whose screenshot 1 is missing on this Mac lists it in its place,
       // named, with Remove; removing it leaves the other screenshot to carry on with.
       const MISSING = { n: 1, name: "screenshot-1", width: 0, height: 0, bytes: 0, covers: 0, reduced: false, url: "", problem: "Screenshot 1 could not be read on this Mac: its saved copy is missing or is not the image you approved. Remove it from the report and add it again." };
@@ -323,53 +311,28 @@ async function run() {
       await emit({ t: "review" });
       await settle();
 
-      // 4. Delivery (round 39 §5)
+      // 4. Delivery (§140, dead simple): sending, submitted, or not sent with Send again
       for (const [kind, extra, want] of [
         ["sending", {}, "Sending your report…"],
-        ["uploading", { done: 1, total: 2 }, "Sending screenshots…"],
-        ["created-checking", { issue_url: "https://github.com/WebDevBooster/richos/issues/412", confirmed: 1, expected: 2 }, "Report created; checking screenshots"],
-        ["created", { issue_url: "https://github.com/WebDevBooster/richos/issues/412", confirmed: 1, expected: 2 }, "Report created; checking screenshots"],
-        ["notsent-upload", { reason: "Screenshot 2 did not finish uploading.", review: false, try_again: true, upload: true, item: "screenshot 2", toolong: false }, "Not sent yet"],
-        ["notsent-toolong", { reason: "Screenshot 2 did not finish uploading.", review: false, try_again: true, upload: true, item: "screenshot 2", toolong: true }, "Not sent yet"],
-        ["checking", {}, "Checking whether your report was received"],
         ["submitted", { issue_url: "https://github.com/WebDevBooster/richos/issues/412" }, "Report submitted"],
-        ["notsent", { reason: "Your Mac is not connected to the internet. Try again when you are online.", review: false, try_again: true }, "Not sent yet"],
-        ["notsent", { reason: "The reporting service did not accept the report: in the startup log excerpt, one line looks like it contains a password.", review: true, try_again: false }, "Not sent yet"],
-        ["unconfirmed", { checked_at: "9:41 AM" }, "Delivery could not be confirmed"],
+        ["notsent", { reason: "Your Mac is not connected to the internet. Send again when you are online.", try_again: true }, "Not sent yet"],
       ]) {
-        const base = kind.replace(/-(upload|toolong)$/, "");
-        const shots = ["uploading", "created", "created-checking", "notsent-upload", "notsent-toolong", "submitted"].includes(kind) ? [SHOT(1), SHOT(2)] : [];
-        const rows = kind === "uploading" ? [{ id: "1", sent: 581001, total: 581001, st: "earlier" }, { id: "2", sent: 371841, total: 581002, st: "live" }]
-          : kind.startsWith("notsent-") ? [{ id: "1", sent: 581001, total: 581001, st: "ok" }, { id: "2", sent: 371841, total: 581002, st: "stopped" }] : [];
-        await emit({ t: "delivery", view: Object.assign(DELIVERY(base, extra), { shots, rows }) });
+        const shots = kind === "submitted" ? [SHOT(1), SHOT(2)] : [];
+        await emit({ t: "delivery", view: Object.assign(DELIVERY(kind, extra), { shots }) });
         await settle();
-        const label = kind + (extra.review ? "-rejected" : "");
-        check(`${theme} result ${label}: heading`, (await T("#result-body h1")) === want);
-        check(`${theme} result ${label}: the report ID, never a secret`, (await T("#result-body .kv")).includes("RD-7K3M-Q9VX"));
+        check(`${theme} result ${kind}: heading`, (await T("#result-body h1")) === want);
+        check(`${theme} result ${kind}: the report ID`, (await T("#result-body .kv")).includes("RD-7K3M-Q9VX"));
         const foot = await T("#result-foot");
-        if (kind === "unconfirmed") check(`${theme} result unconfirmed: Check status, no Send or Try again`, foot.includes("Check status") && !foot.includes("Send report") && !foot.includes("Try again"));
-        if (kind === "notsent" && !extra.review) check(`${theme} result notsent: the observed reason and Try again`, (await T("#result-body .why")).startsWith("Your Mac is not connected") && foot.includes("Try again"));
-        if (kind === "notsent" && extra.review) check(`${theme} result rejected: Review report instead of Try again`, foot.includes("Review report") && !foot.includes("Try again"));
-        if (kind === "created-checking") check(`${theme} result created-checking: the real link, no second report, no Send`, (await T("#result-body .issue")) === "github.com/WebDevBooster/richos/issues/412" && (await T("#result-body")).includes("No second report is created.") && !foot.includes("Send report"));
-        if (kind === "created") check(`${theme} result created: 1 of 2 confirmed, Check status, no Send`, (await T("#result-body .kv")).includes("1 of 2 confirmed") && (await T("#created-rows")).includes("Not confirmed") && foot.includes("Check status") && !foot.includes("Send report"));
+        if (kind === "notsent") check(`${theme} result notsent: the observed reason and Send again`, (await T("#result-body .why")).startsWith("Your Mac is not connected") && foot.includes("Send again") && foot.includes("Email support"));
         if (kind === "submitted") check(`${theme} result submitted: the public link and the receipt count`, (await T("#result-body .issue")) === "github.com/WebDevBooster/richos/issues/412" && (await T("#result-body .kv")).includes("2 screenshots received"));
-        if (kind === "uploading") check(`${theme} result uploading: received earlier, a real percentage, Cancel`, (await T("#up-rows")).includes("Received earlier") && (await T("#up-rows")).includes("64%") && (await T("#up-sum")) === "1 screenshot of 2 received · sending screenshot 2" && foot.includes("Cancel"));
-        if (kind === "notsent-upload") check(`${theme} result interrupted upload: names the image, Resume sending, Review screenshots`, (await T("#result-body .why")).startsWith("Sending stopped while screenshot 2 of 2 was on its way") && foot.includes("Resume sending") && foot.includes("Review screenshots") && !foot.includes("Try again") && (await T("#ns-rows")).includes("Stopped"));
-        if (kind === "notsent-toolong") check(`${theme} result past five minutes: Reduce screenshot 2`, (await T("#result-body .why")).startsWith("Screenshot 2 of 2 did not finish within five minutes") && (await visible('[data-act="reduce-shot"]')));
-        await contrast(page, "result-" + label, theme);
+        await contrast(page, "result-" + kind, theme);
       }
-      // Cancel during Sending screenshots: back to the review, everything kept (round 40 §5)
-      await emit({ t: "delivery", view: Object.assign(DELIVERY("uploading", { done: 0, total: 2 }), { shots: [SHOT(1), SHOT(2)], rows: [{ id: "1", sent: 0, total: 581001, st: "live" }, { id: "2", sent: 0, total: 581002, st: "wait" }] }) });
+      await page.click('#result-foot [data-act="try-again"]');
       await settle();
-      await page.click('#result-foot [data-act="cancel-upload"]');
-      await settle();
-      check(`${theme} cancel upload: asks the app at once`, (await calls()).some((c) => c[0] === "cancel_upload"));
-      await emit({ t: "delivery", view: Object.assign(DELIVERY("notsent", { reason: "You canceled sending.", review: false, try_again: true, upload: true, canceled: true }), { shots: [SHOT(1), SHOT(2)] }) });
-      await page.waitForSelector("#s-review:not([hidden])");
-      check(`${theme} cancel upload: the review returns with the toast`, (await T("#toast")).startsWith("Canceled. Your report and screenshots are kept on this Mac"));
+      check(`${theme} Send again asks the app to send`, (await calls()).some((c) => c[0] === "try_again"));
       // Email support above 10 MiB: two packages, or Mail anyway (round 40 §7)
       await page.evaluate(() => { window.__TAURI__.core.invoke = ((orig) => function (c, a) { if (c === "email_plan") return Promise.resolve({ count: 6, bytes: 14200000, parts: 2, names: ["screenshot-1.png", "screenshot-2.png", "screenshot-3.png", "screenshot-4.png", "screenshot-5.png", "screenshot-6.png"] }); return orig(c, a); })(window.__TAURI__.core.invoke); });
-      await emit({ t: "delivery", view: DELIVERY("unconfirmed", { checked_at: "9:41 AM" }) });
+      await emit({ t: "delivery", view: DELIVERY("notsent", { reason: "RichDoctor could not reach the reporting service. Send again, or email support.", try_again: true }) });
       await settle();
       await page.click('#result-foot [data-act="email"]');
       await page.waitForSelector("#sheet-email:not([hidden])");
@@ -387,7 +350,7 @@ async function run() {
       // 5. Saved reports (round 39 §6)
       await emit({ t: "go", screen: "saved" });
       await page.waitForSelector("#s-saved:not([hidden])");
-      check(`${theme} saved: four rows with their matching action`, (await page.locator("#saved-list .item").count()) === 4 && (await T("#saved-list")).includes("Check status") && (await T("#saved-list")).includes("Resume"));
+      check(`${theme} saved: four rows with their matching action`, (await page.locator("#saved-list .item").count()) === 4 && (await T("#saved-list")).includes("Send again") && (await T("#saved-list")).includes("Resume"));
       await contrast(page, "saved", theme);
       await page.locator('#saved-list [data-act="delete"]').first().click();
       await page.waitForSelector("#sheet-delete:not([hidden])");

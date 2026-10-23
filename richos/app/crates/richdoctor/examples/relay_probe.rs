@@ -6,11 +6,10 @@
 //! RichDoctor's own delivery code through its own HTTPS client (`relay::Https`, plain HTTP on
 //! loopback only):
 //!
-//!   1. a report with two screenshots: register, two uploads, complete; "Report submitted" only
-//!      with both images confirmed; exactly one issue, both images stored, byte-identical;
-//!   2. the issue is created and its answer lost: status reconciles the same ID, one issue;
-//!   3. a definite refusal, then Try again with the same ID: one issue;
-//!   4. retirement: an unseen ID retires, and a retired ID cannot be completed.
+//!   1. a report with two screenshots: register, two uploads, complete, straight through;
+//!      "Report submitted"; exactly one issue, both images stored, byte-identical;
+//!   2. a refusal is "Not sent yet", and Send again (the same report under a fresh report ID)
+//!      files it.
 //!
 //! ```sh
 //! cargo run --offline --manifest-path richos/app/crates/richdoctor/Cargo.toml --example relay_probe -- <scratch dir>
@@ -64,8 +63,7 @@ fn main() {
         }
     };
     let relay = Https::new().unwrap();
-    let clock = richdoctor_core::util::now_millis;
-    let sleep = |ms: u64| std::thread::sleep(std::time::Duration::from_millis(ms.min(1000)));
+    let now = richdoctor_core::util::now_millis;
     let mut failures = 0;
     let mut check = |name: &str, ok: bool, why: String| {
         println!("{} {name}{}", if ok { "ok  " } else { "FAIL" }, if ok { String::new() } else { format!(": {why}") });
@@ -78,13 +76,8 @@ fn main() {
     let images = vec![png(10, 320, 200), png(200, 240, 160)];
     let a = report(&dest, &images);
     let loader = |e: &Entry| images.get(e.order as usize - 1).cloned();
-    let mut seen = Vec::new();
-    let s = delivery::attempt(&a, &loader, &dest, &relay, &clock, &sleep, &mut |s| {
-        seen.push(s.clone());
-        true
-    }, false);
+    let s = delivery::send(&a, &loader, &dest, &relay, now());
     check("1 two screenshots: Report submitted", matches!(s, State::Submitted { .. }), format!("{s:?}"));
-    check("1 the upload stage was shown before filing", seen.iter().any(|s| matches!(s, State::SendingScreenshots { .. })) && seen.contains(&State::Creating), format!("{seen:?}"));
     let issues = get(&dest, "/_issues");
     let issue_count = issues.as_array().map(|a| a.len()).unwrap_or(0);
     check("1 exactly one issue", issue_count == 1, format!("{issue_count}"));
@@ -96,31 +89,16 @@ fn main() {
     let body = issues[0]["body"].as_str().unwrap_or("");
     check("1 the issue carries the count and the staff links", body.contains("Screenshots: 2, shared privately with RichOS support (staff sign-in required)") && body.contains(&format!("\n2. {}/v1/reports/{}/attachments/2\n", dest.relay, a.report_id)), body.to_string());
 
-    // 2. Created, answer lost: reconciled, never created again.
-    let b = report(&dest, &[]);
-    relay.post(&format!("{}/_fault", dest.relay), &serde_json::json!({"next": "lost"}));
-    let s = delivery::attempt(&b, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| true, false);
-    check("2 a lost answer is reconciled to Report submitted", matches!(s, State::Submitted { .. }), format!("{s:?}"));
-    let n = get(&dest, "/_issues").as_array().map(|a| a.len()).unwrap_or(0);
-    check("2 still one issue for that report (two in all)", n == 2, format!("{n}"));
-
-    // 3. A definite refusal, then Try again with the same ID.
+    // 2. A refusal is "Not sent yet"; Send again is the same report under a fresh report ID.
     let c = report(&dest, &[]);
     relay.post(&format!("{}/_fault", dest.relay), &serde_json::json!({"next": "limited"}));
-    let s = delivery::attempt(&c, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| true, false);
-    check("3 busy: Not sent yet, Try again offered", matches!(s, State::NotSent { why: NotSent::Busy { .. }, .. }) && s.permits_try_again(), format!("{s:?}"));
-    let s = delivery::attempt(&c, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| true, true);
-    check("3 Try again, same ID: Report submitted", matches!(s, State::Submitted { .. }), format!("{s:?}"));
+    let s = delivery::send(&c, &|_| None, &dest, &relay, now());
+    check("2 busy: Not sent yet, Send again offered", matches!(s, State::NotSent { why: NotSent::Refused { .. }, .. }) && s.may_send(), format!("{s:?}"));
+    let again = report(&dest, &[]);
+    let s = delivery::send(&again, &|_| None, &dest, &relay, now());
+    check("2 Send again: Report submitted", matches!(s, State::Submitted { .. }), format!("{s:?}"));
     let n = get(&dest, "/_issues").as_array().map(|a| a.len()).unwrap_or(0);
-    check("3 one issue for it (three in all)", n == 3, format!("{n}"));
-
-    // 4. Retirement.
-    let d = report(&dest, &[]);
-    check("4 an unseen ID retires", delivery::retire(&d, &dest, &relay, clock()).is_ok(), String::new());
-    let s = delivery::attempt(&d, &|_| None, &dest, &relay, &clock, &sleep, &mut |_| true, false);
-    check("4 a retired ID is never filed", matches!(s, State::NotSent { why: NotSent::Retired, .. }), format!("{s:?}"));
-    let n = get(&dest, "/_issues").as_array().map(|a| a.len()).unwrap_or(0);
-    check("4 no issue was created for it", n == 3, format!("{n}"));
+    check("2 one issue for it (two in all)", n == 2, format!("{n}"));
 
     if let Some(mut child) = started {
         // The relay this probe started, by the handle it holds, never by a name.

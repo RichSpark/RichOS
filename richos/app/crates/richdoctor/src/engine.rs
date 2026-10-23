@@ -14,7 +14,7 @@
 //! process"); no CLI session is ever resumed.
 use richdoctor_core::adapter::{self, Failure, Next, Session, Spec, StreamEvent};
 use richdoctor_core::collect::{self, Category, Scope, Window};
-use richdoctor_core::delivery::{self, Destination, NotSent, State, Upload};
+use richdoctor_core::delivery::{self, Destination, NotSent, State};
 use richdoctor_core::report::{self, Provenance, Report};
 use richdoctor_core::scrub::{self, Context};
 use richdoctor_core::store::{Delivery, Draft, Entry, SaveError, Shot, Stage, Store};
@@ -52,35 +52,13 @@ struct Inner {
     /// media type). A screenshot replaced or removed before then leaves this queue with it.
     pictures: Vec<(String, String, String)>,
     unsaved: Option<SaveError>,
-    /// The per-image list of the Send report in progress (round 40 §5), in manifest order.
-    upload: Vec<UploadRow>,
-    /// The Cancel of the Send report in progress.
-    cancel_upload: Option<Arc<AtomicBool>>,
     /// A saved report was reopened: its next fresh Claude Code process gets the record so far,
     /// whatever the operation count.
     resumed: bool,
-    /// Report created and screenshots unconfirmed: RichDoctor is still asking (up to 2 minutes).
-    confirming: bool,
 }
 
-/// One row of the per-image list: Waiting, a real percentage, Received, Received earlier, Stopped.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct UploadRow {
-    id: String,
-    sent: u64,
-    total: u64,
-    /// "wait", "live", "ok", "earlier", "stopped"
-    st: &'static str,
-}
-
-fn rows_json(rows: &[UploadRow]) -> Value {
-    Value::Array(rows.iter().map(|r| json!({"id": r.id, "sent": r.sent, "total": r.total, "st": r.st})).collect())
-}
-
-/// How long RichDoctor keeps asking whether the support team can open every screenshot once
-/// the report exists (round 40: "which takes up to two minutes"), and how often.
-const CONFIRM_FOR: Duration = Duration::from_secs(120);
-const CONFIRM_EVERY: Duration = Duration::from_secs(15);
+/// Approved is final (§140): changing an approved report means a new report.
+const FINAL: &str = "This report was approved and can't be changed. Start a new report to change it.";
 
 /// The fixed facts of this Mac and this run.
 pub struct Env {
@@ -115,7 +93,7 @@ fn ctx(env: &Env) -> Context {
 impl Engine {
     pub fn new(env: Env, emit: Emit) -> Engine {
         Engine {
-            inner: Arc::new(Mutex::new(Inner { draft: None, pending: Pending::None, operation: 0, last_message: None, stopper: None, pictures: Vec::new(), unsaved: None, upload: Vec::new(), cancel_upload: None, confirming: false, resumed: false })),
+            inner: Arc::new(Mutex::new(Inner { draft: None, pending: Pending::None, operation: 0, last_message: None, stopper: None, pictures: Vec::new(), unsaved: None, resumed: false })),
             session: Arc::new(Mutex::new(None)),
             canceled: Arc::new(AtomicBool::new(false)),
             quiet: Arc::new(AtomicBool::new(false)),
@@ -747,11 +725,6 @@ impl Engine {
         let total: u64 = facts.iter().filter_map(|f| f["bytes"].as_u64()).sum();
         v["shots"] = Value::Array(facts);
         v["shots_bytes"] = json!(total);
-        if let Some(del) = &d.delivery {
-            v["received"] = json!(del.stored.len());
-            v["attempt"] = json!(del.approved.manifest.len());
-            v["changed"] = json!(!self.unchanged(d));
-        }
         v
     }
 
@@ -778,19 +751,13 @@ impl Engine {
             .collect()
     }
 
-    /// Whether the current report and screenshots are exactly what was approved under the
-    /// earlier ID (round 40 §6: unchanged, Send report resumes; changed, it is a revision).
-    fn unchanged(&self, d: &Draft) -> bool {
-        let (Some(del), Some(r)) = (&d.delivery, &d.report) else { return false };
-        let Ok(manifest) = self.env.store.manifest(d) else { return false };
-        let (title, body) = r.render();
-        delivery::content_sha256(&title, &body, &manifest) == del.approved.content_sha256
-    }
-
     pub fn edit(&self, section: &str, text: &str) -> Result<Value, String> {
         let c = ctx(&self.env);
         let mut inner = self.inner.lock().unwrap();
         let d = inner.draft.as_mut().ok_or("no report")?;
+        if d.delivery.is_some() {
+            return Err(FINAL.into());
+        }
         d.report.as_mut().ok_or("no report")?.edit(section, text, &c)?;
         self.save(&mut inner);
         let d = inner.draft.as_ref().unwrap();
@@ -799,7 +766,7 @@ impl Engine {
 
     pub fn set_excerpt(&self, id: &str, removed: bool) -> Value {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(r) = inner.draft.as_mut().and_then(|d| d.report.as_mut()) {
+        if let Some(r) = inner.draft.as_mut().filter(|d| d.delivery.is_none()).and_then(|d| d.report.as_mut()) {
             r.set_excerpt_removed(id, removed);
         }
         self.save(&mut inner);
@@ -877,86 +844,44 @@ impl Engine {
     }
 
     // -----------------------------------------------------------------------------------
-    // send, and delivery
+    // send
     // -----------------------------------------------------------------------------------
 
-    /// **SEND REPORT**: freeze the exact reviewed text and screenshot set under its report ID and
-    /// a new receipt, save it BEFORE any request, then deliver (register, upload, complete).
-    /// Refused when the last check finds anything, when it cannot be saved, or while an earlier
-    /// approval of this report is unresolved. A changed revision first retires the earlier ID at
-    /// the relay (PRD §7); only a `retired` answer lets it go.
+    /// **SEND REPORT** (§140, dead simple): approve the exact reviewed text and screenshot set
+    /// under the report ID, save it, and send it straight through. Approved is final. A report
+    /// that was not sent is sent again from the start under a fresh report ID (a rare duplicate
+    /// issue is acceptable); one that was submitted, or is being sent, is not sent again.
     pub fn send_report(&self) -> Result<(), String> {
         let dest = self.env.dest.clone()?;
-        let earlier = {
-            let inner = self.inner.lock().unwrap();
-            let d = inner.draft.as_ref().ok_or("no report")?;
-            match &d.delivery {
-                Some(del) if !del.state.permits_revision() => {
-                    return Err("The earlier report may already have reached the team; this edit cannot be sent until that is known.".into());
+        let draft_id = {
+            let mut inner = self.inner.lock().unwrap();
+            let d = inner.draft.as_mut().ok_or("no report")?;
+            match d.delivery.as_ref().map(|x| &x.state) {
+                Some(State::Sending) => return Err("This report is being sent.".into()),
+                Some(State::Submitted { .. }) => return Err("This report was already sent.".into()),
+                Some(State::NotSent { .. }) => {
+                    if let Some(r) = d.report.as_mut() {
+                        r.report_id = delivery::new_report_id().map_err(|e| e.to_string())?;
+                        r.fit();
+                    }
                 }
-                Some(del) if del.state.permits_try_again() && self.unchanged(d) => {
-                    // Round 40 §6: "Send this report unchanged and RichDoctor resumes with the
-                    // missing screenshots" under the same report ID and receipt.
-                    let approved = del.approved.clone();
-                    let this = self.clone();
-                    std::thread::spawn(move || this.deliver(approved, dest, true));
-                    return Ok(());
-                }
-                Some(del) => Some((del.approved.clone(), del.completion_attempted)),
-                None => None,
+                None => {}
             }
+            d.id.clone()
         };
+        let approved = self.approve_and_save(&dest)?;
         let this = self.clone();
-        std::thread::spawn(move || {
-            if let Some((old, completion_attempted)) = earlier {
-                let relay = match crate::relay::Https::new() {
-                    Ok(r) => r,
-                    Err(_) => return this.set_state(&State::NotSent { why: delivery::NotSent::Unreachable, at: util::now_millis() }),
-                };
-                match delivery::retire(&old, &dest, &relay, util::now_millis()) {
-                    Ok(()) => {
-                        let mut inner = this.inner.lock().unwrap();
-                        if let Some(d) = inner.draft.as_mut() {
-                            d.retire_for_revision().ok();
-                            // A revision gets a new report ID (round 39: "Sending this one gives it a
-                            // new report ID and retires the old one on this Mac").
-                            if let Some(r) = d.report.as_mut() {
-                                r.report_id = delivery::new_report_id().unwrap_or_else(|_| r.report_id.clone());
-                                r.fit();
-                            }
-                        }
-                    }
-                    // Refused or lost: the revision stays unsent and the earlier report's real
-                    // state is what the person sees.
-                    // The V6 handover's clarification 1: no completion was ever sent for the
-                    // earlier ID, so no issue can exist. A failed retirement is then only the
-                    // connection outcome: the revision stays unsent, and Send report retries the
-                    // idempotent retirement. Never "could not be confirmed".
-                    Err(State::NotSent { why: delivery::NotSent::Offline, .. }) if !completion_attempted => {
-                        return this.send(json!({"t": "send-refused", "why": "Your Mac is not connected to the internet. Your revised report is kept on this Mac and was not sent; choose Send report again when you are online."}));
-                    }
-                    Err(State::NotSent { why: delivery::NotSent::Unreachable | delivery::NotSent::Busy { .. }, .. }) | Err(State::Checking { .. }) if !completion_attempted => {
-                        return this.send(json!({"t": "send-refused", "why": "RichDoctor could not reach the reporting service. Your revised report is kept on this Mac and was not sent; choose Send report again to try."}));
-                    }
-                    Err(state) => {
-                        let shown = if matches!(state, State::Checking { .. }) {
-                            delivery::after_check(delivery::check(&old, &dest, &relay, util::now_millis()), &State::Unconfirmed { checked_at: util::now_millis() }, util::now_millis())
-                        } else {
-                            state
-                        };
-                        return this.set_state(&shown);
-                    }
-                }
-            }
-            match this.approve_and_save(&dest) {
-                Ok(approved) => this.deliver(approved, dest, false),
-                Err(why) => this.send(json!({"t": "send-refused", "why": why})),
-            }
-        });
+        std::thread::spawn(move || this.deliver(&draft_id, approved, dest));
         Ok(())
     }
 
-    /// Freeze and save the current revision, or say why not.
+    /// **SEND AGAIN** after "Not sent yet": the same report, from the start, under a fresh ID.
+    pub fn try_again(&self) -> Result<(), String> {
+        self.send_report()
+    }
+
+    /// Freeze and save the current report as approved, or say why not. Nothing is sent unless
+    /// the approval is saved first.
     fn approve_and_save(&self, dest: &Destination) -> Result<delivery::Approved, String> {
         let mut inner = self.inner.lock().unwrap();
         let d = inner.draft.as_mut().ok_or("no report")?;
@@ -965,11 +890,12 @@ impl Engine {
         let (title, body) = r.render();
         let approved = delivery::approve(&r.report_id, &title, &body, manifest, &dest.relay, util::now_millis(), &self.env.store.installation_id())
             .map_err(|p| p.iter().map(|p| format!("{}: {}", p.item, p.detail)).collect::<Vec<_>>().join(" "))?;
-        d.delivery = Some(Delivery { approved: approved.clone(), state: State::Sending, completion_attempted: false, stored: Vec::new() });
+        // Sending from the moment it is approved; a quit before it ends reads as not sent at the
+        // next launch (interrupted_sends_not_sent).
+        d.delivery = Some(Delivery { approved: approved.clone(), state: State::Sending });
         d.stage = Stage::Approved;
         d.left = "approved".into();
         if let Err(e) = self.env.store.save(d, util::now_millis()) {
-            // Not durable: nothing is sent (PRD §7: persisted before the first request).
             d.delivery = None;
             d.stage = Stage::Review;
             inner.unsaved = Some(e.clone());
@@ -979,237 +905,59 @@ impl Engine {
         Ok(approved)
     }
 
-    fn set_state(&self, state: &State) {
-        self.set_state_saved(state);
-    }
-
-    /// Show and save `state`; `false` when it could not be saved on this Mac. A "Creating" that
-    /// could not be saved leaves `completion_attempted` as it was, and delivery then makes no
-    /// completion request (Codex audit of 0881b5f8f #1).
-    fn set_state_saved(&self, state: &State) -> bool {
+    /// Save `state` to report `draft_id` (the one that was sent, whichever is open now) and show
+    /// it when that report is the open one.
+    fn set_state(&self, draft_id: &str, state: &State) {
         let mut inner = self.inner.lock().unwrap();
-        let mut before = None;
-        if let Some(del) = inner.draft.as_mut().and_then(|d| d.delivery.as_mut()) {
-            if matches!(state, State::Creating) {
-                before = Some(del.completion_attempted);
-                del.completion_attempted = true;
+        if let Some(d) = inner.draft.as_mut().filter(|d| d.id == draft_id) {
+            if let Some(del) = d.delivery.as_mut() {
+                del.state = state.clone();
             }
-            del.state = state.clone();
-        }
-        if matches!(state, State::NotSent { why: NotSent::UploadStopped { .. } | NotSent::Canceled, .. }) {
-            for row in inner.upload.iter_mut().filter(|r| r.st == "live") {
-                row.st = "stopped";
-            }
-        }
-        if let Some(d) = inner.draft.as_mut() {
             d.left = left_words(state);
-        }
-        self.save(&mut inner);
-        let saved = inner.unsaved.is_none();
-        if let (false, Some(was), Some(del)) = (saved, before, inner.draft.as_mut().and_then(|d| d.delivery.as_mut())) {
-            del.completion_attempted = was;
-        }
-        let view = self.view(&inner);
-        drop(inner);
-        if let Some(v) = view {
-            self.send(json!({"t": "delivery", "view": v}));
-        }
-        saved
-    }
-
-    fn deliver(&self, approved: delivery::Approved, dest: Destination, retry: bool) {
-        let cancel = Arc::new(AtomicBool::new(false));
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.cancel_upload = Some(cancel.clone());
-            inner.confirming = false;
-            let stored = inner.draft.as_ref().and_then(|d| d.delivery.as_ref()).map(|x| x.stored.clone()).unwrap_or_default();
-            inner.upload = approved
-                .manifest
-                .iter()
-                .map(|e| {
-                    let earlier = stored.contains(&e.attachment_id);
-                    UploadRow { id: e.attachment_id.clone(), sent: if earlier { e.bytes } else { 0 }, total: e.bytes, st: if earlier { "earlier" } else { "wait" } }
-                })
-                .collect();
-        }
-        let me = self.clone();
-        let listener: Arc<dyn Fn(Upload) + Send + Sync> = Arc::new(move |e| me.heard(e));
-        let relay = match crate::relay::Https::watched(cancel, listener) {
-            Ok(r) => r,
-            Err(_) => {
-                self.set_state(&State::NotSent { why: delivery::NotSent::Unreachable, at: util::now_millis() });
-                return;
-            }
-        };
-        let (store, draft) = {
-            let inner = self.inner.lock().unwrap();
-            (self.env.store.clone(), inner.draft.clone())
-        };
-        let Some(draft) = draft else { return };
-        // The approved images, read back from the draft and checked against the manifest.
-        let loader = |e: &richdoctor_core::image_profile::Entry| {
-            let shot = draft.screenshots.get(e.order as usize - 1)?;
-            store.shot_bytes(&draft.id, shot).filter(|b| util::sha256_hex(b) == e.sha256)
-        };
-        let this = self.clone();
-        let end = delivery::attempt(&approved, &loader, &dest, &relay, &util::now_millis, &|ms| std::thread::sleep(Duration::from_millis(ms)), &mut |s| this.set_state_saved(s), retry);
-        self.inner.lock().unwrap().cancel_upload = None;
-        if matches!(end, State::CreatedCheckingImages { .. }) {
-            self.confirm_images(&approved, &dest, &relay);
-        }
-    }
-
-    /// Report created; checking screenshots: ask about the same report every 15 seconds for up
-    /// to two minutes. Never sends again; the last answer is what the person sees.
-    fn confirm_images(&self, approved: &delivery::Approved, dest: &Destination, relay: &crate::relay::Https) {
-        self.inner.lock().unwrap().confirming = true;
-        let started = Instant::now();
-        let mut current = self.inner.lock().unwrap().draft.as_ref().and_then(|d| d.delivery.as_ref()).map(|x| x.state.clone());
-        while started.elapsed() < CONFIRM_FOR {
-            std::thread::sleep(CONFIRM_EVERY);
-            let Some(now_state) = current.clone() else { break };
-            let now = util::now_millis();
-            let next = delivery::after_check(delivery::check(approved, dest, relay, now), &now_state, now);
-            let done = !matches!(next, State::CreatedCheckingImages { .. });
-            if done {
-                self.inner.lock().unwrap().confirming = false;
-            }
-            self.set_state(&next);
-            current = Some(next);
-            if done {
-                return;
-            }
-        }
-        self.inner.lock().unwrap().confirming = false;
-        if let Some(s) = current {
-            self.set_state(&s);
-        }
-    }
-
-    /// The per-image list hears the relay: the plan (received earlier), real bytes, receipts.
-    fn heard(&self, e: Upload) {
-        let mut inner = self.inner.lock().unwrap();
-        let mut keep = false;
-        match &e {
-            Upload::Plan { missing } => {
-                let mut stored = Vec::new();
-                for r in inner.upload.iter_mut() {
-                    if !missing.contains(&r.id) {
-                        r.st = if r.st == "ok" { "ok" } else { "earlier" };
-                        r.sent = r.total;
-                        stored.push(r.id.clone());
-                    }
-                }
-                if let Some(del) = inner.draft.as_mut().and_then(|d| d.delivery.as_mut()) {
-                    del.stored = stored;
-                }
-                keep = true;
-            }
-            Upload::Bytes { id, sent, total } => {
-                if let Some(r) = inner.upload.iter_mut().find(|r| &r.id == id) {
-                    r.sent = *sent.min(total);
-                    r.total = *total;
-                    if r.st == "wait" || r.st == "stopped" {
-                        r.st = "live";
-                    }
-                }
-            }
-            Upload::Received { id } => {
-                if let Some(r) = inner.upload.iter_mut().find(|r| &r.id == id) {
-                    r.st = "ok";
-                    r.sent = r.total;
-                }
-                if let Some(del) = inner.draft.as_mut().and_then(|d| d.delivery.as_mut()) {
-                    if !del.stored.contains(id) {
-                        del.stored.push(id.clone());
-                    }
-                }
-                keep = true;
-            }
-        }
-        if keep {
             self.save(&mut inner);
-        }
-        let rows = rows_json(&inner.upload);
-        drop(inner);
-        self.send(json!({"t": "upload", "rows": rows}));
-    }
-
-    /// **CANCEL** during Sending screenshots (round 40): the upload in progress ends at once and
-    /// nothing that could create the public report is sent. Everything stays on this Mac.
-    pub fn cancel_upload(&self) -> bool {
-        let inner = self.inner.lock().unwrap();
-        let sending = inner.draft.as_ref().and_then(|d| d.delivery.as_ref()).is_some_and(|d| matches!(d.state, State::Sending | State::SendingScreenshots { .. }));
-        match (&inner.cancel_upload, sending) {
-            (Some(c), true) => {
-                c.store(true, Ordering::SeqCst);
-                true
+            let view = self.view(&inner);
+            drop(inner);
+            if let Some(v) = view {
+                self.send(json!({"t": "delivery", "view": v}));
             }
-            _ => false,
+            return;
+        }
+        drop(inner);
+        if let Some(mut d) = self.env.store.load(draft_id) {
+            if let Some(del) = d.delivery.as_mut() {
+                del.state = state.clone();
+                d.left = left_words(state);
+                self.env.store.save(&mut d, util::now_millis()).ok();
+            }
         }
     }
 
-    /// The delivery view with the live per-image rows, when a send is in progress or just ended.
+    /// The one request, from the approved report's own screenshots (approved is final, so the
+    /// draft's screenshots are the approved ones).
+    fn deliver(&self, draft_id: &str, approved: delivery::Approved, dest: Destination) {
+        self.set_state(draft_id, &State::Sending);
+        let Some(d) = self.env.store.load(draft_id) else { return };
+        let store = self.env.store.clone();
+        let loader = |e: &richdoctor_core::image_profile::Entry| {
+            let shot = d.screenshots.get(e.order as usize - 1)?;
+            store.shot_bytes(&d.id, shot)
+        };
+        let end = match crate::relay::Https::new() {
+            Ok(relay) => delivery::send(&approved, &loader, &dest, &relay, util::now_millis()),
+            Err(_) => State::NotSent { why: NotSent::Unreachable, at: util::now_millis() },
+        };
+        self.set_state(draft_id, &end);
+    }
+
+    /// The open report's delivery view, with its screenshots' facts.
     fn view(&self, inner: &Inner) -> Option<Value> {
         let d = inner.draft.as_ref()?;
         let mut v = delivery_view(d);
         if v.is_null() {
             return None;
         }
-        if !inner.upload.is_empty() {
-            v["rows"] = rows_json(&inner.upload);
-        }
-        if v["kind"] == "created" && inner.confirming {
-            v["kind"] = json!("created-checking");
-        }
-        let facts = self.shot_facts(d);
-        v["shots"] = Value::Array(facts);
+        v["shots"] = Value::Array(self.shot_facts(d));
         Some(v)
-    }
-
-    /// **TRY AGAIN**: the same approved report, ID, receipt, text and images. Only after a
-    /// definite "not sent"; images already stored are not sent again.
-    pub fn try_again(&self) -> Result<(), String> {
-        let dest = self.env.dest.clone()?;
-        let approved = {
-            let inner = self.inner.lock().unwrap();
-            let del = inner.draft.as_ref().and_then(|d| d.delivery.as_ref()).ok_or("nothing approved")?;
-            if !del.state.permits_try_again() {
-                return Err("This report cannot be sent again now.".into());
-            }
-            // Any edit since the approval ends it: the earlier approval is never sent, and the
-            // changed report goes only through Send report, a fresh approval.
-            if !self.unchanged(inner.draft.as_ref().unwrap()) {
-                return Err("This report changed after you approved it. Review it, then choose Send report to send this version.".into());
-            }
-            del.approved.clone()
-        };
-        let this = self.clone();
-        std::thread::spawn(move || this.deliver(approved, dest, true));
-        Ok(())
-    }
-
-    /// **CHECK STATUS**: ask about the same report. Never sends again.
-    pub fn check_status(&self) -> Result<(), String> {
-        let dest = self.env.dest.clone()?;
-        let (approved, current) = {
-            let inner = self.inner.lock().unwrap();
-            let del = inner.draft.as_ref().and_then(|d| d.delivery.as_ref()).ok_or("nothing approved")?;
-            (del.approved.clone(), del.state.clone())
-        };
-        self.send(json!({"t": "checking-status", "report_id": approved.report_id}));
-        let this = self.clone();
-        std::thread::spawn(move || {
-            let relay = match crate::relay::Https::new() {
-                Ok(r) => r,
-                Err(_) => return,
-            };
-            let now = util::now_millis();
-            let state = delivery::after_check(delivery::check(&approved, &dest, &relay, now), &current, now);
-            this.set_state(&state);
-        });
-        Ok(())
     }
 
     // -----------------------------------------------------------------------------------
@@ -1294,6 +1042,9 @@ impl Engine {
         {
             let mut inner = self.inner.lock().unwrap();
             let d = inner.draft.as_mut().ok_or("no report")?;
+            if d.delivery.is_some() {
+                return Err(FINAL.into());
+            }
             if replacing.is_some_and(|i| i >= d.screenshots.len()) {
                 return Err("no such screenshot".into());
             }
@@ -1345,6 +1096,9 @@ impl Engine {
     pub fn remove_image(&self, index: usize) -> Result<(), String> {
         let mut inner = self.inner.lock().unwrap();
         let d = inner.draft.as_mut().ok_or("no report")?;
+        if d.delivery.is_some() {
+            return Err(FINAL.into());
+        }
         if index >= d.screenshots.len() {
             return Err("no such screenshot".into());
         }
@@ -1397,14 +1151,7 @@ impl Engine {
             .store
             .list()
             .iter()
-            .map(|d| {
-                let mut row = saved_row(d);
-                // A report changed since its approval is reviewed and approved again, never retried.
-                if d.delivery.as_ref().is_some_and(|x| x.state.permits_try_again()) && !self.unchanged(d) {
-                    row["action"] = json!("review");
-                }
-                row
-            })
+            .map(saved_row)
             .collect();
         let sent: Vec<Value> = self
             .env
@@ -1416,8 +1163,7 @@ impl Engine {
         json!({"rows": rows, "sent": sent})
     }
 
-    /// Open a saved report: its conversation, its review or its delivery state. An approved
-    /// in-flight report is checked once (never sent again).
+    /// Open a saved report: its conversation, its review or its delivery state.
     pub fn open(&self, id: &str) -> Result<Value, String> {
         let d = self.env.store.load(id).ok_or("That report is no longer on this Mac.")?;
         {
@@ -1437,13 +1183,8 @@ impl Engine {
                     .filter_map(|s| self.env.store.shot_bytes(&d.id, s).map(|b| (s.id.clone(), util::base64_std(&b), s.media_type.clone())))
                     .collect()
             };
-            inner.upload.clear();
             inner.resumed = !d.conversation.is_empty();
             inner.draft = Some(d.clone());
-        }
-        let in_flight = d.delivery.as_ref().is_some_and(|x| x.state.unresolved());
-        if in_flight {
-            self.check_status().ok();
         }
         Ok(json!({
             "stage": d.stage,
@@ -1487,28 +1228,16 @@ impl Engine {
         self.env.store.delete(id).map_err(|e| e.to_string())
     }
 
-    /// At launch: check every approved report whose delivery is unresolved, once (PRD §7: "On
-    /// reopen the app checks the status of previously approved in-flight reports"). Never sends.
-    pub fn check_in_flight(&self) {
-        let Ok(dest) = self.env.dest.clone() else { return };
-        let store = self.env.store.clone();
-        std::thread::spawn(move || {
-            let Ok(relay) = crate::relay::Https::new() else { return };
-            for mut d in store.list() {
-                let Some(del) = d.delivery.as_mut() else { continue };
-                if !del.state.unresolved() {
-                    continue;
-                }
-                let now = util::now_millis();
-                let reading = delivery::check(&del.approved, &dest, &relay, now);
-                // A report that was mid-send when RichDoctor quit is checked, and an unclear
-                // answer leaves it unconfirmed (it may exist), never sendable.
-                let next = delivery::after_check(reading, &del.state, now);
-                del.state = next.clone();
-                d.left = left_words(&next);
-                store.save(&mut d, now).ok();
+    /// At launch: a report that was being sent when RichDoctor quit or crashed is "not sent
+    /// yet", so the person can send it again (a rare duplicate issue is acceptable, §140).
+    pub fn interrupted_sends_not_sent(&self) {
+        for mut d in self.env.store.list() {
+            if let Some(del) = d.delivery.as_mut().filter(|x| matches!(x.state, State::Sending)) {
+                del.state = State::NotSent { why: NotSent::NoAnswer, at: util::now_millis() };
+                d.left = left_words(&del.state);
+                self.env.store.save(&mut d, util::now_millis()).ok();
             }
-        });
+        }
     }
 
     /// Expire old submitted copies (PRD §6: 30 days, the link stays).
@@ -1551,24 +1280,13 @@ fn entry_event(e: &Entry) -> Value {
 fn left_words(state: &State) -> String {
     match state {
         State::Sending => "approved, sending".into(),
-        State::SendingScreenshots { .. } => "approved, sending screenshots".into(),
-        State::Creating => "approved, filing".into(),
-        State::CreatedCheckingImages { .. } => "created, checking screenshots".into(),
-        State::Checking { .. } => "approved, checking delivery".into(),
-        State::Unconfirmed { checked_at } => format!("approved, checked at {}", util::local_clock(*checked_at)),
         State::Submitted { at, .. } => format!("sent at {}", util::local_clock(*at)),
         State::NotSent { .. } => "approved, not sent yet".into(),
     }
 }
 
 pub fn review_view(d: &Draft, r: &Report) -> Value {
-    let mode = match &d.delivery {
-        Some(del) if del.state.unresolved() => "revision-uncertain",
-        Some(Delivery { state: State::NotSent { why: NotSent::UploadStopped { .. } | NotSent::Canceled, .. }, .. }) => "revision-upload",
-        Some(del) if del.state.permits_revision() => "revision-notsent",
-        Some(_) => "approved",
-        None => "draft",
-    };
+    let mode = if d.delivery.is_some() { "approved" } else { "draft" };
     let mut notes = Vec::new();
     match (r.provenance, d.ai_failure) {
         (Provenance::AiFailed, Some(f)) => notes.push(format!("Claude Code stopped part way ({}). This report was prepared from your answers and what was collected; unanswered questions are listed under Missing information.", f.message().trim_end_matches('.').to_lowercase().replacen("richdoctor", "RichDoctor", 1).replacen("claude code", "Claude Code", 1))),
@@ -1617,32 +1335,10 @@ pub fn delivery_view(d: &Draft) -> Value {
     let sections = del.approved.body.matches("\n## ").count() + usize::from(del.approved.body.starts_with("## "));
     let excerpts = d.report.as_ref().map(|r| r.excerpts.iter().filter(|e| !e.removed).count()).unwrap_or(0);
     let (kind, extra) = match &del.state {
-        State::Sending | State::Creating => ("sending", json!({})),
-        State::SendingScreenshots { done, total } => ("uploading", json!({"done": done, "total": total})),
-        State::CreatedCheckingImages { issue_url, confirmed, expected, .. } => ("created", json!({"issue_url": issue_url, "confirmed": confirmed, "expected": expected})),
-        State::Checking { .. } => ("checking", json!({})),
-        State::Unconfirmed { checked_at } => ("unconfirmed", json!({"checked_at": util::local_clock(*checked_at)})),
+        State::Sending => ("sending", json!({})),
         State::Submitted { issue_url, .. } => ("submitted", json!({"issue_url": issue_url})),
-        State::NotSent { why, .. } => {
-            // Round 40 §5: an interrupted upload names the image that stopped; past the
-            // five-minute cap it also offers Reduce.
-            let (upload, item, toolong) = match why {
-                NotSent::UploadStopped { item, why } => (true, Some(item.clone()), why.contains("five minutes")),
-                NotSent::Canceled => (true, None, false),
-                _ => (false, None, false),
-            };
-            ("notsent", json!({"reason": why.reason(), "review": why.needs_review(), "try_again": del.state.permits_try_again(), "upload": upload, "item": item, "toolong": toolong, "canceled": matches!(why, NotSent::Canceled)}))
-        }
+        State::NotSent { why, .. } => ("notsent", json!({"reason": why.reason(), "review": false, "try_again": true, "upload": false})),
     };
-    let rows: Vec<Value> = del
-        .approved
-        .manifest
-        .iter()
-        .map(|e| {
-            let ok = del.stored.contains(&e.attachment_id);
-            json!({"id": e.attachment_id, "sent": if ok { e.bytes } else { 0 }, "total": e.bytes, "st": if ok { "ok" } else { "wait" }})
-        })
-        .collect();
     json!({
         "kind": kind,
         "report_id": del.approved.report_id,
@@ -1650,8 +1346,6 @@ pub fn delivery_view(d: &Draft) -> Value {
         "first": first.split("\n\nExpected").next().unwrap_or("").chars().take(600).collect::<String>(),
         "summary": format!("{sections} sections, {excerpts} diagnostic {}, the report ID footer. The exact text is in Saved reports.", if excerpts == 1 { "excerpt" } else { "excerpts" }),
         "extra": extra,
-        "rows": rows,
-        "received": del.stored.len(),
         "attempt": del.approved.manifest.len(),
     })
 }
@@ -1660,27 +1354,12 @@ fn saved_row(d: &Draft) -> Value {
     let date = util::local_date(d.updated_at);
     let (state, words, action) = match d.delivery.as_ref().map(|x| &x.state) {
         Some(State::Submitted { .. }) => ("submitted", "Report submitted".to_string(), "view"),
-        Some(State::Unconfirmed { .. }) | Some(State::Checking { .. }) | Some(State::Sending) | Some(State::Creating) | Some(State::SendingScreenshots { .. }) => ("unconfirmed", "Delivery could not be confirmed".to_string(), "check"),
-        Some(State::CreatedCheckingImages { confirmed, expected, .. }) => ("created", format!("Report created; checking screenshots · {confirmed} of {expected} confirmed"), "check"),
-        Some(State::NotSent { why: delivery::NotSent::UploadStopped { item, .. }, .. }) => ("notsent", format!("Not sent yet · {item} of {} did not finish", d.screenshots.len()), "resume-upload"),
-        Some(State::NotSent { why: delivery::NotSent::Canceled, .. }) => ("notsent", "Not sent yet · sending was canceled".to_string(), "resume-upload"),
-        Some(State::NotSent { why, .. }) => ("notsent", format!("Not sent yet · {}", match why {
-            delivery::NotSent::Offline => "offline",
-            delivery::NotSent::Busy { .. } => "the service asked to wait",
-            delivery::NotSent::Unreachable => "connection failed",
-            delivery::NotSent::Rejected { .. } => "needs a change",
-            delivery::NotSent::Refused { .. } => "could not be filed",
-            delivery::NotSent::Closed { .. } => "the service is not taking reports",
-            delivery::NotSent::NotReceived => "not received",
-            delivery::NotSent::UploadStopped { .. } => "a screenshot did not finish uploading",
-            delivery::NotSent::Retired => "replaced by a revision",
-            delivery::NotSent::Canceled => "sending was canceled",
-            delivery::NotSent::NotSaved => "it could not be saved on this Mac",
-        }), if why.needs_review() { "review" } else { "try" }),
+        Some(State::Sending) => ("sending", "Sending".to_string(), "resume"),
+        Some(State::NotSent { .. }) => ("notsent", "Not sent yet".to_string(), "try"),
         None => ("saved", "Saved on this Mac".to_string(), "resume"),
     };
     let issue = match d.delivery.as_ref().map(|x| &x.state) {
-        Some(State::Submitted { issue_url, .. }) | Some(State::CreatedCheckingImages { issue_url, .. }) => Some(issue_url.clone()),
+        Some(State::Submitted { issue_url, .. }) => Some(issue_url.clone()),
         _ => None,
     };
     // Round 40 §7: the date line carries the screenshot facts.
@@ -1688,10 +1367,9 @@ fn saved_row(d: &Draft) -> Value {
     let shots = |n: usize| if n == 1 { "1 screenshot".to_string() } else { format!("{n} screenshots") };
     let shots_words = match d.delivery.as_ref() {
         Some(del) if matches!(del.state, State::Submitted { .. }) => if k == 0 { "no screenshots".to_string() } else { format!("{} received", shots(k)) },
-        Some(del) if k > 0 && matches!(del.state, State::NotSent { .. }) => format!("{} of {} received", del.stored.len(), shots(k)),
-        Some(_) if k == 0 => "no screenshots".to_string(),
         _ if k > 0 => shots(k),
-        _ => String::new(),
+        Some(_) => "no screenshots".to_string(),
+        None => String::new(),
     };
     json!({"id": d.id, "title": d.title(), "date": date, "left": d.left, "state": state, "state_words": words, "action": action, "issue_url": issue, "shots_words": shots_words})
 }
@@ -1729,64 +1407,6 @@ mod tests {
             engine.use_image(&util::base64_std(&png(seed)), u32::from(seed == 1), false).unwrap();
         }
         (engine, seen, root)
-    }
-
-    #[test]
-    fn the_per_image_list_follows_the_relay_and_keeps_what_was_stored() {
-        let (engine, seen, root) = engine_with_shots();
-        let manifest = {
-            let inner = engine.inner.lock().unwrap();
-            engine.env.store.manifest(inner.draft.as_ref().unwrap()).unwrap()
-        };
-        {
-            let mut inner = engine.inner.lock().unwrap();
-            inner.upload = manifest.iter().map(|e| UploadRow { id: e.attachment_id.clone(), sent: 0, total: e.bytes, st: "wait" }).collect();
-            let approved = delivery::approve("RD-7K3M-Q9VX", "t", &richdoctor_core::report::ending("https://report.richos.ceo", "RD-7K3M-Q9VX", 2), manifest.clone(), "https://report.richos.ceo", 1, &util::uuid_v4().unwrap()).unwrap();
-            inner.draft.as_mut().unwrap().delivery = Some(Delivery { approved, state: State::SendingScreenshots { done: 1, total: 2 }, completion_attempted: false, stored: Vec::new() });
-        }
-        engine.heard(Upload::Plan { missing: vec!["2".into()] });
-        engine.heard(Upload::Bytes { id: "2".into(), sent: manifest[1].bytes / 2, total: manifest[1].bytes });
-        let rows = |engine: &Engine| engine.inner.lock().unwrap().upload.iter().map(|r| r.st).collect::<Vec<_>>();
-        assert_eq!(rows(&engine), ["earlier", "live"]);
-        let v = engine.delivery();
-        assert_eq!(v["kind"], "uploading");
-        assert_eq!(v["rows"][1]["sent"], manifest[1].bytes / 2, "a real byte count, never a guess");
-        assert_eq!(v["shots"].as_array().unwrap().len(), 2);
-        engine.heard(Upload::Received { id: "2".into() });
-        assert_eq!(rows(&engine), ["earlier", "ok"]);
-        let stored = engine.inner.lock().unwrap().draft.as_ref().unwrap().delivery.as_ref().unwrap().stored.clone();
-        assert_eq!(stored, ["1", "2"], "what the relay stored is kept with the draft");
-        assert!(seen.lock().unwrap().iter().any(|e| e["t"] == "upload"));
-        // A stopped upload marks its row; the not-sent view names it and offers Resume.
-        engine.inner.lock().unwrap().upload[1].st = "live";
-        engine.set_state(&State::NotSent { why: NotSent::UploadStopped { item: "screenshot 2".into(), why: "it did not finish within five minutes.".into() }, at: 5 });
-        assert_eq!(rows(&engine), ["earlier", "stopped"]);
-        let v = engine.delivery();
-        assert_eq!(v["kind"], "notsent");
-        assert_eq!(v["extra"]["upload"], true);
-        assert_eq!(v["extra"]["toolong"], true);
-        // The review after it is round 40's "after an interrupted send", unchanged until edited.
-        let r = engine.review();
-        assert!(r.is_null() || r["mode"] == "revision-upload");
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn cancel_is_offered_only_while_sending() {
-        let (engine, _, root) = engine_with_shots();
-        assert!(!engine.cancel_upload(), "nothing to cancel");
-        let flag = Arc::new(AtomicBool::new(false));
-        {
-            let mut inner = engine.inner.lock().unwrap();
-            inner.cancel_upload = Some(flag.clone());
-            let approved = delivery::approve("RD-7K3M-Q9VX", "t", &richdoctor_core::report::footer("RD-7K3M-Q9VX"), Vec::new(), "https://report.richos.ceo", 1, &util::uuid_v4().unwrap()).unwrap();
-            inner.draft.as_mut().unwrap().delivery = Some(Delivery { approved, state: State::SendingScreenshots { done: 0, total: 2 }, completion_attempted: false, stored: Vec::new() });
-        }
-        assert!(engine.cancel_upload() && flag.load(Ordering::SeqCst));
-        engine.inner.lock().unwrap().draft.as_mut().unwrap().delivery.as_mut().unwrap().state = State::Creating;
-        flag.store(false, Ordering::SeqCst);
-        assert!(!engine.cancel_upload() && !flag.load(Ordering::SeqCst), "once the report is being filed, Cancel is not offered");
-        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -1923,24 +1543,6 @@ mod tests {
         e.edit("what_happened", "RichOS closes before opening").unwrap();
         let exact = e.exact_text().unwrap().1;
         assert!(!exact.contains("Open the confidential acquisition document"), "{exact}");
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn after_a_failed_send_copy_save_and_email_use_the_current_reviewed_text() {
-        let root = scratch("revision");
-        let (e, _) = engine_at(&root, None);
-        let mut d = reviewed_draft("The confidential acquisition document should open");
-        let r = d.report.as_ref().unwrap();
-        let approved = delivery::approve("RD-7K3M-Q9VX", &r.title, &r.render().1, vec![], delivery::RELAY, 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
-        d.delivery = Some(Delivery { approved, state: State::NotSent { why: NotSent::Unreachable, at: 2 }, completion_attempted: false, stored: vec![] });
-        e.env().store.save(&mut d, 3).unwrap();
-        e.open(&d.id).unwrap();
-        e.edit("what_happened", "Corrected symptom after review").unwrap();
-        assert!(e.review()["exact"].as_str().unwrap().contains("Corrected symptom"));
-        let exported = e.exact_text().unwrap().1;
-        assert!(exported.contains("Corrected symptom"), "{exported}");
-        assert!(!exported.contains("confidential acquisition"), "the removed text is not exported");
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -2126,31 +1728,6 @@ mod tests {
     // ---- review rv-20261022T200039Z-ad2da0bb-a6df, its fixtures as tests ----------------------
 
     #[test]
-    fn an_edit_after_approval_needs_a_fresh_approval_and_every_export_uses_the_current_revision() {
-        let root = scratch("one-revision");
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let e2 = events.clone();
-        // A destination is configured, so only the rule can refuse Try again.
-        let env = Env { store: Store::at(&root), home: root.join("fixture-home"), exe: PathBuf::new(), claude: None, dest: Ok(Destination { relay: "http://127.0.0.1:9".into(), repository: "fixture/reports".into() }) };
-        let e = Engine::new(env, Arc::new(move |v| e2.lock().unwrap().push(v)));
-        let mut d = reviewed_draft("The confidential acquisition document should open");
-        let r = d.report.as_ref().unwrap();
-        let approved = delivery::approve(&r.report_id, &r.title, &r.render().1, vec![], delivery::RELAY, 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
-        d.delivery = Some(Delivery { approved, state: State::NotSent { why: NotSent::Unreachable, at: 2 }, completion_attempted: false, stored: vec![] });
-        e.env().store.save(&mut d, 2).unwrap();
-        e.open(&d.id).unwrap();
-        // The person removes the private detail after the failed send, then saves for later.
-        e.edit("what_happened", "RichOS fails opening a document").unwrap();
-        e.save_later();
-        let exported = e.exact_text().unwrap().1;
-        assert!(!exported.contains("confidential acquisition"), "Copy, Save and Email carry the current revision: {exported}");
-        let rows = e.saved();
-        assert_ne!(rows["rows"][0]["action"], "try", "the saved row does not offer Try again for a changed report");
-        assert!(e.try_again().is_err(), "the earlier approval is never sent once the report changed");
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
     fn a_screenshot_approved_before_the_window_closed_goes_with_the_next_answer_after_reopening() {
         let root = scratch("reopen-images");
         let (e, events) = engine_at(&root.join("store"), Some(fake_cli_asking(&root)));
@@ -2233,19 +1810,19 @@ mod tests {
         ids: Vec<String>,
         /// attachment id and the sha256 of the bytes stored for it, once each.
         stored: Vec<(String, String)>,
-        /// How many issues were created.
+        /// How many issues were created for the current report, and in all.
         created: u32,
+        issues: u32,
+        /// The last registration's body, as it arrived.
+        registered: Value,
         /// How many more uploads are stored; past that an upload's connection is dropped,
         /// unanswered and not stored (an interrupted send). `None`: every one is stored.
         allow_stores: Option<u32>,
-        /// Hold every status answer until this is false.
-        hold_status: bool,
-        status_waiting: bool,
     }
 
     /// A stand-in for the reporting relay, protocol 2, over plain HTTP on loopback: it registers
-    /// a manifest, stores uploads, creates one issue on complete once every image is stored, and
-    /// answers status and retire. `log` keeps "METHOD path" of every request.
+    /// a manifest, stores uploads, and creates one issue on complete once every image is stored.
+    /// `log` keeps "METHOD path" of every request.
     #[derive(Clone)]
     struct FakeRelay {
         url: String,
@@ -2336,19 +1913,17 @@ mod tests {
 
         /// The relay's answer, or `None` to drop the connection unanswered.
         fn answer(&self, method: &str, path: &str, body: &[u8]) -> Option<Value> {
-            let (lock, cv) = &*self.st;
-            let mut s = lock.lock().unwrap();
-            if path.ends_with("/status") && s.hold_status {
-                s.status_waiting = true;
-                cv.notify_all();
-                while s.hold_status {
-                    s = cv.wait_timeout(s, Duration::from_secs(10)).unwrap().0;
-                }
-            }
+            let mut s = self.st.0.lock().unwrap();
             if method == "POST" && path == "/v1/reports" {
                 let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                // A new report ID is a new report: nothing of the one before carries over.
+                if v["report_id"].as_str() != Some(s.report_id.as_str()) {
+                    s.stored.clear();
+                    s.created = 0;
+                }
                 s.report_id = v["report_id"].as_str().unwrap_or("").to_string();
                 s.ids = v["manifest"].as_array().map(|m| m.iter().filter_map(|e| e["attachment_id"].as_str().map(str::to_string)).collect()).unwrap_or_default();
+                s.registered = v;
             } else if method == "PUT" && path.contains("/uploads/") {
                 match s.allow_stores {
                     Some(0) => return None,
@@ -2359,10 +1934,9 @@ mod tests {
                 if !s.stored.iter().any(|x| x.0 == n) {
                     s.stored.push((n, util::sha256_hex(body)));
                 }
-            } else if path.ends_with("/retire") {
-                return Some(json!({"report_id": s.report_id, "state": "retired", "stage": "retired", "stored": [], "missing": []}));
             } else if path.ends_with("/complete") && s.created == 0 && s.ids.iter().all(|i| s.stored.iter().any(|x| &x.0 == i)) {
                 s.created += 1;
+                s.issues += 1;
             }
             let k = s.ids.len();
             if s.created > 0 {
@@ -2390,36 +1964,6 @@ mod tests {
         r.report_id = delivery::new_report_id().unwrap();
         r.fit();
         d
-    }
-
-    #[test]
-    fn a_completion_whose_proof_cannot_be_saved_is_never_requested() {
-        let root = scratch("unsaved-complete");
-        let relay = FakeRelay::start();
-        let (e, _) = engine_for(&root, &relay);
-        let mut d = draft_for(&relay);
-        e.env().store.save(&mut d, 1).unwrap();
-        e.open(&d.id).unwrap();
-        let approved = e.approve_and_save(&relay.dest()).unwrap();
-        // The report's file stops taking writes after the approval was saved (a full disk, a lost
-        // volume): here a folder sits where it is written.
-        let file = e.env().store.draft_dir(&d.id).join("draft.json");
-        let approved_record = std::fs::read(&file).unwrap();
-        std::fs::remove_file(&file).unwrap();
-        std::fs::create_dir_all(file.join("blocked")).unwrap();
-        e.deliver(approved, relay.dest(), false);
-        assert_eq!(relay.requests("/complete"), 0, "no completion request without its saved proof: {:?}", relay.log.lock().unwrap());
-        assert_eq!(e.delivery()["kind"], "notsent");
-        // Restart: the record on disk is the approval, completion never attempted, and that is true.
-        std::fs::remove_dir_all(&file).unwrap();
-        std::fs::write(&file, approved_record).unwrap();
-        e.close();
-        let (e, _) = engine_for(&root, &relay);
-        let saved = e.env().store.load(&d.id).unwrap();
-        assert!(!saved.delivery.unwrap().completion_attempted);
-        assert_eq!(relay.st.0.lock().unwrap().created, 0, "and nothing was created");
-        drop(e);
-        std::fs::remove_dir_all(root).ok();
     }
 
     /// Codex audit of 0881b5f8f #2: a saved screenshot that is missing, damaged or not the
@@ -2451,6 +1995,85 @@ mod tests {
         assert!(previews[0]["problem"].as_str().is_some_and(|w| w.contains("Screenshot 1")), "and name it: {previews:?}");
         assert!(e.image_files().is_err_and(|w| w.contains("Screenshot 1")));
         std::fs::remove_dir_all(out).ok();
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// Two approved screenshots in a report built for `relay`, sent, and waited for (bounded).
+    fn send_and_wait(e: &Engine, again: bool) -> Value {
+        if again { e.try_again().unwrap() } else { e.send_report().unwrap() }
+        // load-bound: a bound on a local loopback relay answering a handful of requests.
+        let until = Instant::now() + Duration::from_secs(30);
+        loop {
+            let v = e.delivery();
+            if v["kind"] == "submitted" || v["kind"] == "notsent" {
+                return v;
+            }
+            assert!(Instant::now() < until, "the send did not end: {v}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn report_with_two_screenshots(root: &std::path::Path, relay: &FakeRelay) -> Engine {
+        let (e, _) = engine_for(root, relay);
+        let mut d = draft_for(relay);
+        e.env().store.save(&mut d, 1).unwrap();
+        e.open(&d.id).unwrap();
+        for seed in [41u8, 42] {
+            e.use_image(&util::base64_std(&png(seed)), 0, false).unwrap();
+        }
+        e
+    }
+
+    /// §140: Send runs the live relay's calls straight through; success shows the issue link.
+    #[test]
+    fn send_files_the_report_with_its_screenshots_and_shows_the_issue_link() {
+        let root = scratch("send-ok");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "submitted", "{v}");
+        assert_eq!(v["extra"]["issue_url"], format!("https://github.com/{FAKE_REPOSITORY}/issues/7"));
+        let s = relay.st.0.lock().unwrap();
+        assert_eq!((s.issues, s.stored.len()), (1, 2), "one issue, both screenshots stored");
+        drop(s);
+        assert!(e.edit("what_happened", "changed after sending").is_err(), "approved is final");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// §140: any failure is "not sent"; Send again starts over under a fresh report ID and files it.
+    #[test]
+    fn a_failed_send_is_not_sent_and_send_again_files_it() {
+        let root = scratch("send-again");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        // The second screenshot's upload is cut off.
+        relay.st.0.lock().unwrap().allow_stores = Some(1);
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "notsent", "{v}");
+        assert_eq!(v["extra"]["try_again"], true, "Send again is offered");
+        let first = v["report_id"].as_str().unwrap().to_string();
+        relay.st.0.lock().unwrap().allow_stores = None;
+        let v = send_and_wait(&e, true);
+        assert_eq!(v["kind"], "submitted", "{v}");
+        assert_ne!(v["report_id"].as_str().unwrap(), first, "a fresh report ID");
+        assert_eq!(relay.st.0.lock().unwrap().issues, 1, "filed once");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// §140: what arrives is the approved text and the approved screenshots, exactly.
+    #[test]
+    fn the_approved_text_and_screenshots_arrive_exactly_as_approved() {
+        let root = scratch("send-exact");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        let exact = e.review()["exact"].as_str().unwrap().to_string();
+        let shots: Vec<String> = { let inner = e.inner.lock().unwrap(); inner.draft.as_ref().unwrap().screenshots.iter().map(|s| s.sha256.clone()).collect() };
+        assert_eq!(send_and_wait(&e, false)["kind"], "submitted");
+        let s = relay.st.0.lock().unwrap();
+        let sent = format!("{}\n\n{}", s.registered["title"].as_str().unwrap(), s.registered["body"].as_str().unwrap());
+        assert_eq!(sent, exact, "the text the person reviewed, byte for byte");
+        assert_eq!(s.stored.iter().map(|x| x.1.clone()).collect::<Vec<_>>(), shots, "the approved screenshots' bytes, in order");
+        drop(s);
         std::fs::remove_dir_all(root).ok();
     }
 

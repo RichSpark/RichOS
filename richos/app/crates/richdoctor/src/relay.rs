@@ -3,22 +3,13 @@
 //! What it reports is only what it saw: an answer (status, JSON body, Retry-After), a
 //! connection that was never made (nothing reached the service; "offline" only when this Mac
 //! has no network at all, [`crate::mac::confirmed_offline`]), or an unclear end (a timeout or a
-//! connection lost after the request may have arrived). Register, status, complete and retire
-//! are bounded to 30 seconds (PRD §8). A screenshot upload instead stops after 60 seconds with no
-//! progress or 5 minutes in all, and says so ([`Transport::Stopped`]).
-use richdoctor_core::delivery::{Relay, Transport, Upload, REQUEST_BOUND, UPLOAD_CAP, UPLOAD_STALL};
+//! connection lost after the request may have arrived). Each call (register, one screenshot's
+//! upload, complete) is bounded by [`SEND_BOUND`].
+use richdoctor_core::delivery::{Relay, Transport, SEND_BOUND};
 use serde_json::Value;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 pub struct Https {
     client: reqwest::Client,
-    /// Set by the window's Cancel during Sending screenshots: an upload in progress ends within
-    /// a quarter second, and no further request that could create anything is made.
-    cancel: Arc<AtomicBool>,
-    /// Hears the per-image progress (round 40's list).
-    events: Option<Arc<dyn Fn(Upload) + Send + Sync>>,
 }
 
 impl Https {
@@ -33,15 +24,7 @@ impl Https {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Https { client, cancel: Arc::new(AtomicBool::new(false)), events: None })
-    }
-
-    /// The transport for one Send report: with the window's Cancel and its per-image listener.
-    pub fn watched(cancel: Arc<AtomicBool>, events: Arc<dyn Fn(Upload) + Send + Sync>) -> Result<Https, String> {
-        let mut h = Https::new()?;
-        h.cancel = cancel;
-        h.events = Some(events);
-        Ok(h)
+        Ok(Https { client })
     }
 }
 
@@ -61,72 +44,16 @@ async fn answer(result: Result<reqwest::Response, reqwest::Error>) -> Transport 
 }
 
 impl Relay for Https {
-    fn canceled(&self) -> bool {
-        self.cancel.load(Ordering::SeqCst)
-    }
-
-    fn heard(&self, event: Upload) {
-        if let Some(f) = &self.events {
-            f(event);
-        }
-    }
-
     fn post(&self, url: &str, body: &Value) -> Transport {
-        let request = self.client.post(url).timeout(REQUEST_BOUND).json(body);
+        let request = self.client.post(url).timeout(SEND_BOUND).json(body);
         tauri::async_runtime::block_on(async move { answer(request.send().await).await })
     }
 
-    fn put(&self, url: &str, headers: &[(String, String)], bytes: Vec<u8>, progress: &mut dyn FnMut(u64)) -> Transport {
-        let total = bytes.len() as u64;
-        let sent = Arc::new(AtomicU64::new(0));
-        let last = Arc::new(Mutex::new(Instant::now()));
-        let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = bytes.chunks(64 * 1024).map(|c| Ok(bytes::Bytes::copy_from_slice(c))).collect();
-        let (s2, l2) = (sent.clone(), last.clone());
-        let stream = futures_util::stream::iter(chunks).inspect(move |c| {
-            if let Ok(c) = c {
-                s2.fetch_add(c.len() as u64, Ordering::SeqCst);
-                *l2.lock().unwrap() = Instant::now();
-            }
-        });
-        let mut request = self.client.put(url).timeout(UPLOAD_CAP).header("Content-Length", total.to_string()).body(reqwest::Body::wrap_stream(stream));
+    fn put(&self, url: &str, headers: &[(String, String)], bytes: Vec<u8>) -> Transport {
+        let mut request = self.client.put(url).timeout(SEND_BOUND).body(bytes);
         for (k, v) in headers {
             request = request.header(k.as_str(), v.as_str());
         }
-        let started = Instant::now();
-        let cancel = self.cancel.clone();
-        tauri::async_runtime::block_on(async move {
-            let send = Box::pin(request.send());
-            let mut send = send;
-            loop {
-                let tick = Box::pin(tokio::time::sleep(std::time::Duration::from_millis(250)));
-                match futures_util::future::select(send, tick).await {
-                    futures_util::future::Either::Left((result, _)) => {
-                        progress(sent.load(Ordering::SeqCst));
-                        return match &result {
-                            Err(e) if e.is_timeout() => Transport::Stopped("it did not finish within five minutes.".into()),
-                            _ => answer(result).await,
-                        };
-                    }
-                    futures_util::future::Either::Right((_, pending)) => {
-                        progress(sent.load(Ordering::SeqCst));
-                        if cancel.load(Ordering::SeqCst) {
-                            return Transport::Stopped("you canceled sending.".into());
-                        }
-                        let quiet = last.lock().unwrap().elapsed();
-                        // Bytes are all handed over and the answer is awaited: that is waiting on the
-                        // service, which the five-minute cap bounds, not a stalled upload.
-                        if sent.load(Ordering::SeqCst) < total && quiet > UPLOAD_STALL {
-                            return Transport::Stopped("it made no progress for 60 seconds.".into());
-                        }
-                        if started.elapsed() > UPLOAD_CAP {
-                            return Transport::Stopped("it did not finish within five minutes.".into());
-                        }
-                        send = pending;
-                    }
-                }
-            }
-        })
+        tauri::async_runtime::block_on(async move { answer(request.send().await).await })
     }
 }
-
-use futures_util::StreamExt as _;

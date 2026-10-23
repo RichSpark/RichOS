@@ -16,7 +16,7 @@
 //! reported, never hidden: the window then says "Not saved on this Mac" and keeps the work in
 //! memory ([`SaveError`]). Unfinished reports are kept until sent or deleted; a submitted
 //! report's local copy is removed 30 days after sending and its link stays ([`Store::expire`]).
-//! Quitting during a send erases nothing: the approved snapshot is saved before the request.
+//! Quitting during a send erases nothing: the approved report is saved before the request.
 use crate::delivery::{Approved, State};
 use crate::report::Report;
 use serde::{Deserialize, Serialize};
@@ -118,19 +118,20 @@ impl Store {
     }
 }
 
+/// The approved report and where it stands. Approved is final: the draft's report and
+/// screenshots are not changed once this exists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delivery {
     pub approved: Approved,
+    /// A state this version does not know (one saved by an earlier build) reads as not sent, so
+    /// the report stays and can be sent again: never a lost report.
+    #[serde(deserialize_with = "state_or_not_sent")]
     pub state: State,
-    /// Whether a completion request (the one that can create the issue) was ever made for this
-    /// approval: set and saved before it is sent ([`State::Creating`]). `false` is the app's own
-    /// durable proof that no issue can exist under this ID.
-    #[serde(default)]
-    pub completion_attempted: bool,
-    /// The screenshots the relay confirmed it stored under this report ID (attachment ids), as
-    /// heard during the upload: what "Received earlier" and Resume sending rest on.
-    #[serde(default)]
-    pub stored: Vec<String>,
+}
+
+fn state_or_not_sent<'de, D: serde::Deserializer<'de>>(d: D) -> Result<State, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or(State::NotSent { why: crate::delivery::NotSent::NoAnswer, at: 0 }))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,9 +169,6 @@ pub struct Draft {
     /// The approved report and its delivery.
     #[serde(default)]
     pub delivery: Option<Delivery>,
-    /// IDs of earlier revisions retired after a definite non-creation.
-    #[serde(default)]
-    pub retired_ids: Vec<String>,
     /// How it was left: "draft, interrupted during the investigation".
     #[serde(default)]
     pub left: String,
@@ -194,7 +192,6 @@ impl Draft {
             screenshots: Vec::new(),
             report: None,
             delivery: None,
-            retired_ids: Vec::new(),
             left: String::new(),
         })
     }
@@ -209,25 +206,6 @@ impl Draft {
         }
         let d = self.description.trim();
         if d.is_empty() { "Unfinished report".into() } else { d.chars().take(80).collect() }
-    }
-
-    /// Whether an edit of the approved report may become a new, sendable revision now.
-    pub fn may_send_revision(&self) -> bool {
-        self.delivery.as_ref().is_none_or(|d| d.state.permits_revision())
-    }
-
-    /// **APPROVE A REVISED REPORT**: only after a definite non-creation of the earlier one, and
-    /// the earlier ID is retired on this Mac (PRD §7).
-    pub fn retire_for_revision(&mut self) -> Result<(), &'static str> {
-        match &self.delivery {
-            None => Ok(()),
-            Some(d) if d.state.permits_revision() => {
-                self.retired_ids.push(d.approved.report_id.clone());
-                self.delivery = None;
-                Ok(())
-            }
-            Some(_) => Err("The earlier report may already have reached the team; this edit cannot be sent until that is known."),
-        }
     }
 }
 
@@ -425,17 +403,22 @@ mod tests {
     }
 
     #[test]
-    fn a_revision_waits_for_a_definite_non_creation_and_retires_the_old_id() {
+    fn a_report_saved_by_an_earlier_build_is_kept_and_can_be_sent_again() {
+        let (root, s) = store();
         let mut d = Draft::new(1).unwrap();
         let body = crate::report::footer("RD-7K3M-Q9VX");
         let approved = crate::delivery::approve("RD-7K3M-Q9VX", "t", &body, vec![], "https://report.richos.ceo", 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
-        d.delivery = Some(Delivery { approved: approved.clone(), state: State::Unconfirmed { checked_at: 2 }, completion_attempted: true, stored: vec![] });
-        assert!(!d.may_send_revision());
-        assert!(d.retire_for_revision().is_err());
-        d.delivery = Some(Delivery { approved, state: State::NotSent { why: crate::delivery::NotSent::NotReceived, at: 3 }, completion_attempted: true, stored: vec![] });
-        d.retire_for_revision().unwrap();
-        assert_eq!(d.retired_ids, ["RD-7K3M-Q9VX"]);
-        assert!(d.delivery.is_none());
+        d.delivery = Some(Delivery { approved, state: State::Sending });
+        s.save(&mut d, 2).unwrap();
+        // The earlier build's record: a state this one does not have, and its extra fields.
+        let file = s.draft_dir(&d.id).join("draft.json");
+        let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        v["delivery"]["state"] = serde_json::json!({"state": "unconfirmed", "checked_at": 2});
+        v["delivery"]["completion_attempted"] = serde_json::json!(true);
+        std::fs::write(&file, serde_json::to_vec(&v).unwrap()).unwrap();
+        let back = s.load(&d.id).expect("the report is kept");
+        assert!(back.delivery.unwrap().state.may_send());
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -444,7 +427,7 @@ mod tests {
         let mut d = Draft::new(1).unwrap();
         let body = crate::report::footer("RD-7K3M-Q9VX");
         let approved = crate::delivery::approve("RD-7K3M-Q9VX", "Title", &body, vec![], "https://report.richos.ceo", 1, "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b").unwrap();
-        d.delivery = Some(Delivery { approved, state: State::Submitted { issue_url: "https://github.com/a/b/issues/1".into(), issue_number: 1, at: 10 }, completion_attempted: true, stored: vec![] });
+        d.delivery = Some(Delivery { approved, state: State::Submitted { issue_url: "https://github.com/a/b/issues/1".into(), issue_number: 1, at: 10 } });
         s.save(&mut d, 10).unwrap();
         assert_eq!(s.expire(10 + SUBMITTED_KEPT_MS - 1), 0);
         assert_eq!(s.expire(10 + SUBMITTED_KEPT_MS), 1);
