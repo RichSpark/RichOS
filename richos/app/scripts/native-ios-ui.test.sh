@@ -851,6 +851,9 @@ for i in "${!SIM_UDID[@]}"; do
   CREATED+=("${SIM_UDID[$i]}")
   # Enumeration does not execute tests. It proves even unrun/missing cases remain
   # obligations, rather than relying on whatever a failed bundle happened to list.
+  # A retry copied the previous run's enumeration here above, and xcodebuild refuses to write
+  # over a file (2026-10-23, run 20261023T213406Z-qfskgufe: "Invalid test enumeration output path").
+  rm -f "$WORK/tests-$i.json"
   python3 "$RICHOS_NATIVE_WORK" -- xcodebuild test-without-building -xctestrun "$XCTESTRUN" \
     -destination "id=${SIM_UDID[$i]}" "${SELECT[@]}" -enumerate-tests \
     -test-enumeration-style flat -test-enumeration-format json \
