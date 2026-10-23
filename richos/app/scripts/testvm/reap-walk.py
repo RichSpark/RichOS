@@ -115,7 +115,10 @@ def told_stopped(record):
     required; one that is there must still say it was stopped (walk-28d1d7305246 failed only on
     the missing notice, with both commands ended inside the bound)."""
     if record.get('state') in OPEN:
-        return 'the stopped assignment is still running: ' + json.dumps(record)[:400]
+        # The state and detail first: walk-f7c9cf5b8d7a's 400 characters ended before them.
+        return 'the stopped assignment is still open (state %r, detail %r, user stop %r): %s' % (
+            record.get('state'), record.get('detail'), record.get('user_stop_requested_at_ms'),
+            json.dumps(record)[:400])
     notices = record.get('notices') or []
     last = notices[-1] if notices else {}
     if record.get('state') != 'interrupted' or not record.get('user_stop_requested_at_ms') \
@@ -202,6 +205,42 @@ def rich_ran_handed(calls, assignments):
         return None
     return ("the job was handed to Stu (%s) and Rich's own session ran its commands: %s"
             % (', '.join(a.get('id') or '?' for a in assignments), json.dumps(mine)[:1200]))
+
+
+def shown_title(nav, thread_id, created):
+    """The title a conversation is shown under, as nav.rs NavState::display_title picks it: his
+    own rename, then the title Haiku wrote from its first message, then the title it was created
+    with. The walk's conversation is created as "Onboarding" and Haiku renames it after the normal
+    step's ask: walk-58cc7adc97d8's crash step relaunched into it, history and composer intact,
+    under "Acme / Running a test command with a shell tool", and waited for "Onboarding"."""
+    for key in ('renamed_threads', 'auto_titles'):
+        title = ((nav or {}).get(key) or {}).get(thread_id)
+        if title:
+            return title
+    return created
+
+
+def summarize(found, sent_ms):
+    """One paragraph from reap-guest.py evidence for a step's failure line: did the ask become a
+    job, what did Rich last say, what did Stu last say or run. The files keep the rest."""
+    if not found:
+        return 'the app\'s files could not be read'
+    jobs = [a for a in found.get('assignments') or [] if (a.get('registered_at_ms') or 0) >= sent_ms]
+    parts = ['jobs since the ask: %s' % ('; '.join('%s %s (%s)' % (a.get('kind'), a.get('state'), (a.get('title') or '')[:60])
+                                                   for a in jobs) or 'none')]
+    turns = found.get('rich_turns') or []
+    if turns:
+        last = turns[-1]
+        parts.append('Rich\'s last turn %s: %r' % ((last.get('ended') or {}).get('event') or 'not ended',
+                                                  (last.get('reply') or '')[-300:]))
+    stu = [s for s in found.get('sessions') or [] if s.get('role') == 'stu']
+    if stu:
+        said = (stu[-1].get('said') or [{}])[-1].get('text', '')
+        tool = (stu[-1].get('tools') or [{}])[-1]
+        parts.append('Stu last said %r, last ran %s' % (said[-300:], tool.get('name') or 'nothing'))
+    else:
+        parts.append('no Stu session')
+    return '; '.join(parts)
 
 
 # --- the grade, pure, so test/reap-walk.test.py can hold it to its rules without a guest ---------
@@ -370,8 +409,42 @@ class Walk(adopt.Walk):
                         'run_by': calls}
             approved += self.approve_pending()
             time.sleep(3)
-        raise StepFailed('prerequisite unavailable: %s never recorded itself within %d s (approved %d request(s))'
-                         % (', '.join(names), within, approved))
+        why = 'prerequisite unavailable: %s never recorded itself within %d s (approved %d request(s))' % (
+            ', '.join(names), within, approved)
+        raise StepFailed('%s\n%s' % (why, self.not_started(tag, sent)))
+
+    def not_started(self, tag, sent_ms):
+        """What explains an ask whose commands never started, saved in OUT/<tag>-not-started/
+        before the guest is gone: the job list, Rich's and Stu's last words and tool calls
+        (reap-guest.py evidence), the screen and its accessibility tree. Returns the summary the
+        step's failure carries. Each piece that cannot be read is written down as such and
+        never changes the step's outcome (walk-56a6baace66a's quit step kept none of them)."""
+        folder = self.out / ('%s-not-started' % tag)
+        folder.mkdir(parents=True, exist_ok=True)
+        found = None
+        try:
+            text = guest(self.vm, 'python3 %s evidence %s %s %d' % (shlex.quote(self.helper), shlex.quote(self.data),
+                                                                    shlex.quote(self.home), sent_ms), 120)
+            found = json.loads(text)
+            (folder / 'evidence.json').write_text(json.dumps(found, indent=2) + '\n')
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
+            (folder / 'evidence.failed.txt').write_text('%s\n' % exc)
+        self.save_screen(folder)
+        return 'saved in %s: %s' % (folder, summarize(found, sent_ms))
+
+    def save_screen(self, folder):
+        """The guest's screen (screen.png) and its accessibility tree (ax-tree.txt) into folder.
+        A piece that cannot be read is written down as <piece>.failed.txt and never changes the
+        step's outcome."""
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            command([HERE / 'shot.sh', self.vm, folder / 'screen.png'], 60)
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
+            (folder / 'screen.failed.txt').write_text('%s\n' % exc)
+        try:
+            (folder / 'ax-tree.txt').write_text(command([HERE / 'ax.sh', self.vm, 'tree'], 90))
+        except Exception as exc:  # noqa: BLE001
+            (folder / 'ax-tree.failed.txt').write_text('%s\n' % exc)
 
     def verdict(self, names, trigger_ms, bound_ms):
         time.sleep(bound_ms / 1000 + 1)
@@ -384,7 +457,27 @@ class Walk(adopt.Walk):
         model = self.a.model
         return relaunch(self.vm, environment={'ANTHROPIC_MODEL': model} if model else None)
 
-    def enter(self):
+    def enter(self, step):
+        """Into the walk's conversation after a relaunch. When a wait fails, the screen and its
+        tree are saved in OUT/<step>-enter-failed/ before the guest is gone: walk-8a771b3e8dee's
+        crash step failed in here after "Quit and stop the work" and kept neither."""
+        try:
+            self.enter_conversation()
+        except StepFailed as exc:
+            folder = self.out / ('%s-enter-failed' % step)
+            self.save_screen(folder)
+            raise StepFailed('%s\nthe screen and its tree are saved in %s' % (exc, folder)) from exc
+
+    def shown_title(self):
+        """The name the app shows the walk's conversation under now: navigation.json's rename or
+        Haiku's title for it, else the title it was created with (shown_title())."""
+        try:
+            nav = json.loads(guest(self.vm, 'cat ' + shlex.quote(self.data + '/navigation.json') + ' 2>/dev/null || true') or '{}')
+        except ValueError:
+            nav = {}
+        return shown_title(nav, self.facts.get('thread'), self.facts.get('thread_title') or 'Running')
+
+    def enter_conversation(self):
         # Every caller has just relaunched the app, and a launch with a company opens on the HOME
         # screen (asked-again-walk.py waits up to 90 s for it). Its door is waited for, not
         # checked once: checked before home was drawn, it was skipped, and the walk then waited
@@ -396,7 +489,7 @@ class Walk(adopt.Walk):
         # "Acme / Onboarding" with its composer and the sidebar closed, so the row the walk then
         # waited for was not on screen. The row is pressed only when the door opened another one.
         self.wait_for('Message to Rich', role='AXTextArea')
-        title = self.facts.get('thread_title') or 'Running'
+        title = self.shown_title()
         # The crumb is static text, whose words are its AXValue (walk-08aeea74dab4's tree:
         # {"role": "AXStaticText", "title": "", "value": "Onboarding"}), never its title.
         try:
@@ -435,7 +528,7 @@ class Walk(adopt.Walk):
         # Leases started before the connection carry the old --add-dir list; start fresh ones.
         self.facts['app'] = self.relaunched()
         self.save()
-        self.enter()
+        self.enter('connect')
         return {'connected': self.company}
 
     def seed(self):
@@ -557,17 +650,20 @@ class Walk(adopt.Walk):
     def crash(self):
         self.facts['app'] = self.relaunched()
         self.save()
-        self.enter()
+        self.enter('crash')
         started = self.start('crash')
         names = started['names']
         pid = self.facts['app']['pid']
         trigger = int(guest(self.vm, 'python3 -c "import os,time; t=time.time(); os.kill(%d, 9); print(int(t*1000))"' % pid))
-        return dict(self.verdict(names, trigger, BOUND_MS), app_pid=pid, started=started)
+        # Evidence, not a verdict: every call that ran a quit heartbeat, so a relaunch that ran
+        # the work he stopped with "Quit and stop the work" again shows as more than the two.
+        return dict(self.verdict(names, trigger, BOUND_MS), app_pid=pid, started=started,
+                    quit_heartbeat_calls=self.commands_run('quit'))
 
     def claude_crash(self):
         self.facts['app'] = self.relaunched()
         self.save()
-        self.enter()
+        self.enter('claude-crash')
         started = self.start('claude')
         names = started['names']
         mine = {r['name']: r['pgid'] for r in self.rows()

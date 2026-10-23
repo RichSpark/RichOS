@@ -154,3 +154,96 @@ fn ordinary_quit_and_restart_preserve_stus_reports_and_input_receipts() {
         if !unverified {assert_eq!(states,vec![state.as_str()],"Rich's status tool disagrees with Stu's record");}
     }
 }
+
+/// **"Quit and stop the work" stops the work** (§7.4a, esc-20261022T221047Z-e01c005a): every
+/// open job records his Stop as the Stop button does, so the next launch hands Stu nothing to
+/// resume. A finished job is not rewritten. The ordinary quit above records nothing.
+#[test]
+fn quit_and_stop_the_work_records_his_stop_on_every_open_job() {
+    let root = std::env::temp_dir().join(format!("richos-job-owner-{}", uuid::Uuid::new_v4()));
+    let state_root = root.join("engine-state");
+    let scope = |thread: &str| StatusToolScope {
+        version: 1,
+        state_root: state_root.clone(),
+        entity_id: "company".into(),
+        thread_id: thread.into(),
+    };
+    let register = |thread: &str, title: &str| {
+        assignment::register(
+            &state_root,
+            &Registration {
+                entity_id: "company".into(),
+                thread_id: thread.into(),
+                obligation_id: format!("{thread}-obligation"),
+                instruction_ledger_ref: format!("ledger:{thread}:request"),
+                instruction_sha256: "a".repeat(64),
+                title: title.into(),
+                repositories: vec![],
+                needs_screen: false,
+            },
+        )
+        .unwrap()
+    };
+    let running = register("one", "Run the heartbeat");
+    let other = register("two", "Run the other heartbeat");
+    let finished = register("three", "Already finished");
+    use sha2::Digest;
+    let record_path = |thread: &str, id: &str| {
+        let key = format!("[\"company\",\"{thread}\"]");
+        let partition = format!("{:x}", sha2::Sha256::digest(key.as_bytes()));
+        state_root.join("assignments").join(partition).join(format!("{id}.json"))
+    };
+    for (thread, id, state) in [
+        ("one", &running.id, "running"),
+        ("two", &other.id, "blocked"),
+        ("three", &finished.id, "settled"),
+    ] {
+        let path = record_path(thread, id);
+        let mut report: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        report["state"] = serde_json::json!(state);
+        report["detail"] = serde_json::json!("Stu's saved report");
+        std::fs::write(&path, serde_json::to_vec(&report).unwrap()).unwrap();
+    }
+    let finished_before = std::fs::read(record_path("three", &finished.id)).unwrap();
+    // Stu holds the running job's handoff, as an ordinary quit would leave it to resume.
+    let input = session_tools::inbox(&scope("one"), "stu").unwrap();
+    std::fs::create_dir_all(input.parent().unwrap()).unwrap();
+    let message = Message {
+        handoff: true,
+        from: "rich".into(),
+        text: "The original handoff".into(),
+        instruction: None,
+        work: Some(WorkReference {
+            assignment_id: running.id.clone(),
+            obligation_id: "one-obligation".into(),
+        }),
+    };
+    let line = serde_json::to_string(&message).unwrap() + "\n";
+    std::fs::write(&input, &line).unwrap();
+    session_tools::begin_attempt(&scope("one"), "stu", &format!("peer:{}", line.len()), "stu-session").unwrap();
+    assert!(session_tools::pending(&scope("one"), "stu").unwrap().is_some_and(|(m, _)| m.handoff));
+
+    let host = WorkHost::new(&state_root, Box::new(NoLease), Arc::new(Quiet));
+    let (stopped, errors) = host.record_quit_and_stop();
+    host.shutdown();
+    richos_core::recovery::reconcile(&state_root);
+
+    assert_eq!((stopped, errors), (2, Vec::<String>::new()));
+    for (thread, id) in [("one", &running.id), ("two", &other.id)] {
+        let job = assignment::read(&state_root, "company", thread, id).unwrap();
+        assert_eq!(job.reported_state(), Some(AssignmentState::Interrupted), "{thread}: the quit left the job open");
+        assert!(job.user_stop_requested_at_ms.is_some(), "{thread}: his stop is not on the record");
+        assert!(!job.accepts_input(), "{thread}: a stopped job still takes input");
+    }
+    assert!(
+        session_tools::pending(&scope("one"), "stu").unwrap().is_none_or(|(m, _)| !m.handoff),
+        "the next launch would hand Stu the stopped job again"
+    );
+    assert_eq!(
+        std::fs::read(record_path("three", &finished.id)).unwrap(),
+        finished_before,
+        "a finished job was rewritten"
+    );
+    assert!(assignment::open(&state_root).unwrap().is_empty());
+    std::fs::remove_dir_all(&root).unwrap();
+}

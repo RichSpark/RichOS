@@ -157,8 +157,8 @@ pub fn decide(request: &ExitRequest) -> ExitDecision {
 ///
 /// American English, spoken-safe, comparative rather than absolute, and it names what is
 /// actually running rather than a count he cannot act on. It never says the work will be
-/// lost: it is stopped, and everything it produced is kept — which is what
-/// `WorkHost::shutdown` actually does (`interrupted`, files retained).
+/// lost: it is stopped, and everything it produced is kept — which is what his answer
+/// actually does (`WorkHost::record_quit_and_stop`: his Stop on every open job, files retained).
 pub fn quit_question(registered: &Registered) -> String {
     if !registered.readable {
         return "I can't tell whether anything is still running in the background. \
