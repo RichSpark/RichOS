@@ -1339,9 +1339,27 @@ class Reaper(object):
         answers pid reuse is owner_state(): a process that started after the
         directory was created cannot have created it. TTL is what it always
         was — a declaration of intent, never an authority to delete.
+
+        EVERY ALLOCATOR ROOT, NOT ONLY THIS JOB'S. scratch.sh allocates under
+        whatever TMPDIR its caller has, and the nightly gates and Codex run with
+        their own (the declared shared and producer temp roots). launchd's TMPDIR
+        held none of their allocations, so a killed gate's sandbox there was never
+        looked at (cleanup PRD 2026-10-23, coverage).
         """
+        for root in self.allocator_roots():
+            self.scan_allocator_root(root, walls)
+
+    def allocator_roots(self):
+        """This job's allocator root first, then one under each other temp root."""
         tmp = os.path.realpath(os.environ.get("TMPDIR") or "/tmp")
-        root = os.path.join(tmp, self.cfg["scratch_root_name"])
+        out = []
+        for base in [tmp] + list(self.cfg.get("shared_tmp_roots") or []):
+            root = os.path.join(os.path.realpath(base), self.cfg["scratch_root_name"])
+            if root not in out:
+                out.append(root)
+        return out
+
+    def scan_allocator_root(self, root, walls):
         if not os.path.isdir(root):
             return
         self.roots.append(root)
@@ -1405,7 +1423,7 @@ class Reaper(object):
             #
             # Placed after the age floor deliberately, so the common case — a
             # young directory — never pays for a whole-machine lsof.
-            snapshot = self.open_under_alloc()
+            snapshot = self.open_under_alloc(root)
             if snapshot is None:
                 self.add(path, "scratch-alloc", size, INDETERMINATE,
                          "pid %d is ended, but the open-file table could not "
@@ -1932,6 +1950,7 @@ class Reaper(object):
         if not self.cfg["deny_by_default"]:
             return
         skip = set(os.path.realpath(r) for r in self.cfg["claude_roots"])
+        skip.update(self.allocator_roots())     # decided by owner, in scan_scratch_root
         for root in self.cfg["shared_tmp_roots"]:
             if not os.path.isdir(root):
                 continue
@@ -2108,9 +2127,11 @@ class Reaper(object):
         # /private/tmp holds 753 direct children, so a per-candidate `lsof +D`
         # would be 753 tree walks against one read.
         pref = tmp + "/"
-        alloc_pref = os.path.join(tmp, self.cfg["scratch_root_name"]) + "/"
+        # One reduction per allocator root (this job's and each other temp root's).
+        allocs = [(a, a + "/") for a in self.allocator_roots()]
         shared = [(r, r.rstrip("/") + "/") for r in self.cfg["shared_tmp_roots"]]
-        found, alloc = set(), set()
+        found = set()
+        alloc_sets = dict((a, set()) for a, _ in allocs)
         shared_sets = dict((r, set()) for r, _ in shared)
         for line in r.stdout.splitlines():
             if not line.startswith("n"):
@@ -2121,18 +2142,19 @@ class Reaper(object):
                     rest = p[len(spref):]
                     if rest:
                         shared_sets[root].add(rest.split("/", 1)[0])
+            for aroot, apref in allocs:
+                if p.startswith(apref):
+                    rest = p[len(apref):]
+                    if rest:
+                        alloc_sets[aroot].add(rest.split("/", 1)[0])
             if not p.startswith(pref):
                 continue
-            if p.startswith(alloc_pref):
-                rest = p[len(alloc_pref):]
-                if rest:
-                    alloc.add(rest.split("/", 1)[0])
             rest = p[len(pref):]
             if not rest:
                 continue
             found.add(rest.split("/", 1)[0])
         self._open_tmp = found
-        self._open_alloc = alloc
+        self._open_alloc = alloc_sets
         self._open_shared = shared_sets
         return found
 
@@ -2149,8 +2171,9 @@ class Reaper(object):
             return None
         return self._open_shared.get(os.path.realpath(root))
 
-    def open_under_alloc(self):
-        """The set of allocator-root children something holds open, or None.
+    def open_under_alloc(self, root=None):
+        """The set of children of allocator root `root` (this job's when None)
+        something holds open, or None.
 
         THE ALLOCATOR ARM WAS THE ONLY ONE THAT TRUSTED A PID ALONE, and that
         made it the one arm that could destroy live work rather than garbage.
@@ -2173,7 +2196,9 @@ class Reaper(object):
             self.open_under_tmp()      # populates both reductions in one read
         if self._open_alloc is None or self._open_alloc is _FAILED:
             return None
-        return self._open_alloc
+        if root is None:
+            root = self.allocator_roots()[0]
+        return self._open_alloc.get(root)    # a root never reduced is unknown, not empty
 
     def held_in_snapshot(self, path, snapshot):
         """True if any open file sits at or inside `path`.
@@ -3759,8 +3784,24 @@ def config_from_env(process_only=False):
             machine_settings.apply()
         named_root = str(machine_settings.agent_root()) if not process_only else ""
         cache_root, cargo_roots = build_caches().roots() if not process_only else ("", [])
+        bulk = machine_settings.load().get("RICHOS_BULK_ROOT") if not process_only else ""
+        bulk_root = str(machine_settings.validate(bulk, require_directory=True)) if bulk else ""
     except (ValueError, OSError) as exc:
         raise Fatal(str(exc)) from exc
+    # THE PRODUCERS' OWN TEMP ROOTS on the bulk drive: the nightly gates' TMPDIR
+    # (nightly-local.py gate_tmpdir), Codex's TMPDIR, and the autocheck suite's
+    # fixture parent. Declared relative to RICHOS_BULK_ROOT and swept exactly like
+    # a shared temp root. Measured 2026-10-23: 13 GB of test fixtures sat in them
+    # and the scheduled job, whose TMPDIR is launchd's, never looked.
+    producer_roots = []
+    for rel in (os.environ.get("SCRATCH_BULK_TMP_ROOTS") or "").split():
+        if not bulk_root:
+            break
+        real = os.path.realpath(os.path.join(bulk_root, rel))
+        if os.path.isabs(rel) or not inside(real, bulk_root) or real == bulk_root:
+            raise Fatal("SCRATCH_BULK_TMP_ROOTS names %r, which is not a directory "
+                        "below RICHOS_BULK_ROOT (%s)." % (rel, bulk_root))
+        producer_roots.append(real)
     def need(name):
         v = (os.environ.get(name) or "").strip()
         if not v:
@@ -3841,7 +3882,11 @@ def config_from_env(process_only=False):
         # yesterday rather than suddenly sweeping every name under $TMPDIR.
         "deny_by_default": opt("SCRATCH_TMP_DENY_BY_DEFAULT", "0") == "1",
         "shared_tmp_roots": [os.path.realpath(p) for p in
-                             opt("SCRATCH_SHARED_TMP_ROOTS", "").split()],
+                             opt("SCRATCH_SHARED_TMP_ROOTS", "").split()]
+                            + [p for p in producer_roots
+                               if p not in [os.path.realpath(q) for q in
+                                            opt("SCRATCH_SHARED_TMP_ROOTS", "").split()]],
+        "producer_tmp_roots": producer_roots,
         "foreign_patterns": opt("SCRATCH_FOREIGN_PATTERNS", "").split(),
         "unknown_age_hours": opt_number("SCRATCH_UNKNOWN_AGE_HOURS", 72),
         "unknown_git_is_fixture":

@@ -87,7 +87,7 @@ class Settings(unittest.TestCase):
    reaper=R.Reaper.__new__(R.Reaper);reaper.cfg=cfg;reaper.now=10000;reaper.floor=3600;reaper.roots=[];reaper._standing=set()
    decisions=[];reaper.add=lambda path,kind,size,status,reason:decisions.append((path,status))
    reaper.owner_state=lambda pid,*args:(pid==102,'controlled generation')
-   reaper.open_under_alloc=lambda:set()
+   reaper.open_under_alloc=lambda *root:set()
    with patch.dict(os.environ,{'TMPDIR':str(job),'SCRATCH_LEDGER':str(base/'ledger')}),patch.object(R,'read_ledger',return_value=rows),patch.object(R,'measure',return_value=(1,0,False)):
     reaper.scan_scratch_root(Walls())
    self.assertIn((str(dead),R.DELETE),decisions)

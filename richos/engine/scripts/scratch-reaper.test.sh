@@ -2724,6 +2724,78 @@ kill "$PID_LC" >/dev/null 2>&1 || true
 wait "$PID_LC" 2>/dev/null || true
 
 # ===========================================================================
+# S35 — THE PRODUCERS' OWN TEMP ROOTS ON THE BULK DRIVE ARE SWEPT
+# ===========================================================================
+# The nightly gates and Codex run with their own TMPDIR on the bulk drive, and the
+# scheduled job's TMPDIR is launchd's: measured 2026-10-23, 13 GB of fixtures
+# there had never been looked at. A declared producer root gets the shared-root
+# rule for its children and the owner rule for its allocator root. Controls: a
+# live allocation, a held child and an undeclared sibling root all survive.
+deny_world bulkroots
+echo 'SCRATCH_BULK_TMP_ROOTS="tmp/gates"' >>"$W_CFG"
+start_claude; PID_BR="$LAST_CLAUDE"
+register "$W_SESSIONS" "$PID_BR" "$SID_LIVE"
+G="$W_BULK/tmp/gates"
+stale "$G/zzz-gate-fixture"
+stale "$G/zzz-gate-held"
+stale "$W_BULK/tmp/undeclared/zzz-elsewhere"
+for _a in "99999-gate-dead" "$PID_BR-gate-live"; do
+    mkdir -p "$G/richos-scratch/$_a"
+    printf 'payload\n' >"$G/richos-scratch/$_a/payload.txt"
+    printf '{"path":"%s","label":"gate","pid":%d,"ppid":1,"session":"","created":"%s","ttl_minutes":360,"event":"new"}\n' \
+        "$G/richos-scratch/$_a" "${_a%%-*}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        >>"$W_HOME/state/scratch-ledger.jsonl"
+done
+HELD_BR=""
+if command -v lsof >/dev/null 2>&1; then
+    tail -f "$G/zzz-gate-held/payload.txt" >/dev/null 2>&1 &
+    HELD_BR=$!
+    KILL_LIST="$KILL_LIST $HELD_BR"
+    # The fact, not a clock: lsof shows the holder has the file open.
+    _n=0
+    until lsof -p "$HELD_BR" 2>/dev/null | grep -q 'zzz-gate-held/payload.txt'; do
+        _n=$((_n + 1))
+        [ "$_n" -lt 300 ] || break
+        sleep 0.1
+    done
+fi
+OUT="$(run --apply)"
+if [ ! -d "$G/zzz-gate-fixture" ]; then
+    ok "S35  a stale child of a declared producer temp root is deleted"
+else
+    bad "S35  a declared producer temp root was not swept"
+    printf '%s\n' "$OUT" | sed 's/^/        /'
+fi
+if [ ! -d "$G/richos-scratch/99999-gate-dead" ]; then
+    ok "S35a an ended allocation in that root's allocator root is deleted"
+else
+    bad "S35a an ended allocation under the producer root's allocator root survived"
+fi
+if [ -f "$G/richos-scratch/$PID_BR-gate-live/payload.txt" ]; then
+    ok "S35b CONTROL: a LIVE owner's allocation there is kept"
+else
+    bad "S35b a live owner's allocation under a producer root was deleted"
+fi
+if [ -n "$HELD_BR" ]; then
+    if [ -f "$G/zzz-gate-held/payload.txt" ]; then
+        ok "S35c CONTROL: a child something holds open is kept"
+    else
+        bad "S35c a held child of a producer root was deleted"
+    fi
+    kill "$HELD_BR" >/dev/null 2>&1 || true
+    wait "$HELD_BR" 2>/dev/null || true
+else
+    ok "S35c SKIPPED — lsof is not on this host"
+fi
+if [ -d "$W_BULK/tmp/undeclared/zzz-elsewhere" ]; then
+    ok "S35d CONTROL: a root nobody declared is not touched"
+else
+    bad "S35d a root nobody declared was swept"
+fi
+kill "$PID_BR" >/dev/null 2>&1 || true
+wait "$PID_BR" 2>/dev/null || true
+
+# ===========================================================================
 # S33 — THIS SUITE NEVER SCANNED THE WHOLE MAC'S OPEN-FILE TABLE
 # ===========================================================================
 # The scoped lsof at the top of this file only helps if the reaper actually

@@ -2038,7 +2038,7 @@
         "richos/engine/scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
-        "richos/engine/orchestration.config": "2c834409e17e74c6aac13ba38e7b0c0f92d68fe89aaa323b8fb0045f2d5663ad"
+        "richos/engine/orchestration.config": "1c5c9c2739d3762ec0111c30526559523f64cbb2ba7382ef2f7e759fa7e5eb28"
       },
       "requires": {
         "paths": [],
