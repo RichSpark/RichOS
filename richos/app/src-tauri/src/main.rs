@@ -4119,6 +4119,18 @@ fn main() {
             }
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = handle.try_state::<AppState>() {
+                    // **HE CHOSE "QUIT AND STOP THE WORK", SO THE WORK STOPS** (§7.4a): every
+                    // open job records his Stop as the Stop button does, before anything below
+                    // ends its commands, so the next launch does not resume it. This records
+                    // what he did, not host inference (2002ec31b). An ordinary quit, and a
+                    // crash (which never reaches this arm), record nothing: the job resumes.
+                    if state.quit_confirmed.load(std::sync::atomic::Ordering::SeqCst) {
+                        let (stopped, errors) = state.work.record_quit_and_stop();
+                        eprintln!("[richos] quit and stop the work: {stopped} job(s) recorded as stopped by the user.");
+                        for error in errors {
+                            eprintln!("[richos] quit and stop the work: a job's stop could not be recorded: {error}");
+                        }
+                    }
                     // ONE bound for the whole quit, shared by the work lease's runners below and
                     // every lease's supervisor after them (reap gap 1.3(c)).
                     let quit_bound = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -4131,8 +4143,9 @@ fn main() {
                     // deliberately not in it (§4.2). Destructors are not guaranteed to run
                     // on this path (tao's event loop ends in `process::exit`), and the
                     // supervisor's 100 ms parent-death poll is a backstop, not the promise.
-                    // Every assignment still open becomes `interrupted`; nothing becomes
-                    // `settled` on the way out.
+                    // The shutdown itself rewrites no job: an open one became `interrupted`
+                    // above only if he chose to stop the work, and stays open otherwise;
+                    // nothing becomes `settled` on the way out.
                     // **HIS TEAM ENDS WITH THE APP, by its own quit path** (r3 (q) item 2): each
                     // lead's supervisor gets SIGTERM and reaps the lead's whole tree, and only
                     // after every lead has gone is the claim given up (e item 3), so his
@@ -10049,7 +10062,10 @@ fn reopen_window(app: &AppHandle) {
 /// does the process end.
 ///
 /// The flag is what the `ExitRequested` arm reads on the second pass; without it the same
-/// arm would prevent the exit again and the app could never be quit at all.
+/// arm would prevent the exit again and the app could never be quit at all. The `Exit` arm
+/// reads it too: with it set, every open job records his Stop
+/// (`WorkHost::record_quit_and_stop`) before the quit ends its commands, so the next launch
+/// does not resume it. Without it (an ordinary quit) the job stays open and resumes.
 #[richos_command::command]
 fn confirm_quit_and_stop(app: AppHandle, state: State<'_, AppState>) {
     state.quit_confirmed.store(true, std::sync::atomic::Ordering::SeqCst);
