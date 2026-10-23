@@ -298,6 +298,15 @@ class ReadsTheScreenAsAPersonDoes(unittest.TestCase):
         self.assertFalse(walk.update_settled(*walk.update_row('Updates\nRichOS 1.2.2\nChecking for updates…\n')))
         self.assertEqual(walk.update_row('no row here'), (None, None))
 
+    def test_a_wrapped_headline_is_one_headline(self):
+        # Nightly 71's new-user walk of 2026-10-23 (update.txt): the frame showed the row whole,
+        # its OCR wrapped the headline, and the walk read "... is up to" / "date." as no verdict.
+        frame = ('Memory folder >\nUpdates\n\nRichOS 1.2.2-nightly.20261023.71 is up to\ndate.\n\n'
+                 'Checked just now.\n{ Check for updates |\n\nSee what\'s new 7\n')
+        self.assertEqual(walk.update_row(frame),
+                         ('RichOS 1.2.2-nightly.20261023.71 is up to date.', 'Checked just now.'))
+        self.assertIsNone(walk.update_verdict(*walk.update_row(frame), []))
+
     def test_whether_settings_is_open_is_read_off_the_frame(self):
         self.assertTrue(walk.settings_open(self.FRAME))
         self.assertFalse(walk.settings_open('RV Park / Onboarding\nTalk to Rich...\nhow it looks to me'))
