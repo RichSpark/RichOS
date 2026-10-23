@@ -212,6 +212,11 @@ KEEP_RUNS = 3
 # because a kill at exactly ten minutes under a contended Mac would fail healthy checks.
 BUDGET_SECONDS = 600
 DEFAULT_WEIGHTS = (("native-ios", 900), ("native-android", 600), ("cargo", 300), ("engine", 300))
+# A check whose measured time does not fit the hour ceiling gets its own deadline. native-ios-ui
+# runs its two simulators one after the other, each the whole selection: in proof run
+# 20261023T044649Z-3za63spa (2026-10-23) device 1 took 2234 s (124 cases, 0 failures) and device 2,
+# at the same pace, was stopped at 2700 s. Two devices of about 2230 s plus a margin.
+SUITE_DEADLINES = {"native-ios-ui": 5400.0}
 
 
 def git_root():
@@ -1338,6 +1343,8 @@ def deadline_for(item, args):
     cap = getattr(args, "cap", None)
     if cap:
         return float(cap)
+    if item.label in SUITE_DEADLINES:
+        return SUITE_DEADLINES[item.label]
     if item.label.startswith("engine ") and any(flag in item.argv for flag in ("--shard", "--only-units")):
         return None
     return min(3600.0, max(args.deadline, 3 * item.weight))
