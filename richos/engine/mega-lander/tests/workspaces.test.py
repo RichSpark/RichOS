@@ -5808,6 +5808,32 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         run("git", "-C", self.other, "merge", "--no-ff", "--no-edit", "cc/newt-opus-rvnotes2")
         self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip2)
 
+    def test_second_review_release_notes_onto_a_release_branch_land_with_no_review(self):
+        # Review rv-20261023T135732Z-c8bab74f-7a95: the notes are judged against
+        # the branch they merge into, never the main checkout's HEAD, so a release
+        # branch's own code is not taken for part of the notes change.
+        run("git", "-C", self.other, "branch", "v1.3.0", "main")
+        rel = os.path.join(self.env.root, "rel-wt")
+        run("git", "-C", self.other, "worktree", "add", "-q", rel, "v1.3.0")
+        self.commit(rel, "release-only.txt")
+        self.verdict(run("git", "-C", rel, "rev-parse", "HEAD").stdout.strip(), "passed")
+        run("git", "-C", self.other, "worktree", "remove", rel)
+        path = os.path.join(self.env.root, "other-wt", "newt-opus-rvrel")
+        ws.register_cc(self.sid, "newt-opus-rvrel", self.other, path, "cc/newt-opus-rvrel", integration="v1.3.0")
+        run("git", "-C", self.other, "worktree", "add", "-q", path, "-b", "cc/newt-opus-rvrel", "v1.3.0")
+        ws.confirm_cc(self.sid, "newt-opus-rvrel", path, True)
+        aid, _npath = self.spawn("newt-opus-rvrel", cc=path)
+        os.makedirs(os.path.join(path, "docs"))
+        self.commit(path, "docs/CHANGELOG.md", "notes of v1.3.0\n")
+        tip = run("git", "-C", path, "rev-parse", "HEAD").stdout.strip()
+        self.finish(aid)
+        main_before = self.head()
+        merged, res = ws.merge_and_land("newt-opus-rvrel", self.sid)
+        self.assertEqual(merged, [(self.other, "cc/newt-opus-rvrel")])
+        self.assertTrue(res["landed"])
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "v1.3.0^2").stdout.strip(), tip)
+        self.assertEqual(self.head(), main_before)
+
     def test_second_review_release_notes_with_any_other_file_still_need_one(self):
         tip = self.notes_branch("newt-opus-rvmixed", "docs/CHANGELOG-NIGHTLY.md", "docs/other.md")
         before = self.head()
