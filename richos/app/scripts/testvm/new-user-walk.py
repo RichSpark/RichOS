@@ -193,11 +193,16 @@ def update_row(text):
     """(headline, subtitle) of Settings' Updates row, read from a frame's OCR TEXT: the two lines
     after the "Updates" heading. The accessibility tree's `value` of #update-line came back empty
     on the guest walk of 2026-10-21 (WebKit keeps a paragraph's words in its child text) while
-    the frame said "RichOS 1.2.2 is up to date.", so the row is read the way a person reads it."""
+    the frame said "RichOS 1.2.2 is up to date.", so the row is read the way a person reads it.
+    A headline wrapped onto more lines ("... is up to" / "date.", nightly 71's walk of 2026-10-23)
+    is one headline: a line starting in lower case continues the sentence above it."""
     lines = [l.strip() for l in (text or '').splitlines() if l.strip()]
     for i, line in enumerate(lines):
         if line == 'Updates':
-            rest = lines[i + 1:i + 3] + [None, None]
+            rest = lines[i + 1:]
+            while len(rest) > 1 and rest[1][0].islower():
+                rest[0:2] = [rest[0] + ' ' + rest[1]]
+            rest = rest[:2] + [None, None]
             return rest[0], rest[1]
     return None, None
 
