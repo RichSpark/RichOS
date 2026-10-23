@@ -14,6 +14,22 @@ final class InteractionTests: XCTestCase {
             .allElementsBoundByIndex.map(\.identifier))
     }
 
+    /// The lowest row on screen: the newest message, while the list follows it.
+    private func newestRow(_ app: XCUIApplication) -> String? {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'row.'"))
+            .allElementsBoundByIndex.max { $0.frame.maxY < $1.frame.maxY }?.identifier
+    }
+
+    /// Nothing was sent: no row the list did not show before, and the newest message is still the one
+    /// it was. Not "the same rows on screen": a hint or card above the composer raises the list's
+    /// bottom inset and the following list keeps its newest message in view (R3), so on the iPhone SE
+    /// the oldest row on screen scrolls off the top, which sends nothing.
+    private func assertNothingSent(_ app: XCUIApplication, rows before: Set<String>, newest: String?, _ message: String,
+                                   file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(rows(app).subtracting(before), [], message, file: file, line: line)
+        XCTAssertEqual(newestRow(app), newest, message, file: file, line: line)
+    }
+
     private func assertNewVoice(_ app: XCUIApplication, after before: Set<String>,
                                 file: StaticString = #filePath, line: UInt = #line) {
         // UICollectionView recycles off-screen rows. Its visible count need not grow on Send.
@@ -70,10 +86,11 @@ final class InteractionTests: XCTestCase {
         let app = Screen.launch("comp-idle", interactive: true)
         try requireMicrophoneKnownToCore(app)
         let before = rows(app)
+        let newest = newestRow(app)
         orb(app).tap()
         let line = app.staticTexts["composer.toast"]
         XCTAssertTrue(line.waitForExistence(timeout: 2), "no hint after a tap")
-        XCTAssertEqual(rows(app), before, "a tap sent something")
+        assertNothingSent(app, rows: before, newest: newest, "a tap sent something")
         // XCTest's accessibility lookup can consume most of the display interval.
         // TooShortLineTests covers the latch; this check proves appearance and disappearance.
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: line)
@@ -269,11 +286,12 @@ final class InteractionTests: XCTestCase {
         let card = app.descendants(matching: .any)["card.micDenied"]
         XCTAssertFalse(card.exists, "the card is up before any press")
         let before = rows(app)
+        let newest = newestRow(app)
         orb(app).press(forDuration: 0.4)
         XCTAssertTrue(card.waitForExistence(timeout: 3), "a press with the microphone off shows nothing")
         XCTAssertEqual(card.label, "The microphone is off for RichConnect, Turn it on in iPhone Settings to send voice messages, or type instead.")
         assertOnScreenAndHittable(app.buttons["card.openSettings"], in: app, "Open Settings")
-        XCTAssertEqual(rows(app), before, "a press with the microphone off sent something")
+        assertNothingSent(app, rows: before, newest: newest, "a press with the microphone off sent something")
         let notNow = app.buttons["card.micNotNow"]
         assertOnScreenAndHittable(notNow, in: app, "Not now")
         notNow.tap()
