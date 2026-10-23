@@ -64,6 +64,7 @@
     "SCRATCH_APP_REGISTRY_RELPATH",
     "SCRATCH_BUILD_CACHE_IDLE_HOURS",
     "SCRATCH_BUILD_CACHE_ORPHAN_HOURS",
+    "SCRATCH_BULK_TMP_ROOTS",
     "SCRATCH_CAMPAIGN_PARENT",
     "SCRATCH_CAMPAIGN_RETENTION_DAYS",
     "SCRATCH_CAMPAIGN_ROOTS",
@@ -75,6 +76,7 @@
     "SCRATCH_DOCKER_THROWAWAY_IMAGES",
     "SCRATCH_DOCKER_UNTIL",
     "SCRATCH_FAILURES_STATE",
+    "SCRATCH_FIXTURE_REPO_LABELS",
     "SCRATCH_FOREIGN_PATTERNS",
     "SCRATCH_KEPT_DIR",
     "SCRATCH_KEPT_RETENTION_DAYS",
@@ -1116,7 +1118,7 @@
     },
     "scripts/verification-inputs.test.py": {
       "source": "scripts/verification-inputs.test.py",
-      "sha256": "0399449fce9f3231bf607ec191bff0b333cbdd59c27ee822afb7d0455e92a7a9",
+      "sha256": "2d973ba54e8468608f88c99c5bc235d59144da1cd1e560e33a0dd9ee5c5b9f38",
       "evidence": "Uses temporary files and Git repositories for parser/closure controls. Its real-file grammar case parses every assignment and checks all eight environment path forms. Helper-source hashing and hook JSON parsing are data reads; selected hooks/suites are never executed. The added real dependency/selection cases only read bound source and hook JSON as data and use synthetic config deltas; they never launch selected suites.",
       "keys": [],
       "edges": [

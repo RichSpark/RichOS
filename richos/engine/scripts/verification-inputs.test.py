@@ -69,7 +69,8 @@ class Inputs(unittest.TestCase):
         # 108 since SCRATCH_KEPT_DIR and SCRATCH_KEPT_RETENTION_DAYS (2026-10-04, what a land kept);
         # 113 since SCRATCH_BUILD_CACHE_* and SCRATCH_CARGO_TARGET_ROOTS (2026-10-08, build caches).
         # 114 since SECOND_REVIEW_REPOS (2026-10-09, the repositories review-watch reviews by itself).
-        self.assertEqual(len(parsed), 108)
+        # 110 since SCRATCH_BULK_TMP_ROOTS and SCRATCH_FIXTURE_REPO_LABELS (2026-10-23, cleanup PRD).
+        self.assertEqual(len(parsed), 110)
         self.assertIsNone(inputs.config_change("", (HERE.parent / "orchestration.config").read_text())["fallback"])
 
     def test_semantic_values_ignore_comments_spacing_and_equivalent_quotes(self):
