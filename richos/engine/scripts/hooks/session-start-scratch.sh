@@ -28,10 +28,11 @@
 #      the mechanism had a disk-space alarm and a delete-failure alarm and
 #      nothing that could say "there is garbage here and nobody is coming for
 #      it". Its own threshold, because this pile never shrinks by itself.
-#   3. THE SCHEDULED JOB IS NOT INSTALLED, OR HAS NOT RUN. A deleter that
-#      quietly stopped looks exactly like a machine with no garbage on it.
-#      This is the who-watches-the-watchman leg and it is the one most likely
-#      to matter on the day it matters.
+#   3. (REMOVED 2026-10-23, cleanup PRD R5.) Whether the scheduled job is
+#      installed, has run and is healthy is now the disk watchdog's cleanup
+#      health, read from the job's own published result and delivered once,
+#      with its owner action, by notice-disk-alert.sh at this same session
+#      start. Saying it here too was a second summary of one failure.
 #
 # ===========================================================================
 # WHAT IT COSTS, MEASURED, AND WHAT HAPPENS WHEN IT COSTS MORE
@@ -61,12 +62,6 @@ ENGINE_ROOT="$(cd "$SCRIPTS/.." && pwd)"
 REAPER="$SCRIPTS/scratch-reaper.sh"
 CONFIG="${SCRATCH_REAPER_CONFIG:-$ENGINE_ROOT/orchestration.config}"
 
-LABEL="com.richos.scratch-reaper"
-LAUNCHD_DIR="${RICHOS_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
-PLIST="$LAUNCHD_DIR/$LABEL.plist"
-STATE_BASE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state"
-STATE="${SCRATCH_REAPER_STATE:-$STATE_BASE/scratch-reaper-state.json}"
-
 # BUDGET, declared here rather than in the config: it is a property of being a
 # SessionStart hook (how long a person will wait for a banner), not of this
 # machine's scratch.
@@ -89,8 +84,8 @@ STATE="${SCRATCH_REAPER_STATE:-$STATE_BASE/scratch-reaper-state.json}"
 # from the LAST FULL PASS, which the scheduled job publishes to
 # scratch-reaper-state.json every six hours and which the banner quotes WITH ITS
 # DATE. A pile nothing will ever collect does not change in six hours — that is
-# what makes it that pile — and leg 3 below already shouts if no pass has
-# completed in fourteen.
+# what makes it that pile — and the disk watchdog's cleanup health alarms when
+# no scheduled pass has completed within its declared twelve hours.
 #
 # The budget therefore stays as a SAFETY rather than as a design: 5 is more than
 # three times the measured 1.5 s, and past it the banner says the size is unknown
@@ -105,39 +100,6 @@ DEADLINE=5
 command -v python3 >/dev/null 2>&1 || exit 0
 
 LINES="$(bash "$REAPER" --notice --deadline "$DEADLINE" 2>/dev/null || true)"
-
-# --- leg 3: is the scheduled job there, and did it run? --------------------
-# On a host with no launchd there is no schedule to be missing, so this leg is
-# silent rather than wrong.
-if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
-    if [ ! -f "$PLIST" ]; then
-        LINES="$LINES${LINES:+
-}SCRATCH: the scheduled reaper is NOT INSTALLED on this machine, so dead scratch is deleted only when somebody remembers. Install it from the MAIN checkout: <main>/richos/engine/scripts/scratch-reaper.sh --install"
-    else
-        AGE="$(STATE="$STATE" python3 - <<'PY' 2>/dev/null || true
-import json, os
-from datetime import datetime, timezone
-try:
-    with open(os.environ["STATE"], encoding="utf-8") as fh:
-        st = json.load(fh)
-    t = datetime.fromisoformat(st["last_apply"].replace("Z", "+00:00"))
-    print("%.0f" % ((datetime.now(timezone.utc) - t).total_seconds() / 3600.0))
-except Exception:
-    print("never")
-PY
-)"
-        # The job fires every six hours, so fourteen is two missed firings plus
-        # slack — the same shape and the same reasoning as the CI watch's
-        # fourteen-hour test against its three-a-day schedule.
-        if [ "$AGE" = "never" ]; then
-            LINES="$LINES${LINES:+
-}SCRATCH: the scheduled reaper is installed but has left NO record of ever completing a pass, so either it has never fired or it cannot write to $STATE_BASE."
-        elif [ "$AGE" -gt 14 ] 2>/dev/null; then
-            LINES="$LINES${LINES:+
-}SCRATCH: the scheduled reaper has not completed a pass in ${AGE} hours (it is scheduled every six). A scheduled job that quietly stopped looks exactly like a machine with no garbage on it."
-        fi
-    fi
-fi
 
 [ -n "$LINES" ] || exit 0
 

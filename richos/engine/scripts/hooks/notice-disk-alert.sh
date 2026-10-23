@@ -188,6 +188,7 @@ import re, sys
 text = sys.stdin.read()
 vols, stuck, inst, klass, notinstalled, stopped = [], "", "", "", False, False
 todo = []
+cleanup = ""
 for line in text.splitlines():
     s = line.strip()
     if "NOT INSTALLED" in s:
@@ -204,6 +205,11 @@ for line in text.splitlines():
     m = re.match(r"^(\d+) TEST APP INSTANCE\(S\) WOULD NOT CLOSE", s)
     if m:
         inst = "%s test app instance(s) would not close" % m.group(1)
+    # The scheduled cleanup has not recovered (cleanup PRD R5): the watchdog line
+    # already is one short summary with its owner action and detail path.
+    m = re.match(r"^CLEANUP HAS NOT RECOVERED: (.*)$", s)
+    if m:
+        cleanup = "cleanup has not recovered: " + m.group(1)[:400]
     # OURS AND NEVER DELETED AUTOMATICALLY — a campaign root past its retention,
     # a running throwaway container. Not an alarm, but the one pile a person
     # gets space back from, so it keeps its place on this line.
@@ -224,6 +230,8 @@ if stuck:
     alarm.append(stuck)
 if inst:
     alarm.append(inst)
+if cleanup:
+    alarm.append(cleanup)
 if alarm and klass:
     alarm.append("classification: " + klass)
 if alarm:
