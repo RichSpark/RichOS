@@ -256,10 +256,17 @@ class NotStarted(unittest.TestCase):
         job.write_text(json.dumps({'id': 'a2', 'kind': 'task', 'state': 'registered', 'title': 'quit job',
                                    'registered_at_ms': T + 4000}))
         (data / 'engine-state/assignments/acme/broken.json').write_text('{')
-        for session, role in (('s-rich', 'rich'), ('s-stu', 'stu')):
+        for session, role in (('s-rich', 'rich'), ('s-stu', 'stu'), ('s-old', 'stu')):
             binding = data / 'engine-state/evidence' / session / 'binding.json'
             binding.parent.mkdir(parents=True)
             binding.write_text(json.dumps({'session_id': session, 'role': role}))
+        # Rich on another Claude account: his transcript is where his own hooks say, never HOME/.claude.
+        elsewhere = root / 'claude-accounts/2/projects/-acme/s-rich.jsonl'
+        elsewhere.parent.mkdir(parents=True)
+        elsewhere.write_text(json.dumps({'type': 'assistant', 'timestamp': '2026-10-22T19:29:00Z', 'message': {
+            'content': [{'type': 'text', 'text': 'Handing it to Stu.'}]}}) + '\n')
+        (data / 'engine-state/evidence/s-rich/callbacks.jsonl').write_text(json.dumps({'callback': {
+            'hook_event_name': 'PreToolUse', 'session_id': 's-rich', 'transcript_path': str(elsewhere)}}) + '\n')
         transcript = home / '.claude/projects/-acme/s-stu.jsonl'
         transcript.parent.mkdir(parents=True)
         transcript.write_text('\n'.join(json.dumps(r) for r in [
@@ -293,11 +300,13 @@ class NotStarted(unittest.TestCase):
         self.assertEqual([t['turn_id'] for t in found['rich_turns']], ['t2'])
         self.assertEqual(found['rich_turns'][0]['reply'], 'On it, handed to Stu.')
         self.assertNotIn('ended', found['rich_turns'][0])
-        stu = [s for s in found['sessions'] if s['role'] == 'stu'][0]
+        sessions = {s['session']: s for s in found['sessions']}
+        stu = sessions['s-stu']
         self.assertEqual(stu['said'][-1]['text'], 'Waiting for the stopped job to settle.')
         self.assertEqual(stu['tools'][-1]['name'], 'Bash')
-        rich = [s for s in found['sessions'] if s['role'] == 'rich'][0]
-        self.assertIsNone(rich['transcript'])
+        self.assertTrue(sessions['s-rich']['transcript'].endswith('claude-accounts/2/projects/-acme/s-rich.jsonl'))
+        self.assertEqual(sessions['s-rich']['said'][-1]['text'], 'Handing it to Stu.')
+        self.assertIsNone(sessions['s-old']['transcript'])
         self.assertEqual(found['stu_inboxes'][0]['last'][0]['text'], 'quit job')
         summary = walk.summarize(found, T)
         self.assertIn('task registered (quit job)', summary)
