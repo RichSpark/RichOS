@@ -389,6 +389,7 @@ class EnterFailed(unittest.TestCase):
         w.pressed = []
         w.press = lambda title, role='AXButton', **k: w.pressed.append(title) or [{'clicked': True}]
         w.ax = lambda *a, **k: []
+        w.shown_title = lambda: 'Onboarding'
 
         def wait_for(title, role='AXButton', app=None, seconds=30):
             if (role, title) not in on_screen:
@@ -444,6 +445,57 @@ class EnterFailed(unittest.TestCase):
             w.enter('connect')
             self.assertEqual(list(w.out.iterdir()), [])
             self.assertEqual(w.pressed, ['Talk to Rich'])
+
+
+class ShownTitle(unittest.TestCase):
+    """walk-58cc7adc97d8: after "Quit and stop the work" the relaunch came back to the walk's own
+    conversation, history and composer intact, under "Acme / Running a test command with a shell
+    tool" (Haiku's title from the normal step's ask); the walk waited for "Onboarding", the title
+    the conversation was created with, and failed the crash step."""
+
+    HAIKU = 'Running a test command with a shell tool'
+
+    def test_the_title_is_his_rename_then_haikus_then_the_created_one(self):
+        nav = {'auto_titles': {'thr_1': self.HAIKU, 'thr_2': 'Other chat'}}
+        self.assertEqual(walk.shown_title(nav, 'thr_1', 'Onboarding'), self.HAIKU)
+        nav['renamed_threads'] = {'thr_1': 'My own name'}
+        self.assertEqual(walk.shown_title(nav, 'thr_1', 'Onboarding'), 'My own name')
+        self.assertEqual(walk.shown_title({'auto_titles': {'thr_2': 'Other chat'}}, 'thr_1', 'Onboarding'), 'Onboarding')
+        self.assertEqual(walk.shown_title({}, 'thr_1', 'Onboarding'), 'Onboarding')
+
+    def test_a_relaunch_enters_the_conversation_under_the_name_it_is_shown_by(self):
+        w = object.__new__(walk.Walk)
+        w.vm, w.data = 'walk-test', '/guest/data'
+        w.facts = {'thread': 'thr_1', 'thread_title': 'Onboarding'}
+        on_screen = {('AXButton', 'Talk to Rich'), ('AXTextArea', 'Message to Rich'), ('AXButton', self.HAIKU)}
+        w.pressed, w.ax = [], (lambda *a, **k: [])
+        w.press = lambda title, role='AXButton', **k: w.pressed.append(title) or [{'clicked': True}]
+
+        def wait_for(title, role='AXButton', app=None, seconds=30):
+            if (role, title) not in on_screen:
+                raise walk.StepFailed(f'{role} "{title}" never appeared within {seconds} s')
+            return True
+        w.wait_for = wait_for
+
+        def guest(vm, cmd, timeout=30):
+            self.assertIn('/guest/data/navigation.json', cmd)
+            return json.dumps({'sidebar_width': 280, 'auto_titles': {'thr_1': self.HAIKU}})
+        saved, walk.guest = walk.guest, guest
+        try:
+            w.enter_conversation()
+        finally:
+            walk.guest = saved
+        self.assertEqual(w.pressed, ['Talk to Rich', self.HAIKU])
+
+    def test_an_unreadable_navigation_file_falls_back_to_the_created_title(self):
+        w = object.__new__(walk.Walk)
+        w.vm, w.data, w.facts = 'walk-test', '/guest/data', {'thread': 'thr_1', 'thread_title': 'Onboarding'}
+        for text in ('', '{ not json'):
+            saved, walk.guest = walk.guest, (lambda vm, cmd, timeout=30, text=text: text)
+            try:
+                self.assertEqual(w.shown_title(), 'Onboarding')
+            finally:
+                walk.guest = saved
 
 
 if __name__ == '__main__':

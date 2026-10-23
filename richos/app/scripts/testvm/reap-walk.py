@@ -205,6 +205,19 @@ def rich_ran_handed(calls, assignments):
             % (', '.join(a.get('id') or '?' for a in assignments), json.dumps(mine)[:1200]))
 
 
+def shown_title(nav, thread_id, created):
+    """The title a conversation is shown under, as nav.rs NavState::display_title picks it: his
+    own rename, then the title Haiku wrote from its first message, then the title it was created
+    with. The walk's conversation is created as "Onboarding" and Haiku renames it after the normal
+    step's ask: walk-58cc7adc97d8's crash step relaunched into it, history and composer intact,
+    under "Acme / Running a test command with a shell tool", and waited for "Onboarding"."""
+    for key in ('renamed_threads', 'auto_titles'):
+        title = ((nav or {}).get(key) or {}).get(thread_id)
+        if title:
+            return title
+    return created
+
+
 def summarize(found, sent_ms):
     """One paragraph from reap-guest.py evidence for a step's failure line: did the ask become a
     job, what did Rich last say, what did Stu last say or run. The files keep the rest."""
@@ -453,6 +466,15 @@ class Walk(adopt.Walk):
             self.save_screen(folder)
             raise StepFailed('%s\nthe screen and its tree are saved in %s' % (exc, folder)) from exc
 
+    def shown_title(self):
+        """The name the app shows the walk's conversation under now: navigation.json's rename or
+        Haiku's title for it, else the title it was created with (shown_title())."""
+        try:
+            nav = json.loads(guest(self.vm, 'cat ' + shlex.quote(self.data + '/navigation.json') + ' 2>/dev/null || true') or '{}')
+        except ValueError:
+            nav = {}
+        return shown_title(nav, self.facts.get('thread'), self.facts.get('thread_title') or 'Running')
+
     def enter_conversation(self):
         # Every caller has just relaunched the app, and a launch with a company opens on the HOME
         # screen (asked-again-walk.py waits up to 90 s for it). Its door is waited for, not
@@ -465,7 +487,7 @@ class Walk(adopt.Walk):
         # "Acme / Onboarding" with its composer and the sidebar closed, so the row the walk then
         # waited for was not on screen. The row is pressed only when the door opened another one.
         self.wait_for('Message to Rich', role='AXTextArea')
-        title = self.facts.get('thread_title') or 'Running'
+        title = self.shown_title()
         # The crumb is static text, whose words are its AXValue (walk-08aeea74dab4's tree:
         # {"role": "AXStaticText", "title": "", "value": "Onboarding"}), never its title.
         try:
@@ -611,7 +633,10 @@ class Walk(adopt.Walk):
         names = started['names']
         pid = self.facts['app']['pid']
         trigger = int(guest(self.vm, 'python3 -c "import os,time; t=time.time(); os.kill(%d, 9); print(int(t*1000))"' % pid))
-        return dict(self.verdict(names, trigger, BOUND_MS), app_pid=pid, started=started)
+        # Evidence, not a verdict: every call that ran a quit heartbeat, so a relaunch that ran
+        # the work he stopped with "Quit and stop the work" again shows as more than the two.
+        return dict(self.verdict(names, trigger, BOUND_MS), app_pid=pid, started=started,
+                    quit_heartbeat_calls=self.commands_run('quit'))
 
     def claude_crash(self):
         self.facts['app'] = self.relaunched()
