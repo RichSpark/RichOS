@@ -3550,14 +3550,18 @@ class PublishedReportTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.tip)
         self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
 
-    def prepare(self, channel="nightly"):
+    def prepare(self, channel="nightly", extra=None):
         self.runner.prepare_changelog = types.MethodType(PREPARE_CHANGELOG, self.runner)
         tag = "v1.2.1" if channel == "stable" else self.TAG
         def command(*args, **kwargs):
             self.assertEqual(args[2], "notes-request")
             request = Path(args[args.index("--output") + 1])
             request.parent.mkdir(parents=True, exist_ok=True)
-            request.write_text(json.dumps({"candidate": tag}))
+            packet = {"schema": 1, "tag": tag, "version": tag[1:], "channel": channel,
+                      "source_commit": "a" * 40,
+                      "build_commit": ("c" if channel == "stable" else "b") * 40,
+                      "previous_tag": None, "previous_source": None, "changes": "history"}
+            request.write_text(json.dumps({**packet, **(extra or {})}))
         self.runner.command = Mock(side_effect=command)
         return self.runner.prepare_changelog({"tag": tag, "channel": channel,
                                               "build_commit": ("c" if channel == "stable" else "b") * 40,
@@ -3580,8 +3584,50 @@ class PublishedReportTests(unittest.TestCase):
         self.assertIn("then immediately run nightly-local.py publish --run", row["question"])
         self.assertIn("Keep this job open", row["question"])
         self.assertIn("remove its entry and record through the normal gate", row["question"])
-        self.assertIn("--type newt --model sonnet --brief", row["question"])
+        self.assertIn("--type newt --model opus --brief", row["question"])
         self.assertEqual([args[0] for args in self.started], [str(m.ESCALATE)])
+        self.main_untouched()
+
+    def test_richer_source_packet_keeps_the_existing_job_and_refreshes_its_brief(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            first = self.prepare()
+            request = next(self.runner.state.rglob("request.json"))
+            sent = request.with_name("dispatched.json")
+            old = json.loads(sent.read_text())
+            # The receipt emitted by the live controller before this change.
+            sent.write_text(json.dumps({"request_sha256": old["request_sha256"],
+                                        "escalation": old["escalation"]}))
+            request.with_name("brief.md").write_text("obsolete brief")
+            enriched = {"changed_files": [{"status": "M", "path": "recovery.rs"}],
+                        "changes": "compact history"}
+            second = self.prepare(extra=enriched)
+            third = self.prepare(extra=enriched)
+        self.assertEqual((first, second, third), (first, first, first))
+        self.assertEqual(len(self.rows()), 1)
+        saved = json.loads(sent.read_text())
+        self.assertEqual(saved["escalation"], first)
+        self.assertNotEqual(saved["request_sha256"], old["request_sha256"])
+        self.assertIn("identity_sha256", saved)
+        self.assertIn("facts.md", request.with_name("brief.md").read_text())
+        self.assertEqual(list(self.runner.state.rglob("*.part")), [])
+        self.main_untouched()
+
+    def test_changed_published_baseline_gets_a_new_notes_job(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            first = self.prepare()
+            second = self.prepare(extra={"previous_tag": "v1.2.1-nightly.20261019.67",
+                                         "previous_source": "d" * 40})
+        self.assertNotEqual(first, second)
+        self.assertEqual(len(self.rows()), 2)
+        self.main_untouched()
+
+    def test_an_unproven_old_receipt_cannot_suppress_the_notes_job(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            first = self.prepare()
+            sent = next(self.runner.state.rglob("dispatched.json"))
+            sent.write_text(json.dumps({"request_sha256": "f" * 64, "escalation": first}))
+            self.prepare(extra={"changed_files": []})
+        self.assertEqual(len(self.rows()), 2)
         self.main_untouched()
 
     def test_dispatch_names_newt_and_materializes_the_brief_for_both_release_kinds(self):
@@ -3589,11 +3635,11 @@ class PublishedReportTests(unittest.TestCase):
             self.prepare()
             self.prepare(channel="stable")
         nightly, stable = self.rows()
-        self.assertIn("newt-sonnet-", nightly["question"])
-        self.assertIn("--type newt --model sonnet", nightly["question"])
+        self.assertIn("newt-opus-", nightly["question"])
+        self.assertIn("--type newt --model opus", nightly["question"])
         self.assertIn("newt-opus-", stable["question"])
         self.assertIn("--type newt --model opus", stable["question"])
-        for row, model in ((nightly, "sonnet"), (stable, "opus")):
+        for row, model in ((nightly, "opus"), (stable, "opus")):
             name = re.search(r"spawn\.sh (\S+)", row["question"]).group(1)
             self.assertRegex(name, r"^[a-z][a-z0-9]{1,15}-%s-[a-z0-9]{1,12}$" % model)
         for identity, tag in (("b", self.TAG), ("c", "v1.2.1")):

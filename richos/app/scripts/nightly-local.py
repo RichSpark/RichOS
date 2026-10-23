@@ -1611,30 +1611,65 @@ class Runner:
     def prepare_changelog(self, info, out):
         """Durable request outside the sealed candidate; never mutate its tested bytes.
 
-        Repeated publish attempts reuse the dispatch for an unchanged request. A changed
-        published baseline creates a fresh request and therefore another review.
+        Repeated publish attempts reuse the job for the same candidate and baseline,
+        even when the request gains richer source data. A changed baseline is a new job.
         """
         request = self.state / "changelogs" / info["build_commit"] / "request.json"
+        try:
+            old_bytes = request.read_bytes()
+        except OSError:
+            old_bytes = None
         self.command(sys.executable, ROOT / SCRIPTS / "nightly.py", "notes-request",
                      "--source", self.source, "--out", out, "--output", request)
-        digest = hashlib.sha256(request.read_bytes()).hexdigest()
+        content = request.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        packet = json.loads(content)
+        keys = ("schema", "tag", "version", "channel", "source_commit", "build_commit",
+                "previous_tag", "previous_source")
+        identity = {key: packet[key] for key in keys}
+        identity_digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         sent = request.with_name("dispatched.json")
-        if sent.exists():
-            try:
-                prior = json.loads(sent.read_text())
-            except (OSError, ValueError):
-                prior = {}
-                self.announce("Saved changelog dispatch receipt is unreadable; dispatching recovery.")
-            if prior.get("request_sha256") == digest:
-                return prior["escalation"]
-        title = f"Prepare {info['tag']} changelog before publication"
         brief = request.with_name("brief.md")
         brief.write_text((ROOT / CHANGELOG_WORKER_BRIEF).read_text()
                          .replace(BRIEF_TAG, info["tag"]).replace("<REQUEST>", shlex.quote(str(request)))
                          + CHANGELOG_SPAWN_LINES)
-        model = "opus" if info.get("channel") == "stable" else "sonnet"
+
+        def remember(raised):
+            temporary = sent.with_suffix(".json.part")
+            try:
+                temporary.write_text(json.dumps({"request_sha256": digest,
+                                                "identity_sha256": identity_digest,
+                                                "escalation": raised}) + "\n")
+                os.replace(temporary, sent)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return raised
+
+        if sent.exists():
+            try:
+                prior = json.loads(sent.read_text())
+                if (not isinstance(prior, dict)
+                        or not isinstance(prior.get("escalation"), str) or not prior["escalation"]):
+                    raise ValueError("invalid dispatch receipt")
+            except (OSError, ValueError):
+                prior = {}
+                self.announce("Saved changelog dispatch receipt is unreadable; dispatching recovery.")
+            # Migrate a byte-keyed receipt only when it proves which old request it sent.
+            # This keeps an in-flight job when its packet gains the source inventory.
+            old_identity = None
+            if old_bytes and prior.get("request_sha256") == hashlib.sha256(old_bytes).hexdigest():
+                try:
+                    old_packet = json.loads(old_bytes)
+                    old_identity = {key: old_packet[key] for key in keys}
+                except (ValueError, KeyError, TypeError):
+                    pass
+            if (prior.get("identity_sha256") == identity_digest
+                    or prior.get("request_sha256") == digest or old_identity == identity):
+                return remember(prior["escalation"])
+        title = f"Prepare {info['tag']} changelog before publication ({identity_digest[:12]})"
+        model = "opus"
         start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
-                            f"newt-{model}-{digest[:12]}", "--repo", "richos",
+                            f"newt-{model}-{identity_digest[:12]}", "--repo", "richos",
                             "--type", "newt", "--model", model, "--brief", str(brief)])
         question = (f"Start Newt, the Release Notes Writer, with this exact command: `{start}`. "
                     f"The brief already names the tag and request. The candidate's run is "
@@ -1649,13 +1684,7 @@ class Runner:
                     "before closing this job. No CEO changelog decision or intervention is needed.")
         raised = self.raise_release_job(title, question,
                                        "QA may continue. Newt owns the source facts and complete user-facing notes.")
-        temporary = sent.with_suffix(".json.part")
-        try:
-            temporary.write_text(json.dumps({"request_sha256": digest, "escalation": raised}) + "\n")
-            os.replace(temporary, sent)
-        finally:
-            temporary.unlink(missing_ok=True)
-        return raised
+        return remember(raised)
 
     def finish_candidate(self, info, out):
         # Use today's controller with the immutable candidate checkout for its source
