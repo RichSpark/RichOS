@@ -1455,13 +1455,19 @@ class Reaper(object):
                             "not all of them are, so nothing here is quit)"))
                 continue
 
-            # A REPOSITORY INSIDE AN ENDED ALLOCATION IS ITS TEST FIXTURE, but only
-            # when the allocator's own ledger row says this directory was allocated
-            # (the name alone is never enough) and every repository in it is wholly
-            # inside it. A suite killed by SIGKILL cannot run its trap, and wall 2
-            # used to keep its fixture repositories until a person deleted them.
+            # A REPOSITORY INSIDE AN ENDED ALLOCATION IS A TEST FIXTURE ONLY ON
+            # POSITIVE EVIDENCE (cleanup PRD R1): the allocator's own ledger row says
+            # this directory was allocated (a name is never enough), its label is a
+            # producer DECLARED to make only fixture repositories
+            # (SCRATCH_FIXTURE_REPO_LABELS), and every repository in it is wholly
+            # inside it. A row and containment prove ownership, not that nothing in
+            # it is somebody's unpushed work: the mid-job review's fixture (a
+            # 'prototype' allocation holding an unpushed commit, a tracked edit and
+            # notes) was deleted on exactly that (rv-20261023T212629Z-3dc330ca-a2b9).
+            # A declared suite killed by SIGKILL cannot run its trap, and wall 2 used
+            # to keep its fixture repositories until a person deleted them.
             fixture = False
-            if has_git and row:
+            if has_git and row and row.get("label") in (self.cfg.get("fixture_repo_labels") or []):
                 outside = repositories_reach_outside(path)
                 if outside:
                     self.add(path, "scratch-alloc", size, INDETERMINATE,
@@ -1920,12 +1926,19 @@ class Reaper(object):
                         "all of them are, so nothing here is quit)"))
             return
 
-        linked = self.reaches_outside(path, has_git, self.cfg["unknown_git_is_fixture"])
+        # IN A PRODUCER'S OWN TEMP ROOT (SCRATCH_BULK_TMP_ROOTS) a repository is a
+        # fixture only in a DECLARED harness family (SCRATCH_LEGACY_TMP_PATTERNS):
+        # Codex works in its TMPDIR, and an unfinished clone or prototype there is
+        # not shown disposable by being old and unopened (cleanup PRD R1; mid-job
+        # review rv-20261023T212629Z-3dc330ca-a2b9). It stays undecided, reported.
+        narrowed = self.cfg["unknown_git_is_fixture"] and (
+            os.path.realpath(root) not in (self.cfg.get("producer_tmp_roots") or [])
+            or any(fnmatch.fnmatch(name, pat) for pat in self.cfg.get("legacy_tmp_patterns") or []))
+        linked = self.reaches_outside(path, has_git, narrowed)
         if linked:
             self.add(path, "tmp-unknown", size, INDETERMINATE, linked)
             return
-        refused = walls.check(path, has_git,
-                              git_is_fixture=self.cfg["unknown_git_is_fixture"])
+        refused = walls.check(path, has_git, git_is_fixture=narrowed)
         if refused:
             self.add(path, "tmp-unknown", size, INDETERMINATE, refused)
             return
@@ -3902,6 +3915,9 @@ def config_from_env(process_only=False):
                                if p not in [os.path.realpath(q) for q in
                                             opt("SCRATCH_SHARED_TMP_ROOTS", "").split()]],
         "producer_tmp_roots": producer_roots,
+        # Allocator labels whose producers make only fixture repositories (PRD R1).
+        # Empty fallback: no repository in an allocation is ever taken as a fixture.
+        "fixture_repo_labels": opt("SCRATCH_FIXTURE_REPO_LABELS", "").split(),
         "foreign_patterns": opt("SCRATCH_FOREIGN_PATTERNS", "").split(),
         "unknown_age_hours": opt_number("SCRATCH_UNKNOWN_AGE_HOURS", 72),
         "unknown_git_is_fixture":
