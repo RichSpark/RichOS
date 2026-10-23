@@ -2676,6 +2676,54 @@ else
 fi
 
 # ===========================================================================
+# S34 — A CHECKOUT OF ANOTHER REPOSITORY IS NEVER A FIXTURE (cleanup PRD R1)
+# ===========================================================================
+# Wall 2 is narrowed for the deny-by-default arm because a harness's throwaway
+# repository is scaffolding. A LINKED checkout of a repository elsewhere is not:
+# measured 2026-10-23, Codex's temp root held two linked checkouts of the main
+# repository, and wall 3 cannot see git's own worktree list. Controls: a
+# self-contained repository, and a pointer to a path that does not exist on this
+# machine (an extracted copy of another machine's checkout), are still collected.
+deny_world linkedcheckout
+echo 'SCRATCH_UNKNOWN_GIT_IS_FIXTURE="1"' >>"$W_CFG"
+start_claude; PID_LC="$LAST_CLAUDE"
+register "$W_SESSIONS" "$PID_LC" "$SID_LIVE"
+mkdir -p "$W_ROOT/outside-repo/.git/worktrees/linked"
+mkdir -p "$W_TMP/zzz-linked/checkout" "$W_TMP/zzz-selfcontained/repo/.git/objects" \
+         "$W_TMP/zzz-dangling/checkout"
+printf 'gitdir: %s/outside-repo/.git/worktrees/linked\n' "$W_ROOT" >"$W_TMP/zzz-linked/checkout/.git"
+printf 'gitdir: %s/no-such-machine/repo/.git/worktrees/x\n' "$W_ROOT" >"$W_TMP/zzz-dangling/checkout/.git"
+for _d in zzz-linked zzz-selfcontained zzz-dangling; do
+    printf 'payload\n' >"$W_TMP/$_d/payload.txt"
+    backdate "$W_TMP/$_d"
+done
+OUT="$(run --apply)"
+if [ -f "$W_TMP/zzz-linked/checkout/.git" ]; then
+    ok "S34  a linked checkout of a repository outside the tree is kept"
+else
+    bad "S34  a linked checkout of an outside repository was deleted as a fixture"
+    printf '%s\n' "$OUT" | sed 's/^/        /'
+fi
+case "$OUT" in
+    *"linked checkout of a repository outside"*)
+        ok "S34a and the reason names the outside repository" ;;
+    *) bad "S34a kept, but not for the outside-repository reason"
+       printf '%s\n' "$OUT" | sed 's/^/        /' ;;
+esac
+if [ ! -d "$W_TMP/zzz-selfcontained" ]; then
+    ok "S34b CONTROL: a self-contained fixture repository is still collected"
+else
+    bad "S34b CONTROL FAILED: a self-contained fixture repository was kept"
+fi
+if [ ! -d "$W_TMP/zzz-dangling" ]; then
+    ok "S34c CONTROL: a pointer to a path that does not exist here is collected"
+else
+    bad "S34c CONTROL FAILED: a dangling pointer kept its tree"
+fi
+kill "$PID_LC" >/dev/null 2>&1 || true
+wait "$PID_LC" 2>/dev/null || true
+
+# ===========================================================================
 # S33 — THIS SUITE NEVER SCANNED THE WHOLE MAC'S OPEN-FILE TABLE
 # ===========================================================================
 # The scoped lsof at the top of this file only helps if the reaper actually

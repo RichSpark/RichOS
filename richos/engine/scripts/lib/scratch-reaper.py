@@ -522,9 +522,19 @@ def repositories_reach_outside(tree):
     `.git` FILE pointing elsewhere is a checkout of somebody's repository, and a
     repository whose linked worktrees live outside `tree` would leave those
     checkouts without an object store if it were deleted. Either is refused. A
-    tree that cannot be read is refused too: unreadable is not proof.
+    tree that cannot be read is refused too: unreadable is not proof. A pointer to
+    a path that does not exist on this machine (an extracted copy of another
+    machine's checkout) belongs to no repository here and is not refused.
+
+    Measured 2026-10-23 in Codex's temp root: two directories held linked
+    checkouts of the main RichOS repository, which wall 3 cannot see because git's
+    own worktree list is not the workspace registry.
     """
     real = os.path.realpath(tree)
+
+    def elsewhere(target):
+        return not target or (not inside(target, real) and os.path.lexists(target))
+
     stack = [real]
     while stack:
         cur = stack.pop()
@@ -536,14 +546,14 @@ def repositories_reach_outside(tree):
             if e.name == ".git":
                 if e.is_file(follow_symlinks=False):
                     target = _gitdir_target(e.path)
-                    if not target or not inside(target, real):
+                    if elsewhere(target):
                         return ("%s is a linked checkout of a repository outside this "
-                                "allocation (%s)" % (cur, target or "unreadable pointer"))
+                                "tree (%s)" % (cur, target or "unreadable pointer"))
                 elif e.is_dir(follow_symlinks=False):
                     for pointer in glob.glob(os.path.join(e.path, "worktrees", "*", "gitdir")):
                         target = _gitdir_target_line(pointer)
-                        if not target or not inside(target, real):
-                            return ("%s has a linked worktree outside this allocation (%s)"
+                        if elsewhere(target):
+                            return ("%s has a linked worktree outside this tree (%s)"
                                     % (e.path, target or "unreadable"))
                 else:
                     return "%s is a .git that is neither a file nor a directory" % e.path
@@ -1081,6 +1091,16 @@ class Reaper(object):
     def add(self, path, klass, size, action, why, standing=False):
         self.entries.append(Entry(path, klass, size, action, why, standing))
 
+    @staticmethod
+    def reaches_outside(path, has_git, narrowed):
+        """'' unless wall 2 is narrowed for this tree and a repository in it is a
+        checkout of, or has worktrees in, a repository elsewhere (cleanup PRD R1)."""
+        if not (has_git and narrowed):
+            return ""
+        why = repositories_reach_outside(path)
+        return ("wall 2: %s; a checkout of another repository is closed by its "
+                "owner, never deleted as a fixture" % why) if why else ""
+
     # --- classes ---------------------------------------------------------
 
     def scan_claude_roots(self, walls):
@@ -1266,6 +1286,10 @@ class Reaper(object):
                 self.add(path, "standing-failure", size, KEEP,
                          "a process has opened a file inside it since the "
                          "failed deletion, so it is no longer abandoned")
+                continue
+            linked = self.reaches_outside(path, has_git, self.cfg["legacy_git_is_fixture"])
+            if linked:
+                self.add(path, "standing-failure", size, INDETERMINATE, linked)
                 continue
             refused = walls.check(path, has_git,
                                   git_is_fixture=self.cfg["legacy_git_is_fixture"])
@@ -1704,6 +1728,10 @@ class Reaper(object):
         # family match, the age floor and the open-handle check have all been
         # established above. Wall 3 (registered workspace) is what protects a
         # real worktree and it still applies in full.
+        linked = self.reaches_outside(path, has_git, self.cfg["legacy_git_is_fixture"])
+        if linked:
+            self.add(path, "tmp-legacy", size, INDETERMINATE, linked)
+            return
         refused = walls.check(path, has_git,
                               git_is_fixture=self.cfg["legacy_git_is_fixture"])
         if refused:
@@ -1874,6 +1902,10 @@ class Reaper(object):
                         "all of them are, so nothing here is quit)"))
             return
 
+        linked = self.reaches_outside(path, has_git, self.cfg["unknown_git_is_fixture"])
+        if linked:
+            self.add(path, "tmp-unknown", size, INDETERMINATE, linked)
+            return
         refused = walls.check(path, has_git,
                               git_is_fixture=self.cfg["unknown_git_is_fixture"])
         if refused:
