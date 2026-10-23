@@ -224,6 +224,36 @@ if quiet && [ "$N" = 0 ]; then
 else bad "T1e a cited order of his opens no hold" "holds=$N out=$HOUT"; fi
 rm -rf "$RICHOS_WORKSPACES_DIR/holds"
 
+# T2 (2026-10-23): sentences that say nothing is held each opened a hold only his words
+# could end (held-3c51602a, held-77933bd6, held-a2aa88fd). Verbatim from the lead's replies.
+no_hold_case() { # <label> <text> <why>
+    write_transcript Bash
+    run_hook "$2"
+    N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
+    if quiet && [ "$N" = 0 ]; then ok "$1 opens no hold: $3"
+    else bad "$1 opens no hold: $3" "holds=$N out=$HOUT"; fi
+    rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+}
+no_hold_case T2a "Nothing of yours is on hold." "a denial of a hold"
+no_hold_case T2b 'The tracker repeated the "hold" it logged from my first message today; none of your work is on hold.' \
+    "'none of your work is on hold' denies one"
+no_hold_case T2c "Codex is still looking into why the end-of-turn output got so long, and I'm not starting anything alongside that." \
+    "'not starting anything alongside' names no work held"
+# The positive control: a denial beside a real hold leaves exactly the real one, and
+# work named after "anything" is still work.
+write_transcript Bash
+run_hook "Nothing new: the latest notice is a repeat about a branch that's on hold. Nothing of yours is on hold."
+N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
+if spoke && [ "$N" = 1 ] && grep -q "a branch that's on hold" "$RICHOS_WORKSPACES_DIR"/holds/held-*.json; then
+    ok "T2d POSITIVE CONTROL: beside a denial, a real hold is still one hold"
+else bad "T2d a real hold beside a denial is still recorded" "holds=$N out=$HOUT"; fi
+rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+write_transcript Bash
+run_hook "I'm not spawning anything for it right now."
+if spoke; then ok "T2e POSITIVE CONTROL: 'not spawning anything for it right now' still fires"
+else bad "T2e work named after 'anything' still fires" "$HOUT"; fi
+rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+
 # ===========================================================================
 # 2. THE THREE DISCHARGES — same text, silenced three different ways
 # ===========================================================================

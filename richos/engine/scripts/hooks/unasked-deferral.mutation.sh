@@ -198,6 +198,17 @@ mutant blocking "1d " "$H" \
     'exit 2; stop_notice_abnormal "$KEY" \' \
     "a Stop hook that refuses turns over a regex on prose wedges the session and earns CHECK_UNASKED_DEFERRAL=0."
 
+# --- T2. A SENTENCE THAT HOLDS NOTHING OPENS NO HOLD (2026-10-23) ----------
+mutant denial-is-a-hold "T2a " "scripts/lib/hold_words.py" \
+    '            if not _DENIED_BEFORE_RE.search(text[max(0, m.start() - 80):m.start()])]' \
+    '            ]' \
+    "'Nothing of yours is on hold.' opened a hold only his words could end, repeated every 30 minutes."
+
+mutant nothing-more-is-a-hold "T2c " "$A" \
+    '     r"(?:spawning|dispatching|launching|kicking off|starting)\b" + _NOTHING_MORE),' \
+    '     r"(?:spawning|dispatching|launching|kicking off|starting)\b"),' \
+    "'I'm not starting anything alongside that' names no work, so its hold could never end by the work running."
+
 # --- 2. THE THREE DISCHARGES ----------------------------------------------
 mutant no-ask-discharge "2a " "$A" \
     '    if "AskUserQuestion" in tools:' \
