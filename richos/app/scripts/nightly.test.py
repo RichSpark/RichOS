@@ -2117,4 +2117,13 @@ EOF
 
 
 if __name__ == "__main__":
+    # A stopped run removes its fixtures. Python's default SIGTERM ends the process at
+    # once, so every TemporaryDirectory above (a remote.git, a repo and a fake nightly
+    # tag) stayed in $TMPDIR, and the scratch reaper keeps a tree holding a .git.
+    # Reproduced 2026-10-23: TERM after 6 s left tmp*/remote.git, repo and
+    # v5.1.0-nightly.20260911.1. Ending as Ctrl-C does lets Python exit normally,
+    # which runs each TemporaryDirectory's finalizer.
+    import signal
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
+    signal.signal(signal.SIGHUP, signal.default_int_handler)
     unittest.main(verbosity=2)
