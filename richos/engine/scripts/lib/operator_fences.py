@@ -992,6 +992,22 @@ def review_listed(names, main):
     return os.path.basename(os.path.realpath(main or "")) in (names or ())
 
 
+# RELEASE NOTES NEED NO SECOND REVIEW (CEO 2026-10-23: any review of a
+# release-notes job is useless). Work whose changed files are all release
+# notes lands without one, and review-watch starts none.
+RELEASE_NOTES = ("docs/CHANGELOG-NIGHTLY.md", "docs/CHANGELOG.md", "docs/release-notes.json")
+
+
+def notes_only(cwd, base, tip, keep_git_env=False):
+    """Does `tip` bring in over `base` (git diff base...tip, renames split into
+    a delete and an add) changes to release notes and to nothing else? False
+    when it changes nothing or git cannot say."""
+    rc, out, _e = git(cwd, "diff", "--no-renames", "--name-only", "-z", "%s...%s" % (base, tip),
+                      keep_git_env=keep_git_env)
+    files = [f for f in out.split("\0") if f] if rc == 0 else []
+    return bool(files) and all(f in RELEASE_NOTES for f in files)
+
+
 def landed_tips(cwd, old, new, keep_git_env=False):
     """The commits whose work a move of main from `old` to `new` lands; each
     needs a passing review of exactly itself. [] when the move lands nothing.
@@ -1637,8 +1653,9 @@ def move_review_gaps(files, old, new, keep_git_env=False):
     question the fence asks of a move of main and review-check asks before a
     land's checks. A check that cannot decide refuses, and says so."""
     try:
-        return review_gaps(files.reviews, landed_tips(os.getcwd(), old, new, keep_git_env=keep_git_env),
-                           files.repo)
+        tips = [t for t in landed_tips(os.getcwd(), old, new, keep_git_env=keep_git_env)
+                if not notes_only(os.getcwd(), old, t, keep_git_env=keep_git_env)]
+        return review_gaps(files.reviews, tips, files.repo)
     except Exception as error:  # noqa: BLE001: a check that cannot decide refuses, and says so
         return {new: ["the second review of this move could not be checked (%s: %s), so it is refused"
                       % (error.__class__.__name__, error)]}

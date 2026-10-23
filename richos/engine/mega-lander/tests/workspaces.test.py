@@ -5782,6 +5782,70 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         run("git", "-C", self.other, "merge", "--no-ff", "--no-edit", "cc/zach-opus-rv5")
         self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip)
 
+    def notes_branch(self, name, *files):
+        """A finished teammate whose one commit changes exactly `files`."""
+        cc = self.make_cc(name)
+        aid, _npath = self.spawn(name, cc=cc)
+        for f in files:
+            os.makedirs(os.path.join(cc, os.path.dirname(f)), exist_ok=True)
+            with open(os.path.join(cc, f), "w") as out:
+                out.write("notes of %s\n" % name)
+        run("git", "-C", cc, "add", "--", *files)
+        run("git", "-C", cc, "commit", "-q", "-m", "release notes")
+        self.finish(aid)
+        return run("git", "-C", cc, "rev-parse", "HEAD").stdout.strip()
+
+    def test_second_review_release_notes_only_land_with_no_review(self):
+        # CEO 2026-10-23: a review of a release-notes job is useless.
+        tip = self.notes_branch("newt-opus-rvnotes", "docs/CHANGELOG-NIGHTLY.md", "docs/CHANGELOG.md",
+                                "docs/release-notes.json")
+        merged, res = ws.merge_and_land("newt-opus-rvnotes", self.sid)
+        self.assertEqual(merged, [(self.other, "cc/newt-opus-rvnotes")])
+        self.assertTrue(res["landed"])
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip)
+        # A plain git merge goes through the fence the same way.
+        tip2 = self.notes_branch("newt-opus-rvnotes2", "docs/release-notes.json")
+        run("git", "-C", self.other, "merge", "--no-ff", "--no-edit", "cc/newt-opus-rvnotes2")
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip2)
+
+    def test_second_review_release_notes_onto_a_release_branch_land_with_no_review(self):
+        # Review rv-20261023T135732Z-c8bab74f-7a95: the notes are judged against
+        # the branch they merge into, never the main checkout's HEAD, so a release
+        # branch's own code is not taken for part of the notes change.
+        run("git", "-C", self.other, "branch", "v1.3.0", "main")
+        rel = os.path.join(self.env.root, "rel-wt")
+        run("git", "-C", self.other, "worktree", "add", "-q", rel, "v1.3.0")
+        self.commit(rel, "release-only.txt")
+        self.verdict(run("git", "-C", rel, "rev-parse", "HEAD").stdout.strip(), "passed")
+        run("git", "-C", self.other, "worktree", "remove", rel)
+        path = os.path.join(self.env.root, "other-wt", "newt-opus-rvrel")
+        ws.register_cc(self.sid, "newt-opus-rvrel", self.other, path, "cc/newt-opus-rvrel", integration="v1.3.0")
+        run("git", "-C", self.other, "worktree", "add", "-q", path, "-b", "cc/newt-opus-rvrel", "v1.3.0")
+        ws.confirm_cc(self.sid, "newt-opus-rvrel", path, True)
+        aid, _npath = self.spawn("newt-opus-rvrel", cc=path)
+        os.makedirs(os.path.join(path, "docs"))
+        self.commit(path, "docs/CHANGELOG.md", "notes of v1.3.0\n")
+        tip = run("git", "-C", path, "rev-parse", "HEAD").stdout.strip()
+        self.finish(aid)
+        main_before = self.head()
+        merged, res = ws.merge_and_land("newt-opus-rvrel", self.sid)
+        self.assertEqual(merged, [(self.other, "cc/newt-opus-rvrel")])
+        self.assertTrue(res["landed"])
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "v1.3.0^2").stdout.strip(), tip)
+        self.assertEqual(self.head(), main_before)
+
+    def test_second_review_release_notes_with_any_other_file_still_need_one(self):
+        tip = self.notes_branch("newt-opus-rvmixed", "docs/CHANGELOG-NIGHTLY.md", "docs/other.md")
+        before = self.head()
+        with self.assertRaises(ws.SpecError) as e:
+            ws.merge_and_land("newt-opus-rvmixed", self.sid)
+        self.assertIn("no second review of %s" % tip[:12], str(e.exception))
+        r = run("git", "-C", self.other, "merge", "--no-ff", "--no-edit", "cc/newt-opus-rvmixed", check=False)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("no second review of %s" % tip[:12], r.stderr)
+        self.assertEqual(self.head(), before)
+        self.no_merge_left()
+
     def test_second_review_a_fast_forward_and_a_direct_commit_are_refused_an_empty_commit_is_not(self):
         run("git", "-C", self.other, "branch", "ff-work")
         wt = os.path.join(self.env.root, "ff-wt")
