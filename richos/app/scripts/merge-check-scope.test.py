@@ -36,6 +36,10 @@ class Scope(unittest.TestCase):
     def test_previous_cargo_fix_selects_no_iphone_suite(self):
         paths = subprocess.check_output(['git', '-C', str(ROOT), 'diff', '--name-only',
                                          'ad1b6996..0c65837b'], text=True).splitlines()
+        # The one-app work deleted two of that fix's 32 files (operator-mutations.py,
+        # operator-walk.test.sh); the selector rightly refuses a path that no longer exists.
+        # The other 30 are still the cargo fix whose selection this case is about.
+        paths = [p for p in paths if (ROOT / p).exists()]
         plan = self.selection(paths)
         for name in ('native-ios-app', 'native-ios-ui', 'native-ios-share'):
             self.assertNotIn(name + '.test.sh', plan)
