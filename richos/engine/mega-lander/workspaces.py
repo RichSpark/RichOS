@@ -3360,7 +3360,9 @@ def due_set(me="", items=None, at=None, cache=None):
     for it in items or []:
         if not it.get("key") or it["key"] in seen or it.get("waiting") or it.get("damaged"):
             continue
-        rec = load_agent(it["key"]) or {}
+        # What the platform recorded counts before the registry adopts it (the dry watcher's
+        # view): a stop seen only there is still a stop (review rv-20261024T033729Z-cfc3e0e1-4e49).
+        rec = platform_view(load_agent(it["key"]) or {}) or {}
         since = ((rec.get("end") or {}).get("at")) or now()
         stopped = (rec.get("end") or {}).get("signal") == "stopped"
         out.append({"name": it["name"], "what": "the finished work of %s" % it["name"], "why": it["why"],

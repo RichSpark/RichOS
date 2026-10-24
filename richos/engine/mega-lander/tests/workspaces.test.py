@@ -4204,6 +4204,19 @@ class HuntV2_05_StatusReadsTheRecordedStop(Base):
                          ["zach-opus-stv2"])
         self.assertEqual(self.rec("zach-opus-stv2")["end"]["signal"], "stopped")
 
+    def test_r2_a_stop_only_the_platform_recorded_offers_only_shelving_and_discard(self):
+        """Review rv-20261024T033729Z-cfc3e0e1-4e49 #1: the watcher's dry read saw the platform's
+        stop, but due_set reloaded the stored record and offered "land it ... or spawn its
+        continuation" for work he had stopped. Nothing is adopted by the question."""
+        self._stopped_by_user("zach-opus-stv3")
+        due = [d for d in ws.due_set(self.sid, ws.pending(self.sid, self.entity, auto=False, dry=True))
+               if d["name"] == "zach-opus-stv3"]
+        self.assertEqual(len(due), 1, due)
+        self.assertIn("shelved/zach-opus-stv3", due[0]["command"])
+        self.assertNotIn("land it", due[0]["command"])
+        self.assertNotIn("spawn its continuation", due[0]["command"])
+        self.assertIsNone(self.rec("zach-opus-stv3")["end"])
+
     def test_v2_05_a_running_worker_is_still_working(self):
         import io
         from contextlib import redirect_stdout
