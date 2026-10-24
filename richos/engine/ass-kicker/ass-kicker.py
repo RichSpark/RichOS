@@ -240,9 +240,9 @@ ARM 2 — THE TURN THAT STOPS, stated precisely
 
     IN THE APP, Stu's own work tools answer the "started nothing" term too
     (2026-10-24, nightly 73 and 74 walks, where both of his truthful replies
-    were refused): a `complete` that closed the job means nothing of it is
-    pending, and a `team save` of a new teammate means the app resumes the job
-    with a team_reloaded message. Either discharges the arm, read from the
+    were refused): a `complete` that closed the selected obligation means
+    nothing of that obligation is pending, and a `team save` of a new teammate
+    means the app resumes the job with a team_reloaded message. Either discharges the arm, read from the
     tool's answer, never from the reply. See app_job_outcome().
 
     THE TERM THAT USED TO SAY "no hold or end-of-day in his own words" IS GONE
@@ -672,18 +672,25 @@ APP_TEAM = "mcp__richos_work__team"
 def app_job_outcome(idle, transcript, prompt_id):
     """What the app's own work tools answered this turn about Stu's job, as
     (verdict, detail), or None. Read from the tools' answers, never the reply:
-      ('closed', ...)   `complete` answered obligation_closed: true. A work
-                        lease carries exactly one job, and the app closes it
-                        only when no worker of it is still running and every
-                        final worker is landed, so nothing of it is pending.
+      ('closed', ...)   `complete` answered obligation_closed: true for the
+                        obligation it selected (the lease's current one, or
+                        the one it names). The app closes that obligation only
+                        when none of its own receipts is still preparing,
+                        running or unknown and every final worker of it is
+                        landed (mega-lander/app.py completion_evidence), so
+                        nothing of THAT obligation is pending. It says nothing
+                        about the lease, which goes on to its next job, or
+                        about any other obligation.
       ('started', ...)  `team save` added a NEW teammate. The app registers
                         him when this turn ends and then sends Stu the
                         team_reloaded message, which starts his next turn
                         (work_host.rs reload_team_after_turn), so the next
                         step is already in motion.
     A refused call counts for nothing, a replaced teammate gets no reload, and
-    a land (`integrate`) is not a close. Nightly 73 and 74 walks: both truthful
-    replies were refused without this."""
+    a land (`integrate`) is not a close. Not told apart (a stated limit): a
+    teammate of a DIFFERENT, still open obligation whose completion arrives in
+    the same turn as this close. Nightly 73 and 74 walks: both truthful replies
+    were refused without this."""
     try:
         offset = idle.turn_start_offset(transcript, prompt_id)
         wanted, answers, started = {}, {}, False
@@ -724,7 +731,7 @@ def app_job_outcome(idle, transcript, prompt_id):
         if not isinstance(answer, dict):
             continue
         if name == APP_COMPLETE and answer.get("obligation_closed") is True:
-            return ("closed", "the app closed the job this turn")
+            return ("closed", "the app closed obligation %s this turn" % answer.get("obligation_id"))
     for tid, answer in answers.items():
         name, inp = wanted[tid]
         if (name == APP_TEAM and isinstance(answer, dict) and isinstance(inp, dict)
