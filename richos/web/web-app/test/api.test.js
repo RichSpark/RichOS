@@ -482,6 +482,20 @@ test('audio is fetched with the credential, by an id the Mac minted', async () =
 	assert.ok(calls[0].init.headers.Authorization.startsWith('RichOS-Device device-1.'), 'the audio request was unauthenticated');
 });
 
+test('a file Rich attached is fetched on the message route with the credential in the header, and a gone file is the Mac\'s sentence', async () => {
+	const { api, calls } = makeApi(() => response(200, '%PDF-1.4', { 'Content-Type': 'application/pdf' }));
+	assert.ok(await api.fetchFile('rf_1', 'thr:5c1e'));
+	assert.ok(calls[0].url.endsWith('/api/messages?kind=file&file_id=rf_1&thread_id=thr%3A5c1e'), calls[0].url);
+	assert.strictEqual(calls[0].init.method, 'GET');
+	assert.ok(calls[0].init.headers.Authorization.startsWith('RichOS-Device device-1.'), 'the file request was unauthenticated');
+	const gone = makeApi(() => response(410, { retry: false, reason: 'No longer on this Mac. It was moved or deleted.' }));
+	await assert.rejects(() => gone.api.fetchFile('rf_1', 't'), (err) => {
+		assert.strictEqual(err.reason, REFUSED);
+		assert.strictEqual(err.message, 'No longer on this Mac. It was moved or deleted.');
+		return true;
+	});
+});
+
 // ---------------------------------------------------------------------------------------------
 // The 503 that is an ANSWER, and the 503 that is an accident (contract §9, plan §2 A)
 // ---------------------------------------------------------------------------------------------

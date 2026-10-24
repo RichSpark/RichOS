@@ -650,6 +650,14 @@
 				return response.nativeAudio || (response.blob ? response.blob() : response.arrayBuffer());
 			},
 
+			/// A FILE RICH ATTACHED, by the id its row carries (`phone/routes.rs` `rich_file`): the
+			/// message route, credential in the header, the bytes as a Blob typed by the Mac. A file
+			/// that is gone is a final refusal carrying the Mac's own sentence.
+			async fetchFile(fileId, threadId) {
+				const response = await request('GET', '/api/messages' + query({ kind: 'file', file_id: fileId, thread_id: threadId }));
+				return response.blob ? response.blob() : response.arrayBuffer();
+			},
+
 			// ---- (d) pairing, and the device record ---------------------------------------------
 			///
 			/// `options.pairingVersion === 2` is a v2 phone (Sage's pairing review §3): it says so in
