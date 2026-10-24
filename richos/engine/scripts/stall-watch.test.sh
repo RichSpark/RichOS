@@ -858,6 +858,13 @@ new_state hd4b
 OUT="$(RICHOS_APP_ENTITY=acme RICHOS_APP_THREAD=thread-1 STALL_WATCH_NOW=$(date +%s) bash "$SW" --tick 2>&1)"
 check "HD5  in the app (one conversation's partition) Stu's watcher tells the due work of Rich's running lease" \
     "$( has "$OUT" "[DUE] victor-opus-a1"; echo $?)" "out=$OUT"
+# Codex 03:24Z item A (Sage D6): one damaged record hid every readable due item.
+printf '{' > "$RICHOS_WORKSPACES_DIR/agents/damaged-fixture.json"
+new_state hd6
+OUT="$(RICHOS_APP_ENTITY=acme RICHOS_APP_THREAD=thread-1 STALL_WATCH_NOW=$(date +%s) bash "$SW" --tick 2>&1)"
+check "HD6  a damaged record beside readable due work: the due work is told, and one UNREADABLE RECORD line" \
+    "$( has "$OUT" "[DUE] victor-opus-a1" && has "$OUT" "UNREADABLE RECORD: 1 workspace registry record"; echo $?)" "out=$OUT"
+rm -f "$RICHOS_WORKSPACES_DIR/agents/damaged-fixture.json"
 unset STALL_WATCH_LEAD_TRANSCRIPT
 
 # --- F: every look is fresh code (orchestration reliability R5) ------------------

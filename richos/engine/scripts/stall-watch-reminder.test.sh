@@ -39,7 +39,7 @@ class DueDeliveryTests(unittest.TestCase):
         self.due = [due_item(1)]
         self.src = SimpleNamespace(ws=SimpleNamespace(
             pending=Mock(return_value=[]), due_set=Mock(side_effect=lambda *a, **k: list(self.due)),
-            damaged_records=Mock(return_value=[])))
+            unreadable_line=Mock(return_value="")))
         self.reg = SimpleNamespace(problem="")
         self.now = 1700000000
         self.env = patch.dict(os.environ, {"STALL_WATCH_LEAD_TRANSCRIPT": str(self.transcript)})
@@ -102,8 +102,11 @@ class DueDeliveryTests(unittest.TestCase):
         self.assertIn("[NOT READ]", out)
         self.assertIn("fixture read failure", out)
         self.src.ws.pending.side_effect = None
-        self.src.ws.damaged_records.return_value = ["damaged record"]
-        self.assertIn("unreadable records", self.tick(self.now + 30 * 60 + 60))
+        # Codex 03:24Z item A: a damaged record never hides the readable due work beside it.
+        self.src.ws.unreadable_line.return_value = "UNREADABLE RECORD: 1 workspace registry record(s) cannot be read"
+        out = self.tick(self.now + 30 * 60 + 60)
+        self.assertIn("UNREADABLE RECORD", out)
+        self.assertIn("[DUE] worker-1", out)
 
     def test_unknown_partial_or_new_user_transcript_never_counts_as_idle(self):
         cases = [b"", b'{"type":"system","subtype":"turn_duration"}', b'[]\n',

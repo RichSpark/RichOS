@@ -7368,6 +7368,28 @@ class NoSilentHolds(Base):
         ws.discard("zach-opus-p5", "handled by the lead in this fixture", not_ceo_ordered="a test fixture, not his order", me=self.sid)
         self.assertEqual(lead(), "")                                     # emptied, same watcher: quiet
 
+    def test_r2_an_unreadable_record_never_hides_the_readable_due_work(self):
+        """Codex 03:24Z item A (Sage D6): one damaged registry record made the watcher drop
+        every readable due item. Readable due work is told, with one UNREADABLE RECORD line,
+        in the fallback, at session start and in `holds`; nothing refuses anything."""
+        import io
+        from contextlib import redirect_stdout
+        self._pending_one()
+        with open(ws.agent_path("damaged-fixture"), "w") as f:
+            f.write("{")
+        ok, person, lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        self.assertIn("zach-opus-p5", lead)
+        self.assertIn("UNREADABLE RECORD: 1 workspace registry record", lead)
+        self.assertIn("damaged-fixture", lead)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            ws.main(["--session", self.sid, "--entity", self.entity, "holds"])
+        self.assertIn("zach-opus-p5", buf.getvalue())
+        self.assertIn("UNREADABLE RECORD", buf.getvalue())
+        os.unlink(ws.agent_path("damaged-fixture"))
+        self.assertEqual(ws.unreadable_line(), "")
+
     def test_r5_an_unreadable_due_set_is_never_told_as_nothing_due(self):
         """Codex 2026-10-24 (R5/R6/A7): an exception reading the due set became an empty set,
         "Nothing is due now." was appended, and the once-only key ignored the failure, so a

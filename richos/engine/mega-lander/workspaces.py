@@ -3527,6 +3527,22 @@ def _hold_runs(name, by):
 # point 5 — the pending list, and who handles which item (point 12)
 # ---------------------------------------------------------------------------
 
+def unreadable_line():
+    """'' or ONE compact line naming the registry records that cannot be read (orchestration
+    reliability R2/R6, A7): the due work told beside it comes from the readable records only,
+    and nobody has to repair it before independent work goes on."""
+    try:
+        bad = damaged_records()
+    except Exception as e:  # noqa: BLE001: a registry that cannot be listed is said, not hidden
+        return "UNREADABLE RECORD: the workspace registry could not be listed (%s)." % e.__class__.__name__
+    if not bad:
+        return ""
+    more = " and %d more" % (len(bad) - 1) if len(bad) > 1 else ""
+    return ("UNREADABLE RECORD: %d workspace registry record(s) cannot be read (%s%s); the due work "
+            "told is from the readable records only. workspaces.sh status names it; repair or remove "
+            "it when convenient." % (len(bad), bad[0][0], more))
+
+
 def scan_unregistered(repos, record=True):
     """Point 3, hole 6: a cc/ or native workspace with no registration, and any
     such branch, is finished work of an ended session. codex/ and every other
@@ -7980,22 +7996,24 @@ def fallback_notice(sid, items=None):
             due = due_set(sid, items if items is not None else pending(sid, auto=False, dry=True))
         except Exception as e:  # noqa: BLE001: unread is said, never "nothing due"
             due, unread = None, "%s: %s" % (e.__class__.__name__, str(e)[:120])
+        bad = unreadable_line()
         state = line.split(":", 2)[1].strip() if line.count(":") >= 1 else line
         watcher = state[:60]
         # The material state: the watcher's state and, apart, UNKNOWN or the due items, so a
         # read that fails after an empty one is a change and is told (never "nothing due").
         key = hashlib.sha1(json.dumps([state[:60], "unread" if due is None else
                                        sorted([d.get("key") or d["name"], d["state"], d.get("end") or ""]
-                                              for d in due)]).encode("utf-8")).hexdigest()
+                                              for d in due), bad]).encode("utf-8")).hexdigest()
         if due is None:
             body = ("The due work could NOT be read (%s), so what is due is unknown; nothing here "
                     "says nothing is due. workspaces.sh holds reads it again." % unread)
         elif due:
             body = "%d item(s) need action: " % len(due) + " | ".join(due_lines(due))
         else:
-            body = "Nothing is due now."
+            body = "" if bad else "Nothing is due now."
+        body = (body + " " + bad).strip()
         text = ("STALL WATCH NOT ACTIVE (%s): due work is told here until it is. %s" % (line, body)).strip()
-    kind = "healthy" if healthy else ("unread" if due is None else ("due" if due else "empty"))
+    kind = "healthy" if healthy else ("unread" if due is None else ("due" if due or bad else "empty"))
     with Lock():
         rec = load_session(sid) or {}
         if rec.get("fallback_notice") == key:
@@ -8100,10 +8118,13 @@ def lifecycle(payload, entity):
         retry_due()
         items = pending(sid, entity, scan=True)
         due = due_set(sid, items)
+        bad = unreadable_line()
         if due:
             # Owned work to resume, not a gate: independent and authorized work goes on.
             ctx = "\n".join(["DUE WORK (%d): handle it as you resume; the complete list: workspaces.sh holds"
-                             % len(due)] + due_lines(due))
+                             % len(due)] + due_lines(due) + ([bad] if bad else []))
+        elif bad:
+            ctx = bad
     elif ev == "SessionEnd":
         record_session_end(sid, str(payload.get("reason") or "SessionEnd"))
         release_session_holds(sid)
@@ -8611,7 +8632,10 @@ def main(argv):
                     "DUE" if h in due else h["state"].upper(), h["source"], h["name"], iso(h["since"]),
                     h["end"] or "-", h["detail"], " ".join(str(h["why"]).split())[:160],
                     ("  next: " + h["command"]) if h in due else ""))
-            if not due and not quiet:
+            bad = unreadable_line()
+            if bad:
+                print(bad)
+            if not due and not quiet and not bad:
                 print("nothing held or due")
         elif a.cmd == "integration-branch":
             # THE ONE ANSWER, FOR A SHELL CONSUMER. "Every part of the system

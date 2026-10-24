@@ -533,8 +533,6 @@ def _due(src, reg, now, session_id):
     if src.ws is None or reg.problem or not hasattr(src.ws, "due_set"):
         return [], ""
     try:
-        if src.ws.damaged_records():
-            raise ValueError("the workspace registry contains unreadable records")
         items = src.ws.pending(session_id, auto=False, dry=True)
         due = src.ws.due_set(session_id, items, now)
     except Exception as exc:  # noqa: BLE001: an unread list is a source not read, never "nothing due"
@@ -547,7 +545,9 @@ def _due(src, reg, now, session_id):
     if len(due) > DUE_SHOWN:
         out.append(Stall("due:more", "DUE", "%d more" % (len(due) - DUE_SHOWN), now, "more due work", [],
                          ["the complete list: workspaces.sh holds"]))
-    return out, ""
+    # One damaged record never hides the readable due work above: it is one compact problem.
+    bad = src.ws.unreadable_line() if hasattr(src.ws, "unreadable_line") else ""
+    return out, bad
 
 
 def _proof_stall(src, reg, w, holders, slots, now, th, table):
