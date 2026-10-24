@@ -492,23 +492,38 @@ healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json"
 # A campaign root past its retention is not an alarm (D10a). It is told once a
 # session, and again only when WHICH places it is changes; sizes never do. A
 # real alarm beside it still repeats every turn.
-by_hand() {              # <bytes> <path> [<path> ...]
+by_hand_sized() {        # <path>=<bytes> [<path>=<bytes> ...]
+    # The producer's shape (scratch-reaper.py by_hand_record): the five largest
+    # places as examples, and an identity over EVERY place, sizes left out.
     python3 - "$SANDBOX/rstate/scratch-reaper-state.json" "$@" <<'PY'
-import json, sys, time
-out, size, paths = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
+import hashlib, json, sys, time
+out = sys.argv[1]
+rows = [(p, int(b)) for p, b in (a.rsplit("=", 1) for a in sys.argv[2:])]
+total = sum(b for _p, b in rows)
+shown = sorted(rows, key=lambda r: -r[1])[:5]
+identity = hashlib.sha1("\n".join(sorted(p for p, _b in rows)).encode(
+    "utf-8", "surrogateescape")).hexdigest()[:16]
 json.dump({"last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "last_apply_epoch": int(time.time()),
            "source": "launchd", "outcome": "healthy", "unresolved": [], "roots": [],
            "deleted": 0, "freed": 0, "undecidable": 0, "undecidable_bytes": 0,
-           "skipped": len(paths), "skipped_bytes": size * len(paths),
+           "skipped": len(rows), "skipped_bytes": total,
            "skipped_split": {
-               "by_hand": {"count": len(paths), "bytes": size * len(paths), "paths": [
-                   {"path": p, "bytes": size,
+               "by_hand": {"count": len(rows), "bytes": total, "identity": identity,
+                           "paths": [
+                   {"path": p, "bytes": b,
                     "why": "PAST ITS RETENTION ... a person removes it:  rm -rf " + p}
-                   for p in paths]},
+                   for p, b in shown]},
                "foreign": {"count": 0, "bytes": 0}},
            "failures": 0, "verdict": "decided"}, open(out, "w"))
 PY
+}
+by_hand() {              # <bytes> <path> [<path> ...] — every place the same size
+    local size="$1" p
+    local args=()
+    shift
+    for p in "$@"; do args+=("$p=$size"); done
+    by_hand_sized "${args[@]}"
 }
 by_hand 13749244608 /Users/x/ab/campaign-a
 T1="$(run_session_hook)"; T2="$(run_session_hook)"
@@ -544,6 +559,28 @@ if printf '%s' "$T6" | grep -q '^MASSIVE ALERT — DISK: .*below the declared' \
     ok "D13b beside a real alarm the alarm repeats every turn and the pile is told once per set"
 else
     bad "D13b mixed alarm and pile (T6: $T6 | T7: $T7 | T8: $T8 | T9: $T9)"
+fi
+# MORE THAN FIVE PLACES: the alert shows the five largest, but WHICH places it is
+# covers all of them (review rv-20261024T184407Z-f26655a1-5189). A place hidden
+# below the five is replaced: told once. The same places with their sizes
+# reordered, so a different five are shown: quiet.
+G="/Users/x/ab/campaign"
+by_hand_sized "$G-1=6000000000" "$G-2=5000000000" "$G-3=4000000000" "$G-4=3000000000" "$G-5=2000000000" "$G-6=1000000000"
+T10="$(run_session_hook)"
+by_hand_sized "$G-1=6000000000" "$G-2=5000000000" "$G-3=4000000000" "$G-4=3000000000" "$G-5=2000000000" "$G-7=1000000000"
+T11="$(run_session_hook)"; T12="$(run_session_hook)"
+if printf '%s' "$T10" | grep -q '^Disk: .* in 6 place(s) is ours and waits' \
+   && printf '%s' "$T11" | grep -q '^Disk: .* in 6 place(s) is ours and waits' && [ -z "$T12" ]; then
+    ok "D13c a place hidden below the five shown is replaced: told once, then quiet"
+else
+    bad "D13c a hidden membership change was not told exactly once (before: $T10 | replaced: $T11 | next: $T12)"
+fi
+by_hand_sized "$G-1=1000000000" "$G-2=2000000000" "$G-3=3000000000" "$G-4=4000000000" "$G-5=5000000000" "$G-7=6000000000"
+T13="$(run_session_hook)"
+if [ -z "$T13" ]; then
+    ok "D13d the same places with reordered sizes (a different five shown) stay quiet"
+else
+    bad "D13d reordered sizes of the same places told the pile again: $T13"
 fi
 healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json"
 

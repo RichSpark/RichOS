@@ -2703,6 +2703,46 @@ else
     bad "S32b the watchdog cannot tell the two piles apart from what is published"
     cat "$W_HOME/state/scratch-reaper-state.json" 2>/dev/null | sed 's/^/        /' | head -20
 fi
+# S32c — WHICH places is ALL of them, not the five shown. Six campaign roots,
+# five published as examples; replacing the smallest (hidden) one must change
+# the published identity while the five examples stay the same.
+deny_world byhandsix
+{
+    echo "SCRATCH_CAMPAIGN_PARENT=\"$W_ROOT/campaigns\""
+    echo 'SCRATCH_CAMPAIGN_ROOTS="zc-1 zc-2 zc-3 zc-4 zc-5 zc-6 zc-7"'
+    echo 'SCRATCH_CAMPAIGN_RETENTION_DAYS="1"'
+} >>"$W_CFG"
+start_claude; PID_S32C="$LAST_CLAUDE"
+register "$W_SESSIONS" "$PID_S32C" "$SID_LIVE"
+for n in 1 2 3 4 5 6; do
+    stale "$W_ROOT/campaigns/zc-$n"
+    head -c $(( (8 - n) * 65536 )) /dev/zero >"$W_ROOT/campaigns/zc-$n/bulk.bin"
+    backdate "$W_ROOT/campaigns/zc-$n"
+done
+s32c_read() {
+    python3 - "$W_HOME/state/scratch-reaper-state.json" <<'PY'
+import json, sys
+h = (json.load(open(sys.argv[1])).get("skipped_split") or {}).get("by_hand") or {}
+print("%s %d %s %s" % (h.get("count"), len(h.get("paths") or []), h.get("identity"),
+                       ",".join(sorted(p.get("path", "").rsplit("/", 1)[-1]
+                                       for p in h.get("paths") or []))))
+PY
+}
+run_scheduled --apply >/dev/null 2>&1
+S32C_A="$(s32c_read 2>&1)"
+rm -rf "$W_ROOT/campaigns/zc-6"
+stale "$W_ROOT/campaigns/zc-7"
+backdate "$W_ROOT/campaigns/zc-7"
+run_scheduled --apply >/dev/null 2>&1
+S32C_B="$(s32c_read 2>&1)"
+read -r CA NA IA PA <<<"$S32C_A"
+read -r CB NB IB PB <<<"$S32C_B"
+if [ "$CA" = "6" ] && [ "$CB" = "6" ] && [ "$NA" = "5" ] && [ "$NB" = "5" ] \
+   && [ "$PA" = "$PB" ] && [ -n "$IA" ] && [ "$IA" != "None" ] && [ "$IA" != "$IB" ]; then
+    ok "S32c the published identity covers every by-hand place: a hidden replacement changes it"
+else
+    bad "S32c the by-hand identity is not over all places (before: $S32C_A | after: $S32C_B)"
+fi
 
 # ===========================================================================
 # S34 — A CHECKOUT OF ANOTHER REPOSITORY IS NEVER A FIXTURE (cleanup PRD R1)

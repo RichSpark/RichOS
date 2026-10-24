@@ -1098,12 +1098,18 @@ def main():
             lines.append("  as a record and not as the state of the disk right now:")
             lines.append("    %s --verbose" % reaper_cmd)
         if by_hand_n > 0:
-            # The set id is WHICH places (their paths and how many), never their
+            # The set id is WHICH places (all of them, and how many), never their
             # size or age: the turn end tells this pile once per set, exactly as
-            # it tells the kept set below (notice-disk-alert.sh).
-            hand_parts = ["count|%d" % by_hand_n] + sorted(
-                "path|%s" % row.get("path") for row in (by_hand.get("paths") or [])
-                if isinstance(row, dict))
+            # it tells the kept set below (notice-disk-alert.sh). The producer's
+            # identity covers every place; the five example paths are only the
+            # fallback for a result written before it published one.
+            hand_parts = ["count|%d" % by_hand_n]
+            if by_hand.get("identity"):
+                hand_parts.append("identity|%s" % by_hand.get("identity"))
+            else:
+                hand_parts += ["path|%s" % row.get("path")
+                               for row in (by_hand.get("paths") or [])
+                               if isinstance(row, dict)]
             lines.append("  %s in %d place(s) IS OURS AND IS NEVER DELETED AUTOMATICALLY "
                          "(set %s):" % (human(by_hand_b), by_hand_n, set_id(hand_parts)))
             lines.append("  a campaign root past its retention, or a running container")

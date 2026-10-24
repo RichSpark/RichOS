@@ -4430,10 +4430,15 @@ def main(argv=None):
     # whole value is being able to say WHICH 12.8 GB, and re-deriving that costs
     # a full nine-second pass. Capped, largest first, and the `why` already
     # carries the exact command.
-    by_hand_rows = sorted((e for e in reaper.entries if e.standing),
-                          key=lambda e: -e.size)[:5]
+    by_hand_all = [e for e in reaper.entries if e.standing]
+    by_hand_rows = sorted(by_hand_all, key=lambda e: -e.size)[:5]
     split["by_hand"]["paths"] = [{"path": e.path, "bytes": e.size,
                                   "why": e.why} for e in by_hand_rows]
+    # WHICH places, all of them, never their sizes: the turn end tells this pile
+    # once per set (disk-watchdog.py), and the five examples above are a sample
+    # that a hidden replacement or a size reorder would fool.
+    split["by_hand"]["identity"] = hashlib.sha1("\n".join(sorted(
+        e.path for e in by_hand_all)).encode("utf-8", "surrogateescape")).hexdigest()[:16]
     failures = []
     if args.apply:
         deleted, freed, failures = reaper.apply(args.log or default_log())
