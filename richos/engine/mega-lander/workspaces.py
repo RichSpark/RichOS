@@ -7965,8 +7965,9 @@ def fallback_notice(sid, items=None):
     if not sid:
         return ""
     healthy, line = _monitor_health(sid)
+    due = []
     if healthy:
-        key = "healthy"
+        key = watcher = "healthy"
         text = ""
     else:
         unread = ""
@@ -7975,6 +7976,7 @@ def fallback_notice(sid, items=None):
         except Exception as e:  # noqa: BLE001: unread is said, never "nothing due"
             due, unread = None, "%s: %s" % (e.__class__.__name__, str(e)[:120])
         state = line.split(":", 2)[1].strip() if line.count(":") >= 1 else line
+        watcher = state[:60]
         # The material state: the watcher's state and, apart, UNKNOWN or the due items, so a
         # read that fails after an empty one is a change and is told (never "nothing due").
         key = hashlib.sha1(json.dumps([state[:60], "unread" if due is None else
@@ -7988,12 +7990,18 @@ def fallback_notice(sid, items=None):
         else:
             body = "Nothing is due now."
         text = ("STALL WATCH NOT ACTIVE (%s): due work is told here until it is. %s" % (line, body)).strip()
+    kind = "healthy" if healthy else ("unread" if due is None else ("due" if due else "empty"))
     with Lock():
         rec = load_session(sid) or {}
         if rec.get("fallback_notice") == key:
             return ""
-        rec["fallback_notice"] = key
+        prev_kind, prev_watcher = rec.get("fallback_kind"), rec.get("fallback_state")
+        rec.update(fallback_notice=key, fallback_kind=kind, fallback_state=watcher)
         write_json(session_path(sid), rec)
+    # The due set merely emptied (the lead handled it) under the same watcher state: nothing to
+    # act on, so nothing is said (a message here costs a model turn that does nothing).
+    if kind == "empty" and prev_kind not in (None, "unread") and prev_watcher == watcher:
+        return ""
     return text
 
 

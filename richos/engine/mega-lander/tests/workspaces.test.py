@@ -7346,6 +7346,15 @@ class NoSilentHolds(Base):
         send("Go: run the walk now.")
         self.assertEqual(ws.holds(self.sid), [])
 
+    def test_r6_a_due_set_that_merely_emptied_is_not_told(self):
+        """Sage D2 / Frank D3: in journey-due-work-acted-on the lead resumed the due item and the
+        next Stop said "Nothing is due now.", which cost a model turn that did nothing."""
+        self._pending_one()
+        lead = lambda: ws.gate_stop({"session_id": self.sid}, self.entity)[2]
+        self.assertIn("zach-opus-p5", lead())                            # due: told
+        ws.discard("zach-opus-p5", "handled by the lead in this fixture", not_ceo_ordered="a test fixture, not his order", me=self.sid)
+        self.assertEqual(lead(), "")                                     # emptied, same watcher: quiet
+
     def test_r5_an_unreadable_due_set_is_never_told_as_nothing_due(self):
         """Codex 2026-10-24 (R5/R6/A7): an exception reading the due set became an empty set,
         "Nothing is due now." was appended, and the once-only key ignored the failure, so a
