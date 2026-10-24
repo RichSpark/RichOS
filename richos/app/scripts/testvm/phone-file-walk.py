@@ -38,6 +38,7 @@ Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.
 import argparse
 import importlib.util
 import json
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -93,8 +94,58 @@ class Walk(adopt.Walk):
         time.sleep(1)
 
     # --- steps --------------------------------------------------------------------------------
+    def pair_url(self, seconds=60):
+        """The pairing address the Mac draws, read from the WHOLE window's tree (the sheet's
+        address need not sit under a node ax.sh calls a dialog). None drawn in time pictures the
+        screen and keeps the tree, then fails."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            try:
+                nodes = self.ax('tree', timeout=60)
+            except StepFailed:
+                nodes = []
+            for n in nodes:
+                for k in ('title', 'value', 'desc'):
+                    m = re.search(r'https://[^\s\'"<>]+#pair=[A-Z0-9]+', str(n.get(k) or ''))
+                    if m:
+                        return m.group(0)
+            time.sleep(2)
+        raise StepFailed('no pairing address was drawn within %d s\n%s' % (seconds, self.picture_screen('pairing address')))
+
     def pair(self):
-        evidence = super().pair()
+        self.press('Settings', role='AXPopUpButton')
+        self.press('Use Rich from your phone')
+        # The route chooser draws a moment after the sheet, and only where RichConnect is offered:
+        # whichever of the two comes first decides.
+        end = time.monotonic() + 30
+        while time.monotonic() < end:
+            if self.present('Use Tailscale', role='AXCheckBox'):  # a toggle, not a button
+                self.ax('click', '--title', 'Use Tailscale', '--role', 'AXCheckBox', '--first')
+                break
+            if self.present('Set my phone up'):
+                break
+            time.sleep(1)
+        self.wait_for('Set my phone up')
+        self.press('Set my phone up')
+        url = self.pair_url()
+        guest(self.vm, shlex.join(['open', '-a', 'Safari', url]))
+        self.wait_for('They match', app='Safari', seconds=40)
+        self.press('They match', app='Safari')
+        end = time.monotonic() + 40
+        while True:
+            try:
+                self.ax('click', '--title', 'They match', '--role', 'AXButton', '--first')
+                break
+            except StepFailed:
+                if time.monotonic() >= end:
+                    raise StepFailed('the Mac never asked for its own "They match"\n' + self.picture_screen('mac they match'))
+                time.sleep(1)
+        self.wait_for('Write to Rich', role='AXTextArea', app='Safari', seconds=40)
+        if self.present('Not now', app='Safari'):
+            self.press('Not now', app='Safari')
+        if self.present('Close'):
+            self.press('Close')
+        evidence = {'paired': True, 'url_host': url.split('#', 1)[0]}
         x, y, w, h = PHONE_FRAME
         script = ('tell application "System Events" to tell process "Safari" to set {position, size} of window 1 '
                   'to {{%d, %d}, {%d, %d}}' % (x, y, w, h))
