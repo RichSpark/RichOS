@@ -7603,6 +7603,33 @@ class OrchestrationR2Waits(Base):
         self.assertEqual([i["name"] for i in items], [])
         self.assertNotEqual(ws.load_agent(rec["key"]).get("claimed_by"), self.sid)
 
+    def test_r2_work_another_live_lead_claimed_is_not_due_here(self):
+        """Review rv-20261024T062159Z-abcb35c8-f97e: an ended session's due work, claimed by
+        one live lead, was still due for a second live lead through holds(), whose fallback
+        and watcher told it to spawn a continuation that register_spawn refuses. Due work
+        follows the ownership pending() uses; once the claimant's session ends, it is due
+        here again."""
+        self._finished("zach-opus-k2")
+        rec = self.rec("zach-opus-k2")
+        rec["session_id"] = "sess-ended-0002"
+        rec["waiting"] = {"kind": "started", "on": "the prerequisite has ended", "at": ws.now(),
+                          "end": "at:2000-01-01T00:00:00Z"}
+        ws.save_agent(rec)
+        ws.record_session_end("sess-ended-0002")
+        due_here = lambda: [d["name"] for d in ws.due_set(self.sid, ws.pending(self.sid, self.entity, auto=False, dry=True))]
+        self.assertEqual(due_here(), ["zach-opus-k2"])                     # control: unclaimed, due here
+        other = "sess-bbbbbbbb-2222"
+        self.env.session(other, self.entity)
+        ws.pending(other, self.entity, auto=False)                        # the other lead claims it
+        self.env.use(self.sess)
+        self.assertEqual(ws.load_agent(rec["key"]).get("claimed_by"), other)
+        self.assertEqual(ws.pending(self.sid, self.entity, auto=False, dry=True), [])
+        self.assertEqual(due_here(), [])                                   # the claimant's, not ours
+        self.assertNotIn("zach-opus-k2", [h["name"] for h in ws.holds(self.sid)])
+        self.assertNotIn("continues: zach-opus-k2", ws.fallback_notice(self.sid) or "")
+        ws.record_session_end(other)
+        self.assertEqual(due_here(), ["zach-opus-k2"])                     # its claimant ended: ours again
+
 
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,

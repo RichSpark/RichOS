@@ -3303,6 +3303,11 @@ def holds(me="", at=None, cache=None):
     for rec in all_agents():
         if rec.get("disposition") or not _in_scope(rec.get("session_id"), rec.get("claimed_by"), me, cache):
             continue
+        # CLAIMED BY ANOTHER LIVE LEAD: its work, by the rule pending() uses, never due here
+        # (review rv-20261024T062159Z-abcb35c8-f97e: here it was told as a continuation
+        # register_spawn refuses).
+        if me and rec.get("session_id") != me and _claimed_elsewhere(rec, me, cache):
+            continue
         fin, paused_, _why = finished_state(rec, cache)
         w, p = rec.get("waiting") or {}, rec.get("pause") or {}
         name = rec.get("name") or rec["key"]
@@ -3687,12 +3692,13 @@ def _claimable(rec, me, cache):
         st, _ = session_state(owner, rec.get("session_identity"), cache)
         if st != "ended":
             return False
+    return not _claimed_elsewhere(rec, me, cache)
+
+
+def _claimed_elsewhere(rec, me, cache):
+    """Another session claimed this record and has not ended: the work is that lead's."""
     claim = rec.get("claimed_by")
-    if claim and claim != me:
-        st, _ = session_state(claim, None, cache)
-        if st != "ended":
-            return False
-    return True
+    return bool(claim) and claim != me and session_state(claim, None, cache)[0] != "ended"
 
 
 def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dry=False):
