@@ -25,9 +25,8 @@ WHAT CLOSES (all of it, rechecked at deletion time):
     executable (a reader whose working directory is elsewhere still keeps it);
   * for a checkout under the app's root: the app's own attachment records
     (read-only, from a consistent snapshot) show no LIVE attachment for it. A
-    live attachment is closed only by its owning chat's archive_worktree, which
-    needs the CEO's standing authorization (PRD section 3); until then it is an
-    unresolved entry, never deleted here.
+    checkout a chat still has attached is kept and reported, never deleted
+    here: no chat is ever woken or archived for housekeeping (CEO decision 143).
 Closing is git's own `worktree remove` without --force (git refuses a checkout
 that changed since) and `branch -d` (git refuses an unmerged branch). Anything
 that cannot be read is undecided, never "nobody owns it".
@@ -226,9 +225,9 @@ def decide(path, ws, app_root, attached, cwds, opened=None):
             return UNDECIDED, "the Codex app's attachment records cannot be read, so whether " \
                               "a chat owns it is unknown", {}
         if real in attached["live"]:
-            return UNDECIDED, "finished, but a Codex chat still has it attached: only that " \
-                              "chat's archive_worktree may close it, and dispatching that " \
-                              "needs the CEO's standing authorization (cleanup PRD section 3)", {}
+            return UNDECIDED, "finished, but a Codex chat still has it attached, so it is " \
+                              "kept: no chat is woken or archived for housekeeping (CEO " \
+                              "decision 143)", {}
     return DELETE, "%s worktree on %s: all its commits are in main, nothing uncommitted or " \
                    "unpreserved, nothing in it in use%s" % (
                        "an app-managed" if in_app else "a plain Codex",

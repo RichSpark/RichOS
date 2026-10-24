@@ -2767,7 +2767,7 @@ class Reaper(object):
 
         A worktree that closes is planned DELETE and closed in apply() by git itself
         after every check is repeated. A finished worktree a Codex chat still has
-        attached is UNDECIDED: only that chat's archive_worktree may close it. Kept
+        attached is UNDECIDED and kept: no chat is woken or archived (CEO decision 143). Kept
         work (unmerged, uncommitted, active, ignored material) is KEEP with its reason.
         """
         roots = [r for r in self.cfg.get("codex_worktree_roots") or [] if os.path.isdir(r)]

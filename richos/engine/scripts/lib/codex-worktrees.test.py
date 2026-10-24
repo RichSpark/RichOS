@@ -205,7 +205,11 @@ class CodexWorktrees(unittest.TestCase):
         self.attach("worktree", wt)
         action, why, _info = self.decide(wt)
         self.assertEqual(action, cw.UNDECIDED)
-        self.assertIn("archive_worktree", why)
+        self.assertIn("attached", why)
+        # CEO decision 143: no Codex chat is woken or archived for housekeeping, so
+        # the reason never sends anyone to a chat's archive or to the CEO for it.
+        self.assertNotIn("archive_worktree", why)
+        self.assertNotIn("authorization", why)
         self.assertTrue(self.close(wt)[0].startswith("at deletion time"))
         self.assertTrue(wt.exists())
 
