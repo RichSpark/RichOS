@@ -326,7 +326,7 @@ def terminal_messages(path, seen=None, cutoff=None, written_note=None, sources=N
     if path in seen:
         raise ValueError("cyclic terminal continuation")
     seen.add(path)
-    calls, links, messages, writes = {}, {}, [], set()
+    calls, links, messages, writes, snapshots = {}, {}, [], set(), []
     deadline = session_time(cutoff) if cutoff else None
 
     def link(note, text, row):
@@ -360,20 +360,7 @@ def terminal_messages(path, seen=None, cutoff=None, written_note=None, sources=N
         # pointer locates originals; neither index text nor note prose is authority.
         if (isinstance(attachment, dict) and attachment.get("type") == "instructions"
                 and row.get("sessionId") == path.stem):
-            for item in attachment.get("files", []):
-                if (not isinstance(item, dict) or item.get("type") != "AutoMem" or item.get("path") != str(path.parent / "memory/MEMORY.md")
-                        or not isinstance(item.get("content"), str)):
-                    continue
-                # A leading restart pointer is the active handoff. Lower index
-                # entries may be historical pointers; they are not parallel ancestors.
-                selected = re.match(r"\A\s*-\s*\[RESTART[^\]\n]*\]\(([^)\n]+)\)",
-                                    item["content"], re.I)
-                for target in ([selected[1]] if selected else []):
-                    note = (path.parent / "memory" / target).resolve()
-                    if note.parent != path.parent / "memory" or not re.fullmatch(r"project[-_]restart[-_].+\.md", note.name):
-                        continue
-                    with note.open() as stream:
-                        link(note, stream.read(8192), row)
+            snapshots.append((attachment, row))
         parts = row.get("message", {}).get("content", [])
         if not isinstance(parts, list):
             continue
@@ -413,6 +400,29 @@ def terminal_messages(path, seen=None, cutoff=None, written_note=None, sources=N
                         continue
                     text = header[0]
                 link(note, text, row)
+    # Explicit successful read receipts outrank the fallback startup index.
+    # Defer disk reads until now: a stale/deleted index pointer cannot erase
+    # the handoff actually read, whose metadata survives in its native result.
+    if not links:
+        for attachment, row in snapshots:
+            for item in attachment.get("files", []):
+                if (not isinstance(item, dict) or item.get("type") != "AutoMem"
+                        or not isinstance(item.get("path"), str)
+                        or not Path(item["path"]).is_absolute()
+                        or Path(item["path"]).resolve() != path.parent / "memory/MEMORY.md"
+                        or not isinstance(item.get("content"), str)):
+                    continue
+                # Only a leading RESTART pointer is a fallback selector. Lower
+                # historical index entries are not parallel ancestors.
+                selected = re.match(r"\A\s*-\s*\[RESTART[^\]\n]*\]\(([^)\n]+)\)",
+                                    item["content"], re.I)
+                if not selected:
+                    continue
+                note = (path.parent / "memory" / selected[1]).resolve()
+                if note.parent != path.parent / "memory" or not re.fullmatch(r"project[-_]restart[-_].+\.md", note.name):
+                    continue
+                with note.open() as stream:
+                    link(note, stream.read(8192), row)
     if written_note and written_note not in writes:
         raise ValueError("restart note has no successful write in its source session")
     if len(links) > 1:

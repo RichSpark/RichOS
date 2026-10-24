@@ -294,6 +294,29 @@ class Pierce(unittest.TestCase):
         self.write_rows(self.transcript, [row])
         self.assertEqual(P.human_context(self.payload), "Implement the feature. Keep the API.")
 
+    def test_explicit_read_overrides_a_stale_startup_index_pointer(self):
+        source, note = self.continued_terminal()
+        self.materialize_note(note)
+        stale = note.parent / "project_restart_stale.md"
+        self.materialize_note(stale, "unrelated")
+        self.write_rows(self.transcript, [self.startup_memory(stale)] + self.note_io("Read", note, "previous"))
+        self.assertEqual(P.human_context(self.payload), "Implement the feature. Keep the API.")
+
+    def test_removed_snapshot_note_does_not_erase_the_successful_read_receipt(self):
+        source, note = self.continued_terminal()
+        self.materialize_note(note)
+        self.write_rows(self.transcript, [self.startup_memory(note)] + self.note_io("Read", note, "previous"))
+        note.unlink()
+        self.assertEqual(P.human_context(self.payload), "Implement the feature. Keep the API.")
+
+    def test_startup_snapshot_canonicalizes_a_symlinked_config_prefix(self):
+        source, note = self.continued_terminal()
+        self.materialize_note(note)
+        alias = self.root / "config-alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        self.write_rows(self.transcript, [self.startup_memory(alias / "memory" / note.name)])
+        self.assertEqual(P.human_context(self.payload), "Implement the feature. Keep the API.")
+
     def test_broken_older_link_preserves_witnessed_predecessor_authority(self):
         source, note = self.continued_terminal()
         missing = note.parent / "project_restart_missing.md"
