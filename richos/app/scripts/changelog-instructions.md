@@ -6,7 +6,7 @@ The changelog worker (`changelog-worker-brief.md`, beside this file) follows the
 
 The worker writes only the entry's bullet lines. `nightly.py notes-draft` adds the version heading and its GitHub release link and saves the candidate identity beside the changelog. Rich publishes immediately after landing and keeps the same job open through release verification or removal of an abandoned entry. No introduction, closing remark or code fence belongs in the entry.
 
-Each line is `- ` followed by one of these words, then what changed as the user sees it:
+Each line is `- `, then the tag `[technical]` and a space when the line needs it, then one of these words and what changed as the user sees it:
 
 - `Added` for something new the user can do or see
 - `Changed` for something that works differently now
@@ -15,7 +15,7 @@ Each line is `- ` followed by one of these words, then what changed as the user 
 
 Something that should have worked and did not is a Fixed line, even when the merge says it "adds" or "makes" it work.
 
-Put the lines in that order: every Added line first, then Changed, Improved and Fixed.
+Put the lines in that order: every Added line first, then Changed, Improved and Fixed. Tagged lines come after every untagged line, in the same order among themselves.
 
 ## How the lines read
 
@@ -42,6 +42,8 @@ Only work that never reaches a user gets no line:
 
 The engine is not on this list. A change to the engine, a guard, a hook or an agent definition that changes what Rich, Stu or their workers do or say in the app gets a line like any other change. Every release carries the whole engine but the app runs only part of it, so trace each change to the part of the app that runs it; a part the app never runs reaches no user.
 
+A change that ships but only a technical person would care about still gets its line, tagged `[technical]`: which model a ready-made teammate runs on or how a teammate's command is checked before it runs.
+
 If nothing in the merges is something a user would notice, write exactly this one line:
 
 - Changed nothing you would notice: this build carries behind-the-scenes work only
@@ -54,3 +56,4 @@ If nothing in the merges is something a user would notice, write exactly this on
 - Improved Stop so it also ends a reply Rich is speaking
 - Fixed a message typed while Rich was busy being dropped
 - Fixed Escape not closing the Bust a bug and Request a feature panels
+- [technical] Fixed a teammate's ordinary command being refused when a folder name in it started with a dash
