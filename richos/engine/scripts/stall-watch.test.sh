@@ -860,6 +860,97 @@ check "HD5  in the app (one conversation's partition) Stu's watcher tells the du
     "$( has "$OUT" "[DUE] victor-opus-a1"; echo $?)" "out=$OUT"
 unset STALL_WATCH_LEAD_TRANSCRIPT
 
+# --- F: every look is fresh code (orchestration reliability R5) ------------------
+# 2026-10-22/23: a watcher started 2026-10-21 kept the workspaces.py it had loaded and
+# never saw the holds feature that landed the next morning. The monitor now runs each look
+# as a fresh child, records the source it evaluated beside its beat, and --alive refuses a
+# monitor that has not evaluated the engine on disk. Run against a COPY of the engine, so a
+# change to its source and a broken source are the fixture's own.
+new_registry f; new_state f
+FE="$SB/engine-copy"
+mkdir -p "$FE/scripts"
+cp -R "$ENGINE/scripts/lib" "$FE/scripts/lib"
+cp -R "$ENGINE/mega-lander" "$FE/mega-lander"
+: >"$SB/f-config"
+f_alive() { python3 -B "$FE/scripts/lib/stall_watch.py" --alive --engine-root "$FE" --config "$SB/f-config" --command sw; }
+f_beat() { python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); print((b.get("evaluated") or {}).get("identity",""))' \
+    "$STALL_WATCH_STATE_DIR/$SID/monitor.json" 2>/dev/null; }
+f_ident() { python3 -B - "$FE" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts/lib")
+import stall_watch
+print(stall_watch.source_identity(sys.argv[1])[0])
+PY
+}
+( STALL_WATCH_POLL_SECONDS=2 exec python3 -B "$FE/scripts/lib/stall_watch.py" --monitor --engine-root "$FE" \
+    --config "$SB/f-config" --command sw >"$SB/f.out" 2>"$SB/f.err" ) &
+FMON=$!; PIDS+=("$FMON")
+f_has_ident() { [ -n "$(f_beat)" ] && [ "$(f_beat)" = "$(f_ident)" ]; }
+wait_for 30 f_has_ident
+OUT="$(f_alive)"; RC=$?
+check "F1   the monitor's beat carries the source its last look evaluated, and --alive accepts it" \
+    "$( [ "$RC" = 0 ] && has "$OUT" "source $(f_ident)"; echo $?)" "rc=$RC out=$OUT err=$(cat "$SB/f.err")"
+BEFORE="$(f_beat)"
+printf '\n# a fixture change to the evaluator\n' >>"$FE/mega-lander/workspaces.py"
+f_changed() { [ "$(f_beat)" != "$BEFORE" ] && [ "$(f_beat)" = "$(f_ident)" ]; }
+wait_for 30 f_changed
+check "F2   a change to the evaluator's source is used by the next look, with no restart" \
+    "$( f_changed; echo $?)" "beat=$(f_beat) ident=$(f_ident)"
+cp "$FE/mega-lander/workspaces.py" "$SB/f-good.py"
+# A look that hangs (the evaluator's source blocks at load): the child is ended at its timeout.
+printf 'import time\ntime.sleep(120)\n' >>"$FE/mega-lander/workspaces.py"
+f_failed() { grep -q 'the look failed' "$SB/f.out"; }
+wait_for 40 f_failed
+f_failed_at() { python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("failed") or {}).get("at",""))' \
+    "$STALL_WATCH_STATE_DIR/$SID/monitor.json" 2>/dev/null; }
+F_FIRST="$(f_failed_at)"
+f_failed_again() { local now; now="$(f_failed_at)"; [ -n "$now" ] && [ "$now" != "$F_FIRST" ]; }
+wait_for 40 f_failed_again    # a second failing look of the same streak
+# Read with the suite's own (good) stall_watch.py: the copy's workspaces.py now blocks at load.
+OUT="$(python3 -B - "$ENGINE/scripts/lib" "$FE" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import stall_watch
+code, line = stall_watch.alive_status(os.environ["RICHOS_SESSION_ID"], sys.argv[2])
+print(line)
+sys.exit(code)
+PY
+)"; RC=$?
+check "F3   a hung look is a watcher failure, told once per streak, and --alive does not read it healthy" \
+    "$( [ "$(grep -c 'the look failed' "$SB/f.out")" = 1 ] && grep -q "did not finish within" "$SB/f.out" \
+        && [ "$RC" = 1 ] && has "$OUT" "LOOKS FAILING"; echo $?)" \
+    "rc=$RC alive=$OUT out=$(cat "$SB/f.out")"
+cp "$SB/f-good.py" "$FE/mega-lander/workspaces.py"
+f_healthy() { f_alive >/dev/null; }
+wait_for 30 f_healthy
+check "F4   the next good look ends the failure" "$( f_healthy; echo $?)" "alive=$(f_alive)"
+kill "$FMON" 2>/dev/null
+f_unwatched() { ! f_alive >/dev/null; }
+wait_for 15 f_unwatched
+OUT="$(f_alive)"; RC=$?
+check "F5   the monitor gone: NOT WATCHED, whatever its last beat said" \
+    "$( [ "$RC" = 1 ] && has "$OUT" "NOT WATCHED"; echo $?)" "rc=$RC out=$OUT"
+# An older monitor (one that looks in-process and records no evaluated source) holding the lock.
+python3 - "$STALL_WATCH_STATE_DIR/$SID" <<'PY'
+import json, os, sys, time
+d = sys.argv[1]
+json.dump({"pid": 1, "poll": 60, "session": os.environ["RICHOS_SESSION_ID"], "mode": "monitor",
+           "last_look": time.time(), "open": 0}, open(os.path.join(d, "monitor.json"), "w"))
+PY
+( exec python3 -c 'import fcntl,os,sys,time; fd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o600); fcntl.flock(fd,fcntl.LOCK_EX); time.sleep(60)' \
+    "$STALL_WATCH_STATE_DIR/$SID/monitor.lock" ) &
+FOLD=$!; PIDS+=("$FOLD")
+f_locked() { python3 -c 'import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_RDWR);
+try:
+    fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB); sys.exit(1)
+except OSError:
+    sys.exit(0)' "$STALL_WATCH_STATE_DIR/$SID/monitor.lock"; }
+wait_for 10 f_locked
+OUT="$(f_alive)"; RC=$?
+kill "$FOLD" 2>/dev/null
+check "F6   a live monitor that never evaluated fresh code (an old parent) is not healthy" \
+    "$( [ "$RC" = 1 ] && has "$OUT" "OLD MONITOR"; echo $?)" "rc=$RC out=$OUT"
+
 # --- E: a teammate's escalation wakes an idle lead (2026-10-01) ---------------
 # richos-hq docs/operations/2026-10-01-escalation-wakes-the-lead.md, built past
 # Sage's review (richos-hq 8ba32b71). Every case below that asserts silence is
