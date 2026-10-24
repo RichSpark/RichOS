@@ -706,6 +706,18 @@ for h in notice-ceo-asks.sh notice-ceo-unasked.sh session-start-ceo-ask.sh; do
     fi
 done
 
+# G5 (upgrade window): the retired dispatch gate's path is still in the cached hook table of a
+# session started before the land. It resolves quietly (exit 0, says nothing) and is
+# registered nowhere, so it is never run twice and never by a new session.
+RETIRED="$SRC_DIR/guard-ceo-ask-first.sh"
+OUT="$(agent_payload S1 "do the thing" | bash "$RETIRED" 2>&1)"; RC=$?
+N="$(cat "$ENGINE_SRC/hooks/hooks.json" "$ENGINE_SRC/.claude/settings.local.json" 2>/dev/null | grep -c 'guard-ceo-ask-first' || true)"
+if [ -x "$RETIRED" ] && [ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ "${N:-0}" -eq 0 ]; then
+    ok "G5. the retired gate's stale command resolves quietly (exit 0, silent) and is registered nowhere"
+else
+    bad "G5. the retired gate's stale command resolves quietly and is registered nowhere" "rc=$RC out=$OUT registrations=$N"
+fi
+
 for f in scripts/lib/ceo-asks.sh scripts/lib/ceo-asks.py; do
     if grep -q "$(basename "$f")" "$SRC_DIR/install.sh" 2>/dev/null; then
         ok "G4. $f is sidecar-hashed by install.sh"

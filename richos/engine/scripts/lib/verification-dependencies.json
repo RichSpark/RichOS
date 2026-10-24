@@ -551,7 +551,7 @@
     },
     "scripts/hooks/ceo-asks.test.sh": {
       "source": "scripts/hooks/ceo-asks.test.sh",
-      "sha256": "3980752090bf8dc6059a9089cce108f6847ec6660b0cafbb20233dd400299d05",
+      "sha256": "efc5b3c4e3d5feed15ab32eec19607c45efc6f3d0154d161d5b263df470617ba",
       "evidence": "Creates a private entity config and private TODO declaration from literal values. Every hook/status invocation receives that entity root. Real hooks.json, installer, probe and notice text are read as registration/source data only. It never transports the real config. Nested mutations rebuild the same fixtures.",
       "keys": [],
       "edges": [
@@ -16668,7 +16668,7 @@
         "session-start-ceo-ask.sh"
       ],
       "sources": {
-        "scripts/hooks/ceo-asks.test.sh": "3980752090bf8dc6059a9089cce108f6847ec6660b0cafbb20233dd400299d05",
+        "scripts/hooks/ceo-asks.test.sh": "efc5b3c4e3d5feed15ab32eec19607c45efc6f3d0154d161d5b263df470617ba",
         "scripts/hooks/notice-ceo-asks.sh": "a69920c5d344cc2f050112281e96c948b884b40a2c91416f01499d25f0618330",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
