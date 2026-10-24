@@ -1332,6 +1332,16 @@ struct StallWatch {
     _child: crate::owned_process::OwnedChild,
     _output: JoinHandle<()>,
     lead: Arc<LeadSignal>,
+    /// Set before the lease ends the monitor, so that end is not reported as a failure.
+    closing: Arc<AtomicBool>,
+}
+
+/// What Stu is told when the monitor's output ends while its lease is still open
+/// (orchestration reliability R5): the parent died or its output broke, and nothing else
+/// would say so until a later manual check.
+fn monitor_failure_text(why: &str) -> String {
+    format!("STALL-WATCH: the monitor stopped unexpectedly ({why}). Nothing watches this conversation's \
+teammates until the lease starts it again; its work is unchanged. Check: stall-watch.sh --alive")
 }
 
 impl StallWatch {
@@ -1357,24 +1367,34 @@ impl StallWatch {
         let mut child=command.spawn().map_err(NativeError::Io)?;
         let output=child.stdout.take().ok_or(NativeError::Closed)?;
         let child=crate::owned_process::OwnedChild::new(child);
+        let closing=Arc::new(AtomicBool::new(false));
+        let ending=Arc::clone(&closing);
         let output=std::thread::Builder::new().name("richos-stall-watch".into()).spawn(move || {
+            // Keep each whole block until the existing durable input accepts it.
+            let deliver=|text:&str| loop {
+                match crate::session_tools::observe_stall(&scope,text) {
+                    Ok(())=>break,
+                    Err(error)=>{eprintln!("[richos] stall-watch input remains pending: {error}");if closed.load(Ordering::SeqCst) {return} std::thread::sleep(Duration::from_secs(5));}
+                }
+            };
+            let mut failure="its output ended".to_string();
             for line in BufReader::new(output).lines() {
                 let observation=(|| {
                     let line=line.map_err(|e|e.to_string())?;
                     let value:Value=serde_json::from_str(&line).map_err(|e|e.to_string())?;
                     value["text"].as_str().map(str::to_owned).ok_or_else(||"missing monitor text".to_string())
                 })();
-                let text=match observation {Ok(text)=>text,Err(error)=>{eprintln!("[richos] stall-watch output: {error}");return}};
-                // Keep this whole block until the existing durable input accepts it.
-                loop {
-                    match crate::session_tools::observe_stall(&scope,&text) {
-                        Ok(())=>break,
-                        Err(error)=>{eprintln!("[richos] stall-watch input remains pending: {error}");if closed.load(Ordering::SeqCst) {return} std::thread::sleep(Duration::from_secs(5));}
-                    }
+                match observation {
+                    Ok(text)=>deliver(&text),
+                    Err(error)=>{eprintln!("[richos] stall-watch output: {error}");failure=format!("its output could not be read: {error}");break}
                 }
             }
+            // The lease closing ends the monitor normally; anything else is a failure Stu is told of.
+            if !ending.load(Ordering::SeqCst) && !closed.load(Ordering::SeqCst) {
+                deliver(&monitor_failure_text(&failure));
+            }
         }).map_err(NativeError::Io)?;
-        Ok(Some(Self {_child:child,_output:output,lead}))
+        Ok(Some(Self {_child:child,_output:output,lead,closing}))
     }
 }
 
@@ -3714,6 +3734,7 @@ impl TurnCancel for NativeCancelHandle {
 
 impl Drop for NativeClient {
     fn drop(&mut self) {
+        if let Some(watch)=&self.stall_watch {watch.closing.store(true,Ordering::SeqCst);}
         drop(self.stall_watch.take());
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -5286,9 +5307,35 @@ exec /bin/sleep 1000
         let other=crate::status_tools::StatusToolScope {thread_id:"thread-b".into(),..scope.clone()};
         assert!(crate::session_tools::pending(&other,"stu").unwrap().is_none());
         assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none());
+        monitor.closing.store(true,Ordering::SeqCst);              // the lease ends it, as NativeClient::drop does
         let StallWatch {_child:child,_output:output,..}=monitor;
         drop(child);
         output.join().unwrap();
+        assert!(crate::session_tools::pending_after(&scope,"stu",through).unwrap().is_none(),
+            "a normal lease close was reported as a failure");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Orchestration reliability R5: the monitor's parent dying while the lease is open reaches
+    /// Stu through the same durable input as every block; before, the reader thread just ended.
+    #[test]
+    fn an_unexpected_monitor_end_is_told_through_the_durable_input() {
+        let root=fixture_root().join(format!("monitor-dies-{}",uuid::Uuid::new_v4()));
+        let mut profile=fixture_profile(&root);
+        profile.work_scope=Some(("company-a".into(),"thread-a".into()));
+        std::fs::create_dir_all(profile.engine.join("scripts")).unwrap();
+        std::fs::create_dir_all(&profile.coordination).unwrap();
+        std::fs::write(profile.engine.join("scripts/stall-watch.sh"),"exit 3\n").unwrap();
+        let mut environment=Command::new("/fictional/provider");
+        profile.configure(&mut environment,Path::new("/fictional/provider"),"stu-session",&root.join("scope.json"));
+        let monitor=StallWatch::start(Some(&profile),LeaseRole::Work,&environment,"stu-session",std::process::id(),
+            Arc::new(AtomicBool::new(false))).unwrap().unwrap();
+        let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),entity_id:"company-a".into(),thread_id:"thread-a".into()};
+        let StallWatch {_output:output,..}=monitor;
+        output.join().unwrap();
+        let message=crate::session_tools::pending(&scope,"stu").unwrap().expect("the failure was not delivered");
+        assert_eq!(message.0.from,"stall-watch");
+        assert!(message.0.text.contains("the monitor stopped unexpectedly (its output ended)"),"{}",message.0.text);
         std::fs::remove_dir_all(root).unwrap();
     }
 
