@@ -232,7 +232,7 @@ richos_in_jurisdiction() {
 #
 # The banner said "the guard did NOT judge it / THIS IS NOT A PASS" to all ten.
 # For nine of them that is FALSE, and on 2026-09-04 the falsehood cost a day: an
-# engineer read it, reported that guard-dialect.sh does not judge files in
+# engineer read it, reported that dialect-guard.sh does not judge files in
 # cross-repository worktrees — meaning the American-English rule would have been
 # unenforced for most writes on this machine, 48 of 53 worktrees — and it was
 # relayed to the CEO as a finding. A second engineer replayed the exact

@@ -23,7 +23,7 @@ readers, no second copy.
 | `dialect-table.test.py`, `dialect-table.test.sh` | its suite | hand |
 | `dialect-en-US.overrides.dict` | additions VarCon's verified data lacks | hand |
 | `dialect-en-US.leave.tsv` | forms VarCon would change that stay as written | hand |
-| `../dialect-en-US.dict` | the dictionary `guard-dialect.sh` reads today; every line is carried into the table | hand |
+| `../dialect-en-US.dict` | the dictionary `dialect-guard.sh` reads today; every line is carried into the table | hand |
 | `third_party/varcon/` | VarCon 2020.12.07, pinned by sha256, with its README and notices | vendored, unmodified |
 | `fixtures/` | British test inputs for the table and for the streams that use it | hand |
 
@@ -56,10 +56,10 @@ the generator instead of being resolved silently.
 ## Exemptions from today's dialect guard
 
 The three vocabulary files (the table, the overrides, the leave list) are named
-by exact basename in `guard-dialect.sh`'s own-file list. `third_party/` and
-`fixtures/` are exempt by path segment, and `third_party/varcon` and the table
+by exact basename in `dialect-guard.sh`'s own-file list. `third_party/` and
+`fixtures/` are exempt by path segment and `third_party/varcon` and the table
 are registered in `.richos/vendored-material` as third-party material. The
-generator, its suite and this page carry no word the table would change, and
+generator, its suite and this page carry no word the table would change and
 the suite proves it, so they need no exemption.
 
 ## License

@@ -49,7 +49,7 @@ Write|guard-main-checkout-writes.sh
 Write|scan-secrets.sh
 Write|guard-publication-writes.sh
 Write|guard-named-persons-writes.sh
-Write|guard-dialect.sh
+Write|dialect-guard.sh
 Write|guard-no-home-network-phone.sh
 Write|guard-host-display-power.sh
 Write|guard-operator-claim.sh

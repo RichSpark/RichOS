@@ -306,7 +306,7 @@ fi
 # call sites route through it and NINE proceed to judge the artifact anyway, out
 # of the target repository's own declaration. The banner said "the guard did NOT
 # judge it / THIS IS NOT A PASS" to all ten, and on 2026-09-04 an engineer read
-# it, reported that guard-dialect.sh does not judge files in cross-repository
+# it, reported that dialect-guard.sh does not judge files in cross-repository
 # worktrees, and that reached the CEO as a finding. A second engineer replayed
 # the configuration and measured exit 2 with a full refusal. The guard worked;
 # the message lied, and it cost a day.

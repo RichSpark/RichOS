@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# guard-dialect.mutation.sh — PROVES THE DIALECT SUITE CAN FAIL.
+# dialect-guard.mutation.sh — PROVES THE DIALECT SUITE CAN FAIL.
 #
 # 71 green ticks are evidence of nothing until somebody shows them turning red
 # for the right reason — and this guard has a specific way of being useless
@@ -11,7 +11,7 @@
 # built for — the 2026-08-30 sweep reported success and constrained nothing.
 #
 # So: take the SHIPPED source, remove ONE property at a time, and assert that
-#   1. guard-dialect.test.sh FAILS,
+#   1. dialect-guard.test.sh FAILS,
 #   2. the SPECIFIC named case fails — not merely "something went red", and
 #   3. the mutation actually applied (a replacement that matched nothing gives
 #      a green run that looks like a green run, which is the same trap again).
@@ -19,12 +19,12 @@
 # Every mutant is a throwaway copy of the engine subtree. Nothing here touches
 # the real tree.
 #
-# Run directly: scripts/hooks/guard-dialect.mutation.sh
+# Run directly: scripts/hooks/dialect-guard.mutation.sh
 # Exit 0 = every property is proven load-bearing.
 
 # THE MERGE GATE LEAVES THIS PASS TO THE NIGHTLY (richos/app/scripts/autocheck/README.md): the
 # gate runs the suite with RICHOS_MUTATION_PASSES=0; nightly-engine.py runs every pass.
-if [ "${RICHOS_MUTATION_PASSES:-}" = 0 ]; then echo "NOT RUN: $(basename "$0"), a mutation pass (RICHOS_MUTATION_PASSES=0, the merge gate; the nightly runs it)"; exit 0; fi
+if [ "${RICHOS_MUTATION_PASSES:-}" = 0 ]; then echo "NOT RUN: $(basename "$0") (RICHOS_MUTATION_PASSES=0: the merge gate leaves this mutation pass to the nightly)"; exit 0; fi
 
 set -uo pipefail
 
@@ -33,7 +33,7 @@ ENGINE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 PASS=0
 FAIL=0
-SANDBOX="$(cd "$(mktemp -d -t guard-dialect-mutation.XXXXXX)" && pwd -P)"
+SANDBOX="$(cd "$(mktemp -d -t dialect-guard-mutation.XXXXXX)" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 required" >&2; exit 1; }
@@ -73,8 +73,8 @@ _mutant_body() {
     local name="$1" want="$2" rel="$3" old="$4" new="$5" why="$6"
     local dir="$SANDBOX/$name"
     mkdir -p "$dir/scripts/hooks" "$dir/scripts/lib" "$dir/hooks" "$dir/.claude"
-    cp "$ENGINE_ROOT/scripts/hooks/guard-dialect.sh" \
-       "$ENGINE_ROOT/scripts/hooks/guard-dialect.test.sh" \
+    cp "$ENGINE_ROOT/scripts/hooks/dialect-guard.sh" \
+       "$ENGINE_ROOT/scripts/hooks/dialect-guard.test.sh" \
        "$ENGINE_ROOT/scripts/hooks/install.sh" "$dir/scripts/hooks/"
     cp "$ENGINE_ROOT/scripts/lib/dialect-en-US.dict" \
        "$ENGINE_ROOT/scripts/lib/resolve-roots.sh" \
@@ -99,7 +99,7 @@ _mutant_body() {
     # The run stops at the mutant's named FAIL line (mutant-suite-run.sh): in this
     # suite a printed FAIL line always ends the run red, and the rest of the run
     # buys nothing the verdict reads.
-    mutant_suite_run "$dir/out.txt" "$want" env RICHOS_MUTATION_INNER=1 bash "$dir/scripts/hooks/guard-dialect.test.sh"
+    mutant_suite_run "$dir/out.txt" "$want" env RICHOS_MUTATION_INNER=1 bash "$dir/scripts/hooks/dialect-guard.test.sh"
     if [ "$MUTANT_STOPPED" = 1 ]; then
         printf '  PASS  %s — removing it turns %s red (stopped at that line)\n' "$name" "$want"
         return 0
@@ -129,13 +129,13 @@ mutant() {
 
 echo "=== the dialect guard: every property, proven load-bearing by removing it ==="
 
-G="scripts/hooks/guard-dialect.sh"
+G="scripts/hooks/dialect-guard.sh"
 D="scripts/lib/dialect-en-US.dict"
 
 # --- 1. IT BLOCKS AT ALL ---------------------------------------------------
 mutant refuses-to-refuse "A1. " "$G" \
-    '      echo "(hook: scripts/hooks/guard-dialect.sh)"\n    } >&2\n    exit 2\n    ;;\n  *)' \
-    '      echo "(hook: scripts/hooks/guard-dialect.sh)"\n    } >&2\n    exit 0\n    ;;\n  *)' \
+    '      echo "(hook: scripts/hooks/dialect-guard.sh)"\n    } >&2\n    exit 2\n    ;;\n  *)' \
+    '      echo "(hook: scripts/hooks/dialect-guard.sh)"\n    } >&2\n    exit 0\n    ;;\n  *)' \
     "the guard would find every violation, print it, and let the write through — a warning wearing a guard's clothes."
 
 # --- 2. THE VOCABULARY IS WHAT DECIDES -------------------------------------
@@ -258,8 +258,8 @@ mutant vendored-exemption-ignores-origin "V2. " "$G" \
 # REPORTING one, where `exit 2` refuses and `return 1` emits a CEO-TODOs note
 # about a file whose ownership the guard just admitted it cannot establish.
 mutant vendored-broken-fails-open "V15. " "$G" \
-    '            echo "(hook: scripts/hooks/guard-dialect.sh)"\n        } >&2\n        exit 2 ;;' \
-    '            echo "(hook: scripts/hooks/guard-dialect.sh)"\n        } >&2\n        return 1 ;;' \
+    '            echo "(hook: scripts/hooks/dialect-guard.sh)"\n        } >&2\n        exit 2 ;;' \
+    '            echo "(hook: scripts/hooks/dialect-guard.sh)"\n        } >&2\n        return 1 ;;' \
     "a declared-but-unreadable registry would print a banner and then judge the file anyway, on the assumption that it is ours — which is the assumption that cost 14 lines of somebody else's prose."
 
 mutant analysis-is-british "B28. " "$D" \

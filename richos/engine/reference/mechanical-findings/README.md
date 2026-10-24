@@ -12,7 +12,7 @@ data contract, red and skipped in CI since 2026-07-19 — sat under a comment re
 
 The audit ran because the CEO asked. Its findings became rows because the lead typed
 them. The finding that had been known for six weeks was a person's memory, seen from the
-outside. Three links were missing, and each is plumbing:
+outside. Three links were missing and each is plumbing:
 
 1. **Nothing triggered the audit.** Automating the search while the CEO stays the
    trigger moves the babysitting; it does not remove it.
@@ -50,9 +50,9 @@ Whether the defect matters is never decided here.
 | `untested-hook` | a hook registered in `hooks/hooks.json` or `.claude/settings*.json` that no test file names on a non-comment line | none today; the class exists for the next hook wired with no test |
 
 A declared exemption is honored and reported, never silent: `finding-exempt: <reason>`
-on the workflow line (or within the window), or anywhere in the harness or hook itself.
+on the workflow line (or within the window) or anywhere in the harness or hook itself.
 A bare marker exempts nothing — the reason is the declaration, the same discipline
-`guard-dialect.sh` uses.
+`dialect-guard.sh` uses.
 
 ## Identity — the same defect three times is one row
 
@@ -81,11 +81,11 @@ numeric id already there, under a lock in `~/.claude/state/mechanical-findings/`
 every repository, because two seats can reach one record). No existing row is ever edited,
 re-stamped, closed or deleted.
 
-## Why the turn end, and what it cannot see
+## Why the turn end and what it cannot see
 
-Every defect it finds is introduced by a land, and a land is a Bash call inside a turn.
+Every defect it finds is introduced by a land and a land is a Bash call inside a turn.
 `Stop` runs at the end of the turn that landed it. A `PreToolUse` guard at the land would
-have to block to matter, and a guard that blocks on a coverage fact is the guard that gets
+have to block to matter and a guard that blocks on a coverage fact is the guard that gets
 waived — the two waiver ledgers held 251 entries on the day this was written.
 `SessionStart` would find the defect tomorrow.
 
@@ -96,7 +96,7 @@ Named blind spots, not discovered later:
 - **Anything needing a judgment or a run**: a pass condition that is also the
   failure-to-run condition (Tom's F1, F3, F7, F8), a suite that is red, a hook whose
   only test is a copy list in an omnibus suite (Tom's F4 — "named by a test" is not
-  "tested by", and no mechanical rule separates them without a naming convention).
+  "tested by" and no mechanical rule separates them without a naming convention).
 - **A waived guard.** `notice-waiver-repetition.sh` produces the fact, but its ledgers
   live outside every tree, so a row about one could carry no warrant. The row would
   have to pin the guard that owns the hatch, which that analyzer does not yet name.

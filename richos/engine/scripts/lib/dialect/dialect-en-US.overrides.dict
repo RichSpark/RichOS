@@ -6,7 +6,7 @@
 #     <non-target form><TAB><target form>[<TAB>ext-exempt=css,...]
 #
 # WHY A SECOND HAND-KEPT FILE AND NOT MORE LINES IN ../dialect-en-US.dict.
-# That file is read by guard-dialect.sh today, so every line added there also
+# That file is read by dialect-guard.sh today, so every line added there also
 # changes what today's guard refuses, and the code-check ratchet counts it.
 # Step 0 of the auto-fix changes data, not enforcement. When stream B moves the
 # guard onto the generated table, the two hand-kept files can be merged.

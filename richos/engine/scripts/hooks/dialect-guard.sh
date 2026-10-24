@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# guard-dialect.sh — PreToolUse guard (Write|Edit|MultiEdit|NotebookEdit).
+# dialect-guard.sh — PreToolUse guard (Write|Edit|MultiEdit|NotebookEdit).
 #
 # ===========================================================================
 # WHY THIS FILE EXISTS
@@ -100,8 +100,8 @@
 #       read BELOW the governing repository when it is known, never from the
 #       directories the repository itself lives in (see DIALECT_GOV_ROOT)
 #     * run output: *.log, *.jsonl
-#     * THIS GUARD'S OWN SIX FILES — dialect-en-US.dict, guard-dialect.sh,
-#       guard-dialect.test.sh, and the three vocabulary files of the generated
+#     * THIS GUARD'S OWN SIX FILES — dialect-en-US.dict, dialect-guard.sh,
+#       dialect-guard.test.sh, and the three vocabulary files of the generated
 #       American spelling table in scripts/lib/dialect/ (added 2026-09-27):
 #       dialect-en-US.generated.dict, dialect-en-US.overrides.dict,
 #       dialect-en-US.leave.tsv. Stated plainly rather than buried, because it
@@ -171,7 +171,7 @@
 
 set -eo pipefail
 
-command -v python3 >/dev/null 2>&1 || { echo "ERROR: guard-dialect.sh: python3 is required for payload parsing — refusing (fail-closed)" >&2; exit 2; }
+command -v python3 >/dev/null 2>&1 || { echo "ERROR: dialect-guard.sh: python3 is required for payload parsing — refusing (fail-closed)" >&2; exit 2; }
 
 # --- ROOT RESOLUTION -------------------------------------------------------
 # TWO ROOTS, NEVER ONE. The full contract, and why the old single-root
@@ -215,7 +215,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _RR_LIB="$SCRIPT_DIR/../lib/resolve-roots.sh"
 if [ ! -f "$_RR_LIB" ]; then
     _RR_MSG="=== RICHOS ENGINE: BROKEN INSTALL — ENFORCEMENT IS NOT ACTIVE ===
-  hook: scripts/hooks/guard-dialect.sh
+  hook: scripts/hooks/dialect-guard.sh
   scripts/lib/resolve-roots.sh is missing at: $_RR_LIB
   Without it this guard cannot tell WHICH REPOSITORY it governs.
   It will not guess, and it will not carry on quietly — a defense
@@ -238,7 +238,7 @@ _SJ_LIB="$SCRIPT_DIR/../lib/seat-jurisdiction.sh"
 if [ ! -f "$_SJ_LIB" ]; then
     {
         echo "=== RICHOS ENGINE: BROKEN INSTALL — ENFORCEMENT IS NOT ACTIVE ==="
-        echo "  hook: scripts/hooks/guard-dialect.sh"
+        echo "  hook: scripts/hooks/dialect-guard.sh"
         echo "  scripts/lib/seat-jurisdiction.sh is missing at: $_SJ_LIB"
         echo "  Without it this guard cannot tell whether the artifact it was"
         echo "  handed belongs to the repository it governs, and a guard that"
@@ -257,11 +257,11 @@ INPUT="$(cat)"
 if resolve_entity_root "$INPUT"; then
     ENTITY_ROOT="$RICHOS_ENTITY_ROOT_RESOLVED"
 elif [ "$RICHOS_ROOT_STATUS" = "not-adopted" ]; then
-    richos_announce_stand_down "scripts/hooks/guard-dialect.sh" \
+    richos_announce_stand_down "scripts/hooks/dialect-guard.sh" \
         "this repository has not adopted the engine, so nothing written here is checked against a declared dialect"
     exit 0
 else
-    root_failure_banner "scripts/hooks/guard-dialect.sh" >&2
+    root_failure_banner "scripts/hooks/dialect-guard.sh" >&2
     exit 2
 fi
 # --- UNEVALUATED-PAYLOAD NOTICE --------------------------------------------
@@ -276,7 +276,7 @@ _UE_LIB="$SCRIPT_DIR/../lib/unevaluated-notice.sh"
 if [ -f "$_UE_LIB" ]; then
     # shellcheck source=../lib/unevaluated-notice.sh
     . "$_UE_LIB"
-    unevaluated_or_continue "guard-dialect.sh" "$INPUT" \
+    unevaluated_or_continue "dialect-guard.sh" "$INPUT" \
         "${ENTITY_ROOT:-${SEAT_ROOT:-${RICHOS_ENTITY_ROOT_RESOLVED:-}}}" \
         "whether the new content introduces a word that is not American English"
 fi
@@ -324,7 +324,7 @@ fi
 [ -n "$DIALECT_TARGET" ] || exit 0
 
 if [ "$DIALECT_TARGET" != "en-US" ]; then
-    echo "NOTE: guard-dialect.sh: DIALECT_TARGET=\"$DIALECT_TARGET\" but the only dictionary shipped is scripts/lib/dialect-en-US.dict (en-GB -> en-US). Nothing was checked. Set DIALECT_TARGET=\"en-US\" or add a dictionary for your locale — this guard will not pretend to enforce a locale it has no data for. (hook: scripts/hooks/guard-dialect.sh)" >&2
+    echo "NOTE: dialect-guard.sh: DIALECT_TARGET=\"$DIALECT_TARGET\" but the only dictionary shipped is scripts/lib/dialect-en-US.dict (en-GB -> en-US). Nothing was checked. Set DIALECT_TARGET=\"en-US\" or add a dictionary for your locale — this guard will not pretend to enforce a locale it has no data for. (hook: scripts/hooks/dialect-guard.sh)" >&2
     exit 0
 fi
 
@@ -332,7 +332,7 @@ DICT="$ENGINE_ROOT/scripts/lib/dialect-en-US.dict"
 if [ ! -f "$DICT" ]; then
     {
         echo "=== RICHOS ENGINE: BROKEN INSTALL — DIALECT ENFORCEMENT IS NOT ACTIVE ==="
-        echo "  hook: scripts/hooks/guard-dialect.sh"
+        echo "  hook: scripts/hooks/dialect-guard.sh"
         echo "  the vocabulary is missing at: $DICT"
         echo "  DIALECT_TARGET is declared, so this repository believes it is"
         echo "  governed. Refusing rather than passing every write through."
@@ -354,7 +354,7 @@ fi
 # jurisdiction over a decision that was never going to be made, which is noise
 # with a serious face on. Caught by case D1 asserting the silent no-op is
 # SILENT, which is why that case checks stderr rather than just the exit code.
-richos_assert_jurisdiction "scripts/hooks/guard-dialect.sh" "$ENTITY_ROOT" "$FILE_PATH" "file" "proceeds" || true
+richos_assert_jurisdiction "scripts/hooks/dialect-guard.sh" "$ENTITY_ROOT" "$FILE_PATH" "file" "proceeds" || true
 
 # --- IS THIS SOMEBODY ELSE'S PROSE? ---------------------------------------
 # THE PATH EXEMPTION THIS GUARD DID NOT HAVE, AND THE INCIDENT IT COST.
@@ -409,7 +409,7 @@ if [ ! -f "$_DG_VM_LIB" ]; then
     # every registered hook in a sandbox and reads exactly this refusal.
     {
         echo "=== RICHOS ENGINE: BROKEN INSTALL — ENFORCEMENT IS NOT ACTIVE ==="
-        echo "  hook: scripts/hooks/guard-dialect.sh"
+        echo "  hook: scripts/hooks/dialect-guard.sh"
         echo "  scripts/lib/vendored-material.sh is missing at: $_DG_VM_LIB"
         echo "  Without it this guard cannot tell whose bytes it is about to"
         echo "  rewrite, and a guard that cannot tell must not answer."
@@ -434,11 +434,11 @@ _dg_is_vendored() {
       1) return 1 ;;   # no repository above this file declares the contract
       *)
         {
-            vm_broken_banner "scripts/hooks/guard-dialect.sh" "$VM_BROKEN_REASON"
+            vm_broken_banner "scripts/hooks/dialect-guard.sh" "$VM_BROKEN_REASON"
             echo "  This guard refuses to judge a word in a file whose ownership it"
             echo "  cannot establish. Fix the registry, or delete it to stand the"
             echo "  vendoring contract down deliberately."
-            echo "(hook: scripts/hooks/guard-dialect.sh)"
+            echo "(hook: scripts/hooks/dialect-guard.sh)"
         } >&2
         exit 2 ;;
     esac
@@ -470,7 +470,7 @@ if [ -n "$DG_GOV" ] && [ -n "$FILE_PATH" ]; then
 fi
 export DIALECT_SCAN_ALLOWLIST DIALECT_EXEMPT_PATHS DICT DIALECT_GOV_ROOT DIALECT_FILE_PHYS
 
-SCAN_PY="$(mktemp -t guard-dialect.XXXXXX.py)"
+SCAN_PY="$(mktemp -t dialect-guard.XXXXXX.py)"
 trap 'rm -f "$SCAN_PY"' EXIT
 cat >"$SCAN_PY" <<'PY'
 import json, os, re, sys
@@ -519,7 +519,7 @@ EVIDENCE_EXTS = (".log", ".jsonl", ".lock", ".min.js", ".min.css", ".patch",
                  ".diff", ".po", ".pot", ".map", ".sha256")
 # This guard's own six files. Self-serving on its face, so it is named in the
 # header and enumerated here rather than expressed as a pattern.
-OWN_FILES = ("dialect-en-us.dict", "guard-dialect.sh", "guard-dialect.test.sh",
+OWN_FILES = ("dialect-en-us.dict", "dialect-guard.sh", "dialect-guard.test.sh",
              "dialect-en-us.generated.dict", "dialect-en-us.overrides.dict",
              "dialect-en-us.leave.tsv")
 
@@ -718,7 +718,7 @@ case "$(printf '%s' "$RESULT" | head -1)" in
     exit 0
     ;;
   NODICT)
-    echo "ERROR: guard-dialect.sh: $DICT is present but yielded no usable rules — refusing (fail-closed). A vocabulary that parses to nothing is an enforcement outage that looks like a clean run." >&2
+    echo "ERROR: dialect-guard.sh: $DICT is present but yielded no usable rules — refusing (fail-closed). A vocabulary that parses to nothing is an enforcement outage that looks like a clean run." >&2
     exit 2
     ;;
   REPORTONLY)
@@ -734,7 +734,7 @@ case "$(printf '%s' "$RESULT" | head -1)" in
       printf '%s\n' "$RESULT" | tail -n +2 | while IFS=$'\t' read -r kind label site; do
         [ "$kind" = "REPORT" ] && echo "    ? $label   — $site"
       done
-      echo "(hook: scripts/hooks/guard-dialect.sh)"
+      echo "(hook: scripts/hooks/dialect-guard.sh)"
     } >&2
     exit 0
     ;;
@@ -767,12 +767,12 @@ case "$(printf '%s' "$RESULT" | head -1)" in
       echo "  refused the commit that tried to quote the difference back."
       echo "  To turn this off for a repository whose product does not speak $DIALECT_TARGET,"
       echo "  blank DIALECT_TARGET in orchestration.config — never weaken the dictionary."
-      echo "(hook: scripts/hooks/guard-dialect.sh)"
+      echo "(hook: scripts/hooks/dialect-guard.sh)"
     } >&2
     exit 2
     ;;
   *)
-    echo "ERROR: guard-dialect.sh: unexpected scanner output — refusing (fail-closed)" >&2
+    echo "ERROR: dialect-guard.sh: unexpected scanner output — refusing (fail-closed)" >&2
     exit 2
     ;;
 esac

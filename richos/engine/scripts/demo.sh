@@ -243,7 +243,7 @@ DEMO_FILES+=(
     "scripts/lib/resolve-roots.sh"
     "scripts/lib/resolve-main-checkout.sh"
     # The jurisdiction predicate. Two Write/Edit guards — scan-secrets.sh and
-    # guard-dialect.sh — REFUSE TO START without it, exactly as they refuse
+    # dialect-guard.sh — REFUSE TO START without it, exactly as they refuse
     # without resolve-roots.sh above. It was missing here, and the way it was
     # missing is worth writing down: Layer K's canary asserts the secrets
     # scanner exits 2 on a planted secret, and a hook that cannot start ALSO
@@ -268,12 +268,12 @@ DEMO_FILES+=(
     # moved?" — which is the question a red-run fixture got wrong on 2026-09-01
     # while reporting success, leaving a double-clicked RichOS with no lease.
     "scripts/lib/global-state-witness.sh"
-    # The dialect vocabulary. guard-dialect.sh decides nothing without it and
+    # The dialect vocabulary. dialect-guard.sh decides nothing without it and
     # Layer T fails loudly when it is absent — which is how this omission was
     # found, by the probe rather than by a reader.
     "scripts/lib/dialect-en-US.dict"
     # The vendored-material predicate — who wrote this text, and is it ours to
-    # judge? guard-vendoring-commits.sh and guard-dialect.sh both REFUSE TO
+    # judge? guard-vendoring-commits.sh and dialect-guard.sh both REFUSE TO
     # START without it, exactly as they refuse without resolve-roots.sh, so the
     # whole demo died during setup naming two hooks and no cause. It landed on
     # 2026-09-04 with the vendoring guard and this list was not grown with it,

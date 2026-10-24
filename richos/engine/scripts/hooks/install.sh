@@ -588,7 +588,7 @@ HOOK_FILES+=(
     # The VENDORED-MATERIAL reader. Same argument again, and here it has a
     # second edge: TWO mechanisms take their whole answer from this one file.
     # guard-vendoring-commits.sh asks it whether a vendoring was recorded, and
-    # guard-dialect.sh asks it whose bytes it is about to rewrite. A tampered
+    # dialect-guard.sh asks it whose bytes it is about to rewrite. A tampered
     # copy that answered "third-party" to everything would leave the dialect
     # guard wired, hashed and silently checking nothing at all.
     "$REPO_ROOT/scripts/lib/vendored-material.sh"
@@ -661,7 +661,7 @@ HOOK_FILES+=(
     "$REPO_ROOT/mega-lander/create-teammate-worktree.sh"
     # The dialect vocabulary. Not a hook, and hashed for the cold-open prompt's
     # reason rather than the reaper's: it is not documentation, it IS the
-    # decision. guard-dialect.sh blocks a write on nothing but what this file
+    # decision. dialect-guard.sh blocks a write on nothing but what this file
     # says, so a quietly emptied or trimmed copy would turn the guard into a
     # green no-op that looks exactly like a clean record — the same silent
     # degradation every entry above exists to make impossible.

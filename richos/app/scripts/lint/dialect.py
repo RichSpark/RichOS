@@ -19,7 +19,7 @@ def scan(root, path, text, *, entity=None):
     env.update(RICHOS_ENGINE_ROOT=str(engine), RICHOS_ENTITY_ROOT=str(entity or engine), PS4="+ ")
     payload = {"tool_name": "Write", "cwd": str(entity or engine),
                "tool_input": {"file_path": str(root / path), "content": text}}
-    result, _ = run(["bash", "-x", engine / "scripts/hooks/guard-dialect.sh"],
+    result, _ = run(["bash", "-x", engine / "scripts/hooks/dialect-guard.sh"],
                     cwd=root, env=env, input=json.dumps(payload), timeout=30)
     verdict = re.search(r"^\+ RESULT=['\"]?(CLEAN|FOUND|REPORTONLY|PARSEFAIL|NODICT)\b", result.stderr, re.M)
     if not verdict or verdict[1] in {"PARSEFAIL", "NODICT"}:

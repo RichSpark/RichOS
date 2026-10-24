@@ -13,7 +13,7 @@
 # repositories, and two verdicts came back short of certain because the
 # evidence had decayed.
 #
-# In a completely unrelated mechanism, guard-dialect.sh Americanized FOURTEEN
+# In a completely unrelated mechanism, dialect-guard.sh Americanized FOURTEEN
 # lines across TWO vendored MIT-licensed skills (commit 06f4a8221a61,
 # 2026-08-30): `engine/skills/copywriting/references/natural-transitions.md` and
 # `engine/skills/landing-page-taste/SKILL.md`. The guard behaved exactly as
@@ -27,7 +27,7 @@
 # ===========================================================================
 # WHY A LIBRARY AND NOT A PARSER IN EACH CALLER
 # ===========================================================================
-# Two callers today (guard-vendoring-commits.sh, guard-dialect.sh) and more
+# Two callers today (guard-vendoring-commits.sh, dialect-guard.sh) and more
 # later. This engine has already paid for the alternative twice: a typed guard
 # inventory drifted in two days (scripts/lib/registered-hooks.sh), and a
 # hand-rolled git-target resolver put the same hole in five files
@@ -142,7 +142,7 @@ vm_load() {
         #
         # SPLIT WITH PARAMETER EXPANSION ONLY — no fork, and no herestring.
         #
-        # This runs inside guard-dialect.sh, which fires on EVERY Write and Edit
+        # This runs inside dialect-guard.sh, which fires on EVERY Write and Edit
         # in every repository on the machine, so the cost of this loop is paid
         # by every edit anybody makes. Both obvious spellings were measured on
         # the machine that ships this, and both were unaffordable:
@@ -217,7 +217,7 @@ vm_load() {
 # vm_load_upward <start_dir>
 # ---------------------------------------------------------------------------
 # The same three outcomes, for a caller that holds a PATH rather than a
-# repository root — guard-dialect.sh is handed a file and has to find out
+# repository root — dialect-guard.sh is handed a file and has to find out
 # whether ANY enclosing repository declares this contract. On rc 0, VM_ROOT is
 # the directory that declared it, and relative paths handed to vm_covering must
 # be relative to THAT.
@@ -294,7 +294,7 @@ EOF
 # vm_is_third_party <relpath>
 # ---------------------------------------------------------------------------
 # rc 0 ONLY when the covering entry says the work is somebody else's. This is
-# the question guard-dialect.sh asks, and the distinction is the whole fix: a
+# the question dialect-guard.sh asks, and the distinction is the whole fix: a
 # `richos` entry must NOT exempt our own prose from our own dialect rule.
 vm_is_third_party() {
     vm_covering "${1:-}" || return 1

@@ -1,6 +1,6 @@
 # dialect-en-US.dict — THE VOCABULARY, AS DATA, IN ONE PLACE.
 #
-# Read by scripts/hooks/guard-dialect.sh. Nothing else in this engine carries a
+# Read by scripts/hooks/dialect-guard.sh. Nothing else in this engine carries a
 # dialect word list; a second copy is how the last one drifted.
 #
 # FORMAT — one rule per line, TAB-separated:

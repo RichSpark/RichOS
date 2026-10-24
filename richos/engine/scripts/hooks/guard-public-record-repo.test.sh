@@ -344,7 +344,7 @@ fi
 
 echo ""
 if [ -z "${RICHOS_MUTATION_INNER:-}" ] && [ -x "$SCRIPT_DIR/public-record-repo.mutation.sh" ]; then
-    # THE HARNESS RUNS FROM THE SUITE IT MUTATES, as guard-dialect.test.sh
+    # THE HARNESS RUNS FROM THE SUITE IT MUTATES, as dialect-guard.test.sh
     # does. Until 2026-09-22 nothing ran it (open items 3.42/3.43, and
     # mutation-inventory.test.sh named it an orphan). The harness sets
     # RICHOS_MUTATION_INNER for every copy of this suite it runs, so this

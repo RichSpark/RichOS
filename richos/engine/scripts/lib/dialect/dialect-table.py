@@ -34,13 +34,13 @@ exactly, then applies the RichOS lists:
        dialect-en-US.leave.tsv       removals (the Harper review list's leave column, names,
                                      editorial calls); each must remove something
        dialect-en-US.overrides.dict  additions VarCon's verified data lacks
-       ../dialect-en-US.dict         the hand-kept dictionary guard-dialect.sh reads today;
+       ../dialect-en-US.dict         the hand-kept dictionary dialect-guard.sh reads today;
                                      every line of it is carried, with its per-file-type options
 
 Every disagreement between those lists and VarCon is REFUSED rather than resolved here: a
 generator that quietly picked a winner would be the second vocabulary the engine forbids.
 
-THE OUTPUT FORMAT is the one guard-dialect.sh already parses, so both readers can use it:
+THE OUTPUT FORMAT is the one dialect-guard.sh already parses, so both readers can use it:
 
     <lowercase British form><TAB><American form>[<TAB>ext-exempt=css,...]
 
@@ -372,7 +372,7 @@ def deny_lists():
     An exit 0 from a guard is not a verdict: both also exit 0 when they stand down. So the
     named-person check calls the predicate's explicit modes (--doctor, --scan-text: OK/ABSENT,
     CLEAN/FOUND), and the publication check reads the guard's scanner result from its shell
-    trace, the way richos/app/scripts/lint/dialect.py reads guard-dialect.sh. Exit 1 unless every
+    trace, the way richos/app/scripts/lint/dialect.py reads dialect-guard.sh. Exit 1 unless every
     verdict is an evaluated CLEAN."""
     engine = HERE.parents[2]
     lib = engine / "scripts" / "lib"

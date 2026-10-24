@@ -1226,7 +1226,7 @@ guard-main-checkout-writes.sh|PreToolUse
 scan-secrets.sh|PreToolUse
 guard-publication-writes.sh|PreToolUse
 guard-named-persons-writes.sh|PreToolUse
-guard-dialect.sh|PreToolUse
+dialect-guard.sh|PreToolUse
 guard-no-home-network-phone.sh|PreToolUse
 guard-no-home-network-phone.sh|PreToolUse
 guard-host-display-power.sh|PreToolUse
@@ -2323,7 +2323,7 @@ done < <(printf '%s\n' "$WIRED" | awk -F'\t' '$1=="<event:Stop>" {print $2}')
 
 CANONICAL_GUARD_HOOK="$REPO_ROOT/scripts/hooks/guard-main-checkout-writes.sh"
 CANONICAL_SECRETS_HOOK="$REPO_ROOT/scripts/hooks/scan-secrets.sh"
-CANONICAL_DIALECT_HOOK="$REPO_ROOT/scripts/hooks/guard-dialect.sh"
+CANONICAL_DIALECT_HOOK="$REPO_ROOT/scripts/hooks/dialect-guard.sh"
 CANONICAL_DIALECT_DICT="$REPO_ROOT/scripts/lib/dialect-en-US.dict"
 CANONICAL_BASHGUARD_HOOK="$REPO_ROOT/scripts/hooks/guard-bash-main-writes.sh"
 CANONICAL_INTERACTIVE_HOOK="$REPO_ROOT/scripts/hooks/guard-interactive-prompt.sh"
@@ -2860,7 +2860,7 @@ for c in "${WRITE_CMDS[@]}"; do
 done
 
 if [ -z "$DIALECT_WIRED_CMD" ]; then
-    emit_fail "T. PreToolUse[Write|Edit|MultiEdit|NotebookEdit] dialect guard (guard-dialect.sh) NOT wired in settings.json — run scripts/hooks/install.sh"
+    emit_fail "T. PreToolUse[Write|Edit|MultiEdit|NotebookEdit] dialect guard (dialect-guard.sh) NOT wired in settings.json — run scripts/hooks/install.sh"
 else
     DIALECT_HOOK_EXE="${DIALECT_WIRED_CMD%% *}"
     DIALECT_REAL="$(realpath_of "$DIALECT_HOOK_EXE")"
@@ -3150,7 +3150,7 @@ CANON = [
     # same dialect refusal twice, which reads as two separate wrong words in one
     # sentence — and would double the cost of the only guard here that runs a
     # word list over every byte of every write.
-    "guard-dialect.sh",
+    "dialect-guard.sh",
     # A BLOCKING Bash-matcher guard: registered twice it would run the CEO-TODOs
     # predicate twice per commit and print its refusal twice, which reads as two
     # separate defects in one record.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# guard-dialect.test.sh — regression tests for scripts/hooks/guard-dialect.sh.
+# dialect-guard.test.sh — regression tests for scripts/hooks/dialect-guard.sh.
 #
 # Three halves, and the second is the one that matters most.
 #
@@ -22,7 +22,7 @@
 # NOTE: this file is itself exempt from the guard by basename (see the guard's
 # header) — it has to be, since it is made of the words the guard rejects.
 #
-# Run directly: scripts/hooks/guard-dialect.test.sh
+# Run directly: scripts/hooks/dialect-guard.test.sh
 # Exit 0 = all cases pass; exit 1 = at least one failure.
 
 set -uo pipefail
@@ -45,12 +45,12 @@ RICHOS_ENTITY_ROOT="$ENGINE_ROOT"
 export RICHOS_ENTITY_ROOT
 unset CLAUDE_PROJECT_DIR
 
-HOOK="$SCRIPT_DIR/guard-dialect.sh"
+HOOK="$SCRIPT_DIR/dialect-guard.sh"
 DICT="$ENGINE_ROOT/scripts/lib/dialect-en-US.dict"
 
 PASS=0
 FAIL=0
-SANDBOX="$(cd "$(mktemp -d -t guard-dialect-test.XXXXXX)" && pwd -P)"
+SANDBOX="$(cd "$(mktemp -d -t dialect-guard-test.XXXXXX)" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 required" >&2; exit 1; }
@@ -296,14 +296,14 @@ echo
 echo "=== E. STRUCTURE — the guard is wired, hashed, and single-sourced ==="
 
 grep -q '\. "\$_RR_LIB"' "$HOOK" \
-    && ok "E1. guard-dialect.sh sources the root-resolution contract" \
-    || bad "E1. guard-dialect.sh sources the root-resolution contract"
+    && ok "E1. dialect-guard.sh sources the root-resolution contract" \
+    || bad "E1. dialect-guard.sh sources the root-resolution contract"
 
-hook_enforced_on_surface "$ENGINE_ROOT/hooks/hooks.json" guard-dialect.sh \
+hook_enforced_on_surface "$ENGINE_ROOT/hooks/hooks.json" dialect-guard.sh \
     && ok "E2. registered on the plugin surface (hooks/hooks.json)" \
     || bad "E2. registered on the plugin surface (hooks/hooks.json)"
 
-hook_enforced_on_surface "$ENGINE_ROOT/.claude/settings.local.json" guard-dialect.sh \
+hook_enforced_on_surface "$ENGINE_ROOT/.claude/settings.local.json" dialect-guard.sh \
     && ok "E3. registered on the seated surface (.claude/settings.local.json)" \
     || bad "E3. registered on the seated surface (.claude/settings.local.json)"
 
@@ -322,7 +322,7 @@ grep -q 'dialect-en-US\.dict' "$ENGINE_ROOT/scripts/hooks/install.sh" \
 # that build the fixer): a test input lists British words by design, and no
 # guard ever reads it as vocabulary.
 DUP="$(grep -rlE '^(colour|behaviour|licence)\b' "$ENGINE_ROOT/scripts" 2>/dev/null \
-        | grep -v 'dialect-en-US.dict' | grep -v 'guard-dialect' \
+        | grep -v 'dialect-en-US.dict' | grep -v 'dialect-guard' \
         | grep -vxF "$ENGINE_ROOT/scripts/lib/dialect/dialect-en-US.generated.dict" \
         | grep -vF "$ENGINE_ROOT/scripts/lib/dialect/fixtures/" || true)"
 [ -z "$DUP" ] && ok "E5. the vocabulary lives in exactly one file" \
@@ -502,13 +502,13 @@ FIRSTPARTY_PAYLOAD
 fi
 
 echo
-if [ -z "${RICHOS_MUTATION_INNER:-}" ] && [ -x "$SCRIPT_DIR/guard-dialect.mutation.sh" ]; then
+if [ -z "${RICHOS_MUTATION_INNER:-}" ] && [ -x "$SCRIPT_DIR/dialect-guard.mutation.sh" ]; then
     # THE HARNESS RUNS FROM THE SUITE IT MUTATES. It did not until now, and
     # nothing else ran it either: run-all-tests.sh discovers *.test.sh, and
     # contract-integrity.test.sh names three harnesses, not this one. A harness
     # nobody runs proves nothing about anything.
     echo "=== running the mutation harness ==="
-    "$SCRIPT_DIR/guard-dialect.mutation.sh" || FAIL=$((FAIL + 1))
+    "$SCRIPT_DIR/dialect-guard.mutation.sh" || FAIL=$((FAIL + 1))
     echo
 fi
 

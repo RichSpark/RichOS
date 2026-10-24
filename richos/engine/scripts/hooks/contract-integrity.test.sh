@@ -483,7 +483,7 @@ ALL_ROOT_SCRIPTS=(
     scripts/lib/worktree-ledger.py
     mega-lander/create-teammate-worktree.sh
     # The jurisdiction predicate — and it was MISSING from this list, silently,
-    # for as long as the list has existed. scan-secrets.sh and guard-dialect.sh
+    # for as long as the list has existed. scan-secrets.sh and dialect-guard.sh
     # both REFUSE TO START without it, by exiting 2, and Layer K's canary
     # asserts the scanner exits 2 on a planted secret. Same number, opposite
     # meanings: the layer was green here over a scanner that never ran. Layer T
@@ -512,7 +512,7 @@ ALL_ROOT_SCRIPTS=(
     scripts/named-persons.sh
     # The VENDORED-MATERIAL reader — whose work is this? On this list for the
     # FIRST reason twice over: guard-vendoring-commits.sh REFUSES TO START
-    # without it, and so does guard-dialect.sh, which is the more interesting
+    # without it, and so does dialect-guard.sh, which is the more interesting
     # half. The dialect guard used to have no such dependency, and on 2026-08-30
     # it rewrote fourteen lines across two vendored MIT-licensed skills because
     # it could not tell whose bytes they were. A sandbox missing this file would
@@ -528,7 +528,7 @@ ALL_ROOT_SCRIPTS=(
     # "did this run leave the pointer moved?", which is the question a red-run
     # fixture answered wrongly on 2026-09-01 while reporting success.
     scripts/lib/global-state-witness.sh
-    # The dialect vocabulary. guard-dialect.sh decides nothing without it and
+    # The dialect vocabulary. dialect-guard.sh decides nothing without it and
     # Layer T fails loudly when it is absent — first reason on this list, same
     # as the predicates above.
     scripts/lib/dialect-en-US.dict
@@ -795,7 +795,7 @@ data["hooks"] = {
             # Layer T's subject. Wired LAST here for the same reason it is wired
             # last in the shipped table: the two above decide whether the write
             # is ALLOWED AT ALL, and this one decides what the words say.
-            {"type": "command", "command": P + "/guard-dialect.sh", "timeout": 10},
+            {"type": "command", "command": P + "/dialect-guard.sh", "timeout": 10},
         ]},
         {"matcher": "SendMessage", "hooks": [
             {"type": "command", "command": P + "/guard-resume-isolation.sh", "timeout": 10},
