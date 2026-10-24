@@ -2018,10 +2018,10 @@ class Reaper(object):
         Each child older than the age floor whose name no unfinished registered agent
         carries is an undecided entry: the published result stays unresolved for
         this root, and the lead is told, until it is gone."""
-        if self.skip_named:
+        roots = [r for r in self.cfg.get("agent_roots") or [] if r and os.path.isdir(r)]
+        if not roots or self.skip_named:
             return
-        roots = [r for r in self.cfg.get("agent_roots", []) if r and os.path.isdir(r)]
-        live = self.live_agent_names() if roots else set()
+        live = self.live_agent_names()
         for root in roots:
             self.roots.append(root)
             try:
