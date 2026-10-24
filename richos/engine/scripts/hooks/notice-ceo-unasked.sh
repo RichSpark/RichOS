@@ -188,14 +188,24 @@ try:
     d=json.load(sys.stdin); print(str(d.get("session_id","") or "") if isinstance(d,dict) else "")
 except Exception: print("")' 2>/dev/null || true)"
 
-# A QUESTION IN THE REPLY IS AN ASK (CLAUDE.md §125: "A question never holds up work:
-# it goes in the reply with the current default stated"). The reply's text is matched
-# against his prepared items exactly as an AskUserQuestion is (ca_match), and a match
-# is recorded the same way, so it is not asked again.
-REPLY="$(printf '%s' "$INPUT" | python3 -c 'import json,sys
+# A QUESTION THE REPLY PUTS TO HIM IS AN ASK (CLAUDE.md §125: "A question never holds up
+# work: it goes in the reply with the current default stated"). Only the questions the reply
+# actually puts are matched: its sentences that end in a question mark, outside code, quotes
+# and quoted lines. A reply that only mentions an item ("I have not asked you about 1.1
+# yet") or quotes an earlier question puts nothing. Each question is matched against his
+# prepared items exactly as an AskUserQuestion is (ca_match) and recorded the same way.
+REPLY="$(printf '%s' "$INPUT" | python3 -c 'import json, re, sys
 try:
-    d=json.load(sys.stdin); print(str(d.get("last_assistant_message","") or "") if isinstance(d,dict) else "")
-except Exception: print("")' 2>/dev/null || true)"
+    d = json.load(sys.stdin)
+    t = str(d.get("last_assistant_message", "") or "") if isinstance(d, dict) else ""
+except Exception:
+    t = ""
+t = re.sub(r"```.*?```", " ", t, flags=re.S)
+t = re.sub(r"`[^`\n]*`", " ", t)
+t = "\n".join(l for l in t.splitlines() if not l.lstrip().startswith(">"))
+t = re.sub(r"\"[^\"\n]*\"|\u201c[^\u201d\n]*\u201d", " ", t)
+qs = [s.strip() for s in re.findall(r"[^.!?\n]+\?", t) if len(s.split()) >= 3]
+print("\n".join(qs))' 2>/dev/null || true)"
 if [ -n "$REPLY" ] && [ -n "$SESSION_ID" ]; then
     _CU_ITEMS="$(mktemp -t ceo-unasked-items.XXXXXX)" || _CU_ITEMS=""
     _CU_Q="$(mktemp -t ceo-unasked-q.XXXXXX)" || _CU_Q=""

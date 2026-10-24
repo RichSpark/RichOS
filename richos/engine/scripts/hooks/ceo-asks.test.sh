@@ -565,7 +565,7 @@ fi
 # D5-D6 (orchestration reliability R3, A1): a question put in the REPLY is an ask
 # (CLAUDE.md §125), and an item already asked stays quiet.
 reset_ledger
-REPLY_PAYLOAD="$(CA_CWD="$SEAT" CA_Q="$Q_SIGNING $L_SIGNING: $D_SIGNING. Default meanwhile: I keep signing as it is." python3 -c '
+REPLY_PAYLOAD="$(CA_CWD="$SEAT" CA_Q="One decision for you. Apple signing and developer enrollment: will you enroll as an individual for 99 dollars a year, or as a company? Default meanwhile: I keep signing as it is." python3 -c '
 import json, os
 print(json.dumps({"hook_event_name": "Stop", "session_id": "S7", "cwd": os.environ["CA_CWD"],
                   "stop_hook_active": False, "last_assistant_message": os.environ["CA_Q"]}))')"
@@ -595,6 +595,25 @@ if [ "$RC" -eq 1 ]; then
 else
     bad "D7. a reply asking an unrelated question asks nothing" "rc=$RC"
 fi
+# D8-D9 (Codex 2026-10-24): naming the item is not asking it. A reply that says it has NOT
+# asked item 1.1, and one that quotes an earlier question about it, put no question to him.
+reset_ledger
+for case in \
+    "D8|says it has not asked it|I have not asked you about item 1.1, Apple signing and developer enrollment, yet. No decision is requested in this reply." \
+    "D9|quotes an earlier question|Yesterday I asked \"Apple signing and developer enrollment: individual or company?\" and the answer is still pending."; do
+    cid="${case%%|*}"; rest="${case#*|}"; why="${rest%%|*}"; text="${rest#*|}"
+    P="$(CA_CWD="$SEAT" CA_T="$text" CA_S="S-$cid" python3 -c '
+import json, os
+print(json.dumps({"hook_event_name": "Stop", "session_id": os.environ["CA_S"], "cwd": os.environ["CA_CWD"],
+                  "stop_hook_active": False, "last_assistant_message": os.environ["CA_T"]}))')"
+    run_hook "$STOPN" "$P"
+    asked "S-$cid"
+    if [ "$RC" -eq 1 ] && ! grep -q '"source_hook": "Stop\[reply\]"' "$LEDGER" 2>/dev/null; then
+        ok "$cid. a reply that names item 1.1 without asking it ($why) records no ask"
+    else
+        bad "$cid. a reply that only names the item was recorded as the ask" "rc=$RC $(cat "$LEDGER" 2>/dev/null)"
+    fi
+done
 
 write_seat_config "$SANDBOX/no-such-repo"
 reset_ledger

@@ -409,7 +409,7 @@
     },
     "scripts/hooks/notice-ceo-unasked.sh": {
       "source": "scripts/hooks/notice-ceo-unasked.sh",
-      "sha256": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
+      "sha256": "754303cf6603442031527f8939e2fb7c466a95f4dfc17b1a550d53f42957a497",
       "evidence": "Resolves the governed root then delegates config access to ca_resolve. Its other inputs are the hook payload and per-session ledger.",
       "keys": [],
       "edges": [
@@ -565,7 +565,7 @@
     },
     "scripts/hooks/ceo-asks.test.sh": {
       "source": "scripts/hooks/ceo-asks.test.sh",
-      "sha256": "2b2c76a46d7b8bc71b476a5d2c721129fc0b915b25273fd0ae5819fb34b9b1e7",
+      "sha256": "d488ebc0c6deb1cba463532141a0319a978893cbdd5f61e79a0392dc1e9140cf",
       "evidence": "Creates a private entity config and private TODO declaration from literal values. Every hook/status invocation receives that entity root. Real hooks.json, installer, probe and notice text are read as registration/source data only. It never transports the real config. Nested mutations rebuild the same fixtures.",
       "keys": [],
       "edges": [
@@ -7274,7 +7274,7 @@
     },
     "scripts/hooks/notice-ceo-unasked.sh#unadopted-stop": {
       "source": "scripts/hooks/notice-ceo-unasked.sh",
-      "sha256": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
+      "sha256": "754303cf6603442031527f8939e2fb7c466a95f4dfc17b1a550d53f42957a497",
       "evidence": "Visibility suite invokes this hook with no CLI arguments and a new unadopted directory, first as explicit bad root then as cwd/payload. Root-failure/not-adopted paths terminate before entity config, transcript predicates or live-state checks. Bootstrap, module initialization and any pre-root session-recovery helper remain bound. The negative control only replaces stop_notice_abnormal output.",
       "keys": [],
       "edges": [
@@ -16695,7 +16695,7 @@
         "session-start-ceo-ask.sh"
       ],
       "sources": {
-        "scripts/hooks/ceo-asks.test.sh": "2b2c76a46d7b8bc71b476a5d2c721129fc0b915b25273fd0ae5819fb34b9b1e7",
+        "scripts/hooks/ceo-asks.test.sh": "d488ebc0c6deb1cba463532141a0319a978893cbdd5f61e79a0392dc1e9140cf",
         "scripts/hooks/notice-ceo-asks.sh": "a69920c5d344cc2f050112281e96c948b884b40a2c91416f01499d25f0618330",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -16704,7 +16704,7 @@
         "scripts/lib/ceo-todos.py": "5e6264edc76c9dc03b0c569c63de251dd5b053bd88e40aa7101538bbbeaf406b",
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
         "scripts/hooks/guard-ceo-ask-first.sh": "f4ede84780824e4b6065b68b603ffc94f7e1a65affa48a3b9b91c386f119d20a",
-        "scripts/hooks/notice-ceo-unasked.sh": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
+        "scripts/hooks/notice-ceo-unasked.sh": "754303cf6603442031527f8939e2fb7c466a95f4dfc17b1a550d53f42957a497",
         "scripts/lib/stop-hook-notice.sh": "f1431988b7e290d871da89518cd3c6c2bfc455558517862097659472ddcf409d",
         "scripts/hooks/session-start-ceo-ask.sh": "5880b3f3a494bd25f9320b6786efe37cb357edde9406974e6b064ee274744b26",
         "scripts/ceo-asks-status.sh": "bd01c8ce9d195b5c77cc0011b08b8ac983865d08c3a8f0e8feb31d103fb2a650",
@@ -17148,7 +17148,7 @@
         "scripts/hooks/notice-ceo-asks.sh": "a69920c5d344cc2f050112281e96c948b884b40a2c91416f01499d25f0618330",
         "scripts/hooks/notice-ceo-inputs-unheld.sh": "b0324ae5589a7116ab2416643a899de05613fda7dafb204ce56c6d6e8e784585",
         "scripts/hooks/notice-ceo-ruled-prose.sh": "b6aa4600524c27077232a5a83feab3cfe603436ae8dcaaaa0bcc9ed725c0c1b5",
-        "scripts/hooks/notice-ceo-unasked.sh": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
+        "scripts/hooks/notice-ceo-unasked.sh": "754303cf6603442031527f8939e2fb7c466a95f4dfc17b1a550d53f42957a497",
         "scripts/hooks/notice-claim-capability.sh": "f918e14199d059e57f306ee1202fe0edb3ab27711deb0003358ad36bcae3a1c5",
         "scripts/hooks/notice-disk-alert.sh": "8d30387da21de0f07be504cc9d64e73ad43455816b41af567474fc63462331f0",
         "scripts/disk-watchdog.sh": "40930d78fec671182cb8957a7b755a02ff094ec09a4ee32014d5818bb99964da",
@@ -17456,7 +17456,7 @@
         "scripts/hooks/guard-workspace-gate.sh": "b5712a6240510a481dff53e39abd4e49ca99750eb70fc19280d99e9917119f90",
         "scripts/hooks/notice-ceo-inputs-unheld.sh": "b0324ae5589a7116ab2416643a899de05613fda7dafb204ce56c6d6e8e784585",
         "scripts/hooks/notice-ceo-ruled-prose.sh": "b6aa4600524c27077232a5a83feab3cfe603436ae8dcaaaa0bcc9ed725c0c1b5",
-        "scripts/hooks/notice-ceo-unasked.sh": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
+        "scripts/hooks/notice-ceo-unasked.sh": "754303cf6603442031527f8939e2fb7c466a95f4dfc17b1a550d53f42957a497",
         "scripts/hooks/notice-disk-alert.sh": "8d30387da21de0f07be504cc9d64e73ad43455816b41af567474fc63462331f0",
         "scripts/disk-watchdog.sh": "40930d78fec671182cb8957a7b755a02ff094ec09a4ee32014d5818bb99964da",
         "scripts/lib/disk-watchdog.py": "736cf708869b4d1525998d4184361337aa69e108dfd75b76be2304bc3cdba07c",
@@ -17816,7 +17816,7 @@
         "scripts/hooks/scan-secrets.sh": "fd488d5b07748fd41c773c80ec133eed526869534f4f1324c847a33701ae1ab1",
         "scripts/hooks/guard-publication-writes.sh": "8d05dfb59a29be16bdcbd19aee71b0a402f58d928c82397f0a98da96f6f2531d",
         "scripts/hooks/notice-ceo-ruled-prose.sh": "b6aa4600524c27077232a5a83feab3cfe603436ae8dcaaaa0bcc9ed725c0c1b5",
-        "scripts/hooks/notice-ceo-unasked.sh": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
+        "scripts/hooks/notice-ceo-unasked.sh": "754303cf6603442031527f8939e2fb7c466a95f4dfc17b1a550d53f42957a497",
         "scripts/hooks/notice-disk-alert.sh": "8d30387da21de0f07be504cc9d64e73ad43455816b41af567474fc63462331f0",
         "scripts/disk-watchdog.sh": "40930d78fec671182cb8957a7b755a02ff094ec09a4ee32014d5818bb99964da",
         "scripts/lib/disk-watchdog.py": "736cf708869b4d1525998d4184361337aa69e108dfd75b76be2304bc3cdba07c",
