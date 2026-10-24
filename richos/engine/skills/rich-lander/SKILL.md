@@ -23,7 +23,7 @@ no-ops, wrong deploy target).
 ## Detecting a handoff — durable signals, NEVER the mailbox
 
 The agent↔lead `SendMessage` mailbox is lossy (~50% drop). The orchestrator never
-waits on or trusts, a chat message as the trigger or the source of truth. Two
+waits on or trusts a chat message as the trigger or the source of truth. Two
 durable event logs in the session team dir are the wake signal:
 
 1. **`~/.claude/teams/session-<id>/idle-events.jsonl`** — the `TeammateIdle`
@@ -135,7 +135,7 @@ guaranteed while the worktree exists. (The dirs it collects are configured as
 is done, so this step is only for a merge typed by hand or for holding the lease
 past the merge (a push or a deploy).
 With the operator fence off this says so and does nothing.
-With it on, several conversations and Codex, land into the same repositories,
+With it on, several conversations and Codex land into the same repositories,
 and the fence refuses a merge, commit, reset or switch in a main checkout by
 anyone who does not hold that repository's lease. **Exit 75 means another holder
 is landing**: the line names who, for how long and in what state; run the
@@ -276,7 +276,7 @@ If work was rejected or abandoned, record why before removing.
 ### 8b. IN-FLIGHT TEAMMATES — a notice only when one is load-bearing
 
 **The rule since 2026-10-06 (CEO): a push no longer requires a notice to or a
-waiver for, any live teammate.** Every spawn prompt tells the teammate to run
+waiver for any live teammate.** Every spawn prompt tells the teammate to run
 `git merge main` in its own worktree as its last step before handover
 (`prepare-agent-spawn.py` adds that line; `verify-agent-prompt.sh` check 6 refuses a
 worktree spawn without it). So main moving under a teammate creates no debt:
