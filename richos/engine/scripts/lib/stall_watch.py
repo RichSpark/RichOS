@@ -141,6 +141,7 @@ import calendar
 import datetime as _dt
 import fcntl
 import glob
+import hashlib
 import importlib.util
 import json
 import os
@@ -545,7 +546,7 @@ def _due(src, reg, now, session_id):
         out.append(Stall(due_key(d), "DUE",
                          d["name"], d["since"], d["detail"], ["why: " + why], ["next: " + d["command"]]))
     if len(due) > DUE_SHOWN:
-        out.append(Stall("due:more", "DUE", "%d more" % (len(due) - DUE_SHOWN), now, "more due work", [],
+        out.append(Stall(more_key(due), "DUE", "%d more" % (len(due) - DUE_SHOWN), now, "more due work", [],
                          ["the complete list: workspaces.sh holds"]))
     # One damaged record never hides the readable due work above: it is one compact problem.
     bad = src.ws.unreadable_line() if hasattr(src.ws, "unreadable_line") else ""
@@ -560,17 +561,25 @@ def due_key(d):
                                    d["state"], d.get("end") or "")
 
 
+def more_key(due):
+    """The "more due" pointer's announce key: a digest of the hidden items' own keys, so a
+    changed set behind the pointer (another item due, a different one) is told at the next
+    look and an unchanged set stays quiet until the repeat."""
+    hidden = "\n".join(due_key(d) for d in due[DUE_SHOWN:])
+    return "due:more:" + hashlib.sha1(hidden.encode("utf-8")).hexdigest()[:12]
+
+
 def record_told_due(sid, due, now=None):
     """The SessionStart notice (workspaces.lifecycle) told these due items: they are
     recorded in this session's announced.json under the key the first look makes, so
     that look does not tell them again unchanged. A changed item has another key. Past
-    DUE_SHOWN items the notice showed the "more due" pointer, recorded under due:more."""
+    DUE_SHOWN items the notice showed the "more due" pointer, recorded under more_key."""
     if not sid or not due:
         return
     now = clock() if now is None else now
     told = [(due_key(d), d["since"], d["name"], d["detail"]) for d in due[:DUE_SHOWN]]
     if len(due) > DUE_SHOWN:
-        told.append(("due:more", now, "%d more" % (len(due) - DUE_SHOWN), "more due work"))
+        told.append((more_key(due), now, "%d more" % (len(due) - DUE_SHOWN), "more due work"))
     sd = session_dir(sid)
     path = os.path.join(sd, "announced.json")
     with announced_lock(sd):

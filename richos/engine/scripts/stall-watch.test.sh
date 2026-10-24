@@ -62,6 +62,7 @@
 #   HD7  a due item the SessionStart notice told is not told again by the first
 #        look; the same item, changed, is; HD7e/f the startup record and a tick
 #        never lose each other's update of announced.json, in either order
+#        HD7j a changed set behind the 'more' pointer is told at the next look
 #   E01  THE 2026-10-01 INCIDENT: a teammate of this session raises a proceeding,
 #        for=lead escalation after the session started; the next look prints
 #        ONE ESCALATION-WATCH block, FIRST, with its key, sender and question
@@ -983,6 +984,20 @@ nine[:] = [rev]
 said = io.StringIO()
 sw.tick(None, sw.session_dir(sidr), sidr, now + 60, said)
 print("I %s %s" % ("told" if "[DUE] worker-opus-0" in said.getvalue() else "SUPPRESSED", json.dumps(said.getvalue())))
+# (j) review rv-20261024T124053Z-11930dbd-b765#1: the startup told nine (eight and "1 more"),
+# a tenth becomes due before the first look: the changed pointer is told, once.
+ten = [dict(item, key="hd7j--item-%d" % i, name="item-opus-%d" % i, why="fixture", command="land it")
+       for i in range(10)]
+sidj = "hd7j-session"
+sw.record_told_due(sidj, ten[:9], now)
+nine[:] = ten
+said = io.StringIO()
+sw.tick(None, sw.session_dir(sidj), sidj, now + 60, said)
+first = said.getvalue()
+said = io.StringIO()
+sw.tick(None, sw.session_dir(sidj), sidj, now + 120, said)
+print("J %s %s" % ("told-once" if "[DUE] 2 more" in first and "[DUE] item-opus-0" not in first
+                   and not said.getvalue() else "NOT-TOLD-ONCE", json.dumps([first, said.getvalue()])))
 PY2
 )"
 check "HD7e the startup read the file, a tick published, the startup wrote: both updates kept" \
@@ -994,6 +1009,8 @@ check "HD7h nine due items: the first look repeats neither the eight items nor t
     "$( has "$OUT" "H silent"; echo $?)" "out=$OUT"
 check "HD7i finished work the startup told, then a changes-requested review on it: the first look tells the review" \
     "$( has "$OUT" "I told"; echo $?)" "out=$OUT"
+check "HD7j the startup told nine, a tenth became due: the first look tells the changed 'more' pointer, the next look is quiet" \
+    "$( has "$OUT" "J told-once"; echo $?)" "out=$OUT"
 unset STALL_WATCH_LEAD_TRANSCRIPT
 
 # --- F: every look is fresh code (orchestration reliability R5) ------------------
