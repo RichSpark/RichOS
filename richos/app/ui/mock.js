@@ -3741,26 +3741,8 @@
         }
         // Durable notices are read at the thread open and at every turn boundary. Empty
         // here: this harness drives the surface, not the delivery lane.
-        case "take_work_notices": {
-          // Empty unless a suite queued some with `workNoticeQueue` (the operator lane's
-          // one-report-one-card check needs both lanes carrying the same words).
-          const queued = mockOperator.work.get(args.threadId) || [];
-          mockOperator.work.delete(args.threadId);
-          return queued;
-        }
-        // HIS TEAM'S DURABLE LANE (`main.rs` `take_operator_notices`), shaped exactly like
-        // `operator_runtime::OperatorNotice`. Reads AND marks, like the real one. On anything
-        // but an operator preset it answers an empty list before it reads anything, which is
-        // what the shell does with no desk.
-        case "take_operator_notices": {
-          mockOperator.calls.push(args.threadId);
-          if (!mockOperator.install) return [];
-          const held = mockOperator.notices.get(args.threadId) || [];
-          const now = Date.now();
-          const pending = held.filter((n) => n.delivered_at_ms == null);
-          for (const n of pending) n.delivered_at_ms = now;
-          return pending.map((n) => ({ ...n }));
-        }
+        case "take_work_notices":
+          return [];
         case "stop_assignment":
           return null;
         case "get_worker_status":
@@ -4974,15 +4956,6 @@
   /// merely looking pressed.
   const mockVoiceModel = { offer: null, calls: [], rejectWith: null, installed: false };
 
-  /// His team's lane on an operator install (`operator: true` in the preset); off otherwise,
-  /// which is every other suite and the preview.
-  const mockOperator = {
-    install: !!(window.__RICHOS_MOCK_PRESET__ && window.__RICHOS_MOCK_PRESET__.operator),
-    notices: new Map(), // threadId -> OperatorNotice[] (the notices.jsonl stand-in)
-    work: new Map(), // threadId -> PendingNotice[] queued for the next take_work_notices
-    calls: [],
-  };
-
   // --- dev-only test hooks, exercised by a headless check, never by real users ----------
   window.__RICHOS_MOCK__ = {
     // ---- a file Rich put in front of the user (round 36 screen 3) --------------------------
@@ -5032,40 +5005,6 @@
     outputSaveSheet(answer) { outputSheetAnswer = answer; },
     /// This Mac's app list for a file changes once, under the next *Open with…* choice.
     outputAppsChange() { outputAppsChangeOnce = true; },
-    // ---- his team, on an operator install (the operator-client record's §7 item 1) -------
-    /// His team says something: appended to the durable lane FIRST, then pushed on
-    /// `rich://operator-notice`, in that order, as `DurableDelivery::say` does. `push: false`
-    /// leaves it on disk only, which is what a closed window or a relaunch finds.
-    ///
-    ///     __RICHOS_MOCK__.operatorSay("thr_x", { kind: "question", text: "…", handle: "a1" })
-    operatorSay(threadId, notice, opts) {
-      const saved = {
-        at_ms: typeof notice.at_ms === "number" ? notice.at_ms : Date.now(),
-        handle: notice.handle == null ? null : notice.handle,
-        kind: notice.kind,
-        text: notice.text,
-        delivered_at_ms: null,
-      };
-      const list = mockOperator.notices.get(threadId) || [];
-      list.push(saved);
-      mockOperator.notices.set(threadId, list);
-      if (mockOperator.install && !(opts && opts.push === false)) {
-        emit("rich://operator-notice", { threadId, notice: { ...saved } });
-      }
-      return { ...saved };
-    },
-    /// Queue a `PendingNotice` for the next `take_work_notices` on that thread.
-    workNoticeQueue(threadId, notice) {
-      const list = mockOperator.work.get(threadId) || [];
-      list.push({ ...notice });
-      mockOperator.work.set(threadId, list);
-    },
-    /// Every thread `take_operator_notices` was asked about, in order.
-    operatorCalls() { return mockOperator.calls.slice(); },
-    /// How many notices on that thread have not been handed to the window yet.
-    operatorUndelivered(threadId) {
-      return (mockOperator.notices.get(threadId) || []).filter((n) => n.delivered_at_ms == null).length;
-    },
     // ---- screenshots and files on the Mac composer (CEO §86) -------------------------------
     /// Drop files on the window, the way the shell reports one: a `rich://file-drag` enter and
     /// leave, then `rich://file-drop` with a drop number and names only. Each file is

@@ -1040,14 +1040,8 @@ fn work_verdict(app: &AppHandle) -> WorkVerdict {
         .map(|session| richos_core::app_workers::status(&engine_state, Some(session)))
         .collect();
     let (background, background_gap) = work_gate::worst(
-        work_gate::worst(
-            work_gate::background(&background_work, &work_lease_views),
-            // 5. **HIS TEAM, on an operator install** (r3 (m)): any agent of any lead ALIVE by his
-            //    engine's resolver, a lead in its turn, or a live descendant blocks exactly as
-            //    background work does. Not in a callback, so the resolver's reading, not the stream's.
-            state.operator.as_ref().map_or((Liveness::Clear, None), |desk| work_gate::operator_team(&desk.team())),
-        ),
-        // 6. **COMMANDS RICH STARTED, on every product lease** (reap gap C5): the relaunch ends
+        work_gate::background(&background_work, &work_lease_views),
+        // 5. **COMMANDS RICH STARTED, on every product lease** (reap gap C5): the relaunch ends
         //    them now, so a running one blocks as background work does.
         work_gate::commands(&richos_core::lease_commands::LiveLeases::process().reading()),
     );

@@ -178,8 +178,23 @@ def sessions_dir():
     return os.path.join(base, "sessions")
 
 
+# The system tool directories, appended to PATH when missing. lsof lives in
+# /usr/sbin on macOS, and the scheduled job's PATH (launchd's, set by the plist
+# install writes) does not carry /usr/sbin. Measured 2026-10-23 under a launchd
+# job with that PATH and ProcessType Background: `lsof` raised FileNotFoundError,
+# while /usr/sbin/lsof answered with exit 0 in 0.51 s. Every scheduled run since
+# reported "THE OPEN-FILE TABLE COULD NOT BE READ" and decided nothing under
+# $TMPDIR or /private/tmp. Appended, never prepended, so a caller's own PATH
+# still wins.
+_SYSTEM_TOOL_DIRS = ("/usr/sbin", "/sbin")
+
+
 def _ps_env():
-    return dict(os.environ, LC_ALL="C", LANG="C", TZ="UTC0")
+    env = dict(os.environ, LC_ALL="C", LANG="C", TZ="UTC0")
+    path = [d for d in (env.get("PATH") or "").split(os.pathsep) if d]
+    path += [d for d in _SYSTEM_TOOL_DIRS if d not in path]
+    env["PATH"] = os.pathsep.join(path)
+    return env
 
 
 def session_process_names():
@@ -483,6 +498,79 @@ def registered_workspaces():
 def inside(child, parent):
     child, parent = child.rstrip("/"), parent.rstrip("/")
     return child == parent or child.startswith(parent + "/")
+
+
+def _gitdir_target(pointer_file):
+    """The realpath a `gitdir:` pointer file names, or '' if it names none."""
+    try:
+        with open(pointer_file, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(4096).strip()
+    except OSError:
+        return ""
+    if not text.startswith("gitdir:"):
+        return ""
+    target = text[len("gitdir:"):].strip()
+    if not os.path.isabs(target):
+        target = os.path.join(os.path.dirname(pointer_file), target)
+    return os.path.realpath(target)
+
+
+def repositories_reach_outside(tree):
+    """'' when every .git under `tree` is a repository wholly inside it, else why not.
+
+    A test suite's fixture is a repository it made inside its own allocation. A
+    `.git` FILE pointing elsewhere is a checkout of somebody's repository, and a
+    repository whose linked worktrees live outside `tree` would leave those
+    checkouts without an object store if it were deleted. Either is refused. A
+    tree that cannot be read is refused too: unreadable is not proof. A pointer to
+    a path that does not exist on this machine (an extracted copy of another
+    machine's checkout) belongs to no repository here and is not refused.
+
+    Measured 2026-10-23 in Codex's temp root: two directories held linked
+    checkouts of the main RichOS repository, which wall 3 cannot see because git's
+    own worktree list is not the workspace registry.
+    """
+    real = os.path.realpath(tree)
+
+    def elsewhere(target):
+        return not target or (not inside(target, real) and os.path.lexists(target))
+
+    stack = [real]
+    while stack:
+        cur = stack.pop()
+        try:
+            entries = list(os.scandir(cur))
+        except OSError as exc:
+            return "%s could not be read (%s)" % (cur, exc)
+        for e in entries:
+            if e.name == ".git":
+                if e.is_file(follow_symlinks=False):
+                    target = _gitdir_target(e.path)
+                    if elsewhere(target):
+                        return ("%s is a linked checkout of a repository outside this "
+                                "tree (%s)" % (cur, target or "unreadable pointer"))
+                elif e.is_dir(follow_symlinks=False):
+                    for pointer in glob.glob(os.path.join(e.path, "worktrees", "*", "gitdir")):
+                        target = _gitdir_target_line(pointer)
+                        if elsewhere(target):
+                            return ("%s has a linked worktree outside this tree (%s)"
+                                    % (e.path, target or "unreadable"))
+                else:
+                    return "%s is a .git that is neither a file nor a directory" % e.path
+                continue
+            if e.is_dir(follow_symlinks=False):
+                stack.append(e.path)
+    return ""
+
+
+def _gitdir_target_line(pointer):
+    """A repository's worktrees/<name>/gitdir holds one absolute path, no prefix."""
+    try:
+        with open(pointer, encoding="utf-8", errors="replace") as fh:
+            target = fh.read(4096).strip()
+    except OSError:
+        return ""
+    return os.path.realpath(target) if target else ""
 
 
 # ---------------------------------------------------------------------------
@@ -908,6 +996,21 @@ def build_caches():
     return _BUILD_CACHES[0]
 
 
+_CODEX_WORKTREES = []
+
+
+def codex_worktrees():
+    """lib/codex_worktrees.py (Codex's finished worktrees, cleanup PRD A6), by path."""
+    if not _CODEX_WORKTREES:
+        spec = importlib.util.spec_from_file_location(
+            "richos_codex_worktrees",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "codex_worktrees.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _CODEX_WORKTREES.append(mod)
+    return _CODEX_WORKTREES[0]
+
+
 def human(n):
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024 or unit == "TB":
@@ -983,6 +1086,10 @@ class Reaper(object):
         # Set by --notice too: the build-cache arm walks the external drive's caches,
         # which a session-start banner must not pay for.
         self.skip_build_caches = False
+        # And the Codex worktree arm, which runs git status in every Codex checkout.
+        self.skip_codex = False
+        # And the named-agent scratch report, which measures every leftover entry.
+        self.skip_named = False
         # A LAND'S SCOPED SWEEP (--agent). None for every other run. When set,
         # scan_agent() replaces scan(), and apply() collects nothing it did not
         # plan: no test devices, no Docker. See scan_agent.
@@ -1002,6 +1109,16 @@ class Reaper(object):
 
     def add(self, path, klass, size, action, why, standing=False):
         self.entries.append(Entry(path, klass, size, action, why, standing))
+
+    @staticmethod
+    def reaches_outside(path, has_git, narrowed):
+        """'' unless wall 2 is narrowed for this tree and a repository in it is a
+        checkout of, or has worktrees in, a repository elsewhere (cleanup PRD R1)."""
+        if not (has_git and narrowed):
+            return ""
+        why = repositories_reach_outside(path)
+        return ("wall 2: %s; a checkout of another repository is closed by its "
+                "owner, never deleted as a fixture" % why) if why else ""
 
     # --- classes ---------------------------------------------------------
 
@@ -1189,6 +1306,10 @@ class Reaper(object):
                          "a process has opened a file inside it since the "
                          "failed deletion, so it is no longer abandoned")
                 continue
+            linked = self.reaches_outside(path, has_git, self.cfg["legacy_git_is_fixture"])
+            if linked:
+                self.add(path, "standing-failure", size, INDETERMINATE, linked)
+                continue
             refused = walls.check(path, has_git,
                                   git_is_fixture=self.cfg["legacy_git_is_fixture"])
             if refused:
@@ -1237,9 +1358,27 @@ class Reaper(object):
         answers pid reuse is owner_state(): a process that started after the
         directory was created cannot have created it. TTL is what it always
         was — a declaration of intent, never an authority to delete.
+
+        EVERY ALLOCATOR ROOT, NOT ONLY THIS JOB'S. scratch.sh allocates under
+        whatever TMPDIR its caller has, and the nightly gates and Codex run with
+        their own (the declared shared and producer temp roots). launchd's TMPDIR
+        held none of their allocations, so a killed gate's sandbox there was never
+        looked at (cleanup PRD 2026-10-23, coverage).
         """
+        for root in self.allocator_roots():
+            self.scan_allocator_root(root, walls)
+
+    def allocator_roots(self):
+        """This job's allocator root first, then one under each other temp root."""
         tmp = os.path.realpath(os.environ.get("TMPDIR") or "/tmp")
-        root = os.path.join(tmp, self.cfg["scratch_root_name"])
+        out = []
+        for base in [tmp] + list(self.cfg.get("shared_tmp_roots") or []):
+            root = os.path.join(os.path.realpath(base), self.cfg["scratch_root_name"])
+            if root not in out:
+                out.append(root)
+        return out
+
+    def scan_allocator_root(self, root, walls):
         if not os.path.isdir(root):
             return
         self.roots.append(root)
@@ -1303,7 +1442,7 @@ class Reaper(object):
             #
             # Placed after the age floor deliberately, so the common case — a
             # young directory — never pays for a whole-machine lsof.
-            snapshot = self.open_under_alloc()
+            snapshot = self.open_under_alloc(root)
             if snapshot is None:
                 self.add(path, "scratch-alloc", size, INDETERMINATE,
                          "pid %d is ended, but the open-file table could not "
@@ -1335,7 +1474,27 @@ class Reaper(object):
                             "not all of them are, so nothing here is quit)"))
                 continue
 
-            refused = walls.check(path, has_git)
+            # A REPOSITORY INSIDE AN ENDED ALLOCATION IS A TEST FIXTURE ONLY ON
+            # POSITIVE EVIDENCE (cleanup PRD R1): the allocator's own ledger row says
+            # this directory was allocated (a name is never enough), its label is a
+            # producer DECLARED to make only fixture repositories
+            # (SCRATCH_FIXTURE_REPO_LABELS), and every repository in it is wholly
+            # inside it. A row and containment prove ownership, not that nothing in
+            # it is somebody's unpushed work: the mid-job review's fixture (a
+            # 'prototype' allocation holding an unpushed commit, a tracked edit and
+            # notes) was deleted on exactly that (rv-20261023T212629Z-3dc330ca-a2b9).
+            # A declared suite killed by SIGKILL cannot run its trap, and wall 2 used
+            # to keep its fixture repositories until a person deleted them.
+            fixture = False
+            if has_git and row and row.get("label") in (self.cfg.get("fixture_repo_labels") or []):
+                outside = repositories_reach_outside(path)
+                if outside:
+                    self.add(path, "scratch-alloc", size, INDETERMINATE,
+                             "wall 2: pid %d is ENDED and the ledger records this "
+                             "allocation, but %s" % (pid or 0, outside))
+                    continue
+                fixture = True
+            refused = walls.check(path, has_git, git_is_fixture=fixture)
             if refused:
                 self.add(path, "scratch-alloc", size, INDETERMINATE, refused)
                 continue
@@ -1612,6 +1771,10 @@ class Reaper(object):
         # family match, the age floor and the open-handle check have all been
         # established above. Wall 3 (registered workspace) is what protects a
         # real worktree and it still applies in full.
+        linked = self.reaches_outside(path, has_git, self.cfg["legacy_git_is_fixture"])
+        if linked:
+            self.add(path, "tmp-legacy", size, INDETERMINATE, linked)
+            return
         refused = walls.check(path, has_git,
                               git_is_fixture=self.cfg["legacy_git_is_fixture"])
         if refused:
@@ -1782,8 +1945,19 @@ class Reaper(object):
                         "all of them are, so nothing here is quit)"))
             return
 
-        refused = walls.check(path, has_git,
-                              git_is_fixture=self.cfg["unknown_git_is_fixture"])
+        # IN A PRODUCER'S OWN TEMP ROOT (SCRATCH_BULK_TMP_ROOTS) a repository is a
+        # fixture only in a DECLARED harness family (SCRATCH_LEGACY_TMP_PATTERNS):
+        # Codex works in its TMPDIR, and an unfinished clone or prototype there is
+        # not shown disposable by being old and unopened (cleanup PRD R1; mid-job
+        # review rv-20261023T212629Z-3dc330ca-a2b9). It stays undecided, reported.
+        narrowed = self.cfg["unknown_git_is_fixture"] and (
+            os.path.realpath(root) not in (self.cfg.get("producer_tmp_roots") or [])
+            or any(fnmatch.fnmatch(name, pat) for pat in self.cfg.get("legacy_tmp_patterns") or []))
+        linked = self.reaches_outside(path, has_git, narrowed)
+        if linked:
+            self.add(path, "tmp-unknown", size, INDETERMINATE, linked)
+            return
+        refused = walls.check(path, has_git, git_is_fixture=narrowed)
         if refused:
             self.add(path, "tmp-unknown", size, INDETERMINATE, refused)
             return
@@ -1808,6 +1982,7 @@ class Reaper(object):
         if not self.cfg["deny_by_default"]:
             return
         skip = set(os.path.realpath(r) for r in self.cfg["claude_roots"])
+        skip.update(self.allocator_roots())     # decided by owner, in scan_scratch_root
         for root in self.cfg["shared_tmp_roots"]:
             if not os.path.isdir(root):
                 continue
@@ -1821,6 +1996,80 @@ class Reaper(object):
                 if os.path.realpath(path) in skip or self.named_scratch(path):
                     continue            # separate scoped/Claude-root collection owns it
                 self._unknown.append((path, root))
+
+    def live_agent_names(self):
+        """({names of registered agents whose run has not finished}, {name: the newest
+        end its finished records recorded}), or (None, {}) when the agent registry
+        cannot be read. Paused counts as not finished."""
+        try:
+            if self.ws.damaged_records(include_done=False):
+                return None, {}
+            cache, live, ended = {}, set(), {}
+            for r in self.ws.all_agents():
+                name = r.get("name")
+                if not self.ws.finished_state(r, cache)[0]:
+                    live.add(name)
+                    continue
+                at = [x for x in ((r.get("end") or {}).get("at"),
+                                  (r.get("disposition") or {}).get("at"))
+                      if isinstance(x, (int, float))]
+                if at:
+                    ended[name] = max(ended.get(name, 0), max(at))
+            return live, ended
+        except Exception:
+            return None, {}
+
+    def scan_named_scratch(self, walls):
+        """NAMED-AGENT SCRATCH LEFT BEHIND, REPORTED AND NEVER DELETED HERE.
+
+        <agent root>/<name> is collected only by a land's scoped sweep (scan_agent),
+        so the scratch of an agent that was stopped or shelved and never landed was
+        neither collected nor reported (review rv-20261023T232303Z-ba744b07-d444 #2).
+        Each child older than the age floor whose name no unfinished registered agent
+        carries is an undecided entry: the published result stays unresolved for
+        this root, and the lead is told, until it is gone."""
+        roots = [r for r in self.cfg.get("agent_roots") or [] if r and os.path.isdir(r)]
+        if not roots or self.skip_named:
+            return
+        live, ended = self.live_agent_names()
+        for root in roots:
+            self.roots.append(root)
+            try:
+                names = sorted(os.listdir(root))
+            except OSError as exc:
+                self.add(root, "agent-named", 0, INDETERMINATE,
+                         "the named-agent scratch root could not be listed (%s)" % exc)
+                continue
+            for name in names:
+                check_deadline()
+                path = os.path.join(root, name)
+                if live is not None and name in live:
+                    self.add(path, "agent-named", 0, KEEP,
+                             "named for %s, whose run has not finished" % name)
+                    continue
+                size, newest, _has_git = measure(path)
+                # THE CLOCK COMES OFF THE AGENT'S RECORDED END WHEN THE REGISTRY HAS
+                # ONE, and off the newest mtime only when it does not: an orphaned
+                # writer would otherwise keep a stopped agent's scratch inside the
+                # floor for ever (the same failure Liveness.ended_epoch answers).
+                if name in ended:
+                    age, clock = self.now - ended[name], "its agent recorded its end"
+                else:
+                    age, clock = self.now - newest, "named scratch written"
+                if age < self.floor:
+                    self.add(path, "agent-named", size, KEEP,
+                             "%s %d min ago, inside the %d min floor"
+                             % (clock, age // 60, self.cfg["age_floor_minutes"]))
+                    continue
+                if live is None:
+                    self.add(path, "agent-named", size, INDETERMINATE,
+                             "named-agent scratch, and the agent registry cannot be read "
+                             "to tell whether %s is still running" % name)
+                    continue
+                self.add(path, "agent-named", size, INDETERMINATE,
+                         "named-agent scratch no running agent carries (%s was stopped, "
+                         "shelved or never landed). Only a land's sweep deletes named "
+                         "scratch, so remove it by hand once nothing needs it" % name)
 
     def scan_deferred_unknown(self, walls):
         """THE DEFERRED DENY-BY-DEFAULT PASS, and the ONE arm allowed to be cut
@@ -1984,9 +2233,11 @@ class Reaper(object):
         # /private/tmp holds 753 direct children, so a per-candidate `lsof +D`
         # would be 753 tree walks against one read.
         pref = tmp + "/"
-        alloc_pref = os.path.join(tmp, self.cfg["scratch_root_name"]) + "/"
+        # One reduction per allocator root (this job's and each other temp root's).
+        allocs = [(a, a + "/") for a in self.allocator_roots()]
         shared = [(r, r.rstrip("/") + "/") for r in self.cfg["shared_tmp_roots"]]
-        found, alloc = set(), set()
+        found = set()
+        alloc_sets = dict((a, set()) for a, _ in allocs)
         shared_sets = dict((r, set()) for r, _ in shared)
         for line in r.stdout.splitlines():
             if not line.startswith("n"):
@@ -1997,18 +2248,19 @@ class Reaper(object):
                     rest = p[len(spref):]
                     if rest:
                         shared_sets[root].add(rest.split("/", 1)[0])
+            for aroot, apref in allocs:
+                if p.startswith(apref):
+                    rest = p[len(apref):]
+                    if rest:
+                        alloc_sets[aroot].add(rest.split("/", 1)[0])
             if not p.startswith(pref):
                 continue
-            if p.startswith(alloc_pref):
-                rest = p[len(alloc_pref):]
-                if rest:
-                    alloc.add(rest.split("/", 1)[0])
             rest = p[len(pref):]
             if not rest:
                 continue
             found.add(rest.split("/", 1)[0])
         self._open_tmp = found
-        self._open_alloc = alloc
+        self._open_alloc = alloc_sets
         self._open_shared = shared_sets
         return found
 
@@ -2025,8 +2277,9 @@ class Reaper(object):
             return None
         return self._open_shared.get(os.path.realpath(root))
 
-    def open_under_alloc(self):
-        """The set of allocator-root children something holds open, or None.
+    def open_under_alloc(self, root=None):
+        """The set of children of allocator root `root` (this job's when None)
+        something holds open, or None.
 
         THE ALLOCATOR ARM WAS THE ONLY ONE THAT TRUSTED A PID ALONE, and that
         made it the one arm that could destroy live work rather than garbage.
@@ -2049,7 +2302,9 @@ class Reaper(object):
             self.open_under_tmp()      # populates both reductions in one read
         if self._open_alloc is None or self._open_alloc is _FAILED:
             return None
-        return self._open_alloc
+        if root is None:
+            root = self.allocator_roots()[0]
+        return self._open_alloc.get(root)    # a root never reduced is unknown, not empty
 
     def held_in_snapshot(self, path, snapshot):
         """True if any open file sits at or inside `path`.
@@ -2496,6 +2751,70 @@ class Reaper(object):
             e.unit_keys = [k for k, _u in idle]
             self.entries.append(e)
 
+    def codex_app_root(self):
+        home = self.cfg.get("codex_home") or ""
+        return os.path.realpath(os.path.join(home, "worktrees")) if home else ""
+
+    def codex_attachments(self):
+        home = self.cfg.get("codex_home") or ""
+        if not home:
+            return {"live": set(), "archived": set()}, ""
+        return codex_worktrees().attachments(home)
+
+    def scan_codex_worktrees(self, walls):
+        """CODEX'S FINISHED WORKTREES (cleanup PRD section 3, A6), from the declared
+        Codex worktree roots only; the decision and the closing are lib/codex_worktrees.py.
+
+        A worktree that closes is planned DELETE and closed in apply() by git itself
+        after every check is repeated. A finished worktree a Codex chat still has
+        attached is UNDECIDED: only that chat's archive_worktree may close it. Kept
+        work (unmerged, uncommitted, active, ignored material) is KEEP with its reason.
+        """
+        roots = [r for r in self.cfg.get("codex_worktree_roots") or [] if os.path.isdir(r)]
+        if not roots or self.skip_codex:
+            return
+        # Never take git's optional index lock in someone else's checkout.
+        os.environ["GIT_OPTIONAL_LOCKS"] = "0"
+        cw = codex_worktrees()
+        app_root = self.codex_app_root()
+        attached, why_not = self.codex_attachments()
+        cwds = self.ws._process_cwds(strict=True)
+        # What is in use inside a checkout whatever the user's cwd: open files,
+        # mapped libraries, running executables. One read, kept to these roots.
+        opened = cw.open_paths(env=_ps_env())
+        if opened is not None:
+            prefixes = tuple(os.path.realpath(r).rstrip("/") + "/" for r in roots)
+            opened = {p for p in opened if p.startswith(prefixes)}
+        found, husks = cw.checkouts(roots)
+        self.roots.extend(roots)
+        for path in found:
+            check_deadline()
+            action, why, info = cw.decide(path, self.ws, app_root, attached, cwds, opened)
+            if attached is None and why_not and action == cw.UNDECIDED:
+                why = "%s (%s)" % (why, why_not)
+            e = Entry(path, "codex-worktree", measure(path)[0] if action == DELETE else 0,
+                      action, why)
+            e.close_info = info
+            self.entries.append(e)
+        for husk in husks:
+            real = os.path.realpath(husk)
+            if attached is None:
+                self.add(husk, "codex-husk", 0, INDETERMINATE,
+                         "an emptied worktree parent, but the Codex app's attachment "
+                         "records cannot be read (%s)" % why_not)
+            elif any((p + "/").startswith(real + "/") for p in attached["live"]):
+                self.add(husk, "codex-husk", 0, INDETERMINATE,
+                         "an emptied worktree parent that a live Codex attachment still "
+                         "names; the app has lost the checkout it shows that chat")
+            else:
+                refused = walls.check(husk, False)
+                if refused:
+                    self.add(husk, "codex-husk", 0, INDETERMINATE, refused)
+                else:
+                    self.add(husk, "codex-husk", 0, DELETE,
+                             "a worktree parent holding nothing but the Codex app's "
+                             "marker, and no live attachment names anything in it")
+
     # --- running it ------------------------------------------------------
 
     def scan(self):
@@ -2507,7 +2826,8 @@ class Reaper(object):
         kept = [self.cfg["kept_dir"]] if self.cfg.get("kept_dir") else []
         caches = [self.cfg["build_cache_root"]] if self.cfg.get("build_cache_root") else []
         cargo = [r for r in self.cfg.get("cargo_target_roots", []) if os.path.isdir(r)]
-        walls = Walls(roots + [tmp] + nightly + shared + kept + caches + cargo)
+        codex = [r for r in self.cfg.get("codex_worktree_roots", []) if os.path.isdir(r)]
+        walls = Walls(roots + [tmp] + nightly + shared + kept + caches + cargo + codex)
         # FIRST, so the other arms can skip what it has already claimed. A path
         # decided twice would be counted twice in the verdict, and a standing
         # failure is precisely a path another arm would otherwise report as KEEP.
@@ -2518,9 +2838,11 @@ class Reaper(object):
         self.scan_scratch_root(walls)
         self.scan_tmp(walls)
         self.scan_shared_tmp(walls)
+        self.scan_named_scratch(walls)
         self.scan_nightly(walls)
         self.scan_kept(walls)
         self.scan_build_caches(walls)
+        self.scan_codex_worktrees(walls)
         self.scan_campaign_roots(walls)
         self.scan_docker_containers(walls)
         # LAST, ALWAYS. It is the only expensive arm and the only one that may be
@@ -3146,8 +3468,11 @@ class Reaper(object):
         # decided to delete. It never reaches a live peer's instance.
         # A cargo-units row names a profile directory that is NOT deleted, only some of its
         # units, so an app running from it is not inside anything being removed.
+        # A Codex worktree is closed by git after a recheck that keeps any with a
+        # process in it, so no app instance there is quit on the plan's word.
         for line in self.collect_test_instances([e.path for e in order
-                                                 if e.klass != "cargo-units"], stamp):
+                                                 if e.klass not in ("cargo-units",
+                                                                    "codex-worktree")], stamp):
             lines.append(line)
             if " FAILED test-instance " in line:
                 failures.append(line.split("error=", 1)[-1])
@@ -3164,6 +3489,27 @@ class Reaper(object):
         if self.scope is None:
             lines.extend(self.collect_test_devices(stamp))
         for e in order:
+            if e.klass == "codex-worktree":
+                # CLOSED BY GIT, NOT rmtree, after every check is repeated now
+                # (lib/codex_worktrees.py close): a checkout that changed since the
+                # plan is kept, and git itself refuses a dirty one or an unmerged branch.
+                kept, err = codex_worktrees().close(
+                    e.path, getattr(e, "close_info", {}), self.ws, self.codex_app_root(),
+                    lambda: self.codex_attachments()[0],
+                    lambda: self.ws._process_cwds(strict=True),
+                    lambda: codex_worktrees().open_paths(env=_ps_env()))
+                if kept:
+                    lines.append("%s KEPT %s class=%s why=%s" % (stamp, e.path, e.klass, kept))
+                    continue
+                if err:
+                    failures.append("%s: %s" % (e.path, err))
+                    lines.append("%s FAILED %s class=%s error=%s" % (stamp, e.path, e.klass, err))
+                    continue
+                deleted += 1
+                freed += e.size
+                lines.append("%s DELETED %s bytes=%d class=%s why=%s"
+                             % (stamp, e.path, e.size, e.klass, e.why))
+                continue
             if e.klass == "cargo-units":
                 # UNITS, NOT THE DIRECTORY. Re-measured and deleted under Cargo's own
                 # lock (lib/build_caches.py), so a build that started since the plan
@@ -3614,7 +3960,22 @@ def _make_writable(path):
     return cleared
 
 
+# The deletion log keeps one previous file, as quota_watch.py's poll log does, so
+# the cleanup's own record cannot become a pile (cleanup PRD R4). Measured
+# 2026-10-23: 63 MB, never trimmed.
+LOG_MAX_BYTES = 16 * 1024 * 1024
+
+
+def rotate_log(path, limit=LOG_MAX_BYTES):
+    try:
+        if os.path.getsize(path) > limit:
+            os.replace(path, path + ".1")
+    except OSError:
+        pass
+
+
 def write_log(path, lines):
+    rotate_log(path)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a", encoding="utf-8") as fh:
@@ -3635,8 +3996,40 @@ def config_from_env(process_only=False):
             machine_settings.apply()
         named_root = str(machine_settings.agent_root()) if not process_only else ""
         cache_root, cargo_roots = build_caches().roots() if not process_only else ("", [])
+        bulk = machine_settings.load().get("RICHOS_BULK_ROOT") if not process_only else ""
+        bulk_root = str(machine_settings.validate(bulk, require_directory=True)) if bulk else ""
     except (ValueError, OSError) as exc:
         raise Fatal(str(exc)) from exc
+    # THE PRODUCERS' OWN TEMP ROOTS on the bulk drive: the nightly gates' TMPDIR
+    # (nightly-local.py gate_tmpdir), Codex's TMPDIR, and the autocheck suite's
+    # fixture parent. Declared relative to RICHOS_BULK_ROOT and swept exactly like
+    # a shared temp root. Measured 2026-10-23: 13 GB of test fixtures sat in them
+    # and the scheduled job, whose TMPDIR is launchd's, never looked.
+    producer_roots = []
+    for rel in (os.environ.get("SCRATCH_BULK_TMP_ROOTS") or "").split():
+        if not bulk_root:
+            break
+        real = os.path.realpath(os.path.join(bulk_root, rel))
+        if os.path.isabs(rel) or not inside(real, bulk_root) or real == bulk_root:
+            raise Fatal("SCRATCH_BULK_TMP_ROOTS names %r, which is not a directory "
+                        "below RICHOS_BULK_ROOT (%s)." % (rel, bulk_root))
+        producer_roots.append(real)
+    # CODEX'S OWN WORKTREE ROOTS (cleanup PRD A6): each absolute (the Codex app's
+    # root under its home) or relative to RICHOS_BULK_ROOT. Empty fallback: an
+    # engine whose config predates the keys closes no Codex worktree.
+    codex_roots = []
+    for entry in (os.environ.get("SCRATCH_CODEX_WORKTREE_ROOTS") or "").split():
+        if os.path.isabs(entry):
+            codex_roots.append(os.path.realpath(entry))
+            continue
+        if not bulk_root:
+            continue
+        real = os.path.realpath(os.path.join(bulk_root, entry))
+        if not inside(real, bulk_root) or real == bulk_root:
+            raise Fatal("SCRATCH_CODEX_WORKTREE_ROOTS names %r, which is not a directory "
+                        "below RICHOS_BULK_ROOT (%s)." % (entry, bulk_root))
+        codex_roots.append(real)
+    codex_home = (os.environ.get("SCRATCH_CODEX_HOME") or "").strip()
     def need(name):
         v = (os.environ.get(name) or "").strip()
         if not v:
@@ -3717,7 +4110,16 @@ def config_from_env(process_only=False):
         # yesterday rather than suddenly sweeping every name under $TMPDIR.
         "deny_by_default": opt("SCRATCH_TMP_DENY_BY_DEFAULT", "0") == "1",
         "shared_tmp_roots": [os.path.realpath(p) for p in
-                             opt("SCRATCH_SHARED_TMP_ROOTS", "").split()],
+                             opt("SCRATCH_SHARED_TMP_ROOTS", "").split()]
+                            + [p for p in producer_roots
+                               if p not in [os.path.realpath(q) for q in
+                                            opt("SCRATCH_SHARED_TMP_ROOTS", "").split()]],
+        "producer_tmp_roots": producer_roots,
+        "codex_worktree_roots": codex_roots,
+        "codex_home": os.path.realpath(os.path.expanduser(codex_home)) if codex_home else "",
+        # Allocator labels whose producers make only fixture repositories (PRD R1).
+        # Empty fallback: no repository in an allocation is ever taken as a fixture.
+        "fixture_repo_labels": opt("SCRATCH_FIXTURE_REPO_LABELS", "").split(),
         "foreign_patterns": opt("SCRATCH_FOREIGN_PATTERNS", "").split(),
         "unknown_age_hours": opt_number("SCRATCH_UNKNOWN_AGE_HOURS", 72),
         "unknown_git_is_fixture":
@@ -3793,6 +4195,74 @@ def default_state():
         or os.path.join(state_base(), "scratch-reaper-state.json")
 
 
+# THE ONE CONTEXT THAT PUBLISHES CLEANUP HEALTH (cleanup PRD R3/R4): the installed
+# launchd job, whether it fired at a calendar slot or by `launchctl kickstart`.
+# scratch-reaper.sh reads launchd's XPC_SERVICE_NAME and hands the fact on as
+# SCRATCH_REAPER_SCHEDULED (why the shell and not this program: see there). An
+# interactive --apply prints its result and records failed deletions, but never
+# writes or clears the unattended result: on 2026-10-23 a manual run at 16:42Z
+# overwrote the state the failing scheduled runs had published, and the record
+# then described a run the scheduler never made.
+def unattended():
+    return os.environ.get("SCRATCH_REAPER_SCHEDULED") == "1"
+
+
+def unresolved_rows(reaper, failures):
+    """What kept this run from being a completed cleanup, grouped by the inspected
+    root and class it happened in, each with one example and its reason. An entry
+    a verified rule KEEPs is not here; an undecided one, a failed deletion and an
+    entry the run never reached are."""
+    roots = sorted(set(os.path.realpath(r) for r in reaper.roots), key=len, reverse=True)
+
+    def scope_of(path):
+        real = os.path.realpath(path)
+        return next((r for r in roots if inside(real, r)), real)
+
+    groups = {}
+    for e in reaper.entries:
+        if e.action != INDETERMINATE:
+            continue
+        key = (scope_of(e.path), e.klass)
+        g = groups.setdefault(key, {"scope": key[0], "class": e.klass, "count": 0,
+                                    "bytes": 0, "example": e.path, "why": e.why})
+        g["count"] += 1
+        g["bytes"] += e.size
+    out = []
+    for g in groups.values():
+        g["cause"] = ("%d undecided %s entr%s (%s), e.g. %s: %s"
+                      % (g["count"], g["class"], "y" if g["count"] == 1 else "ies",
+                         human(g["bytes"]), g.pop("example"), g.pop("why")[:200]))
+        out.append(g)
+    # A FAILED DELETION IS NAMED BY THE ROOT IT HAPPENED IN, like everything above:
+    # the watchdog keeps an action open until a healthy run has inspected every
+    # root that failed, and a label that is not a path could never be inspected.
+    # Each failure reads "<path>: <error>" (apply()).
+    failed = {}
+    for f in failures:
+        scope = scope_of(str(f).split(": ", 1)[0])
+        failed.setdefault(scope, []).append(str(f))
+    for scope, rows in failed.items():
+        out.append({"scope": scope, "class": "deletion", "count": len(rows),
+                    "cause": "%d deletion(s) failed, e.g. %s" % (len(rows), rows[0][:200])})
+    if reaper.deferred_skipped:
+        out.append({"scope": "deny-by-default arm", "count": reaper.deferred_skipped,
+                    "cause": "%d entries were not reached before the run's budget ran out"
+                             % reaper.deferred_skipped})
+    return sorted(out, key=lambda r: (r["scope"], r.get("class", "")))
+
+
+def publish_refusal(cause):
+    """A scheduled run that refused to run publishes that, keeping the time of the
+    last run the scheduled job completed (a manual run's time is never kept)."""
+    prev = read_failures(default_state())
+    payload = {k: prev[k] for k in ("last_apply", "last_apply_epoch")
+               if prev.get("source") == "launchd" and k in prev}
+    payload.update({"source": "launchd", "outcome": "unresolved",
+                    "result_epoch": int(time.time()), "roots": [],
+                    "unresolved": [{"scope": "run", "cause": str(cause)[:300]}]})
+    write_state(default_state(), payload)
+
+
 def write_state(path, payload):
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -3843,6 +4313,8 @@ def main(argv=None):
         # from the last full pass, which the scheduled job publishes.
         reaper.skip_unknown_arm = bool(args.notice)
         reaper.skip_build_caches = bool(args.notice)
+        reaper.skip_codex = bool(args.notice)
+        reaper.skip_named = bool(args.notice)
         if args.process_only:
             reaper.scope = {"kind": "process", "name": "process"}
             reaper.scan_scratch_root(Walls([os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]))
@@ -3854,6 +4326,8 @@ def main(argv=None):
             reaper.scan()
     except Fatal as exc:
         sys.stderr.write("scratch-reaper: %s\n" % exc)
+        if args.apply and not args.process_only and args.agent is None and unattended():
+            publish_refusal("the scheduled run refused to start: %s" % exc)
         return 2
     except Deadline:
         if args.notice:
@@ -3932,14 +4406,26 @@ def main(argv=None):
                           key=lambda e: -e.size)[:5]
     split["by_hand"]["paths"] = [{"path": e.path, "bytes": e.size,
                                   "why": e.why} for e in by_hand_rows]
+    failures = []
     if args.apply:
         deleted, freed, failures = reaper.apply(args.log or default_log())
         n_failures = len(failures)
     # THE STATE FILE DESCRIBES THE LAST FULL PASS, and the watchdog reads it as
     # such: a land's scoped sweep looked at one agent's scratch, and publishing
-    # its numbers would tell the watchdog the scheduled job had just run.
-    if args.apply and reaper.scope is None:
+    # its numbers would tell the watchdog the scheduled job had just run. And
+    # ONLY THE INSTALLED JOB PUBLISHES IT (cleanup PRD R3/R4): a manual --apply
+    # prints its result and never replaces or clears the unattended one.
+    if args.apply and reaper.scope is None and unattended():
+        unresolved = unresolved_rows(reaper, failures)
         write_state(default_state(), {
+            # source/outcome/unresolved/roots: the cleanup health the watchdog
+            # turns into one owner action. `healthy` means every candidate was
+            # decided and nothing failed; a deliberate KEEP is not a failure.
+            "source": "launchd",
+            "outcome": "unresolved" if unresolved else "healthy",
+            "unresolved": unresolved,
+            "roots": sorted(set(reaper.roots)),
+            "result_epoch": int(time.time()),
             "last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "last_apply_epoch": int(time.time()),
             "deleted": deleted, "freed": freed,

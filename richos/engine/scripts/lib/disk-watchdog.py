@@ -305,6 +305,130 @@ def log(path, line):
 
 
 # ---------------------------------------------------------------------------
+# cleanup health: the scheduled reaper's own published result, and ONE owner action
+# ---------------------------------------------------------------------------
+# Cleanup PRD 2026-10-23, R4/R5. The reaper's scheduled run failed 142 of 146
+# times (lsof was not on launchd's PATH) and this job printed it as "GARBAGE
+# REPORT (not an alert)", which nobody acted on. Health is read ONLY from the
+# result the installed launchd job published; a manual run never writes it, an
+# acknowledgement never changes it, and nothing here runs the reaper.
+REAPER_LABEL = "com.richos.scratch-reaper"
+
+
+def cleanup_health(reaper_state, state_path, max_age_h, now, launch_agents_dir):
+    """[problem, ...] for the last unattended cleanup result; [] when it is healthy."""
+    problems = []
+    plist = os.path.join(launch_agents_dir, REAPER_LABEL + ".plist")
+    if not os.path.isfile(plist):
+        problems.append("the scheduled cleanup job is not installed (%s)" % plist)
+    if not reaper_state:
+        problems.append("no unattended cleanup result is published (%s is missing or "
+                        "unreadable)" % state_path)
+        return problems
+    if reaper_state.get("source") != "launchd" \
+            or reaper_state.get("outcome") not in ("healthy", "unresolved"):
+        problems.append("%s does not hold a result of the scheduled job" % state_path)
+        return problems
+    epoch = reaper_state.get("last_apply_epoch")
+    if not isinstance(epoch, (int, float)) or epoch <= 0:
+        problems.append("the scheduled job has never completed a run")
+    elif now - epoch > max_age_h * 3600:
+        problems.append("the last completed scheduled run was %s ago, past the %d h window"
+                        % (_short_age(now - epoch), int(max_age_h)))
+    if reaper_state.get("outcome") == "unresolved":
+        rows = [u for u in (reaper_state.get("unresolved") or []) if isinstance(u, dict)]
+        for u in rows:
+            problems.append("%s: %s" % (u.get("scope") or "?", u.get("cause") or "?"))
+        if not rows:
+            problems.append("the scheduled run reported an unresolved outcome")
+    return problems
+
+
+def _escalate(engine_scripts, args):
+    """Run escalate.sh; (exit code, stdout). Never raises."""
+    try:
+        r = subprocess.run(["bash", os.path.join(engine_scripts, "escalate.sh")] + args,
+                           capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 2, str(exc)
+
+
+def _escalation_status(esc_id, now):
+    """'open', 'held' (a timed ack in force), 'closed' or 'unknown'."""
+    try:
+        import escalations
+        rows, _bad = escalations.read_rows()
+    except Exception:  # noqa: BLE001  an unreadable ledger is unknown, never closed
+        return "unknown"
+    if rows is None:
+        return "unknown"
+    if not any(r.get("event") == "Escalation" and r.get("id") == esc_id for r in rows):
+        return "missing"           # a readable ledger without it: raise afresh
+    import datetime as _dt
+    when = _dt.datetime.fromtimestamp(now, _dt.timezone.utc)
+    if any(e.get("id") == esc_id for e in escalations.outstanding(rows, when)):
+        return "open"
+    acks = escalations.acks_for(rows, esc_id)
+    if any(isinstance(a.get("until_epoch"), (int, float)) and a["until_epoch"] > now
+           for a in acks):
+        return "held"
+    return "closed" if acks else "unknown"
+
+
+def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, state_path):
+    """The scheduled tick's owner action: ONE open escalation per unresolved result.
+
+    Unresolved and nothing associated, or the associated one acknowledged
+    permanently: raise one (state proceeding, for the lead). Associated and open,
+    or held by a timed acknowledgement: nothing; the ledger and the stall watcher
+    already repeat it, and an expiring hold reopens the same id. Healthy again:
+    acknowledge the associated id permanently, or keep the association until a
+    hold expires and it can be. Returns the association to store, or None."""
+    engine_scripts = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    checkout = os.path.realpath(os.path.join(engine_scripts, "..", "..", ".."))
+    assoc = prev.get("cleanup_escalation") if isinstance(prev.get("cleanup_escalation"), dict) else None
+    status = _escalation_status(assoc["id"], now) if assoc and assoc.get("id") else None
+    if not problems:
+        if not assoc:
+            return None
+        if status == "open":
+            rc, out = _escalate(engine_scripts, [
+                "ack", assoc["id"], "--disposition",
+                "Recovered: the scheduled cleanup run published a healthy result at %s; "
+                "closed by the disk watchdog." % stamp])
+            log(log_path, "%s cleanup escalation %s %s" % (
+                stamp, assoc["id"], "acknowledged (recovered)" if rc == 0 else
+                "could not be acknowledged yet (exit %d): %s" % (rc, out.strip()[:160])))
+            return None if rc == 0 else assoc
+        return None if status in ("closed", "missing") else assoc
+    if assoc and status in ("open", "held", "unknown"):
+        return assoc
+    title = "Scheduled cleanup has not recovered: %s" % problems[0][:140]
+    question = ("Diagnose and repair the scheduled cleanup (%d unresolved: %s). Detail: %s "
+                "--verbose and %s. Manual deletion does not clear this; only the next "
+                "scheduled run's healthy result does. A blocker you cannot repair in an "
+                "hour goes to the CEO only if it needs him."
+                % (len(problems), "; ".join(p[:120] for p in problems[:3]), reaper_cmd,
+                   state_path))
+    rc, out = _escalate(engine_scripts, [
+        "raise", "--title", title, "--state", "proceeding", "--for", "lead",
+        "--question", question,
+        "--meanwhile", "The scheduled cleanup keeps running every six hours; nothing is "
+                       "deleted on a guess.",
+        "--teammate", "scratch-reaper", "--worktree", checkout, "--no-record"])
+    found = [w for w in out.split() if w.startswith("esc-")]
+    if rc != 0 or not found:
+        log(log_path, "%s cleanup escalation NOT RAISED (exit %d): %s"
+            % (stamp, rc, out.strip()[:200]))
+        return assoc
+    log(log_path, "%s cleanup escalation %s raised: %s" % (stamp, found[0], problems[0][:160]))
+    return {"id": found[0], "raised": stamp,
+            "replaces": assoc.get("id") if assoc else None}
+
+
+# ---------------------------------------------------------------------------
 # the run
 # ---------------------------------------------------------------------------
 
@@ -529,9 +653,13 @@ def main():
     # READ, NEVER RUN. The sweeper publishes both numbers to its own state file
     # at every --apply; this job looks at what was left behind, exactly as it does
     # for the failures. It never invokes the sweeper and never writes its file.
-    reaper_state = read_state(expand(env(
+    reaper_state_path = expand(env(
         "SCRATCH_REAPER_STATE",
-        os.path.join(sbase, "scratch-reaper-state.json"))))
+        os.path.join(sbase, "scratch-reaper-state.json")))
+    reaper_state = read_state(reaper_state_path)
+    # Cleanup health comes from THE PUBLISHED RESULT ONLY, read before --status
+    # swaps in a live plan below: a plan is not a scheduled run.
+    published = reaper_state
     # --- AND THE NUMBER MUST BE FROM A RUN, NOT FROM A MEMORY ---------------
     #
     # CEO, 2026-09-19, reading the status line: "11.4 GB in 2 place(s)
@@ -598,6 +726,36 @@ def main():
     foreign_b = int(foreign.get("bytes") or (skipped_b if not split else 0))
     skipped_floor = env_num("SCRATCH_SKIPPED_NOTICE_BYTES", 1024 ** 3)
     undec_floor = env_num("SCRATCH_UNDECIDABLE_NOTICE_BYTES", 64 * 1024 ** 2)
+
+    # --- CLEANUP HEALTH, AND ITS ONE OWNER ACTION (cleanup PRD R4/R5) --------
+    launch_agents = expand(env("RICHOS_LAUNCH_AGENTS_DIR", "~/Library/LaunchAgents"))
+    cleanup_problems = cleanup_health(published, reaper_state_path, max_age_h, now,
+                                      launch_agents)
+    assoc = prev.get("cleanup_escalation") if isinstance(
+        prev.get("cleanup_escalation"), dict) else None
+    if not cleanup_problems and assoc:
+        # Only a run that inspected the scope that failed clears it.
+        inspected = set(published.get("roots") or [])
+        for scope in assoc.get("scopes") or []:
+            if scope not in inspected:
+                cleanup_problems.append("%s: the last healthy run did not inspect it, and "
+                                        "it is where cleanup last failed" % scope)
+    if mode == "check" and os.environ.get("DISK_WATCHDOG_SCHEDULED") == "1":
+        # THE INSTALLED JOB ONLY. A terminal --check, and any test suite, reads
+        # and prints; it never writes the escalation ledger.
+        kept_scopes = set((assoc or {}).get("scopes") or [])
+        assoc = bridge_cleanup_escalation(cleanup_problems, prev, now, stamp, log_path,
+                                          reaper_cmd, reaper_state_path)
+        if assoc is not None:
+            # EVERY ROOT THAT EVER FAILED STAYS ON THE ACTION, across ticks and
+            # into a replacement, until a healthy scheduled run has inspected it
+            # (the check above): §54's "told until it is gone". A later failure in
+            # another root joins; it never waits for the list to be empty.
+            failed = set()
+            if published.get("source") == "launchd":
+                failed = {u.get("scope") for u in (published.get("unresolved") or [])
+                          if isinstance(u, dict) and str(u.get("scope") or "").startswith("/")}
+            assoc["scopes"] = sorted(kept_scopes | set(assoc.get("scopes") or []) | failed)
     # --- THREE PILES, THREE ANSWERS, AND ONLY ONE OF THEM IS AN ALARM -------
     #
     # CEO, 2026-09-19, on one line that ran all three together: "And what is
@@ -624,9 +782,12 @@ def main():
     #       visible; never ours to touch. One quiet line. No alarm, ever.
     #   (d) UNDECIDABLE — ours, refused by a wall. One line with the size and
     #       what would settle it. No alarm: it is a thing to read, not to do.
+    #
+    # (d) CHANGED 2026-10-23 (cleanup PRD R4): an undecided pile is an UNRESOLVED
+    #     cleanup result, an alarm with one owner action (cleanup health below),
+    #     never a line to read. It is no longer part of this report.
     garbage_report = (by_hand_b >= undec_floor or by_hand_n > 0
-                      or foreign_b >= skipped_floor
-                      or undec_b >= undec_floor)
+                      or foreign_b >= skipped_floor)
     # RETAINED UNDER ITS OLD NAME because the state file publishes it and a
     # reader comparing two days of records should see the same key. It is no
     # longer part of `condition`: it reports, it does not alarm.
@@ -665,7 +826,8 @@ def main():
     # broken: the disk is low or falling, our own clean-up failed, or a test app
     # window would not close. The garbage report below is printed alongside it
     # and never raises it — see the three-piles note above.
-    condition = bool(alerting) or n_fail > 0 or n_inst > 0 or n_dev > 0
+    condition = (bool(alerting) or n_fail > 0 or n_inst > 0 or n_dev > 0
+                 or bool(cleanup_problems))
     # Anything at all worth printing, alarm or not. `--alert` prints when this
     # is true so the quiet lines still reach a reader; the EXIT CODE follows
     # `condition`.
@@ -673,7 +835,10 @@ def main():
 
     # --- attribution and classification, ONLY when something is wrong -------
     consumers, classification, garbage = [], "", 0
-    if condition and mode in ("check", "status"):
+    # Attribution walks the disk, so only the conditions it explains pay for it;
+    # a cleanup result alone does not (its detail is the reaper's own record).
+    disk_condition = bool(alerting) or n_fail > 0 or n_inst > 0 or n_dev > 0
+    if disk_condition and mode in ("check", "status"):
         consumers = [{"path": p, "bytes": b, "human": human(b)}
                      for b, p in top_consumers(candidates)]
         garbage = richos_garbage_bytes()
@@ -685,7 +850,7 @@ def main():
         shortfall = max(rich_gb * GB - worst, 1)
         classification = ("RichOS garbage (DEFECT)"
                           if garbage >= 0.25 * shortfall else "other")
-    elif condition:
+    elif disk_condition:
         classification = prev.get("classification") or "other"
         garbage = prev.get("richos_garbage_bytes") or 0
         consumers = prev.get("top_consumers") or []
@@ -742,6 +907,8 @@ def main():
             headline.append("A TEST APP WINDOW WOULD NOT CLOSE")
         if n_dev > 0:
             headline.append("TEST DEVICE CLEANUP NEEDS ATTENTION")
+        if cleanup_problems:
+            headline.append("CLEANUP HAS NOT RECOVERED")
         lines.append("=" * 72)
         lines.append("  MASSIVE ALERT — %s" % " + ".join(headline))
         lines.append("=" * 72)
@@ -800,6 +967,18 @@ def main():
                 lines.append("      first seen %s, %s attempt(s), %s"
                              % (row.get("first", "?"), row.get("attempts", "?"),
                                 str(row.get("why", "?"))[:90]))
+        if cleanup_problems:
+            # ONE SHORT SUMMARY AND WHERE THE DETAIL IS; the owner action is the
+            # escalation the scheduled tick raised, never a wall of candidates.
+            lines.append("")
+            lines.append("  CLEANUP HAS NOT RECOVERED: %s%s. Owner action: %s. Detail: %s "
+                         "--verbose and %s"
+                         % (cleanup_problems[0][:160],
+                            "" if len(cleanup_problems) == 1
+                            else " (+%d more)" % (len(cleanup_problems) - 1),
+                            "escalation %s" % assoc["id"] if assoc and assoc.get("id")
+                            else "the next scheduled watchdog tick raises one",
+                            reaper_cmd, reaper_state_path))
         if n_dev > 0:
             lines.append("")
             lines.append("  %d TEST DEVICE CLEANUP ISSUE(S). A device a test"
@@ -880,12 +1059,6 @@ def main():
             lines.append("  Studio Code's updater, Codex, WebKit, and the directories")
             lines.append("  macOS makes for its own agents. NOT OURS, NOT AN ALERT, and")
             lines.append("  never deleted by us. Counted only so it is not invisible.")
-        if undec_b >= undec_floor:
-            lines.append("  %s in %d place(s) COULD NOT BE DECIDED — ours, and a wall"
-                         % (human(undec_b), undec_n))
-            lines.append("  refused it (a checkout inside it, a registered workspace).")
-            lines.append("  No scheduled run will settle that; this says which and why:")
-            lines.append("    %s --verbose" % reaper_cmd)
         lines.append("-" * 72)
 
     # --- THE WATCHMAN'S OWN ABSENCE, which is an alert of its own ------------
@@ -962,6 +1135,11 @@ def main():
         "sweeper_state_age_seconds": (None if state_age is None
                                       else int(state_age)),
         "sweeper_state_stale": state_stale,
+        # CLEANUP HEALTH from the scheduled job's published result, and the ONE
+        # escalation associated with it. Carried forward by every reading.
+        "cleanup_healthy": not cleanup_problems,
+        "cleanup_problems": cleanup_problems,
+        "cleanup_escalation": assoc,
         "notified": notified,
         "timer_installed": installed,
         "reading_gap_seconds": int(gap),
@@ -1020,6 +1198,8 @@ def main():
         if n_dev:
             sys.stdout.write("ALERT  %d test device cleanup issue(s)\n"
                              % n_dev)
+        for problem in cleanup_problems:
+            sys.stdout.write("ALERT  cleanup has not recovered: %s\n" % problem)
         # THREE LINES, EACH SAYING WHOSE IT IS, AND NONE OF THEM AN ALERT.
         # It was one: "ALERT  13.9 GB skipped + 11.4 GB undecidable". The 13.9
         # was mostly our own campaign roots with a printed command, the rest was
@@ -1035,10 +1215,6 @@ def main():
             sys.stdout.write("fyi     %s in %d place(s) belongs to other programs — "
                              "counted, never ours to delete\n"
                              % (human(foreign_b), foreign_n))
-        if undec_b >= undec_floor:
-            sys.stdout.write("to read %s in %d place(s) could not be decided — a wall "
-                             "refused it; %s --verbose says which\n"
-                             % (human(undec_b), undec_n, reaper_cmd))
         if not installed:
             sys.stdout.write("ALERT  the launchd timer is NOT installed\n")
     elif mode == "check":

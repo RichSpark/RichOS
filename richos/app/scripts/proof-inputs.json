@@ -3186,7 +3186,7 @@
       "qualification_unit": "engine scripts/hooks/guard-unresolved-claims.test.sh",
       "isolation": "private-home-v1"
     },
-    "engine ass-kicker/tests/guard-stated-actions.test.sh": {
+    "engine ass-kicker/tests/ass-kicker.test.sh": {
       "paths": [
         "richos/engine",
         "richos/app/scripts"
@@ -3245,7 +3245,7 @@
       "environment": [],
       "external": [],
       "qualification": "docs/development/verification-input-qualifications.json",
-      "qualification_unit": "engine ass-kicker/tests/guard-stated-actions.test.sh",
+      "qualification_unit": "engine ass-kicker/tests/ass-kicker.test.sh",
       "isolation": "private-home-v1"
     },
     "engine scripts/hooks/guard-worktree-removal.test.sh": {
@@ -3620,13 +3620,90 @@
         "/usr/bin/stat",
         "curl",
         "uname",
-        "mv"
+        "mv",
+        "/usr/bin/codesign",
+        "/usr/bin/xcrun",
+        "/usr/bin/ditto",
+        "/usr/bin/tar",
+        "/usr/bin/true",
+        "/usr/libexec/PlistBuddy"
       ],
       "environment": [],
       "external": [],
       "qualification": "docs/development/verification-input-qualifications.json",
       "qualification_unit": "make-release",
       "isolation": "private-home-v1"
+    },
+    "native-ios-ui": {
+      "paths": [
+        "richos/mobile/native-ios",
+        "richos/app/scripts/native-ios-ui.test.sh",
+        "richos/app/scripts/lib/ios_ui_shards.py",
+        "richos/app/scripts/lib/ios_ui_scope.py",
+        "richos/app/scripts/lib/simulator_budget.py",
+        "richos/app/scripts/lib/test_results.py",
+        "richos/app/scripts/testvm/reserve.py",
+        "richos/app/scripts/proof-run.py",
+        "richos/engine/scripts/lib",
+        "richos/engine/scripts/hooks/guard-host-display-power.sh"
+      ],
+      "tools": [
+        "bash",
+        "sh",
+        "python3",
+        "git",
+        "awk",
+        "sed",
+        "grep",
+        "sort",
+        "find",
+        "date",
+        "mktemp",
+        "mkdir",
+        "dirname",
+        "head",
+        "tail",
+        "wc",
+        "tr",
+        "cut",
+        "cp",
+        "rm",
+        "chmod",
+        "cat",
+        "comm",
+        "cksum",
+        "stat",
+        "ps",
+        "shasum",
+        "perl",
+        "sleep",
+        "xargs",
+        "env",
+        "rmdir",
+        "tee",
+        "seq",
+        "ln",
+        "basename",
+        "cmp",
+        "nice",
+        "xcrun",
+        "xcodebuild",
+        "xcode-select",
+        "xcodegen",
+        "swiftc"
+      ],
+      "environment": [
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "DEVELOPER_DIR",
+        "SDKROOT",
+        "TOOLCHAINS"
+      ],
+      "external": [],
+      "qualification": "docs/development/native-ios-ui-inputs.json"
     }
   },
   "families": {
@@ -3708,7 +3785,7 @@
         "RICHOS_UI_TESTS_LEDGER": "the runner's per-run evidence ledger",
         "RICHOS_UI_NAV_EVIDENCE_DIR": "where a navigation failure writes its evidence",
         "RICHOS_TEST_RESULTS_ROOT": "the runner's per-check results folder, where a differing or regenerated picture leaves its evidence",
-        "RICHOS_WORKER_TOKENS":"the run's worker budget (admission)",
+        "RICHOS_WORKER_TOKENS": "the run's worker budget (admission)",
         "RICHOS_WORKER_TOKENS_TOOL": "the worker-token helper's path (admission)",
         "RICHOS_WORKER_BORROW_LOCK": "the caller's held worker slot (admission)",
         "RICHOS_WORKER_SLOT_HELD": "the caller's held worker slot (admission)"

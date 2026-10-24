@@ -1045,14 +1045,7 @@
   /// he was told, the other is the app talking about itself and is gone on the next
   /// snapshot. The sentences are unchanged; what changed is that they no longer claim to be
   /// speech. See `renderLocalNotice`.
-  ///
-  /// **`team`, when given, is who the line is from on an operator install** (the
-  /// operator-client record's §7 item 1): `{kind, about}`, where `kind` is the wire's own
-  /// `OperatorNotice.kind` and `about` is the assignment's title in his terms or null. It
-  /// changes the attribution drawn above the words and nothing else: the item is still a
-  /// `local_notice`, still carried across a snapshot, still in no ledger. See
-  /// `teamAttribution`.
-  function addLocalNotice(model, text, at, team) {
+  function addLocalNotice(model, text, at) {
     const turnId = "\u0000local:" + at + ":" + Math.random().toString(36).slice(2, 8);
     const id = turnId + ":text:0";
     const item = {
@@ -1069,7 +1062,6 @@
       text,
       closed: true,
     };
-    if (team && typeof team.kind === "string") item.team = { kind: team.kind, about: team.about || null };
     model.items.set(id, item);
     // BY WHEN IT HAPPENED, NOT AT THE END — audit-7 row 9. `at` is now for a notice that has
     // just been raised, so this pushes to the end exactly as it always did for the live path.
@@ -1079,22 +1071,6 @@
     // failures from `08:13` and `08:14` come back after an answer given at `08:16`.
     placeByTime(model, turnId, at);
     return id;
-  }
-
-  /// **Say who a line already on screen is from** — the same words, now attributed to his
-  /// team. The one caller is the operator lane meeting its own duplicate: a report that
-  /// closes an assignment is raised on the assignment's record AND said on the operator lane
-  /// with the same words (`operator_host.rs` `settle_handle`), and whichever reaches the
-  /// window second must not draw a second card. When the attributed copy is the second,
-  /// the first card gains the attribution instead.
-  ///
-  /// A NEW OBJECT, never a mutation: `turnSignature` signs items by identity, so an item
-  /// changed in place would keep its cached node and the attribution would never appear.
-  function attributeLocalNotice(model, id, team) {
-    const item = model.items.get(id);
-    if (!item || item.kind !== "local_notice" || !team || typeof team.kind !== "string") return false;
-    model.items.set(id, Object.assign({}, item, { team: { kind: team.kind, about: team.about || null } }));
-    return true;
   }
 
   /// Adopt the oldest un-adopted optimistic bubble onto a real turn, under the id the
@@ -2276,45 +2252,15 @@
   /// Contrast, computed under WebKit in both themes rather than eyeballed, and re-measured
   /// by `ui/tests/local-notice.js` on every run: the body is `--ink` on `--surface`, and the
   /// left rule — a non-text indicator, floor 3:1 — is `--attention` on the same.
-  ///
-  /// **On an operator install, a line from his team is the same card with its attribution
-  /// drawn above the words** (the operator-client record's §7 item 1). Not a message and not
-  /// a second visual language: the same `<aside role="note">`, the same body, the same left
-  /// rule, and a from-line in the message lane's own byline shape (`.tl-who`). See
-  /// `teamAttribution` for what each kind says and why two of them are not "Your team".
   function renderLocalNotice(item) {
     const card = elem("aside", "tl-notice");
     card.dataset.messageId = item.id;
     card.setAttribute("role", "note");
-    const from = item.team ? teamAttribution(item.team.kind) : null;
-    if (from) {
-      card.classList.add("tl-notice--team");
-      if (from.tone === "danger") card.classList.add("tl-notice--danger");
-      card.dataset.teamKind = item.team.kind;
-      // The from-line is VISIBLE, so it is also what a screen reader hears first; the
-      // "RichOS status" label below would be a second, contradicting name for the card.
-      const line = elem("p", "tl-notice-from");
-      line.appendChild(elem("span", "tl-who", from.who));
-      if (from.says) {
-        line.appendChild(document.createTextNode(" "));
-        line.appendChild(elem("span", "tl-notice-kind", from.says));
-      }
-      if (item.team.about) {
-        const dot = elem("span", "tl-notice-sep", " · ");
-        dot.setAttribute("aria-hidden", "true");
-        line.appendChild(dot);
-        line.appendChild(srOnly("about "));
-        line.appendChild(elem("span", "tl-notice-about", item.team.about));
-      }
-      card.appendChild(line);
-    } else {
-      card.appendChild(srOnly("RichOS status"));
-    }
+    card.appendChild(srOnly("RichOS status"));
     const body = elem("p", "tl-notice-body");
     body.id = "prose:" + item.id;
-    // A line from his team is what Claude wrote (Stu's words); an app status line is the app's
-    // own text and is drawn as written.
-    renderMarkdownInto(body, item.team ? said(item.text) : item.text);
+    // An app status line is the app's own text and is drawn as written.
+    renderMarkdownInto(body, item.text);
     inlineTalkIcon(body);
     card.appendChild(body);
     return card;
@@ -2350,44 +2296,6 @@
       });
       node.parentNode.replaceChild(frag, node);
     }
-  }
-
-  /// **WHO A LINE ON THE OPERATOR LANE IS FROM, AND WHAT KIND OF LINE IT IS** — one entry
-  /// per `OperatorNotice.kind` (`operator_host.rs` `Say`, serialized kebab-case), so the
-  /// surface never parses a sentence to decide, which is why the backend sends the kind.
-  ///
-  /// Three rules decide the words, and each is a rule the notice lanes already keep:
-  ///
-  /// - **Attribution is a claim, so it is only made where it is true.** `update`,
-  ///   `question`, `answer`, `outcome` and `failed` are his team's own words (a report, or a
-  ///   turn's final words), so they say "Your team". `team` is RichOS talking ABOUT his team
-  ///   (it ended, a stop's result, his Esc, a report that could not be recorded) and its
-  ///   sentences speak as "I" — "Speak to me here and I'll start it again" — so it says
-  ///   "About your team". `alarm` is one of his engine's alarms, verbatim, from neither.
-  /// - **NEVER "done" FOR SOMETHING NOT WITNESSED FINISHING** (`STREAMING.md`, the work
-  ///   lane's rule 2). An `outcome` is a report; what landed is in its own words, which the
-  ///   backend verified in Git before saying "landed". So it says "reported back", never
-  ///   "finished". `failed` says "could not finish", which is also true of a job that ran and
-  ///   did not land.
-  /// - **Two tones, both already in this file's card family.** `failed` and `alarm` take the
-  ///   failure card's `--danger` rule; everything else keeps the notice's `--attention` rule.
-  ///
-  /// An unknown kind (a newer backend) is still drawn, as "About your team": it came on his
-  /// team's lane, and claiming it was their words would be the one wrong guess.
-  const TEAM_ATTRIBUTION = {
-    update: { who: "Your team", says: null, tone: "attention" },
-    question: { who: "Your team", says: "asks you", tone: "attention" },
-    answer: { who: "Your team", says: "answered", tone: "attention" },
-    outcome: { who: "Your team", says: "reported back", tone: "attention" },
-    failed: { who: "Your team", says: "could not finish", tone: "danger" },
-    alarm: { who: "Alarm", says: null, tone: "danger" },
-    team: { who: "About your team", says: null, tone: "attention" },
-  };
-  function teamAttribution(kind) {
-    if (typeof kind !== "string") return null;
-    return Object.prototype.hasOwnProperty.call(TEAM_ATTRIBUTION, kind)
-      ? TEAM_ATTRIBUTION[kind]
-      : TEAM_ATTRIBUTION.team;
   }
 
   // -------------------------------------------------------------------------------------
@@ -3482,8 +3390,6 @@
     markStopping,
     addLocalNotice,
     inlineTalkIcon,
-    attributeLocalNotice,
-    teamAttribution,
     onTurnStatus,
     onCeoMessage,
     onMessageStarted,

@@ -285,4 +285,14 @@ while read -r _k; do
 done < <(compgen -v)
 unset _k
 
+# THE INSTALLED JOB'S MARK (cleanup PRD R5): only the scheduled tick writes the
+# cleanup escalation. launchd names the job in XPC_SERVICE_NAME, and this shell
+# hands that on because a Python started as a child reads it as "0" (measured
+# 2026-10-23; scratch-reaper.sh has the measurement). Set or cleared here only.
+if [ "${XPC_SERVICE_NAME:-}" = "$LABEL" ]; then
+    export DISK_WATCHDOG_SCHEDULED=1
+else
+    unset DISK_WATCHDOG_SCHEDULED
+fi
+
 MODE="$MODE" STATE="$STATE" LOG="$LOG" exec python3 "$SCRIPT_DIR/lib/disk-watchdog.py"

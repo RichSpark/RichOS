@@ -15,6 +15,22 @@ final class AccessibilityLayoutTests: XCTestCase {
         app.textFields["composer.field"].exists ? app.textFields["composer.field"] : app.textViews["composer.field"]
     }
 
+    /// The conversation settles at the largest size (esc-20261022T232706Z-335cacd1). With Tailscale off
+    /// and a message waiting to send, the cards' region measured the layout it set and chased the last
+    /// bit of a `CGFloat` forever, so the app stayed on its launch picture at 100% of a core. On main
+    /// before the fix it hung within the first five launches in each of three runs, so one launch is
+    /// not enough: twelve, in both appearances, stopping at the first that never settles.
+    func testTheConversationSettlesAtLaunchAtTheLargestSize() {
+        for k in 0..<12 {
+            let appearance = k % 2 == 0 ? "light" : "dark"
+            let app = Screen.launch("conn-tailscale-off", appearance: appearance, textSize: Self.largest)
+            guard app.descendants(matching: .any)["header.nameplate"].waitForExistence(timeout: 8) else {
+                XCTFail("launch \(k + 1), \(appearance): the conversation never settled")
+                return
+            }
+        }
+    }
+
     /// F1, F2, F11: the composer — field and record control — is fully on screen and touchable at the
     /// largest size, with a notice, a card or a draft above it.
     func testComposerKeepsPriorityAtTheLargestSize() {

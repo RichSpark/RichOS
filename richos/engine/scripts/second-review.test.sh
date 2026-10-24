@@ -71,6 +71,9 @@
 #        full past 64 KiB, the connected folder's uncommitted CLAUDE.local.md after it, and
 #        no AGENTS.md beside a CLAUDE.md
 #   C24  a CLAUDE.md linked out of the repository is read as the worker's brief reads it
+#   C25  --follow-up reads a finding as the land fence does: a "withdrawn" from a review of
+#        an unrelated tip (one not built on the finding's tip) never closes it, so the
+#        finding the fence refuses on can be filed, and the fence then admits that tip
 #
 
 # Exit 0 = every case passed; exit 1 = at least one failed.
@@ -884,6 +887,62 @@ FAKE_MODE=pass run --repo "$REPO4" --tip "$(G4 rev-parse HEAD)" --base "$BASE4" 
 P4="$(last_call)/prompt.md"
 grep -qF -- "SHARED-RULE-LINE" "$P4" && ! grep -qF -- "AGENTS-BESIDE-THE-LINK" "$P4"
 check "C24 a CLAUDE.md linked out of the repository reaches the reviewer, as it reaches the worker" $? "rc=$RC prompt=$P4"
+
+# --- C25 ---------------------------------------------------------------------
+# 2026-10-23, richos main e0d960c6b: the land fence refused codex/iphone-verification-loop on
+# rv-20261023T091432Z-e14ecb3f-a67e#1 and named --follow-up as the way through, and --follow-up
+# answered "not an open blocking finding": a review of an unrelated tip on the same work key had
+# "withdrawn" it. The fence reads only reviews of the land tip's own history; --follow-up read
+# every later review. Fixture ledger only: tip A raises a blocking finding, tip B (cut from the
+# same base, never built on A) withdraws it.
+REPO5="$SB/repo-unrelated-withdrawal"
+C25_STATE="$SB/c25-state"
+G5() { git -C "$REPO5" -c core.hooksPath=/dev/null -c user.name=Author -c user.email=author@example.invalid -c commit.gpgsign=false "$@"; }
+mkdir -p "$REPO5" "$C25_STATE"
+G5 init -q -b main
+printf 'base\n' >"$REPO5/a.txt"; G5 add -A; G5 commit -qm "base"
+BASE5="$(G5 rev-parse HEAD)"
+G5 checkout -qb codex/tip-a; printf 'base\na\n' >"$REPO5/a.txt"; G5 commit -qam "tip A"
+TIP5A="$(G5 rev-parse HEAD)"
+G5 checkout -qb cc/tip-b "$BASE5"; printf 'base\nb\n' >"$REPO5/b.txt"; G5 add -A; G5 commit -qm "tip B"
+TIP5B="$(G5 rev-parse HEAD)"
+G5 checkout -q main
+python3 - "$SCRIPT_DIR/lib" "$C25_STATE" "$REPO5" "$BASE5" "$TIP5A" "$TIP5B" <<'PY'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import operator_fences as f
+state, repo, base, a, b = sys.argv[2:7]
+ident, work = f.review_repo_identity(repo), "range:%s:%s" % (repo, base)
+finding = {"priority": 2, "title": "Recipe input missing", "files": ["x.sh"], "evidence": "e", "fixture": "",
+           "blocks": True}
+records = {"rv-c25a": {"answer": {"findings": [finding], "earlier_findings": []}, "earlier_findings_in": []},
+           "rv-c25b": {"answer": {"findings": [], "earlier_findings": [{"id": "rv-c25a#1", "status": "withdrawn",
+                       "blocks": False, "note": "The input this finding cites is absent from this tip."}]},
+                       "earlier_findings_in": [dict(finding, id="rv-c25a#1")]}}
+with open(os.path.join(state, "reviews.jsonl"), "w") as ledger:
+    for rid, tip, verdict in (("rv-c25a", a, "changes-requested"), ("rv-c25b", b, "passed")):
+        os.makedirs(os.path.join(state, rid))
+        json.dump(records[rid], open(os.path.join(state, rid, "verdict.json"), "w"))
+        ledger.write(json.dumps({"id": rid, "tip": tip, "repo": repo, "repo_id": ident, "work": work,
+                                 "trigger": "handover", "verdict": verdict, "record": os.path.join(state, rid)}) + "\n")
+PY
+c25_gate() { python3 - "$SCRIPT_DIR/lib" "$C25_STATE/reviews.jsonl" "$REPO5" "$TIP5A" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import operator_fences as f
+print("\n".join(f.review_gaps(sys.argv[2], [sys.argv[4]], sys.argv[3]).get(sys.argv[4], [])))
+PY
+}
+GATE="$(c25_gate)"
+has "$GATE" "Blocking finding id(s): rv-c25a#1"
+check "C25 setup: the fence refuses tip A on rv-c25a#1 although a review of unrelated tip B withdrew it" $? "gate=$GATE"
+SECOND_REVIEW_STATE_DIR="$C25_STATE" run --follow-up "rv-c25a#1" --why "Rich: not in normal use of this work"
+[ "$RC" -eq 0 ] && has "$OUT" "rv-c25a#1 filed as a follow-up" \
+  && [ "$(field "$(tail -1 "$C25_STATE/review-deferrals.jsonl" 2>/dev/null)" 'r["tip"]')" = "$TIP5A" ]
+check "C25 the finding the fence refuses on is filed by --follow-up (one deferral row on tip A)" $? "rc=$RC out=$OUT"
+GATE="$(c25_gate)"
+[ -z "$GATE" ]
+check "C25 once filed, the fence admits tip A" $? "gate=$GATE"
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"

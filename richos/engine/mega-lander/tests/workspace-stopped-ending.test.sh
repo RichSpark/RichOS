@@ -80,7 +80,10 @@ export TMPDIR="$T/tmp"
 mkdir -p "$TMPDIR"
 export GIT_CONFIG_GLOBAL="$T/home/.gitconfig"
 printf '[user]\n\tname = stopped\n\temail = stopped@example.invalid\n[init]\n\tdefaultBranch = main\n' > "$GIT_CONFIG_GLOBAL"
-unset RICHOS_WORKSPACES_DIR RICHOS_SESSION_ID CLAUDE_PROJECT_DIR RICHOS_ENGINE_ROOT CLAUDE_PLUGIN_ROOT RICHOS_SESSION_PID RICHOS_PROJECTS_DIR 2>/dev/null || true
+# The bulk root a proof run exports points the sweep at the host's real scratch
+# (S1.4 then counted every agent's directory there), so it goes too (2026-10-23).
+unset RICHOS_WORKSPACES_DIR RICHOS_SESSION_ID CLAUDE_PROJECT_DIR RICHOS_ENGINE_ROOT CLAUDE_PLUGIN_ROOT RICHOS_SESSION_PID RICHOS_PROJECTS_DIR \
+      RICHOS_BULK_ROOT RICHOS_MACHINE_SETTINGS_RESOLVED 2>/dev/null || true
 export SEAL_WAIT_SECONDS=0 RICHOS_WORKSPACES_SPAWN_WINDOW=0 RICHOS_WORKSPACES_STOP_GRACE=1 RICHOS_WORKSPACES_RETRY_BASE=0
 STORE="$CLAUDE_CONFIG_DIR/state/workspaces"
 WS="$ENGINE/mega-lander/workspaces.sh"

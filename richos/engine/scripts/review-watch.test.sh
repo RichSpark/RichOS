@@ -45,7 +45,8 @@
 #        key absent it says so once and starts nothing; a value bash sets that
 #        is not names (review_repos in scripts/lib/operator_fences.py, the one
 #        reader install and the land use too, sources the config in bash) is
-#        said once and starts nothing
+#        said once and starts nothing; work that changes only release notes
+#        is never reviewed, and notes with any other file are
 #   W10  monitors.json starts review-watch.sh --monitor always
 #   W11  --host-json (the operator install's host child, slice 4): a look's notices
 #        are one JSON line per lead session, for the host to send to that lead
@@ -2673,6 +2674,25 @@ tickrw
 [ "$(ncalls)" = "0" ] && has "$O1" "orchestration.config cannot be read: bash reads it as '/abs/richos'" && [ -z "$OUT" ]
 check "W09 a SECOND_REVIEW_REPOS value that is not names is said once and starts nothing" $? "calls=$(ncalls) first=$O1 second=$OUT"
 cfg 'SECOND_REVIEW_REPOS="richos"'
+W09_BRANCH="$(G symbolic-ref --short HEAD)"
+G checkout -qb cc/newt-opus-wnotes main
+mkdir -p "$REPO/docs"
+printf 'notes\n' >"$REPO/docs/CHANGELOG-NIGHTLY.md"
+printf '{}\n' >"$REPO/docs/release-notes.json"
+G add docs; G commit -qm "release notes only"
+G checkout -qb cc/newt-opus-wmixed
+printf 'more\n' >>"$REPO/a.txt"
+G commit -qam "release notes and one other file"
+G checkout -q "$W09_BRANCH"
+resetstate
+reg newt-opus-wnotes 600 30
+tickrw
+[ "$RC" -eq 0 ] && [ "$(ncalls)" = "0" ]; check "W09 work that changes only release notes is never reviewed" $? "calls=$(ncalls) out=$OUT"
+resetstate
+reg newt-opus-wmixed 600 30
+tickrw
+waitcalls 1; waitrows 1
+[ "$RC" -eq 0 ] && [ "$(ncalls)" = "1" ]; check "W09 release notes with any other file are reviewed" $? "calls=$(ncalls) out=$OUT"
 
 # --- W10 ---------------------------------------------------------------------
 python3 - "$ENGINE/monitors/monitors.json" <<'PY'

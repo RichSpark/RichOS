@@ -249,7 +249,7 @@ def handle(payload):
         # The same host grant controls mutation tools and the visible-turn analyzer.
         active = scope()
         if active.get("actions_allowed") is True:
-            run([sys.executable, str(ENGINE / "ass-kicker/guard-stated-actions.py")], payload)
+            run([sys.executable, str(ENGINE / "ass-kicker/ass-kicker.py")], payload)
 
 
 DECISION_RANK = {"allow": 1, "ask": 2, "defer": 3, "deny": 4}

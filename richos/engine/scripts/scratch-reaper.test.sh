@@ -257,14 +257,18 @@ if not real or not root or os.path.basename(os.path.dirname(real)) == "scoped-bi
     sys.stderr.write("scoped lsof: no real lsof or no suite root; refusing to "
                      "scan the whole machine\n")
     sys.exit(97)
-ps = subprocess.run(["ps", "-Ao", "pid=,ppid="], capture_output=True, text=True)
+ps = subprocess.Popen(["ps", "-Ao", "pid=,ppid="], stdout=subprocess.PIPE, text=True)
+listing, _ = ps.communicate()
 if ps.returncode != 0:
     sys.stderr.write("scoped lsof: ps failed; refusing to guess the tree\n")
     sys.exit(98)
+# The ps above has exited by now, and `lsof -p` exits 1 when any pid it was
+# given is gone, which a strict caller (the cwd listing) rightly reads as no
+# answer. It is never part of the tree asked about.
 children = {}
-for line in ps.stdout.splitlines():
+for line in listing.splitlines():
     parts = line.split()
-    if len(parts) == 2:
+    if len(parts) == 2 and parts[0] != str(ps.pid):
         children.setdefault(parts[1], []).append(parts[0])
 tree, stack = [], [root]
 while stack:
@@ -383,6 +387,13 @@ bad() { printf '  FAIL  %s\n' "$1"; FAIL=$((FAIL + 1)); }
 [ -f "$REAPER" ] || { echo "FATAL: missing $REAPER" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 required" >&2; exit 1; }
 
+# Settings a caller exported (a proof run exports the bulk root) would override each
+# world's own settings file, so none of them reaches a world.
+for _k in RICHOS_MACHINE_SETTINGS_RESOLVED $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import machine_settings; print(" ".join(machine_settings.KEYS))' "$SCRIPT_DIR/lib"); do
+    unset "$_k"
+done
+unset _k
+
 echo "=== scratch-reaper tests ==="
 
 # ---------------------------------------------------------------------------
@@ -463,6 +474,13 @@ world() {                  # <name> -> exports W_*
     W_TMP="$W_ROOT/tmp"
     W_NIGHTLY="$W_ROOT/nightly"
     W_FAKE_HOME=""
+    # THE WORLD'S OWN MACHINE SETTINGS. Without them the reaper read the operator's
+    # private settings file, so every --apply here swept the REAL build caches (and,
+    # once producer temp roots were added, would have swept Codex's and the gates'
+    # temp roots with this suite's scoped lsof, which cannot see their holders).
+    W_BULK="$W_ROOT/bulk"
+    mkdir -p "$W_BULK"
+    printf 'RICHOS_BULK_ROOT=%s\n' "$W_BULK" >"$W_ROOT/machine.env"
     mkdir -p "$W_SCRATCH" "$W_SESSIONS" "$W_HOME/state" "$W_TMP" "$W_NIGHTLY"
     {
         echo 'SCRATCH_REAPER_ENABLE="1"'
@@ -508,6 +526,7 @@ alloc() {                  # <dir-name> <pid> <label>
 }
 
 run() {                    # run the reaper in the current world
+    RICHOS_ENV_FILE="$W_ROOT/machine.env" \
     SCRATCH_REAPER_CONFIG="$W_CFG" \
     RICHOS_SESSIONS_DIR="$W_SESSIONS" \
     CLAUDE_CONFIG_DIR="$W_HOME" \
@@ -516,6 +535,31 @@ run() {                    # run the reaper in the current world
     RICHOS_SIMCTL="$NO_DEVICES/simctl" \
     RICHOS_ANDROID_CACHES_ROOT="$NO_DEVICES/android" \
     bash "$REAPER" "$@" 2>&1
+}
+# THE INSTALLED JOB, as scratch-reaper.sh runs the program once launchd has named it
+# (cleanup PRD R4). launchd's XPC_SERVICE_NAME cannot be handed to a child on this
+# OS: measured 2026-10-23, any child process, bash or Python, reads it as "0"; only
+# launchd's own job process and what it execs see the label. So this does what the
+# shell does after deciding: export the world's declarations and
+# SCRATCH_REAPER_SCHEDULED=1, and run the program. S36 proves the shell refuses a
+# caller's own SCRATCH_REAPER_SCHEDULED.
+run_scheduled() {
+    (
+        set -a
+        # shellcheck disable=SC1090
+        . "$W_CFG"
+        set +a
+        export SCRATCH_REAPER_SCHEDULED=1
+        RICHOS_ENV_FILE="$W_ROOT/machine.env" \
+        SCRATCH_REAPER_CONFIG="$W_CFG" \
+        RICHOS_SESSIONS_DIR="$W_SESSIONS" \
+        CLAUDE_CONFIG_DIR="$W_HOME" \
+        TMPDIR="$W_TMP" \
+        HOME="${W_FAKE_HOME:-$HOME}" \
+        RICHOS_SIMCTL="$NO_DEVICES/simctl" \
+        RICHOS_ANDROID_CACHES_ROOT="$NO_DEVICES/android" \
+        python3 "$SCRIPT_DIR/lib/scratch-reaper.py" "$@" 2>&1
+    )
 }
 # W_FAKE_HOME IS EMPTY IN EVERY WORLD BUT S31's, and it has to be RESET by
 # world() rather than merely set by the case that wants it: a shell variable set
@@ -1803,7 +1847,7 @@ deny_world skipstate
 start_claude; PID_D11="$LAST_CLAUDE"
 register "$W_SESSIONS" "$PID_D11" "$SID_LIVE"
 stale "$W_TMP/zforeign.published"
-run --apply >/dev/null 2>&1
+run_scheduled --apply >/dev/null 2>&1
 SFILE="$W_HOME/state/scratch-reaper-state.json"
 if python3 - "$SFILE" <<'PY'
 import json, sys
@@ -2639,7 +2683,7 @@ case "$OUT" in
 esac
 # THE PUBLISHED RECORD CARRIES THE SPLIT AND THE PATHS, because the watchdog
 # reads that file and cannot say WHICH 12.8 GB from a total.
-run --apply >/dev/null 2>&1
+run_scheduled --apply >/dev/null 2>&1
 if python3 - "$W_HOME/state/scratch-reaper-state.json" <<'PY'
 import json, sys
 try:
@@ -2659,6 +2703,355 @@ else
     bad "S32b the watchdog cannot tell the two piles apart from what is published"
     cat "$W_HOME/state/scratch-reaper-state.json" 2>/dev/null | sed 's/^/        /' | head -20
 fi
+
+# ===========================================================================
+# S34 — A CHECKOUT OF ANOTHER REPOSITORY IS NEVER A FIXTURE (cleanup PRD R1)
+# ===========================================================================
+# Wall 2 is narrowed for the deny-by-default arm because a harness's throwaway
+# repository is scaffolding. A LINKED checkout of a repository elsewhere is not:
+# measured 2026-10-23, Codex's temp root held two linked checkouts of the main
+# repository, and wall 3 cannot see git's own worktree list. Controls: a
+# self-contained repository, and a pointer to a path that does not exist on this
+# machine (an extracted copy of another machine's checkout), are still collected.
+deny_world linkedcheckout
+echo 'SCRATCH_UNKNOWN_GIT_IS_FIXTURE="1"' >>"$W_CFG"
+start_claude; PID_LC="$LAST_CLAUDE"
+register "$W_SESSIONS" "$PID_LC" "$SID_LIVE"
+mkdir -p "$W_ROOT/outside-repo/.git/worktrees/linked"
+mkdir -p "$W_TMP/zzz-linked/checkout" "$W_TMP/zzz-selfcontained/repo/.git/objects" \
+         "$W_TMP/zzz-dangling/checkout"
+printf 'gitdir: %s/outside-repo/.git/worktrees/linked\n' "$W_ROOT" >"$W_TMP/zzz-linked/checkout/.git"
+printf 'gitdir: %s/no-such-machine/repo/.git/worktrees/x\n' "$W_ROOT" >"$W_TMP/zzz-dangling/checkout/.git"
+for _d in zzz-linked zzz-selfcontained zzz-dangling; do
+    printf 'payload\n' >"$W_TMP/$_d/payload.txt"
+    backdate "$W_TMP/$_d"
+done
+OUT="$(run --apply)"
+if [ -f "$W_TMP/zzz-linked/checkout/.git" ]; then
+    ok "S34  a linked checkout of a repository outside the tree is kept"
+else
+    bad "S34  a linked checkout of an outside repository was deleted as a fixture"
+    printf '%s\n' "$OUT" | sed 's/^/        /'
+fi
+case "$OUT" in
+    *"linked checkout of a repository outside"*)
+        ok "S34a and the reason names the outside repository" ;;
+    *) bad "S34a kept, but not for the outside-repository reason"
+       printf '%s\n' "$OUT" | sed 's/^/        /' ;;
+esac
+if [ ! -d "$W_TMP/zzz-selfcontained" ]; then
+    ok "S34b CONTROL: a self-contained fixture repository is still collected"
+else
+    bad "S34b CONTROL FAILED: a self-contained fixture repository was kept"
+fi
+if [ ! -d "$W_TMP/zzz-dangling" ]; then
+    ok "S34c CONTROL: a pointer to a path that does not exist here is collected"
+else
+    bad "S34c CONTROL FAILED: a dangling pointer kept its tree"
+fi
+kill "$PID_LC" >/dev/null 2>&1 || true
+wait "$PID_LC" 2>/dev/null || true
+
+# ===========================================================================
+# S35 — THE PRODUCERS' OWN TEMP ROOTS ON THE BULK DRIVE ARE SWEPT
+# ===========================================================================
+# The nightly gates and Codex run with their own TMPDIR on the bulk drive, and the
+# scheduled job's TMPDIR is launchd's: measured 2026-10-23, 13 GB of fixtures
+# there had never been looked at. A declared producer root gets the shared-root
+# rule for its children and the owner rule for its allocator root. Controls: a
+# live allocation, a held child and an undeclared sibling root all survive.
+deny_world bulkroots
+echo 'SCRATCH_BULK_TMP_ROOTS="tmp/gates"' >>"$W_CFG"
+start_claude; PID_BR="$LAST_CLAUDE"
+register "$W_SESSIONS" "$PID_BR" "$SID_LIVE"
+G="$W_BULK/tmp/gates"
+stale "$G/zzz-gate-fixture"
+stale "$G/zzz-gate-held"
+stale "$W_BULK/tmp/undeclared/zzz-elsewhere"
+for _a in "99999-gate-dead" "$PID_BR-gate-live"; do
+    mkdir -p "$G/richos-scratch/$_a"
+    printf 'payload\n' >"$G/richos-scratch/$_a/payload.txt"
+    printf '{"path":"%s","label":"gate","pid":%d,"ppid":1,"session":"","created":"%s","ttl_minutes":360,"event":"new"}\n' \
+        "$G/richos-scratch/$_a" "${_a%%-*}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        >>"$W_HOME/state/scratch-ledger.jsonl"
+done
+HELD_BR=""
+if command -v lsof >/dev/null 2>&1; then
+    tail -f "$G/zzz-gate-held/payload.txt" >/dev/null 2>&1 &
+    HELD_BR=$!
+    KILL_LIST="$KILL_LIST $HELD_BR"
+    # The fact, not a clock: lsof shows the holder has the file open.
+    _n=0
+    until lsof -p "$HELD_BR" 2>/dev/null | grep -q 'zzz-gate-held/payload.txt'; do
+        _n=$((_n + 1))
+        [ "$_n" -lt 300 ] || break
+        sleep 0.1
+    done
+fi
+OUT="$(run --apply)"
+if [ ! -d "$G/zzz-gate-fixture" ]; then
+    ok "S35  a stale child of a declared producer temp root is deleted"
+else
+    bad "S35  a declared producer temp root was not swept"
+    printf '%s\n' "$OUT" | sed 's/^/        /'
+fi
+if [ ! -d "$G/richos-scratch/99999-gate-dead" ]; then
+    ok "S35a an ended allocation in that root's allocator root is deleted"
+else
+    bad "S35a an ended allocation under the producer root's allocator root survived"
+fi
+if [ -f "$G/richos-scratch/$PID_BR-gate-live/payload.txt" ]; then
+    ok "S35b CONTROL: a LIVE owner's allocation there is kept"
+else
+    bad "S35b a live owner's allocation under a producer root was deleted"
+fi
+if [ -n "$HELD_BR" ]; then
+    if [ -f "$G/zzz-gate-held/payload.txt" ]; then
+        ok "S35c CONTROL: a child something holds open is kept"
+    else
+        bad "S35c a held child of a producer root was deleted"
+    fi
+    kill "$HELD_BR" >/dev/null 2>&1 || true
+    wait "$HELD_BR" 2>/dev/null || true
+else
+    ok "S35c SKIPPED — lsof is not on this host"
+fi
+if [ -d "$W_BULK/tmp/undeclared/zzz-elsewhere" ]; then
+    ok "S35d CONTROL: a root nobody declared is not touched"
+else
+    bad "S35d a root nobody declared was swept"
+fi
+kill "$PID_BR" >/dev/null 2>&1 || true
+wait "$PID_BR" 2>/dev/null || true
+
+# ===========================================================================
+# S36 — ONLY THE SCHEDULED JOB PUBLISHES CLEANUP HEALTH, AND IT SAYS WHAT HAPPENED
+# ===========================================================================
+# Cleanup PRD R3/R4, A3. On 2026-10-23 every scheduled run for days had been
+# unable to read the open-file table (lsof was not on launchd's PATH), and a
+# manual --apply at 16:42Z then overwrote the published state with its own
+# result. The scheduled result now says healthy or unresolved and why; a manual
+# run neither writes nor clears it; a refused run publishes the refusal and keeps
+# the time of the last run the scheduled job completed.
+world health
+start_claude; PID_H="$LAST_CLAUDE"
+register "$W_SESSIONS" "$PID_H" "$SID_LIVE"
+SF="$W_HOME/state/scratch-reaper-state.json"
+# One undecided entry: a repository under the allocator root with no ledger row.
+mkdir -p "$W_TMP/richos-scratch/99999993-norow-cccccccc/repo/.git"
+state_is() {               # <python expression over st> — exit 0 when it holds
+    python3 - "$SF" "$1" <<'PY'
+import json, sys
+try:
+    st = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+sys.exit(0 if eval(sys.argv[2], {"st": st}) else 1)
+PY
+}
+# Through the shell, with the handoff forged by the caller: the shell decides from
+# launchd's own name, so a manual run publishes nothing.
+( export SCRATCH_REAPER_SCHEDULED=1; run --apply ) >/dev/null 2>&1
+if [ ! -f "$SF" ]; then
+    ok "S36  an interactive --apply publishes no cleanup result, even with the handoff forged"
+else
+    bad "S36  a manual --apply wrote the scheduled job's result"
+fi
+OUT="$(run_scheduled --apply)"
+if state_is 'st.get("source") == "launchd" and st.get("outcome") == "unresolved" and any(u.get("class") == "scratch-alloc" and "richos-scratch" in u.get("scope", "") for u in st.get("unresolved", []))'; then
+    ok "S36a the scheduled run publishes UNRESOLVED, naming the scope and class"
+else
+    bad "S36a an undecided entry did not make the scheduled result unresolved"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | tail -12
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+rm -rf "$W_TMP/richos-scratch/99999993-norow-cccccccc"
+run --apply >/dev/null 2>&1
+if state_is 'st.get("outcome") == "unresolved"'; then
+    ok "S36b a manual --apply after the failure does not clear it"
+else
+    bad "S36b a manual run cleared the scheduled failure"
+fi
+run_scheduled --apply >/dev/null 2>&1
+if state_is 'st.get("outcome") == "healthy" and st.get("unresolved") == [] and st.get("last_apply_epoch")'; then
+    ok "S36c the next scheduled run, with nothing undecided, publishes HEALTHY"
+else
+    bad "S36c a clean scheduled run did not publish healthy"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+HEALTHY_AT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["last_apply_epoch"])' "$SF")"
+# A3: inspection unavailable under the scheduled job (an lsof that cannot answer).
+BLIND36="$W_ROOT/blindbin"
+mkdir -p "$BLIND36"
+printf '#!/bin/sh\nexit 9\n' >"$BLIND36/lsof"
+chmod +x "$BLIND36/lsof"
+stale "$W_TMP/zzz-health-blind"
+echo 'SCRATCH_TMP_DENY_BY_DEFAULT="1"' >>"$W_CFG"
+SRT_BLIND_LSOF="$BLIND36/lsof" PATH="$BLIND36:$PATH" run_scheduled --apply >/dev/null 2>&1
+if state_is 'st.get("outcome") == "unresolved" and any("OPEN-FILE TABLE COULD NOT BE READ" in u.get("cause", "") for u in st.get("unresolved", []))'; then
+    ok "S36d an unreadable open-file table under the scheduled job is UNRESOLVED, with that cause"
+else
+    bad "S36d a blind scheduled run was published as anything but unresolved"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+# A refused scheduled run: an undeclared threshold. The last COMPLETED run is the
+# blind one just above (it finished, unresolved), so that is the time to keep.
+HEALTHY_AT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["last_apply_epoch"])' "$SF")"
+sed -i.bak '/^SCRATCH_AGE_FLOOR_MINUTES=/d' "$W_CFG"
+run_scheduled --apply >/dev/null 2>&1
+if state_is "st.get('outcome') == 'unresolved' and st['unresolved'][0]['scope'] == 'run' and 'not declared' in st['unresolved'][0]['cause'] and st.get('last_apply_epoch') == $HEALTHY_AT"; then
+    ok "S36e a refused scheduled run publishes the refusal and keeps the last completed run's time"
+else
+    bad "S36e a refused scheduled run left health untouched or moved its completion time"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+kill "$PID_H" >/dev/null 2>&1 || true
+wait "$PID_H" 2>/dev/null || true
+
+# ===========================================================================
+# S37 — CODEX'S FINISHED WORKTREES CLOSE THROUGH THE SCHEDULED SWEEP (PRD A6)
+# ===========================================================================
+# The workspace engine never touches codex/ (its point 2), so nothing collected
+# Codex's worktrees: measured 2026-10-23, about 67 GB in 104 checkouts. Only the
+# declared Codex roots are looked in. A merged, clean, idle plain worktree closes
+# through git (checkout and branch); an unmerged one is kept; a finished one a
+# Codex chat still has attached is undecided (only that chat may archive it); a
+# parent left holding only the app's marker goes. The decision is
+# lib/codex_worktrees.py; lib/codex-worktrees.test.py has the full set of controls.
+world codexwt
+CX_HOME="$W_ROOT/codex-home"
+CX_PLAIN="$W_ROOT/plain-worktrees"
+CX_REPO="$W_ROOT/repo"
+mkdir -p "$CX_HOME/worktrees" "$CX_PLAIN" "$CX_REPO"
+{
+    echo "SCRATCH_CODEX_HOME=\"$CX_HOME\""
+    echo "SCRATCH_CODEX_WORKTREE_ROOTS=\"$CX_HOME/worktrees $CX_PLAIN\""
+} >>"$W_CFG"
+cxgit() {
+    GIT_CONFIG_GLOBAL="$W_ROOT/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+    GIT_AUTHOR_NAME=Fixture GIT_AUTHOR_EMAIL=f@example.invalid \
+    GIT_COMMITTER_NAME=Fixture GIT_COMMITTER_EMAIL=f@example.invalid \
+    git -C "$@" >/dev/null 2>&1
+}
+printf '[init]\n\tdefaultBranch = main\n' >"$W_ROOT/gitconfig"
+cxgit "$CX_REPO" init -q
+printf 'a\n' >"$CX_REPO/a.txt"
+cxgit "$CX_REPO" add -A
+cxgit "$CX_REPO" commit -q -m base
+cx_worktree() {            # <root> <task> <branch> <merge: 1|0>
+    local wt="$1/$2/repo"
+    mkdir -p "$1/$2"
+    printf '%s\n' "$2" >"$1/$2/.codex-worktree-name"
+    cxgit "$CX_REPO" worktree add -q -b "$3" "$wt" main
+    printf '%s\n' "$2" >"$wt/$2.txt"
+    cxgit "$wt" add -A
+    cxgit "$wt" commit -q -m "$2"
+    [ "$4" = "1" ] && cxgit "$CX_REPO" merge -q --no-ff -m "merge $2" "$3"
+    printf '%s\n' "$wt"
+}
+WT_DONE="$(cx_worktree "$CX_PLAIN" done codex/done 1)"
+WT_OPEN="$(cx_worktree "$CX_PLAIN" open codex/open 0)"
+WT_LIVE="$(cx_worktree "$CX_HOME/worktrees" live codex/live 1)"
+mkdir -p "$CX_HOME/worktrees/gone"
+printf 'gone\n' >"$CX_HOME/worktrees/gone/.codex-worktree-name"
+python3 - "$CX_HOME/state_5.sqlite" "$WT_LIVE" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("create table thread_attachments (id text primary key, thread_id text not null, "
+            "attachment_type text not null, identity_key text not null, payload text not null, "
+            "created_at integer not null)")
+con.execute("insert into thread_attachments values ('a1', 't1', 'worktree', ?, '{}', 0)", (sys.argv[2],))
+con.commit()
+PY
+OUT="$(run --apply)"
+if [ ! -d "$WT_DONE" ] && ! cxgit "$CX_REPO" rev-parse --verify -q refs/heads/codex/done; then
+    ok "S37  a merged, clean, idle plain Codex worktree closes with its branch"
+else
+    bad "S37  a finished plain Codex worktree was not closed"
+    printf '%s\n' "$OUT" | grep -i codex | sed 's/^/        /' | head -8
+fi
+if [ -f "$WT_OPEN/open.txt" ]; then
+    ok "S37a CONTROL: an unmerged Codex worktree is kept"
+else
+    bad "S37a an unmerged Codex worktree was deleted"
+fi
+if [ -f "$WT_LIVE/live.txt" ] && printf '%s' "$OUT" | grep -q 'archive_worktree'; then
+    ok "S37b a finished worktree a chat still has attached is undecided, not deleted"
+else
+    bad "S37b an attached Codex worktree was deleted or not reported"
+    printf '%s\n' "$OUT" | grep -i codex | sed 's/^/        /' | head -8
+fi
+if [ ! -d "$CX_HOME/worktrees/gone" ]; then
+    ok "S37c a parent holding only the app's marker goes"
+else
+    bad "S37c an emptied Codex worktree parent survived"
+fi
+
+# ===========================================================================
+# S39 — NAMED-AGENT SCRATCH NO RUNNING AGENT CARRIES IS UNRESOLVED UNTIL IT IS GONE
+# ===========================================================================
+# Handover review rv-20261023T232303Z-ba744b07-d444 #2. Only a land's scoped sweep
+# collects <agent root>/<name>, and the scheduled sweep excluded that root, so a
+# stopped or shelved agent's scratch was neither collected nor reported: published
+# HEALTHY with the residue still there. It is reported now, never deleted here.
+world named
+start_claude; PID_N="$LAST_CLAUDE"
+register "$W_SESSIONS" "$PID_N" "$SID_LIVE"
+SF="$W_HOME/state/scratch-reaper-state.json"
+NAMED="$W_BULK/tmp/claude"
+sed -i.bak 's/^SCRATCH_AGE_FLOOR_MINUTES=.*/SCRATCH_AGE_FLOOR_MINUTES="60"/' "$W_CFG"
+# A producer that wrote its output and finished, never landed.
+python3 -B -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True); p.write_text("disposable fixture output")' \
+    "$NAMED/finished-agent/disposable-output.txt"
+stale "$NAMED/live-agent"
+mkdir -p "$NAMED/fresh-agent"
+printf 'just written\n' >"$NAMED/fresh-agent/out.txt"
+backdate "$NAMED/finished-agent"
+mkdir -p "$W_HOME/state/workspaces/agents"
+printf '{"key": "k-live", "name": "live-agent", "workspaces": []}\n' >"$W_HOME/state/workspaces/agents/k-live.json"
+OUT="$(RICHOS_WORKSPACES_DIR="$W_HOME/state/workspaces" run_scheduled --apply)"
+if state_is 'st.get("outcome") == "unresolved" and [(u.get("scope"), u.get("count")) for u in st.get("unresolved", []) if u.get("class") == "agent-named"] == [("'"$NAMED"'", 1)] and "finished-agent" in str(st["unresolved"])' \
+   && [ -f "$NAMED/finished-agent/disposable-output.txt" ]; then
+    ok "S39  a finished agent's named scratch is published UNRESOLVED for its root, and not deleted"
+else
+    bad "S39  a finished agent's named scratch was not reported (or was deleted)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | tail -8
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+if [ -f "$NAMED/live-agent/payload.txt" ] && [ -f "$NAMED/fresh-agent/out.txt" ]; then
+    ok "S39a CONTROL: a running agent's and a just-written directory are kept and not reported"
+else
+    bad "S39a a running agent's or a fresh named directory was deleted"
+fi
+rm -rf "$NAMED/finished-agent"
+RICHOS_WORKSPACES_DIR="$W_HOME/state/workspaces" run_scheduled --apply >/dev/null 2>&1
+if state_is 'not any(u.get("class") == "agent-named" for u in st.get("unresolved", []))'; then
+    ok "S39b CONTROL: once the leftover is gone, the named root clears"
+else
+    bad "S39b the named root stayed unresolved after its leftover was removed"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+# Mid-job review rv-20261024T003222Z-30e4f755-64ef #1: an orphaned writer keeps
+# appending to a STOPPED agent's log, so the newest mtime stays inside the floor.
+# The clock comes off the end the registry recorded, not the mtime.
+mkdir -p "$NAMED/stopped-agent"
+printf 'still being written by an orphaned worker\n' >"$NAMED/stopped-agent/worker.log"
+python3 - "$W_HOME/state/workspaces/agents/k-stopped.json" <<'PY'
+import json, sys, time
+json.dump({"key": "k-stopped", "name": "stopped-agent", "workspaces": [],
+           "end": {"signal": "stopped", "at": time.time() - 4 * 86400, "detail": "fixture"}},
+          open(sys.argv[1], "w"))
+PY
+RICHOS_WORKSPACES_DIR="$W_HOME/state/workspaces" run_scheduled --apply >/dev/null 2>&1
+if state_is '[(u.get("scope"), u.get("count")) for u in st.get("unresolved", []) if u.get("class") == "agent-named"] == [("'"$NAMED"'", 1)] and "stopped-agent" in str(st["unresolved"])' \
+   && [ -f "$NAMED/stopped-agent/worker.log" ]; then
+    ok "S39c a stopped agent's scratch an orphaned writer keeps fresh is still published UNRESOLVED"
+else
+    bad "S39c a fresh write hid a stopped agent's scratch inside the age floor"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+kill "$PID_N" >/dev/null 2>&1 || true
+wait "$PID_N" 2>/dev/null || true
 
 # ===========================================================================
 # S33 — THIS SUITE NEVER SCANNED THE WHOLE MAC'S OPEN-FILE TABLE

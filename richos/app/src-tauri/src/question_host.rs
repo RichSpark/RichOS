@@ -156,15 +156,7 @@ pub fn start(app: AppHandle) {
                 // The pass itself is richos-core's (`WorkHost::deliver_team_answers`, the
                 // work-path design D8), so the tests and the VM crash matrix run it as it ships.
                 let binding_for = |thread: &str| view.ledger().thread_binding(thread).ok();
-                let lead = state.operator.as_ref()
-                    .map(|desk| move |d: &richos_core::questions::Delivery| desk.queue_question_answer(d));
-                state.work.deliver_team_answers(&binding_for,
-                    lead.as_ref().map(|f| f as &dyn Fn(&richos_core::questions::Delivery) -> Result<String, String>));
-                if let Some(desk) = &state.operator {
-                    if let Err(error) = desk.flush_question_answers() {
-                        eprintln!("[richos] operator answer remains saved: {error}");
-                    }
-                }
+                state.work.deliver_team_answers(&binding_for);
             }
         })
         .expect("start question work delivery");

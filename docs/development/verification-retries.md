@@ -77,7 +77,7 @@ Before a broad rerun, write a short decision record containing all of:
 
 1. The unresolved unit and the result of its isolated retry.
 2. The source, dependency, fixture, toolchain or relevant environment change that
-   invalidates earlier results, or the specific gate requiring a fresh run.
+   invalidates earlier results or the specific gate requiring a fresh run.
 3. Why applicable receipts cannot cover the required plan.
 4. The exact command, inherited overrides and measured runtime basis.
 
@@ -221,3 +221,14 @@ Unqualified recipes and interrupted attempts cannot establish a baseline.
 Queue time, completed execution and repeated attempts remain separate in the
 runner report. The cost warning does not relabel a passing assertion as failed
 or turn an unresolved performance target into completion.
+
+### Native iPhone UI evidence
+
+`native-ios-ui` uses `native-ios-ui-inputs.json` to bind the entire native app,
+fixtures, test sources, project specification, native runner and its helper closure.
+The proof runner additionally binds the selected Xcode, Swift, SDK and available
+simulator runtimes, plus semantic native-test settings. Process ownership tags
+and output paths are excluded. The command still binds every requested selector.
+An unrelated script or test-fixture correction does not invalidate this suite.
+Failed-only retries retain the original result bundles and revalidate their build
+stamps and complete enumerated coverage; missing or changed evidence reruns.

@@ -58,6 +58,8 @@ over richos 2d5aaf844 with a wider range reviewed unrelated main commits.
 
 Only repositories listed in SECOND_REVIEW_REPOS (the governed repository's
 orchestration.config) are reviewed; record-only repositories are not (plan §6).
+Work whose changed files are all release notes (operator_fences.RELEASE_NOTES)
+is never reviewed: the land asks no review of it either (CEO 2026-10-23).
 
 ===========================================================================
 ONE TIP IS NEVER REVIEWED TWICE AT ONCE (Sage §1.3)
@@ -886,6 +888,19 @@ class Book(object):
         return max(ts) if ts else None
 
 
+_NOTES_ONLY = {}
+
+
+def notes_only(item):
+    """Is everything this work changes release notes (F.RELEASE_NOTES)? Then no
+    second review starts for it, and the land asks for none. Commits never
+    change, so each (repo, base, tip) is asked of git once."""
+    k = (item.repo, item.base, item.tip)
+    if k not in _NOTES_ONLY:
+        _NOTES_ONLY[k] = F.notes_only(item.repo, item.base, item.tip)
+    return _NOTES_ONLY[k]
+
+
 def due(items, book, now, seen, long_seconds, handover=True):
     """[(item, trigger, supersede lock info or None)]: the reviews to start now.
     Pure: everything it needs is in its arguments. handover=False is the app's watcher
@@ -1360,6 +1375,7 @@ class Watcher(object):
         citems, cproblems = self.world.codex_items(now, codex_state)
         items += citems
         problems += cproblems
+        items = [it for it in items if not notes_only(it)]
         import recovery_runner
         entity = os.path.dirname(self.config) if self.config else os.environ.get("RICHOS_ENTITY_ROOT", "")
         recovery_requests = recovery_runner.tick(items, self.engine_root, entity,

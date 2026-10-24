@@ -176,7 +176,10 @@ STAMP_ATTACHMENT = "richos-build-stamp"
 def stamps(bundle, out, runner=subprocess.run):
     """{"Class/test()": stamp} from one result bundle's exported attachments.
 
-    TestSupport/BuildStamp.swift attaches the stamp its bundle was built with to every test."""
+    TestSupport/BuildStamp.swift attaches the stamp its bundle was built with to every test.
+    `out` is emptied first: a bundle is read more than once (its run's verify, then the retry
+    after it), and xcresulttool exits 1 exporting into a directory that holds an export."""
+    shutil.rmtree(out, ignore_errors=True)
     os.makedirs(out, exist_ok=True)
     result = runner(["xcrun", "xcresulttool", "export", "attachments", "--path", bundle, "--output-path", out],
                     capture_output=True, text=True)
@@ -229,6 +232,23 @@ def attribution(bundle, rows, build_stamp, out, runner=subprocess.run):
     return bad
 
 
+def retry_settings(environment=None):
+    """Semantic native-test settings, excluding invocation ownership and output locations."""
+    run_fields = {"RICHOS_AUTOCHECK_ACTIVE", "RICHOS_AUTOCHECK_RETRY_REASON", "RICHOS_PROOF_RUN",
+                  "RICHOS_TEST_DEVICE_RUN_ID", "RICHOS_TEST_DEVICE_OWNER_PID", "RICHOS_IOS_POOL_WAIT",
+                  "RICHOS_VERIFICATION_CONTAMINATION", "RICHOS_VERIFICATION_RUNNER_WAIT",
+                  "RICHOS_VERIFICATION_CHECKOUT", "RICHOS_VERIFICATION_OWNER", "RICHOS_MACHINE_WORKERS",
+                  "RICHOS_SIMULATOR_CACHE_HELD",
+                  # Ownership tags and output addresses change on every attempt. They do
+                  # not change the built app, test selection or simulator configuration.
+                  "RICHOS_PROCESS_SCOPE", "RICHOS_HOST_SHIELD_LOG", "RICHOS_HOST_SHIELD_RUNS",
+                  "RICHOS_HOST_SHIELD_TOOL", "RICHOS_PROOF_RUN_SLOT_HELD", "RICHOS_PROOF_RUN_SLOT_FDS",
+                  "RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION"}
+    return sorted((k, v) for k, v in (os.environ if environment is None else environment).items()
+                      if k.startswith(("RICHOS_", "DEVELOPER_", "SDKROOT", "TOOLCHAINS"))
+                      and k not in run_fields and not k.startswith(("RICHOS_WORKER_", "RICHOS_TEST_RESULTS_")))
+
+
 def retry_identity(root, runtime, devices, selectors):
     """Bind retained cases to actual files (including untracked source), tools and settings."""
     root = Path(root)
@@ -243,16 +263,8 @@ def retry_identity(root, runtime, devices, selectors):
     hashes = [(str(p.relative_to(root)), hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(files)]
     tools = [(shutil.which(name), subprocess.check_output([name, flag], text=True))
              for name, flag in (("xcodebuild", "-version"), ("xcodegen", "--version"), ("swiftc", "--version"))]
-    run_fields = {"RICHOS_AUTOCHECK_ACTIVE", "RICHOS_AUTOCHECK_RETRY_REASON", "RICHOS_PROOF_RUN",
-                  "RICHOS_TEST_DEVICE_RUN_ID", "RICHOS_TEST_DEVICE_OWNER_PID", "RICHOS_IOS_POOL_WAIT",
-                  "RICHOS_VERIFICATION_CONTAMINATION", "RICHOS_VERIFICATION_RUNNER_WAIT",
-                  "RICHOS_VERIFICATION_CHECKOUT", "RICHOS_VERIFICATION_OWNER", "RICHOS_MACHINE_WORKERS",
-                  "RICHOS_SIMULATOR_CACHE_HELD"}
-    settings = sorted((k, v) for k, v in os.environ.items()
-                      if k.startswith(("RICHOS_", "DEVELOPER_", "SDKROOT", "TOOLCHAINS"))
-                      and k not in run_fields and not k.startswith(("RICHOS_WORKER_", "RICHOS_TEST_RESULTS_")))
     return hashlib.sha256(json.dumps([str(root.resolve()), hashes, tools, runtime,
-                                     devices, selectors, settings, "UTC", "en_US"]).encode()).hexdigest()
+                                     devices, selectors, retry_settings(), "UTC", "en_US"]).encode()).hexdigest()
 
 
 def retained(work, i, build_stamp, runner=subprocess.run):
@@ -641,6 +653,54 @@ def selftest():
               "--only RichOSNativeTests/<Suite> plans only that suite's cases, not the UI bundle")
         check(retry([], ["-only-testing:RichOSNativeUITests/A/testX()"]) == 1
               and "matched 0 tests; 0 of what was asked will run" in said.getvalue(), "an empty enumeration is a FAILURE with the count")
+    # THE FAILED-ONLY RETRY (2026-10-23, run 20261023T213406Z-qfskgufe): the failed run's own verify
+    # had already read its bundles, exporting their attachments into retry-attribution-0, and
+    # `xcresulttool export attachments` exits 1 into a directory that holds an export (measured on
+    # that run's result-1.xcresult). So the retry kept none of the 123 passed cases.
+    with tempfile.TemporaryDirectory() as root, contextlib.redirect_stdout(io.StringIO()) as said:
+        previous, work = Path(root) / "previous", Path(root) / "work"
+        cases = [("RichOSNativeUITests/A/t%d()" % n, "Failed" if n == 0 else "Passed") for n in range(3)]
+        for d in (previous, work):
+            d.mkdir()
+            (d / "build-stamp.txt").write_text("stamp\n")
+            json.dump({"values": [{"enabledTests": [{"identifier": i} for i, _ in cases]}]}, open(d / "tests-0.json", "w"))
+            (d / "shard-1.args").write_text("-only-testing:RichOSNativeUITests\n")
+        (previous / "result-0.xcresult").mkdir()
+        (previous / "reuse-0.json").write_text("[]")
+
+        class X:
+            def __init__(self, out, rc=0):
+                self.stdout, self.returncode = out, rc
+
+        def xcresult(argv, **_kw):
+            if argv[2] == "export":
+                out = argv[argv.index("--output-path") + 1]
+                if os.path.exists(os.path.join(out, "manifest.json")):
+                    return X("", 1)       # what xcresulttool does into an earlier export
+                manifest = []
+                for n, (ident, _res) in enumerate(cases):
+                    open(os.path.join(out, "s%d.txt" % n), "w").write("stamp")
+                    manifest.append({"testIdentifier": ident.split("/", 1)[1], "attachments": [
+                        {"exportedFileName": "s%d.txt" % n, "suggestedHumanReadableName": STAMP_ATTACHMENT + "_0_A.txt"}]})
+                json.dump(manifest, open(os.path.join(out, "manifest.json"), "w"))
+                return X("")
+            if argv[4] == "summary":
+                return X(json.dumps({"passedTests": 2, "failedTests": 1, "skippedTests": 0, "totalTestCount": 3}))
+            return X(json.dumps({"testNodes": [{"nodeType": "UI test bundle", "name": "RichOSNativeUITests", "children": [
+                {"nodeType": "Test Case", "nodeIdentifier": i.split("/", 1)[1], "result": r, "durationInSeconds": 1.0}
+                for i, r in cases]}]}))
+        retained(previous, 0, "stamp", xcresult)          # the failed run's own verify read it first
+        rc = cmd_retry(str(work), str(previous), 0, xcresult)
+        retried = (work / "retry-0.args").read_text().split()
+    check(rc == 0 and retried == ["-only-testing:RichOSNativeUITests/A/t0()"] and "2 retained cases" in said.getvalue(),
+          "a failed-only retry runs only the failed case and keeps the passed ones (%s)" % (retried or said.getvalue().strip()))
+    # And the suite then enumerates the device again into the path the previous enumeration was
+    # copied to, which xcodebuild refuses to write over: the suite removes it first.
+    suite = (Path(__file__).resolve().parents[1] / "native-ios-ui.test.sh").read_text()
+    enumerate_at = suite.find("-enumerate-tests")
+    check(-1 < suite.find('cp "$PREVIOUS/tests-$i.json" "$WORK/tests-$i.json"')
+          < suite.rfind('rm -f "$WORK/tests-$i.json"', 0, enumerate_at),
+          "a retry's copied enumeration is removed before xcodebuild enumerates the device again")
     print("  shards selftest: %d passed, %d failed" % (ok, bad))
     return 1 if bad else 0
 

@@ -16,7 +16,7 @@ ENGINE = Path(__file__).resolve().parents[2]
 ENTRYPOINTS = {
     "brief-provenance.py": "scripts/brief-provenance.py",
     "brief-scope.py": "scripts/brief-scope.py",
-    "guard-stated-actions.py": "scripts/hooks/guard-stated-actions.py",
+    "ass-kicker.py": "scripts/hooks/ass-kicker.py",
 }
 
 
@@ -92,7 +92,7 @@ class Relocation(unittest.TestCase):
                 self.assertEqual(module.__file__, canonical)
                 self.assertEqual(module.main.__code__.co_filename, canonical)
                 self.assertIs(module.main.__globals__, vars(module))
-                if name == "guard-stated-actions.py":
+                if name == "ass-kicker.py":
                     helper = module._load("manifest", "turn-manifest.py")
                     self.assertEqual(Path(helper.__file__).resolve(),
                                      self.engine / "scripts/hooks/turn-manifest.py")
@@ -117,11 +117,11 @@ class Relocation(unittest.TestCase):
         cases = {
             "ass-kicker/brief-provenance.py": "ass-kicker/tests/brief-provenance.test.sh",
             "ass-kicker/brief-scope.py": "ass-kicker/tests/brief-scope.test.sh",
-            "ass-kicker/guard-stated-actions.py": "ass-kicker/tests/guard-stated-actions.test.sh",
+            "ass-kicker/ass-kicker.py": "ass-kicker/tests/ass-kicker.test.sh",
             "scripts/brief-provenance.py": "ass-kicker/tests/brief-provenance.test.sh",
             "scripts/brief-scope.py": "ass-kicker/tests/brief-scope.test.sh",
-            "scripts/hooks/guard-stated-actions.py": "ass-kicker/tests/guard-stated-actions.test.sh",
-            "scripts/hooks/guard-stated-actions.sh": "ass-kicker/tests/guard-stated-actions.test.sh",
+            "scripts/hooks/ass-kicker.py": "ass-kicker/tests/ass-kicker.test.sh",
+            "scripts/hooks/ass-kicker.sh": "ass-kicker/tests/ass-kicker.test.sh",
             "scripts/hooks/guard-brief-scope.sh": "ass-kicker/tests/brief-scope.test.sh",
             "scripts/hooks/notice-claim-capability.sh": "scripts/hooks/notice-claim-capability.test.sh",
             "ass-kicker/fixtures/brief-scope/round9-brief-2026-09-13.md": "ass-kicker/tests/brief-scope.test.sh",
@@ -142,7 +142,7 @@ class Relocation(unittest.TestCase):
             self.assertIn("ass-kicker", ignored.stdout)
         settings = json.loads((self.engine / ".claude/settings.local.json").read_text())
         plugin = json.loads((self.engine / "hooks/hooks.json").read_text())
-        for hook in ("guard-brief-scope.sh", "guard-stated-actions.sh", "notice-claim-capability.sh"):
+        for hook in ("guard-brief-scope.sh", "ass-kicker.sh", "notice-claim-capability.sh"):
             def count(document):
                 return sum(hook in h.get("command", "")
                            for entries in document["hooks"].values()
@@ -163,7 +163,7 @@ class Relocation(unittest.TestCase):
         self.assertIn("S31 THE ROUND-9 BRIEF", result.stdout)
 
     def test_stop_hook_self_test_uses_relocated_suite_in_isolated_engine(self):
-        result = self.command("bash", "scripts/hooks/guard-stated-actions.sh", "--self-test")
+        result = self.command("bash", "scripts/hooks/ass-kicker.sh", "--self-test")
         # The suite's size is not this test's business: a pinned "49 passed" went stale when
         # ARM 3 grew the suite to 84 cases (2026-10-02 and 03), and this test failed from then on.
         summary = re.search(r"=== summary: (\d+) passed, 0 failed ===", result.stdout)

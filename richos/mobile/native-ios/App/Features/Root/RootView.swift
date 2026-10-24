@@ -285,7 +285,7 @@ struct ScreenView: View {
                         // conversation does, down to a floor where a card's title still shows. One card
                         // yields as several do (R3).
                         .frame(maxHeight: min(max(aboveHeight, 1), height * 0.6, cardsRoom()))
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardsHeight = $0 }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if Self.moved(cardsHeight, $0) { cardsHeight = $0 } }
                         // I05: a card raised while another shows is brought into view, the least
                         // scroll that shows it, once, when it is raised: never a timer or a redraw.
                         .onChange(of: model.cards) { before, after in
@@ -303,7 +303,7 @@ struct ScreenView: View {
             .padding(.bottom, 8)
             .background(GeometryReader { p in
                 Color.clear.onAppear { zoneTop = p.frame(in: .global).minY }
-                    .onChange(of: p.frame(in: .global).minY) { _, y in zoneTop = y }
+                    .onChange(of: p.frame(in: .global).minY) { _, y in if Self.moved(zoneTop, y) { zoneTop = y } }
             })
         }
         .animation(Motion.spring(320), value: model.attach.menuOpen)
@@ -326,6 +326,16 @@ struct ScreenView: View {
         guard cardsHeight > 0, zoneTop > headerBottom else { return .infinity }
         return max(80, cardsHeight + zoneTop - headerBottom - Self.conversationMinimum)
     }
+
+    /// Whether `zoneTop` or `cardsHeight` moved enough to be taken. The cards' region is laid out from
+    /// `cardsRoom()`, which reads both, so the two measure the layout they set. Their sum stays put as
+    /// the region grows or shrinks, but only to the last bit of a `CGFloat`: at the largest text size
+    /// with the "Waiting to send" card on the iPhone 16 Pro Max, each layout handed the next a room one
+    /// bit different, `zoneTop` flipped between 550.66666666666674 and 550.66666666666652 and
+    /// `cardsHeight` between 269.25520833333326 and 269.25520833333337, and the screen never settled:
+    /// 99% CPU, the conversation never drawn (2026-10-23). A move of half a point or less is not one
+    /// anybody sees; ignoring it lets the layout come to rest.
+    private static func moved(_ old: CGFloat, _ new: CGFloat) -> Bool { abs(new - old) > 0.5 }
 
     /// The thread fades out under the header (`.thread` `mask-image`). `safeTop` is where the header
     /// block's 60 pt begin; the stops sit 30, 64 and 100 pt below it.

@@ -566,10 +566,15 @@ def follow_up(finding, why, reopen=False):
             raise Refused("%s is already filed as a follow-up (%s: %s)" % (finding, current.get("at"), current.get("why")))
         repo_id = source.get("repo_id") or ""
         # The finding as the reviews of its repository left it: the review that raised it and every
-        # later one that was asked about it (open_review_findings, the gate's own reading).
+        # later one that was asked about it, of its own tip or a commit built on it (open_review_findings,
+        # the gate's own reading; review_of keeps only the land tip's own history). A review of an
+        # unrelated tip on the same work key never closes it here, as it never does at the fence
+        # (2026-10-23: rv-20261023T091432Z-e14ecb3f-a67e#1 was refused here while the fence held on it).
         history = [r for r in rows[at:] if same_repo(r, source.get("repo"), repo_id) and r.get("verdict")
-                   and (r.get("id") == rid or any(e.get("id") == finding for e in
-                                                   fences.review_record(r).get("earlier_findings_in") or []))]
+                   and (r.get("id") == rid or (fences._own_history(repo_id or source.get("repo"), source.get("tip"),
+                                                                  r.get("tip"))
+                                               and any(e.get("id") == finding for e in
+                                                       fences.review_record(r).get("earlier_findings_in") or [])))]
         f = fences.open_review_findings(history).get(finding)
         if not f or f.get("blocks") is False:
             raise Refused("%s is not an open blocking finding in %s, so it holds no land" % (finding, ledger_path()))

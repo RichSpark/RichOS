@@ -592,6 +592,21 @@ class GitTests(GitFixture):
             n.finish(info, out)
         self.assertEqual(n.remote_tags(), set())
 
+    def test_finish_publishes_the_standalone_doctor_with_candidate_assets(self):
+        info = self.reserve()
+        out = Path(self.temp.name) / "doctor"
+        name, content = "RichDoctor-macos-aarch64.zip", b"signed Doctor archive fixture"
+
+        def stage_doctor(*args, **kwargs):
+            self.fake_external(*args, **kwargs)
+            if args[0] == "bash" and args[2] == "app":
+                (out / name).write_bytes(content)
+
+        with patch.object(n, "execute", side_effect=stage_doctor):
+            n.build(info, out)
+        n.finish(info, out)
+        self.assertEqual(self.asset_bytes[info["tag"], name], content)
+
     def test_promotion_resumes_after_tag_and_after_partial_upload(self):
         info = self.reserve()
         out = Path(self.temp.name) / "resume"
@@ -985,6 +1000,46 @@ class ChangelogTests(GitFixture):
         self.assertNotEqual(replacement["build_commit"], request["build_commit"])
         self.assertEqual(n.remote_tags(), set())
 
+    def test_history_is_a_compact_index_and_inventory_is_the_pinned_net_implementation(self):
+        for name in ("behavior.txt", "removed.txt"):
+            (self.repo / name).write_text("before\n")
+        n.git("add", ".")
+        n.git("commit", "-qm", "published source")
+        baseline = n.git("rev-parse", "HEAD")
+        (self.repo / "behavior.txt").write_text("project instructions reach workers only\n")
+        (self.repo / "removed.txt").unlink()
+        (self.repo / "user feature.txt").write_text("recover after the connection returns\n")
+        (self.repo / "reverted.txt").write_text("temporary implementation\n")
+        n.git("add", "-A")
+        n.git("commit", "-qm", "Misleading author account", "-m", "UNESTABLISHED_BODY_CLAIM")
+        (self.repo / "reverted.txt").unlink()
+        n.git("add", "-A")
+        n.git("commit", "-qm", "remove the temporary behavior")
+        info, _ = self.candidate()
+        n.git("checkout", "-q", "main")
+        (self.repo / "later.txt").write_text("not in this candidate\n")
+        n.git("add", ".")
+        n.git("commit", "-qm", "future behavior")
+        with patch.object(n, "published_changelog_base", return_value=("v5.0.0", baseline)):
+            request = n.changelog_request(info)
+        self.assertEqual(request["changed_files"], [
+            {"status": "M", "path": "behavior.txt"},
+            {"status": "D", "path": "removed.txt"},
+            {"status": "A", "path": "user feature.txt"},
+        ])
+        self.assertIn("Misleading author account", request["changes"])
+        self.assertNotIn("UNESTABLISHED_BODY_CLAIM", request["changes"])
+        self.assertNotIn("future behavior", request["changes"])
+
+    def test_first_release_inventory_is_source_files_not_packaging_or_the_current_checkout(self):
+        info, _ = self.candidate()
+        (self.repo / "untracked later file").write_text("not shipped\n")
+        request = n.changelog_request(info)
+        source_files = n.git("ls-tree", "-r", "--name-only", info["source_commit"]).splitlines()
+        self.assertEqual(request["changed_files"],
+                         [{"status": "A", "path": name} for name in source_files])
+        self.assertNotIn(str(n.PROVENANCE), source_files)
+
     def test_stale_baseline_refuses_and_empty_ranges_are_valid(self):
         info, out = self.candidate()
         self.approve(info)
@@ -995,6 +1050,7 @@ class ChangelogTests(GitFixture):
                 n.finish(info, out)
             request = n.changelog_request(info)
             self.assertEqual(request["changes"], "")
+            self.assertEqual(request["changed_files"], [])
         self.assertNotIn(info["tag"], self.releases)
 
     def test_stable_uses_previous_stable_not_the_promoted_nightly(self):
@@ -1007,6 +1063,7 @@ class ChangelogTests(GitFixture):
         self.assertTrue(read.call_args.args[0].endswith("/releases/latest"))
         self.assertEqual(request["previous_tag"], "v5.0.0")
         self.assertEqual(request["changes"], "")
+        self.assertEqual(request["changed_files"], [])
 
     def test_stable_publishes_approved_notes_and_completed_publish_is_retryable(self):
         (self.repo / n.CONFIG).write_text(n.json_text(
@@ -2060,4 +2117,13 @@ EOF
 
 
 if __name__ == "__main__":
+    # A stopped run removes its fixtures. Python's default SIGTERM ends the process at
+    # once, so every TemporaryDirectory above (a remote.git, a repo and a fake nightly
+    # tag) stayed in $TMPDIR, and the scratch reaper keeps a tree holding a .git.
+    # Reproduced 2026-10-23: TERM after 6 s left tmp*/remote.git, repo and
+    # v5.1.0-nightly.20260911.1. Ending as Ctrl-C does lets Python exit normally,
+    # which runs each TemporaryDirectory's finalizer.
+    import signal
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
+    signal.signal(signal.SIGHUP, signal.default_int_handler)
     unittest.main(verbosity=2)

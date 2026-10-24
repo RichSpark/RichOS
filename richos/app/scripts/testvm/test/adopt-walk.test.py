@@ -168,6 +168,79 @@ class OpenEnabled(unittest.TestCase):
         self.assertIn('connect folder', str(ctx.exception))
         self.assertIn('enabled=False', str(ctx.exception))
 
+    def test_a_wait_that_ends_unanswered_photographs_the_recorded_app(self):
+        """esc-20261021T212321Z-0d63eb9f: the failure carries the app's main-thread path."""
+        import os
+        import tempfile
+        root = tempfile.mkdtemp()
+        (Path(root) / 'run' / 'vm1').mkdir(parents=True)
+        (Path(root) / 'run' / 'vm1' / 'app.pid').write_text('1837\n')
+        sampled, real_guest, before = [], walk.guest, os.environ.get('TESTVM_ROOT')
+        def guest(vm, cmd, timeout=30):
+            sampled.append(cmd)
+            if cmd.startswith('pgrep'):
+                return '2001'
+            if cmd.startswith('top'):
+                return 'Processes: 60 total\nCPU usage: 9% user\nPID COMMAND %CPU\n1837 richos-tauri 0.0'
+            return ('Analysis of sampling 1837 every 1 millisecond\nCall graph:\n'
+                    '    812 Thread_1   DispatchQueue_1: com.apple.main-thread  (serial)\n'
+                    '      812 start  (in dyld) + 1  [0x1]\n'
+                    '        812 mach_msg2_trap  (in libsystem_kernel.dylib) + 8  [0x2]\n\n')
+        w = walk.Walk.__new__(walk.Walk)
+        w.vm, w.out = 'vm1', Path(root)
+        def ax(mode, *a, **k):
+            raise walk.StepFailed('command failed (1): ax.sh find\n{"error": "unresponsive"}')
+        w.ax = ax
+        walk.guest, os.environ['TESTVM_ROOT'] = guest, root
+        try:
+            with self.assertRaises(walk.StepFailed) as ctx:
+                w.wait_for('Onboarding', seconds=3)
+        finally:
+            walk.guest = real_guest
+            if before is None:
+                os.environ.pop('TESTVM_ROOT')
+            else:
+                os.environ['TESTVM_ROOT'] = before
+        self.assertIn('sample 1837 1 10', ' '.join(sampled))
+        self.assertIn('app pid 1837, main thread, heaviest path:', str(ctx.exception))
+        self.assertIn('mach_msg2_trap', str(ctx.exception))
+        self.assertTrue((Path(root) / 'unanswered-photo.txt').exists())
+
+    def test_a_wait_that_ends_not_found_pictures_the_screen(self):
+        """esc-20261021T213902Z-b513879e: the failure names what IS on screen."""
+        import tempfile
+        root = Path(tempfile.mkdtemp())
+        w = walk.Walk.__new__(walk.Walk)
+        w.vm, w.out, w.shots = 'vm1', root, []
+        def ax(mode, *a, **k):
+            if mode == 'tree':
+                return [{'meta': True}, {'role': 'AXButton', 'title': 'Acme'},
+                        {'role': 'AXButton', 'title': '', 'desc': 'Talk to Rich'}, {'role': 'AXStaticText', 'title': 'x'}]
+            raise walk.StepFailed('command failed (1): ax.sh find\n{"error": "notfound", "detail": "nothing matched"}')
+        w.ax = ax
+        w.shot = lambda name: w.shots.append(name)
+        with self.assertRaises(walk.StepFailed) as ctx:
+            w.wait_for('Onboarding', seconds=3)
+        self.assertEqual(w.shots, ['notfound-Onboarding.png'])
+        self.assertIn('buttons on screen: ["Acme", "Talk to Rich"]', str(ctx.exception))
+        self.assertTrue((root / 'notfound-Onboarding.tree.jsonl').exists())
+
+    def test_the_last_read_chooses_the_picture(self):
+        """Second review of 1d0f056eb (P3): unresponsive, then not found, then not found is a
+        screen to picture, not an app to sample."""
+        w = walk.Walk.__new__(walk.Walk)
+        answers = [walk.StepFailed('{"error": "unresponsive"}')] + \
+                  [walk.StepFailed('{"error": "notfound", "detail": "nothing matched"}')] * 10
+        def ax(mode, *a, **k):
+            raise answers.pop(0) if len(answers) > 1 else answers[0]
+        w.ax = ax
+        w.picture_screen = lambda title: 'PICTURED'
+        w.photograph_app = lambda: 'SAMPLED'
+        with self.assertRaises(walk.StepFailed) as ctx:
+            w.wait_for('Onboarding', seconds=3)
+        self.assertIn('PICTURED', str(ctx.exception))
+        self.assertNotIn('SAMPLED', str(ctx.exception))
+
     def test_connect_folder_has_no_fixed_sleep_before_open(self):
         source = (HERE / 'adopt-walk.py').read_text()
         body = source[source.index('    def connect_folder'):source.index('    def decline_first_run_sheets')]
