@@ -957,8 +957,7 @@ sw.look = look_with_startup
 said = io.StringIO()
 sw.tick(None, sd, sid, now + 60, said)
 verdict("F", said.getvalue())
-# (h) review rv-20261024T103953Z-ef74f415-d156#1: nine due items. The startup shows eight and
-# the "more due" pointer; the first look, built by the watcher's own _due, repeats none of it.
+# (h) review rv-20261024T103953Z-ef74f415-d156#1: nine due items use the real due builder.
 nine = [dict(item, key="hd7h--item-%d" % i, name="item-opus-%d" % i, why="fixture", command="land it")
         for i in range(9)]
 class _WS(object):
