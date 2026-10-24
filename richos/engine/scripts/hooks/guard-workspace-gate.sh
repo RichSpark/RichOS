@@ -150,7 +150,7 @@ fi
 LIB="$SCRIPT_DIR/../../mega-lander/workspaces.py"
 if ! command -v python3 >/dev/null 2>&1 || [ ! -f "$LIB" ]; then
     stop_notice_abnormal "cannot-run" \
-        "WORKSPACE GATE IS OFF: python3 or mega-lander/workspaces.py is unavailable. Point 5 of the workspace spec is not enforced until the engine is restored. $HOOK_TAG"
+        "WORKSPACE GATE IS OFF: python3 or mega-lander/workspaces.py is unavailable, so landed work is not cleaned up and due work is not told at turn ends until the engine is restored. $HOOK_TAG"
     exit 0
 fi
 
@@ -168,12 +168,8 @@ case "$RC" in
         [ -n "$OUT" ] && printf '%s\n' "$OUT"
         [ -n "$ERR" ] && printf '%s\n' "$ERR" >&2
         exit 0 ;;
-    2)
-        printf '%s\n' "$ERR" >&2
-        echo "$HOOK_TAG" >&2
-        exit 2 ;;
     *)
         stop_notice_abnormal "evaluation-failed" \
-            "WORKSPACE GATE FAILED TO EVALUATE (exit $RC) — the turn is allowed to end and point 5 is NOT enforced: $(printf '%s' "$ERR" | tail -3 | tr '\n' ' ' | tr '"' "'" | cut -c1-400) $HOOK_TAG"
+            "WORKSPACE GATE FAILED TO EVALUATE (exit $RC): landed work was not cleaned up and due work was not told at this turn end: $(printf '%s' "$ERR" | tail -3 | tr '\n' ' ' | tr '"' "'" | cut -c1-400) $HOOK_TAG"
         exit 0 ;;
 esac
