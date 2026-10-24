@@ -82,6 +82,25 @@ class PairingTest {
         assertFalse(Fixtures.ORIGIN in runtime.export().keys)
     }
 
+    /**
+     * Found on the Android test phone, 2026-10-22: a phone the Mac had removed pressed Pair again,
+     * the new Mac took its key, and the screen went straight back to "removed from your Mac" because
+     * the connection still said revoked (stored by a health probe while the link was down). The six
+     * words never showed, and the Mac's window closed unanswered. A new pairing is a fresh start.
+     */
+    @Test
+    fun `a phone the Mac removed pairs again, and the old removal does not cover the new pairing's words`() = runTest {
+        val runtime = unpaired()
+        val core = runtime.core
+        core.markRevoked()
+        core.dispatch(Action.Link(LinkStatus.AWAY))
+        var s = core.dispatch(Action.Health(phoneOnline = true))
+        assertEquals(ConnectionReason.REVOKED, s.connection.reason, "the removal as the phone stood before Pair again")
+        s = core.dispatch(Action.Pair(Fixtures.PAIR_LINK))
+        assertEquals(PairingPhase.CONFIRMING, s.pairing.phase)
+        assertTrue(s.connection.reason != ConnectionReason.REVOKED, "the new pairing is not shown as removed: ${s.connection.reason}")
+    }
+
     @Test
     fun `They do not match on the phone while waiting tells the Mac, stops the wait and forgets the key`() = runTest {
         val runtime = unpaired()

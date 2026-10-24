@@ -139,6 +139,8 @@ fun RichApp(model: ScreenModel, onEvent: (UiEvent) -> Unit, camera: (@Composable
             when (e) {
                 // The composer must not keep its keyboard over the Settings sheet.
                 UiEvent.OpenSettings -> focusManager.clearFocus()
+                // Nor over a file's viewer: with it up, the viewer opened squeezed above it (Honor).
+                is UiEvent.OpenRichFile -> focusManager.clearFocus()
                 // A Mac that takes no photos or files: the + says why (core's card) instead of a menu.
                 UiEvent.AttachMenu -> if (model.attachmentsSupported) menuOpen = !menuOpen else onEvent(UiEvent.AttachPick("photos"))
                 is UiEvent.AttachPick -> menuOpen = false
