@@ -118,8 +118,11 @@ def scan(args):
                     continue
                 if full in markers:
                     continue
-                rows.append({'path': full, 'kind': 'dir' if is_dir else ('link' if os.path.islink(full) else 'file'),
-                             'at': round(when, 3)})
+                # A file's own size, so a listing says how much each leftover takes; a
+                # directory or a link is 0 here (its contents are reported on their own).
+                kind = 'dir' if is_dir else ('link' if os.path.islink(full) else 'file')
+                rows.append({'path': full, 'kind': kind, 'at': round(when, 3),
+                             'bytes': st.st_size if kind == 'file' else 0})
             # Never descend through a symlink; os.walk already does not follow them.
 
     counts = {}
