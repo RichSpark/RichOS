@@ -7990,7 +7990,7 @@ def fallback_notice(sid, items=None):
     healthy, line = _monitor_health(sid)
     due = []
     if healthy:
-        key = watcher = "healthy"
+        key = "healthy"
         text = ""
     else:
         unread = ""
@@ -8000,7 +8000,6 @@ def fallback_notice(sid, items=None):
             due, unread = None, "%s: %s" % (e.__class__.__name__, str(e)[:120])
         bad = unreadable_line()
         state = line.split(":", 2)[1].strip() if line.count(":") >= 1 else line
-        watcher = state[:60]
         # The material state: the watcher's state and, apart, UNKNOWN or the due items, so a
         # read that fails after an empty one is a change and is told (never "nothing due").
         key = hashlib.sha1(json.dumps([state[:60], "unread" if due is None else
@@ -8020,12 +8019,13 @@ def fallback_notice(sid, items=None):
         rec = load_session(sid) or {}
         if rec.get("fallback_notice") == key:
             return ""
-        prev_kind, prev_watcher = rec.get("fallback_kind"), rec.get("fallback_state")
-        rec.update(fallback_notice=key, fallback_kind=kind, fallback_state=watcher)
+        prev_kind = rec.get("fallback_kind")
+        rec.update(fallback_notice=key, fallback_kind=kind)
         write_json(session_path(sid), rec)
-    # The due set merely emptied (the lead handled it) under the same watcher state: nothing to
-    # act on, so nothing is said (a message here costs a model turn that does nothing).
-    if kind == "empty" and prev_kind not in (None, "unread") and prev_watcher == watcher:
+    # Nothing due is nothing to act on, so nothing is said (a message here costs the lead a model
+    # turn that does nothing; in a chat-only app conversation it was every first turn end). The
+    # one exception: right after a read that failed, the recovered read is told once.
+    if kind == "empty" and prev_kind != "unread":
         return ""
     return text
 

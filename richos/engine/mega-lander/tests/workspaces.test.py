@@ -7410,7 +7410,7 @@ class NoSilentHolds(Base):
         verified-empty in the message and in the once-only state."""
         lead = lambda: ws.gate_stop({"session_id": self.sid}, self.entity)[2]
         first = lead()                                                   # no watcher, nothing due
-        self.assertIn("Nothing is due now.", first)
+        self.assertEqual(first, "")                                      # nothing to act on: quiet (F1)
         with patch.object(ws, "due_set", side_effect=OSError("registry unreadable")):
             failed = lead()
             self.assertIn("could NOT be read", failed)                 # a change: told
