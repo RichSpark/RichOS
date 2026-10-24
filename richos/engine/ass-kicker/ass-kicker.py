@@ -37,7 +37,9 @@ THE EVIDENCE is this turn's own tool calls: Write / Edit / MultiEdit /
 NotebookEdit targets, and Bash write targets (redirects, tee, sed -i, python
 writes) resolved against the command's own `cd` and shell variables; commits;
 engine record commands (escalation ledger, acknowledgement logs, workspace
-registry) with the entry ids on their command lines; ECS checkpoints. Each
+registry) with the entry ids on their command lines; ECS checkpoints; in the
+app, a team save by the path it answers and a job report that answers
+recorded: true, with its obligation id as the entry (2026-10-24). Each
 target is classified: the memory directory and ECS are PRIVATE; scratch and
 temp are nothing; a git work tree file is a REPOSITORY record; anything else
 durable is a FILE record.
@@ -1215,6 +1217,24 @@ def classify_target(path):
         d = parent
 
 
+APP_REPORT = "mcp__richos_work__report"
+
+
+def _app_answer(block):
+    """An app tool's JSON answer from its tool_result block, or {} when the
+    call was refused or the answer is not a JSON object."""
+    if not isinstance(block, dict) or block.get("is_error") is True:
+        return {}
+    content = block.get("content")
+    if isinstance(content, list):
+        content = "".join(x.get("text", "") for x in content if isinstance(x, dict))
+    try:
+        answer = json.loads(content)
+    except (TypeError, ValueError):
+        return {}
+    return answer if isinstance(answer, dict) else {}
+
+
 def turn_writes(tm, transcript, prompt_id, cwd):
     """What this turn wrote, from its own calls. None plus a reason when the
     turn cannot be read. turn-manifest.py no longer caps the transcript size
@@ -1225,7 +1245,7 @@ def turn_writes(tm, transcript, prompt_id, cwd):
     calls, results, _examined, err = tm.read_turn(transcript, prompt_id)
     if err:
         return None, err
-    ids = {tid for tid, name in calls if name in WRITE_TOOLS or name == "Bash"}
+    ids = {tid for tid, name in calls if name in WRITE_TOOLS or name in ("Bash", APP_REPORT)}
     inputs = {}
     if ids:
         try:
@@ -1263,6 +1283,19 @@ def turn_writes(tm, transcript, prompt_id, cwd):
             w["record_script"] = w["record_script"] or b["record_script"]
             w["record_tokens"].extend(b["record_tokens"])
             w["ecs"] = w["ecs"] or b["ecs"]
+        elif name in (APP_TEAM, APP_REPORT):
+            # The app's own record tools, counted only by their confirmed
+            # answer (nightly 74 walk on f7db19c03, Stu rows 141-169): a team
+            # save writes team/<name>.md and answers with that path; a job
+            # report answers recorded: true. A refused or unreadable answer
+            # counts for nothing.
+            answer = _app_answer(results.get(tid))
+            if name == APP_TEAM and isinstance(answer.get("saved"), str):
+                w["targets"].append(answer["saved"])
+            elif name == APP_REPORT and answer.get("recorded") is True:
+                w["record_script"] = True
+                if isinstance(inp.get("obligation_id"), str):
+                    w["record_tokens"].append(inp["obligation_id"])
         res = results.get(tid)
         if res is not None:
             traffic.append(tm.flatten(res.get("content")))

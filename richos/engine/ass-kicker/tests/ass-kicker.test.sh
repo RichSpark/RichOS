@@ -57,6 +57,10 @@
 #     (n14) app: Done report, the turn landed but never closed     -> exit 2
 #     (n15) app: Done report, the close was refused                -> exit 2
 #     (n16) app: wait reply, the save replaced (no reload comes)   -> exit 2
+#   ARM 3 — APP RECORD TOOLS
+#     (R56) app team saves answered with paths, "I saved Norm"     -> no alert
+#     (R57) saved paths named + job report recorded: true          -> no alert
+#     (R58) the team save was refused, "I saved Norm"              -> alert
 #   SAFETY — never strand a session
 #     (r)  stop_hook_active=true, violation present               -> exit 0
 #     (s)  repository has not adopted the engine                  -> exit 0, silent
@@ -536,6 +540,65 @@ run_hook "$SANDBOX/app-close-refused.jsonl" "$STU_DONE"
 
 run_hook "$SANDBOX/app-replaced.jsonl" "$STU_WAIT"
 [ "$RC" -eq 2 ] && ok "n16. a wait on a reload that is not coming (an existing teammate replaced) is still refused" || bad "n16. replaced teammate" "rc=$RC"
+
+# R56-R58: ARM 3 over the app's own record tools, from the walk of f7db19c03 (Stu's transcript
+# 49b30d21…jsonl, richos-hq docs/audits/2026-10-15-nightly-root/evidence/
+# m1-report-guard-walk-f7db19c/kept/kept.tgz). Two team saves answered with their saved paths
+# (rows 141, 146), the job report answered recorded: true (row 163), and both truthful replies
+# (rows 155, 167) still got "this turn wrote NOTHING" (rows 156-157, 168-169). Run as the re-fire,
+# where ARM 3 alone speaks.
+python3 - "$APP_SPECS" <<'PY'
+import json, os, sys
+out = sys.argv[1]
+team = "/Users/admin/testvm/walk-9b09c00b8b30/home/Library/Application Support/com.richos.app/team/"
+notice = ("<task-notification>\n<task-id>a014432beb72259d3</task-id>\n<status>completed</status>\n"
+          "<summary>Agent \"Activate an engineer and a reviewer for Acme\" finished</summary>\n"
+          "<result>Both are fitted.</result>\n</task-notification>")
+def save(name):
+    return {"app": ["mcp__richos_work__team", {"action": "save", "name": name, "text": "---\nname: %s\n---\n" % name},
+                    {"saved": team + name + ".md", "name": name, "replaced": False, "registered": False,
+                     "registration_boundary": "next_provider_connection"}]}
+report = {"app": ["mcp__richos_work__report",
+                  {"obligation_id": "work-ffd9dd7010af48b194f07e8037136584", "state": "running",
+                   "detail": "Dean fitted shelf teammates norm and tom to Acme, and I saved both."},
+                  {"recorded": True, "state": "running"}]}
+refused = {"app": ["mcp__richos_work__team", {"action": "save", "name": "norm", "text": "---\nname: norm\n---\n"},
+                   "norm is already the user's teammate, and that copy is the user's: it is kept.", True]}
+specs = {"saved": [{"machine": notice}, save("norm"), save("tom")],
+         "saved-reported": [{"machine": notice}, save("norm"), save("tom"), report],
+         "save-refused": [{"machine": notice}, refused]}
+for name, spec in specs.items():
+    with open(os.path.join(out, name + ".json"), "w", encoding="utf-8") as fh:
+        json.dump(spec, fh)
+PY
+for s in saved saved-reported save-refused; do
+    mk_tr "$SANDBOX/app-$s.jsonl" "$(cat "$APP_SPECS/$s.json")"
+done
+# Row 155, verbatim.
+STU_SAVED="I saved Norm and Tom as teammates. Once RichOS reloads the team, Norm will add and commit the file and Tom will review it."
+# Row 167, verbatim.
+IFS= read -r -d '' STU_SAVED_WHERE <<'EOF' || true
+Nothing is in the Acme repository yet. `notes.md` has not been created, committed or landed.
+
+No one on the team could make or review a repository change, so I added two teammates, Norm (engineer) and Tom (reviewer). Their definitions are saved in the app's team folder at `team/norm.md` and `team/tom.md`, and I logged this step on the job's record. They become available when RichOS next reloads the team.
+
+When they're available, Norm will add `notes.md` with the single line "Notes for the walk test." and commit it. Tom will review that commit independently, and then I'll land it on Acme's `main`.
+EOF
+
+run_hook "$SANDBOX/app-saved.jsonl" "$STU_SAVED" true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R56. two app team saves that answered with their paths back 'I saved Norm and Tom': no alert"
+else bad "R56. app team save" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+
+run_hook "$SANDBOX/app-saved-reported.jsonl" "$STU_SAVED_WHERE" true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R57. the saved paths named and a job report answered recorded: true back the explanation: no alert"
+else bad "R57. app saves + job report" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+
+run_hook "$SANDBOX/app-save-refused.jsonl" "$STU_SAVED" true
+if printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R58. a team save the app REFUSED backs nothing: 'I saved Norm' still alerts"
+else bad "R58. refused app save" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
 
 # ---------------------------------------------------------------------------
 # ARM 3 — RECORDED, NOT WRITTEN
