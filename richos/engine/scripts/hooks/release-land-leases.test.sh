@@ -38,11 +38,14 @@ is_json_or_empty() { # the notice is for the lead: Stop additionalContext (R6)
     printf '%s' "$1" | python3 -c 'import json,sys; v=json.load(sys.stdin); sys.exit(0 if isinstance(v, dict) and (v.get("hookSpecificOutput") or {}).get("additionalContext") and not v.get("systemMessage") else 1)'
 }
 turn_end_in() { # <session> <session id>: the Stop hook with a session id, so its notice ledger is in use
-    ofx_in "$1" "printf '{\"session_id\":\"$2\"}' | bash '$HOOK' 2>/dev/null"
+    # The ledger is seated on a sandbox entity, never the engine's own .claude/state.
+    ofx_in "$1" "printf '{\"session_id\":\"$2\"}' | RICHOS_ENTITY_ROOT='$T9_ENT' bash '$HOOK' 2>/dev/null"
 }
 
 ofx_init || exit 1
-trap ofx_cleanup EXIT
+. "$ENGINE_ROOT/scripts/lib/entity-sandbox.sh"
+T9_ENT="$(entity_sandbox "$ENGINE_ROOT")"
+trap 'ofx_cleanup; rm -rf "$T9_ENT"' EXIT
 ofx_repo r; R="$OFX_R"
 ofx_install "$R" >/dev/null 2>&1 && ofx_on "$R" >/dev/null 2>&1
 ofx_session A; ofx_session B

@@ -11831,7 +11831,7 @@
     },
     "scripts/hooks/release-land-leases.test.sh": {
       "source": "scripts/hooks/release-land-leases.test.sh",
-      "sha256": "6961b892b163abf5dd1a3addc13bba81bcb9c88d3ef62acdb9d268383f8b6b4e",
+      "sha256": "09982f7503d7ec79db77b45c286a757595b74966172a5849c1d7abe6474216b0",
       "evidence": "Uses operator-fences-fixture to create private repositories, literal entity configuration and captured shell sessions. turn_end invokes only the fixed release hook; all shell-server commands are fixed Git/lease fixture operations. Nested mutants preserve those entry points.",
       "keys": [],
       "edges": [
