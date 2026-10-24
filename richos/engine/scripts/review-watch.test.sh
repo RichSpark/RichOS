@@ -115,6 +115,11 @@
 #   W36  a NO VERDICT TWICE notice is never told for a commit already on main, and one
 #        that has not landed still is (2026-10-24: four notices from a session ended
 #        2026-10-21, for landed commits, told again by a new session)
+#   W37  every look of the monitor is fresh code: after its review_watch.py changes on
+#        disk, the next look runs the changed code and records the source it evaluated;
+#        a look that fails is told once per failing streak and the monitor keeps watching;
+#        --status says watching only after a recent successful look
+#        (2026-10-24: a landed fix never reached the session's monitor, PID 90830)
 #
 # Every case loads scripts/lib/app_review.py too: review_watch.py imports its app_paths.
 # The app mode (--app-state) and app_review.py's mid-job notice are driven over the real
@@ -2799,6 +2804,80 @@ sys.exit(0 if len(m) == 1 and m[0].get("when") == "always"
          and m[0].get("command", "").endswith("/scripts/review-watch.sh --monitor") else 1)
 PY
 check "W10 monitors.json starts review-watch.sh --monitor always" $? "monitors.json wiring"
+
+# --- W37 ---------------------------------------------------------------------
+# 2026-10-24: the fix for a READY naming only richos-hq landed at 19:49Z and was installed,
+# but this session's monitor (PID 90830, started 13:32Z) had loaded review_watch.py once and
+# told [NOT STARTED] for that READY again at 20:44Z. The real monitor, run from a copy of the
+# engine, looks once; the copy's review_watch.py then changes on disk, and the next look runs
+# the changed code. Then the copy breaks: the failed look is told once, never passed silently,
+# and the monitor keeps watching.
+resetstate
+W37="$SB/w37"
+mkdir -p "$W37/engine/scripts/lib" "$W37/engine/mega-lander"
+cp "$LIB"/*.py "$W37/engine/scripts/lib/"
+cp "$ENGINE"/mega-lander/*.py "$W37/engine/mega-lander/"
+W37_SD="$SB/rw/sessions/w37-lead"
+RICHOS_SESSION_ID=w37-lead RICHOS_SESSION_PID=$$ REVIEW_WATCH_POLL_SECONDS=1 W37_MARK="$W37/fresh" \
+    python3 -B "$W37/engine/scripts/lib/review_watch.py" --monitor --config "$SB/orchestration.config" \
+    --engine-root "$W37/engine" >"$W37/out" 2>&1 &
+W37_PID=$!
+for _ in $(seq 1 200); do [ -s "$W37_SD/told.json" ] && break; sleep 0.1; done
+for _ in $(seq 1 30); do [ -s "$W37_SD/evaluated.json" ] && break; sleep 0.1; done
+# evfield <key> [<subkey>]: one field of the session's evaluated.json, or nothing.
+evfield() { python3 -c 'import json, sys
+v = json.load(open(sys.argv[1]))
+for k in sys.argv[2:]:
+    v = v.get(k) if isinstance(v, dict) else None
+print("" if v is None else v)' "$W37_SD/evaluated.json" "$@" 2>/dev/null; }
+FIRST="$(evfield identity)"
+python3 - "$W37/engine/scripts/lib/review_watch.py" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = "    out = out or sys.stdout\n"
+assert s.count(anchor) == 1, "tick's first line moved"
+open(p, "w").write(s.replace(anchor, '    open(os.environ["W37_MARK"], "a").write("fresh\\n")\n' + anchor))
+PY
+# The fact waited for: a look recorded a source other than the first one (bounded, for a hang).
+for _ in $(seq 1 200); do
+    SECOND="$(evfield identity)"
+    [ -s "$W37/fresh" ] && [ -n "$SECOND" ] && [ "$SECOND" != "$FIRST" ] && break
+    sleep 0.1
+done
+w37status() { ST="$(RICHOS_SESSION_ID=w37-lead python3 -B "$LIB/review_watch.py" --status --engine-root "$W37/engine" 2>&1)"; STRC=$?; }
+w37status; ST1="$ST"; ST1RC=$STRC
+[ -s "$W37/fresh" ] && [ -n "$FIRST" ] && [ -n "$SECOND" ] && [ "$FIRST" != "$SECOND" ]
+check "W37 the monitor's look after its source changes on disk runs the changed code" $? \
+    "marker=$(cat "$W37/fresh" 2>/dev/null) evaluated before=$FIRST after=$SECOND out=$(head -c 600 "$W37/out")"
+[ "$ST1RC" -eq 0 ] && has "$ST1" "watching this session"
+check "W37 --status reads a monitor whose looks succeed as watching" $? "rc=$ST1RC status=$ST1"
+python3 - "$W37/engine/scripts/lib/review_watch.py" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = "import stall_watch  #"
+assert s.count(anchor) == 1, "the import line moved"
+open(p, "w").write(s.replace(anchor, 'raise RuntimeError("w37: a broken engine")\n' + anchor))
+PY
+# The fact waited for: three failing looks recorded (each one's failed.at), bounded for a hang.
+SEEN=" "
+for _ in $(seq 1 200); do
+    F="$(evfield failed at)"
+    [ -n "$F" ] && case "$SEEN" in *" $F "*) ;; *) SEEN="$SEEN$F " ;; esac
+    [ "$(printf '%s' "$SEEN" | wc -w | tr -d ' ')" -ge 3 ] && break
+    sleep 0.1
+done
+NLOOKS="$(printf '%s' "$SEEN" | wc -w | tr -d ' ')"
+NFAIL="$(grep -c "a look failed" "$W37/out")"
+w37status; ST2="$ST"; ST2RC=$STRC
+kill -0 "$W37_PID" 2>/dev/null; W37_ALIVE=$?
+kill "$W37_PID" 2>/dev/null; wait "$W37_PID" 2>/dev/null
+[ "$NLOOKS" -ge 3 ] && [ "$NFAIL" = "1" ] && grep -q "w37: a broken engine" "$W37/out" && [ "$W37_ALIVE" -eq 0 ]
+check "W37 a look that fails is told once per failing streak, and the monitor keeps watching" $? \
+    "failing looks=$NLOOKS told=$NFAIL alive=$W37_ALIVE out=$(head -c 600 "$W37/out")"
+[ "$ST2RC" -eq 1 ] && has "$ST2" "LOOKS FAILING"
+check "W37 --status reads a monitor whose looks fail as failing, never as watching" $? "rc=$ST2RC status=$ST2"
 
 echo
 echo "review-watch.test.sh: $PASS passed, $FAIL failed"
