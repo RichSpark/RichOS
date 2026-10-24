@@ -61,7 +61,9 @@ for l in resolve-roots.sh resolve-main-checkout.sh seat-jurisdiction.sh \
          stop-hook-notice.sh hold_words.py; do
     cp "$SRC_DIR/../lib/$l" "$REPO/scripts/lib/$l" 2>/dev/null || true
 done
-# A finding opens a hold in the workspace registry (2026-10-22): the sandbox's own.
+# A finding records nothing (R1). The registry library sits where the old hook
+# found it, so a regression that opens a hold again shows up in the sandbox's own
+# registry, which must stay empty.
 mkdir -p "$REPO/mega-lander"
 cp "$SRC_DIR/../../mega-lander/workspaces.py" "$REPO/mega-lander/"
 export RICHOS_WORKSPACES_DIR="$SANDBOX/workspaces"
@@ -132,7 +134,7 @@ run_hook() { # <message> [--remember]
     HRC=$?
 }
 
-spoke()  { printf '%s' "$HOUT" | grep -q 'YOU WERE NOT ASKED'; }
+spoke()  { printf '%s' "$HOUT" | grep -q '"additionalContext":"DEFERRAL CHECK (unverified'; }
 quiet()  { ! spoke; }
 names()  { printf '%s' "$HOUT" | grep -q "$1"; }
 
@@ -155,9 +157,9 @@ if names "deliberately not spawning"; then
     ok "1b  the notice QUOTES the construction it matched, not a count"
 else bad "1b  the notice QUOTES the construction it matched" "$HOUT"; fi
 
-if names "decision taken on your behalf"; then
-    ok "1c  the notice says WHY it matters: a deferral he did not choose is his decision, taken for him"
-else bad "1c  the notice states the harm" "$HOUT"; fi
+if names "check his original request"; then
+    ok "1c  the notice tells the lead what to do: check his original request, then act or drop it"
+else bad "1c  the notice names the lead's next action" "$HOUT"; fi
 
 if [ "$HRC" -eq 0 ]; then ok "1d  it REPORTS, it does not block — exit 0"
 else bad "1d  it REPORTS, it does not block — exit 0" "rc=$HRC"; fi
@@ -174,95 +176,80 @@ run_hook "Nothing else is outstanding. It goes in with the dialect guard's land.
 if spoke; then ok "1f  family B alone fires — bundling into a later land"
 else bad "1f  family B alone fires" "$HOUT"; fi
 
-# T1 (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-holds.md): the
-# 2026-09-27 15:30Z reply. No pattern matched it and his order sat held for
-# weeks. Now it opens a hold, and a turn end once it is 30 min old names it.
-# The turn also spawned an agent: a reply saying work is held cannot be
-# starting it, so the spawn discharges nothing here.
-rm -rf "$RICHOS_WORKSPACES_DIR/holds"       # the holds the cases above opened
+# T1 (2026-10-24, orchestration reliability R1, richos-hq docs/prds/2026-10-23-
+# orchestration-reliability.md): a match is an unverified diagnostic for the LEAD,
+# never a work item. The 2026-09-27 15:30Z reply ("Stream B is on hold,
+# deliberately.") still reaches the lead, beside a spawn, on the model channel,
+# and nothing is recorded anywhere: no hold file, no person-facing message.
+no_record() { [ -z "$(ls -A "$RICHOS_WORKSPACES_DIR" 2>/dev/null)" ]; }
 write_transcript Agent Bash
 run_hook "Stream A is running. Stream B is on hold, deliberately."
-HOLDFILE="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | head -1)"
-if spoke && names "Recorded as the hold held-" && [ -n "$HOLDFILE" ]; then
-    ok "T1a 'Stream B is on hold, deliberately.' fires, even beside a spawn, and leaves a hold"
-else bad "T1a the 2026-09-27 reply leaves a hold" "file=$HOLDFILE out=$HOUT"; fi
-python3 - "$HOLDFILE" <<'PYEOF'
-import json, sys, time
-h = json.load(open(sys.argv[1])); h["at"] = time.time() - 31 * 60; json.dump(h, open(sys.argv[1], "w"))
+if spoke && names "Stream B is on hold, deliberately." && no_record \
+        && ! printf '%s' "$HOUT" | grep -q systemMessage; then
+    ok "T1a 'Stream B is on hold, deliberately.' reaches the lead (additionalContext), beside a spawn, and records nothing"
+else bad "T1a the 2026-09-27 reply reaches the lead and records nothing" "out=$HOUT ws=$(ls -R "$RICHOS_WORKSPACES_DIR" 2>/dev/null)"; fi
+# The reply that answers the diagnostic is its continuation, not fresh input: the
+# host appends our additionalContext as a hook_additional_context attachment.
+python3 - "$SANDBOX/transcript.jsonl" <<'PYEOF'
+import json, sys
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"type": "attachment", "attachment": {"type": "hook_additional_context",
+             "hookName": "Stop", "content": ["DEFERRAL CHECK (unverified, report only): this reply says ..."]}}) + "\n")
 PYEOF
-# The workspace gate's turn-end systemMessage is built from hold_lines() (workspaces.test.py
-# NoSilentHolds test_holds_the_gates_turn_end_message_carries_the_lines proves the gate's half).
-GOUT="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import workspaces as w; print("\n".join(w.hold_lines(sys.argv[2])))' \
-    "$REPO/mega-lander" "deadbeef-1111-4000-8000-000000000000" 2>&1)"
-if printf '%s' "$GOUT" | grep -q 'HELD BY RICH, NOT BY YOU: Stream B is on hold, deliberately. since'; then
-    ok "T1b the next turn end at +31 min names it to him, and every one after"
-else bad "T1b the turn-end line names the hold" "$GOUT"; fi
-rm -rf "$RICHOS_WORKSPACES_DIR/holds"
-
-# Second review rv-20261022T013056Z-12c77c90-1291, finding 2: a hold put to him as a choice
-# stays recorded until he decides (no notice: he was asked); finding 3: each held piece of
-# work in one reply is its own hold.
+run_hook "Checked: Stream B is parked by his own order of 09-27, so nothing to record."
+if quiet && no_record; then ok "T1b the lead's answer to the diagnostic is not read again: no second diagnostic, no recursion"
+else bad "T1b the continuation is never fresh detector input" "$HOUT"; fi
+# A choice put to him is his: no diagnostic and nothing recorded.
 write_transcript Bash
 run_hook "Spelling work is on hold, deliberately. Your call: run it now or keep holding?"
-N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
-if quiet && [ "$N" = 1 ] && grep -q "held until he decides" "$RICHOS_WORKSPACES_DIR"/holds/held-*.json; then
-    ok "T1c a hold handed back to him as his choice is recorded until he decides, with no notice"
-else bad "T1c a handed-back hold is recorded" "holds=$N out=$HOUT"; fi
-rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+if quiet && no_record; then ok "T1c a hold handed back to him as his choice: no diagnostic, nothing recorded"
+else bad "T1c a handed-back hold is quiet" "out=$HOUT"; fi
 write_transcript Bash
 run_hook "Spelling work is on hold, deliberately. The sign-in fix is parked."
-N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
-if spoke && [ "$N" = 2 ] && grep -q "sign-in fix is parked" "$RICHOS_WORKSPACES_DIR"/holds/held-*.json; then
-    ok "T1d two held pieces of work in one reply are two holds"
-else bad "T1d each held piece is its own hold" "holds=$N out=$HOUT"; fi
-rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+if spoke && no_record; then ok "T1d two held pieces in one reply: one diagnostic, nothing recorded"
+else bad "T1d two held pieces: one diagnostic, nothing recorded" "out=$HOUT"; fi
 write_transcript Bash
 run_hook "You killed Stream B, so Stream B is on hold."
-N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
-if quiet && [ "$N" = 0 ]; then
-    ok "T1e his own order, cited, opens no hold: the decision is his and made"
-else bad "T1e a cited order of his opens no hold" "holds=$N out=$HOUT"; fi
-rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+if quiet && no_record; then ok "T1e his own order, cited: quiet, nothing recorded"
+else bad "T1e a cited order of his is quiet" "out=$HOUT"; fi
+# 2026-10-23 14:57:12Z: a retrospective explanation opened held-643a9400.
+write_transcript Bash
+run_hook "- Then I parked everything behind the nightly and the stable."
+if no_record; then ok "T1f a retrospective explanation creates no work record (held-643a9400 specimen)"
+else bad "T1f a retrospective explanation creates no work record" "ws=$(ls -R "$RICHOS_WORKSPACES_DIR")"; fi
 
 # T2 (2026-10-23): sentences that say nothing is held each opened a hold only his words
 # could end (held-3c51602a, held-77933bd6, held-a2aa88fd). Verbatim from the lead's replies.
 no_hold_case() { # <label> <text> <why>
     write_transcript Bash
     run_hook "$2"
-    N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
-    if quiet && [ "$N" = 0 ]; then ok "$1 opens no hold: $3"
-    else bad "$1 opens no hold: $3" "holds=$N out=$HOUT"; fi
-    rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+    if quiet && no_record; then ok "$1 is quiet and records nothing: $3"
+    else bad "$1 is quiet and records nothing: $3" "out=$HOUT"; fi
 }
 no_hold_case T2a "Nothing of yours is on hold." "a denial of a hold"
 no_hold_case T2b 'The tracker repeated the "hold" it logged from my first message today; none of your work is on hold.' \
     "'none of your work is on hold' denies one"
 no_hold_case T2c "Codex is still looking into why the end-of-turn output got so long, and I'm not starting anything alongside that." \
     "'not starting anything alongside' names no work held"
-# The positive control: a denial beside a real hold leaves exactly the real one, and
+# The positive control: a denial beside a real hold still reaches the lead, and
 # work named after "anything" is still work.
 write_transcript Bash
 run_hook "Nothing new: the latest notice is a repeat about a branch that's on hold. Nothing of yours is on hold."
-N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
-if spoke && [ "$N" = 1 ] && grep -q "a branch that's on hold" "$RICHOS_WORKSPACES_DIR"/holds/held-*.json; then
-    ok "T2d POSITIVE CONTROL: beside a denial, a real hold is still one hold"
-else bad "T2d a real hold beside a denial is still recorded" "holds=$N out=$HOUT"; fi
-rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+if spoke && names "a branch that's on hold" && no_record; then
+    ok "T2d POSITIVE CONTROL: beside a denial, a real hold still reaches the lead"
+else bad "T2d a real hold beside a denial still reaches the lead" "out=$HOUT"; fi
 write_transcript Bash
 run_hook "I'm not spawning anything for it right now."
 if spoke; then ok "T2e POSITIVE CONTROL: 'not spawning anything for it right now' still fires"
 else bad "T2e work named after 'anything' still fires" "$HOUT"; fi
-rm -rf "$RICHOS_WORKSPACES_DIR/holds"
 # Second review rv-20261023T204623Z-591cbe58-c2b4: #1, work named after "anyone else" /
 # "anything new" is still a deferral; #2, denials written the normal ways open nothing.
 for t in "T2f|I'm not spawning anyone else for the sign-in review right now." \
          "T2g|I'm not starting anything new on your requested sign-in fix today."; do
     write_transcript Bash
     run_hook "${t#*|}"
-    N="$(ls "$RICHOS_WORKSPACES_DIR"/holds/held-*.json 2>/dev/null | wc -l | tr -d ' ')"
-    if spoke && [ "$N" -ge 1 ]; then ok "${t%%|*} work named after the qualifier still fires and holds: ${t#*|}"
-    else bad "${t%%|*} work named after the qualifier still fires and holds: ${t#*|}" "holds=$N out=$HOUT"; fi
-    rm -rf "$RICHOS_WORKSPACES_DIR/holds"
+    if spoke && no_record; then ok "${t%%|*} work named after the qualifier still reaches the lead: ${t#*|}"
+    else bad "${t%%|*} work named after the qualifier still reaches the lead: ${t#*|}" "out=$HOUT"; fi
 done
 no_hold_case T2h "Nothing you asked for is on hold." "a relative clause before the verb"
 no_hold_case T2i "Nothing of yours is **on hold**." "markdown emphasis on the hold word"

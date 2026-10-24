@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 #
-# notice-unasked-deferral.sh — NON-BLOCKING Stop hook. A TURN DOES NOT END
-#                              QUIETLY WHILE IT ANNOUNCES A DEFERRAL THE CEO
-#                              WAS NEVER GIVEN THE CHANCE TO CHOOSE.
+# notice-unasked-deferral.sh — NON-BLOCKING Stop hook. A REPLY THAT SEEMS TO
+#                              DEFER WORK ALEX ASKED FOR IS PUT TO THE LEAD ONCE.
 #
 # The predicate, the corpus, the precision number, the constructions that were
 # refused and WHY are in guard-unasked-deferral.py. Read that first — it is the
@@ -15,9 +14,11 @@
 #   1. an AskUserQuestion in the same turn putting the deferral to him, or
 #   2. an explicit CEO instruction to defer, already on the record, or
 #   3. an Agent spawn in the same turn that actually starts the deferred thing.
-# Otherwise this notice names the deferral, quotes the construction it matched,
-# and says plainly that a deferral the CEO did not choose is a decision taken on
-# his behalf.
+# Otherwise the LEAD is told once, on the model channel, to check the original
+# request: start the work, put the choice to him, record the real work, or drop
+# the match. A match is an unverified diagnostic, never a work item: nothing is
+# recorded and nothing reaches the person (orchestration reliability R1,
+# richos-hq docs/prds/2026-10-23-orchestration-reliability.md).
 #
 # ===========================================================================
 # WHY IT REPORTS AND DOES NOT BLOCK
@@ -53,10 +54,10 @@
 # and by checking the engine-status banner's registered-hook count.
 #
 # ONE LINE, STATE-CHANGE DE-DUPLICATED, through scripts/lib/stop-hook-notice.sh
-# — the only channel measured to reach the operator (that file carries the
-# measurement table; on exit 0 the host shows him neither stdout nor stderr).
-# The state key is the construction plus a hash of the quote, so a second
-# DIFFERENT deferral speaks again and a re-report of the same one does not.
+# (stop_notice_lead: Stop additionalContext, the model channel). The state key
+# is the construction plus a hash of the quote, so a second DIFFERENT deferral
+# speaks again and a re-report of the same one does not. The continued turn that
+# answers it is not read again (guard-unasked-deferral.py, CONTINUED).
 #
 # Exit codes: always 0. This hook never refuses a turn.
 #
@@ -158,6 +159,26 @@ else
         printf '%s\n' "{\"suppressOutput\":true,\"systemMessage\":\"NOTICE HELPER MISSING at $_SHN_LIB, so this is unconditional and undeduplicated: ${2:-}\"}"
         return 0
     }
+    stop_notice_lead() { stop_notice_abnormal "$@"; }
+fi
+# stop_notice_lead <state-key> <message>: stop_notice_abnormal's state-change
+# dedup, on the MODEL channel (Stop hookSpecificOutput.additionalContext), which
+# the lead reads and answers in a continued turn; a systemMessage reaches only the
+# person. Measured: the frozen 2026-10-23 native request carried such a notice as
+# model input and the lead answered it (richos-hq docs/verification/2026-10-23-
+# orchestration-reliability-prd/author-v2-checks.json).
+if [ -f "$_SHN_LIB" ]; then
+    stop_notice_lead() {
+        local state="${1:-lead}" msg="${2:-}" prior
+        prior="$(_shn_prior)"
+        if [ "$prior" != "$state" ]; then
+            _shn_record "$state" "$(date +%s 2>/dev/null || echo '')"
+            printf '%s\n' "{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"$(_shn_escape "$msg")\"}}"
+        else
+            _shn_record "$state" "$(_shn_prior_emit_epoch)"
+        fi
+        return 0
+    }
 fi
 
 INPUT="$(cat)"
@@ -246,8 +267,13 @@ set -e
 # the previous state was one of the stand-downs above, so an operator who was
 # told this guard was off is told when it comes back.
 notice_clean() {
-    stop_notice_normal \
-        "DEFERRAL WATCH — RUNNING AGAIN. This turn's text was checked for work postponed without putting the choice to you. $HOOK_TAG"
+    # After a finding the clean turn says nothing: "running again" is for a watch
+    # that was off, never for one that just spoke.
+    case "$(_shn_prior 2>/dev/null || true)" in
+        deferral:*) stop_notice_normal "" ;;
+        *) stop_notice_normal \
+            "DEFERRAL WATCH — RUNNING AGAIN. This turn's text was checked for work postponed without putting the choice to you. $HOOK_TAG" ;;
+    esac
     exit 0
 }
 
@@ -286,25 +312,6 @@ try:
     d=json.load(sys.stdin); print(str(d.get("quote","") or ""))
 except Exception: print("")' 2>/dev/null || true)"
 
-# THE HOLD IT OPENED (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-
-# holds.md): the analyzer records every finding as a hold in the workspace
-# registry, which every turn end shows from 30 min on until the work runs,
-# lands or the CEO decides. This one-time notice names it; the repeat is the
-# workspace gate's (workspaces.py hold_lines), never this ledger's.
-HOLD="$(printf '%s' "$FINDING" | python3 -c 'import json,sys
-try:
-    d=json.load(sys.stdin); print(str(d.get("hold","") or ""))
-except Exception: print("")' 2>/dev/null || true)"
-HOLD_ERROR="$(printf '%s' "$FINDING" | python3 -c 'import json,sys
-try:
-    d=json.load(sys.stdin); print(str(d.get("hold_error","") or ""))
-except Exception: print("")' 2>/dev/null || true)"
-if [ -n "$HOLD" ]; then
-    HOLD_SENTENCE=" Recorded as the hold $HOLD: it is shown at every turn end from 30 minutes on until the work runs, lands, or you decide. A false catch: workspaces.sh release $HOLD --not-a-hold '<why>'."
-else
-    HOLD_SENTENCE=" NO HOLD WAS RECORDED for it (${HOLD_ERROR:-the analyzer named none}), so nothing will bring it back: start it or ask him now."
-fi
-
 # Same rule one level down: a finding that carries no quote is a broken
 # analyzer contract, not a clean turn, and it must not borrow the clean
 # turn's sentence.
@@ -314,6 +321,10 @@ fi
 # speaks again; the same one restated does not.
 KEY="deferral:${CONSTRUCTION}:$(printf '%s' "$QUOTE" | cksum | tr -d ' ')"
 
-stop_notice_abnormal "$KEY" \
-    "YOU WERE NOT ASKED — THIS TURN DEFERS WORK: \"${QUOTE}\". A deferral you did not choose is a decision taken on your behalf: the reasoning is the orchestrator's, the consequence is yours. Deferring may well be right — but it is YOUR call, so it goes to you as a question or the work starts now.${HOLD_SENTENCE} $HOOK_TAG"
+# REPORT ONLY, TO THE LEAD (orchestration reliability R1, richos-hq docs/prds/
+# 2026-10-23-orchestration-reliability.md): nothing is recorded, nothing blocks,
+# and nothing is said to the person. The lead reads it once in a continued turn,
+# checks the original request and records the real work or drops the match.
+stop_notice_lead "$KEY" \
+    "DEFERRAL CHECK (unverified, report only): this reply says \"${QUOTE}\". If it postpones work Alex asked for and he did not choose that, check his original request, then start it, put the choice to him in your reply with the current default, or record the real work with workspaces.sh hold <name> --what '...' --until <agent:|review:|at:|ceo:end>. If it does not postpone his work, ignore this. It is not a work item and nothing was recorded. $HOOK_TAG"
 exit 0

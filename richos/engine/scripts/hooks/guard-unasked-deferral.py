@@ -175,21 +175,24 @@ time. A blocking guard on PROSE would wedge the session and get switched off,
 which is the failure mode that produced this in the first place.
 
 ===========================================================================
-A DEFERRAL OPENS A HOLD (2026-10-22)
+FAMILY D, AND WHY A MATCH IS ONLY A QUESTION TO THE LEAD (2026-10-24)
 ===========================================================================
-Said once was not enough: on 2026-09-27 15:30Z a reply said "Stream B is on
-hold, deliberately.", no pattern matched it, and his order sat held for weeks.
-The CEO: "WHEN WILL [THIS] STOP ONCE AND FOR ALL???" (richos-hq docs/plans/
-2026-10-22-no-silent-holds.md). So family D adds the hold words
-(scripts/lib/hold_words.py, shared with the SendMessage parser): "on hold",
-"hold off", "parked", "until I say", "wait for my go". The 2026-08-31 corpus
-dropped "parked" at 32 noisy hits; a false catch now costs one
-`workspaces.sh release <name> --not-a-hold '<why>'`, which he is shown once,
-while a miss costs his order. A reply that says the work is held cannot be
-starting it, so an Agent spawn in the same turn does not discharge family D.
-Every finding opens a hold (workspaces.py hold(), held-<hash of the quote>),
-which every turn end shows from 30 minutes on until the work runs, lands or he
-decides.
+On 2026-09-27 15:30Z a reply said "Stream B is on hold, deliberately.", no
+pattern matched it, and his order sat held for weeks. So family D adds the hold
+words (scripts/lib/hold_words.py): "on hold", "hold off", "parked", "until I
+say", "wait for my go". A reply that says the work is held cannot be starting
+it, so an Agent spawn in the same turn does not discharge family D.
+
+A text match is not evidence that authorized unfinished work exists: on
+2026-10-23 "Then I parked everything behind the nightly and the stable." (a
+retrospective explanation) became a durable hold, and denials became startup
+stalls (richos-hq docs/prds/2026-10-23-orchestration-reliability.md, R1). So a
+finding opens nothing. It goes to the LEAD once per quote, through the Stop
+hook's additionalContext (the model channel; a systemMessage reaches only the
+person), so the lead checks the original request and records the real work
+(`workspaces.sh hold <name> --what ... --until <end>`), starts it, puts it to
+him, or drops the match. The continuation that answers it is never read again
+by this detector: a diagnostic and its follow-up are not fresh input.
 """
 
 import json
@@ -373,9 +376,6 @@ def discharge(text, tools, hits=()):
     return None
 
 
-_WS = []
-
-
 def _sentence(text, scan, start, end):
     """The sentence (or line) of `text` around [start, end)."""
     a = max(scan.rfind(".", 0, start), scan.rfind("\n", 0, start)) + 1
@@ -401,29 +401,6 @@ def held_pieces(text, hits):
     return out
 
 
-def open_hold(payload, name, quote, asked=None):
-    """The hold this deferral is: holds/held-<hash>.json in the workspace registry,
-    so the same quote restated is the same hold. (hold name, '') or ('', why not).
-    `asked`: how the choice was put to him; the hold stays until he decides
-    (second review rv-20261022T013056Z-12c77c90-1291, finding 2)."""
-    import hashlib
-    import importlib.util
-    hold = "held-" + hashlib.sha1(quote.encode("utf-8")).hexdigest()[:8]
-    lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mega-lander", "workspaces.py")
-    why = ("put to him as his choice (%s); held until he decides" % asked if asked
-           else "a reply held it without putting it to him (%s)" % name)
-    try:
-        if not _WS:
-            spec = importlib.util.spec_from_file_location("deferral_workspaces", lib)
-            ws = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(ws)
-            _WS.append(ws)
-        _WS[0].hold(hold, quote, "", why, str(payload.get("session_id") or ""), by="deferral")
-    except Exception as exc:  # noqa: BLE001: said in the notice, never silence
-        return "", "%s: %s" % (exc.__class__.__name__, str(exc)[:160])
-    return hold, ""
-
-
 # ---------------------------------------------------------------------------
 # HOOK ENTRY POINT
 # ---------------------------------------------------------------------------
@@ -433,6 +410,10 @@ def open_hold(payload, name, quote, asked=None):
 # The de-duplication ledger and the state-change semantics belong to
 # scripts/lib/stop-hook-notice.sh, which is bash; the wrapper owns those. This
 # module's only output is the sentence, on stdout, one line, or nothing.
+
+MARKER = "DEFERRAL CHECK (unverified"
+CONTINUED = "\0continued"
+
 
 def _tools_of_turn(payload):
     """The tool names used in the CURRENT turn.
@@ -462,6 +443,11 @@ def _tools_of_turn(payload):
         except Exception:
             continue
         if not isinstance(rec, dict) or rec.get("isSidechain"):
+            continue
+        att = rec.get("attachment") if rec.get("type") == "attachment" else None
+        if isinstance(att, dict) and att.get("type") == "hook_additional_context" \
+                and any(MARKER in str(c) for c in (att.get("content") or [])):
+            tools.add(CONTINUED)     # this turn is the continuation of our own diagnostic
             continue
         msg = rec.get("message") or {}
         content = msg.get("content")
@@ -541,30 +527,17 @@ def main():
         print("transcript-unreadable")
         return 4
 
+    if CONTINUED in tools:
+        return 0          # the reply answering our own diagnostic is never fresh detector input
     asked = discharge(text, tools, hits)
-    if asked in ("agent-spawn", "his-order"):
-        return 0          # the spawn starts the deferred work (never family D), or he ordered it
-    # EVERY HELD PIECE IS RECORDED, also when the choice was put to him: until he decides,
-    # nothing else brings it back (second review rv-20261022T013056Z-12c77c90-1291, findings
-    # 2 and 3). Put to him, there is no notice; the hold's turn-end line is the reminder.
-    pieces = held_pieces(text, hits)
-    opened, errors = [], []
-    for name, quote in pieces:
-        held, why_not = open_hold(payload, name, quote, asked)
-        if held:
-            opened.append(held)
-        if why_not:
-            errors.append(why_not)
     if asked is not None:
-        return 0
-    name, quoted = pieces[0]
+        return 0          # put to him, a spawn that starts it (never family D), or his own order
+    # REPORT ONLY (R1): nothing is recorded. The lead is asked once to check it.
+    name, quoted = held_pieces(text, hits)[0]
     print(json.dumps({
         "construction": name,
         "quote": quoted,
         "all": [h[0] for h in hits],
-        "hold": ", ".join(opened),
-        "holds": opened,
-        "hold_error": "; ".join(errors),
     }))
     return 3  # 3 = "a deferral fired"; the wrapper turns it into the notice
 
