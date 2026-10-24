@@ -27,6 +27,9 @@ WHAT IT DOES, reusing adopt-walk.py's steps for everything before the file:
               carries the card's line ("PDF · … · 1 page").
   open        the card is pressed on the phone page. PASS when Safari has a tab holding the bytes the
               Mac sent (a blob: address, Safari's own PDF view); photographed, then that tab is closed.
+  save-file   a CSV (a type the Mac sends as application/octet-stream) is attached the same way and
+              its card pressed. PASS when ~/Downloads holds rich-file-table.csv, by that name, with
+              the file's bytes (Safari's download question answered Allow).
   dark        the guest's appearance is set to dark (the page follows it), the card photographed,
               the appearance put back.
   missing     the PDF is deleted in the guest and the card pressed again. PASS when the card says
@@ -55,7 +58,8 @@ _spec.loader.exec_module(adopt)
 StepFailed = adopt.StepFailed
 command = adopt.command
 
-STEPS = ['identity', 'first-run', 'pair', 'rich-file', 'open', 'dark', 'missing']
+STEPS = ['identity', 'first-run', 'pair', 'rich-file', 'open', 'save-file', 'dark', 'missing']
+SAVE_NAME = 'rich-file-table.csv'
 FILE_NAME = 'rich-file-check.pdf'
 GONE = 'No longer on this Mac. It was moved or deleted.'
 # The phone page at a phone's width (430 px, the widest iPhone the page is measured at), beside
@@ -163,10 +167,8 @@ class Walk(adopt.Walk):
             evidence['phone_frame'] = 'not set: ' + str(exc)[-300:]
         return evidence
 
-    def rich_file(self):
-        path = self.company + '/' + FILE_NAME
-        guest(self.vm, "printf 'Rich file check\\n\\nA PDF Rich puts in front of you.\\n' > /tmp/rich-file-check.txt "
-                       '&& /usr/sbin/cupsfilter /tmp/rich-file-check.txt > %s 2>/dev/null' % shlex.quote(path))
+    def attach(self, path, name):
+        """Rich is asked FROM THE PHONE to attach PATH; waits for its record row and the turn's end."""
         known = {r.get('turn_id') for r in self.ledger() if r.get('event') == 'PromptReceived'}
         self.type_into(TASK % path, '--role', 'AXTextArea', '--title', 'Write to Rich', app='Safari')
         self.press('Send', app='Safari')
@@ -178,16 +180,23 @@ class Walk(adopt.Walk):
                 new = [r for r in ledger if r.get('event') == 'PromptReceived' and r.get('turn_id') not in known
                        and r.get('source') != 'internal']
                 turn = new[-1]['turn_id'] if new else None
-            rows = [r for r in self.records() if r.get('name') == FILE_NAME]
+            rows = [r for r in self.records() if r.get('name') == name]
             done = turn and [r for r in ledger if r.get('turn_id') == turn
                              and r.get('event') in ('TurnCompleted', 'TurnInterrupted')]
             if rows and done:
                 break
             time.sleep(3)
+        if not rows:
+            raise StepFailed('no attachment of %s reached the record (turn %s)' % (name, turn))
+        return turn, rows
+
+    def rich_file(self):
+        path = self.company + '/' + FILE_NAME
+        guest(self.vm, "printf 'Rich file check\\n\\nA PDF Rich puts in front of you.\\n' > /tmp/rich-file-check.txt "
+                       '&& /usr/sbin/cupsfilter /tmp/rich-file-check.txt > %s 2>/dev/null' % shlex.quote(path))
+        turn, rows = self.attach(path, FILE_NAME)
         self.facts.update(turn=turn, record=rows)
         self.save()
-        if not rows:
-            raise StepFailed('no attachment of %s reached the record (turn %s)' % (FILE_NAME, turn))
         time.sleep(4)  # the row's live arrival and the reply's last repaint on the phone page
         self.front_safari()
         self.shot('phone-file-light.png')
@@ -226,6 +235,34 @@ class Walk(adopt.Walk):
         # Back to the conversation: close the file's tab (it is front), keep the phone page.
         self.script('tell application "Safari" to close current tab of front window')
         time.sleep(1)
+        return evidence
+
+    def save_file(self):
+        """A type the browser does not show (CSV: the Mac sends it as application/octet-stream) is
+        saved under its own name (review rv-20261024T183254Z-e2271b0e-45da). Safari asks once per
+        site whether it may download; Allow is pressed when it asks."""
+        path = self.company + '/' + SAVE_NAME
+        guest(self.vm, "printf 'name,count\\nalpha,1\\n' > %s" % shlex.quote(path))
+        guest(self.vm, 'rm -f ~/Downloads/' + shlex.quote(SAVE_NAME))
+        turn, rows = self.attach(path, SAVE_NAME)
+        time.sleep(4)
+        self.front_safari()
+        self.press('Open ' + SAVE_NAME, app='Safari')
+        end = time.monotonic() + 40
+        listing = ''
+        while time.monotonic() < end:
+            if self.present('Allow', app='Safari'):
+                self.press('Allow', app='Safari')
+            listing = guest(self.vm, 'ls ~/Downloads 2>/dev/null || true')
+            if SAVE_NAME in listing.split('\n'):
+                break
+            time.sleep(1)
+        self.shot('phone-file-saved.png')
+        same = guest(self.vm, 'cmp -s ~/Downloads/%s %s && echo same || echo differs'
+                     % (shlex.quote(SAVE_NAME), shlex.quote(path))).strip()
+        evidence = {'turn': turn, 'downloads': listing.split('\n'), 'bytes': same}
+        if SAVE_NAME not in evidence['downloads'] or same != 'same':
+            raise StepFailed('%s was not saved under its own name with its bytes: %s' % (SAVE_NAME, json.dumps(evidence)))
         return evidence
 
     def dark(self):
