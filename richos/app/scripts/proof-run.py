@@ -212,6 +212,11 @@ KEEP_RUNS = 3
 # because a kill at exactly ten minutes under a contended Mac would fail healthy checks.
 BUDGET_SECONDS = 600
 DEFAULT_WEIGHTS = (("native-ios", 900), ("native-android", 600), ("cargo", 300), ("engine", 300))
+# A check whose measured time does not fit the hour ceiling gets its own deadline. native-ios-ui
+# runs its two simulators one after the other, each the whole selection: in proof run
+# 20261023T044649Z-3za63spa (2026-10-23) device 1 took 2234 s (124 cases, 0 failures) and device 2,
+# at the same pace, was stopped at 2700 s. Two devices of about 2230 s plus a margin.
+SUITE_DEADLINES = {"native-ios-ui": 5400.0}
 
 
 def git_root():
@@ -782,7 +787,35 @@ def recipe_of(item):
 def input_identity(item, args, logdir, snapshot=None, caller=None):
     environment = execution_environment(item, caller)
     result = proof_evidence.recipe_identity(ROOT, recipe_of(item), environment, snapshot)
-    if result.get("fresh") and item.label not in proof_evidence.VERIFIES_OWN_INPUTS and item.argv:
+    native_toolchain_failed = False
+    if item.label == "native-ios-ui" and not result.get("fresh"):
+        # /usr/bin/xcodebuild is a shim: its bytes alone do not identify the selected
+        # Xcode, SDK or simulator runtime. Read their identities without booting a device.
+        import ios_ui_shards
+        commands = (("xcode-select", "-p"), ("xcodebuild", "-version"),
+                    ("xcodegen", "--version"), ("swiftc", "--version"),
+                    ("xcrun", "--find", "swiftc"),
+                    ("xcrun", "--sdk", "iphonesimulator", "--show-sdk-build-version"),
+                    ("xcrun", "simctl", "list", "runtimes", "available", "-j"))
+        try:
+            toolchain = [
+                subprocess.check_output(command, env=environment, text=True,
+                                        stderr=subprocess.STDOUT, timeout=15).strip()
+                for command in commands]
+            # simctl updates lastUsage whenever a runtime is used. Bind its build and
+            # configuration, not that timestamp, and canonicalize JSON object ordering.
+            runtimes = json.loads(toolchain[-1])
+            for runtime in runtimes["runtimes"]:
+                runtime.pop("lastUsage", None)
+            toolchain[-1] = runtimes
+            result["native_toolchain"] = proof_evidence.digest(toolchain)
+            result["native_environment"] = proof_evidence.digest(ios_ui_shards.retry_settings(
+                {**environment, "RICHOS_TEST_SCOPE": "full"}))
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+            result = {"fresh": "native toolchain identity unavailable: " + str(exc)}
+            native_toolchain_failed = True
+    if (result.get("fresh") and not native_toolchain_failed
+            and item.label not in proof_evidence.VERIFIES_OWN_INPUTS and item.argv):
         # No reviewed contract: keyed by the whole checkout's content, so a retry of the same
         # tree (--resume, a refused land tried again, the push after it) keeps what passed
         # (proof_evidence.WHOLE_CHECKOUT). Engine units too (2026-10-02): they were `fresh`, so
@@ -822,15 +855,28 @@ def recorded_environment(environ=None):
     return {"values": values, "withheld": withheld}
 
 
+# What the runner hands every check itself when its caller has none (supply_runtime,
+# supply_speech_models). They are in each check's item.env, which a saved plan does not carry, so
+# the coverage verifier, rebuilding the items, finds them only in its own environment: that of
+# the `engine receipts` check, which the runner started with them.
+RUNNER_SUPPLIED = ("RICHOS_RUNTIME_DIR", "RICHOS_GUI_SPEECH_MODELS")
+
+
 def as_caller(recorded, root, environ=None):
     """The caller environment a run in checkout `root` recorded (recorded_environment), named for
     this checkout, with this process's own Git, per-run and withheld credential values kept, and
     its own mutation switches: they are what this run asks its checks to do, not what a shell
-    held, so a pass made with them off never stands for a run with them on (stands_in)."""
+    held, so a pass made with them off never stands for a run with them on (stands_in). So are
+    the values this run supplies its checks (RUNNER_SUPPLIED), where this process holds them.
+
+    2026-10-23, runs 20261023T200918Z-bq9lv1qe and 20261023T213406Z-qfskgufe: reuse() read a
+    pass under the recorded environment with the runner's supplied values (item.env), and the
+    verifier, whose items carry none, without them; so `engine receipts` refused as
+    "unqualified historical receipt" every engine unit reuse() had accepted that way."""
     values = {k: v for k, v in recorded["values"].items() if k not in proof_evidence.MUTATION_SWITCHES}
     if os.path.realpath(root) != os.path.realpath(ROOT):
         values = proof_evidence.placed(values, root, ROOT)
-    keep = set(recorded.get("withheld") or ()) | set(proof_evidence.MUTATION_SWITCHES)
+    keep = set(recorded.get("withheld") or ()) | set(proof_evidence.MUTATION_SWITCHES) | set(RUNNER_SUPPLIED)
     own = {k: v for k, v in (os.environ if environ is None else environ).items()
            if k in keep or k.startswith("GIT_") or k in proof_evidence.RUN_SCOPED_ENVIRONMENT}
     return {**values, **own}
@@ -1338,6 +1384,8 @@ def deadline_for(item, args):
     cap = getattr(args, "cap", None)
     if cap:
         return float(cap)
+    if item.label in SUITE_DEADLINES:
+        return SUITE_DEADLINES[item.label]
     if item.label.startswith("engine ") and any(flag in item.argv for flag in ("--shard", "--only-units")):
         return None
     return min(3600.0, max(args.deadline, 3 * item.weight))
