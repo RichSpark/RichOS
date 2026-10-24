@@ -223,6 +223,7 @@ def main():
     except (StepFailed, RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as exc:
         row['outcome'] = 'FAIL'
         row['detail'] = str(exc)
+        ok = False  # rows not carried off the guest before it is deleted: the walk failed
     report['steps'].append(row)
     (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     print(f"keep: {row['outcome']}" + (f" — {row.get('detail')}" if row['outcome'] != 'PASS' else ''), flush=True)

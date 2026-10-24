@@ -1788,6 +1788,10 @@ t "ax-wait: every walk's waiting find reads a find the app did not answer (unres
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/ax-wait.test.py" >"$TMP/ax-wait.log" 2>&1; ok $? "$(cat "$TMP/ax-wait.log")"
 t_done
 
+t "work-lease-walk: a failed keep (the guest's rows not carried off before it is deleted) fails the walk"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/work-lease-walk.test.py" >"$TMP/work-lease-walk.log" 2>&1; ok $? "$(cat "$TMP/work-lease-walk.log")"
+t_done
+
 t "asked-again-walk: two proposals for the entity with a torn answer between; a torn line is never read as a decline"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/asked-again-walk.test.py" >"$TMP/asked-again-walk.log" 2>&1; ok $? "$(cat "$TMP/asked-again-walk.log")"
 t_done
