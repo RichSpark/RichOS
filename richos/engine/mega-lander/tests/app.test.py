@@ -1061,7 +1061,8 @@ class DesktopWork(unittest.TestCase):
             with self.subTest(command=command), self.assertRaisesRegex(ValueError, r"bash <file>"):
                 self.app.validate_shell_target({"tool_name":"Bash","tool_input":{"command":command}})
         for command in ["bash /fictional/scratch/run.sh", "bash -x ./run.sh", "python3 -c 'print(1)'",
-                        "git -c core.editor=true status", "bash test.sh && git diff --cached", "ls -la"]:
+                        "git -c core.editor=true status", "bash test.sh && git diff --cached", "ls -la",
+                        "bash /private/tmp/claude-501/-Users-fictional-ab-x/session/scratchpad/run.sh"]:
             with self.subTest(command=command):
                 self.assertIsNone(self.app.validate_shell_target({"tool_name":"Bash","tool_input":{"command":command}}))
         self.assertIsNone(self.app.validate_shell_target({"tool_name":"Read","tool_input":{"command":"bash -c x"}}))

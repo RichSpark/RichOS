@@ -25,7 +25,10 @@ import re
 import sys
 
 SHELL_WORD = re.compile(r"(?<![\w.\-])(bash|sh|zsh|dash|ksh)(?![\w.\-])")
-OPTION_WORD = re.compile(r"(?<![\w\-])-[A-Za-z0-9-]*")
+# An option word starts a word of the command: at the start of the text, or after whitespace, a quote
+# or shell punctuation. Never mid-word or after a / (2026-10-24: a session scratch folder of the shape
+# /private/tmp/claude-<uid>/-Users-<user>-<project>/... was read as the option group -Users-...).
+OPTION_WORD = re.compile(r"(?<![^\s'\"`;|&(){}<>])-[A-Za-z0-9-]*")
 
 MESSAGE = (
     "=== guard-no-shell-c: BLOCKED ===\n"
@@ -43,7 +46,8 @@ def verdict(command):
     """Return the shell name when `command` has a shell word followed, anywhere later (across lines
     and separators), by a short-option group containing c; else None. A group ends at the first
     character that is not a letter, digit or -, so -c</dev/null and -c'x' count; --long options do
-    not. Nothing is split into segments: a line continuation or &> cannot hide the pair."""
+    not, and neither does a hyphen inside a path or word (/-Users-sample). Nothing is split into
+    segments: a line continuation or &> cannot hide the pair."""
     for m in SHELL_WORD.finditer(command):
         for o in OPTION_WORD.finditer(command, m.end()):
             if re.fullmatch(r"-(?!-)[A-Za-z0-9-]+", o.group(0)) and "c" in o.group(0):

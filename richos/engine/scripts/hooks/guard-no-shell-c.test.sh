@@ -13,6 +13,8 @@
 #   N1   a script file (bash file.sh, bash -x file.sh, sh ./x.sh, bash < file) and ordinary commands pass
 #   N2   a MENTION is not a call: echo, a commit message, a heredoc body
 #   N3   an unreadable payload and a non-Bash tool pass
+#   N5   a hyphen inside a path (the session scratch folder /-Users-<user>-...) is not an option word
+#   P9   with that fixed, bash -c, sh -lc and a later sh -c are still refused
 #   D1   through the real dispatcher (dispatch-pretooluse.sh Bash) the refusal is exit 2 with its text
 #
 # Usage: scripts/hooks/guard-no-shell-c.test.sh
@@ -115,6 +117,21 @@ check 2 P8 "semicolon attached to the shell name" "bash; grep -c y"
 check 0 N4 "script name test.sh then -c word" "test.sh -c x"
 check 0 N4 "bashrc is not a shell word" "bashrc -c x"
 check 0 N4 "ssh -C host" "ssh -C host"
+
+echo "=== guard-no-shell-c: a hyphen inside a path is not an option (2026-10-24) ==="
+# A Claude session's scratch folder has the shape /private/tmp/claude-<uid>/-Users-<user>-<project>/...;
+# the hyphen run after the / was read as an option group containing c. The three command shapes it
+# refused, with a fictional user and project:
+SESSION=/private/tmp/claude-501/-Users-sample-ab-demoproject/0a1b2c3d-0000-4000-8000-000000000000/scratchpad
+check 0 N5 "install.sh with a log in the session scratch folder" "cd /Users/sample/demo/engine && bash scripts/hooks/install.sh > $SESSION/install.log 2>&1"
+check 0 N5 "a script file in the session scratch folder" "bash $SESSION/mutant-rerun.sh"
+check 0 N5 "sh a script, log in the session scratch folder" "sh /Users/sample/demo-state/mutation-proof/run-1/rerun/01-shell-c-mutant.sh > $SESSION/mutant-rerun.log 2>&1"
+check 0 N5 "a hyphen word after a path separator" "bash /tmp/x/-c/run.sh"
+check 2 P9 "bash -c 'x' still refused" "bash -c 'x'"
+check 2 P9 "sh -lc x still refused" "sh -lc x"
+check 2 P9 "a script file, then sh -c" "bash /tmp/a.sh; sh -c y"
+check 2 P9 "a session-path script, then bash -c" "bash $SESSION/a.sh && bash -c 'x'"
+check 2 P9 "a quoted option word" "bash '-c' 'x'"
 check 0 N3 "unreadable payload" "x"
 out="$(printf 'not json' | bash "$HOOK" 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ok "N3 unreadable payload passes" || bad "N3 unreadable payload" "rc=$rc $out"
