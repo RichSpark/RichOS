@@ -11,10 +11,14 @@
 #     still running -> released, silently. A background land between two of
 #     its steps looks at rest; on 2026-10-11 this hook released two leases that
 #     way and the fence refused both merges (operator_fences.land_process);
-#   * otherwise -> kept, and one systemMessage names the repository, the holder's
+#   * otherwise -> kept, and one notice names the repository, the holder's
 #     conversation, the age and what is unfinished, including which paths are
 #     dirty, so a lease held up by ANOTHER writer's dirt can be told from the
-#     holder's own unfinished work.
+#     holder's own unfinished work. It goes to the LEAD (Stop additionalContext),
+#     which holds the lease and finishes or releases it, and only when the lease or
+#     what keeps it changes, never again at every turn end for the same state
+#     (orchestration reliability R6, richos-hq docs/prds/2026-10-23-orchestration-
+#     reliability.md: the screenshot turn carried it among 10,302 characters).
 # A lease this session does not hold is never touched. It never blocks.
 #
 # WITH THE SWITCH OFF no lease exists (land-lease.sh takes none) and a repository
@@ -117,8 +121,19 @@ if [ "$_rll_rc" -ne 0 ]; then
     exit 0
 fi
 if [ -n "$_rll_out" ]; then
-    printf '%s\n' "$_rll_out"
+    _rll_msg="$(printf '%s' "$_rll_out" | "$_rll_py" -c 'import json,sys
+print(json.load(sys.stdin).get("systemMessage") or "")' 2>/dev/null)"
+    # The state is the message without its age ("after 12 min:"), so a lease that only
+    # grew older is not said again.
+    _rll_key="held:$(printf '%s' "$_rll_msg" | sed -E 's/ after [^:]*:/ after:/g' | cksum | tr -d ' ')"
+    if [ "$(_shn_prior)" != "$_rll_key" ]; then
+        _shn_record "$_rll_key" "$(date +%s 2>/dev/null || echo '')"
+        printf '%s\n' "{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"$(_shn_escape "$_rll_msg")\"}}"
+    fi
 else
-    stop_notice_normal "LAND LEASE RELEASE: running again."
+    case "$(_shn_prior)" in
+        held:*) stop_notice_normal "" ;;          # released: nothing to say
+        *) stop_notice_normal "LAND LEASE RELEASE: running again." ;;
+    esac
 fi
 exit 0

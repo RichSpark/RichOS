@@ -7467,7 +7467,7 @@
     },
     "scripts/hooks/release-land-leases.sh#unadopted-stop": {
       "source": "scripts/hooks/release-land-leases.sh",
-      "sha256": "67507402a96c8fa243814ba2269cb3d3e00fede94ae50ca2c2bd9bb90b891e76",
+      "sha256": "727ba9fd9a03fc5f3d0afa5b06ae7a6f7ee02e7cb30d3e9592073b1931ee332a",
       "evidence": "Visibility suite invokes this hook with no CLI arguments and a new unadopted directory, first as explicit bad root then as cwd/payload. Root-failure/not-adopted paths terminate before entity config, transcript predicates or live-state checks. Bootstrap, module initialization and any pre-root session-recovery helper remain bound. The negative control only replaces stop_notice_abnormal output.",
       "keys": [],
       "edges": [
@@ -10230,7 +10230,7 @@
     },
     "scripts/hooks/release-land-leases.sh": {
       "source": "scripts/hooks/release-land-leases.sh",
-      "sha256": "67507402a96c8fa243814ba2269cb3d3e00fede94ae50ca2c2bd9bb90b891e76",
+      "sha256": "727ba9fd9a03fc5f3d0afa5b06ae7a6f7ee02e7cb30d3e9592073b1931ee332a",
       "evidence": "Full turn-end hook reviewed: resolved entity/adoption, structured stop notice and fixed operator_fences turn-end. It never sources orchestration settings.",
       "keys": [],
       "edges": [
@@ -11831,7 +11831,7 @@
     },
     "scripts/hooks/release-land-leases.test.sh": {
       "source": "scripts/hooks/release-land-leases.test.sh",
-      "sha256": "0ac5c64c7e4d8790f70dff845fddd27a85bbc8a1fe6220da8b39d4b170c473f0",
+      "sha256": "6961b892b163abf5dd1a3addc13bba81bcb9c88d3ef62acdb9d268383f8b6b4e",
       "evidence": "Uses operator-fences-fixture to create private repositories, literal entity configuration and captured shell sessions. turn_end invokes only the fixed release hook; all shell-server commands are fixed Git/lease fixture operations. Nested mutants preserve those entry points.",
       "keys": [],
       "edges": [
@@ -17166,7 +17166,7 @@
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
         "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
-        "scripts/hooks/release-land-leases.sh": "67507402a96c8fa243814ba2269cb3d3e00fede94ae50ca2c2bd9bb90b891e76",
+        "scripts/hooks/release-land-leases.sh": "727ba9fd9a03fc5f3d0afa5b06ae7a6f7ee02e7cb30d3e9592073b1931ee332a",
         "scripts/hooks/release-shared-writes.sh": "da06d8fbe6b3438a0bb1c33cea6e6b4789aeb041f9aef246ec3eea24d0f4ed80",
         "scripts/hooks/session-start-ceo-ask.sh": "722f3e24fc066989c8721ccfa8a5b0e4b1746b265edca30083c2e3febd297079",
         "scripts/hooks/session-start-ci-surface.sh": "a4f1b332f362a2374ae1dad83d44af14a977d8cfdb753154014bbcc7e74c05a5",
@@ -17472,7 +17472,7 @@
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
         "scripts/hooks/notice-unstarted-rows.sh": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
-        "scripts/hooks/release-land-leases.sh": "67507402a96c8fa243814ba2269cb3d3e00fede94ae50ca2c2bd9bb90b891e76",
+        "scripts/hooks/release-land-leases.sh": "727ba9fd9a03fc5f3d0afa5b06ae7a6f7ee02e7cb30d3e9592073b1931ee332a",
         "scripts/hooks/turn-manifest.sh": "f5e92311f9896874e5294533673dd08160f3e4cfba4a262e161ae96e377331ae",
         "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/hooks/ass-kicker.sh": "67958c5559f0271a699ee95462636009f5547ad1212124139137827b0a6006c1"
@@ -17842,7 +17842,7 @@
         "scripts/lib/unstarted-rows.py": "80476a1bcc89496a0180bd5c5d773cda94989296bf9568997d6928e3d09de576",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
         "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
-        "scripts/hooks/release-land-leases.sh": "67507402a96c8fa243814ba2269cb3d3e00fede94ae50ca2c2bd9bb90b891e76",
+        "scripts/hooks/release-land-leases.sh": "727ba9fd9a03fc5f3d0afa5b06ae7a6f7ee02e7cb30d3e9592073b1931ee332a",
         "scripts/hooks/shell-evidence.sh": "01d511155b7df5a4be0ab6cb25aaac934a467e086d5c31f2afd6ee9c7bcc370a",
         "scripts/hooks/shell-evidence.py": "de4326ba4e1c9d8a415e27379efe3b4ecb15d4dd362419925628afe64c1cf240",
         "scripts/hooks/turn-manifest.sh": "f5e92311f9896874e5294533673dd08160f3e4cfba4a262e161ae96e377331ae",
