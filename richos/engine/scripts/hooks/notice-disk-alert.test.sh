@@ -481,6 +481,67 @@ alarm_twice "D12f low disk beside the told set alerts, every turn" "below the de
 cp "$CFG.d12" "$CFG"
 healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json"
 
+# ---------------------------------------------------------------------------
+# D13 — OUR PILE WAITING FOR A PERSON IS ADMINISTRATION TOO: TOLD ONCE PER SET
+# ---------------------------------------------------------------------------
+# A campaign root past its retention is not an alarm (D10a). It is told once a
+# session, and again only when WHICH places it is changes; sizes never do. A
+# real alarm beside it still repeats every turn.
+by_hand() {              # <bytes> <path> [<path> ...]
+    python3 - "$SANDBOX/rstate/scratch-reaper-state.json" "$@" <<'PY'
+import json, sys, time
+out, size, paths = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
+json.dump({"last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "last_apply_epoch": int(time.time()),
+           "source": "launchd", "outcome": "healthy", "unresolved": [], "roots": [],
+           "deleted": 0, "freed": 0, "undecidable": 0, "undecidable_bytes": 0,
+           "skipped": len(paths), "skipped_bytes": size * len(paths),
+           "skipped_split": {
+               "by_hand": {"count": len(paths), "bytes": size * len(paths), "paths": [
+                   {"path": p, "bytes": size,
+                    "why": "PAST ITS RETENTION ... a person removes it:  rm -rf " + p}
+                   for p in paths]},
+               "foreign": {"count": 0, "bytes": 0}},
+           "failures": 0, "verdict": "decided"}, open(out, "w"))
+PY
+}
+by_hand 13749244608 /Users/x/ab/campaign-a
+T1="$(run_session_hook)"; T2="$(run_session_hook)"
+by_hand 14749244608 /Users/x/ab/campaign-a
+T3="$(run_session_hook)"
+if printf '%s' "$T1" | grep -q '^Disk: .* is ours and waits for a person to remove it; told once per set' \
+   && [ -z "$T2" ] && [ -z "$T3" ]; then
+    ok "D13  an unchanged by-hand pile is told once, and its size changing does not re-tell it"
+else
+    bad "D13  an unchanged by-hand pile repeated (turn 1: $T1 | turn 2: $T2 | bigger: $T3)"
+fi
+by_hand 13749244608 /Users/x/ab/campaign-a /Users/x/ab/campaign-b
+T4="$(run_session_hook)"; T5="$(run_session_hook)"
+if printf '%s' "$T4" | grep -q '^Disk: .* in 2 place(s) is ours and waits' && [ -z "$T5" ]; then
+    ok "D13a a changed by-hand pile is told once more, then quiet"
+else
+    bad "D13a a changed by-hand pile was not told exactly once (turn 1: $T4 | turn 2: $T5)"
+fi
+# Mixed: low disk beside the told pile alerts every turn and does not repeat it;
+# a new pile arriving beside the alarm is told once, inside the alarm line.
+cp "$CFG" "$CFG.d13"
+sed -i.bak 's/^DISK_RICH_ALERT_GB=.*/DISK_RICH_ALERT_GB="999999"/' "$CFG"
+T6="$(run_session_hook)"; T7="$(run_session_hook)"
+by_hand 13749244608 /Users/x/ab/campaign-c
+T8="$(run_session_hook)"; T9="$(run_session_hook)"
+cp "$CFG.d13" "$CFG"
+if printf '%s' "$T6" | grep -q '^MASSIVE ALERT — DISK: .*below the declared' \
+   && printf '%s' "$T7" | grep -q '^MASSIVE ALERT — DISK: .*below the declared' \
+   && ! printf '%s%s' "$T6" "$T7" | grep -q 'waits for a person' \
+   && printf '%s' "$T8" | grep -q '^MASSIVE ALERT — DISK: .*below the declared.*| Disk: .* is ours and waits' \
+   && printf '%s' "$T9" | grep -q '^MASSIVE ALERT — DISK: .*below the declared' \
+   && ! printf '%s' "$T9" | grep -q 'waits for a person'; then
+    ok "D13b beside a real alarm the alarm repeats every turn and the pile is told once per set"
+else
+    bad "D13b mixed alarm and pile (T6: $T6 | T7: $T7 | T8: $T8 | T9: $T9)"
+fi
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json"
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

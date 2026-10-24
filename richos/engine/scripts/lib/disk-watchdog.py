@@ -354,9 +354,13 @@ def kept_leftovers(reaper_state):
 def kept_set_id(rows):
     """WHICH leftovers in WHAT condition, never how big or how old: scope, class,
     condition and the reaper's identity of the entries and their conditions."""
-    parts = sorted("%s|%s|%s|%s" % (r.get("scope"), r.get("class"), r.get("condition"),
-                                    r.get("identity") or r.get("count")) for r in rows)
-    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:12]
+    return set_id("%s|%s|%s|%s" % (r.get("scope"), r.get("class"), r.get("condition"),
+                                   r.get("identity") or r.get("count")) for r in rows)
+
+
+def set_id(parts):
+    """A short, order-free identity of a set of descriptive strings."""
+    return hashlib.sha1("\n".join(sorted(parts)).encode("utf-8")).hexdigest()[:12]
 
 
 def cleanup_health(reaper_state, state_path, max_age_h, now, launch_agents_dir):
@@ -1094,11 +1098,17 @@ def main():
             lines.append("  as a record and not as the state of the disk right now:")
             lines.append("    %s --verbose" % reaper_cmd)
         if by_hand_n > 0:
-            lines.append("  %s in %d place(s) IS OURS AND IS NEVER DELETED"
-                         % (human(by_hand_b), by_hand_n))
-            lines.append("  AUTOMATICALLY — a campaign root past its retention, or a")
-            lines.append("  running container on a throwaway image. Each prints its own")
-            lines.append("  command; a person runs it and the space comes back:")
+            # The set id is WHICH places (their paths and how many), never their
+            # size or age: the turn end tells this pile once per set, exactly as
+            # it tells the kept set below (notice-disk-alert.sh).
+            hand_parts = ["count|%d" % by_hand_n] + sorted(
+                "path|%s" % row.get("path") for row in (by_hand.get("paths") or [])
+                if isinstance(row, dict))
+            lines.append("  %s in %d place(s) IS OURS AND IS NEVER DELETED AUTOMATICALLY "
+                         "(set %s):" % (human(by_hand_b), by_hand_n, set_id(hand_parts)))
+            lines.append("  a campaign root past its retention, or a running container")
+            lines.append("  on a throwaway image. Each prints its own command; a person")
+            lines.append("  runs it and the space comes back:")
             for row in (by_hand.get("paths") or [])[:5]:
                 if not isinstance(row, dict):
                     continue

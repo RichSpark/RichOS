@@ -209,6 +209,7 @@ vols, stuck, inst, klass, notinstalled, stopped = [], "", "", "", False, False
 todo = []
 cleanup = ""
 kept, kept_set = "", ""
+todo_set = ""
 for line in text.splitlines():
     s = line.strip()
     if "NOT INSTALLED" in s:
@@ -231,12 +232,14 @@ for line in text.splitlines():
     if m:
         cleanup = "cleanup has not recovered: " + m.group(1)[:400]
     # OURS AND NEVER DELETED AUTOMATICALLY — a campaign root past its retention,
-    # a running throwaway container. Not an alarm, but the one pile a person
-    # gets space back from, so it keeps its place on this line.
-    m = re.match(r"^(\S+ \S+) in (\d+) place\(s\) IS OURS AND IS NEVER DELETED", s)
+    # a running throwaway container. Not an alarm: administrative, told once
+    # per set like the kept set below.
+    m = re.match(r"^(\S+ \S+) in (\d+) place\(s\) IS OURS AND IS NEVER DELETED"
+                 r"(?: AUTOMATICALLY \(set ([0-9a-f]+)\))?", s)
     if m:
         todo.append("%s in %s place(s) is ours and waits for a person to remove it"
                     % (m.group(1), m.group(2)))
+        todo_set = m.group(3) or ""
     if s.startswith("CLASSIFICATION:"):
         klass = s.split(":", 1)[1].strip()
     # KEPT OR UNDECIDED: not an alarm. Told once per set (the shell below), so
@@ -263,36 +266,49 @@ if alarm and klass:
     alarm.append("classification: " + klass)
 summary = ""
 if alarm:
-    summary = ("MASSIVE ALERT — DISK: " + " | ".join(alarm + todo)
+    summary = ("MASSIVE ALERT — DISK: " + " | ".join(alarm)
                + ". Full reading: scripts/disk-watchdog.sh --status")
-elif todo:
+todo_line = ""
+if todo:
     # NO ALARM WORDS. Nothing is broken and nothing is at risk; there is simply
     # space a person can reclaim with a command the full reading prints.
-    summary = ("Disk: " + " | ".join(todo)
-               + ". Which, and the command: scripts/disk-watchdog.sh --status")
+    todo_line = ("Disk: " + " | ".join(todo)
+                 + "; told once per set. Which, and the command: "
+                   "scripts/disk-watchdog.sh --status")
 # AND NOTHING AT ALL when the block held only other programs temp. That is in
 # the SessionStart block to be read, not on every turn end to be scrolled past.
-# Three lines, always: the summary, the kept set id and the kept sentence.
+# Five lines, always: the alarm, then each administrative notice with its set.
 print(summary)
 print(kept_set)
 print(kept)
+print(todo_set)
+print(todo_line)
 ' 2>/dev/null || echo "")"
     SUMMARY="$(printf '%s\n' "$PARSED" | sed -n 1p)"
     KEPT_SET="$(printf '%s\n' "$PARSED" | sed -n 2p)"
     KEPT="$(printf '%s\n' "$PARSED" | sed -n 3p)"
+    TODO_SET="$(printf '%s\n' "$PARSED" | sed -n 4p)"
+    TODO="$(printf '%s\n' "$PARSED" | sed -n 5p)"
 
-    # KEPT LEFTOVERS ARE TOLD ONCE PER SET, and only they are. Known, kept
-    # leftovers are administrative: an unchanged set is not news, so it is told
-    # once a session, and a new leftover or a changed set (its id is WHICH
-    # entries, never their size or age) is told once more. Everything that is
-    # an alarm keeps repeating every turn below, whatever was told before.
+    # ADMINISTRATION IS TOLD ONCE PER SET, and only administration is: the kept
+    # or undecided leftovers and our own pile waiting for a person. An unchanged
+    # set is not news, so it is told once a session, and a new or changed set
+    # (its id is WHICH entries, never their size or age) is told once more.
+    # Everything that is an alarm keeps repeating every turn below.
     if [ -n "$KEPT" ] && [ -n "$KEPT_SET" ] && stop_notice_seen "kept:$KEPT_SET"; then
         KEPT=""
     fi
+    if [ -n "$TODO" ] && [ -n "$TODO_SET" ] && stop_notice_seen "todo:$TODO_SET"; then
+        TODO=""
+    fi
+    ADMIN="$TODO"
+    if [ -n "$KEPT" ]; then
+        ADMIN="${ADMIN:+$ADMIN | }$KEPT"
+    fi
 
     if [ -z "$SUMMARY" ]; then
-        if [ -n "$KEPT" ]; then
-            stop_notice_abnormal "kept:$KEPT_SET" "$KEPT" 2>/dev/null || true
+        if [ -n "$ADMIN" ]; then
+            stop_notice_abnormal "admin:$KEPT_SET:$TODO_SET" "$ADMIN" 2>/dev/null || true
             exit 0
         fi
         # The block said something, but nothing a person must act on. Treat it
@@ -301,8 +317,8 @@ print(kept)
         stop_notice_normal 2>/dev/null || true
         exit 0
     fi
-    if [ -n "$KEPT" ]; then
-        SUMMARY="$SUMMARY | $KEPT"
+    if [ -n "$ADMIN" ]; then
+        SUMMARY="$SUMMARY | $ADMIN"
     fi
     # AN ALARM IS TOLD EVERY TURN, with no memory at all, exactly as before the
     # ledger above existed: its key is only how many MASSIVE ALERT banners there
