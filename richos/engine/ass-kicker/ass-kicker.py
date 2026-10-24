@@ -243,7 +243,8 @@ ARM 2 — THE TURN THAT STOPS, stated precisely
     IN THE APP, Stu's own work tools answer the "started nothing" term too
     (2026-10-24, nightly 73 and 74 walks, where both of his truthful replies
     were refused): a `complete` that closed the selected obligation means
-    nothing of that obligation is pending, and a `team save` of a new teammate
+    nothing of that obligation is pending, which answers for the completions
+    of that obligation's own teammates and no other, and a `team save` of a new teammate
     means the app resumes the job with a team_reloaded message. Either discharges the arm, read from the
     tool's answer, never from the reply. See app_job_outcome().
 
@@ -669,30 +670,72 @@ def satisfied(who, arm, calls, inputs):
 
 APP_COMPLETE = "mcp__richos_work__complete"
 APP_TEAM = "mcp__richos_work__team"
+APP_PREPARE = "mcp__richos_work__prepare"
 
 
-def app_job_outcome(idle, transcript, prompt_id):
+def prepared_obligations(transcript):
+    """{title: obligation} from the work receipts the app answered to `prepare`
+    in this transcript, the latest one per title. The host titles an Agent's
+    completion with the description Stu launched it under, which is the
+    prepare's title (nightly 74, Stu 9cadeff2: "Review notes.md commit for
+    Acme" prepared for work-94e48f43, launched, finished, closed). A refused
+    prepare made no receipt and counts for nothing; one without obligation_id
+    (a legacy connection, which derives it from its host scope) maps to None.
+    Only lines naming the prepare tool or one of its pending ids are parsed."""
+    pending, owners = {}, {}
+    with open(transcript, "rb") as fh:
+        for raw in fh:
+            if APP_PREPARE.encode() not in raw and not (
+                    pending and b"tool_use_id" in raw
+                    and any(tid.encode() in raw for tid in pending)):
+                continue
+            try:
+                rec = json.loads(raw)
+            except ValueError:
+                continue
+            content = (rec.get("message") or {}).get("content") if isinstance(rec, dict) else None
+            for b in content if isinstance(content, list) else ():
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "tool_use" and b.get("name") == APP_PREPARE:
+                    inp = b.get("input")
+                    if isinstance(inp, dict) and isinstance(inp.get("title"), str):
+                        pending[b.get("id")] = inp
+                elif b.get("type") == "tool_result" and b.get("tool_use_id") in pending:
+                    inp = pending.pop(b["tool_use_id"])
+                    if _app_answer(b).get("id"):
+                        owners[re.sub(r"\s+", " ", inp["title"]).strip()] = inp.get("obligation_id")
+    return owners
+
+
+def app_job_outcome(idle, transcript, prompt_id, finishes):
     """What the app's own work tools answered this turn about Stu's job, as
     (verdict, detail), or None. Read from the tools' answers, never the reply:
-      ('closed', ...)   `complete` answered obligation_closed: true for the
-                        obligation it selected (the lease's current one, or
-                        the one it names). The app closes that obligation only
-                        when none of its own receipts is still preparing,
+      ('closed', ...)   `complete` answered obligation_closed: true, and
+                        EVERY completion that arrived this turn is of a
+                        teammate prepared for an obligation closed this turn
+                        (prepared_obligations). The app closes an obligation
+                        only when none of its own receipts is still preparing,
                         running or unknown and every final worker of it is
                         landed (mega-lander/app.py completion_evidence), so
                         nothing of THAT obligation is pending. It says nothing
                         about the lease, which goes on to its next job, or
-                        about any other obligation.
+                        about any other obligation: a completion of another
+                        job, or of an agent no receipt names, keeps the check,
+                        and the refusal names only those (second review
+                        rv-20261024T230343Z-5ff59ca2-e966: notes.md's reviewer
+                        and more.md's worker finished, only notes.md was
+                        closed, and "both are landed and closed" went through).
       ('started', ...)  `team save` added a NEW teammate. The app registers
                         him when this turn ends and then sends Stu the
                         team_reloaded message, which starts his next turn
                         (work_host.rs reload_team_after_turn), so the next
                         step is already in motion.
     A refused call counts for nothing, a replaced teammate gets no reload, and
-    a land (`integrate`) is not a close. Not told apart (a stated limit): a
-    teammate of a DIFFERENT, still open obligation whose completion arrives in
-    the same turn as this close. Nightly 73 and 74 walks: both truthful replies
-    were refused without this."""
+    a land (`integrate`) is not a close. Not told apart (a stated limit): two
+    obligations whose teammates were prepared under the same title, where the
+    later prepare names the owner. Nightly 73 and 74 walks: both truthful
+    replies were refused without this."""
     try:
         offset = idle.turn_start_offset(transcript, prompt_id)
         wanted, answers, started = {}, {}, False
@@ -717,29 +760,30 @@ def app_job_outcome(idle, transcript, prompt_id):
                         continue
                     if b.get("type") == "tool_use" and b.get("name") in (APP_COMPLETE, APP_TEAM):
                         wanted[b.get("id")] = (b.get("name"), b.get("input") or {})
-                    elif (b.get("type") == "tool_result" and b.get("tool_use_id") in wanted
-                          and b.get("is_error") is not True):
-                        res = b.get("content")
-                        if isinstance(res, list):
-                            res = "".join(x.get("text", "") for x in res if isinstance(x, dict))
-                        try:
-                            answers[b["tool_use_id"]] = json.loads(res)
-                        except (TypeError, ValueError):
-                            pass
+                    elif b.get("type") == "tool_result" and b.get("tool_use_id") in wanted:
+                        answers[b["tool_use_id"]] = _app_answer(b)
+        closed = set()
+        for tid, answer in answers.items():
+            name, inp = wanted[tid]
+            if name == APP_COMPLETE and answer.get("obligation_closed") is True:
+                closed.add(answer.get("obligation_id"))
+                closed.add(inp.get("obligation_id") if isinstance(inp, dict) else None)
+        if closed:
+            owners = prepared_obligations(transcript)
+            open_ = [t for t in finishes if t not in owners or owners[t] not in closed]
+            if not open_:
+                return ("closed", "the app closed obligation %s this turn"
+                        % ", ".join(sorted(str(o) for o in closed if o)))
     except (OSError, AttributeError):
         return None
     for tid, answer in answers.items():
         name, inp = wanted[tid]
-        if not isinstance(answer, dict):
-            continue
-        if name == APP_COMPLETE and answer.get("obligation_closed") is True:
-            return ("closed", "the app closed obligation %s this turn" % answer.get("obligation_id"))
-    for tid, answer in answers.items():
-        name, inp = wanted[tid]
-        if (name == APP_TEAM and isinstance(answer, dict) and isinstance(inp, dict)
+        if (name == APP_TEAM and isinstance(inp, dict)
                 and inp.get("action") == "save" and answer.get("replaced") is False
                 and answer.get("registration_boundary") == "next_provider_connection"):
             return ("started", "a new teammate is saved; the app reloads the team and resumes the job")
+    if closed:
+        return ("open", open_)
     return None
 
 
@@ -764,8 +808,10 @@ def stop_after_completion(idle, transcript, prompt_id, message):
         return {"finishes": finishes, "verdict": "started", "detail": "backgrounded tool call"}
     if "AskUserQuestion" in turn["tools"]:
         return {"finishes": finishes, "verdict": "ceo-owed", "detail": "AskUserQuestion"}
-    job = app_job_outcome(idle, transcript, prompt_id)
-    if job:
+    job = app_job_outcome(idle, transcript, prompt_id, finishes)
+    if job and job[0] == "open":
+        finishes = job[1]
+    elif job:
         return {"finishes": finishes, "verdict": job[0], "detail": job[1]}
     # NO HOLD TERM (2026-09-20, CEO ruling §68). This used to call
     # idle.hold_signal(turn["said"]) -- two regexes over the CEO's own typed
