@@ -113,12 +113,15 @@ would ever close it.
 ===========================================================================
 IDENTITY, AND WHY IT IS DERIVED
 ===========================================================================
-    esc-<UTC timestamp, compact>-<first 8 hex of sha256(teammate|title|worktree)>
+    esc-<UTC timestamp, compact>-<first 8 hex of sha256(teammate|title|worktree|nonce)>
 
-Time-ordered, greppable, unique per (teammate, title, worktree) per second, and
-typed by nobody. Raising the same escalation twice produces two ids and two
-rows on purpose — a duplicate is visible, and de-duplicating would mean
-deciding that two teammates' words are the same thing, which is a judgment.
+Time-ordered, greppable, unique per raise, and typed by nobody. Raising the
+same escalation twice produces two ids and two rows on purpose — a duplicate is
+visible, and de-duplicating would mean deciding that two teammates' words are
+the same thing, which is a judgment. The random nonce is what makes that true
+inside one second: without it two raises in the same second got the same id and
+the second was merged into the first (the disk watchdog's replacement of an
+acknowledged alarm, 2026-10-24).
 
 ===========================================================================
 AGE BUCKETS — why an unacknowledged escalation gets LOUDER
@@ -306,7 +309,8 @@ def append_row(row, path=None):
 def make_id(when, teammate, title, worktree):
     stamp = when.strftime("%Y%m%dT%H%M%SZ")
     h = hashlib.sha256(
-        ("%s|%s|%s" % (teammate or "", title or "", worktree or "")).encode("utf-8")
+        ("%s|%s|%s|%s" % (teammate or "", title or "", worktree or "",
+                          os.urandom(8).hex())).encode("utf-8")
     ).hexdigest()[:8]
     return "esc-%s-%s" % (stamp, h)
 

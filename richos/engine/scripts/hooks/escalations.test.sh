@@ -153,9 +153,8 @@ canary_add_root() { # <dir> — resolve to a tree root and remember it once
 # when their contents change. It is the `??` entries that are invisible.
 #
 # The witness is a checksum AND, where the platform can give one, an mtime.
-# The escalation id is a timestamp with one-second resolution, so two raises
-# inside the same second produce a BYTE-IDENTICAL file at an identical path
-# that a checksum cannot tell apart. A sub-second mtime can. Case 17d is built
+# A file rewritten with identical bytes is something a checksum cannot tell
+# apart from the untouched file. A sub-second mtime can. Case 17d is built
 # not to depend on either one being available.
 CANARY_MAX_ENTRIES=2000
 
@@ -363,6 +362,31 @@ fi
 REC="$(find "$WT/docs/verification/escalations" -name '*.md' 2>/dev/null | head -1)"
 if [ -n "$REC" ]; then ok "1f  the record file went to docs/verification/escalations/"
 else bad "1f  record file" "not found under $WT/docs/verification/escalations"; fi
+# TWO RAISES IN ONE SECOND ARE TWO ESCALATIONS. The id's timestamp has one-second
+# resolution, so the same teammate raising the same title twice inside one second
+# (the disk watchdog replacing an acknowledged alarm does exactly that) must
+# still get two ids, or the second is merged into the first. The clock is pinned
+# here so the case cannot pass by straddling a second.
+SAME_SEC="$(python3 - "$ENG/scripts/lib" "$WT" <<'PY' 2>&1
+import sys, types
+from datetime import datetime, timezone
+sys.path.insert(0, sys.argv[1])
+import escalations
+when = datetime(2026, 10, 24, 18, 57, 2, tzinfo=timezone.utc)
+args = types.SimpleNamespace(
+    teammate="zach-opus-e1same", title="the same alarm, raised twice", worktree=sys.argv[2],
+    branch="", repo="", head="", state="proceeding", audience="lead",
+    question="q", tried="", meanwhile="", record="", session="s")
+a = escalations.build_row(args, when)["id"]
+b = escalations.build_row(args, when)["id"]
+ok = a != b and all(escalations.ID_RX.fullmatch(i) for i in (a, b))
+print(("DISTINCT " if ok else "SAME ") + a + " " + b)
+PY
+)"
+case "$SAME_SEC" in
+    DISTINCT*) ok "1g  two raises of the same escalation in the same second get two ids, both in the readable format (${SAME_SEC#DISTINCT })" ;;
+    *)         bad "1g  same-second ids are distinct" "$SAME_SEC" ;;
+esac
 
 # ===========================================================================
 # 2. THE STOP HOOK ANNOUNCES IT — same session, one turn later
