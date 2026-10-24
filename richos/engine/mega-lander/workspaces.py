@@ -6063,13 +6063,25 @@ def _merges_in_main_checkout(main, target, b):
 
 def _merge_in_temporary_checkout(main, target, args, b, author_runs=()):
     """Runs `git merge` (with git's own hooks and checks) in a temporary
-    checkout of `target` under this tool's state directory, then removes that
+    checkout of `target` in the engine's state location, then removes that
     checkout. A refused merge commits nothing, so `target` has not moved; the
     checkout is removed either way. `author_runs` are offered to the gate
-    (_land_env)."""
-    _ensure_dirs()
-    parent = _p("merge-checkouts")
-    os.makedirs(parent, exist_ok=True)
+    (_land_env).
+
+    NEVER UNDER ~/.claude (2026-10-24, zach-opus-orch5): the test runner drops
+    every variable that points inside the operator's record before a check
+    (record-canary.sh _rc_roads_back), and in a checkout there that is PATH, so
+    every land into a release branch failed with rc=127."""
+    here = os.path.join(engine_root(), "scripts", "lib")
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import machine_settings
+    try:
+        parent = str(machine_settings.state("merge-checkouts"))
+        os.makedirs(parent, exist_ok=True)
+    except (ValueError, OSError) as e:
+        raise SpecError("cannot merge %s: the engine's state location for a temporary checkout of %s cannot be "
+                        "used (%s); nothing was landed" % (b, target, e))
     path = os.path.join(os.path.realpath(parent), "%s-%d" % (_key_segment(target), os.getpid()))
     _remove_temporary_checkout(main, path)
     rc, out, err = git(main, "worktree", "add", "--quiet", path, target, timeout=600)

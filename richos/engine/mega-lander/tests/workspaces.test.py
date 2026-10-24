@@ -4933,6 +4933,44 @@ class TeammateBoundToABranchOfItsOwn(Base):
         self.assertNotIn("git merge main", prepared["prompt"])
 
 
+class ReleaseLandChecksRunOutsideTheOperatorsRecord(Base):
+    """2026-10-24 (zach-opus-orch5): every land into a branch other than main
+    failed. Its temporary checkout lived under ~/.claude/state/workspaces, and
+    the test runner removes every variable pointing inside ~/.claude before a
+    check (record-canary.sh _rc_roads_back), PATH included, whose first entry
+    is the checkout's own scripts/bin: verification-pins.test.sh ended with
+    INFRASTRUCTURE-ERROR rc=127. The checkout now lives in the engine's state
+    location (machine_settings.state), outside the operator's record."""
+
+    def test_a_merge_into_a_release_branch_runs_its_checks_outside_claude_config_dir(self):
+        run("git", "-C", self.other, "branch", "v1.3.1", "main")
+        seen = os.path.join(self.env.root, "hook-cwd")
+        hook = os.path.join(self.other, ".git", "hooks", "pre-merge-commit")
+        with open(hook, "w") as f:
+            f.write("#!/bin/sh\npwd -P > %s\n" % shlex.quote(seen))
+        os.chmod(hook, 0o755)
+        path = os.path.join(self.env.root, "other-wt", "zach-opus-rc")
+        ws.register_cc(self.sid, "zach-opus-rc", self.other, path, "cc/zach-opus-rc", integration="v1.3.1")
+        run("git", "-C", self.other, "worktree", "add", "-q", path, "-b", "cc/zach-opus-rc", "v1.3.1")
+        ws.confirm_cc(self.sid, "zach-opus-rc", path, True)
+        aid, _npath = self.spawn("zach-opus-rc", cc=path)
+        self.commit(path, "release.txt")
+        self.finish(aid)
+
+        merged, res = ws.merge_and_land("zach-opus-rc", self.sid)
+
+        self.assertEqual(merged, [(self.other, "cc/zach-opus-rc")])
+        self.assertTrue(res["landed"])
+        with open(seen) as f:
+            where = f.read().strip()
+        record = os.path.realpath(os.environ["CLAUDE_CONFIG_DIR"])
+        for root in (record, os.path.realpath(os.path.join(os.environ["HOME"], ".claude"))):
+            self.assertFalse(where == root or where.startswith(root + os.sep),
+                             "the land's checks ran inside the operator's record: %s" % where)
+        self.assertTrue(where.startswith(os.path.realpath(self.env.root) + os.sep), where)
+        self.assertFalse(os.path.exists(where), "the temporary checkout was left behind")
+
+
 class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
     """2026-10-11, both in richos from the lead's terminal, each a background
     script that took the lease and then ran `workspaces.sh merge`:
