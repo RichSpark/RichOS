@@ -650,7 +650,13 @@ impl WorkHost {
                 .as_mut()
                 .ok_or("The operator connection closed during team reload")?;
             self.project_output(binding, &session);
-            self.refresh_peer_team(backend, lease.as_mut())?;
+            // A teammate he saved this turn is usable only from his next one, which nothing
+            // else would start: one turn per change, through his own inbox.
+            if self.refresh_peer_team(backend, lease.as_mut())? {
+                if let Err(error) = crate::session_tools::observe_team_reloaded(&self.message_scope(binding)) {
+                    eprintln!("[richos] the team reload could not be passed to Stu: {error}");
+                }
+            }
             Ok(session)
         }
         })();
@@ -3462,13 +3468,59 @@ mod tests {
             1,
             "team reload must retain Stu and his native descendants"
         );
+        // The team changed during turn 7, so Stu gets his one continuation, and nothing more.
+        h.host.wake_messages(&h.binding);
+        assert!(
+            h.host.wait_for_completed(2, std::time::Duration::from_secs(10)),
+            "hang guard: wait for the continuation"
+        );
         let prompts = h.work_prompts.lock().unwrap();
         assert_eq!(
             prompts.len(),
-            7,
-            "roster reload must not add a synthetic input or replay the accepted handoff"
+            8,
+            "roster reload must add one continuation and never replay the accepted handoff"
         );
+        assert!(prompts[7].contains("team_reloaded"), "{:?}", prompts[7]);
         drop(prompts);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// Walk 2 of 2026-10-24: Stu saved a teammate, ended his turn to use it on the next one,
+    /// and no next input ever came. The reload after his turn registers it; a changed team
+    /// then gets exactly one more turn through his own inbox, and an unchanged team none.
+    #[test]
+    fn a_turn_that_changes_the_team_gets_exactly_one_continuation() {
+        let h = harness(0);
+        h.team.lock().unwrap().digest = Some("stock".into());
+        every_worker_observed_ending(&h);
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.state.join("rich-status.json");
+        crate::session_tools::bind(&path, &scope, "native-rich", "rich", None).unwrap();
+        let continuations = |prompts: &[String]| {
+            prompts.iter().filter(|text| text.contains("team_reloaded")).count()
+        };
+        // load-bound: hang guards only; the verdicts are the prompts and the empty inbox.
+        let settled = |count| {
+            assert!(h.host.wait_for_completed(count, std::time::Duration::from_secs(10)), "hang guard");
+            assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_none());
+            h.work_prompts.lock().unwrap().clone()
+        };
+        h.team.lock().unwrap().in_turn.push_back(Some("stock and norm".into()));
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Save norm and have him fix it"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        let prompts = settled(2);
+        assert_eq!(prompts.len(), 2, "the changed team got no continuation: {prompts:?}");
+        assert_eq!(continuations(&prompts), 1);
+        assert!(!prompts[1].contains("Save norm"), "the continuation replayed the input: {prompts:?}");
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"How is it going?"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        let prompts = settled(3);
+        assert_eq!(prompts.len(), 3, "an unchanged team got a continuation: {prompts:?}");
+        assert_eq!(continuations(&prompts), 1);
+        h.host.wake_messages(&h.binding);
+        let prompts = settled(3);
+        assert_eq!(prompts.len(), 3, "a second unchanged refresh added input: {prompts:?}");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }

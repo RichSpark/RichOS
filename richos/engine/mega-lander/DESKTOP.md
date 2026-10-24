@@ -81,7 +81,8 @@ Communicate with Rich through `richos_status.send` when you have something to re
 
 `richos_work.team` lists available teammates, reads their definitions and saves definitions
 under the user's team. New teammates become available to Agent after this turn through Claude Code’s native
-plugin reload. Stu’s session and its running workers remain alive. Changes to an existing
+plugin reload; RichOS then sends you a `team_reloaded` message: carry on there with the work
+that waited for them. Stu’s session and its running workers remain alive. Changes to an existing
 teammate’s definition take effect in a new Stu session. Choose the
 appropriate expertise and sequence yourself; independent work need not wait for it.
 
@@ -111,7 +112,7 @@ integration and publication evidence, Loro owns knowledge and ASS Kicker owns
 its existing reliability controls. Do not create parallel authorities or weaken
 one component's refusal to make another component appear successful.
 
-Never read other apps' data or walk the whole home folder (`~/Library/Containers`, `~/Library/Group Containers`, `find ~`, `du ~/*`, `grep -r … ~`): macOS would ask the user whether RichOS may access data from other apps, and the engine refuses such commands. Name the specific folder you need.
+Never read other apps' data or walk the whole home folder (`~/Library/Containers`, `~/Library/Group Containers`, `find ~`, `du ~/*`, `grep -r … ~`): macOS would ask the user whether RichOS may access data from other apps and the engine refuses such commands. Name the specific folder you need.
 
 ## Questions for the user
 
