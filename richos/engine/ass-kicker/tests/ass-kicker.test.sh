@@ -59,6 +59,7 @@
 #     (n16) app: wait reply, the save replaced (no reload comes)   -> exit 2
 #     (n17) app: two jobs finish, one is closed, report on both    -> exit 2
 #     (n18) app: two jobs finish, both are closed                  -> exit 0
+#     (n19) app: n17's turn with no work receipt to read           -> exit 0
 #   ARM 3 — APP RECORD TOOLS
 #     (R56) app team saves answered with paths, "I saved Norm"     -> no alert
 #     (R57) saved paths named + job report recorded: true          -> no alert
@@ -469,12 +470,14 @@ run_hook "$TR_NOTDONE" "$FIN_REPORT"
 # (rows 146 and 327), and nightly 73 refused the same pair (4beb2145…jsonl rows 160 and 308).
 APP_SPECS="$SANDBOX/app-specs"
 mkdir -p "$APP_SPECS"
-python3 - "$APP_SPECS" <<'PY'
+APP_STATE="$SANDBOX/app-state"
+APP_PART="2a2183bda91a03d6c8458d75216155d64922946bc022736669853e991dfa21ec"
+python3 - "$APP_SPECS" "$APP_STATE/work-receipts/$APP_PART" <<'PY'
 import json, os, sys
-out = sys.argv[1]
-def notice(title):
-    return ("<task-notification>\n<task-id>a191b4bf3c4ab6b88</task-id>\n<status>completed</status>\n"
-            "<summary>Agent \"%s\" finished</summary>\n<result>done</result>\n</task-notification>" % title)
+out, receipts = sys.argv[1:3]
+def notice(title, task="a191b4bf3c4ab6b88"):
+    return ("<task-notification>\n<task-id>%s</task-id>\n<status>completed</status>\n"
+            "<summary>Agent \"%s\" finished</summary>\n<result>done</result>\n</task-notification>" % (task, title))
 save = ["mcp__richos_work__team", {"action": "save", "name": "norm", "text": "---\nname: norm\n---\n"}]
 saved = {"saved": "/home/Library/Application Support/com.richos.app/team/norm.md", "name": "norm",
          "replaced": False, "registered": False, "registration_boundary": "next_provider_connection"}
@@ -486,25 +489,25 @@ closed = {"obligation_closed": True, "obligation_id": "work-94e48f43",
           "evidence_ref": "app-completion:5860d42f", "published": False}
 send = ["mcp__richos_status__send", {"text": "Done: notes.md is committed and landed."}, {"saved": True, "to": "rich"}]
 review = {"machine": notice("Review notes.md commit for Acme")}
-def prepare(title, obligation, receipt):
-    # a prepare the app answered with its work receipt, in an EARLIER turn (row 236 for the review)
-    return {"app": ["mcp__richos_work__prepare", {"request_id": receipt, "title": title,
-                    "teammate": "norm", "obligation_id": obligation, "brief": "..."},
-                    {"id": receipt, "status": "prepared", "name": "norm-sonnet-" + receipt}]}
-earlier, this = {"turn": "00000000-0000-4000-8000-000000000000"}, {"turn": "11111111-2222-3333-4444-555555555555"}
-prepared_review = prepare("Review notes.md commit for Acme", "work-94e48f43", "cf86")
-# the second review's fixture: the notes.md review and the more.md worker (another obligation,
-# ordinary concurrent use) finish in the same turn, and only notes.md is closed
-two_jobs = [earlier, prepared_review, prepare("Add more.md to Acme", "work-9953e2af", "c2ad"), this,
-            review, {"machine": notice("Add more.md to Acme")}, {"app": integrate}]
+# The second review's fixture: notes.md's reviewer and more.md's worker (another obligation,
+# ordinary concurrent use) finish in the same turn, and only notes.md is closed. Their work
+# receipts are the app's own (nightly 74's cf86... and c2ad..., shortened): the agent id each
+# notice carries, and the obligation the receipt was prepared for.
+os.makedirs(receipts)
+for rid, agent, obligation, role in (("cf86", "aaff1d866a945cba3", "work-94e48f43", "reviewer"),
+                                     ("c2ad", "a02f76eded281b9d6", "work-9953e2af", "worker")):
+    with open(os.path.join(receipts, rid + ".json"), "w", encoding="utf-8") as fh:
+        json.dump({"schema": 1, "id": rid, "agent_id": agent, "status": "run-ended",
+                   "request": {"obligation_id": obligation, "role": role}}, fh)
+two_jobs = [{"machine": notice("Review notes.md commit for Acme", "aaff1d866a945cba3")},
+            {"machine": notice("Add more.md to Acme", "a02f76eded281b9d6")}, {"app": integrate}]
 closed_more = {"app": ["mcp__richos_work__complete", {"obligation_id": "work-9953e2af", "worker_ids": ["c2ad"]},
                        dict(closed, obligation_id="work-9953e2af")]}
 specs = {
     # rows 129-146: Dean's consult returns, Stu saves Norm, the app reloads the team after the turn
     "wait": [{"machine": notice("Activate Norm for Acme")}, {"app": save + [saved]}],
-    # rows 236-327: the review is prepared; it returns, Stu lands, checks, closes the job and tells Rich
-    "done": [earlier, prepared_review, this, review, {"app": integrate},
-             {"bash": "git -C /home/Acme log --oneline -3"},
+    # rows 261-327: the review returns, Stu lands, checks, closes the job and tells Rich
+    "done": [review, {"app": integrate}, {"bash": "git -C /home/Acme log --oneline -3"},
              {"tool": "Read"}, {"app": complete + [closed]}, {"app": send}],
     "two-jobs-one-closed": two_jobs + [{"app": complete + [closed]}],
     "two-jobs-both-closed": two_jobs + [{"app": complete + [closed]}, closed_more],
@@ -560,6 +563,9 @@ run_hook "$SANDBOX/app-replaced.jsonl" "$STU_WAIT"
 [ "$RC" -eq 2 ] && ok "n16. a wait on a reload that is not coming (an existing teammate replaced) is still refused" || bad "n16. replaced teammate" "rc=$RC"
 
 TWO_DONE="Done. notes.md and more.md are committed and landed on main. Both jobs are closed."
+# n17/n18 run as the app runs its hooks: the work receipts beside the thread's workspace registry.
+SAVED_WORKSPACES_DIR="$RICHOS_WORKSPACES_DIR"
+export RICHOS_APP_STATE="$APP_STATE" RICHOS_WORKSPACES_DIR="$APP_STATE/workspaces/$APP_PART"
 run_hook "$SANDBOX/app-two-jobs-one-closed.jsonl" "$TWO_DONE"
 if [ "$RC" -eq 2 ] && printf '%s' "$ERR" | grep -q 'Add more.md to Acme' \
         && ! printf '%s' "$ERR" | grep -q 'Review notes.md commit for Acme'; then
@@ -570,6 +576,13 @@ run_hook "$SANDBOX/app-two-jobs-both-closed.jsonl" "$TWO_DONE"
 if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
     ok "n18. two jobs finish in one turn and both are closed: the report on both passes"
 else bad "n18. both closed" "rc=$RC out=$(printf '%s' "$OUT" | head -c 200) err=$(printf '%s' "$ERR" | head -c 300)"; fi
+unset RICHOS_APP_STATE
+export RICHOS_WORKSPACES_DIR="$SAVED_WORKSPACES_DIR"
+
+run_hook "$SANDBOX/app-two-jobs-one-closed.jsonl" "$TWO_DONE"
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
+    ok "n19. the same turn with no receipt to read: the owner is not guessed, so the close is not refused on a guess"
+else bad "n19. no receipts" "rc=$RC err=$(printf '%s' "$ERR" | head -c 300)"; fi
 
 # R56-R58: ARM 3 over the app's own record tools, from the walk of f7db19c03 (Stu's transcript
 # 49b30d21…jsonl, richos-hq docs/audits/2026-10-15-nightly-root/evidence/

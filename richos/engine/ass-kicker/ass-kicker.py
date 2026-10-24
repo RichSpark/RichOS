@@ -243,8 +243,8 @@ ARM 2 — THE TURN THAT STOPS, stated precisely
     IN THE APP, Stu's own work tools answer the "started nothing" term too
     (2026-10-24, nightly 73 and 74 walks, where both of his truthful replies
     were refused): a `complete` that closed the selected obligation means
-    nothing of that obligation is pending, which answers for the completions
-    of that obligation's own teammates and no other, and a `team save` of a new teammate
+    nothing of that obligation is pending, which answers for every completion
+    except one whose work receipt names another, still open job, and a `team save` of a new teammate
     means the app resumes the job with a team_reloaded message. Either discharges the arm, read from the
     tool's answer, never from the reply. See app_job_outcome().
 
@@ -670,72 +670,89 @@ def satisfied(who, arm, calls, inputs):
 
 APP_COMPLETE = "mcp__richos_work__complete"
 APP_TEAM = "mcp__richos_work__team"
-APP_PREPARE = "mcp__richos_work__prepare"
+TASK_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
 
 
-def prepared_obligations(transcript):
-    """{title: obligation} from the work receipts the app answered to `prepare`
-    in this transcript, the latest one per title. The host titles an Agent's
-    completion with the description Stu launched it under, which is the
-    prepare's title (nightly 74, Stu 9cadeff2: "Review notes.md commit for
-    Acme" prepared for work-94e48f43, launched, finished, closed). A refused
-    prepare made no receipt and counts for nothing; one without obligation_id
-    (a legacy connection, which derives it from its host scope) maps to None.
-    Only lines naming the prepare tool or one of its pending ids are parsed."""
-    pending, owners = {}, {}
-    with open(transcript, "rb") as fh:
-        for raw in fh:
-            if APP_PREPARE.encode() not in raw and not (
-                    pending and b"tool_use_id" in raw
-                    and any(tid.encode() in raw for tid in pending)):
+def finished_agents(idle, notices):
+    """{title: provider agent id} for this turn's Agent completions, both read
+    from the host's own notice (its <task-id> is the agent id the app records
+    on the teammate's work receipt)."""
+    out = {}
+    for text in notices or []:
+        for part in text.split("<task-notification>")[1:]:
+            part = "<task-notification>" + part
+            titles, m = idle.agent_finishes([part]), TASK_ID_RE.search(part)
+            if titles and m:
+                out.setdefault(titles[0], m.group(1))
+    return out
+
+
+def receipt_obligations(agent_ids):
+    """{agent id: obligation id} from the app's own work receipts, for the given
+    agents only. The app keeps this conversation's receipts in
+    <RICHOS_APP_STATE>/work-receipts/sha256(entity, thread), and its workspace
+    registry, which it sets as RICHOS_WORKSPACES_DIR, in
+    <RICHOS_APP_STATE>/workspaces/<the same hash> (mega-lander/app.py folder()
+    and read_scope()). One folder is listed and its receipts read until every
+    agent is found; nothing else is opened. {} outside the app or when the
+    folder cannot be read; an agent no receipt names is simply absent."""
+    state = (os.environ.get("RICHOS_APP_STATE") or "").strip()
+    registry = (os.environ.get("RICHOS_WORKSPACES_DIR") or "").strip()
+    if not agent_ids or not state or os.path.dirname(registry) != os.path.join(state, "workspaces"):
+        return {}
+    root = os.path.join(state, "work-receipts", os.path.basename(registry))
+    try:
+        names = sorted(n for n in os.listdir(root) if n.endswith(".json"))
+    except OSError:
+        return {}
+    found = {}
+    for name in names:
+        path = os.path.join(root, name)
+        try:
+            if os.path.islink(path) or os.path.getsize(path) > 1024 * 1024:
                 continue
-            try:
-                rec = json.loads(raw)
-            except ValueError:
-                continue
-            content = (rec.get("message") or {}).get("content") if isinstance(rec, dict) else None
-            for b in content if isinstance(content, list) else ():
-                if not isinstance(b, dict):
-                    continue
-                if b.get("type") == "tool_use" and b.get("name") == APP_PREPARE:
-                    inp = b.get("input")
-                    if isinstance(inp, dict) and isinstance(inp.get("title"), str):
-                        pending[b.get("id")] = inp
-                elif b.get("type") == "tool_result" and b.get("tool_use_id") in pending:
-                    inp = pending.pop(b["tool_use_id"])
-                    if _app_answer(b).get("id"):
-                        owners[re.sub(r"\s+", " ", inp["title"]).strip()] = inp.get("obligation_id")
-    return owners
+            with open(path, encoding="utf-8") as fh:
+                rec = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict) and rec.get("agent_id") in agent_ids:
+            found[rec["agent_id"]] = (rec.get("request") or {}).get("obligation_id")
+            if len(found) == len(agent_ids):
+                break
+    return found
 
 
-def app_job_outcome(idle, transcript, prompt_id, finishes):
+def app_job_outcome(idle, transcript, prompt_id, agents):
     """What the app's own work tools answered this turn about Stu's job, as
     (verdict, detail), or None. Read from the tools' answers, never the reply:
-      ('closed', ...)   `complete` answered obligation_closed: true, and
-                        EVERY completion that arrived this turn is of a
-                        teammate prepared for an obligation closed this turn
-                        (prepared_obligations). The app closes an obligation
+      ('closed', ...)   `complete` answered obligation_closed: true, and no
+                        completion that arrived this turn is of a teammate
+                        whose work receipt names an obligation still open
+                        (receipt_obligations: the notice's agent id, the
+                        receipt's obligation). The app closes an obligation
                         only when none of its own receipts is still preparing,
                         running or unknown and every final worker of it is
                         landed (mega-lander/app.py completion_evidence), so
                         nothing of THAT obligation is pending. It says nothing
                         about the lease, which goes on to its next job, or
-                        about any other obligation: a completion of another
-                        job, or of an agent no receipt names, keeps the check,
-                        and the refusal names only those (second review
+                        about any other obligation: a completion whose
+                        receipt names another job keeps the check, and the
+                        refusal names only those (second review
                         rv-20261024T230343Z-5ff59ca2-e966: notes.md's reviewer
                         and more.md's worker finished, only notes.md was
                         closed, and "both are landed and closed" went through).
+                        A completion whose receipt cannot be read (no receipt
+                        names the agent, or the hook runs outside the app) is
+                        not guessed at: it does not keep the check, and the
+                        verdict's detail says its owner was not read.
       ('started', ...)  `team save` added a NEW teammate. The app registers
                         him when this turn ends and then sends Stu the
                         team_reloaded message, which starts his next turn
                         (work_host.rs reload_team_after_turn), so the next
                         step is already in motion.
     A refused call counts for nothing, a replaced teammate gets no reload, and
-    a land (`integrate`) is not a close. Not told apart (a stated limit): two
-    obligations whose teammates were prepared under the same title, where the
-    later prepare names the owner. Nightly 73 and 74 walks: both truthful
-    replies were refused without this."""
+    a land (`integrate`) is not a close. Nightly 73 and 74 walks: both
+    truthful replies were refused without this."""
     try:
         offset = idle.turn_start_offset(transcript, prompt_id)
         wanted, answers, started = {}, {}, False
@@ -769,11 +786,13 @@ def app_job_outcome(idle, transcript, prompt_id, finishes):
                 closed.add(answer.get("obligation_id"))
                 closed.add(inp.get("obligation_id") if isinstance(inp, dict) else None)
         if closed:
-            owners = prepared_obligations(transcript)
-            open_ = [t for t in finishes if t not in owners or owners[t] not in closed]
+            owners = receipt_obligations(set(agents.values()))
+            open_ = [t for t, a in agents.items() if a in owners and owners[a] not in closed]
+            unread = [t for t, a in agents.items() if a not in owners]
             if not open_:
-                return ("closed", "the app closed obligation %s this turn"
-                        % ", ".join(sorted(str(o) for o in closed if o)))
+                return ("closed", "the app closed obligation %s this turn%s"
+                        % (", ".join(sorted(str(o) for o in closed if o)),
+                           "; owner not read for: %s" % ", ".join(unread) if unread else ""))
     except (OSError, AttributeError):
         return None
     for tid, answer in answers.items():
@@ -808,7 +827,7 @@ def stop_after_completion(idle, transcript, prompt_id, message):
         return {"finishes": finishes, "verdict": "started", "detail": "backgrounded tool call"}
     if "AskUserQuestion" in turn["tools"]:
         return {"finishes": finishes, "verdict": "ceo-owed", "detail": "AskUserQuestion"}
-    job = app_job_outcome(idle, transcript, prompt_id, finishes)
+    job = app_job_outcome(idle, transcript, prompt_id, finished_agents(idle, turn.get("notices")))
     if job and job[0] == "open":
         finishes = job[1]
     elif job:
