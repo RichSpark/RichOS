@@ -161,26 +161,6 @@ else
     }
     stop_notice_lead() { stop_notice_abnormal "$@"; }
 fi
-# stop_notice_lead <state-key> <message>: stop_notice_abnormal's state-change
-# dedup, on the MODEL channel (Stop hookSpecificOutput.additionalContext), which
-# the lead reads and answers in a continued turn; a systemMessage reaches only the
-# person. Measured: the frozen 2026-10-23 native request carried such a notice as
-# model input and the lead answered it (richos-hq docs/verification/2026-10-23-
-# orchestration-reliability-prd/author-v2-checks.json).
-if [ -f "$_SHN_LIB" ]; then
-    stop_notice_lead() {
-        local state="${1:-lead}" msg="${2:-}" prior
-        prior="$(_shn_prior)"
-        if [ "$prior" != "$state" ]; then
-            _shn_record "$state" "$(date +%s 2>/dev/null || echo '')"
-            printf '%s\n' "{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"$(_shn_escape "$msg")\"}}"
-        else
-            _shn_record "$state" "$(_shn_prior_emit_epoch)"
-        fi
-        return 0
-    }
-fi
-
 INPUT="$(cat)"
 
 if resolve_entity_root "$INPUT"; then

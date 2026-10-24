@@ -126,10 +126,7 @@ print(json.load(sys.stdin).get("systemMessage") or "")' 2>/dev/null)"
     # The state is the message without its age ("after 12 min:"), so a lease that only
     # grew older is not said again.
     _rll_key="held:$(printf '%s' "$_rll_msg" | sed -E 's/ after [^:]*:/ after:/g' | cksum | tr -d ' ')"
-    if [ "$(_shn_prior)" != "$_rll_key" ]; then
-        _shn_record "$_rll_key" "$(date +%s 2>/dev/null || echo '')"
-        printf '%s\n' "{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"$(_shn_escape "$_rll_msg")\"}}"
-    fi
+    stop_notice_lead "$_rll_key" "$_rll_msg"
 else
     case "$(_shn_prior)" in
         held:*) stop_notice_normal "" ;;          # released: nothing to say

@@ -244,8 +244,8 @@ mutant notice-counts-not-names "D1. " "$N" \
     "a count is what got demoted on 2026-08-31; a specific question is what got answered."
 
 mutant unasked-never-told "D1. " "$N" \
-    'if [ "$(_shn_prior)" != "unasked:$IDS" ]; then' \
-    'if false; then' \
+    'stop_notice_lead "unasked:$IDS" "$_CU_MSG"' \
+    'true' \
     "a still-current question he was never asked would reach nobody: the lead asks him, so the lead must be told (R3/R6)."
 
 mutant broken-list-is-quiet "D4. " "$N" \

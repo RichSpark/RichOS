@@ -259,10 +259,5 @@ fi
 # TO THE LEAD (Stop additionalContext), once per set of unasked items: the lead asks,
 # so the lead must read it; a systemMessage reaches only the person.
 _CU_MSG="CEO TODO ${TOP_ID} has not been put to him this session: ${TOP_ASK}${MORE} First check it is still current (already done or answered: close it on the record instead). If it is, ask it in your next reply with the current default stated, and keep independent work moving (CLAUDE.md §125); a blocking AskUserQuestion only if the next action truly waits on it. Full list: ${ENGINE_ROOT}/scripts/ceo-asks-status.sh"
-if [ "$(_shn_prior)" != "unasked:$IDS" ]; then
-    _shn_record "unasked:$IDS" "$(date +%s 2>/dev/null || echo '')"
-    printf '%s\n' "{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"$(_shn_escape "$_CU_MSG")\"}}"
-else
-    _shn_record "unasked:$IDS" "$(_shn_prior_emit_epoch)"
-fi
+stop_notice_lead "unasked:$IDS" "$_CU_MSG"
 exit 0
