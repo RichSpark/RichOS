@@ -225,6 +225,9 @@ for repo in dict.fromkeys(r for r in os.environ["IF_REPOS"].split("\n") if r.str
         # NOT "everyone acked" (hunt part 3 v3, finding 28).
         failed.append("%s (%s)" % (os.path.basename(repo.rstrip("/")) or repo, exc.__class__.__name__))
         continue
+    if res.get("error"):
+        # A RETURNED error decided nothing either: same NOT CHECKED line.
+        failed.append("%s (%s)" % (os.path.basename(repo.rstrip("/")) or repo, " ".join(str(res["error"]).split())))
     for wt in res["worktrees"]:
         who = wt.get("resolved_name") or os.path.basename(wt["path"].rstrip("/"))
         if wt["verdict"] == "OWED-NO-NOTICE":

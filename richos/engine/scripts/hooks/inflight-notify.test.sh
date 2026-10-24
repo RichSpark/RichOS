@@ -1014,6 +1014,65 @@ case "$AGE" in
     *) bad "13. a notice's age is read as UTC under daylight saving" "$AGE" ;;
 esac
 
+# ==========================================================================
+# 14. AN ASSESSMENT THAT RETURNS AN ERROR IS NOT CHECKED, NEVER "NOTHING
+#     OUTSTANDING"
+#
+# assess() reports some failures by RETURNING a result with "error" set (no
+# tip commit, an unreadable worktree inventory, git gaps) rather than raising.
+# The Stop notice used to read only the raised kind, so a returned error fell
+# through to "Nothing outstanding." Its own repository, so the state before
+# each case is known: a teammate behind and never told, that teammate gone
+# (the clean answer), then a swept directory whose tip cannot be resolved.
+# ==========================================================================
+CLEAN="$SANDBOX/clean-repo"
+CLEAN_TEAMS="$SANDBOX/clean-teams"
+mkdir -p "$CLEAN" "$CLEAN_TEAMS/session-deadbeef" "$SANDBOX/not-a-repo"
+printf 'PROTECTED_PATHS="src"\n' > "$CLEAN/orchestration.config"
+git -C "$CLEAN" init -q -b main
+git -C "$CLEAN" config user.email "$(git config user.email 2>/dev/null || echo tester@example.invalid)"
+git -C "$CLEAN" config user.name "$(git config user.name 2>/dev/null || echo tester)"
+mkdir -p "$CLEAN/src"
+echo "one" > "$CLEAN/src/a.txt"
+git -C "$CLEAN" add -A
+git -C "$CLEAN" commit -q -m "base"
+CLEAN_WT="$SANDBOX/wt/mark-sonnet-clean1"
+git -C "$CLEAN" worktree add -q -b worktree-mark "$CLEAN_WT" >/dev/null 2>&1
+echo "teammate work" > "$CLEAN_WT/src/b.txt"
+git -C "$CLEAN_WT" add -A
+git -C "$CLEAN_WT" commit -q -m "teammate commit"
+echo "two" >> "$CLEAN/src/a.txt"
+git -C "$CLEAN" add -A
+git -C "$CLEAN" commit -q -m "a land that moves main"
+: > "$CLEAN_TEAMS/session-deadbeef/inflight-repos.txt"
+clean_stop() {
+    stop_payload | RICHOS_ENTITY_ROOT="$CLEAN" INFLIGHT_TEAMS_DIR="$CLEAN_TEAMS" \
+        RICHOS_INFLIGHT_ACK_LEDGER="$NO_ACK_LEDGER" bash "$STOPHOOK" 2>/dev/null
+}
+notice_has() { # <output> <text>
+    printf '%s' "$1" | NEEDLE="$2" python3 -c 'import json,os,sys; d=json.load(sys.stdin); sys.exit(0 if os.environ["NEEDLE"] in d.get("systemMessage","") else 1)' 2>/dev/null
+}
+COUT="$(clean_stop)"
+say "14 teammate never told" "$COUT"
+notice_has "$COUT" "NEVER TOLD: mark-sonnet-clean1" \
+    && ok "14a. precondition: a teammate behind and never told is named" \
+    || bad "14a. precondition: a teammate behind and never told is named" "$COUT"
+git -C "$CLEAN" worktree remove --force "$CLEAN_WT" >/dev/null 2>&1
+COUT="$(clean_stop)"
+say "14 nothing owed" "$COUT"
+notice_has "$COUT" "Nothing outstanding." \
+    && ok "14b. a clean assessment with nothing owed says nothing outstanding" \
+    || bad "14b. a clean assessment with nothing owed says nothing outstanding" "$COUT"
+printf '%s\n' "$SANDBOX/not-a-repo" > "$CLEAN_TEAMS/session-deadbeef/inflight-repos.txt"
+COUT="$(clean_stop)"
+say "14 returned error" "$COUT"
+if notice_has "$COUT" "NOT CHECKED, the assessment failed for: not-a-repo" \
+        && ! notice_has "$COUT" "Nothing outstanding."; then
+    ok "14c. an assessment that RETURNS an error is NOT CHECKED, naming the repository"
+else
+    bad "14c. an assessment that returns an error is NOT CHECKED, naming the repository" "$COUT"
+fi
+
 echo ""
 if [ "$FAIL" -eq 0 ]; then
     printf '\033[32m✓ in-flight sweep: all %s checks passed.\033[0m\n' "$PASS"

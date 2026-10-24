@@ -3849,7 +3849,7 @@
     },
     "scripts/hooks/notice-inflight-acks.sh": {
       "source": "scripts/hooks/notice-inflight-acks.sh",
-      "sha256": "472a52d1fe0e78b0f4f166da9402fae9acf3eba3f6329c3afeb7460ced547a32",
+      "sha256": "892764ae128878acf05cbd02d9203f57eac6a1e4cb36dae8369e3e4ba1a12a09",
       "evidence": "Resolves the entity and team ledger, reads the timeout through inflight.sh and assesses recorded repositories through inflight.py. Its fixed Stop-notice and payload helpers read/write notice state; remediation and TaskStop text are output only.",
       "keys": [],
       "edges": [
@@ -3880,7 +3880,7 @@
     },
     "scripts/hooks/inflight-notify.test.sh": {
       "source": "scripts/hooks/inflight-notify.test.sh",
-      "sha256": "21269805e48be6fd1dead5a08b3474bcf369013842149c64ac20217dade1d431",
+      "sha256": "b09b24c66626633957a5ac21f3463dccfcfc3683d51a63771947105054ac6eee",
       "evidence": "Finite copied hooks/libraries run against newly initialized private repositories with literal PROTECTED_PATHS, private team/notice/ack ledgers and transcript data. All guard, Stop-hook, CLI and acknowledgement calls target these fixtures. Native teammate helpers create Git worktrees/locks, not model processes. The final timezone check imports real inflight.py but calls only time and ack readers with literal arguments; no production config is copied or sourced.",
       "keys": [],
       "edges": [
@@ -7336,7 +7336,7 @@
     },
     "scripts/hooks/notice-inflight-acks.sh#unadopted-stop": {
       "source": "scripts/hooks/notice-inflight-acks.sh",
-      "sha256": "472a52d1fe0e78b0f4f166da9402fae9acf3eba3f6329c3afeb7460ced547a32",
+      "sha256": "892764ae128878acf05cbd02d9203f57eac6a1e4cb36dae8369e3e4ba1a12a09",
       "evidence": "Visibility suite invokes this hook with no CLI arguments and a new unadopted directory, first as explicit bad root then as cwd/payload. Root-failure/not-adopted paths terminate before entity config, transcript predicates or live-state checks. Bootstrap, module initialization and any pre-root session-recovery helper remain bound. The negative control only replaces stop_notice_abnormal output.",
       "keys": [],
       "edges": [
@@ -17023,12 +17023,12 @@
         "scripts/hooks/guard-worktree-removal.test.sh": "2b7b5c289305b351e5e5f911d5bc68f5e257e6242ed769f22db04190ff97fcba",
         "scripts/hooks/idle-land.mutation.sh": "50afc330c98fe2813f880ee1e6c9532b8d91f98095e7cf68b1a90c3ead07623a",
         "scripts/hooks/inflight-notify.mutation.sh": "9eebb219f5fd40aa2dec6c34504679042fcd64684eb663936e1543acfcd298a6",
-        "scripts/hooks/inflight-notify.test.sh": "21269805e48be6fd1dead5a08b3474bcf369013842149c64ac20217dade1d431",
+        "scripts/hooks/inflight-notify.test.sh": "b09b24c66626633957a5ac21f3463dccfcfc3683d51a63771947105054ac6eee",
         "scripts/hooks/install.sh": "958988c765495883314904a7d556288f2c2dc3518c12cb8f58311a0985a5c73f",
         "scripts/hooks/interactive-prompt.mutation.sh": "3872e019a151c07a5d387e3128451954efcd34e4b3ac738bfc6282a430833e27",
         "scripts/hooks/mechanical-findings.mutation.sh": "822097cb9972738d9d39a91ab187d2475cfb4008f63c3c421e5ef9e7f1818a6d",
         "scripts/hooks/mechanical-findings.test.sh": "e23f188f029e21dec0e06c0758bb6912ede88002d366c5c3b331f3a0ca7a0397",
-        "scripts/hooks/notice-inflight-acks.sh": "472a52d1fe0e78b0f4f166da9402fae9acf3eba3f6329c3afeb7460ced547a32",
+        "scripts/hooks/notice-inflight-acks.sh": "892764ae128878acf05cbd02d9203f57eac6a1e4cb36dae8369e3e4ba1a12a09",
         "scripts/hooks/notice-inflight-sends.sh": "b5120d7d24070d1e306ed38fd96345bfee3c7d2538e1bde72c4bde155a4e0af4",
         "scripts/hooks/notice-mechanical-findings.sh": "1b3ba1af8d15b64cd8eda504e691347f0ef923bd78e53f235223589248bb1c07",
         "scripts/hooks/observe-created-refs.sh": "6c1bcc7fc86608dace9465fdaef957468872b82906e4134382a98b5ab8085202",
@@ -17485,7 +17485,7 @@
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
-        "scripts/hooks/notice-inflight-acks.sh": "472a52d1fe0e78b0f4f166da9402fae9acf3eba3f6329c3afeb7460ced547a32",
+        "scripts/hooks/notice-inflight-acks.sh": "892764ae128878acf05cbd02d9203f57eac6a1e4cb36dae8369e3e4ba1a12a09",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/hooks/notice-mechanical-findings.sh": "1b3ba1af8d15b64cd8eda504e691347f0ef923bd78e53f235223589248bb1c07",
         "scripts/hooks/notice-protected-ref-moves.sh": "15ea383b87181c6924a00f8b5f656f72f2319e9680947674f68972fbcd6c2c43",
@@ -17842,7 +17842,7 @@
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
-        "scripts/hooks/notice-inflight-acks.sh": "472a52d1fe0e78b0f4f166da9402fae9acf3eba3f6329c3afeb7460ced547a32",
+        "scripts/hooks/notice-inflight-acks.sh": "892764ae128878acf05cbd02d9203f57eac6a1e4cb36dae8369e3e4ba1a12a09",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/lib/inflight.py": "323e7fe192bd5e324381f78517b33eec5ee95036152c37f56e75701b1859bd35",
         "scripts/hooks/notice-mechanical-findings.sh": "1b3ba1af8d15b64cd8eda504e691347f0ef923bd78e53f235223589248bb1c07",
