@@ -536,6 +536,19 @@ impl WorkHost {
         Ok(changed)
     }
 
+    /// At the end of a turn of Stu's, his own or an automatic one: a teammate he saved in it is
+    /// usable only from his next turn, which nothing else would start, so a changed team is
+    /// registered and he gets one turn per change, through his own inbox.
+    fn reload_team_after_turn(&self, backend: &Arc<Backend>, binding: &ThreadBinding,
+        lease: &mut dyn Cognition) -> Result<(), String> {
+        if self.refresh_peer_team(backend, lease)? {
+            if let Err(error) = crate::session_tools::observe_team_reloaded(&self.message_scope(binding)) {
+                eprintln!("[richos] the team reload could not be passed to Stu: {error}");
+            }
+        }
+        Ok(())
+    }
+
     fn handoff_stopped(
         &self,
         binding: &ThreadBinding,
@@ -650,13 +663,7 @@ impl WorkHost {
                 .as_mut()
                 .ok_or("The operator connection closed during team reload")?;
             self.project_output(binding, &session);
-            // A teammate he saved this turn is usable only from his next one, which nothing
-            // else would start: one turn per change, through his own inbox.
-            if self.refresh_peer_team(backend, lease.as_mut())? {
-                if let Err(error) = crate::session_tools::observe_team_reloaded(&self.message_scope(binding)) {
-                    eprintln!("[richos] the team reload could not be passed to Stu: {error}");
-                }
-            }
+            self.reload_team_after_turn(backend, binding, lease.as_mut())?;
             Ok(session)
         }
         })();
@@ -1130,6 +1137,16 @@ impl WorkHost {
             let result = match next {
                 Next::Move(binding, at_turn_end) => {
                     self.move_to_account_in_use(&backend, &binding, at_turn_end);
+                    // An automatic turn's end (the only `at_turn_end`) is a turn's end too
+                    // (nightly 73 walk, check 5: Stu saved norm in one and was never told).
+                    if at_turn_end {
+                        let mut lease = backend.lease.lock().unwrap();
+                        if let Some(lease) = lease.as_mut() {
+                            if let Err(error) = self.reload_team_after_turn(&backend, &binding, lease.as_mut()) {
+                                eprintln!("[richos] the team could not be reloaded after an automatic turn: {error}");
+                            }
+                        }
+                    }
                     let mut inner = backend.inner.lock().unwrap();
                     inner.processing = false;
                     backend.wake.notify_all();
@@ -1989,6 +2006,7 @@ mod tests {
         fn account(&self)->Option<&str> {Some(&self.account)}
         fn running_commands(&self)->Option<crate::lease_commands::CommandReading> {Some(*self.commands.lock().unwrap())}
         fn set_between_turn_sink(&mut self,sink:crate::cognition::BetweenTurnSink) {*self.sink.lock().unwrap()=Some(sink);}
+        fn refresh_team(&mut self)->Result<bool,CognitionError> {Ok(true)}
         fn prompt(&mut self,text:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
             self.prompts.lock().unwrap().push((self.account.clone(),text.to_string()));
             Ok("end_turn".into())
@@ -2002,9 +2020,11 @@ mod tests {
         commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
         sink: Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>,
         prompts: Arc<Mutex<Vec<(String, String)>>>,
+        team: Arc<Mutex<TeamScript>>,
     }
     impl LeaseFactory for OnAccountInUse {
         fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
+        fn team_digest(&self)->Option<String> {self.team.lock().unwrap().digest.clone()}
         fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
             let n=self.spawns.fetch_add(1,Ordering::SeqCst);
             Ok(Box::new(Driven {session:format!("stu-session-{n}"),account:self.quota.lease_account().id,
@@ -2038,14 +2058,19 @@ mod tests {
     }
     /// Stu started on Account 1 by a message in his inbox (the run loop opens his lease).
     fn stu_on_account_one() -> Moving {
+        stu_on_account_one_with_team(None)
+    }
+    /// The same, with the saved team `team` registered by the lease his first turn opens.
+    fn stu_on_account_one_with_team(team: Option<&str>) -> Moving {
         let h=harness(0);
+        h.team.lock().unwrap().digest=team.map(str::to_string);
         let quota=Arc::new(crate::quota::Service::open(&h.root.join("quota")).unwrap());
         let home=quota.accounts.add("Home").unwrap();
         let (spawns,prompts)=(Arc::new(AtomicUsize::new(0)),Arc::new(Mutex::new(Vec::new())));
         let commands=Arc::new(Mutex::new(crate::lease_commands::CommandReading::Clear));
         let sink=Arc::new(Mutex::new(None));
         let host=WorkHost::new(&h.state,Box::new(OnAccountInUse {quota:quota.clone(),spawns:spawns.clone(),
-            commands:commands.clone(),sink:sink.clone(),prompts:prompts.clone()}),Arc::new(SilentNotifier));
+            commands:commands.clone(),sink:sink.clone(),prompts:prompts.clone(),team:h.team.clone()}),Arc::new(SilentNotifier));
         host.set_quota(quota.clone());
         crate::session_tools::observe_stall(&host.message_scope(&h.binding),"the website job").unwrap();
         host.wake_messages(&h.binding);
@@ -2163,6 +2188,34 @@ mod tests {
         until("Stu is told to carry on, on Home",||told(&m,"account_moved").iter().any(|(account,_)|account==&m.home.id));
         let moved=told(&m,"account_moved");
         assert!(moved[0].1.contains(r#"\"from\":\"Account 1\""#) && moved[0].1.contains(r#"\"to\":\"Home\""#),"{}",moved[0].1);
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
+    }
+
+    /// **A teammate Stu saves in an automatic turn is reloaded when that turn ends, and Stu gets
+    /// his one turn to take up the job** (nightly 73 walk, check 5, 2026-10-24: a task
+    /// notification started his turn, he saved norm in it, `prepare norm` was refused, the turn
+    /// ended, and nothing reloaded the team or told him; only an unrelated stall reminder moved
+    /// the job on). No input of ours and no reminder here: the turn's end alone does it, on the
+    /// same session, and an automatic turn that changes nothing adds nothing.
+    #[test]
+    fn a_teammate_saved_in_an_automatic_turn_is_reloaded_when_it_ends_and_stu_carries_on() {
+        let m=stu_on_account_one_with_team(Some("stock"));
+        settled(&m);
+        automatic_turn_starts(&m);
+        m.h.team.lock().unwrap().digest=Some("stock and norm".into());
+        automatic_turn_ends(&m);
+        until("Stu is told the team reloaded",||!told(&m,"team_reloaded").is_empty());
+        settled(&m);
+        let backend=m.host.backend(m.h.binding.thread_id()).unwrap();
+        assert_eq!(backend.inner.lock().unwrap().lease_team.as_deref(),Some("stock and norm"),"norm is not registered");
+        assert_eq!(m.spawns.load(Ordering::SeqCst),1,"the reload replaced Stu's session");
+        let reloaded=told(&m,"team_reloaded");
+        assert_eq!(reloaded.len(),1,"one turn per change: {reloaded:?}");
+        assert_eq!(reloaded[0].0,"1","told on the session he saved norm in");
+        assert_eq!(m.prompts.lock().unwrap().len(),2,"anything but his first turn and the reload: {:?}",m.prompts.lock().unwrap());
+        automatic_turn(&m);
+        settled(&m);
+        assert_eq!(told(&m,"team_reloaded").len(),1,"an unchanged team got a continuation");
         m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
     }
 
