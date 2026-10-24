@@ -3744,10 +3744,25 @@ class Finding15_TheBudgetReachesTheWork(Base):
 
     def test_finding_15_a_retry_stops_at_its_budget_inside_the_attempt(self):
         npath = self._landed_with_pending_deletion("zach-opus-bud")
+        slow, compared = self._slow_same_file(), []
+
+        def counted(*a, **kw):
+            compared.append(a[0])
+            return slow(*a, **kw)
         t0 = time.monotonic()
-        with patch.object(ws, "_same_file", self._slow_same_file()):
+        # The stages before the proof are bounded by their own tests (V2-03). Here they
+        # answer at once, so the 1 s budget reaches the proof on a loaded Mac too. When
+        # they spent it (reproduced by slowing the process listing by 1 s), the attempt
+        # was deferred before the proof ran and a proof with no deadline passed, as the
+        # p05-retry-proof-has-no-deadline mutant did in nightly run 20261024T141722Z-b960a7c2.
+        with patch.object(ws, "_same_file", counted), \
+                patch.object(ws, "stop_processes", return_value={"stopped": [], "survivors": []}), \
+                patch.object(ws, "stop_containers", return_value={}), \
+                patch.object(ws, "stop_test_instances", return_value={}):
             ws.retry_due(budget=1.0)
         took = time.monotonic() - t0
+        self.assertTrue(compared, "the budget ran out before the landing proof compared a file, "
+                                  "so this attempt did not test the proof's deadline")
         self.assertLess(took, self.FILES * self.SLOW * 0.6,
                         "one retry attempt ran %.1fs past a 1s budget" % took)
         rec = self.rec("zach-opus-bud")
