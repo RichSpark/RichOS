@@ -1722,6 +1722,10 @@ def run_loop(a, src, exit_on_notice=False):
     alive = session_alive_check(spid) if spid else None
     poll = _env_float("STALL_WATCH_POLL_SECONDS", POLL_SECONDS)
     beat = {"pid": os.getpid(), "started": int(time.time()), "poll": poll, "session": sid,
+            # The registry partition this monitor reads (in the app, one conversation's):
+            # another conversation's reader may count this monitor only for the same one.
+            "scope": os.path.realpath(os.environ["RICHOS_WORKSPACES_DIR"])
+                     if (os.environ.get("RICHOS_WORKSPACES_DIR") or "").strip() else "",
             "mode": "watch" if exit_on_notice else "monitor", "last_look": None, "open": 0}
     failing = ""
     try:
@@ -1780,7 +1784,8 @@ def alive_status(sid, engine_root, command="stall-watch.sh"):
     current source? 0 yes; 1 no, with why; 2 no session. The one reading --alive and the
     Stop/startup fallback (workspaces.py) share. In the app the registry is one
     conversation's partition and its one monitor runs under the Work lease's session, so
-    there a healthy monitor of any session in the state directory counts."""
+    there a healthy monitor of another session counts only when its beat's `scope` is this
+    caller's registry partition (RICHOS_WORKSPACES_DIR)."""
     if not sid:
         return 2, "stall-watch: no session here; nothing to check"
     names = [sid]
@@ -1789,8 +1794,13 @@ def alive_status(sid, engine_root, command="stall-watch.sh"):
             names += sorted(n for n in os.listdir(state_root()) if n != sid)
         except OSError:
             pass
+    mine = os.path.realpath(os.environ["RICHOS_WORKSPACES_DIR"]) \
+        if (os.environ.get("RICHOS_WORKSPACES_DIR") or "").strip() else ""
     first = None
     for name in names:
+        if name != sid and (not mine or _read_json(os.path.join(state_root(), name, "monitor.json"))
+                            .get("scope") != mine):
+            continue          # another conversation's monitor watches another partition
         code, line = _alive_one(name, sid, engine_root, command)
         if code == 0:
             return code, line

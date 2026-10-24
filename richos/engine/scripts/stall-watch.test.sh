@@ -998,6 +998,40 @@ OUT="$(f_alive)"; RC=$?
 check "F10  a beat whose writer, the lock's named holder, is a dead process is not healthy" \
     "$( [ "$RC" = 1 ] && has "$OUT" "is gone"; echo $?)" "rc=$RC out=$OUT"
 kill "$FOLD" 2>/dev/null
+# F11 (Frank and Sage D1): in the app, conversation A's healthy monitor must not make
+# conversation B read as watched; only a monitor of the same registry partition counts.
+OUT="$(python3 -B - "$FE" "$SB/f11" <<'PY'
+import fcntl, json, os, subprocess, sys, time
+fe, root = sys.argv[1], sys.argv[2]
+os.makedirs(os.path.join(root, "sess-A"), exist_ok=True)
+os.environ["STALL_WATCH_STATE_DIR"] = root
+sys.path.insert(0, fe + "/scripts/lib")
+import stall_watch
+lock = os.path.join(root, "sess-A", "monitor.lock")
+holder = subprocess.Popen([sys.executable, "-c",
+    "import fcntl,os,sys,time; fd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o600); fcntl.flock(fd,fcntl.LOCK_EX); "
+    "os.ftruncate(fd,0); os.pwrite(fd,str(os.getpid()).encode(),0); print('ready',flush=True); time.sleep(60)", lock],
+    stdout=subprocess.PIPE, text=True)
+holder.stdout.readline()
+try:
+    now = time.time()
+    a_part = os.path.realpath(os.path.join(root, "partition-A"))
+    json.dump({"pid": holder.pid, "poll": 60, "session": "sess-A", "mode": "monitor", "last_look": now, "open": 0,
+               "scope": a_part, "evaluated": {"identity": stall_watch.source_identity(fe)[0], "at": now}},
+              open(os.path.join(root, "sess-A", "monitor.json"), "w"))
+    os.environ.update(RICHOS_APP_ENTITY="company", RICHOS_APP_THREAD="thread-b",
+                      RICHOS_WORKSPACES_DIR=os.path.join(root, "partition-B"))
+    b = stall_watch.alive_status("sess-B", fe)[0]
+    os.environ["RICHOS_WORKSPACES_DIR"] = os.path.join(root, "partition-A")
+    a = stall_watch.alive_status("sess-B", fe)[0]
+    print(b, a)
+finally:
+    holder.kill()
+    holder.wait()
+PY
+)"
+check "F11  in the app, another partition's healthy monitor leaves this conversation NOT watched; the same partition's counts" \
+    "$( [ "$OUT" = "1 0" ]; echo $?)" "out=$OUT"
 # F9: the evaluator's source changes while the child loads it. The fixture's workspaces.py
 # edits itself once at import (a flag file arms it): the child started on one version and
 # the disk holds another when it ends, so the look records no version. F9b: the next look,
