@@ -8672,7 +8672,7 @@
     },
     "mega-lander/tests/workspaces.test.py": {
       "source": "mega-lander/tests/workspaces.test.py",
-      "sha256": "21a699f55c6c7194918906aef94a38e66d0cc0ef7ec360fbe0cad09af3db7af9",
+      "sha256": "eb86f0bd7892144bd7498230a0f95fcc52541a0aa73239646ae5e92cf8feffae",
       "evidence": "AST census of every ws call, subprocess and run call: fixed Git fixtures, captured sleep processes, a literal shutdown writer and seven Stop guards. Private HOME/config directories and Git config do not replace real app cleanup or QA settings. Six guards receive only a forbidden lead; workspace gate receives a private unadopted repository. The sole land CLI call explicitly patches out the scratch sweep. The added resource-waits Stop guard also returns at the forbidden-lead recovery before reading settings or wait state. Renewed 2026-09-30 (hunt part 4): the finding-20 case runs app.test.py as a subprocess for the one case test_pause_message_is_fixed selects (edge to that case) and reads the five sibling *.mutation.sh files as text; the finding 11-15 and 29 cases add literal sleeper processes, ps reads, a patched container reaper and a private RICHOS_WORKSPACES_GATE_BUDGET. No configuration read is added. Renewed 2026-10-07 (merge-gate abort): MergeGateRefusal installs and switches on the operator fence in its private repository through scripts/operator-fences.sh with a literal private entity config, writes a private session record for its own pid, takes the lease with scripts/land-lease.sh (CLAUDE_PID removed from the child environment), adds a literal refusing pre-merge-commit hook and runs workspaces.py merge as a subprocess. No configuration read is added. Env (2026-10-08) also exports SCRATCH_BUILD_CACHE_ROOT and SCRATCH_CARGO_TARGET_ROOTS pointing into its own temporary root and restores them on close, so the lander's build-cache step never reads the operator's configured cache folders. RecoveryChain fixtures exercise private review state and patch mode/reconcile/provider launch; observation tests execute no model and preserve baseline helper tools. Direct recovery imports are included in the fixture dependency closure. Renewed 2026-10-20 (verification reliability PRD T20): VerifierBuildOutputDoesNotBlockAContinuation reads the repository's committed richos/mobile/conformance/verifier/.gitignore beside the ignore files RichosBuildOutputDoesNotBlockAContinuation already reads, and writes only its private fixture. No configuration read is added.",
       "keys": [],
       "edges": [
@@ -8731,7 +8731,7 @@
     },
     "mega-lander/tests/workspaces.mutation.sh": {
       "source": "mega-lander/tests/workspaces.mutation.sh",
-      "sha256": "24597d9a2be5a9fcf76b6691b77db6d5d2a0cfbc18b96400d96394807b26ca45",
+      "sha256": "bd6bc12dc36a2e853fc519caf80e5a15b52d10d2f88a76261f11bcdddcb63b7e",
       "evidence": "Reviewed all finite old/new mutation operands: local workspace predicates, records, Git queries and fixed helper calls. No mutant introduces a dynamic configuration reader or executable. Focused inner suite keeps the same fixture boundaries; copied configuration presence remains a harness input.",
       "keys": [],
       "literal_keys": {
@@ -16980,7 +16980,7 @@
         "ass-kicker/tests/stated-actions.mutation.sh": "fb2b1f726c2945c158083ab2fc63a6987bf8427a35d1be7aa786ffb0da70e0f1",
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/tests/workspaces-e2e.test.sh": "c8790b5c0761f1c5c7f25faa5b6192f8c236554c6a975c86aa2fe2df0f961a30",
-        "mega-lander/tests/workspaces.test.py": "21a699f55c6c7194918906aef94a38e66d0cc0ef7ec360fbe0cad09af3db7af9",
+        "mega-lander/tests/workspaces.test.py": "eb86f0bd7892144bd7498230a0f95fcc52541a0aa73239646ae5e92cf8feffae",
         "mega-lander/workspaces.py": "c4e7e7e3651764c67e1d4563fe43ad157c7f00d1b764b8d907ba671090051094",
         "mega-lander/workspaces.sh": "f3d8f6fd22b225d83efa1debf5336de5076c6531a48690802000e5f573f80744",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
