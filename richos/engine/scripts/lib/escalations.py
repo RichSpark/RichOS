@@ -1111,8 +1111,20 @@ def cmd_ack(args):
             % args.id)
         return 2
     if args.id not in live:
-        sys.stderr.write("escalations: %s is already acknowledged. Nothing appended.\n" % args.id)
-        return 1
+        # A TIMED HOLD MAY BE CLOSED FOR GOOD. A hold says "look again by this
+        # date"; when the answer is already in, a permanent acknowledgement
+        # replaces it, so the hold cannot expire and tell somebody about a thing
+        # that is over. Only that: an id closed permanently stays closed, and a
+        # hold is never renewed or replaced by another hold this way.
+        now_e = utcnow().timestamp()
+        acks = acks_for(rows, args.id)
+        permanent = any(not isinstance(a.get("until_epoch"), (int, float)) for a in acks)
+        held = any(isinstance(a.get("until_epoch"), (int, float)) and a["until_epoch"] > now_e
+                   for a in acks)
+        if permanent or not held or (getattr(args, "until", "") or "").strip():
+            sys.stderr.write("escalations: %s is already acknowledged. Nothing appended.\n"
+                             % args.id)
+            return 1
     row = {
         "event": "EscalationAck",
         "id": args.id,

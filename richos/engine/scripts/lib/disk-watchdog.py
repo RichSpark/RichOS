@@ -429,9 +429,9 @@ def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, 
     Unresolved and nothing associated, or the associated one acknowledged
     permanently: raise one (state proceeding, for the lead). Associated and open,
     or held by a timed acknowledgement: nothing; the ledger and the stall watcher
-    already repeat it, and an expiring hold reopens the same id. Healthy again:
-    acknowledge the associated id permanently, or keep the association until a
-    hold expires and it can be. Returns the association to store, or None."""
+    already repeat it, and an expiring hold reopens the same id. Healthy again
+    (kept leftovers are not a failure): acknowledge the associated id permanently,
+    open or held. Returns the association to store, or None."""
     engine_scripts = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     checkout = os.path.realpath(os.path.join(engine_scripts, "..", "..", ".."))
     assoc = prev.get("cleanup_escalation") if isinstance(prev.get("cleanup_escalation"), dict) else None
@@ -439,7 +439,10 @@ def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, 
     if not problems:
         if not assoc:
             return None
-        if status == "open":
+        # HELD IS CLOSED TOO. A timed hold left in place would expire and tell the
+        # lead again about a failure that is gone (2026-10-24: the escalation of
+        # 01:19Z was held to 22:00Z on superseded instructions).
+        if status in ("open", "held"):
             rc, out = _escalate(engine_scripts, [
                 "ack", assoc["id"], "--disposition",
                 "Recovered: the scheduled cleanup run's result at %s has no failure left "

@@ -1597,19 +1597,22 @@ if [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = 
 else
     bad "W23i a timed acknowledgement was answered with a replacement"
 fi
-# Recovery before the hold expires: health clears, the association stays until the
-# id can be closed.
-healthy_reaper_state "$RS" '"roots": ["/x/root"]'
+# Recovery before the hold expires, to a refreshed result holding ONLY a known
+# kept leftover (the state of 2026-10-24): health clears and the HELD id is closed
+# permanently at once, so its hold cannot expire and tell the lead again.
+# (Changed 2026-10-24; it used to keep the id until the hold expired.)
+healthy_reaper_state "$RS" '"outcome": "unresolved", "roots": ["/x/root"], "unresolved": [{"scope": "/x/root", "class": "codex-worktree", "condition": "chat-attached", "count": 1, "bytes": 0, "identity": "k1", "cause": "1 undecided codex-worktree entry (0 B), e.g. /x/root/a: finished, but a Codex chat still has it attached, so it is kept"}]'
 OUT="$(run_wd --alert)"; RC=$?
 run_wd_scheduled >/dev/null 2>&1
-if [ "$RC" = "0" ] && [ "$(wd_assoc)" = "$ID2" ] \
-   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "EscalationAck"])')" = "2" ]; then
-    ok "W23j recovery during a hold clears health and keeps the id until it can be closed"
+if [ "$RC" = "0" ] && [ -z "$(wd_assoc)" ] \
+   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "EscalationAck" and r.get("id") == "'"$ID2"'" and "Recovered" in r.get("disposition", "") and not r.get("until")])')" = "1" ]; then
+    ok "W23j recovery during a hold, to only a kept leftover, closes the held id permanently"
 else
-    bad "W23j recovery during a hold (rc=$RC assoc=$(wd_assoc))"
+    bad "W23j a held escalation stayed open after recovery (rc=$RC assoc=$(wd_assoc))"
+    cat "$LEDGER" 2>/dev/null | sed 's/^/        /' | tail -4
 fi
-# The hold expires (its until moved into the past): the same id reopens, and the
-# next tick, reading a healthy result, closes it permanently.
+# The hold's date then passes: the permanent close outlives it; nothing reopens
+# and no new id is raised.
 python3 - "$LEDGER" "$ID2" <<'PY'
 import json, sys, time
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
@@ -1622,10 +1625,18 @@ PY
 run_wd_scheduled >/dev/null 2>&1
 if [ -z "$(wd_assoc)" ] \
    && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "EscalationAck" and r.get("id") == "'"$ID2"'" and "Recovered" in r.get("disposition", "") and not r.get("until")])')" = "1" ] \
+   && [ "$(python3 - "$LEDGER" "$ID2" "$SCRIPT_DIR/lib" <<'PYOUT'
+import json, sys
+sys.path.insert(0, sys.argv[3])
+import escalations
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+print(len([e for e in escalations.outstanding(rows) if e.get("id") == sys.argv[2]]))
+PYOUT
+)" = "0" ] \
    && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = "2" ]; then
-    ok "W23k after the hold expires the job closes the SAME id permanently; no new id"
+    ok "W23k after the hold's date passes the closed id stays closed; no new id"
 else
-    bad "W23k the expired hold was not closed against current health"
+    bad "W23k the expired hold reopened the closed id, or a new one was raised"
     cat "$LEDGER" 2>/dev/null | sed 's/^/        /' | tail -4
 fi
 # Only a run that inspected the scope that failed clears it.
