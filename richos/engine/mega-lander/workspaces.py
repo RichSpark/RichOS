@@ -8695,7 +8695,7 @@ def main(argv):
                                                      "; nothing checkable ends it, so it is reported until it runs"))
         elif a.cmd == "hold":
             h = hold(a.name, a.what, a.until, a.why, me, a.by)
-            print("held: %s%s" % (a.name, (" until " + (h.get("end") or (h.get("waiting") or {}).get("end") or ""))
+            print("held: %s%s" % (a.name, (" until " + ((h.get("waiting") or {}).get("end") or h.get("end") or ""))
                                   if a.until else "; nothing checkable ends it, so it is reported until it runs"))
         elif a.cmd == "release":
             release(a.name, a.ceo_word, a.not_a_hold, me)

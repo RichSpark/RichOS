@@ -18,7 +18,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65). stu-remi
 unchanged: identity, first-run, job (stu-reminder-walk.py's JOB, which needs an engineer, so Stu has to
 save one; it must be SETTLED with no human message after the request), idle. Then:
   monitor   the Work lease's monitor (`stall_watch.py --monitor --jsonl`, native.rs StallWatch) is
-            running for the Stu session that ran the job: pid, parent, start time, RICHOS_SESSION_ID
+            running for the Stu session that ran the job: pid, parent, start time, RICHOS_SESSION_ID;
+            the probe leaves out its own process and its shell, whose command lines name those words
   fail      that pid, verified to be the same process, is killed (SIGKILL, in the disposable guest).
             PASS needs a NEW stall-watch row "the monitor stopped unexpectedly" in THIS conversation's
             inbox for Stu and its words in THIS Stu session's transcript
@@ -26,9 +27,11 @@ save one; it must be SETTLED with no human message after the request), idle. The
             and the transcript lines carrying `team_reloaded`; FAIL when there is none (the job did
             not go through a team change, so the question was not asked)
   after     after `fail`: one ordinary request (--after-task) is typed; it must be SETTLED, the lead
-            file of the session that ran it must say its turn ended after the send (the Work lease
-            closed normally), and no NEW "monitor stopped" row may reach Stu's inbox up to
-            --after-quiet seconds after that close
+            file of the session that ran it must say its turn ended after the send, and no NEW
+            "monitor stopped" row may reach Stu's inbox up to --after-quiet seconds after that turn
+            end. A turn end is idle between turns (native.rs LeadSignal), not the lease's disposal, so
+            this step reports only the turn end; a normal lease close is the a6-app-work-lease-eof
+            walk's (richos-hq docs/verification/2026-10-24-orchestration-reliability-impl)
   keep      ALWAYS, pass or fail, before run-walk.py deletes the guest: every session transcript
             (~/.claude/projects), the app's engine-state, the conversation ledger and the bundle's
             Info.plist, as kept/kept.tgz on the host. The first such walk lost the rows.
@@ -59,12 +62,15 @@ STEPS = ['identity', 'first-run', 'job', 'idle', 'reload', 'monitor', 'fail', 'a
 AFTER_JOB = ('Please add a file named more.md whose whole content is the line "More notes for the walk test." '
              'to the Acme repository and commit it, and land it.')
 
-PROCS = ('import json,subprocess,sys\n'
+# The Work-lease monitors running in the guest. This source names the three words it looks for, so it
+# leaves out its own process and the shell that ran it (nightly 74 walk: pid 24452 was this probe).
+PROCS = ('import json,os,subprocess,sys\n'
          'rows=[]\n'
+         'me={os.getpid(),os.getppid()}\n'
          'out=subprocess.run(["ps","-axo","pid=,ppid=,lstart=,command="],capture_output=True,text=True).stdout\n'
          'for l in out.splitlines():\n'
          '    p=l.split(None,7)\n'
-         '    if len(p)<8 or "stall_watch.py" not in p[7] or "--monitor" not in p[7] or "--jsonl" not in p[7]: continue\n'
+         '    if len(p)<8 or int(p[0]) in me or "stall_watch.py" not in p[7] or "--monitor" not in p[7] or "--jsonl" not in p[7]: continue\n'
          '    env=subprocess.run(["ps","-E","-o","command=","-p",p[0]],capture_output=True,text=True).stdout\n'
          '    sid=[w.split("=",1)[1] for w in env.split() if w.startswith("RICHOS_SESSION_ID=")]\n'
          '    par=subprocess.run(["ps","-o","command=","-p",p[1]],capture_output=True,text=True).stdout.strip()\n'
@@ -179,24 +185,24 @@ class WorkLeaseWalk(srw.StuReminderWalk):
         session = record.get('work_session')
         idle_end = time.monotonic() + self.a.idle_within
         while True:
-            closed = [d for d in self.lead_files()
-                      if d.get('session') == session and (d.get('turn_ended') or 0) > sent[1] / 1000]
-            if closed or time.monotonic() >= idle_end:
+            ended = [d for d in self.lead_files()
+                     if d.get('session') == session and (d.get('turn_ended') or 0) > sent[1] / 1000]
+            if ended or time.monotonic() >= idle_end:
                 break
             time.sleep(5)
-        if closed:
-            time.sleep(self.a.after_quiet)  # a row from the close would come within seconds of it
-        ev.update({'work_session': session, 'lease_closed': closed[-1] if closed else None,
+        if ended:
+            time.sleep(self.a.after_quiet)  # a failure row would come within seconds of the turn end
+        ev.update({'work_session': session, 'turn_ended': ended[-1] if ended else None,
                    'new_failure_rows': failed()[rows_before:], 'monitors_after': self.monitors(),
                    'lead_files': self.lead_files()})
         (self.out / 'after.json').write_text(json.dumps(ev, indent=2) + '\n')
-        if not closed:
+        if not ended:
             raise StepFailed('the session %s that ran the request never ended its turn within %g s; see after.json' % (
                 session, self.a.idle_within))
         if ev['new_failure_rows']:
-            raise StepFailed('a Work lease that closed normally raised a "monitor stopped" row; see after.json')
+            raise StepFailed('a "monitor stopped" row reached Stu after the request settled and its turn ended; see after.json')
         return {'job': {k: record.get(k) for k in ('id', 'state', 'title', 'work_session')},
-                'approvals_pressed': pressed, 'lease_closed': ev['lease_closed'], 'new_failure_rows': []}
+                'approvals_pressed': pressed, 'turn_ended': ev['turn_ended'], 'new_failure_rows': []}
 
     def keep(self):
         dest = self.out / 'kept'
@@ -236,7 +242,7 @@ def main():
     p.add_argument('--reminder-seconds', type=float, default=120)
     p.add_argument('--after-task', default=AFTER_JOB, help="`after`'s ordinary request")
     p.add_argument('--after-quiet', type=float, default=60,
-                   help="seconds after the lease's normal close that a failure row is waited for")
+                   help="seconds after the request's turn ended that a failure row is waited for")
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)

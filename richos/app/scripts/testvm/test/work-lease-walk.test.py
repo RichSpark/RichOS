@@ -4,10 +4,13 @@
 (1) Nightly 74 walk: a failed final `keep` (the transcripts and rows NOT carried off the guest before
 it is deleted) left the exit code 0. A keep failure is a failed walk.
 (2) `after`: once the monitor was killed, one ordinary request to Stu is answered and its work
-settles, and the Work lease that then closes normally raises no "monitor stopped" row."""
+settles, its turn ends, and no "monitor stopped" row follows. It reports a turn end, never a lease close.
+(3) Nightly 74 walk: the monitor probe's own `python -c` matched itself, since its source names
+`stall_watch.py --monitor --jsonl`; it leaves out itself and its parent shell."""
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -52,7 +55,7 @@ class KeepIsPartOfTheVerdict(unittest.TestCase):
 
 
 class After(unittest.TestCase):
-    """One settled request after the kill, its lease's turn ended, and no new failure row."""
+    """One settled request after the kill, its session's turn ended, and no new failure row."""
 
     def walk(self, rows_after):
         w = object.__new__(Walk)
@@ -90,12 +93,37 @@ class After(unittest.TestCase):
         with self.assertRaises(wlw.StepFailed):
             w.after()
 
+    def test_the_evidence_says_the_turn_ended_never_that_the_lease_closed(self):
+        # Nightly 74 walk: `after` said "the Work lease closed normally" while the kept lease file still
+        # said ended=false. The lead file's `turn_ended` is idle between turns (native.rs LeadSignal).
+        w = self.walk([])
+        ev = w.after()
+        self.assertEqual(ev['turn_ended']['turn_ended'], 1002)
+        written = (w.out / 'after.json').read_text()
+        for said in (json.dumps(ev), written):
+            self.assertNotIn('close', said.lower())
+        with self.assertRaises(wlw.StepFailed) as failed:
+            self.walk([FAIL_ROW]).after()
+        self.assertNotIn('close', str(failed.exception).lower())
+
     def test_a_lease_whose_turn_never_ends_fails(self):
         w = self.walk([])
         w.lead_files = lambda: [{'session': 's2', 'turn_ended': 999}]  # before the request was sent
         w.a.idle_within = 0
         with self.assertRaises(wlw.StepFailed):
             w.after()
+
+
+class ProbeLeavesOutItself(unittest.TestCase):
+    def test_the_probe_and_its_shell_are_not_monitors(self):
+        # Run as the guest runs it: a shell whose command line carries the probe's source. `; true`
+        # keeps the shell from exec'ing python, so both the shell and python name the three words.
+        shell = subprocess.Popen(['/bin/sh', '-c', 'python3 -c %s; true' % wlw.shlex.quote(wlw.PROCS)],
+                                 stdout=subprocess.PIPE, text=True)
+        out, _ = shell.communicate(timeout=60)
+        self.assertEqual(shell.returncode, 0)
+        ours = [r for r in json.loads(out) if shell.pid in (r['pid'], r['ppid'])]
+        self.assertEqual(ours, [], 'the probe counted itself or its shell as a monitor')
 
 
 if __name__ == '__main__':

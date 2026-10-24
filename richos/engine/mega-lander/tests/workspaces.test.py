@@ -7642,6 +7642,30 @@ class OrchestrationR2Waits(Base):
         ws.wait("zach-opus-w1", "started", "the carrier lands it", "", self.sid, "agent:zach-opus-w2")
         self.assertEqual(self.rec("zach-opus-w1")["waiting"]["end"], "agent:zach-opus-w2")
 
+    def _hold_cli(self, name, until):
+        import contextlib, io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = ws.main(["--session", self.sid, "--entity", self.entity, "hold", name,
+                          "--what", "the release notes", "--until", until])
+        return rc, buf.getvalue()
+
+    def test_r2_a_hold_on_a_finished_agent_prints_the_holds_end(self):
+        """2026-10-24: `workspaces.sh hold newt-... --until agent:ray-...` recorded the hold,
+        then crashed printing it (TypeError: str + dict): the agent's own run end, a dict,
+        was printed in place of the hold's end."""
+        self._finished("zach-opus-h1")
+        self.assertIsInstance(self.rec("zach-opus-h1")["end"], dict)    # its run has a recorded end
+        rc, out = self._hold_cli("zach-opus-h1", "agent:zach-opus-h2")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.strip(), "held: zach-opus-h1 until agent:zach-opus-h2")
+        self.assertEqual(self.rec("zach-opus-h1")["waiting"]["end"], "agent:zach-opus-h2")
+
+    def test_r2_a_standalone_hold_still_prints_its_end(self):
+        rc, out = self._hold_cli("stream-h", "agent:zach-opus-h2")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.strip(), "held: stream-h until agent:zach-opus-h2")
+
     def test_r2_the_detail_command_lists_every_due_item_past_the_shown_eight(self):
         """Review rv-20261024T013623Z-f883a475-d24b: the watcher showed eight due items and
         pointed to `workspaces.sh holds`, which read holds() alone and printed nothing for
