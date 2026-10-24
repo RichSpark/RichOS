@@ -485,7 +485,20 @@ fi
 NOISE_DISK="$SANDBOX/healthy-disk"
 mkdir -p "$NOISE_DISK/state" "$NOISE_DISK/launch"
 touch "$NOISE_DISK/launch/com.richos.disk-watchdog.plist"
-printf 'DISK_RICH_ALERT_GB=1\nDISK_WATCHDOG_ENABLE=1\n' > "$NOISE_DISK/config"
+# And a healthy scheduled cleanup (cleanup PRD R4), as notice-disk-alert.test.sh's
+# healthy_reaper builds it: the job installed and a result published just now. Without
+# them the hook rightly reports "CLEANUP HAS NOT RECOVERED".
+touch "$NOISE_DISK/launch/com.richos.scratch-reaper.plist"
+python3 - "$NOISE_DISK/state/scratch-reaper-state.json" <<'PY'
+import json, sys, time
+json.dump({"source": "launchd", "outcome": "healthy", "unresolved": [], "roots": [],
+           "last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "last_apply_epoch": int(time.time()), "deleted": 0, "freed": 0,
+           "undecidable": 0, "undecidable_bytes": 0, "skipped": 0, "skipped_bytes": 0,
+           "failures": 0, "verdict": "decided"}, open(sys.argv[1], "w"))
+PY
+printf 'DISK_RICH_ALERT_GB=1\nDISK_WATCHDOG_ENABLE=1\nSCRATCH_REAPER_STATE="%s"\n' \
+    "$NOISE_DISK/state/scratch-reaper-state.json" > "$NOISE_DISK/config"
 printf '{"volumes":[],"alerts":[]}\n' > "$NOISE_DISK/state/disk-watchdog.json"
 NOISE_FAIL=""
 for h in $STOP_HOOKS; do
