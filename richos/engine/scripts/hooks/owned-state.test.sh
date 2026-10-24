@@ -385,15 +385,6 @@ else
     bad "4c  a new session was not told" "rc=$RC $OUT"
 fi
 
-run_hook "$(payload s3 "$(printf 'Refactor.\nowned-state-ack: alpha — the founder is on a live demo right now\n')")"
-if [ "$RC" -eq 0 ] && [ -z "$OUT" ] \
-   && grep -q 'how=ack' "$ENTITY/.claude/state/owned-state-acks.log" 2>/dev/null \
-   && grep -q 'live demo' "$ENTITY/.claude/state/owned-state-acks.log" 2>/dev/null; then
-    ok "4d  an ack is still recorded with its reason when one is given, though nothing requires it"
-else
-    bad "4d  a well-formed ack was not recorded" "rc=$RC"
-fi
-
 run_hook "$(payload s4 "$(printf 'Refactor.\nowned-state-ack: alpha\n')")"
 if [ "$RC" -eq 0 ] && told; then
     ok "4e  a bare ack line is not needed and silences nothing: the dispatch goes ahead and is told"

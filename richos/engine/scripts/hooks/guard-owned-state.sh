@@ -106,36 +106,18 @@
 # session for free. A keyword is not work. It is a waiver nobody had to type.
 #
 # So the predicate (scripts/lib/owned-systems.py, "WHAT ADDRESSED MEANS")
-# decides, and it counts exactly three things:
+# decides, and it counts exactly two things:
 #   progress  the system THIS SESSION WAS REFUSED OVER got smaller: its check
 #             passes, its `measure:` fell below the fresh baseline taken at that
 #             refusal, or its `backlog:` past the tolerated age reached zero.
 #             Measured by the predicate. This hook sees it as exit 0.
 #   triage    the prompt matches the DEMANDED row's `triage:` pattern, which
 #             names the system's own record (for escalations, the ledger file).
-#   ack       the line below.
-# All three are silent when they clear a dispatch. A gate that lectured the
+# Both are silent when they clear a dispatch. A gate that lectured the
 # operator at the moment he did the right thing would teach the wrong lesson.
 #
-# ===========================================================================
-# THE ESCAPE HATCH — a live prompt line, with a reason, logged
-# ===========================================================================
-#     owned-state-ack: <system id> — <why this can wait>
-#
-# anywhere on its own line in the Agent spawn prompt. Same idiom as
-# `model-ceiling-ack:`, `main-checkout-run:`, `resume-ack:`,
-# `stale-staging-ack:` and `ceo-todos-deferred:`.
-#
-#   * It must name the DEMANDED system's id. Any other id is refused with the
-#     right one printed — that is what stops the cheapest-first rotation.
-#   * The reason must be at least 15 characters. A bare marker exempts nothing,
-#     because a bare token is something a reflex types and a reason is
-#     something a person writes.
-#   * It is appended to <entity root>/.claude/state/owned-state-acks.log, which
-#     notice-waiver-repetition.py reads: an operator who types the same excuse
-#     about the same system session after session gets NAMED for it. That is
-#     the anti-habit machinery this engine already ships, and this hatch is
-#     wired into it rather than inventing a second one.
+# (Until 2026-10-24 an `owned-state-ack:` prompt line unlocked the refusal. With the
+# refusal gone it unlocked nothing, so it was removed; an old line is ignored.)
 #
 # ===========================================================================
 # FAIL OPEN, AND LOUDLY — the deliberate choice, state by state
@@ -322,7 +304,7 @@ NAME="$(printf '%s' "$PARSED" | cut -f4)"
 PROMPT="$(printf '%s' "$PARSED" | cut -f5- | tr '\001' '\n')"
 
 if [ "$STATUS" = "PARSEFAIL" ]; then
-    announce_off "OWNED-STATE GATE: this Agent spawn could not be parsed, so no owned system was checked and the 'owned-state-ack:' line could not be read either. This ONE dispatch is UNGATED."
+    announce_off "OWNED-STATE GATE: this Agent spawn could not be parsed, so this ONE dispatch was not checked against the owned systems (UNGATED)."
     exit 0
 fi
 
@@ -364,13 +346,6 @@ pattern = d.get("triage") or ""
 if not pattern:
     sys.exit(0)
 prompt = os.environ.get("PROMPT_TEXT", "")
-# THE ACK LINE IS NOT PART OF THE PROMPT FOR THIS TEST, and the first version of
-# this hook proved why: an ack reading `owned-state-ack: alpha - ...` matched
-# alphas own pattern and was recorded as a dispatch WORKING on the system it
-# was asking to defer. An escape hatch that satisfies the gate merely by naming
-# the system is not a hatch, it is a hole.
-prompt = "\n".join(l for l in prompt.splitlines()
-                   if not re.match(r"^\s*owned-state-ack:", l))
 try:
     m = re.search(pattern, prompt, re.IGNORECASE)
 except re.error:
@@ -384,44 +359,6 @@ if [ -n "$TRIAGED" ]; then
         --system "$DEMANDED_ID" --how triage --agent "${NAME:-${SUBAGENT_TYPE:-<unset>}}" \
         --reason "dispatch names the system's own record: ${TRIAGED}" >/dev/null 2>&1 || true
     exit 0
-fi
-
-# --- THE ESCAPE HATCH, BEFORE THE VERDICT ----------------------------------
-# ONE extraction, not a test followed by an extraction: two greps with the same
-# pattern are two chances to relax one of them and not the other, and the
-# resulting hook would test strictly, extract loosely, and behave in a way
-# neither pattern describes.
-ACK_LINE="$(printf '%s' "$PROMPT" \
-    | grep -oE '^[[:space:]]*owned-state-ack:[[:space:]]*[^[:space:]].*' \
-    | head -1 | sed -E 's/^[[:space:]]*//' || true)"
-
-if [ -n "$ACK_LINE" ]; then
-    # Parsed in python, not sed. The id is the FIRST WHITESPACE-DELIMITED TOKEN
-    # with any trailing separator stripped, and the reason is everything after
-    # it. A sed expression that split on the first `-` would have mangled every
-    # future id with a hyphen in it, which is a defect that shows up only once
-    # somebody adds one — the class of bug this project keeps finding in itself.
-    ACK_PARSED="$(ACK_BODY="$ACK_LINE" python3 -c '
-import os, re
-body = re.sub(r"^\s*owned-state-ack:\s*", "", os.environ.get("ACK_BODY", ""))
-parts = body.split(None, 1)
-sid = re.sub(r"[—:;,\-]+$", "", parts[0]) if parts else ""
-rest = parts[1] if len(parts) > 1 else ""
-rest = re.sub(r"^[\s—:;,\-]+", "", rest)
-print("%s\t%s" % (sid, rest.replace("\t", " ")))
-' 2>/dev/null || printf '\t')"
-    ACK_ID="$(printf '%s' "$ACK_PARSED" | cut -f1)"
-    ACK_REASON="$(printf '%s' "$ACK_PARSED" | cut -f2-)"
-    if [ "$ACK_ID" = "$DEMANDED_ID" ] && [ "${#ACK_REASON}" -ge 15 ]; then
-        python3 "$LIB" dispose --entity "$ENTITY_ROOT" --session "$SESSION_ID" \
-            --system "$DEMANDED_ID" --how ack --agent "${NAME:-${SUBAGENT_TYPE:-<unset>}}" \
-            --reason "$ACK_REASON" >/dev/null 2>&1 || true
-        exit 0
-    fi
-    ACK_PROBLEM="the ack names '${ACK_ID:-<nothing>}'"
-    [ "$ACK_ID" = "$DEMANDED_ID" ] && ACK_PROBLEM="the ack names the right system but its reason is ${#ACK_REASON} characters, and a reason under 15 is a bare marker"
-else
-    ACK_PROBLEM=""
 fi
 
 # --- TOLD, NEVER REFUSED (orchestration reliability R3) --------------------

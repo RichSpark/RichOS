@@ -7885,7 +7885,7 @@
     },
     "scripts/hooks/guard-owned-state.sh#fixture-declaration": {
       "source": "scripts/hooks/guard-owned-state.sh",
-      "sha256": "7883f423e563301fec58b643a386b547ede2be9ed27de5e6611b4281d6474217",
+      "sha256": "c83607e13472c29626cb103c65a643a5a95302c6face0d184a571ee88485f0c8",
       "evidence": "Full guard sources the entity config and calls fixed owned-systems demanded/dispose commands; prompt matching is string/regex data. Only qualified for the literal owned-state suite declarations, including its bound escalation row.",
       "keys": [
         "OWNED_STATE_GATE"
@@ -7922,7 +7922,7 @@
     },
     "scripts/hooks/owned-state.mutation.sh": {
       "source": "scripts/hooks/owned-state.mutation.sh",
-      "sha256": "585ccbe456736f1aa6f84091d8467e091ea7112a957e92b23087b9ecdd94e0ff",
+      "sha256": "4f81a9cb4d1671fa021327648e7194f1a8778b0e87378c94903d8001025eb0b2",
       "evidence": "Full finite driver retains the shipped declaration, then applies fixed gate/verdict/triage mutations and runs the fixed suite via the reviewed mutation harness. No new execution target is introduced.",
       "keys": [],
       "edges": [
@@ -7939,7 +7939,7 @@
     },
     "scripts/hooks/owned-state.test.sh": {
       "source": "scripts/hooks/owned-state.test.sh",
-      "sha256": "447d4befdf04ec314dc427c4b22823addc4b0f3962786301544ee1858e7318d1",
+      "sha256": "487d91383cd87f56a5e0b7c5a186aa4ba31a167a3e6559661b1df7f8a6562a5a",
       "evidence": "Full suite writes literal entity configs and shell-check declarations, tests registration metadata in a separate private engine and extracts the one shipped escalation row. The latter command and declaration are bound explicitly. Private ledger and time-dependent baselines remain execution inputs; real config is copied only by the nested mutation transport.",
       "keys": [],
       "edges": [
@@ -10312,7 +10312,7 @@
     },
     "scripts/hooks/guard-owned-state.sh#fixture-default": {
       "source": "scripts/hooks/guard-owned-state.sh",
-      "sha256": "7883f423e563301fec58b643a386b547ede2be9ed27de5e6611b4281d6474217",
+      "sha256": "c83607e13472c29626cb103c65a643a5a95302c6face0d184a571ee88485f0c8",
       "evidence": "Full hook with private entity settings, but the Python reader may resolve the actual engine declaration key. Only reviewed default commands are admitted by the bound downstream contract.",
       "keys": [
         "OWNED_STATE_GATE"
@@ -10984,7 +10984,7 @@
     },
     "scripts/hooks/guard-owned-state.sh#template-default": {
       "source": "scripts/hooks/guard-owned-state.sh",
-      "sha256": "7883f423e563301fec58b643a386b547ede2be9ed27de5e6611b4281d6474217",
+      "sha256": "c83607e13472c29626cb103c65a643a5a95302c6face0d184a571ee88485f0c8",
       "evidence": "Full owned-state hook on the private seated contract template, with no original engine config path remaining.",
       "keys": [
         "OWNED_STATE_GATE"
@@ -17119,7 +17119,7 @@
         "scripts/hooks/guard-named-persons-writes.sh": "95095c3eee1ac1f3f7f156dfc2fcb0b039868c63c1d10d45d043fdd7d86ad3ce",
         "scripts/hooks/guard-no-home-network-phone.sh": "b717ada819776abafca071ffe9f65ea2c959bf563ddb8fc6e506f376819b65ac",
         "scripts/hooks/guard-operator-claim.sh": "06ded03dc7f1dc6825df5e952619dcaae26c24f0bcda7ba017c935ed20c5663b",
-        "scripts/hooks/guard-owned-state.sh": "7883f423e563301fec58b643a386b547ede2be9ed27de5e6611b4281d6474217",
+        "scripts/hooks/guard-owned-state.sh": "c83607e13472c29626cb103c65a643a5a95302c6face0d184a571ee88485f0c8",
         "scripts/lib/owned-systems.py": "f07b79f4608753f0a622bf9c8ddba78f3058e2b1a20d4b75106e028fd81c11f9",
         "owned-systems.declaration": "22c6e921991e633148a8d191806d2647a471507ee8f7fbd478fb893a30a8b44a",
         "scripts/ci-status.sh": "cdc53d28b1814b1e53d6fe9debf95b4a72d361a34e650da60f53ac19462ff3b6",
@@ -17776,7 +17776,7 @@
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/hooks/guard-no-home-network-phone.sh": "b717ada819776abafca071ffe9f65ea2c959bf563ddb8fc6e506f376819b65ac",
         "scripts/hooks/guard-operator-claim.sh": "06ded03dc7f1dc6825df5e952619dcaae26c24f0bcda7ba017c935ed20c5663b",
-        "scripts/hooks/guard-owned-state.sh": "7883f423e563301fec58b643a386b547ede2be9ed27de5e6611b4281d6474217",
+        "scripts/hooks/guard-owned-state.sh": "c83607e13472c29626cb103c65a643a5a95302c6face0d184a571ee88485f0c8",
         "scripts/lib/owned-systems.py": "f07b79f4608753f0a622bf9c8ddba78f3058e2b1a20d4b75106e028fd81c11f9",
         "owned-systems.declaration": "22c6e921991e633148a8d191806d2647a471507ee8f7fbd478fb893a30a8b44a",
         "scripts/ci-status.sh": "cdc53d28b1814b1e53d6fe9debf95b4a72d361a34e650da60f53ac19462ff3b6",
@@ -18069,15 +18069,15 @@
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-        "scripts/hooks/guard-owned-state.sh": "7883f423e563301fec58b643a386b547ede2be9ed27de5e6611b4281d6474217",
-        "scripts/hooks/owned-state.mutation.sh": "585ccbe456736f1aa6f84091d8467e091ea7112a957e92b23087b9ecdd94e0ff",
+        "scripts/hooks/guard-owned-state.sh": "c83607e13472c29626cb103c65a643a5a95302c6face0d184a571ee88485f0c8",
+        "scripts/hooks/owned-state.mutation.sh": "4f81a9cb4d1671fa021327648e7194f1a8778b0e87378c94903d8001025eb0b2",
         "scripts/owned-state.sh": "313a26b975baf1005c6a86beaa03cc7910481b9e1d6754d45a0e4206b5b001a0",
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
         "owned-systems.declaration": "22c6e921991e633148a8d191806d2647a471507ee8f7fbd478fb893a30a8b44a",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
-        "scripts/hooks/owned-state.test.sh": "447d4befdf04ec314dc427c4b22823addc4b0f3962786301544ee1858e7318d1",
+        "scripts/hooks/owned-state.test.sh": "487d91383cd87f56a5e0b7c5a186aa4ba31a167a3e6559661b1df7f8a6562a5a",
         "scripts/lib/escalations.py": "b221aa573110d20f2031d76edec1312c3875929e517ced3f631923468729086b",
         "scripts/escalate.sh": "9f9de4d2efea2703c9e6fd0ff7f9c3479c5cb15fc6e0df7ec58ae4a8339616f0",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",

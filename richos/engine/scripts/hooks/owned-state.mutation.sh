@@ -80,10 +80,8 @@ mutant triage-ignored "7f" "$G" \
     "a dispatch whose whole job is triaging the escalation ledger would be told of the backlog as if it were unrelated work, so the natural answer to the notice would be treated as ignoring it."
 
 # --- 6. THE ACK STOPS NO CLOCK ---------------------------------------------
-mutant ack-resets-age "7g" "$L" \
-    '    ok = record_disposition(args.entity, args.session, args.system.strip(),' \
-    '    _write_json(state_path(args.entity, SEEN_NAME), {}){NL}    ok = record_disposition(args.entity, args.session, args.system.strip(),' \
-    "an owned-state-ack would reset the age of the thing it deferred, so a backlog waived once a session would look new every session."
+# (ack-resets-age went with the owned-state-ack line, 2026-10-24: no prompt line records an
+# ack any more, so nothing a dispatch says can reset an age.)
 
 # --- 7. THE BASELINE IS FRESH ----------------------------------------------
 mutant baseline-from-cache "7h" "$L" \
