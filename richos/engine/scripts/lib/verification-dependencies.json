@@ -4560,14 +4560,17 @@
     "scripts/escalate.sh": {
       "source": "scripts/escalate.sh",
       "sha256": "b3c8b3e5207d14ea166e6b39cf9bddf81895bd95374c472ecc62d7c6dad54b4a",
-      "evidence": "Fixed escalations library/Python calls with argument values; an optional --fields file is validated by escalations.py and each value is assigned through a fixed case statement, never evaluated. Git reads derive record identity. Output markdown, actor strings and record paths are data. No orchestration config or manifest is read. Renewed 2026-10-24: raise sources resolve-main-checkout.sh and publication-boundary.sh to decide where the record goes (pb_repo_root, pb_load_declaration, pb_resolve_sources, pb_physical); a publication-bound worktree's record goes under the first PRIVATE_SOURCES entry that is its own git checkout with docs/ and no declaration. Declarations are parsed, never sourced.",
+      "evidence": "Fixed escalations library/Python calls with argument values; an optional --fields file is validated by escalations.py and each value is assigned through a fixed case statement, never evaluated. Git reads derive record identity. Output markdown, actor strings and record paths are data. No orchestration config or manifest is read. Renewed 2026-10-24: raise sources resolve-main-checkout.sh and publication-boundary.sh to decide where the record goes (pb_repo_root, pb_load_declaration, pb_resolve_sources, pb_physical); a publication-bound worktree's record goes under the first PRIVATE_SOURCES entry that is its own git checkout with docs/ and no declaration. Declarations are parsed, never sourced. PUBLICATION_DECLARATION uses its unsourced environment/default value, not orchestration.config, which this script never reads.",
       "keys": [],
       "edges": [
         {
           "to": "scripts/lib/escalations.sh"
         },
         {
-          "to": "scripts/lib/publication-boundary.sh#declaration-and-sources"
+          "to": "scripts/lib/publication-boundary.sh#declaration-and-sources",
+          "overrides": [
+            "PUBLICATION_DECLARATION"
+          ]
         },
         {
           "to": "scripts/lib/resolve-main-checkout.sh"
