@@ -1229,7 +1229,7 @@ def note_window(raw, sentence):
     """The paragraph a note claim sits in: the file and commit that back a
     claim are named WITH it, never in another paragraph of the reply."""
     first = re.split(r"\s{2,}", sentence.strip())[0]
-    probes = [first[:40].strip()]
+    probes = [first[:40].strip(), re.split(r"[(`]", first)[0][:40].strip()]
     if ". " in first:
         probes.append(first.split(". ", 1)[1][:40].strip())
     for probe in probes:
@@ -1265,10 +1265,81 @@ def _staged_in_commit(path, traffic):
     return False
 
 
-def judge_record_claims(claims, writes, raw):
+# AN EXISTING RECORD IS LOOKED UP, NOT RE-DEMANDED (orchestration reliability R6/A7,
+# richos-hq docs/prds/2026-10-23-orchestration-reliability.md). 2026-10-23 14:06-14:12Z:
+# "That's on the follow-up list in the private repo (`docs/plans/follow-ups.md`, commit
+# `f0db3a01b`)" was alerted twice as "in no committed repository file", though f0db3a01b
+# (an earlier turn) had added that item. Two traps: code spans are stripped before claims
+# are read, so the path and SHA must come from the raw reply; and a SHA counted only when
+# this turn's traffic carried it.
+#
+# WHAT THE LOOKUP ESTABLISHES, AND WHAT IT DOES NOT. When the claim's paragraph names the
+# follow-up list and cites a commit, the commit is resolved in the repositories the
+# workspace registry knows (and the reply's own checkout). Observable facts only: the
+# commit exists, it changed the follow-up list, and a line it added is still on the list.
+# Those facts make the claim CITED: no alert. They do NOT establish that the line is this
+# item (a reply citing an "Investigate X" row while saying "Delete X" is cited too); no
+# wording is compared, by design, so nothing here is ever labeled verified. A cited commit
+# that is absent, does not change the list, or whose added lines are all gone is NOT
+# VERIFIED, said as such and never as "no record exists"; nothing cited and nothing written
+# is the missing-record alert as before.
+FOLLOWUPS_BASENAME = "follow-ups.md"
+
+
+def _record_repos(cwd):
+    """Repositories to resolve a cited commit in: the workspace registry's (repos.json,
+    workspaces.state_dir's rule) and the checkout the reply was written in."""
+    base = (os.environ.get("RICHOS_WORKSPACES_DIR") or "").strip() or os.path.join(
+        (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
+        "state", "workspaces")
+    repos = []
+    try:
+        with open(os.path.join(base, "repos.json"), encoding="utf-8") as fh:
+            repos = [r for r in (json.load(fh) or {}).get("repos", []) if isinstance(r, str)]
+    except (OSError, ValueError, AttributeError):
+        pass
+    return [r for r in dict.fromkeys(repos + ([cwd] if cwd else [])) if os.path.isdir(r)]
+
+
+def existing_record(window, repos):
+    """('cited', sha, repo) | ('unverified', sha, why) | None (the paragraph names no
+    follow-up list or cites no commit). `window` is the RAW paragraph (code spans intact)."""
+    import subprocess
+    if FOLLOWUPS_BASENAME not in window:
+        return None
+    shas = [x for x in SHA_RE.findall(window.lower()) if re.search(r"[a-f]", x) and re.search(r"\d", x)]
+    if not shas:
+        return None
+    why = "commit %s was not found in any repository the registry knows" % shas[0]
+    for sha in shas:
+        for repo in repos:
+            def git(*args):
+                r = subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True, timeout=5)
+                return r.returncode, r.stdout
+            try:
+                if git("cat-file", "-e", sha + "^{commit}")[0] != 0:
+                    continue
+                _rc, names = git("show", "--name-only", "--format=", sha)
+                files = [n for n in names.splitlines() if n.endswith(FOLLOWUPS_BASENAME)]
+                if not files:
+                    why = "commit %s (in %s) does not change the follow-up list" % (sha, repo)
+                    continue
+                _rc, diff = git("show", "--format=", "--unified=0", sha, "--", files[0])
+                added = [ln[1:] for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++")]
+                rc, head = git("show", "HEAD:" + files[0])
+                if rc == 0 and any(ln.strip() and ln in head.splitlines() for ln in added):
+                    return "cited", sha, repo
+                why = "commit %s (in %s) changed the follow-up list, but no line it added is still there" % (sha, repo)
+            except (OSError, subprocess.SubprocessError):
+                why = "commit %s could not be read" % sha
+    return "unverified", shas[0], why
+
+
+def judge_record_claims(claims, writes, raw, repos=()):
     """[(sentence, code, problem)] for every claim this turn does not back.
-    code is one of: nothing, private, where, sha, state. Pure: claims from
-    record_claims(), writes from turn_writes(), raw = the reply."""
+    code is one of: nothing, private, where, sha, state, followup, unverified.
+    Pure but for `repos`: claims from record_claims(), writes from turn_writes(),
+    raw = the reply, repos = where a cited follow-up commit is looked up."""
     failing = []
     low = raw.lower()
     concrete = bool(LOCATION_RE.search(raw))
@@ -1305,6 +1376,14 @@ def judge_record_claims(claims, writes, raw):
             wl = win.lower()
             here = [s for s in cited if s in wl]
             repo_named = [p for p, k in durable if k == "repo" and _named(p, win)]
+            found = None if (here and writes["committed"] and any(_staged_in_commit(p, traffic)
+                                                                 for p in repo_named)) \
+                else (existing_record(win, repos) if repos else None)
+            if found and found[0] == "cited":
+                continue
+            if found:
+                failing.append((sentence, "unverified", found[2]))
+                continue
             if not (here and writes["committed"]
                     and any(_staged_in_commit(p, traffic) for p in repo_named)):
                 failing.append((sentence, "followup", "a promise or follow-up is called noted or in the "
@@ -1317,6 +1396,12 @@ def judge_record_claims(claims, writes, raw):
             on_list = [p for p, k in durable if k == "repo"
                        and (p == FOLLOWUPS_FILE or p.endswith("/" + FOLLOWUPS_FILE))]
             if not (writes["committed"] and any(_staged_in_commit(p, traffic) for p in on_list)):
+                found = existing_record(note_window(raw, sentence), repos) if repos else None
+                if found and found[0] == "cited":
+                    continue
+                if found:
+                    failing.append((sentence, "unverified", found[2]))
+                    continue
                 failing.append((sentence, "followup", "an item is said to be on the follow-up list, and "
                                                       "this turn wrote %s. Only a committed change to %s "
                                                       "backs it" % (wrote(), FOLLOWUPS_FILE)))
@@ -1420,7 +1505,7 @@ def record_claim_verdict(payload, message):
         v["verdict"] = "unavailable: " + str(err)
         return v
     v["written"] = writes["targets"]
-    v["failing"] = judge_record_claims(claims, writes, message)
+    v["failing"] = judge_record_claims(claims, writes, message, _record_repos(cwd))
     if v["failing"]:
         v["verdict"] = "refused"
     return v
@@ -1440,7 +1525,7 @@ def _arm3_log(payload, v):
         pass
 
 
-ALERT_CODES = ("nothing", "private", "rule", "followup")
+ALERT_CODES = ("nothing", "private", "rule", "followup", "unverified")
 
 
 def unbacked_claims(v):
@@ -1461,7 +1546,7 @@ def arm3_alert_line(v):
     if not bad:
         return ""
     parts = []
-    for sentence, code, _p in bad[:3]:
+    for sentence, code, _p in bad[:3]:  # noqa: B007 (_p: the unverified alert quotes it)
         one = " ".join(sentence.split())[:160]
         if code == "rule":
             what = ("this turn wrote only a private memory note, and a rule is never a private note: "
@@ -1473,6 +1558,9 @@ def arm3_alert_line(v):
                     "committed repository file the reply "
                     "names (memory and ECS do not count). Lead: write it to %s, commit it, and name "
                     "the file and the commit" % FOLLOWUPS_FILE)
+        elif code == "unverified":
+            what = ("the record it cites is NOT VERIFIED: %s (not a finding that no record exists). "
+                    "Lead: check the commit you cited" % _p)
         elif code == "private":
             what = ("this turn wrote only a private memory note, and the reply never said "
                     "\"in my private notes\"")
@@ -1482,6 +1570,8 @@ def arm3_alert_line(v):
     more = " (+%d more)" % (len(bad) - 3) if len(bad) > 3 else ""
     if any(c == "rule" for _s, c, _p in bad[:3]):
         return "RECORD ALERT: " + " | ".join(parts) + more + rule_tail + "."
+    if all(c == "unverified" for _s, c, _p in bad[:3]):
+        return "RECORD ALERT: " + " | ".join(parts) + more + "."      # never a demand to write it again
     return ("RECORD ALERT: " + " | ".join(parts) + more +
             ". Lead: write it to the record now (a repository file, committed), or say it was not recorded.")
 

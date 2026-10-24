@@ -314,9 +314,14 @@ mutant arm3-alerts-on-a-written-record "R10." "$P" \
     "a claim backed by a durable write is true; alerting because the reply did not recite a path or SHA is the refusal this alert replaced."
 
 mutant arm3-alerts-on-a-citation "R4." "$P" \
-    'ALERT_CODES = ("nothing", "private", "rule", "followup")' \
-    'ALERT_CODES = ("nothing", "private", "rule", "followup", "state")' \
+    'ALERT_CODES = ("nothing", "private", "rule", "followup", "unverified")' \
+    'ALERT_CODES = ("nothing", "private", "rule", "followup", "unverified", "state")' \
     "'it is written in the three places I read' cites an existing record; it is not a claim that this turn wrote one."
+
+mutant arm3-cited-record-demanded-again "A7a." "$P" \
+    '                    return "cited", sha, repo' \
+    '                    return "unverified", sha, "mutated"' \
+    "a follow-up committed in an earlier turn and cited with its file and commit would be alerted again, the 2026-10-23 14:06Z and 14:11Z false alerts (orchestration reliability A7)."
 
 mutant arm3-confession-is-a-claim "R30." "$P" \
     'if (ARM3_CONFESS_RE.search(c[m.start():]) or' \
