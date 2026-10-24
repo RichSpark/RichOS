@@ -243,9 +243,8 @@ ARM 2 — THE TURN THAT STOPS, stated precisely
     IN THE APP, Stu's own work tools answer the "started nothing" term too
     (2026-10-24, nightly 73 and 74 walks, where both of his truthful replies
     were refused): a `complete` that closed the selected obligation means
-    nothing of that obligation is pending, and a `team save` of a new teammate,
-    in a turn that neither lands nor closes, means the app resumes the job with
-    a team_reloaded message. Either discharges the arm, read from the
+    nothing of that obligation is pending, and a `team save` of a new teammate
+    means the app resumes the job with a team_reloaded message. Either discharges the arm, read from the
     tool's answer, never from the reply. See app_job_outcome().
 
     THE TERM THAT USED TO SAY "no hold or end-of-day in his own words" IS GONE
@@ -670,7 +669,6 @@ def satisfied(who, arm, calls, inputs):
 
 APP_COMPLETE = "mcp__richos_work__complete"
 APP_TEAM = "mcp__richos_work__team"
-APP_INTEGRATE = "mcp__richos_work__integrate"
 
 
 def app_job_outcome(idle, transcript, prompt_id):
@@ -689,15 +687,7 @@ def app_job_outcome(idle, transcript, prompt_id):
                         him when this turn ends and then sends Stu the
                         team_reloaded message, which starts his next turn
                         (work_host.rs reload_team_after_turn), so the next
-                        step is already in motion. That is a WAIT, never
-                        finished work: a turn that also lands or closes
-                        (`integrate` or `complete`, answered or refused) is
-                        judged by its close alone (second review,
-                        rv-20261024T230343Z-5ff59ca2-e966: save, refused close,
-                        "committed, landed and closed" went through). The
-                        reply is not read, so a Done reply after a save in a
-                        turn that made no land or close call at all is not
-                        told apart from the wait (a stated limit).
+                        step is already in motion.
     A refused call counts for nothing, a replaced teammate gets no reload, and
     a land (`integrate`) is not a close. Not told apart (a stated limit): a
     teammate of a DIFFERENT, still open obligation whose completion arrives in
@@ -705,7 +695,7 @@ def app_job_outcome(idle, transcript, prompt_id):
     were refused without this."""
     try:
         offset = idle.turn_start_offset(transcript, prompt_id)
-        wanted, answers, started, finishing = {}, {}, False, False
+        wanted, answers, started = {}, {}, False
         with open(transcript, "rb") as fh:
             fh.seek(offset)
             for raw in fh:
@@ -725,8 +715,6 @@ def app_job_outcome(idle, transcript, prompt_id):
                 for b in content:
                     if not isinstance(b, dict):
                         continue
-                    if b.get("type") == "tool_use" and b.get("name") in (APP_COMPLETE, APP_INTEGRATE):
-                        finishing = True
                     if b.get("type") == "tool_use" and b.get("name") in (APP_COMPLETE, APP_TEAM):
                         wanted[b.get("id")] = (b.get("name"), b.get("input") or {})
                     elif (b.get("type") == "tool_result" and b.get("tool_use_id") in wanted
@@ -746,8 +734,6 @@ def app_job_outcome(idle, transcript, prompt_id):
             continue
         if name == APP_COMPLETE and answer.get("obligation_closed") is True:
             return ("closed", "the app closed obligation %s this turn" % answer.get("obligation_id"))
-    if finishing:
-        return None
     for tid, answer in answers.items():
         name, inp = wanted[tid]
         if (name == APP_TEAM and isinstance(answer, dict) and isinstance(inp, dict)
