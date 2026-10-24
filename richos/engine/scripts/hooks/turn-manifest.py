@@ -466,7 +466,7 @@ def main():
             message = unavailable(err)
             rows = None
         else:
-            message = render(calls, results)
+            message = render(calls, results) if show else ""   # rendered only when asked (--show)
             rows = len(calls)
 
     if show:

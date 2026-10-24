@@ -3291,7 +3291,7 @@
     },
     "scripts/hooks/turn-manifest.py": {
       "source": "scripts/hooks/turn-manifest.py",
-      "sha256": "3cb16837d219f9cc57a7ee850233b5d90bdfcb522611cd74dac9db35a42a0ca7",
+      "sha256": "be6f8cbeb3573c338cd94caaeef81f27a1ce8806ea7d5cfa8f13d3c05a2d6b83",
       "evidence": "Imports only json, os and sys. Reads the supplied transcript and writes a manifest ledger under the supplied entity root; neither operation reads config or executes transcript content.",
       "keys": [],
       "edges": []
@@ -17012,7 +17012,7 @@
         "scripts/hooks/observe-created-refs.sh": "6c1bcc7fc86608dace9465fdaef957468872b82906e4134382a98b5ab8085202",
         "scripts/hooks/scan-secrets.sh": "fd488d5b07748fd41c773c80ec133eed526869534f4f1324c847a33701ae1ab1",
         "scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
-        "scripts/hooks/turn-manifest.py": "3cb16837d219f9cc57a7ee850233b5d90bdfcb522611cd74dac9db35a42a0ca7",
+        "scripts/hooks/turn-manifest.py": "be6f8cbeb3573c338cd94caaeef81f27a1ce8806ea7d5cfa8f13d3c05a2d6b83",
         "scripts/hooks/workspace-lifecycle.sh": "e8a6bd193fe910eb22f76da44c81b04feaa04e2a7429b055823ea8efc8df72e8",
         "scripts/inflight-ack.sh": "5ccbb53c17bc12d2bbea8780ea1f710a3391cf72d60f34f21f8327dc10f4378b",
         "scripts/inflight-notify.sh": "d7c37362a9293ee929e934684b42843cc940c19c4f138ce2e11bdd604de64ba4",
@@ -17802,7 +17802,7 @@
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
         "scripts/hooks/guard-stale-staging.sh": "3aaaea16970f7d9cb08b4600ba1a2edad55333c24115e7fb759cedc9512b1a6e",
-        "scripts/hooks/turn-manifest.py": "3cb16837d219f9cc57a7ee850233b5d90bdfcb522611cd74dac9db35a42a0ca7",
+        "scripts/hooks/turn-manifest.py": "be6f8cbeb3573c338cd94caaeef81f27a1ce8806ea7d5cfa8f13d3c05a2d6b83",
         "scripts/hooks/guard-stop-live-work.sh": "d4e441b03f147bef5f603f75f9d8d1e22f4129d9490aa1ae9389bed25f5893d5",
         "scripts/lib/stop-live-work.py": "d0f36a18367cdd8bf4b022e1325e8cdc1043e508c584359cff0980dbdadca8be",
         "scripts/hooks/guard-unresolved-claims.sh": "ee955921f52cd49dcf9e2abb50b2cada51d5d2628bb9384baac7dada190633ba",
