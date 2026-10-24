@@ -106,9 +106,11 @@ or interruption coverage. Observation mode never applies recovery controls.
 COMMANDS (review-watch.sh passes --engine-root and --config)
 ===========================================================================
   --monitor  the plugin monitor's body: one per session, a look every 60 s,
-             ends with its session
+             ends with its session; each look is a fresh --tick child, so a
+             landed fix reaches the next look (EVERY LOOK IS FRESH CODE)
   --tick     one look, printing what the monitor would print
-  --status   one line per running review and the last look's time
+  --status   whether this session is watched (its lock held and a recent
+             successful look), then one line per running review
 
 Test seams (review-watch.test.sh only): REVIEW_WATCH_STATE_DIR,
 REVIEW_WATCH_NOW, REVIEW_WATCH_POLL_SECONDS, REVIEW_WATCH_SECOND_REVIEW,
@@ -1955,19 +1957,104 @@ def current_session(engine_root):
     return sid, pid
 
 
-def run_loop(watcher, engine_root):
+# ---------------------------------------------------------------------------
+# EVERY LOOK IS FRESH CODE (stall_watch.py's design, R5 there)
+# ---------------------------------------------------------------------------
+# 2026-10-24: the fix for a READY that names only richos-hq landed at 19:49Z, but this
+# session's monitor (PID 90830, started 13:32Z) had loaded review_watch.py once, and at
+# 20:44Z it told [NOT STARTED] for exactly that READY again. stall-watch met the same thing
+# on 2026-10-22. So the plain monitor keeps only its lock, its session's liveness and its
+# output; every look is `--tick --monitor-look` in a fresh child, which loads the engine from
+# disk and records the source identity it evaluated (evaluated.json). A child that fails or
+# outlives LOOK_SECONDS is a watcher failure, told once per failing streak and reason.
+# The app's and the operator host's watchers (run_host_loop) end with their host and keep
+# their reviews in memory for the quit, so they still look in-process.
+EVALUATOR_SOURCES = ("scripts/lib/review_watch.py", "scripts/lib/stall_watch.py", "scripts/lib/app_review.py",
+                     "scripts/lib/operator_fences.py", "scripts/lib/recovery.py", "scripts/lib/recovery_runner.py",
+                     "scripts/lib/recovery_events.py", "mega-lander/workspaces.py")
+# An estimate, not a measurement: a look is git calls bounded at GIT_SECONDS each, and stops
+# of overrunning reviews bounded at STOP_TERM_SECONDS + STOP_KILL_SECONDS each.
+LOOK_SECONDS = 300
+
+
+def source_identity(engine_root):
+    """The sha256 (16 hex) of the evaluator's source files as they are on disk."""
+    h = hashlib.sha256()
+    for rel in EVALUATOR_SOURCES:
+        try:
+            with open(os.path.join(engine_root, rel), "rb") as fh:
+                h.update(rel.encode() + b"\0" + fh.read() + b"\0")
+        except OSError:
+            h.update(rel.encode() + b"\0missing\0")
+    return h.hexdigest()[:16]
+
+
+def _child_look(a, engine_root, sid, sd):
+    """(ok, why). One look in a fresh child of this same script; what it prints is passed on."""
+    timeout = stall_watch._env_float("REVIEW_WATCH_LOOK_SECONDS", LOOK_SECONDS)
+    cmd = [sys.executable, "-B", os.path.abspath(__file__), "--tick", "--monitor-look",
+           "--config", a.config, "--engine-root", engine_root]
+    started = time.time()
+    # The source when the child STARTS; the child hashes it again after its look, and a
+    # difference means which version it ran is unknown (recorded as no version).
+    before = source_identity(engine_root)
+    try:
+        r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
+                           env=dict(os.environ, RICHOS_SESSION_ID=sid or ""))
+    except subprocess.TimeoutExpired as exc:
+        # What it printed before it was ended is passed on: a verdict it printed may already be
+        # recorded delivered. (Python gives this partial output as bytes, whatever text= says.)
+        part = exc.stdout or ""
+        part = part.decode("utf-8", "replace") if isinstance(part, bytes) else part
+        if part:
+            sys.stdout.write(part if part.endswith("\n") else part + "\n")
+            sys.stdout.flush()
+        return False, "the look did not finish within %.0f s" % timeout
+    except OSError as exc:
+        return False, "the look could not start (%s)" % exc
+    if r.stdout:
+        sys.stdout.write(r.stdout)
+        sys.stdout.flush()
+    if r.stderr and r.returncode == 0:
+        sys.stderr.write(r.stderr)                  # a look's own notes, as before; a failure's tail is told below
+        sys.stderr.flush()
+    if r.returncode != 0:
+        tail = " ".join((r.stderr or "").strip().splitlines()[-2:])[:200]
+        return False, "the look exited %d%s" % (r.returncode, (": " + tail) if tail else "")
+    path = os.path.join(sd, "evaluated.json")
+    ev = stall_watch._read_json(path)
+    if not isinstance(ev.get("at"), (int, float)) or ev["at"] < started:
+        return False, "the look recorded no evaluated source"
+    if ev.get("identity") != before:
+        stall_watch._write_json(path, dict(ev, identity="changed-during-the-look"))
+    return True, ""
+
+
+def run_loop(a, engine_root):
     sid, spid = current_session(engine_root)
     sd = session_dir(sid)
     fd = stall_watch._try_lock(os.path.join(sd, "monitor.lock"))
     if fd is None:
         return 0                                    # this session is already watched
     prune(sd)
-    MONITOR["session"] = sid
     alive = stall_watch.session_alive_check(spid) if spid else None
     poll = stall_watch._env_float("REVIEW_WATCH_POLL_SECONDS", POLL_SECONDS)
+    failing = ""
     try:
         while alive is None or alive():
-            tick(watcher, sd)
+            ok, why = _child_look(a, engine_root, sid, sd)
+            if not ok:
+                # Beside the last successful look, so --status reads a failing child as failing.
+                path = os.path.join(sd, "evaluated.json")
+                stall_watch._write_json(path, dict(stall_watch._read_json(path), failed={"at": time.time(), "why": why}))
+                if why != failing:                  # once per failing streak and reason
+                    # What the failed look did before it ended (a review started or settled, a
+                    # notice printed) is not known, so nothing here claims it did nothing.
+                    sys.stdout.write("REVIEW-WATCH %s: a look failed (%s); what it did before it ended is not "
+                                     "known. The next look tries again. Check: review-watch.sh --status\n"
+                                     % (hhmm(clock()), why))
+                    sys.stdout.flush()
+            failing = "" if ok else why
             stall_watch._nap(poll, alive)
     finally:
         os.close(fd)
@@ -2051,17 +2138,34 @@ def app_mode(a, engine_root):
 def mode_status(engine_root):
     sid, _pid = current_session(engine_root)
     sd = _p("sessions", sid or "no-session")
-    st = stall_watch._read_json(os.path.join(sd, "told.json"))
     held = stall_watch.lock_held(os.path.join(sd, "monitor.lock"))
-    last = st.get("last_look")
-    print("review-watch: %s; last look %s" % ("watching this session" if held else "NOT WATCHING this session",
-                                             iso(last) if last else "never"))
+    # Watching is a held lock AND a recent successful look, as stall-watch's --alive reads it:
+    # the lock alone is also held by a monitor whose every look fails.
+    ev = stall_watch._read_json(os.path.join(sd, "evaluated.json"))
+    last = ev.get("at") if isinstance(ev.get("at"), (int, float)) else None
+    failed = ev.get("failed") or {}
+    poll = float(ev.get("poll") or POLL_SECONDS)
+    watching = False
+    if not held:
+        line = "NOT WATCHING this session"
+    elif failed and float(failed.get("at") or 0) >= float(last or 0):
+        line = "LOOKS FAILING since %s: %s" % (iso(float(failed.get("at") or 0)), failed.get("why"))
+    elif not last:
+        told = stall_watch._read_json(os.path.join(sd, "told.json")).get("last_look")
+        line = ("OLD MONITOR: it looks in-process with the code it started with (last look %s); it is replaced "
+                "when its session restarts" % iso(told) if told else "the monitor started; no look finished yet")
+    elif time.time() - last > 3 * poll + 30:
+        line = "STOPPED LOOKING: the last successful look was %s (it looks every %.0f s)" % (iso(last), poll)
+    else:
+        watching = True
+        line = "watching this session; last look %s, source %s" % (iso(last), ev.get("identity"))
+    print("review-watch: %s" % line)
     for path in sorted(glob.glob(_p("locks", "*.lock"))):
         info = stall_watch._read_json(path)
         print("  running: %s %s@%s (%s, attempt %s) since %s, pid %s" % (
             info.get("name"), os.path.basename(info.get("repo") or ""), str(info.get("tip"))[:12],
             info.get("trigger"), info.get("attempt"), iso(float(info.get("started_at") or 0)), info.get("pid")))
-    return 0 if held else 1
+    return 0 if watching else 1
 
 
 def main(argv):
@@ -2079,6 +2183,7 @@ def main(argv):
                     help="app mode: the app's Codex review switch (codex-reviews.json); on, Codex reviews when it can")
     ap.add_argument("--host-json", action="store_true",
                     help="the operator host's child: notices as JSON lines, one per lead session")
+    ap.add_argument("--monitor-look", action="store_true", help=argparse.SUPPRESS)  # --tick: the monitor's own look
     a = ap.parse_args(argv)
     engine_root = a.engine_root or os.path.dirname(os.path.dirname(HERE))
     if a.app_state:
@@ -2097,9 +2202,18 @@ def main(argv):
             return run_host_loop(watcher, "operator-host")
     if a.tick:
         sid, _pid = current_session(engine_root)
-        tick(watcher, session_dir(sid))
+        sd = session_dir(sid)
+        if a.monitor_look:
+            MONITOR["session"] = sid
+        tick(watcher, sd)
+        if a.monitor_look:
+            # The source on disk AFTER the look; the monitor compares it with the source when
+            # this child started (_child_look).
+            stall_watch._write_json(os.path.join(sd, "evaluated.json"), {
+                "identity": source_identity(engine_root), "at": time.time(), "pid": os.getpid(),
+                "poll": stall_watch._env_float("REVIEW_WATCH_POLL_SECONDS", POLL_SECONDS)})
         return 0
-    return run_loop(watcher, engine_root)
+    return run_loop(a, engine_root)
 
 
 if __name__ == "__main__":
