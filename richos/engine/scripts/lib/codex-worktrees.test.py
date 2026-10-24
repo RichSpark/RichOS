@@ -205,7 +205,14 @@ class CodexWorktrees(unittest.TestCase):
         self.attach("worktree", wt)
         action, why, _info = self.decide(wt)
         self.assertEqual(action, cw.UNDECIDED)
-        self.assertIn("archive_worktree", why)
+        self.assertIn("attached", why)
+        # No Codex chat is ever woken or archived for housekeeping, so the reason
+        # never sends anyone to a chat's archive or to the CEO for it, and it
+        # names the kept condition the disk watchdog quiets.
+        self.assertNotIn("archive_worktree", why)
+        self.assertNotIn("authorization", why)
+        self.assertNotIn("143", why)
+        self.assertEqual(_info.get("condition"), "chat-attached")
         self.assertTrue(self.close(wt)[0].startswith("at deletion time"))
         self.assertTrue(wt.exists())
 

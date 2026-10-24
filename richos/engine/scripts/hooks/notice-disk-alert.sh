@@ -39,10 +39,18 @@
 # mentioned last turn, and the failure mode of going quiet is that the machine
 # stops working mid-task.
 #
-# It is done through stop_notice_abnormal_recurring with a one-second interval
-# rather than by bypassing the library, so the announcement is still LEDGERED and
-# still visible to everything that audits Stop notices. One second means "every
-# turn" in practice, and saying so here is cheaper than a private code path.
+# It is done through the library's emission (stop_notice_abnormal_recurring)
+# with no ledger, so every turn it is said again, unconditionally: the ledger
+# below is for the kept set only, and an alarm never consults it.
+#
+# ONE THING IS NOT AN ALARM AND IS TOLD ONCE (CEO, 2026-10-24: "remove obsolete
+# instructions and repeated administrative noise without hiding genuine
+# failures"): leftovers the scheduled cleanup kept or left undecided by a known
+# condition. The watchdog prints them under "KEPT OR UNDECIDED" with the set's
+# identity (which entries, in which condition); this line tells a
+# set once a session, and a new or changed set once more. Low or falling disk, a
+# failed deletion, a failed, missing or stale run and a failed app or device
+# cleanup are alarms and still repeat every turn.
 #
 # ===========================================================================
 # IT NEVER BLOCKS AND IT NEVER COSTS A DF
@@ -133,12 +141,23 @@ WD="$SCRIPTS/disk-watchdog.sh"
 # stdin is drained on the Stop path because the host writes the payload there and
 # a hook that leaves it unread can make the host block. Done unconditionally and
 # with a timeout, the way the other notices do it.
+# READ AS EVERY OTHER Stop HOOK READS IT. This was `timeout 2 cat`, and macOS has
+# no `timeout`, so the payload was always empty here: no session id, so no
+# ledger, so nothing this hook said was ever remembered. A terminal is never read.
 PAYLOAD=""
-if [ "$EVENT" = "Stop" ]; then
-    PAYLOAD="$(timeout 2 cat 2>/dev/null || true)"
+if [ "$EVENT" = "Stop" ] && [ ! -t 0 ]; then
+    PAYLOAD="$(cat 2>/dev/null || true)"
 fi
 
 BODY="$(bash "$WD" --alert 2>/dev/null || true)"
+
+# THE LEDGER IS THE SESSION'S, so a kept leftover told once is remembered (below).
+# A root that cannot be resolved leaves it unset, and then everything is told
+# every turn: the library's safe direction.
+NOTICE_ROOT=""
+if [ "$EVENT" = "Stop" ] && resolve_entity_root "$PAYLOAD" >/dev/null 2>&1; then
+    NOTICE_ROOT="${RICHOS_ENTITY_ROOT_RESOLVED:-}"
+fi
 
 if [ -z "$BODY" ]; then
     # Nothing wrong. On Stop, tell the ledger the condition has CLEARED, so the
@@ -147,7 +166,7 @@ if [ -z "$BODY" ]; then
     if [ "$EVENT" = "Stop" ] && [ -f "$SCRIPTS/lib/stop-hook-notice.sh" ]; then
         # shellcheck source=../lib/stop-hook-notice.sh
         . "$SCRIPTS/lib/stop-hook-notice.sh" 2>/dev/null || exit 0
-        stop_notice_init "notice-disk-alert.sh" "" "$PAYLOAD" 2>/dev/null || exit 0
+        stop_notice_init "notice-disk-alert.sh" "$NOTICE_ROOT" "$PAYLOAD" 2>/dev/null || exit 0
         stop_notice_normal 2>/dev/null || true
     fi
     exit 0
@@ -157,7 +176,7 @@ if [ "$EVENT" = "Stop" ]; then
     [ -f "$SCRIPTS/lib/stop-hook-notice.sh" ] || exit 0
     # shellcheck source=../lib/stop-hook-notice.sh
     . "$SCRIPTS/lib/stop-hook-notice.sh" 2>/dev/null || exit 0
-    stop_notice_init "notice-disk-alert.sh" "" "$PAYLOAD" 2>/dev/null || exit 0
+    stop_notice_init "notice-disk-alert.sh" "$NOTICE_ROOT" "$PAYLOAD" 2>/dev/null || exit 0
 
     # ONE LINE, assembled from the block. The interesting facts are the volume
     # lines, the stuck-path count and the classification; the "what to do"
@@ -183,12 +202,15 @@ if [ "$EVENT" = "Stop" ]; then
     # ALERT. Another program's temporary files never appear here at all: they
     # are in the SessionStart block, where they are information, and a turn-end
     # line about files nobody may touch is the definition of wallpaper.
-    SUMMARY="$(printf '%s\n' "$BODY" | python3 -c '
+    PARSED="$(printf '%s\n' "$BODY" | python3 -c '
 import re, sys
 text = sys.stdin.read()
 vols, stuck, inst, klass, notinstalled, stopped = [], "", "", "", False, False
+dev, heading = "", ""
 todo = []
 cleanup = ""
+kept, kept_set = "", ""
+todo_set = ""
 for line in text.splitlines():
     s = line.strip()
     if "NOT INSTALLED" in s:
@@ -205,20 +227,35 @@ for line in text.splitlines():
     m = re.match(r"^(\d+) TEST APP INSTANCE\(S\) WOULD NOT CLOSE", s)
     if m:
         inst = "%s test app instance(s) would not close" % m.group(1)
+    m = re.match(r"^(\d+) TEST DEVICE CLEANUP ISSUE\(S\)", s)
+    if m:
+        dev = "%s test device cleanup issue(s) need attention" % m.group(1)
+    m = re.match(r"^MASSIVE ALERT — (.+)$", s)
+    if m and not heading:
+        heading = m.group(1)
     # The scheduled cleanup has not recovered (cleanup PRD R5): the watchdog line
     # already is one short summary with its owner action and detail path.
     m = re.match(r"^CLEANUP HAS NOT RECOVERED: (.*)$", s)
     if m:
         cleanup = "cleanup has not recovered: " + m.group(1)[:400]
     # OURS AND NEVER DELETED AUTOMATICALLY — a campaign root past its retention,
-    # a running throwaway container. Not an alarm, but the one pile a person
-    # gets space back from, so it keeps its place on this line.
-    m = re.match(r"^(\S+ \S+) in (\d+) place\(s\) IS OURS AND IS NEVER DELETED", s)
+    # a running throwaway container. Not an alarm: administrative, told once
+    # per set like the kept set below.
+    m = re.match(r"^(\S+ \S+) in (\d+) place\(s\) IS OURS AND IS NEVER DELETED"
+                 r"(?: AUTOMATICALLY \(set ([0-9a-f]+)\))?", s)
     if m:
         todo.append("%s in %s place(s) is ours and waits for a person to remove it"
                     % (m.group(1), m.group(2)))
+        todo_set = m.group(3) or ""
     if s.startswith("CLASSIFICATION:"):
         klass = s.split(":", 1)[1].strip()
+    # KEPT OR UNDECIDED: not an alarm. Told once per set (the shell below), so
+    # the set id travels apart from the words.
+    m = re.match(r"^KEPT OR UNDECIDED \(not an alert\): (.*) \(set ([0-9a-f]+)\)$", s)
+    if m:
+        kept = ("Cleanup, kept or undecided: %s; told once per set. Which, and why: "
+                "scripts/disk-watchdog.sh --status" % m.group(1))
+        kept_set = m.group(2)
 # ALARM and REPORT are assembled separately, and the prefix follows the ALARM.
 alarm = []
 if notinstalled:
@@ -230,30 +267,76 @@ if stuck:
     alarm.append(stuck)
 if inst:
     alarm.append(inst)
+if dev:
+    alarm.append(dev)
 if cleanup:
     alarm.append(cleanup)
+# AN ALARM THIS PARSER DOES NOT KNOW IS STILL AN ALARM: the MASSIVE ALERT
+# heading of the block is the item, never silence.
+if heading and not alarm:
+    alarm.append(heading)
 if alarm and klass:
     alarm.append("classification: " + klass)
+summary = ""
 if alarm:
-    print("MASSIVE ALERT — DISK: " + " | ".join(alarm + todo)
-          + ". Full reading: scripts/disk-watchdog.sh --status")
-elif todo:
+    summary = ("MASSIVE ALERT — DISK: " + " | ".join(alarm)
+               + ". Full reading: scripts/disk-watchdog.sh --status")
+todo_line = ""
+if todo:
     # NO ALARM WORDS. Nothing is broken and nothing is at risk; there is simply
     # space a person can reclaim with a command the full reading prints.
-    print("Disk: " + " | ".join(todo)
-          + ". Which, and the command: scripts/disk-watchdog.sh --status")
-# AND NOTHING AT ALL when the block held only other programs temp or an
-# undecidable pile. Those are in the SessionStart block to be read, not on
-# every turn end to be scrolled past.
+    todo_line = ("Disk: " + " | ".join(todo)
+                 + "; told once per set. Which, and the command: "
+                   "scripts/disk-watchdog.sh --status")
+# AND NOTHING AT ALL when the block held only other programs temp. That is in
+# the SessionStart block to be read, not on every turn end to be scrolled past.
+# Five lines, always: the alarm, then each administrative notice with its set.
+print(summary)
+print(kept_set)
+print(kept)
+print(todo_set)
+print(todo_line)
 ' 2>/dev/null || echo "")"
+    SUMMARY="$(printf '%s\n' "$PARSED" | sed -n 1p)"
+    KEPT_SET="$(printf '%s\n' "$PARSED" | sed -n 2p)"
+    KEPT="$(printf '%s\n' "$PARSED" | sed -n 3p)"
+    TODO_SET="$(printf '%s\n' "$PARSED" | sed -n 4p)"
+    TODO="$(printf '%s\n' "$PARSED" | sed -n 5p)"
+
+    # ADMINISTRATION IS TOLD ONCE PER SET, and only administration is: the kept
+    # or undecided leftovers and our own pile waiting for a person. An unchanged
+    # set is not news, so it is told once a session, and a new or changed set
+    # (its id is WHICH entries, never their size or age) is told once more.
+    # Everything that is an alarm keeps repeating every turn below.
+    if [ -n "$KEPT" ] && [ -n "$KEPT_SET" ] && stop_notice_seen "kept:$KEPT_SET"; then
+        KEPT=""
+    fi
+    if [ -n "$TODO" ] && [ -n "$TODO_SET" ] && stop_notice_seen "todo:$TODO_SET"; then
+        TODO=""
+    fi
+    ADMIN="$TODO"
+    if [ -n "$KEPT" ]; then
+        ADMIN="${ADMIN:+$ADMIN | }$KEPT"
+    fi
 
     if [ -z "$SUMMARY" ]; then
+        if [ -n "$ADMIN" ]; then
+            stop_notice_abnormal "admin:$KEPT_SET:$TODO_SET" "$ADMIN" 2>/dev/null || true
+            exit 0
+        fi
         # The block said something, but nothing a person must act on. Treat it
         # exactly as the empty-block path above: tell the ledger the condition
         # has cleared so the next real one announces afresh.
         stop_notice_normal 2>/dev/null || true
         exit 0
     fi
+    if [ -n "$ADMIN" ]; then
+        SUMMARY="$SUMMARY | $ADMIN"
+    fi
+    # AN ALARM IS TOLD EVERY TURN, with no memory at all, exactly as before the
+    # ledger above existed: its key is only how many MASSIVE ALERT banners there
+    # are, so remembering it could hide a later, different failure.
+    stop_notice_init "notice-disk-alert.sh" "" "$PAYLOAD" 2>/dev/null || exit 0
 
     # THE STATE KEY IS THE CONDITION, NOT THE NUMBER. Keying on free bytes would
     # make every reading a new state and defeat the ledger entirely; keying on

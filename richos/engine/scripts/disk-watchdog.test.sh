@@ -1058,14 +1058,122 @@ fi
 # scheduled cleanup ("the open-file table could not be read") sat in a report
 # nobody acted on. An undecided entry in the scheduled result is an UNRESOLVED
 # cleanup: an alarm, at any size, with one owner action.
+#
+# CHANGED 2026-10-24 (CEO: "remove obsolete instructions and repeated
+# administrative noise without hiding genuine failures"). A group the reaper
+# names by its class and KEPT on purpose is reported under its own heading and is
+# not an alarm. A run that could not read what every decision depends on (the
+# open-file table, above) still is, and so is a row without a class.
 healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "undecidable": 23, "undecidable_bytes": 164580800, "verdict": "undecided", "unresolved": [{"scope": "/tmp/x", "cause": "23 undecided tmp-unknown entries (157.0 MB), e.g. /tmp/x/a: wall 2"}]'
 OUT="$(run_wd --alert)"; RC=$?
 if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: /tmp/x: 23 undecided'; then
-    ok "W18c an undecided pile in the scheduled result is an UNRESOLVED cleanup, an alarm"
+    ok "W18c an unresolved row the reaper did not class is still an alarm"
 else
-    bad "W18c an undecided pile in the scheduled result did not alarm (rc=$RC)"
+    bad "W18c an unclassed unresolved row did not alarm (rc=$RC)"
     printf '%s\n' "$OUT" | sed 's/^/        /' | head -10
 fi
+# THE MIXED STATE OF 2026-10-24 16:00:44Z: no failure, an undecidable repository
+# whose main cannot be read, finished checkouts a Codex chat still has attached,
+# and checkouts under temp roots. Each row carries the reaper's own condition
+# code; honest and short, and no alarm.
+KEPT_ROWS='{"scope": "/v/ab/worktrees", "class": "codex-worktree", "condition": "main-unreadable", "count": 1, "bytes": 0, "identity": "aaaa", "cause": "1 undecided codex-worktree entry (0 B), e.g. /v/ab/worktrees/hh/prospects: main of /u/prospects cannot be read"}, {"scope": "/v/codex/worktrees", "class": "codex-worktree", "condition": "chat-attached", "count": 13, "bytes": 0, "identity": "bbbb", "cause": "13 undecided codex-worktree entries (0 B), e.g. /v/codex/worktrees/a/richos: finished, but a Codex chat still has it attached, so it is kept"}, {"scope": "/v/tmp/codex", "class": "tmp-unknown", "condition": "wall-2", "count": 13, "bytes": 6299191717, "identity": "cccc", "cause": "13 undecided tmp-unknown entries (5.9 GB), e.g. /v/tmp/codex/h: wall 2: this tree contains a .git"}'
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "failures": 0, "undecidable": 27, "verdict": "undecided", "unresolved": ['"$KEPT_ROWS"']'
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "0" ] && ! printf '%s' "$OUT" | grep -q 'MASSIVE ALERT\|CLEANUP HAS NOT RECOVERED' \
+   && printf '%s' "$OUT" | grep -q 'KEPT OR UNDECIDED (not an alert): 27 entries in 3 group(s) the scheduled run of .* left in place and will not delete on its own (set [0-9a-f]*)' \
+   && printf '%s' "$OUT" | grep -q "/v/ab/worktrees (undecided: its repository's main cannot be read): 1 undecided codex-worktree entry" \
+   && ! printf '%s' "$OUT" | grep -qi 'nothing failed\|safe'; then
+    ok "W18d kept or undecided leftovers are reported under their own heading, not an alarm, never called safe"
+else
+    bad "W18d kept leftovers alarmed, went unreported or were called safe (rc=$RC)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -12
+fi
+# --status runs the reaper live; a command that is not there keeps it on the file.
+echo "SCRATCH_REAPER_CMD=\"$W_DIR/nothing-here.sh\"" >>"$W_CFG"
+OUT="$(run_wd --status)"; RC=$?
+if printf '%s' "$OUT" | grep -q '^kept    /v/codex/worktrees (a finished checkout a Codex chat still has attached): 13 undecided' \
+   && ! printf '%s' "$OUT" | grep -q 'cleanup has not recovered'; then
+    ok "W18e --status still lists every kept leftover, marked kept, not ALERT"
+else
+    bad "W18e --status lost the kept leftovers or alarmed on them"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -12
+fi
+# ONLY THE REAPER'S ESTABLISHED CODES ARE QUIET. A classed row with no condition
+# (a reading the run could not make, an older result), an unknown code and a
+# malformed one all stay alarms, beside the kept rows.
+for EXTRA in '{"scope": "/v/tmp", "class": "tmp-unknown", "count": 1, "bytes": 0, "cause": "1 undecided tmp-unknown entry (0 B), e.g. /v/tmp: THE OPEN-FILE TABLE COULD NOT BE READ"}' \
+             '{"scope": "/v/tmp", "class": "codex-worktree", "condition": "some-new-code", "count": 1, "bytes": 0, "cause": "1 undecided codex-worktree entry (0 B), e.g. /v/tmp: its status cannot be read"}' \
+             '{"scope": "/v/tmp", "class": "codex-worktree", "condition": ["wall-2"], "count": 1, "bytes": 0, "cause": "1 undecided codex-worktree entry (0 B), e.g. /v/tmp: malformed"}'; do
+    healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": ['"$KEPT_ROWS"', '"$EXTRA"']'
+    OUT="$(run_wd --alert)"; RC=$?
+    if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: /v/tmp: 1 undecided'; then
+        ok "W18f an undecided row without an established condition code is still an alarm ($(printf '%s' "$EXTRA" | cut -c60-110)...)"
+    else
+        bad "W18f an undecided row without an established code was quieted (rc=$RC): $EXTRA"
+        printf '%s\n' "$OUT" | sed 's/^/        /' | head -12
+    fi
+done
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "failures": 1, "unresolved": ['"$KEPT_ROWS"', {"scope": "/v/tmp", "class": "deletion", "count": 1, "cause": "1 deletion(s) failed, e.g. /v/tmp/x: permission denied"}]'
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: /v/tmp: 1 deletion(s) failed' \
+   && ! printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: .*(+' \
+   && printf '%s' "$OUT" | grep -q 'KEPT OR UNDECIDED (not an alert): 27 entries' \
+   && ! printf '%s' "$OUT" | grep -qi 'nothing failed'; then
+    ok "W18g a failed deletion beside kept leftovers is the alarm, and the kept heading claims nothing about it"
+else
+    bad "W18g a failed deletion beside kept leftovers did not alarm alone, or the kept heading denied it (rc=$RC)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -14
+fi
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "last_apply_epoch": int(time.time()) - 13 * 3600, "unresolved": ['"$KEPT_ROWS"']'
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: the last completed scheduled run was .* past the 12 h window'; then
+    ok "W18h a stale scheduled run with kept leftovers is still an alarm"
+else
+    bad "W18h a stale run hid behind its kept leftovers (rc=$RC)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -12
+fi
+# THE SET IS ITS IDENTITY: sizes and times never change it; a new entry, and the
+# same entries in a changed condition, do.
+kept_set() { run_wd --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("cleanup_kept_set") or "")'; }
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": ['"$KEPT_ROWS"']'
+SET1="$(kept_set)"
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "last_apply_epoch": int(time.time()) - 3600, "unresolved": ['"$(printf '%s' "$KEPT_ROWS" | sed 's/6299191717/7299191717/; s/(5.9 GB)/(6.8 GB)/')"']'
+SET2="$(kept_set)"
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": ['"$(printf '%s' "$KEPT_ROWS" | sed 's/"count": 13, "bytes": 0, "identity": "bbbb"/"count": 14, "bytes": 0, "identity": "bbbd"/')"']'
+SET3="$(kept_set)"
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": ['"$(printf '%s' "$KEPT_ROWS" | sed 's/"condition": "main-unreadable"/"condition": "chat-attached"/')"']'
+SET4="$(kept_set)"
+if [ -n "$SET1" ] && [ "$SET1" = "$SET2" ] && [ "$SET3" != "$SET1" ] && [ "$SET4" != "$SET1" ]; then
+    ok "W18i the kept set is keyed by which leftovers in which condition, never by bytes or time"
+else
+    bad "W18i the kept set id moved with a size or time, or missed a change ($SET1 $SET2 $SET3 $SET4)"
+fi
+# THE PRODUCER: the reaper publishes each undecided group's condition code, and
+# the group identity moves when the same entry's condition changes.
+if python3 - "$SCRIPT_DIR/lib/scratch-reaper.py" <<'PYID'
+import importlib.util, sys
+from types import SimpleNamespace
+sys.path.insert(0, sys.argv[1].rsplit("/", 1)[0])
+spec = importlib.util.spec_from_file_location("srt_reaper_id", sys.argv[1])
+sr = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sr)
+wall = sr.Refusal(2, "wall 2: this tree contains a .git")
+assert wall.condition == "wall-2" and wall.startswith("wall 2:"), wall
+def rows(cond):
+    e = sr.Entry("/r/a", "codex-worktree", 0, sr.INDETERMINATE, "why", condition=cond)
+    return sr.unresolved_rows(SimpleNamespace(roots=["/r"], entries=[e], deferred_skipped=0), [])
+a, b, none = rows("main-unreadable"), rows("chat-attached"), rows(None)
+assert a[0]["condition"] == "main-unreadable" and "condition" not in none[0], (a, none)
+assert a[0]["identity"] != b[0]["identity"], (a, b)
+assert rows("main-unreadable")[0]["identity"] == a[0]["identity"]
+assert sr.Entry("/r/b", "tmp-unknown", 5, sr.INDETERMINATE, wall).condition == "wall-2"
+PYID
+then
+    ok "W18j the reaper publishes each undecided group's condition, and the identity follows it"
+else
+    bad "W18j the reaper does not publish the condition, or its identity ignores it"
+fi
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json"
 
 # ===========================================================================
 # W19 — THREE PILES, THREE HEADINGS, AND ONLY ONE OF THEM IS AN ALARM
@@ -1489,19 +1597,22 @@ if [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = 
 else
     bad "W23i a timed acknowledgement was answered with a replacement"
 fi
-# Recovery before the hold expires: health clears, the association stays until the
-# id can be closed.
-healthy_reaper_state "$RS" '"roots": ["/x/root"]'
+# Recovery before the hold expires, to a refreshed result holding ONLY a known
+# kept leftover (the state of 2026-10-24): health clears and the HELD id is closed
+# permanently at once, so its hold cannot expire and tell the lead again.
+# (Changed 2026-10-24; it used to keep the id until the hold expired.)
+healthy_reaper_state "$RS" '"outcome": "unresolved", "roots": ["/x/root"], "unresolved": [{"scope": "/x/root", "class": "codex-worktree", "condition": "chat-attached", "count": 1, "bytes": 0, "identity": "k1", "cause": "1 undecided codex-worktree entry (0 B), e.g. /x/root/a: finished, but a Codex chat still has it attached, so it is kept"}]'
 OUT="$(run_wd --alert)"; RC=$?
 run_wd_scheduled >/dev/null 2>&1
-if [ "$RC" = "0" ] && [ "$(wd_assoc)" = "$ID2" ] \
-   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "EscalationAck"])')" = "2" ]; then
-    ok "W23j recovery during a hold clears health and keeps the id until it can be closed"
+if [ "$RC" = "0" ] && [ -z "$(wd_assoc)" ] \
+   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "EscalationAck" and r.get("id") == "'"$ID2"'" and "Recovered" in r.get("disposition", "") and not r.get("until")])')" = "1" ]; then
+    ok "W23j recovery during a hold, to only a kept leftover, closes the held id permanently"
 else
-    bad "W23j recovery during a hold (rc=$RC assoc=$(wd_assoc))"
+    bad "W23j a held escalation stayed open after recovery (rc=$RC assoc=$(wd_assoc))"
+    cat "$LEDGER" 2>/dev/null | sed 's/^/        /' | tail -4
 fi
-# The hold expires (its until moved into the past): the same id reopens, and the
-# next tick, reading a healthy result, closes it permanently.
+# The hold's date then passes: the permanent close outlives it; nothing reopens
+# and no new id is raised.
 python3 - "$LEDGER" "$ID2" <<'PY'
 import json, sys, time
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
@@ -1514,10 +1625,18 @@ PY
 run_wd_scheduled >/dev/null 2>&1
 if [ -z "$(wd_assoc)" ] \
    && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "EscalationAck" and r.get("id") == "'"$ID2"'" and "Recovered" in r.get("disposition", "") and not r.get("until")])')" = "1" ] \
+   && [ "$(python3 - "$LEDGER" "$ID2" "$SCRIPT_DIR/lib" <<'PYOUT'
+import json, sys
+sys.path.insert(0, sys.argv[3])
+import escalations
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+print(len([e for e in escalations.outstanding(rows) if e.get("id") == sys.argv[2]]))
+PYOUT
+)" = "0" ] \
    && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = "2" ]; then
-    ok "W23k after the hold expires the job closes the SAME id permanently; no new id"
+    ok "W23k after the hold's date passes the closed id stays closed; no new id"
 else
-    bad "W23k the expired hold was not closed against current health"
+    bad "W23k the expired hold reopened the closed id, or a new one was raised"
     cat "$LEDGER" 2>/dev/null | sed 's/^/        /' | tail -4
 fi
 # Only a run that inspected the scope that failed clears it.

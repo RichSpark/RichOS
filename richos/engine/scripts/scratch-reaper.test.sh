@@ -2975,7 +2975,8 @@ if [ -f "$WT_OPEN/open.txt" ]; then
 else
     bad "S37a an unmerged Codex worktree was deleted"
 fi
-if [ -f "$WT_LIVE/live.txt" ] && printf '%s' "$OUT" | grep -q 'archive_worktree'; then
+if [ -f "$WT_LIVE/live.txt" ] && printf '%s' "$OUT" | grep -q 'a Codex chat still has it attached' \
+        && ! printf '%s' "$OUT" | grep -q 'archive_worktree\|authorization'; then
     ok "S37b a finished worktree a chat still has attached is undecided, not deleted"
 else
     bad "S37b an attached Codex worktree was deleted or not reported"
