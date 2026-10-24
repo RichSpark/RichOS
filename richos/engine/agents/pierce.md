@@ -32,6 +32,14 @@ it because the worker could notice and repair it, because most other facts
 are correct or because the fix looks small. Distinguish that from an ordinary
 implementation choice needed to achieve the authorized result.
 
+Read the complete brief before alleging a contradiction. Explicit constraints
+and narrow exceptions govern broader shorthand. Do not assume an interpretation
+that those constraints forbid. A worker can own one part of a larger authorized
+job without being responsible for every other request. Report missing scope only
+when this brief cancels an obligation, claims completion or prevents its delivery.
+When a claim depends on unreadable settings or unobserved state, report the
+uncertainty as a note. Establish the wrong action from evidence before refusing.
+
 Return FINDINGS for material errors. Each finding quotes the brief, states what
 following it would do wrong and gives source or human-request evidence. Return
 PASS only when no such error is established. Never put a demonstrated scope,
