@@ -120,6 +120,9 @@
 #        a look that fails is told once per failing streak and the monitor keeps watching;
 #        --status says watching only after a recent successful look
 #        (2026-10-24: a landed fix never reached the session's monitor, PID 90830)
+#   W38  a look whose evaluation raises is a failed look: told once per failing streak,
+#        --status says failing; a clean look reads healthy again; the same error after a
+#        successful look is told again (the second review of 5331505bd, finding 1)
 #
 # Every case loads scripts/lib/app_review.py too: review_watch.py imports its app_paths.
 # The app mode (--app-state) and app_review.py's mid-job notice are driven over the real
@@ -2878,6 +2881,73 @@ check "W37 a look that fails is told once per failing streak, and the monitor ke
     "failing looks=$NLOOKS told=$NFAIL alive=$W37_ALIVE out=$(head -c 600 "$W37/out")"
 [ "$ST2RC" -eq 1 ] && has "$ST2" "LOOKS FAILING"
 check "W37 --status reads a monitor whose looks fail as failing, never as watching" $? "rc=$ST2RC status=$ST2"
+
+# --- W38 ---------------------------------------------------------------------
+# 2026-10-24, the second review of 5331505bd (finding 1): a look whose evaluation raised was
+# caught inside the child, which still recorded a successful look and exited 0, so --status
+# said watching; and once told, the same error was never told again, even after a good look.
+# The real monitor, from a copy of the engine whose Watcher.look raises while a marker file
+# exists: the failing looks are told once, --status says failing; a clean look reads healthy
+# again; the same error coming back is told again.
+resetstate
+W38="$SB/w38"
+mkdir -p "$W38/engine/scripts/lib" "$W38/engine/mega-lander"
+cp "$LIB"/*.py "$W38/engine/scripts/lib/"
+cp "$ENGINE"/mega-lander/*.py "$W38/engine/mega-lander/"
+python3 - "$W38/engine/scripts/lib/review_watch.py" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = '        """Lines to print. Starts what is due; settles what ended."""\n'
+assert s.count(anchor) == 1, "Watcher.look's first line moved"
+open(p, "w").write(s.replace(anchor, anchor + '        if os.path.exists(os.environ["W38_RAISE"]):\n'
+                             '            raise OSError("w38: registry unavailable")\n'))
+PY
+W38_SD="$SB/rw/sessions/w38-lead"
+: >"$W38/raise"
+RICHOS_SESSION_ID=w38-lead RICHOS_SESSION_PID=$$ REVIEW_WATCH_POLL_SECONDS=1 W38_RAISE="$W38/raise" \
+    python3 -B "$W38/engine/scripts/lib/review_watch.py" --monitor --config "$SB/orchestration.config" \
+    --engine-root "$W38/engine" >"$W38/out" 2>&1 &
+W38_PID=$!
+# w38field <key> [<subkey>]: one field of the session's evaluated.json, or nothing.
+w38field() { python3 -c 'import json, sys
+v = json.load(open(sys.argv[1]))
+for k in sys.argv[2:]:
+    v = v.get(k) if isinstance(v, dict) else None
+print("" if v is None else v)' "$W38_SD/evaluated.json" "$@" 2>/dev/null; }
+# w38fails <n>: wait (bounded, for a hang) until n more failing looks are recorded (each one's failed.at).
+w38fails() { local seen=" " f; for _ in $(seq 1 200); do
+    f="$(w38field failed at)"
+    [ -n "$f" ] && [ "$f" != "$W38_LASTF" ] && case "$seen" in *" $f "*) ;; *) seen="$seen$f " ;; esac
+    [ "$(printf '%s' "$seen" | wc -w | tr -d ' ')" -ge "$1" ] && break
+    sleep 0.1
+done; W38_LASTF="$f"; W38_N="$(printf '%s' "$seen" | wc -w | tr -d ' ')"; }
+w38status() { ST="$(RICHOS_SESSION_ID=w38-lead python3 -B "$LIB/review_watch.py" --status --engine-root "$W38/engine" 2>&1)"; STRC=$?; }
+W38_LASTF=""
+w38fails 3; N1="$W38_N"
+TOLD1="$(grep -c "a look failed" "$W38/out")"
+w38status; ST1="$ST"; ST1RC=$STRC
+[ "$N1" -ge 3 ] && [ "$TOLD1" = "1" ] && grep -q "w38: registry unavailable" "$W38/out" \
+    && [ "$ST1RC" -eq 1 ] && has "$ST1" "LOOKS FAILING" && has "$ST1" "w38: registry unavailable"
+check "W38 a look whose evaluation raises fails: told once per failing streak, --status never says watching" $? \
+    "failing looks=$N1 told=$TOLD1 status rc=$ST1RC status=$ST1 out=$(head -c 600 "$W38/out")"
+rm -f "$W38/raise"
+# The fact waited for: a successful look recorded after the last failing one.
+for _ in $(seq 1 200); do
+    [ -n "$(w38field at)" ] && [ -z "$(w38field failed at)" ] && break
+    sleep 0.1
+done
+w38status; ST2="$ST"; ST2RC=$STRC
+[ "$ST2RC" -eq 0 ] && has "$ST2" "watching this session"
+check "W38 a clean look after failing ones reads healthy again" $? "rc=$ST2RC status=$ST2"
+: >"$W38/raise"
+W38_LASTF=""
+w38fails 1
+TOLD2="$(grep -c "a look failed" "$W38/out")"
+kill "$W38_PID" 2>/dev/null; wait "$W38_PID" 2>/dev/null
+[ "$W38_N" -ge 1 ] && [ "$TOLD2" = "2" ]
+check "W38 the same evaluation error after a successful look is told again" $? \
+    "failing looks=$W38_N told=$TOLD2 out=$(head -c 900 "$W38/out")"
 
 echo
 echo "review-watch.test.sh: $PASS passed, $FAIL failed"
