@@ -6063,13 +6063,25 @@ def _merges_in_main_checkout(main, target, b):
 
 def _merge_in_temporary_checkout(main, target, args, b, author_runs=()):
     """Runs `git merge` (with git's own hooks and checks) in a temporary
-    checkout of `target` under this tool's state directory, then removes that
+    checkout of `target` in the engine's state location, then removes that
     checkout. A refused merge commits nothing, so `target` has not moved; the
     checkout is removed either way. `author_runs` are offered to the gate
-    (_land_env)."""
-    _ensure_dirs()
-    parent = _p("merge-checkouts")
-    os.makedirs(parent, exist_ok=True)
+    (_land_env).
+
+    NEVER UNDER ~/.claude (2026-10-24, zach-opus-orch5): the test runner drops
+    every variable that points inside the operator's record before a check
+    (record-canary.sh _rc_roads_back), and in a checkout there that is PATH, so
+    every land into a release branch failed with rc=127."""
+    here = os.path.join(engine_root(), "scripts", "lib")
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import machine_settings
+    try:
+        parent = str(machine_settings.state("merge-checkouts"))
+        os.makedirs(parent, exist_ok=True)
+    except (ValueError, OSError) as e:
+        raise SpecError("cannot merge %s: the engine's state location for a temporary checkout of %s cannot be "
+                        "used (%s); nothing was landed" % (b, target, e))
     path = os.path.join(os.path.realpath(parent), "%s-%d" % (_key_segment(target), os.getpid()))
     _remove_temporary_checkout(main, path)
     rc, out, err = git(main, "worktree", "add", "--quiet", path, target, timeout=600)
@@ -6772,6 +6784,21 @@ def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
     if not ordered and not (ceo_word or "").strip() and len((not_ceo_ordered or "").strip()) < 10:
         raise SpecError("say whether the CEO ordered this work: --ceo-word '<his words>' or "
                         "--not-ceo-ordered '<why it was not his order>' (point 7)")
+    # A PREDECESSOR'S UNLANDED WORK IS NEVER DISCARDED WITH ITS CONTINUATION
+    # (2026-10-24 ~07:50Z: discarding zach-opus-orch5, which had committed
+    # nothing, deleted the reviewed, unlanded branches of orch3 and orch1 it
+    # continued). Such a predecessor, with everything it continues, stays; one
+    # the discarded work continued goes back to the list of work to land.
+    kept = set()
+    for r in chain:
+        if r["key"] == rec["key"] or r["key"] in kept:
+            continue
+        sub = _chain(r)
+        if any(_unlanded(sub, repo, b) for repo, b in _branch_targets([r])):
+            kept.update(x["key"] for x in sub)
+    reopen = [r for r in chain if r["key"] in kept and (r.get("disposition") or {}).get("kind") == "continued"
+              and r["disposition"].get("by") not in kept]
+    chain = [r for r in chain if r["key"] not in kept]
     tips = {}
     for repo, b in _branch_targets(chain):
         t = branch_tip(repo, b)
@@ -6787,8 +6814,27 @@ def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
                 fresh["disposition"]["dispatch_refused"] = refused
             save_agent(fresh)
         event("discarded", key=r["key"], reason=reason, tips=tips, as_part_of=rec["key"])
+    for r in reopen:
+        with Lock():
+            fresh = load_agent(r["key"])
+            if (fresh.get("disposition") or {}).get("kind") == "continued":
+                fresh["disposition"] = None
+                save_agent(fresh)
+        event("continuation-discarded", key=r["key"], by=rec["key"])
     _delete_chain(chain, "discarded")
-    return {"discarded": True, "tips": tips}
+    return {"discarded": True, "tips": tips, "kept": sorted(r.get("name") or r["key"] for r in reopen)}
+
+
+def _unlanded(chain, repo, b):
+    """True unless branch `b` of `repo` is absent or already in the branch this
+    work integrates on; an answer that cannot be read counts as unlanded."""
+    t, unread = branch_tip_read(repo, b)
+    if unread:
+        return True
+    if not t:
+        return False
+    _target, tip, why_not = integration_target(chain, repo)
+    return bool(why_not or not tip or not is_ancestor(repo, t, tip))
 
 
 def never_ran(rec):
@@ -8697,6 +8743,8 @@ def main(argv):
         elif a.cmd == "discard":
             r = discard(a.agent, a.reason, a.ceo_word, a.not_ceo_ordered, me)
             print("discarded: %s — tips recorded: %s" % (a.agent, json.dumps(r["tips"])))
+            for k in r.get("kept") or []:
+                print("kept: %s holds work not yet landed; it is back on the list to land" % k)
         elif a.cmd == "pause":
             notes = []
             pause(a.agent, a.until, me, notes)
