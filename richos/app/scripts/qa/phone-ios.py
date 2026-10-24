@@ -487,10 +487,13 @@ def device_ids(device):
     """Every spelling of one phone, lowercase. devicectl and `approval --device` use the CoreDevice
     UUID (691DB4F7-...); xcodebuild logs and libimobiledevice use the hardware UDID (00008030-...).
     Matching only the given spelling is why `approval` read 0 sessions on 2026-10-01 for a phone that
-    had run all day. RICHOS_IOS_DEVICE_ALIASES (comma-separated) adds spellings, for fixtures."""
+    had run all day. Both directions: `rios device run` records its ledger row under the CoreDevice
+    UUID while `perf` asks by the hardware UDID, so on 2026-10-24 a hardware-UDID query read 0 of the
+    phone's 16 recent sessions and refused the speed check. RICHOS_IOS_DEVICE_ALIASES
+    (comma-separated) adds spellings, for fixtures."""
     ids = {device.lower()}
     ids.update(a.strip().lower() for a in os.environ.get("RICHOS_IOS_DEVICE_ALIASES", "").split(",") if a.strip())
-    if not HARDWARE_UDID.match(device) and not os.environ.get("RICHOS_IOS_DEVICE_ALIASES"):
+    if not os.environ.get("RICHOS_IOS_DEVICE_ALIASES"):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "d.json"
@@ -498,10 +501,9 @@ def device_ids(device):
                 subprocess.run(["xcrun", "devicectl", "list", "devices", "--json-output", str(out)],
                                capture_output=True, timeout=30)
                 for d in json.loads(out.read_text())["result"]["devices"]:
-                    if d.get("identifier", "").lower() == device.lower():
-                        udid = d.get("hardwareProperties", {}).get("udid")
-                        if udid:
-                            ids.add(udid.lower())
+                    spellings = {d.get("identifier", ""), d.get("hardwareProperties", {}).get("udid") or ""}
+                    if device.lower() in {s.lower() for s in spellings}:
+                        ids.update(s.lower() for s in spellings if s)
             except (OSError, subprocess.TimeoutExpired, ValueError, KeyError):
                 pass
     return ids
