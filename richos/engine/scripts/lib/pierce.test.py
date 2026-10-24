@@ -1148,14 +1148,153 @@ class HaikuParallelTrack(unittest.TestCase):
         self.assertEqual((result["verdict"], result["report"]), ("PASS", "PASS. Fixture."))
         self.assertIn("no twin started: OSError", (self.shadow / "shadow.log").read_text())
 
-    def job(self):
+    def job(self, period=None):
         """A real job file from pierce.py, with the detached start captured instead of run."""
         self.turn_on()
+        if period:
+            with (self.project / "orchestration.config").open("a") as stream:
+                stream.write('PIERCE_SHADOW_PERIOD="%s"\n' % period)
         with patch.object(P.subprocess, "Popen") as start, patch.object(P, "invoke", return_value={
                 "verdict": "FINDINGS", "report": "1. Remove the API contradicts the user."}):
             result = P.inspect(self.payload)
         path = Path(start.call_args.args[0][4])
         return path, json.loads(path.read_text())["pair"], result
+
+    def test_new_period_ignores_legacy_counts_and_completion(self):
+        S = shadow_module()
+        env = self.track_env({}, {})
+        self.turn_on()
+        with (self.project / "orchestration.config").open("a") as stream:
+            stream.write('PIERCE_SHADOW_PERIOD="fresh-period"\n')
+        old = self.shadow / "pairs"
+        old.mkdir(parents=True)
+        for suffix, value in {"kind": {"kind": 1}, "haiku": {"verdict": "PASS"},
+                              "opus": {"verdict": "FINDINGS"},
+                              "adjudication": {"status": "done", "positive": True}}.items():
+            (old / ("old." + suffix + ".json")).write_text(json.dumps(value))
+        marker = self.shadow / "complete.json"
+        marker.write_text('{"old_sample": true}')
+        before = {p.name: p.read_bytes() for p in old.iterdir()}
+        with patch.object(P.subprocess, "Popen") as start, patch.object(P, "invoke", return_value={
+                "verdict": "FINDINGS", "report": "1. The API is required."}):
+            result = P.inspect(self.payload)
+        self.assertTrue(start.called, "legacy completion must not suppress a fresh period")
+        job = Path(start.call_args.args[0][4])
+        fresh = self.shadow / "periods/fresh-period"
+        self.assertEqual(job.parent.parent, fresh)
+        with patch.dict(os.environ, env), patch.object(S, "TARGET_POSITIVE_PER_KIND", 1), \
+             patch.object(S.pierce, "run_review", return_value=({"verdict": "PASS", "report": "PASS", "notes": []}, {})) as twin:
+            self.assertEqual(S.run(str(job)), 0)
+        twin.assert_called_once()
+        self.assertTrue((fresh / "pairs" / (job.stem + ".haiku.json")).exists())
+        self.assertEqual(S.progress()[1]["both valid"], 1)
+        self.assertEqual(S.progress()[1]["positive"], 0)
+        self.assertFalse((fresh / "complete.json").exists())
+        self.assertEqual(marker.read_text(), '{"old_sample": true}')
+        self.assertEqual({p.name: p.read_bytes() for p in old.iterdir()}, before)
+        self.assertEqual(result["shadow_period"], "fresh-period")
+
+    def test_running_pair_keeps_its_period_when_configuration_changes(self):
+        S = shadow_module()
+        env = self.track_env({}, {})
+        self.turn_on()
+        config = self.project / "orchestration.config"
+        config.write_text(config.read_text() + 'PIERCE_SHADOW_PERIOD="period-a"\n')
+        def inspect_and_switch(request, profile):
+            config.write_text(config.read_text().replace('"period-a"', '"period-b"'))
+            return {"verdict": "PASS", "report": "PASS. The API stays.", "notes": []}
+        with patch.object(P.subprocess, "Popen") as start, patch.object(P, "invoke", side_effect=inspect_and_switch):
+            result = P.inspect(self.payload)
+        job = Path(start.call_args.args[0][4])
+        a, b = self.shadow / "periods/period-a", self.shadow / "periods/period-b"
+        self.assertEqual(job.parent.parent, a)
+        self.assertEqual(result["shadow_period"], "period-a")
+        self.assertTrue((a / "pairs" / (job.stem + ".opus.json")).exists())
+        with patch.dict(os.environ, env), patch.object(S.pierce, "run_review", return_value=(
+                {"verdict": "PASS", "report": "PASS", "notes": []}, {})):
+            self.assertEqual(S.run(str(job)), 0)
+        self.assertTrue((a / "pairs" / (job.stem + ".haiku.json")).exists())
+        self.assertFalse(b.exists(), "an in-flight pair must not write to the newly selected period")
+
+    def test_invalid_period_does_not_fall_back_to_legacy_or_change_opus(self):
+        self.turn_on()
+        config = self.project / "orchestration.config"
+        config.write_text(config.read_text() + 'PIERCE_SHADOW_PERIOD="../escape"\n')
+        with patch.object(P.subprocess, "Popen") as start, patch.object(P, "invoke", return_value={
+                "verdict": "PASS", "report": "PASS"}):
+            result = P.inspect(self.payload)
+        start.assert_not_called()
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertFalse((self.root / "config/state/escape").exists())
+
+    def test_period_rejects_changed_reviewer_inputs_without_changing_opus(self):
+        self.job(period="pinned-inputs")
+        root = self.shadow / "periods/pinned-inputs"
+        manifest = (root / "period.json").read_bytes()
+        with patch.object(P, "SOURCE_SHA256", "different-loaded-code"), \
+             patch.object(P.subprocess, "Popen") as start, patch.object(P, "invoke", return_value={
+                "verdict": "PASS", "report": "PASS"}):
+            result = P.inspect({**self.payload, "session_id": "another-session"})
+        start.assert_not_called()
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual((root / "period.json").read_bytes(), manifest)
+        self.assertIn("inputs changed", (root / "shadow.log").read_text())
+
+    def test_twin_rejects_changed_loaded_source_before_provider_call(self):
+        S = shadow_module()
+        path, pair, _ = self.job(period="pinned-inputs")
+        job = json.loads(path.read_text())
+        job["collection"]["source_sha256"] = "old-inspector"
+        path.write_text(json.dumps(job))
+        with patch.dict(os.environ, self.track_env({}, {})), \
+             patch.object(S.pierce, "run_review", side_effect=AssertionError("no model call")) as twin:
+            self.assertEqual(S.run(str(path)), 0)
+        twin.assert_not_called()
+        skipped = json.loads((path.parent.parent / "skipped.jsonl").read_text())
+        self.assertIn("identity changed", skipped["why"])
+
+    def test_old_job_finishes_in_legacy_root_after_new_period_is_selected(self):
+        S = shadow_module()
+        path, pair, _ = self.job()
+        job = json.loads(path.read_text())
+        job.pop("collection")  # a job queued by the pre-period runtime
+        path.write_text(json.dumps(job))
+        with (self.project / "orchestration.config").open("a") as stream:
+            stream.write('PIERCE_SHADOW_PERIOD="new-period"\n')
+        with patch.dict(os.environ, self.track_env({}, {})), patch.object(S.pierce, "run_review", return_value=(
+                {"verdict": "PASS", "report": "PASS", "notes": []}, {})):
+            self.assertEqual(S.run(str(path)), 0)
+        self.assertTrue((self.shadow / "pairs" / (pair + ".haiku.json")).exists())
+        self.assertFalse((self.shadow / "periods/new-period").exists())
+
+    def test_revision_and_dismissal_keep_the_selected_period(self):
+        _, _, first = self.job(period="fresh-revisions")
+        with patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS", "notes": []}):
+            revision = P.inspect(self.revised())
+        root = self.shadow / "periods/fresh-revisions"
+        self.assertEqual(revision["review_mode"], "revision")
+        link = json.loads((root / "revisions" / (revision["id"] + ".json")).read_text())
+        self.assertEqual(link["revises"], first["id"])
+        config = self.project / "orchestration.config"
+        config.write_text(config.read_text().replace("fresh-revisions", "next-period"))
+        dismissed = subprocess.run([sys.executable, "-B", str(HERE / "pierce.py"), "--dismiss", revision["id"],
+                                    "--reason", "Fixture only."], env=self.env, capture_output=True, text=True)
+        self.assertEqual(dismissed.returncode, 0, dismissed.stderr)
+        self.assertEqual(json.loads((root / "dismissals.jsonl").read_text())["id"], revision["id"])
+        self.assertFalse((self.shadow / "dismissals.jsonl").exists())
+        self.assertFalse((self.shadow / "periods/next-period").exists())
+
+    def test_status_reads_only_the_governed_repositorys_selected_period(self):
+        S = shadow_module()
+        self.job(period="status-period")
+        (self.shadow / "complete.json").write_text('{"legacy": true}')
+        import io
+        with patch.dict(os.environ, self.env), patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(S.main(["status", "--project", str(self.project)]), 0)
+        text = output.getvalue()
+        self.assertIn("periods/status-period", text)
+        self.assertIn("collecting", text)
+        self.assertNotIn("STOPPED", text)
 
     def test_quota_pause_skips_the_twin(self):
         S = shadow_module()
