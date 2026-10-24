@@ -7370,18 +7370,25 @@ class NoSilentHolds(Base):
         self.spawn("zach-opus-d", extra="continues: stream-d\n")                      # a continuation runs it
         self.assertEqual(ws.holds(self.sid), [])
 
-    def test_holds_a_message_telling_a_teammate_to_wait_is_a_hold_and_a_later_one_its_go(self):
-        """The words are scripts/lib/hold_words.py's, the one list the deferral analyzer
-        shares (2026-10-21: "wait for my go" sent to a teammate went quiet)."""
+    def test_holds_r1_a_free_text_message_creates_no_obligation_and_a_legacy_hold_ends_at_the_go(self):
+        """Orchestration reliability R1 (richos-hq docs/prds/2026-10-23-orchestration-
+        reliability.md): "Yes, stop it now", "Hand over now" and "wait for my go" were each
+        kept as an obligation a later commit or his word had to end. A message's words record
+        nothing now; a legacy `held` wait still ends at the go, never at a question."""
         aid, _n = self.spawn("zach-opus-w7")
         send = lambda text: ws.lifecycle({"hook_event_name": "PostToolUse", "tool_name": "SendMessage",
                                           "session_id": self.sid, "tool_input": {"to": "zach-opus-w7",
                                                                                  "message": text}}, self.entity)
-        _ctx, notes = send("Commit what you have. Then wait for my go before the walk.")
-        self.assertTrue(any(n.startswith("HOLD RECORDED on zach-opus-w7") for n in notes), notes)
-        self.assertEqual([(h["name"], h["source"]) for h in ws.holds(self.sid)], [("zach-opus-w7", "wait")])
-        # Review rv-20261022T002958Z-2ac46e09-fa4e finding 1, rechecked in
-        # rv-20261022T023129Z-cefd17cf-7c77 (fixtures/hold_edges.py): none of these is the go.
+        for text in ["Commit what you have. Then wait for my go before the walk.", "Yes, stop it now",
+                     "Hand over now", "Fix review finding #1: quota.rs:702."]:
+            _ctx, notes = send(text)
+            self.assertEqual(ws.holds(self.sid), [], text)
+            self.assertFalse(any(n.startswith("HOLD RECORDED") for n in notes), notes)
+        rec = self.rec("zach-opus-w7")
+        self.assertNotIn("correction", rec)
+        rec["waiting"] = {"kind": "held", "on": "told to wait: wait for my go", "todo": "", "at": ws.now(),
+                          "end": ""}                                   # a legacy record
+        ws.save_agent(rec)
         for text in ["What is your current status?", "What do you need before you can proceed?",
                      "Do not resume yet; the review is still running."]:
             send(text)
@@ -7440,28 +7447,16 @@ class NoSilentHolds(Base):
             held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-p5"]
             self.assertEqual(held[0]["state"], "ceo")              # on his page: his decision, quiet
 
-    def test_holds_t6_a_correction_its_run_never_acted_on_stays_in_sight(self):
-        """2026-10-21 23:45Z, echo-opus-andreas2: Rich sent the fix for review finding
-        rv-20261021T233844Z-10df0b1f-1846#1, its run ended at 23:45:14Z, and the branch sat
-        at 10df0b1fc with the hole open; only the agent's own last words said so."""
+    def test_holds_r1_a_legacy_correction_field_is_never_an_obligation(self):
+        """2026-10-22/23: "Yes, stop it now" (honorfile1) and "Hand over now" (filecard3) were
+        reported the next day as corrections their runs never acted on, though both runs had
+        stopped and handed over. The generic field is no longer read."""
         aid, npath = self.spawn("zach-opus-c6")
         self.commit(npath)
-        ws.lifecycle({"hook_event_name": "PostToolUse", "tool_name": "SendMessage", "session_id": self.sid,
-                      "tool_input": {"to": "zach-opus-c6", "message": "Fix review finding #1: quota.rs:702."}},
-                     self.entity)
-        self.finish(aid)                                       # its run ends before it acts on it
-        held = [h for h in ws.holds(self.sid) if h["source"] == "correction"]
-        self.assertEqual([h["name"] for h in held], ["zach-opus-c6"])
-        self.assertIn("Fix review finding #1", held[0]["why"])
-        lines = ws.hold_lines(self.sid, at=ws.now() + 31 * 60)
-        self.assertTrue(any(l.startswith("HELD BY RICH, NOT BY YOU: the correction sent to zach-opus-c6")
-                            for l in lines), lines)
-        with self.assertRaises(ws.SpecError):
-            ws.release("zach-opus-c6", session_id=self.sid)    # Rich saying so ends nothing
-        rec = self.rec("zach-opus-c6")                         # the correction was sent a minute ago
-        rec["correction"]["at"] -= 60
+        self.finish(aid)
+        rec = self.rec("zach-opus-c6")
+        rec["correction"] = {"at": ws.now(), "text": "Hand over now"}  # written before 2026-10-24
         ws.save_agent(rec)
-        self.commit(npath, "fix.txt")                          # and it is acted on now
         self.assertEqual([h for h in ws.holds(self.sid) if h["source"] == "correction"], [])
 
     def test_holds_t6_a_changes_requested_review_handed_over_without_the_fix(self):

@@ -3056,10 +3056,12 @@ def wait(ref, kind, on, todo="", session_id="", until=""):
 # silent-holds.md. Every hold counts as a hold on his work (nothing marks his
 # orders). A hold is:
 #   - a finished agent's `waiting` (workspaces.sh wait), or a live one's
-#     `waiting` of kind "held" (a SendMessage telling it to wait);
+#     `waiting` of kind "held" (workspaces.sh hold <agent>; legacy records also
+#     came from a message's words, which since 2026-10-24 record nothing);
 #   - an agent's `pause`;
 #   - holds/<name>.json, for held work with no teammate yet (workspaces.sh
-#     hold, or a deferral the Stop hook found in a reply).
+#     hold). A reply's words never open one (the deferral check only asks the
+#     lead; legacy `by: deferral` files are read like any other).
 # Only an END the engine can check keeps it quiet, from a fixed list:
 #   agent:<name>   a live teammate does it      review:<id>  a second review runs
 #   at:<UTC time>  e.g. a quota reset            ceo:<item>   his decision, on CEO-TODOs
@@ -3077,17 +3079,10 @@ REVIEW_RUN_SECONDS = 90 * 60
 
 
 def _hold_go(text):
-    _hold_words()                        # puts scripts/lib on the path
-    import hold_words
-    return hold_words.is_go(text)
-
-
-def _hold_words():
-    """scripts/lib/hold_words.py: the one list of words that hold work, shared with
-    the deferral analyzer."""
+    """The go that ends a legacy `held` wait (scripts/lib/hold_words.py)."""
     _agent_hold()                        # puts scripts/lib on the path
     import hold_words
-    return hold_words.HOLD_WORDS_RE
+    return hold_words.is_go(text)
 
 
 def _holds_dir():
@@ -3285,15 +3280,7 @@ def holds(me="", at=None, cache=None):
             found.append(("wait", "the work of %s" % name, w.get("on") or "", w.get("at"),
                           w.get("end") or ("ceo:" + w["todo"] if w.get("todo") else "")))
         if fin:
-            # A CORRECTION ITS RUN NEVER ACTED ON (2026-10-21 23:45Z, echo-opus-andreas2:
-            # the fix for a review finding was sent, its run ended at 23:45:14Z, and the
-            # branch sat at 10df0b1fc with the hole open). Open until a commit lands
-            # after it, a continuation runs, the work lands, or his words.
             tips = [(repo, t) for repo, b in sorted(_branch_targets([rec])) for t in [branch_tip(repo, b)] if t]
-            c = rec.get("correction") or {}
-            if c and tips and not any(_commit_time(repo, t) > float(c.get("at") or 0) for repo, t in tips):
-                found.append(("correction", "the correction sent to %s" % name,
-                              "its run ended before it acted on it: %s" % (c.get("text") or ""), c.get("at"), ""))
             # A REVIEW ASKING FOR CHANGES ON THE TIP IT HANDED OVER (a mid-job or handover
             # CHANGES-REQUESTED verdict, then a hand-over without the fix).
             if tips and reviews is None:
@@ -3463,7 +3450,7 @@ def _release_one(h, name, ceo_word, not_a_hold, session_id):
             save_agent(rec)
         else:
             rec = load_agent(h["key"])
-            field = {"pause": "pause", "pause-ended": "pause", "correction": "correction"}.get(h["source"], "waiting")
+            field = {"pause": "pause", "pause-ended": "pause"}.get(h["source"], "waiting")
             rec.setdefault("history", []).append({"at": iso(), "fact": "hold released", field: rec.get(field),
                                                   "how": how})
             rec[field] = None
@@ -8265,27 +8252,15 @@ def lifecycle(payload, entity):
                                   control=_generated("pause", text), end=_generated_end(text))
                         except SpecError as e:
                             notices.append(str(e))
-                    elif _hold_words().search(text) and not finished_state(rec)[0]:
-                        # Told to wait, in any words on the list: recorded as a hold on
-                        # that agent, never refused; the message has already gone out.
-                        m = _hold_words().search(text)
-                        a, b = text.rfind(".", 0, m.start()) + 1, text.find(".", m.end())
-                        quote = " ".join(text[a:b if b >= 0 else len(text)].split())[:200]
-                        try:
-                            wait(rec["key"], "held", "told to wait: " + quote, "", sid)
-                            notices.append("HOLD RECORDED on %s: %s. It is shown at every turn end from 30 min "
-                                           "on until it runs or he decides." % (rec["name"], quote))
-                        except SpecError as e:
-                            notices.append(str(e))
                     else:
-                        if not rec.get("disposition") and not _generated("resume", text) and text.strip():
-                            # A correction: kept until a commit lands after it (HOLDS, correction).
-                            with Lock():
-                                fresh = load_agent(rec["key"])
-                                fresh["correction"] = {"at": now(), "text": " ".join(text.split())[:200]}
-                                save_agent(fresh)
-                                rec = fresh
-                        # ONLY THE GO ENDS IT (second review rv-20261022T002958Z-2ac46e09-fa4e,
+                        # A FREE-TEXT MESSAGE CREATES NO OBLIGATION (orchestration reliability R1,
+                        # richos-hq docs/prds/2026-10-23-orchestration-reliability.md): "Yes, stop
+                        # it now" and "Hand over now" were kept as corrections a later commit had
+                        # to fulfil, and "wait for my go" as a hold. Only the structured pause
+                        # above, the generated RESUME and a stop change the lifecycle; a real
+                        # correction goes in the teammate's TASK or a corrected continuation brief.
+                        # A LEGACY "held" WAIT (recorded from a message before 2026-10-24) still
+                        # ends at the go (second review rv-20261022T002958Z-2ac46e09-fa4e,
                         # finding 1): a status question or a note leaves the teammate held.
                         if (rec.get("waiting") or {}).get("kind") == "held" and _hold_go(text):
                             with Lock():
