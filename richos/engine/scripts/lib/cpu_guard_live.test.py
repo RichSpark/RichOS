@@ -236,10 +236,11 @@ class ObservationIsNotAnAlertTests(unittest.TestCase):
                               module.notice_payload({'session_id': 's', 'hook_event_name': 'Stop'})['systemMessage'])
 
 
-class OnlyACurrentAlertIsShownTests(unittest.TestCase):
+class RetiredObservationIsNeverShownTests(unittest.TestCase):
     """CEO build point 6: "He never has to ask; every step and failure reaches him unprompted."
     On 2026-10-24 session 07c09dd7 started at 13:32:50Z and was shown, at startup and at its
-    first Bash call, the alert.json the earlier controller wrote at 12:38:01Z."""
+    first Bash call, the host-pressure observation an earlier controller wrote to alert.json at
+    12:38:01Z, which R6 moved to the logs. Any other alert, however old, is still shown."""
 
     def bash_hook(self, session):
         payload = io.StringIO(json.dumps({'tool_name': 'Bash', 'session_id': session,
@@ -249,42 +250,34 @@ class OnlyACurrentAlertIsShownTests(unittest.TestCase):
             self.assertEqual(L.hook(), 0)
         return out.getvalue()
 
-    def test_a_new_session_is_shown_a_current_alert_and_never_an_old_one(self):
-        clock = [1792845481.2954812]
-        with tempfile.TemporaryDirectory(prefix='cpu-guard-current-') as directory, \
+    def notice(self):
+        out = io.StringIO()
+        with patch.object(sys, 'argv', ['cpu_guard.py', 'notice']), contextlib.redirect_stdout(out):
+            self.assertEqual(L.main(), 0)
+        return out.getvalue()
+
+    def test_a_new_session_is_not_shown_the_old_observation_and_is_shown_an_old_stop(self):
+        an_hour_ago = time.time() - 3604                       # the measured age
+        with tempfile.TemporaryDirectory(prefix='cpu-guard-retired-') as directory, \
                 patch.object(L, 'STATE', Path(directory)), \
                 patch.object(L, 'healthy', return_value=True), \
                 patch.object(L, 'processes', return_value={}), \
-                patch.object(L.time, 'time', lambda: clock[0]), \
                 patch.object(L.pwd, 'getpwuid', return_value=type('U', (), {'pw_dir': str(Path.home())})), \
                 patch.dict(os.environ, {'RICHOS_TEST_DEVICES_DIR': str(Path(directory) / 'devices')}):
             os.environ.pop('CLAUDE_CONFIG_DIR', None)
-            L.write_json(L.STATE / 'alert.json', dict(at=clock[0], host_busy=90.5,
-                         message='Host CPU is high; unregistered processes reported without signals'))
-            self.assertIn('Host CPU is high', L.notice_payload(
-                {'session_id': 'running', 'hook_event_name': 'Stop'})['systemMessage'])  # current then
-            clock[0] += 3604                                      # the measured age
-            old = L.read_json(L.STATE / 'alert.json')
+            observation = dict(at=an_hour_ago, message='Host CPU is high; unregistered processes reported '
+                               'without signals', host_busy=90.5, processes=[dict(pid=1, cores=0.03)])
+            L.write_json(L.STATE / 'alert.json', observation)
             self.assertIsNone(L.notice_payload({'session_id': 'new', 'hook_event_name': 'SessionStart'}))
             self.assertEqual(self.bash_hook('new'), '')
-            self.assertEqual(L.read_json(L.STATE / 'alert.json'), old)  # the record is kept as it is
-            # A current alert reaches the new session at its next look, and a session started now.
-            L.event('CPU circuit breaker stopped an owned workload', pid=50)
-            for session in ('new', 'later'):
-                self.assertIn('stopped an owned workload', self.bash_hook(session))
-                self.assertIn('stopped an owned workload', L.notice_payload(
-                    {'session_id': session, 'hook_event_name': 'SessionStart'})['systemMessage'])
-                self.assertEqual(self.bash_hook(session), '')          # once
-            # A session that was running when it was raised is shown it however long it waits.
-            clock[0] += 3600
+            self.assertEqual(self.notice(), '')
+            self.assertEqual(L.read_json(L.STATE / 'alert.json'), observation)  # its record is kept
+            stop = dict(at=an_hour_ago, message='CPU circuit breaker stopped an owned workload', pid=50)
+            L.write_json(L.STATE / 'alert.json', stop)
             self.assertIn('stopped an owned workload', L.notice_payload(
-                {'session_id': 'running', 'hook_event_name': 'Stop'})['systemMessage'])
-            # An iOS simulator stop still in force stays current; once it is lifted it is not.
-            L.block_ios('Operator stopped local iOS simulators')
-            clock[0] += 3600
-            self.assertIn('iOS simulator stopped', self.bash_hook('after-block'))
-            (L.STATE / 'ios-block.json').unlink()
-            self.assertEqual(self.bash_hook('after-lift'), '')
+                {'session_id': 'new', 'hook_event_name': 'SessionStart'})['systemMessage'])
+            self.assertIn('stopped an owned workload', self.bash_hook('new'))
+            self.assertIn('stopped an owned workload', self.notice())
 
 
 class RuntimeDependencyTests(unittest.TestCase):

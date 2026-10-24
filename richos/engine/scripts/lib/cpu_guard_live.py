@@ -159,6 +159,9 @@ def event(message, **details):
     write_json(STATE / 'alert.json', record)
 
 
+HOST_PRESSURE = 'Host CPU is high; unregistered processes reported without signals'
+
+
 def host_pressure_note(busy, processes):
     """High host CPU with nothing of ours stopped is an OBSERVATION: it goes to the event
     history only, never to alert.json, so no hook shows it to the lead or the person. Its
@@ -166,8 +169,15 @@ def host_pressure_note(busy, processes):
     reliability R6, richos-hq docs/prds/2026-10-23-orchestration-reliability.md); what
     changes the work (a workload or simulator stopped, admission recovered, a failure,
     an unhealthy guard) is still raised through event()."""
-    return note('Host CPU is high; unregistered processes reported without signals',
-                host_busy=round(busy, 1), processes=processes)
+    return note(HOST_PRESSURE, host_busy=round(busy, 1), processes=processes)
+
+
+def shown_alert():
+    """alert.json as the hooks and `notice` show it. The host-pressure observation an earlier
+    controller wrote there is never shown (2026-10-24: a session that started at 13:32:50Z was
+    shown one written at 12:38:01Z); it stays in alert.json and events.jsonl."""
+    alert = read_json(STATE / 'alert.json')
+    return None if alert and alert.get('message') == HOST_PRESSURE else alert
 
 
 def healthy():
@@ -743,53 +753,27 @@ def hook():
             remedy = 'Use randroid, rios or native-work.py -- COMMAND so admission and cleanup apply.'
         print('CPU guard: %s is refused. %s' % (reason, remedy), file=sys.stderr)
         return 2
-    alert = unseen_alert(STATE / 'notices' / (str(payload.get('session_id', 'unknown')).replace('/', '_') + '.json'))
+    alert = shown_alert()
     if alert:
-        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse',
-                         'additionalContext': 'CPU GUARD ALERT: ' + json.dumps(alert)}}))
+        marker = STATE / 'notices' / (str(payload.get('session_id', 'unknown')).replace('/', '_') + '.json')
+        previous = read_json(marker, {})
+        if alert.get('at') != previous.get('at'):
+            print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse',
+                             'additionalContext': 'CPU GUARD ALERT: ' + json.dumps(alert)}}))
+            write_json(marker, {'at': alert.get('at')})
     return 0
 
 
-# AN ALERT IS SHOWN ONLY WHILE IT IS CURRENT (CEO build point 6, 2026-10-24: a session that
-# started at 13:32:50Z was shown, at startup and at its first Bash call, an alert.json written
-# at 12:38:01Z). Every session already running when an alert is raised is shown it once, at
-# its next Bash call or turn end, however long that takes. A session that first looks later
-# is shown it only within ALERT_CURRENT_SECONDS of its `at`, or while the iOS simulator stop
-# it reports is still in force. alert.json and events.jsonl are left as they are.
-ALERT_CURRENT_SECONDS = 600.0
-
-
-def current(alert):
-    """True while an alert still tells a session that has just started something true."""
-    if not alert:
-        return False
-    if time.time() - alert.get('at', 0) < ALERT_CURRENT_SECONDS:
-        return True
-    block = ios_block()
-    return block is not None and alert.get('incident') == block
-
-
-def unseen_alert(marker):
-    """The alert the session owning `marker` has not been shown, or None. Its first look marks
-    whatever alert.json holds then as seen, and shows it only if it is current."""
-    alert = read_json(STATE / 'alert.json')
-    seen = read_json(marker)
-    at = alert.get('at') if alert else None
-    if seen is not None and seen.get('at') == at:
-        return None
-    write_json(marker, {'at': at})
-    if seen is None and not current(alert):
-        return None
-    return alert
-
-
 def notice_payload(payload):
+    alert = shown_alert()
     message = ''
     if not healthy():
         message = 'CPU GUARD UNHEALTHY: native build and device admission is closed.'
-    alert = unseen_alert(STATE/'notices'/('visible-' + str(payload.get('session_id', 'unknown')).replace('/', '_') + '.json'))
-    if alert:
+    marker = STATE/'notices'/('visible-' + str(payload.get('session_id', 'unknown')).replace('/', '_') + '.json')
+    seen = read_json(marker, {})
+    if alert and seen.get('at') != alert.get('at'):
         message += ' CPU GUARD ALERT: ' + json.dumps(alert)
+        write_json(marker, {'at':alert.get('at')})
     if not message:
         return None
     result = {'systemMessage':message.strip()}
@@ -819,8 +803,8 @@ def main():
         if result: print(json.dumps(result))
     if a.action == 'notice':
         if not healthy(): print('CPU GUARD UNHEALTHY: native build and device admission is closed.')
-        alert = read_json(STATE/'alert.json')
-        if current(alert): print('CPU GUARD ALERT: ' + json.dumps(alert))
+        alert = shown_alert()
+        if alert: print('CPU GUARD ALERT: ' + json.dumps(alert))
     return 0
 
 
