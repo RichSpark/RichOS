@@ -7371,6 +7371,26 @@ class NoSilentHolds(Base):
         self.assertIn("shelved/zach-opus-sp", due[0]["command"])
         self.assertNotIn("land it", due[0]["command"])
         self.assertNotIn("spawn its continuation", due[0]["command"])
+        # Review rv-20261024T053817Z-c68788ad-bcc2 #1: a mid-job review asked for changes, then
+        # he stopped the worker. Its review obligation is due too, and is offered only shelving.
+        # Only the registry's Git readers are stubbed (its branch, its tip and the review of it).
+        tip = "1234567890abcdef1234567890abcdef12345678"
+        review = {"id": "rv-fixture", "verdict": "changes-requested", "findings": 1,
+                  "finished_at": "2026-10-24T01:00:00Z"}
+        items = ws.pending(self.sid, self.entity, auto=False, dry=True)
+        with patch.object(ws, "_reviews_by_tip", return_value={tip: review}), \
+                patch.object(ws, "_branch_targets", return_value={(self.entity, "fixture-branch")}), \
+                patch.object(ws, "branch_tip", return_value=tip):
+            due = [d for d in ws.due_set(self.sid, items) if d["name"] == "zach-opus-sp"]
+            # The same one choice in the release error's advice (Codex 05:51Z).
+            with self.assertRaises(ws.SpecError) as refused:
+                ws.release("zach-opus-sp", session_id=self.sid)
+        self.assertEqual([d["source"] for d in due], ["review"], due)
+        self.assertIn("shelved/zach-opus-sp", due[0]["command"])
+        self.assertNotIn("spawn the teammate", due[0]["command"])
+        self.assertNotIn("continues:", due[0]["command"])
+        self.assertIn("shelved/zach-opus-sp", str(refused.exception))
+        self.assertNotIn("continues:", str(refused.exception))
 
     def test_r6_a_due_set_that_merely_emptied_is_not_told(self):
         """Sage D2 / Frank D3: in journey-due-work-acted-on the lead resumed the due item and the

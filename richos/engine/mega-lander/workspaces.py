@@ -3360,18 +3360,12 @@ def due_set(me="", items=None, at=None, cache=None):
     for it in items or []:
         if not it.get("key") or it["key"] in seen or it.get("waiting") or it.get("damaged"):
             continue
-        # What the platform recorded counts before the registry adopts it (the dry watcher's
-        # view): a stop seen only there is still a stop (review rv-20261024T033729Z-cfc3e0e1-4e49).
-        rec = platform_view(load_agent(it["key"]) or {}) or {}
+        rec, stopped = _stopped_record(it["key"])
         since = ((rec.get("end") or {}).get("at")) or now()
-        stopped = (rec.get("end") or {}).get("signal") == "stopped"
         out.append({"name": it["name"], "what": "the finished work of %s" % it["name"], "why": it["why"],
                     "since": float(since), "end": "", "state": "none", "detail": "finished, not landed or discarded",
                     "source": "finished", "key": it["key"], "review": "",
-                    # Stopped work is never revived (A4; CLAUDE.md §92): no land, no continuation.
-                    "command": ("save its commits on shelved/%s and discard it with his words "
-                                "(workspaces.sh discard %s --ceo-word '<his words>'); never land or continue it"
-                                % (it["name"], it["name"])) if stopped else
+                    "command": _stopped_command(it["name"]) if stopped else
                                "land it (workspaces.sh land %s), discard it, or spawn its continuation" % it["name"]})
     return out
 
@@ -3423,8 +3417,26 @@ def _reviews_by_tip():
     return out
 
 
+def _stopped_record(key):
+    """(the platform-aware record, whether he stopped it). What the platform recorded counts
+    before the registry adopts it (the dry watcher's view): a stop seen only there is still a
+    stop (review rv-20261024T033729Z-cfc3e0e1-4e49). Reads; writes nothing."""
+    rec = (platform_view(load_agent(key) or {}) or {}) if key else {}
+    return rec, (rec.get("end") or {}).get("signal") == "stopped"
+
+
+def _stopped_command(name):
+    """Stopped work is never revived (A4; CLAUDE.md §92): no land, no continuation."""
+    return ("save its commits on shelved/%s and discard it with his words "
+            "(workspaces.sh discard %s --ceo-word '<his words>'); never land or continue it" % (name, name))
+
+
 def hold_command(h):
-    """What makes held work run: the one command for Rich."""
+    """What makes held work run: the one command for Rich. For a worker he stopped, whatever
+    else is held or due on it (a changes-requested review, a wait, a pause), only shelving
+    and discard (rv-20261024T053817Z-c68788ad-bcc2; Codex 05:51Z: one choice for every caller)."""
+    if _stopped_record(h.get("key") or "")[1]:
+        return _stopped_command(h["name"])
     if h["source"] == "pause":
         return "workspaces.sh resume %s" % h["name"]
     # Anything else, a pause whose session ended included: its run cannot resume.
