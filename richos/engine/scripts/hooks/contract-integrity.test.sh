@@ -449,9 +449,9 @@ ALL_ROOT_SCRIPTS=(
     # failure to notice, which is why it is carried too.
     scripts/lib/stop-hook-notice.sh
     # The CEO-ask predicate. On this list for the FIRST reason, not the
-    # stop-hook-notice one: guard-ceo-ask-first.sh fails OPEN without it, so a
-    # sandbox missing it would model an engine whose newest blocking guard is
-    # silently off — and it would look fine doing it.
+    # stop-hook-notice one: notice-ceo-unasked.sh fails OPEN without it, so a
+    # sandbox missing it would model an engine whose CEO-ask notice is silently
+    # off — and it would look fine doing it.
     scripts/lib/ceo-asks.sh
     scripts/lib/ceo-asks.py
     # The CEO-RULED predicate and its operator CLI. On this list for the FIRST

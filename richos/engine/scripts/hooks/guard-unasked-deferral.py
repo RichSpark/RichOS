@@ -22,8 +22,8 @@ THE SIN IS NOT DEFERRING. Deferral is often right — sequencing, collisions, a
 genuinely better order. The sin is deferring SILENTLY AND UNILATERALLY:
 converting a decision that belongs to the CEO into a plan announced to him.
 
-This is the CONVERSE of the CEO-ask gate (guard-ceo-ask-first.sh /
-notice-ceo-unasked.sh), and is not covered by it. That pair ensures a PREPARED
+This is the CONVERSE of the CEO-ask notice (notice-ceo-unasked.sh), and is
+not covered by it. That pair ensures a PREPARED
 question actually gets put to him. This one covers the case where there is no
 ambiguity about what he wants — he asked directly — and the orchestrator
 schedules it for later on its own authority. Nothing checked for that.

@@ -84,7 +84,6 @@ _mutant_body() {
     local dir="$SANDBOX/$name"
     mkdir -p "$dir/scripts/hooks" "$dir/scripts/lib" "$dir/hooks"
     cp "$ENGINE_ROOT/scripts/hooks/notice-ceo-asks.sh" \
-       "$ENGINE_ROOT/scripts/hooks/guard-ceo-ask-first.sh" \
        "$ENGINE_ROOT/scripts/hooks/notice-ceo-unasked.sh" \
        "$ENGINE_ROOT/scripts/hooks/session-start-ceo-ask.sh" \
        "$ENGINE_ROOT/scripts/hooks/ceo-asks.test.sh" \
@@ -171,7 +170,6 @@ echo "=== the CEO-ask gate: every property, proven load-bearing by removing it =
 PY="scripts/lib/ceo-asks.py"
 LIB="scripts/lib/ceo-asks.sh"
 W="scripts/hooks/notice-ceo-asks.sh"
-G="scripts/hooks/guard-ceo-ask-first.sh"
 N="scripts/hooks/notice-ceo-unasked.sh"
 S="scripts/hooks/session-start-ceo-ask.sh"
 
@@ -213,23 +211,13 @@ mutant blocked-counts-as-prepared "A5. " "$PY" \
     "demanding that an UNPREPARED item be put to him is the failure the CEO-TODOs contract exists to stop, arriving from the other side."
 
 # --- 2. NO BLOCK, AND THE ASK THAT IS NOT ONE ------------------------------
-# The block, its escape hatch and the bare-marker rule went with the refusal
-# (orchestration reliability R3, 2026-10-24). What is load-bearing now: nothing is
-# refused, and a reply that asks his question is recorded as the ask.
-mutant gate-refuses-again "C1. " "$G" \
-    '# default (CLAUDE.md §125); a decision that really blocks something holds only that.\nexit 0' \
-    '# default (CLAUDE.md §125); a decision that really blocks something holds only that.\nexit 2' \
-    "an unrelated prepared decision would veto a repair or an independent dispatch again (R3; 2026-10-23, the review tools' repair held for a Windows question)."
+# The dispatch gate went with its refusal (orchestration reliability R3, 2026-10-24).
+# What is load-bearing now: a reply that asks his question is recorded as the ask.
 
 mutant reply-ask-not-witnessed "D5. " "$N" \
     '        _CU_LINE="$(ca_match "$_CU_Q" "$_CU_ITEMS" 2>/dev/null || true)"' \
     '        _CU_LINE=""' \
     "a question put to him in the reply (§125) would not count, so he would be asked the same thing again."
-
-mutant broken-fails-closed "C10. " "$G" \
-    'UNGATED, and a declared-but-unreadable list is not an empty one."\n        exit 0 ;;' \
-    'UNGATED, and a declared-but-unreadable list is not an empty one."\n        exit 2 ;;' \
-    "a guard that wedges every dispatch over its own plumbing is a guard that gets switched off."
 
 # --- 3. THE WITNESS --------------------------------------------------------
 mutant no-ledger-write "B1. " "$W" \

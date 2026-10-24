@@ -79,8 +79,8 @@
 # does no work directly, so a spawn is the observable form of "moving on". The
 # alternatives, argued rather than left to be re-derived:
 #
-#   Stop, blocking the turn — REJECTED for the reason guard-ceo-ask-first.sh
-#     gives on the same choice: a turn that ends because the founder
+#   Stop, blocking the turn — REJECTED for the reason the CEO-ask gate gave
+#     on the same choice: a turn that ends because the founder
 #     interrupted is a turn ending correctly, and refusing those makes this
 #     something to switch off. The end of a turn is a NOTICE's event.
 #   Every Bash call — REJECTED. Reading a file is not "getting on with

@@ -11,8 +11,8 @@
 # ===========================================================================
 # WHY IT DOES NOT BLOCK, WHEN ITS SIBLING DOES
 # ===========================================================================
-# guard-ceo-ask-first.sh BLOCKS a teammate dispatch, on the CEO's explicit
-# ruling. This hook deliberately does not block the TURN, and the two are not in
+# guard-ceo-ask-first.sh BLOCKED a teammate dispatch until 2026-10-24 (removed
+# with orchestration reliability R3). This hook deliberately does not block the TURN, and the two are not in
 # tension: they are aimed at different things.
 #
 # Dispatching a teammate is MOTION — the specific act that beat the ask on
@@ -171,9 +171,7 @@ case "$RRC" in
         stop_notice_normal ""
         exit 0 ;;
     *)
-        # THE LOUD FAIL-OPEN. guard-ceo-ask-first.sh also announces this, but on
-        # a channel that is unproven for PreToolUse. This is the one that is
-        # measured, so this is the guarantee.
+        # THE LOUD FAIL-OPEN, on the channel that is measured.
         stop_notice_abnormal "broken:$(printf '%s' "$CA_REASON" | cksum | tr -d ' ')" \
             "CEO-ASK WATCH IS BROKEN: this repository DECLARES CEO TODOs and they cannot be read — ${CA_REASON}. Teammate dispatches are UNGATED and no prepared decision is being surfaced. A declared-but-unreadable list is not an empty one."
         exit 0 ;;

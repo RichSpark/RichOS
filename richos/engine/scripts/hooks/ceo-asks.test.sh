@@ -43,7 +43,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 
 ENGINE="$SANDBOX/engine"
 mkdir -p "$ENGINE/scripts/hooks" "$ENGINE/scripts/lib"
-for h in notice-ceo-asks.sh guard-ceo-ask-first.sh notice-ceo-unasked.sh session-start-ceo-ask.sh; do
+for h in notice-ceo-asks.sh notice-ceo-unasked.sh session-start-ceo-ask.sh; do
     cp "$SRC_DIR/$h" "$ENGINE/scripts/hooks/$h"
     chmod +x "$ENGINE/scripts/hooks/$h"
 done
@@ -55,7 +55,6 @@ cp "$ENGINE_SRC/scripts/ceo-asks-status.sh" "$ENGINE/scripts/"
 chmod +x "$ENGINE/scripts/ceo-asks-status.sh"
 
 WITNESS="$ENGINE/scripts/hooks/notice-ceo-asks.sh"
-GATE="$ENGINE/scripts/hooks/guard-ceo-ask-first.sh"
 STOPN="$ENGINE/scripts/hooks/notice-ceo-unasked.sh"
 SSTART="$ENGINE/scripts/hooks/session-start-ceo-ask.sh"
 STATUS="$ENGINE/scripts/ceo-asks-status.sh"
@@ -373,15 +372,6 @@ asked() {
 }
 
 reset_ledger
-run_hook "$GATE" "$(agent_payload S1 "do the thing")"
-say "C1" "$ERR"
-if [ "$RC" -eq 0 ] && [ -z "$ERR" ]; then
-    ok "C1. an unasked prepared item refuses NO dispatch (orchestration reliability R3) and adds nothing to it"
-else
-    bad "C1. an unasked prepared item refuses NO dispatch" "rc=$RC $ERR"
-fi
-
-reset_ledger
 run_hook "$WITNESS" "$(ask_payload S1 - "$Q_SIGNING" "$L_SIGNING" "$D_SIGNING")"
 asked S1
 if [ "$RC" -eq 0 ]; then
@@ -457,34 +447,14 @@ else
     bad "C5g. a new conversation's lead in the same run is not told to put the same item to him again" "$OUT"
 fi
 
-reset_ledger
-run_hook "$GATE" "$(CA_CWD="$SEAT" python3 -c '
-import json, os
-print(json.dumps({"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"S1",
-                  "cwd": os.environ["CA_CWD"], "tool_input":{"command":"ls"}}))')"
-if [ "$RC" -eq 0 ]; then
-    ok "C8. a payload for another tool passes untouched"
-else
-    bad "C8. a payload for another tool passes untouched" "rc=$RC $ERR"
-fi
-
 # --- the three states, and the two of them that must NOT block --------------
 write_seat_config ""
 reset_ledger
-run_hook "$GATE" "$(agent_payload S1 "do the thing")"
-if [ "$RC" -eq 0 ] && [ -z "$ERR" ]; then
+run_hook "$STOPN" "$(stop_payload S1)"
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
     ok "C9. NOT-DECLARED: a seat with no CEO list stands down, silently"
 else
-    bad "C9. NOT-DECLARED: a seat with no CEO list stands down, silently" "rc=$RC err=$ERR"
-fi
-
-write_seat_config "$SANDBOX/no-such-repo"
-run_hook "$GATE" "$(agent_payload S1 "do the thing")"
-say "C10" "$ERR$OUT"
-if [ "$RC" -eq 0 ] && printf '%s%s' "$ERR" "$OUT" | grep -q 'UNGATED'; then
-    ok "C10. BROKEN: a declared list that is not on disk FAILS OPEN and says so"
-else
-    bad "C10. BROKEN: a declared list that is not on disk FAILS OPEN and says so" "rc=$RC err=$ERR out=$OUT"
+    bad "C9. NOT-DECLARED: a seat with no CEO list stands down, silently" "rc=$RC out=$OUT"
 fi
 
 # P5-50: an UNREADABLE ledger is not an EMPTY one. A ledger path that cannot be
@@ -494,9 +464,9 @@ fi
 write_seat_config "$TODOREPO"
 write_record
 rm -rf "$LEDGER"; mkdir -p "$LEDGER"
-run_hook "$GATE" "$(agent_payload S1 "do the thing")"
+run_hook "$STOPN" "$(stop_payload S1)"
 say "C10b" "$ERR$OUT"
-if [ "$RC" -eq 0 ] && printf '%s%s' "$ERR" "$OUT" | grep -q 'UNGATED'; then
+if [ "$RC" -eq 0 ] && printf '%s%s' "$ERR" "$OUT" | grep -q 'ledger could not be read'; then
     ok "C10b. BROKEN: an unreadable ledger FAILS OPEN and says so, it is not read as an empty ledger (P5-50)"
 else
     bad "C10b. BROKEN: an unreadable ledger FAILS OPEN and says so" "rc=$RC err=$ERR out=$OUT"
@@ -515,7 +485,6 @@ s = s.replace("READY-FOR-CEO", "BLOCKED-ON-RICH")
 open(p, "w", encoding="utf-8").write(s)
 PY
 reset_ledger
-run_hook "$GATE" "$(agent_payload S1 "do the thing")"
 asked S1
 if [ "$RC" -eq 0 ]; then
     ok "C11. NOTHING PREPARED: a list of unprepared items asks for nothing"
@@ -701,7 +670,7 @@ fi
 echo ""
 echo "=== G. the wiring: registered, hashed, and rooted like its siblings ==="
 
-for h in notice-ceo-asks.sh guard-ceo-ask-first.sh notice-ceo-unasked.sh session-start-ceo-ask.sh; do
+for h in notice-ceo-asks.sh notice-ceo-unasked.sh session-start-ceo-ask.sh; do
     # `|| echo 0` would be wrong here: grep -c already PRINTS 0 before exiting 1,
     # so the fallback appends a second line and `[` sees "0\n0".
     N="$(grep -c "scripts/hooks/$h" "$ENGINE_SRC/hooks/hooks.json" 2>/dev/null || true)"
@@ -713,7 +682,7 @@ for h in notice-ceo-asks.sh guard-ceo-ask-first.sh notice-ceo-unasked.sh session
     fi
 done
 
-for h in notice-ceo-asks guard-ceo-ask-first notice-ceo-unasked session-start-ceo-ask; do
+for h in notice-ceo-asks notice-ceo-unasked session-start-ceo-ask; do
     if grep -q "$h" "$SRC_DIR/contract-integrity-probe.sh" 2>/dev/null; then
         ok "G2. $h is declared in contract-integrity-probe.sh"
     else
@@ -727,7 +696,7 @@ done
 REF="$(sed -n '/^# --- ROOT RESOLUTION ---/,/^ENGINE_ROOT="\$(resolve_engine_root/p' \
         "$SRC_DIR/notice-unstarted-rows.sh" \
         | sed -e 's|scripts/hooks/[a-z-]*\.sh|<HOOK>|' -e 's|^    exit [0-9]*$|    exit <RC>|')"
-for h in notice-ceo-asks.sh guard-ceo-ask-first.sh notice-ceo-unasked.sh session-start-ceo-ask.sh; do
+for h in notice-ceo-asks.sh notice-ceo-unasked.sh session-start-ceo-ask.sh; do
     BLK="$(sed -n '/^# --- ROOT RESOLUTION ---/,/^ENGINE_ROOT="\$(resolve_engine_root/p' "$SRC_DIR/$h" \
             | sed -e 's|scripts/hooks/[a-z-]*\.sh|<HOOK>|' -e 's|^    exit [0-9]*$|    exit <RC>|')"
     if [ "$BLK" = "$REF" ]; then

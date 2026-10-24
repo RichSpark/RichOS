@@ -21,12 +21,12 @@ import sys
 ACK_PREFIXES = (
     "hand-roll-ack",          # guard-worktree-isolation
     "model-downgrade-ack",    # guard-worktree-isolation
-    "main-checkout-run",      # guard-worktree-isolation, verify-agent-prompt, guard-ceo-ask-first, guard-owned-state
+    "main-checkout-run",      # guard-worktree-isolation, verify-agent-prompt, guard-owned-state
     "definition-drift-ack",   # guard-definition-drift
     "conceal-ack",            # verify-agent-prompt
     "data-contract-bypass",   # verify-agent-prompt, guard-stale-staging
     "no-inflight-ack",        # verify-agent-prompt
-    "ceo-todos-deferred",     # guard-ceo-ask-first, guard-model-ceiling, guard-owned-state
+    "ceo-todos-deferred",     # guard-model-ceiling, guard-owned-state
     "model-ceiling-ack",      # guard-model-ceiling
     "stale-staging-ack",      # guard-stale-staging
     "owned-state-ack",        # guard-owned-state

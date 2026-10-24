@@ -49,7 +49,7 @@
 # him". This hook is that step, and it is the only one.
 #
 # ===========================================================================
-# THIS IS THE SIBLING OF guard-ceo-ask-first.sh, ASKING THE OPPOSITE QUESTION
+# THIS WAS THE SIBLING OF guard-ceo-ask-first.sh (removed 2026-10-24), ASKING THE OPPOSITE QUESTION
 # ===========================================================================
 # That guard refuses to DISPATCH work while a prepared decision has never been
 # put to him. This one refuses to PUT a question to him he has already

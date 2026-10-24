@@ -1217,7 +1217,6 @@ guard-sealed-worktree.sh|PreToolUse
 guard-worktree-isolation.sh|PreToolUse
 guard-definition-drift.sh|PreToolUse
 verify-agent-prompt.sh|PreToolUse
-guard-ceo-ask-first.sh|PreToolUse
 guard-model-ceiling.sh|PreToolUse
 guard-stale-staging.sh|PreToolUse
 guard-owned-state.sh|PreToolUse
@@ -3196,12 +3195,9 @@ CANON = [
     "worker-started-handoff.sh",
     "worker-updated-handoff.sh",
     "worker-ended-handoff.sh",
-    # The CEO-ask gate and its witness. The gate is BLOCKING: registered twice it
-    # would print its refusal twice, which reads as two separate unasked items.
-    # The witness is an append-only logger, the class this list already says
-    # MAKES a double-registration visible — and here a duplicated line would be
-    # read as the CEO having been asked the same question twice.
-    "guard-ceo-ask-first.sh",
+    # The CEO-ask witness: an append-only logger, the class this list already says
+    # MAKES a double-registration visible — here a duplicated line would be read as
+    # the CEO having been asked the same question twice.
     "notice-ceo-asks.sh",
     # The cost ceiling. BLOCKING, and registered twice it would print its whole
     # refusal — the ruling, the examples, the ack line — twice per spawn, which
