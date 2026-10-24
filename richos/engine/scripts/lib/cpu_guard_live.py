@@ -159,6 +159,9 @@ def event(message, **details):
     write_json(STATE / 'alert.json', record)
 
 
+HOST_PRESSURE = 'Host CPU is high; unregistered processes reported without signals'
+
+
 def host_pressure_note(busy, processes):
     """High host CPU with nothing of ours stopped is an OBSERVATION: it goes to the event
     history only, never to alert.json, so no hook shows it to the lead or the person. Its
@@ -166,8 +169,15 @@ def host_pressure_note(busy, processes):
     reliability R6, richos-hq docs/prds/2026-10-23-orchestration-reliability.md); what
     changes the work (a workload or simulator stopped, admission recovered, a failure,
     an unhealthy guard) is still raised through event()."""
-    return note('Host CPU is high; unregistered processes reported without signals',
-                host_busy=round(busy, 1), processes=processes)
+    return note(HOST_PRESSURE, host_busy=round(busy, 1), processes=processes)
+
+
+def shown_alert():
+    """alert.json as the hooks and `notice` show it. The host-pressure observation an earlier
+    controller wrote there is never shown (2026-10-24: a session that started at 13:32:50Z was
+    shown one written at 12:38:01Z); it stays in alert.json and events.jsonl."""
+    alert = read_json(STATE / 'alert.json')
+    return None if alert and alert.get('message') == HOST_PRESSURE else alert
 
 
 def healthy():
@@ -743,7 +753,7 @@ def hook():
             remedy = 'Use randroid, rios or native-work.py -- COMMAND so admission and cleanup apply.'
         print('CPU guard: %s is refused. %s' % (reason, remedy), file=sys.stderr)
         return 2
-    alert = read_json(STATE / 'alert.json')
+    alert = shown_alert()
     if alert:
         marker = STATE / 'notices' / (str(payload.get('session_id', 'unknown')).replace('/', '_') + '.json')
         previous = read_json(marker, {})
@@ -755,7 +765,7 @@ def hook():
 
 
 def notice_payload(payload):
-    alert = read_json(STATE/'alert.json')
+    alert = shown_alert()
     message = ''
     if not healthy():
         message = 'CPU GUARD UNHEALTHY: native build and device admission is closed.'
@@ -793,7 +803,7 @@ def main():
         if result: print(json.dumps(result))
     if a.action == 'notice':
         if not healthy(): print('CPU GUARD UNHEALTHY: native build and device admission is closed.')
-        alert = read_json(STATE/'alert.json')
+        alert = shown_alert()
         if alert: print('CPU GUARD ALERT: ' + json.dumps(alert))
     return 0
 
