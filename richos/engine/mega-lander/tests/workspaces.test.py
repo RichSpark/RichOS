@@ -4858,6 +4858,59 @@ class DiscardTakesAWorkspaceWhoseTeammateNeverRan(Base):
         self.assertFalse(os.path.exists(cc))
         self.assertNotIn("cc/zach-opus-nf", branches(self.other))
 
+    def test_discarding_an_empty_continuation_keeps_the_unlanded_work_it_continued(self):
+        # 2026-10-24 ~07:50Z: `discard zach-opus-orch5` (continues orch3, which
+        # continues orch1; orch5 had committed nothing) deleted orch1's and
+        # orch3's reviewed, unlanded branches with its own. A discard takes only
+        # the named workspace; a predecessor holding commits not in its
+        # integration branch stays, back on the list of work to land.
+        cc = self.make_cc("zach-opus-pa")
+        aid, _npath = self.spawn("zach-opus-pa", cc=cc)
+        self.commit(cc, "reviewed.txt")
+        tip = run("git", "-C", cc, "rev-parse", "HEAD").stdout.strip()
+        self.finish(aid)
+        cc2 = self.make_cc("zach-opus-pb", base="cc/zach-opus-pa")
+        aid2, npath2 = self.spawn("zach-opus-pb", cc=cc2, extra="continues: zach-opus-pa\n")
+        self.assertEqual(self.rec("zach-opus-pa")["disposition"]["kind"], "continued")
+        self.finish(aid2)
+
+        r = ws.discard("zach-opus-pb", "its continuation committed nothing",
+                       not_ceo_ordered="Rich's own follow-up, not his order", me=self.sid)
+
+        self.assertTrue(r["discarded"])
+        self.assertEqual(self.rec("zach-opus-pb")["disposition"]["kind"], "discarded")
+        self.assertFalse(os.path.exists(cc2) or os.path.exists(npath2))
+        self.assertNotIn("cc/zach-opus-pb", branches(self.other))
+        self.assertIn("cc/zach-opus-pa", branches(self.other), "the predecessor's unlanded work was deleted")
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "cc/zach-opus-pa").stdout.strip(), tip)
+        self.assertIsNone(self.rec("zach-opus-pa").get("disposition"))
+        self.assertIn("zach-opus-pa", self.names())
+
+    def test_unlanded_is_judged_against_the_predecessors_own_integration_branch(self):
+        # Work bound to a release branch is not landed because main has it.
+        run("git", "-C", self.other, "branch", "v1.3.1", "main")
+        cc = os.path.join(self.env.root, "other-wt", "zach-opus-qa")
+        ws.register_cc(self.sid, "zach-opus-qa", self.other, cc, "cc/zach-opus-qa", integration="v1.3.1")
+        run("git", "-C", self.other, "worktree", "add", "-q", cc, "-b", "cc/zach-opus-qa", "v1.3.1")
+        ws.confirm_cc(self.sid, "zach-opus-qa", cc, True)
+        aid, _npath = self.spawn("zach-opus-qa", cc=cc)
+        self.commit(cc, "release.txt")
+        self.finish(aid)
+        self.merge(self.other, "cc/zach-opus-qa")                # in main, not in v1.3.1
+        cc2 = os.path.join(self.env.root, "other-wt", "zach-opus-qb")
+        ws.register_cc(self.sid, "zach-opus-qb", self.other, cc2, "cc/zach-opus-qb", integration="v1.3.1")
+        run("git", "-C", self.other, "worktree", "add", "-q", cc2, "-b", "cc/zach-opus-qb", "cc/zach-opus-qa")
+        ws.confirm_cc(self.sid, "zach-opus-qb", cc2, True)
+        aid2, _np2 = self.spawn("zach-opus-qb", cc=cc2, extra="continues: zach-opus-qa\n")
+        self.finish(aid2)
+
+        r = ws.discard("zach-opus-qb", "its continuation committed nothing",
+                       not_ceo_ordered="Rich's own follow-up, not his order", me=self.sid)
+
+        self.assertEqual(r["kept"], ["zach-opus-qa"])
+        self.assertIn("cc/zach-opus-qa", branches(self.other))
+        self.assertNotIn("cc/zach-opus-qb", branches(self.other))
+
     def test_a_registered_spawn_the_platform_has_not_answered_or_launched_is_still_refused(self):
         for name, result in (("zach-opus-nq", None),
                              ("zach-opus-nl", {"content": [{"type": "text", "text":
