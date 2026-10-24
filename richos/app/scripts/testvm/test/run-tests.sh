@@ -1788,7 +1788,7 @@ t "ax-wait: every walk's waiting find reads a find the app did not answer (unres
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/ax-wait.test.py" >"$TMP/ax-wait.log" 2>&1; ok $? "$(cat "$TMP/ax-wait.log")"
 t_done
 
-t "work-lease-walk: a failed keep (the guest's rows not carried off before it is deleted) fails the walk"
+t "work-lease-walk: a failed keep fails the walk; after the kill, an ordinary request settles and a normal lease close raises no failure row"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/work-lease-walk.test.py" >"$TMP/work-lease-walk.log" 2>&1; ok $? "$(cat "$TMP/work-lease-walk.log")"
 t_done
 

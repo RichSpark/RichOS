@@ -25,6 +25,10 @@ save one; it must be SETTLED with no human message after the request), idle. The
   reload    the rows that show the job moving after the reload: the `team-reload` rows in Stu's inbox
             and the transcript lines carrying `team_reloaded`; FAIL when there is none (the job did
             not go through a team change, so the question was not asked)
+  after     after `fail`: one ordinary request (--after-task) is typed; it must be SETTLED, the lead
+            file of the session that ran it must say its turn ended after the send (the Work lease
+            closed normally), and no NEW "monitor stopped" row may reach Stu's inbox up to
+            --after-quiet seconds after that close
   keep      ALWAYS, pass or fail, before run-walk.py deletes the guest: every session transcript
             (~/.claude/projects), the app's engine-state, the conversation ledger and the bundle's
             Info.plist, as kept/kept.tgz on the host. The first such walk lost the rows.
@@ -50,7 +54,10 @@ from relaunch import guest  # noqa: E402
 StepFailed = srw.StepFailed
 FAIL_MARK = 'the monitor stopped unexpectedly'
 RELOAD_MARK = 'team_reloaded'
-STEPS = ['identity', 'first-run', 'job', 'idle', 'monitor', 'fail', 'reload']
+STEPS = ['identity', 'first-run', 'job', 'idle', 'reload', 'monitor', 'fail', 'after']
+# An ordinary request after the monitor was killed, worded as srw.JOB is.
+AFTER_JOB = ('Please add a file named more.md whose whole content is the line "More notes for the walk test." '
+             'to the Acme repository and commit it, and land it.')
 
 PROCS = ('import json,subprocess,sys\n'
          'rows=[]\n'
@@ -148,6 +155,49 @@ class WorkLeaseWalk(srw.StuReminderWalk):
             raise StepFailed('no team-reload row in Stu\'s inbox: the job did not go through a team change; see reload.json')
         return ev
 
+    def after(self):
+        if not self.facts.get('monitor'):
+            raise StepFailed('fail must have run (no killed monitor on record)')
+        failed = lambda: [r for r in self.inbox('stall-watch') if FAIL_MARK in str(r.get('text', ''))]
+        rows_before = len(failed())
+        sent = self.send(self.a.after_task)
+        end = time.monotonic() + self.a.job_within
+        pressed, record = 0, None
+        while time.monotonic() < end:
+            record = self.ours(sent)
+            if record and record.get('state') not in srw.OPEN:
+                break
+            if record and pressed < self.a.approvals and self.approve_if_asked(record.get('title', '')):
+                pressed += 1
+            time.sleep(3)
+        ev = {'sent_between_guest_ms': sent, 'job': record, 'approvals_pressed': pressed,
+              'failure_rows_before': rows_before}
+        if not record or record.get('state') != 'settled':
+            (self.out / 'after.json').write_text(json.dumps(ev, indent=2) + '\n')
+            raise StepFailed('the request after the kill was not settled: %s; see after.json' % (
+                record.get('state') if record else 'no assignment registered'))
+        session = record.get('work_session')
+        idle_end = time.monotonic() + self.a.idle_within
+        while True:
+            closed = [d for d in self.lead_files()
+                      if d.get('session') == session and (d.get('turn_ended') or 0) > sent[1] / 1000]
+            if closed or time.monotonic() >= idle_end:
+                break
+            time.sleep(5)
+        if closed:
+            time.sleep(self.a.after_quiet)  # a row from the close would come within seconds of it
+        ev.update({'work_session': session, 'lease_closed': closed[-1] if closed else None,
+                   'new_failure_rows': failed()[rows_before:], 'monitors_after': self.monitors(),
+                   'lead_files': self.lead_files()})
+        (self.out / 'after.json').write_text(json.dumps(ev, indent=2) + '\n')
+        if not closed:
+            raise StepFailed('the session %s that ran the request never ended its turn within %g s; see after.json' % (
+                session, self.a.idle_within))
+        if ev['new_failure_rows']:
+            raise StepFailed('a Work lease that closed normally raised a "monitor stopped" row; see after.json')
+        return {'job': {k: record.get(k) for k in ('id', 'state', 'title', 'work_session')},
+                'approvals_pressed': pressed, 'lease_closed': ev['lease_closed'], 'new_failure_rows': []}
+
     def keep(self):
         dest = self.out / 'kept'
         dest.mkdir(parents=True, exist_ok=True)
@@ -184,6 +234,9 @@ def main():
     p.add_argument('--approvals', type=int, default=3)
     p.add_argument('--relaunch-within', type=float, default=120)
     p.add_argument('--reminder-seconds', type=float, default=120)
+    p.add_argument('--after-task', default=AFTER_JOB, help="`after`'s ordinary request")
+    p.add_argument('--after-quiet', type=float, default=60,
+                   help="seconds after the lease's normal close that a failure row is waited for")
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
@@ -210,7 +263,7 @@ def main():
             except (StepFailed, RuntimeError, subprocess.TimeoutExpired):
                 pass
             # `reload` only reads what is there, so it still runs after a failed step.
-            if step != 'reload' and 'reload' in a.steps.split(','):
+            if 'reload' in a.steps.split(',') and 'reload' not in [r['step'] for r in report['steps']]:
                 try:
                     report['steps'].append({'step': 'reload', 'outcome': 'PASS', 'evidence': walk.reload()})
                 except (StepFailed, RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
