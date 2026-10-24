@@ -973,7 +973,7 @@
     },
     "scripts/hooks/guard-ceo-ruled-ask.sh": {
       "source": "scripts/hooks/guard-ceo-ruled-ask.sh",
-      "sha256": "7d09f36f96bffd9aa0acf6fad76c77ceef5ebf5cf57fbdf12ce4ae54187b92bc",
+      "sha256": "518ed8a467948d9604d062eb87af3d8e5c90b52bd4a1f2a584f99e4fc146856a",
       "evidence": "Resolves the governed entity then calls the deaf-lead, premise and ruling helpers; all setting reads are in those helpers. Renewed 2026-10-01: CHECK 0 pipes the payload to scripts/lib/blocking_ask.py check with the resolved entity and engine roots and acts only on its first field.",
       "keys": [],
       "edges": [
@@ -2632,7 +2632,7 @@
     },
     "scripts/hooks/premise-ask.test.sh": {
       "source": "scripts/hooks/premise-ask.test.sh",
-      "sha256": "82535499f8bae0c1999047207c5827a0bb6e7358f1e5c6d72fdc0e96ef2e5e7f",
+      "sha256": "78c62901298be77d16b5f70b843a66c184742406bcca7eeabe99b8fa3a53d24e",
       "evidence": "Every gate call uses a generated CEO declaration or empty adopted config. The optional archive reads supplied transcript JSON and invokes only the premise predicate. The mutation callback reconstructs these same literal settings.",
       "keys": [],
       "edges": [
@@ -16737,7 +16737,7 @@
       ],
       "sources": {
         "scripts/hooks/ceo-ruled.test.sh": "e135b5b7c3ad3cf859acaa38ced4c58e973e5df651315f1147fd4483f1e30c0d",
-        "scripts/hooks/guard-ceo-ruled-ask.sh": "7d09f36f96bffd9aa0acf6fad76c77ceef5ebf5cf57fbdf12ce4ae54187b92bc",
+        "scripts/hooks/guard-ceo-ruled-ask.sh": "518ed8a467948d9604d062eb87af3d8e5c90b52bd4a1f2a584f99e4fc146856a",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/premise-ask.sh": "54ed7bab6c1f1632458c6dbabc05f13dcec91f6ab262bfe3c5c2ae20b4b91080",
@@ -17095,7 +17095,7 @@
         "scripts/hooks/guard-ceo-ask-first.sh": "f4ede84780824e4b6065b68b603ffc94f7e1a65affa48a3b9b91c386f119d20a",
         "scripts/lib/ceo-asks.sh": "90532e654d581669aafdc81d5b54f330d1488ee8161d2cef72af7421c9a2698d",
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
-        "scripts/hooks/guard-ceo-ruled-ask.sh": "7d09f36f96bffd9aa0acf6fad76c77ceef5ebf5cf57fbdf12ce4ae54187b92bc",
+        "scripts/hooks/guard-ceo-ruled-ask.sh": "518ed8a467948d9604d062eb87af3d8e5c90b52bd4a1f2a584f99e4fc146856a",
         "scripts/lib/premise-ask.sh": "54ed7bab6c1f1632458c6dbabc05f13dcec91f6ab262bfe3c5c2ae20b4b91080",
         "scripts/lib/premise-ask.py": "2a6a079fbc0fab7937f90967c29c19e7ab2747a7286ec9923ec1dd685aa63e0a",
         "scripts/lib/ceo-ruled.sh": "737879339e074a0c41011974a8dcdc74bbbbf7118ffda2904e2f8da7a0b10e91",
@@ -17738,7 +17738,7 @@
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "scripts/lib/ceo-todos.py": "5e6264edc76c9dc03b0c569c63de251dd5b053bd88e40aa7101538bbbeaf406b",
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
-        "scripts/hooks/guard-ceo-ruled-ask.sh": "7d09f36f96bffd9aa0acf6fad76c77ceef5ebf5cf57fbdf12ce4ae54187b92bc",
+        "scripts/hooks/guard-ceo-ruled-ask.sh": "518ed8a467948d9604d062eb87af3d8e5c90b52bd4a1f2a584f99e4fc146856a",
         "scripts/lib/premise-ask.sh": "54ed7bab6c1f1632458c6dbabc05f13dcec91f6ab262bfe3c5c2ae20b4b91080",
         "scripts/lib/premise-ask.py": "2a6a079fbc0fab7937f90967c29c19e7ab2747a7286ec9923ec1dd685aa63e0a",
         "scripts/lib/ceo-ruled.sh": "737879339e074a0c41011974a8dcdc74bbbbf7118ffda2904e2f8da7a0b10e91",

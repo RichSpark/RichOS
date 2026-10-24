@@ -237,6 +237,15 @@ if [ "$RC" -eq 2 ]; then
 else
     bad "3e. an unrelated question went through because a prepared item exists" "rc=$RC"
 fi
+# 3f (§54, Frank D6 / Sage D5): the prepared-items temporary file is removed.
+mkdir -p "$SANDBOX/tmp3f"
+fresh_state
+TMPDIR="$SANDBOX/tmp3f" run_gate "Windows real-capture test: will you run the 20-minute protocol on a real Windows machine now?" "Run it now." sess-9c
+if [ -z "$(ls -A "$SANDBOX/tmp3f" 2>/dev/null)" ]; then
+    ok "3f. no temporary file is left behind by the prepared-item check"
+else
+    bad "3f. a temporary file was left behind" "$(ls "$SANDBOX/tmp3f")"
+fi
 cp "$SANDBOX/open-items.saved" "$HQ/wiki/open-items.md"
 cp "$SANDBOX/ceo-todos.saved" "$HQ/.ceo-todos"
 

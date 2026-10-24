@@ -306,7 +306,7 @@ except Exception:
                 PA_OUT="$(mktemp -t premise-ask-out.XXXXXX)" || PA_OUT=""
                 PA_REPORT="$(mktemp -t premise-ask-report.XXXXXX)" || PA_REPORT=""
                 if [ -n "$PA_QF" ] && [ -n "$PA_WF" ] && [ -n "$PA_OUT" ] && [ -n "$PA_REPORT" ]; then
-                    trap 'rm -f "$PA_QF" "$PA_WF" "$PA_OUT" "$PA_REPORT"' EXIT
+                    trap 'rm -f "$PA_QF" "$PA_WF" "$PA_OUT" "$PA_REPORT" "${PA_PREPARED_ITEMS:-}"' EXIT
                     PA_ANY_CHECK=0
                     PA_CODES=""
                     PA_HEADER=""
@@ -322,8 +322,10 @@ except Exception:
                     if [ -f "$SCRIPT_DIR/../lib/ceo-asks.sh" ]; then
                         . "$SCRIPT_DIR/../lib/ceo-asks.sh"
                         if ca_require && ca_resolve "$ENTITY_ROOT"; then
-                            PA_PREPARED_ITEMS="$(mktemp -t premise-ask-items.XXXXXX)" \
-                                && ca_items_json "$PA_PREPARED_ITEMS" || PA_PREPARED_ITEMS=""
+                            PA_PREPARED_ITEMS="$(mktemp -t premise-ask-items.XXXXXX)" || PA_PREPARED_ITEMS=""
+                            if [ -n "$PA_PREPARED_ITEMS" ] && ! ca_items_json "$PA_PREPARED_ITEMS"; then
+                                rm -f "$PA_PREPARED_ITEMS"; PA_PREPARED_ITEMS=""
+                            fi
                         fi
                     fi
                     while IFS=$'\t' read -r PA_IDX PA_QTEXT PA_WTEXT; do
@@ -416,7 +418,7 @@ PA_QLIST_EOF
                     else
                         pa_record "$ENTITY_ROOT" "$PA_SESSION" "UNGATED" "$PA_HEADER" "" "$PA_ALLTEXT"
                     fi
-                    rm -f "$PA_QF" "$PA_WF" "$PA_OUT" "$PA_REPORT"
+                    rm -f "$PA_QF" "$PA_WF" "$PA_OUT" "$PA_REPORT" "${PA_PREPARED_ITEMS:-}"
                     trap - EXIT
                 fi
             fi
