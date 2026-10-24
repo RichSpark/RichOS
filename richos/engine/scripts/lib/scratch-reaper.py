@@ -3010,6 +3010,116 @@ class Reaper(object):
         self.entries.sort(key=Entry.key)
         return self.entries
 
+    def app_sessions(self, state):
+        """The Claude sessions THE APP hosted: `<engine-state>/evidence/<session>/binding.json`,
+        written by the app when it binds a session (richos-core session_tools::bind). This is
+        the app's own record, so a session named here is the app's and no other program's."""
+        found = set()
+        try:
+            names = os.listdir(os.path.join(state, "evidence"))
+        except OSError:
+            return found
+        for name in names:
+            if UUID_RE.match(name) and os.path.isfile(os.path.join(state, "evidence", name, "binding.json")):
+                found.add(name)
+        return found
+
+    def scan_app(self, scope):
+        """THE APP'S SWEEP: ONLY WHAT THE RICHOS APP ITSELF LEFT BEHIND (CEO §54 addendum 2).
+
+        The app calls this at start, when its jobs have settled and at quit
+        (richos-core app_cleanup.rs), with `scope` = {"data": <the app's data folder>}.
+        Like a land's sweep (scan_agent), it never runs the machine's other arms: a
+        Codex worktree, Docker, another program's temporary files and a terminal
+        session's scratch are not the app's, so the app never takes them.
+
+        What is the app's, measured in the test VM after ordinary use, a quit, a
+        SIGKILL and a restart (garbage-walk.py, 2026-10-25):
+
+          app-session   Claude Code's own scratch for a session the app hosted:
+                        <claude root>/<slug>/<session>, holding its background
+                        commands' output (tasks/) and its scratchpad. Claude Code
+                        never removes it. Decided by the same liveness proof as the
+                        scheduled sweep (a session file naming a live process, by
+                        exhaustion over every running claude): RUNNING is kept,
+                        INDETERMINATE is kept and counted, and an ENDED one is kept
+                        while any process holds a file open inside it.
+
+        NO AGE FLOOR, deliberately. The floor exists "only to cover the seconds between
+        a session starting and recording itself"; here the session is named by the
+        app's own record, and a claude process that has not yet recorded itself is
+        unattributed, which makes everything written after it started INDETERMINATE.
+        A floor would keep a session that ended in a crash until an hour after the
+        next start, and the next start is exactly when that garbage must go.
+
+        Everything else it looks at in those places is UNATTRIBUTED: left alone and
+        counted. The transcripts under the Claude configuration folder and the app's
+        own records are history the app reads back (`--resume`), never scratch.
+        """
+        self.scope = {"kind": "app", "name": "app", "data": scope.get("data") or ""}
+        data = os.path.realpath(scope.get("data") or "")
+        if not data or not os.path.isdir(data):
+            raise Fatal("the app's data folder %r is not a directory, so nothing in it can be "
+                        "shown to be the app's" % (scope.get("data") or ""))
+        state = os.path.join(data, "engine-state")
+        hosted = self.app_sessions(state)
+        claude_roots = [r for r in self.cfg["claude_roots"] if os.path.isdir(r)]
+        walls = Walls(claude_roots)
+
+        def held(path, size, klass, owner):
+            """True if the path was decided here as kept or undecidable."""
+            h = self.holder(path)
+            if h is None:
+                self.add(path, klass, size, INDETERMINATE,
+                         "%s, but the open-file table could not be read, and a tree "
+                         "something is reading must never be deleted from under it" % owner)
+                return True
+            if h.strip():
+                self.add(path, klass, size, KEEP,
+                         "%s, but a live process (pid %s) holds a file open inside it"
+                         % (owner, h.strip()))
+                return True
+            return False
+
+        for root in claude_roots:
+            self.roots.append(root)
+            for slug in sorted(os.listdir(root)):
+                check_deadline()
+                slug_path = os.path.join(root, slug)
+                if os.path.islink(slug_path) or not os.path.isdir(slug_path):
+                    self.unattributed += 1
+                    continue
+                try:
+                    children = sorted(os.listdir(slug_path))
+                except OSError:
+                    continue
+                for name in children:
+                    path = os.path.join(slug_path, name)
+                    if name not in hosted or os.path.islink(path) or not os.path.isdir(path):
+                        self.unattributed += 1
+                        continue
+                    owner = "Claude scratch of session %s, which the app hosted" % name[:8]
+                    if name in self.live.running:
+                        self.add(path, "app-session", 0, KEEP,
+                                 self.live.running[name][1] + " (not measured: a live "
+                                 "session is never a candidate)")
+                        continue
+                    size, newest, has_git = measure(path)
+                    verdict, why = self.live.verdict(name, newest)
+                    if verdict != ENDED:
+                        self.add(path, "app-session", size,
+                                 KEEP if verdict == RUNNING else INDETERMINATE, why)
+                        continue
+                    if held(path, size, "app-session", owner):
+                        continue
+                    refused = walls.check(path, has_git)
+                    if refused:
+                        self.add(path, "app-session", size, INDETERMINATE, refused)
+                        continue
+                    self.add(path, "app-session", size, DELETE, "%s: %s" % (owner, why))
+        self.entries.sort(key=Entry.key)
+        return self.entries
+
     def report(self, verbose=False):
         """The plan, with NO timestamps and no elapsed anything in it, so that
         --dry-run and --apply can be compared byte for byte."""
@@ -3141,9 +3251,13 @@ class Reaper(object):
         if self.unknown_not_scanned:
             line += " not_scanned=%d" % self.unknown_not_scanned
         if self.scope is not None:
-            line += " scope=agent:%s unattributed=%d" % (
-                self.scope.get("name") or "?", self.unattributed)
+            line += " %s unattributed=%d" % (self.scope_label(), self.unattributed)
         return line
+
+    def scope_label(self):
+        if (self.scope or {}).get("kind") == "app":
+            return "scope=app"
+        return "scope=agent:%s" % ((self.scope or {}).get("name") or "?")
 
     def prune_docker(self):
         """Docker's own caches, which no walk of the filesystem can reclaim.
@@ -3546,6 +3660,12 @@ class Reaper(object):
                     failures.append(f)
                     lines.append("%s FAILED %s class=%s error=%s" % (stamp, e.path, e.klass, f))
                 continue
+            if (self.scope or {}).get("kind") == "app" and not os.path.lexists(e.path):
+                # Gone since the plan: the scheduled sweep, or Claude Code itself, took
+                # it first. Nothing was left to delete, so nothing failed.
+                lines.append("%s GONE %s class=%s why=already removed since the plan"
+                             % (stamp, e.path, e.klass))
+                continue
             try:
                 # A DIRECTORY IS THE ONLY THING rmtree CAN TAKE. THE TEST USED TO
                 # BE ITS COMPLEMENT AND THAT IS 200 OF THE 218 PERMANENT ALERTS.
@@ -3659,8 +3779,7 @@ class Reaper(object):
                      % (stamp, deleted, freed, human(freed),
                         self.counts()[1], len(failures),
                         "" if self.scope is None else
-                        " scope=agent:%s unattributed=%d"
-                        % (self.scope.get("name") or "?", self.unattributed)))
+                        " %s unattributed=%d" % (self.scope_label(), self.unattributed)))
         write_log(log_path, lines)
         self._record_failures(failures, stamp)
         return deleted, freed, failures
@@ -4329,6 +4448,11 @@ def main(argv=None):
     ap.add_argument("--hold-named", action="store_true",
                     help="with --agent: another live agent has the same name, "
                          "so its named directories are kept")
+    # THE APP'S OWN SWEEP (scan_app). An engine without this argument refuses it
+    # (argparse, exit 2), so an app newer than its engine deletes nothing rather
+    # than running the whole machine's sweep.
+    ap.add_argument("--app", default=None,
+                    help="sweep ONLY what the RichOS app with this data folder left behind")
     args = ap.parse_args(argv)
 
     if args.deadline:
@@ -4346,6 +4470,8 @@ def main(argv=None):
         if args.process_only:
             reaper.scope = {"kind": "process", "name": "process"}
             reaper.scan_scratch_root(Walls([os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]))
+        elif args.app is not None:
+            reaper.scan_app({"data": args.app})
         elif args.agent is not None:
             reaper.scan_agent({"name": args.agent, "session": args.session,
                                "workspaces": args.workspace,
