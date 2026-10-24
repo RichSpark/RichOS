@@ -564,16 +564,41 @@ def record_told_due(sid, due, now=None):
     if not sid or not due:
         return
     now = clock() if now is None else now
-    path = os.path.join(session_dir(sid), "announced.json")
-    state = _read_json(path)
-    opened = dict(state.get("open") or {})
-    for d in due[:DUE_SHOWN]:
-        prev = opened.get(due_key(d)) or {"first": now, "count": 1, "since": d["since"], "who": d["name"],
-                                         "what": d["detail"]}
-        prev.update(last=now, missed=0)
-        opened[due_key(d)] = prev
-    state["open"] = opened
-    _write_json(path, state)
+    sd = session_dir(sid)
+    path = os.path.join(sd, "announced.json")
+    with announced_lock(sd):
+        state = _read_json(path)
+        opened = dict(state.get("open") or {})
+        for d in due[:DUE_SHOWN]:
+            prev = opened.get(due_key(d)) or {"first": now, "count": 1, "since": d["since"], "who": d["name"],
+                                             "what": d["detail"]}
+            prev.update(last=now, missed=0)
+            opened[due_key(d)] = prev
+        state["open"] = opened
+        _write_json(path, state)
+
+
+class announced_lock(object):
+    """A short exclusive lock around one read-modify-write of a session's announced.json.
+    Its two writers (the tick's final write, record_told_due) each read the file inside it,
+    so neither ever replaces the file with a copy older than the other's write. Held for a
+    read and a write only, never across a look. A lock that cannot be opened is not taken."""
+
+    def __init__(self, sd):
+        self.path, self.fd = os.path.join(sd, "announced.lock"), None
+
+    def __enter__(self):
+        try:
+            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except OSError:
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            os.close(self.fd)
+        return False
 
 
 def _proof_stall(src, reg, w, holders, slots, now, th, table):
@@ -1648,10 +1673,11 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
         out.flush()
     # A key written during this look by another writer (the SessionStart notice,
     # record_told_due) is kept, never overwritten by the state read before it.
-    for k, v in (_read_json(path).get("open") or {}).items():
-        if k not in read_keys and k not in state.setdefault("open", {}):
-            state["open"][k] = v
-    _write_json(path, state)
+    with announced_lock(sd):
+        for k, v in (_read_json(path).get("open") or {}).items():
+            if k not in read_keys and k not in state.setdefault("open", {}):
+                state["open"][k] = v
+        _write_json(path, state)
     return len(lines), len(state.get("open") or {})
 
 

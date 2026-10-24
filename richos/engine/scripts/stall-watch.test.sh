@@ -60,7 +60,8 @@
 #   T4   a manual pause is told at +31 min; a quota pause is quiet until its at: passes
 #   HD0-HD3  nothing before 30 min; the 30-min repeat; --once lists holds
 #   HD7  a due item the SessionStart notice told is not told again by the first
-#        look; the same item, changed, is
+#        look; the same item, changed, is; HD7e/f the startup record and a tick
+#        never lose each other's update of announced.json, in either order
 #   E01  THE 2026-10-01 INCIDENT: a teammate of this session raises a proceeding,
 #        for=lead escalation after the session started; the next look prints
 #        ONE ESCALATION-WATCH block, FIRST, with its key, sender and question
@@ -902,6 +903,59 @@ check "HD7c a wait with a pending end is quiet" "$( ! has "$OUT" "[DUE]"; echo $
 hd7_py yankee-done
 tick 180
 check "HD7d the same item, changed (its end came true), is told" "$( has "$OUT" "[DUE] xray-opus-n1"; echo $?)" "out=$OUT"
+# Codex 10:06Z: the two writers of announced.json must never lose each other's update. The
+# real tick and record_told_due, in one process, with the look's sources replaced so each
+# interleaving is fixed: (e) the startup has read the file when a tick publishes; (f) the
+# startup records while a tick is looking. Both keys and the tick's escalation state survive.
+new_state hd7e
+OUT="$(python3 - "$ENGINE" <<'PY2'
+import io, json, os, sys, threading
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "lib"))
+import stall_watch as sw
+sid, now = "hd7e-session", 1000000.0
+item = {"key": "hd7e--zulu-opus-z1", "name": "zulu-opus-z1", "state": "none", "end": "", "since": now,
+        "detail": "finished, not landed or discarded"}
+sw.lead_is_idle = lambda src, s: True
+sw.idle_end = lambda src, n, s, prev: ([], {})
+sw.escalation_watch = lambda src, n, s, prev, th: ([], {"v": "after"}, [])
+other = sw.Stall("stall:other", "SILENT", "victor-opus-v1", now, "silent", [], [])
+sd = sw.session_dir(sid)
+path = os.path.join(sd, "announced.json")
+def verdict(case):
+    st = sw._read_json(path)
+    ok = "stall:other" in st.get("open", {}) and sw.due_key(item) in st.get("open", {}) and st.get("esc") == {"v": "after"}
+    print("%s %s %s" % (case, "kept" if ok else "LOST", json.dumps(st, sort_keys=True)))
+# (e) the startup reads, a tick publishes, the startup writes.
+sw._write_json(path, {"open": {}, "esc": {"v": "before"}})
+sw.look = lambda src, n, s, th, due=True: ([other], [])
+real_read, fired = sw._read_json, []
+def read_then_tick(p):
+    got = real_read(p)
+    if p == path and not fired:
+        fired.append(1)
+        t = threading.Thread(target=sw.tick, args=(None, sd, sid, now + 60, io.StringIO()))
+        t.start()
+        t.join(3)   # a tick that is not held back publishes inside this window
+        fired.append(t)
+    return got
+sw._read_json = read_then_tick
+sw.record_told_due(sid, [item], now)
+sw._read_json = real_read
+fired[1].join(10)
+verdict("E")
+# (f) a tick reads, the startup records during its look, the tick writes.
+sw._write_json(path, {"open": {}, "esc": {"v": "before"}})
+def look_with_startup(src, n, s, th, due=True):
+    sw.record_told_due(sid, [item], now)
+    return [other], []
+sw.look = look_with_startup
+sw.tick(None, sd, sid, now + 60, io.StringIO())
+verdict("F")
+PY2
+)"
+check "HD7e the startup read the file, a tick published, the startup wrote: both updates kept" \
+    "$( has "$OUT" "E kept"; echo $?)" "out=$OUT"
+check "HD7f a tick looked while the startup recorded: both updates kept" "$( has "$OUT" "F kept"; echo $?)" "out=$OUT"
 unset STALL_WATCH_LEAD_TRANSCRIPT
 
 # --- F: every look is fresh code (orchestration reliability R5) ------------------
