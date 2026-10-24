@@ -1998,16 +1998,26 @@ class Reaper(object):
                 self._unknown.append((path, root))
 
     def live_agent_names(self):
-        """Names of registered agents whose run has not finished (paused counts as
-        not finished), or None when the agent registry cannot be read."""
+        """({names of registered agents whose run has not finished}, {name: the newest
+        end its finished records recorded}), or (None, {}) when the agent registry
+        cannot be read. Paused counts as not finished."""
         try:
             if self.ws.damaged_records(include_done=False):
-                return None
-            cache = {}
-            return {r.get("name") for r in self.ws.all_agents()
-                    if not self.ws.finished_state(r, cache)[0]}
+                return None, {}
+            cache, live, ended = {}, set(), {}
+            for r in self.ws.all_agents():
+                name = r.get("name")
+                if not self.ws.finished_state(r, cache)[0]:
+                    live.add(name)
+                    continue
+                at = [x for x in ((r.get("end") or {}).get("at"),
+                                  (r.get("disposition") or {}).get("at"))
+                      if isinstance(x, (int, float))]
+                if at:
+                    ended[name] = max(ended.get(name, 0), max(at))
+            return live, ended
         except Exception:
-            return None
+            return None, {}
 
     def scan_named_scratch(self, walls):
         """NAMED-AGENT SCRATCH LEFT BEHIND, REPORTED AND NEVER DELETED HERE.
@@ -2021,7 +2031,7 @@ class Reaper(object):
         roots = [r for r in self.cfg.get("agent_roots") or [] if r and os.path.isdir(r)]
         if not roots or self.skip_named:
             return
-        live = self.live_agent_names()
+        live, ended = self.live_agent_names()
         for root in roots:
             self.roots.append(root)
             try:
@@ -2038,10 +2048,18 @@ class Reaper(object):
                              "named for %s, whose run has not finished" % name)
                     continue
                 size, newest, _has_git = measure(path)
-                if self.now - newest < self.floor:
+                # THE CLOCK COMES OFF THE AGENT'S RECORDED END WHEN THE REGISTRY HAS
+                # ONE, and off the newest mtime only when it does not: an orphaned
+                # writer would otherwise keep a stopped agent's scratch inside the
+                # floor for ever (the same failure Liveness.ended_epoch answers).
+                if name in ended:
+                    age, clock = self.now - ended[name], "its agent recorded its end"
+                else:
+                    age, clock = self.now - newest, "named scratch written"
+                if age < self.floor:
                     self.add(path, "agent-named", size, KEEP,
-                             "named scratch written %d min ago, inside the %d min floor"
-                             % ((self.now - newest) // 60, self.cfg["age_floor_minutes"]))
+                             "%s %d min ago, inside the %d min floor"
+                             % (clock, age // 60, self.cfg["age_floor_minutes"]))
                     continue
                 if live is None:
                     self.add(path, "agent-named", size, INDETERMINATE,

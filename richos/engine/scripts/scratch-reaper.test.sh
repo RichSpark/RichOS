@@ -3031,6 +3031,25 @@ else
     bad "S39b the named root stayed unresolved after its leftover was removed"
     cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
 fi
+# Mid-job review rv-20261024T003222Z-30e4f755-64ef #1: an orphaned writer keeps
+# appending to a STOPPED agent's log, so the newest mtime stays inside the floor.
+# The clock comes off the end the registry recorded, not the mtime.
+mkdir -p "$NAMED/stopped-agent"
+printf 'still being written by an orphaned worker\n' >"$NAMED/stopped-agent/worker.log"
+python3 - "$W_HOME/state/workspaces/agents/k-stopped.json" <<'PY'
+import json, sys, time
+json.dump({"key": "k-stopped", "name": "stopped-agent", "workspaces": [],
+           "end": {"signal": "stopped", "at": time.time() - 4 * 86400, "detail": "fixture"}},
+          open(sys.argv[1], "w"))
+PY
+RICHOS_WORKSPACES_DIR="$W_HOME/state/workspaces" run_scheduled --apply >/dev/null 2>&1
+if state_is '[(u.get("scope"), u.get("count")) for u in st.get("unresolved", []) if u.get("class") == "agent-named"] == [("'"$NAMED"'", 1)] and "stopped-agent" in str(st["unresolved"])' \
+   && [ -f "$NAMED/stopped-agent/worker.log" ]; then
+    ok "S39c a stopped agent's scratch an orphaned writer keeps fresh is still published UNRESOLVED"
+else
+    bad "S39c a fresh write hid a stopped agent's scratch inside the age floor"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
 kill "$PID_N" >/dev/null 2>&1 || true
 wait "$PID_N" 2>/dev/null || true
 
