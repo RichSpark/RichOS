@@ -395,6 +395,39 @@ select {
 .ask-line, .ask-status { margin: 0; font-size: 16px; color: var(--ink-soft); }
 .ask-status { margin-top: 8px; }
 
+/* A file from Rich: the Mac's card (`app/ui/style.css` `.tl-rfile`, round 36 screen 3), one tap
+ * opens it. Computed with `app/scripts/qa/contrast.py`, dark / light: the name `--ink` on `--rich-bg`
+ * 13.02 / 17.02, its line `--ink-soft` 9.19 / 7.17, the card's edge `--line-control` against the
+ * chat's `--ground` 4.57 / 3.35 (non-text, 3:1), the type printed inside the page glyph ("PDF")
+ * `--ink` on `--surface-sunk` 14.78 / 15.58. The Mac prints that type at 14px and declares it
+ * skippable; this page claims no exemption, so it is 16px here. */
+.msg-file { width: 88%; padding: 0; border: 0; background: none; }
+.file-card {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	width: 100%;
+	padding: 10px 12px;
+	text-align: left;
+	font-weight: 400;
+	border-radius: 12px;
+	border: 1px solid var(--line-control);
+	background: var(--rich-bg);
+	color: var(--ink);
+}
+.msg-file[data-s="missing"] .file-card { border-style: dashed; cursor: default; }
+.msg-file[data-s="missing"] .file-glyph svg { opacity: 0.5; }
+.file-glyph { position: relative; flex: none; width: 44px; height: 52px; }
+.file-glyph svg { position: absolute; inset: 0; width: 44px; height: 52px; }
+.file-glyph .pg { fill: var(--surface-sunk); stroke: var(--line-control); stroke-width: 1; }
+.file-glyph .fold { fill: var(--gold); }
+.file-ext { position: absolute; left: 0; right: 0; bottom: 6px; text-align: center; font-size: 16px; font-weight: 700; color: var(--ink); }
+.file-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.file-name { font-size: 17px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.file-line { font-size: 16px; color: var(--ink-soft); }
+.msg-file[data-s="missing"] .file-line { color: var(--ink); }
+.msg-file .msg-meta { padding-left: 4px; }
+
 /* ---------------------------------------------------------------------------------------
    The composer — type, or hold and speak
    --------------------------------------------------------------------------------------- */
