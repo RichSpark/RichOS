@@ -350,6 +350,9 @@ test('the production smoke test files exactly one report with one screenshot, an
     : f.send(new Request(url, init));
   const screenshot = readFileSync(join(__dirname, '../service/report/fixtures/relay/accept-rgb.png'));
   const deps = { fetchImpl, screenshot, wait: async () => {} };
+  // The script stamps its approval with Date.now(); the relay here runs on the fixture's fixed
+  // clock, so the script must read that clock too, or the stamp lands after it on a later date.
+  const realNow = Date.now; Date.now = f.now; t.after(() => { Date.now = realNow; });
   await assert.rejects(smoke({ ...profile, stage: 'test', worker: 'richos-report-test', hostname: 'report-test.example.com', repository: 'a/b', bucket: 'richos-report-test' }, { ...deps, confirm: CONFIRM }), /production route only/);
   await assert.rejects(smoke(profile, deps), /confirmation word/);
   assert.equal(f.posts(), 0);
