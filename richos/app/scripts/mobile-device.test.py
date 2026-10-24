@@ -761,7 +761,8 @@ def _():
     # `reboot` is the remedy the check itself applies, so it too runs without the check, holding the phone.
     # `launch` opens the app on purpose: it holds the phone but runs its own Wi-Fi-first, launch-once procedure
     # instead of the trust check, so it sits beside the read-only verbs on the HOLD line and is the only one there that launches.
-    assert 'approval|procs|apps|lock|battery|syslog|trust|net|close|wifi-restore|wifi-on|wifi-off|reboot|launch) exec "${HOLD[@]}"' in text
+    # `crashes` only copies and reads the phone's crash reports, so it is a read-only verb on that line.
+    assert 'approval|procs|apps|lock|battery|syslog|crashes|trust|net|close|wifi-restore|wifi-on|wifi-off|reboot|launch) exec "${HOLD[@]}"' in text
 
 
 @case("D27b a phone joined to Wi-Fi whose Wi-Fi carries no traffic is restarted once BEFORE anything is opened, so iOS never refuses the app for want of a network")
@@ -1151,6 +1152,63 @@ def _():
     # proof-run.py reads only `cd <dir> && <command>` lines, so the land writes the scan in that form
     assert 'f"cd {scanner.parent} && python3 {scanner.name} scan"' in land, "every land runs it, as a line proof-run can read"
     assert "python3 {PHYSICAL_CHECK} scan" not in land, "not the bare form proof-run refuses"
+
+
+NET_ONLINE = ("Active default network: 100\n"
+              "  NetworkAgentInfo{network{100}  handle{430} ni{WIFI CONNECTED} nc{[ Transports: WIFI Capabilities: "
+              "INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VPN&VALIDATED&NOT_ROAMING ]}}\n"
+              "  NetworkAgentInfo{network{101}  handle{431} ni{MOBILE CONNECTED} nc{[ Transports: CELLULAR Capabilities: INTERNET ]}}\n"
+              "--richos--\n0\n0")
+
+
+@case("D36 device list names the wired phones and their adb state without a serial, and contacts no phone")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        ph = Phone(tmp, sha="a" * 64)
+        code, out = ph.randroid("device", "list")
+        assert code == 0, (code, out)
+        assert json.loads(out)["result"] == [{"serial": "PHONE1", "state": "device"}], out
+        assert ph.calls == ["devices"], ph.calls
+
+
+@case("D37 device net: what the phone itself reaches (transport, Android's validation, a ping by address and by name), "
+      "read only; no internet exits 1 with the sentence; an emulator is refused")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        ph = Phone(tmp, sha="a" * 64, replies={"dumpsys connectivity": NET_ONLINE})
+        code, out = ph.randroid("device", "--serial", "PHONE1", "net")
+        assert code == 0, (code, out)
+        got = json.loads(out[out.index("{"):])["result"]
+        assert got["defaultTransport"] == "WIFI" and got["validatedByAndroid"] is True, got
+        assert got["internet"] is True and "reaches the internet over WIFI" in got["verdict"], got
+        assert touched(ph.calls) == [] and not any(" put " in c or "svc " in c for c in ph.calls), ph.calls
+        ph.file.write_text(json.dumps({**ph.state, "replies": {"dumpsys connectivity": NET_ONLINE.replace("0\n0", "0\n1")}}))
+        code, out = ph.randroid("device", "--serial", "PHONE1", "net")
+        assert code == 1 and "cannot resolve a name" in out, (code, out)
+        ph.file.write_text(json.dumps({**ph.state, "replies": {"dumpsys connectivity": "--richos--\n1\n1"}}))
+        code, out = ph.randroid("device", "--serial", "PHONE1", "net")
+        assert code == 1 and "no default network" in out, (code, out)
+        ph.file.write_text(json.dumps({**ph.state, "emulator": True}))
+        code, out = ph.randroid("device", "--serial", "PHONE1", "net")
+        assert code == 3 and "is an emulator" in out, (code, out)
+
+
+@case("D38 launch and close: only the TEST copy is opened (its launcher activity, am start -W) or ended (am force-stop), "
+      "whatever package is named; a debuggable build is refused first")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        ph = Phone(tmp, sha="a" * 64, replies={"am start": "Status: ok\nLaunchState: COLD\nTotalTime: 412"})
+        code, out = ph.randroid("device", "--serial", "PHONE1", "launch")
+        assert code == 0 and '"totalMs": 412' in out, (code, out)
+        code, out = ph.randroid("device", "--serial", "PHONE1", "close", "--package", "dev.richos.connect")
+        assert code == 0, (code, out)
+        acts = [c for c in ph.calls if " am " in f" {c} "]
+        assert acts == ["-s PHONE1 shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "
+                        "-n dev.richos.connect.perf/dev.richos.android.app.MainActivity",
+                        "-s PHONE1 shell am force-stop dev.richos.connect.perf"], acts
+        ph.file.write_text(json.dumps({**ph.state, "debuggable": True}))
+        code, out = ph.randroid("device", "--serial", "PHONE1", "launch")
+        assert code == 3 and "DEBUGGABLE RichConnect" in out, (code, out)
 
 
 @case("D14 the test copy's install builds through the Firebase wrapper, so the copy carries notification settings (CEO 2026-10-03)")

@@ -214,7 +214,7 @@ command = command_walk.command
 STEPS = ['identity', 'first-run', 'connect', 'tools', 'pdf', 'backend-worker', 'front-desk-worker', 'open-reveal', 'panel',
          'md-view', 'previews', 'save-copy', 'attach', 'pull',
          'empty', 'csv', 'buttons', 'link', 'actions', 'missing', 'menus', 'overlap', 'job-question', 'scroll', 'wrote',
-         'theme-flash', 'sidebar', 'scratch', 'labels', 'named', 'consult', 'shelf']
+         'theme-flash', 'sidebar', 'scratch', 'labels', 'named', 'consult', 'shelf', 'rich-file']
 # The candidate walk's steps: never in the default list, which runs the witness checks.
 CANDIDATE_STEPS = ('empty', 'csv', 'buttons', 'link', 'actions', 'missing', 'menus', 'overlap', 'job-question', 'scroll',
                    'wrote', 'theme-flash', 'sidebar', 'scratch', 'labels')
@@ -246,6 +246,14 @@ ATTACH_WORD = 'heron-4127'
 ATTACH_TASK = ('Please run this harmless test command for me yourself with your shell tool, '
                "and tell me when it has finished: printf '# Attach check\\n\\nThe code word is %s.\\n' > %s")
 ATTACH_ASK = 'What is the code word in the attached file? Reply with the code word only.'
+# §138 item 12 (round 36 screen 3): a file Rich puts in front of the user. A real PDF made with what
+# every Mac has (cupsfilter), so its default app is Preview on any guest; then Rich is asked to use
+# his attach_file tool on it. The card names the app by Launch Services: "Open <name> in Preview".
+RICH_FILE_NAME = 'rich-file-check.pdf'
+RICH_FILE_TASK = ('Please run this harmless test command for me yourself with your shell tool: '
+                  "printf 'Rich file check\\n\\nA PDF Rich puts in front of you.\\n' > /tmp/rich-file-check.txt "
+                  '&& /usr/sbin/cupsfilter /tmp/rich-file-check.txt > %s 2>/dev/null. '
+                  'Then put that PDF in front of me in this conversation with your attach_file tool.')
 # S4's one written file: a shell command, so no tool needs installing and witness (c) sees it.
 PANEL_TASK = ('Please run this harmless test command for me yourself with your shell tool, in my Acme folder, '
               "and tell me when it has finished: printf '# Panel check\\n\\nOne written file.\\n' > panel-check.md")
@@ -1514,6 +1522,98 @@ class OutputWalk(command_walk.CommandWalk):
             raise StepFailed('the conversation folder does not hold a copy of the recorded file: ' + json.dumps(stored))
         return evidence
 
+    # --- §138 item 12: a file Rich puts in front of the user ----------------------------------------
+    def rich_file(self):
+        """Round 36 screen 3 on the real app: Rich is asked to make a PDF and attach it with his
+        `attach_file` tool. PASS when the record (`engine-state/rich-files/files.jsonl`) holds it for
+        this conversation, its card is on screen by the name a person hears ("Open <name> in
+        Preview") and says its pages ("· 1 page"), pressing that card puts a Preview window named for
+        the file on screen, and the card is still there after another turn, in the normal view and
+        with Techy Mode on.
+        Preview is quit after the picture (CEO §54)."""
+        target = self.company + '/' + RICH_FILE_NAME
+        turn, sent = self.send(RICH_FILE_TASK % shlex.quote(target))
+        evidence, note = self.observed('rich-file')
+        end = time.monotonic() + self.a.within
+        rows = []
+        while time.monotonic() < end:
+            rows = [r for r in self.lines(self.data + '/engine-state/rich-files/files.jsonl')
+                    if r.get('name') == RICH_FILE_NAME and r.get('threadId') == self.facts['thread']]
+            if rows:
+                break
+            self.approve_pending(sent)
+            time.sleep(5)
+        note(turn=turn, rows=rows, on_disk=self.exists_in_guest(target))
+        if not rows:
+            note(turn_story=self.turn_story(turn))
+            raise StepFailed('no attachment of %s reached the record within %d s' % (RICH_FILE_NAME, self.a.within))
+        self.turn_end(turn)
+        note(turn_story=self.turn_story(turn))
+        label = 'Open ' + RICH_FILE_NAME
+        try:
+            self.wait_for(label, seconds=60)
+        except StepFailed:
+            self.shot('rich-file-no-card.png')
+            raise
+        card = self.node(label, role='AXButton')
+        note(card=card)
+        self.shot('rich-file-card.png')
+        self.press(label)
+        listing = self.wait_for_window(lambda p, w: RICH_FILE_NAME in w, 30)
+        opened = [(p, w) for p, w in listing if RICH_FILE_NAME in w]
+        time.sleep(1.5)
+        self.shot('rich-file-opened.png')
+        for process, _ in opened:
+            self.script('tell application "%s" to quit' % process.replace('"', ''))
+        note(windows=listing, opened=opened, quit=[p for p, _ in opened])
+        if not opened:
+            raise StepFailed('pressing the card put no window named %s on screen: %s' % (RICH_FILE_NAME, listing))
+        # Round 36's card says a PDF's pages ("PDF · 2 KB · 1 page"): cupsfilter writes one page. The
+        # button's name ("Open … in Preview, PDF · … · 1 page") carries the line and stands in for the
+        # button's children, so the line is read from the card's title or description, not from a
+        # static text of its own.
+        pages = [n.get('value') or n.get('title') for n in self.texts(' · 1 page')]
+        pages += [card.get(k) for k in ('help', 'desc', 'title', 'value') if ' · 1 page' in str(card.get(k) or '')]
+        note(pages_line=pages)
+        # The normal view, another turn: the conversation is re-read when it ends, and the card stays.
+        self.front()
+        plain_turn, _ = self.send('Thanks. Reply with the single word noted.')
+        self.turn_end(plain_turn)
+        try:
+            self.wait_for(label, seconds=30)
+            plain_after_turn = True
+        except StepFailed:
+            plain_after_turn = False
+        self.shot('rich-file-after-turn.png')
+        note(plain_turn=plain_turn, card_after_another_turn=plain_after_turn)
+        if not pages:
+            raise StepFailed("the PDF's card does not say its pages (no text with ' · 1 page')")
+        if not plain_after_turn:
+            raise StepFailed('in the normal view the card was gone after another turn')
+        # Techy Mode on (review rv-20261021T083350Z-8ca9bacf-e592): it re-reads the conversation
+        # from get_machinery when a turn ends, which carried no cards. The shortcut asks where;
+        # "For this conversation only" is chosen and confirmed, then one short turn runs to its end.
+        self.front()
+        self.script('tell application "System Events" to keystroke "t" using {command down, shift down}')
+        self.wait_for('For this conversation only', role='AXRadioButton', seconds=20)
+        self.press('For this conversation only', role='AXRadioButton')
+        self.press('Turn it on')
+        time.sleep(2)  # the sheet closes and the conversation is re-read in place
+        on_after_toggle = self.present(label)
+        techy_turn, _ = self.send('Thanks. Reply with the single word done.')
+        self.turn_end(techy_turn)
+        try:
+            self.wait_for(label, seconds=30)
+            after_turn = True
+        except StepFailed:
+            after_turn = False
+        self.shot('rich-file-techy.png')
+        note(techy_card_after_toggle=on_after_toggle, techy_turn=techy_turn, techy_card_after_turn_end=after_turn)
+        if not (on_after_toggle and after_turn):
+            raise StepFailed('with Techy Mode on the card was gone: after the switch %s, after the turn %s'
+                             % (on_after_toggle, after_turn))
+        return evidence
+
     # --- the candidate walk: what the slice steps never pressed ------------------------------------
     def observed(self, name):
         """An evidence dict and its `note`, written to `<name>-observed.json` at every note, so a
@@ -2691,7 +2791,8 @@ def main():
     p.add_argument('--relaunch-within', type=float, default=120,
                    help='sidebar: seconds for the composer to come back after the relaunch')
     p.add_argument('--steps', default=','.join(s for s in STEPS
-                                               if s not in ('open-reveal', 'panel', 'md-view', 'previews', 'save-copy', 'attach', 'pull', 'named', 'consult', 'shelf')
+                                               if s not in ('open-reveal', 'panel', 'md-view', 'previews', 'save-copy', 'attach', 'pull', 'named', 'consult', 'shelf',
+                                                            'rich-file')
                                                and s not in CANDIDATE_STEPS),
                    help='default: every step but open-reveal (alone, with --no-app) and the panel steps, '
                         'which run together after identity, first-run and connect: '

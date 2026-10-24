@@ -66,6 +66,7 @@ import dev.richos.android.ui.attach.AttachMenu
 import dev.richos.android.ui.attach.DeniedCard
 import dev.richos.android.ui.attach.MacOffCard
 import dev.richos.android.ui.attach.PhotoViewer
+import dev.richos.android.ui.attach.RichFileViewer
 import dev.richos.android.ui.attach.RejectionCard
 import dev.richos.android.ui.attach.ShareSheetView
 import dev.richos.android.ui.attach.SystemPickerDrawing
@@ -138,6 +139,8 @@ fun RichApp(model: ScreenModel, onEvent: (UiEvent) -> Unit, camera: (@Composable
             when (e) {
                 // The composer must not keep its keyboard over the Settings sheet.
                 UiEvent.OpenSettings -> focusManager.clearFocus()
+                // Nor over a file's viewer: with it up, the viewer opened squeezed above it (Honor).
+                is UiEvent.OpenRichFile -> focusManager.clearFocus()
                 // A Mac that takes no photos or files: the + says why (core's card) instead of a menu.
                 UiEvent.AttachMenu -> if (model.attachmentsSupported) menuOpen = !menuOpen else onEvent(UiEvent.AttachPick("photos"))
                 is UiEvent.AttachPick -> menuOpen = false
@@ -187,6 +190,8 @@ fun RichApp(model: ScreenModel, onEvent: (UiEvent) -> Unit, camera: (@Composable
                     Conversation(shown, menuOpen, handle)
                     Overlays(model, handle)
                     viewer?.let { v -> model.thread.firstOrNull { it.id == v.messageId }?.let { PhotoViewer(it, v.index, handle) } }
+                    // A file Rich attached, once it is on this phone and was tapped (round 36 "Phone: opened").
+                    model.fileViewer?.let { (file, fetch, time) -> RichFileViewer(file, fetch, time, handle) }
                 }
             }
         }

@@ -791,7 +791,9 @@
   /// question inside a real turn loses nothing: that turn's `work_duration` row records it.
   function placeTurn(model, item) {
     if (!item.turnId) return;
-    if (item.kind !== "question") {
+    // A file Rich or Stu attached (`rich_files_host.rs`) is appended the same way a question
+    // is, and a background job's file carries its job as `turnId` just as its question does.
+    if (item.kind !== "question" && item.kind !== "rich_file") {
       turnRecord(model, item.turnId);
       return;
     }
@@ -1603,6 +1605,10 @@
           // order" true when the transcript is expanded: prose rows never move, activity
           // rows appear between them.
           stream: items.filter((i) => RENDERED_STREAM_KINDS.indexOf(i.kind) >= 0),
+          // The files Rich put in front of the user in this turn (round 36 screen 3). Their
+          // own slot, like `user`, because they are drawn UNDER his words whenever in the
+          // turn the tool was called — never between two runs of his prose.
+          files: items.filter((i) => i.kind === "rich_file"),
           // The turn died to the model API (richos-core `upstream.rs`, open-items row
           // 3.30). Its own slot, like `user`, because it is drawn INSIDE the failure card
           // rather than in the stream — the card is where a reader already looks when a
@@ -1620,6 +1626,7 @@
             (i) =>
               RENDERED_STREAM_KINDS.indexOf(i.kind) < 0 &&
               i.kind !== "user_message" &&
+              i.kind !== "rich_file" &&
               i.kind !== "work_duration" &&
               i.kind !== "upstream_outage" &&
               i.kind !== "turn_interruption"
@@ -2766,6 +2773,24 @@
     return { node: wrap, row, hasActivity };
   }
 
+  /// **The files Rich put in front of the user, under his words** (round 36 screen 3): inside
+  /// his last message of the turn, right after its prose and above its Copy row, as the round
+  /// draws them. A turn with no words of his (a file Stu attached for a job) gets them in the
+  /// lane on their own.
+  function placeFiles(lane, turn, opts) {
+    if (!turn.files || !turn.files.length || !window.RichFiles) return;
+    const list = window.RichFiles.render(turn.files, opts);
+    let last = null;
+    for (const child of lane.children) if (child.classList.contains("tl-rich")) last = child;
+    if (!last) {
+      lane.appendChild(list);
+      return;
+    }
+    let actions = null;
+    for (const child of last.children) if (child.classList.contains("tl-rich-actions")) actions = child;
+    last.insertBefore(list, actions);
+  }
+
   /// The files the output record lists under this turn, newest first, or none.
   function turnFiles(opts, turnId) {
     return opts.output && opts.output.forTurn ? opts.output.forTurn(turnId) : [];
@@ -3016,6 +3041,7 @@
         else if (isLocalNotice(item) && item.text) lane.appendChild(renderLocalNotice(item));
         else if (isProse(item) && item.text) lane.appendChild(renderRichMessage(item, opts));
       }
+      placeFiles(lane, turn, opts);
       if (lane.childNodes.length) section.appendChild(lane);
       frag.appendChild(section);
       return frag;
@@ -3073,6 +3099,10 @@
         // Above the prose, in the position the activity itself occupies when expanded.
         lane.insertBefore(line, lane.firstChild);
       }
+
+      // The files Rich attached sit right under his words (round 36 screen 3), above the
+      // record's own *Produced* strip.
+      placeFiles(lane, turn, opts);
 
       const produced = turnFiles(opts, turn.turnId);
       if (produced.length) lane.appendChild(renderProduced(produced));
@@ -3197,6 +3227,9 @@
       const open = opts.isMachineryExpanded && opts.isMachineryExpanded(item.id) ? "+" : "";
       parts.push(tokenOf(item) + open);
     }
+    // The files Rich attached are drawn from their own slot, not the stream, so each needs its
+    // own term: a file attached after the turn is on screen must replace the cached node.
+    for (const item of turn.files || []) parts.push("rf" + tokenOf(item));
     parts.push(opts.machineryRaw ? "m1" : "m0");
     // The Oxford comma setting changes how Claude's words are drawn without any item changing.
     parts.push(window.RichOxford && window.RichOxford.keeping() ? "k1" : "k0");

@@ -113,6 +113,11 @@ struct DialogView: View {
         case .forgetBlocked:
             Button { send(.showWaiting) } label: { Text("Show the waiting messages") }
                 .buttonStyle(RButtonStyle(kind: .primary, wide: true))
+            // The way out when the Mac is gone for good (reinstalled, replaced): the waiting messages
+            // go and the pairing is forgotten, so this phone can pair again.
+            Button { send(.discardAndForget) } label: { Text("Discard and forget") }
+                .buttonStyle(RButtonStyle(kind: .ghost, wide: true))
+                .accessibilityIdentifier("forgetBlocked.discard")
             Button { send(.closeDialog) } label: { QuietLabel(text: "Keep pairing") }
                 .buttonStyle(RButtonStyle(kind: .quiet, wide: true))
         case .update:

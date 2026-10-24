@@ -819,6 +819,39 @@ class Collector(Base):
         with self.assertRaisesRegex(RuntimeError, 'already starting'): T.boot_ios(first)
         self.assertEqual(T._read_json(path)['boot']['deadline'], 280)
 
+    def test_failed_startup_cleanup_checks_shutdown_state_before_blocking_other_runs(self):
+        import cpu_guard
+        for state in ('Shutdown', 'Booted', 'unreadable'):
+            with self.subTest(state=state):
+                udid = T.acquire_ios('iPhone', 'runtime', os.getpid())
+                checked, simctl = T.checked_simctl, T.simctl
+                failed = False
+                def fail_boot(*args, **kwargs):
+                    nonlocal failed
+                    if args[0] == 'boot':
+                        failed = True
+                        self.write_state([dict(d, state=state) for d in self.devices()])
+                        raise RuntimeError('original startup failure')
+                    return checked(*args, **kwargs)
+                def cleanup(*args, **kwargs):
+                    if failed and args[0] == 'shutdown':
+                        return 405, '', 'Unable to shutdown device in current state: Shutdown'
+                    if failed and state == 'unreadable' and args[0] == 'list':
+                        return 1, '', 'inventory unavailable'
+                    return simctl(*args, **kwargs)
+                with patch.object(T, 'checked_simctl', side_effect=fail_boot), \
+                        patch.object(T, 'simctl', side_effect=cleanup), \
+                        patch.object(cpu_guard, 'block_ios') as blocked:
+                    with self.assertRaisesRegex(RuntimeError, 'original startup failure'):
+                        T.boot_ios(udid)
+                    if state == 'Shutdown':
+                        blocked.assert_not_called()
+                        self.assertEqual(T._read_json(T._record_path('ios-simulator', udid))['boot']['phase'], 'failed')
+                    else:
+                        blocked.assert_called_once()
+                        self.assertIn('Failed startup cleanup', blocked.call_args.args[0])
+                T.release_ios(udid, os.getpid())
+
     def test_collected_boot_cannot_resurrect_its_lease(self):
         first = T.acquire_ios("iPhone", "runtime", os.getpid())
         original = T.checked_simctl

@@ -61,7 +61,9 @@ class Inputs(unittest.TestCase):
         parsed = inputs.config((HERE.parent / "orchestration.config").read_text())
         expected = {"SCRATCH_NIGHTLY_DIR", "SCRATCH_FAILURES_STATE",
                     "SCRATCH_REAPER_STATE", "APP_INSTANCE_FAILURES_STATE", "TEST_DEVICE_FAILURES_STATE",
-                    "DISK_STATE_JSON", "SCRATCH_KEPT_DIR"}
+                    "DISK_STATE_JSON", "SCRATCH_KEPT_DIR",
+                    # The two Codex worktree keys (2026-10-23, cleanup PRD A6) take $HOME too.
+                    "SCRATCH_CODEX_HOME", "SCRATCH_CODEX_WORKTREE_ROOTS"}
         actual = {key for key, row in parsed.items() if any(part[0] == "parameter" for part in row["value"])}
         self.assertEqual(actual, expected)
         # 105 since 0ba40e59 added CHECK_RESOURCE_WAITS and RESOURCE_WAIT_MINUTES;
@@ -69,7 +71,9 @@ class Inputs(unittest.TestCase):
         # 108 since SCRATCH_KEPT_DIR and SCRATCH_KEPT_RETENTION_DAYS (2026-10-04, what a land kept);
         # 113 since SCRATCH_BUILD_CACHE_* and SCRATCH_CARGO_TARGET_ROOTS (2026-10-08, build caches).
         # 114 since SECOND_REVIEW_REPOS (2026-10-09, the repositories review-watch reviews by itself).
-        self.assertEqual(len(parsed), 108)
+        # 110 since SCRATCH_BULK_TMP_ROOTS and SCRATCH_FIXTURE_REPO_LABELS (2026-10-23, cleanup PRD).
+        # 112 since SCRATCH_CODEX_HOME and SCRATCH_CODEX_WORKTREE_ROOTS (2026-10-23, cleanup PRD A6).
+        self.assertEqual(len(parsed), 112)
         self.assertIsNone(inputs.config_change("", (HERE.parent / "orchestration.config").read_text())["fallback"])
 
     def test_semantic_values_ignore_comments_spacing_and_equivalent_quotes(self):

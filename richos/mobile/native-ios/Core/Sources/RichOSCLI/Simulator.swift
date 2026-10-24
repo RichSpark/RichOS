@@ -91,7 +91,7 @@ final class Simulator {
         case "launch": report = try await launch(fixture: arg)
         case "restart": report = try await launch(fixture: nil)
         case "verify": report = try await verify()
-        case "ui-test": report = try uiTest()
+        case "ui-test": report = try uiTest(only: arg)
         case "screenshot": report = try await screenshot(arg)
         case "check-release": report = try checkRelease()
         case "stop": report = try stop()
@@ -306,7 +306,9 @@ final class Simulator {
         return SimReport(state: state, screenshot: target.path)
     }
 
-    func uiTest() throws -> SimReport {
+    /// `only` (a test target, suite or test, as xcodebuild's `-only-testing:` takes it) runs that
+    /// alone, e.g. `RichOSNativeTests/TranscriptItemIDTests`; nil runs every test.
+    func uiTest(only: String? = nil) throws -> SimReport {
         let files = ["UITests", "UnitTests"].flatMap { dir in
             (try? FileManager.default.subpathsOfDirectory(atPath: root.appendingPathComponent(dir).path))?.filter { $0.hasSuffix(".swift") } ?? []
         }
@@ -324,7 +326,8 @@ final class Simulator {
                                         "-derivedDataPath", derivedData.path,
                                         "-clonedSourcePackagesDirPath", cache.appendingPathComponent("SourcePackages").path,
                                         "-resultBundlePath", bundle.path,
-                                        "CODE_SIGN_IDENTITY=-", "test"], log: log("ui-test"))
+                                        "CODE_SIGN_IDENTITY=-"] + (only.map { ["-only-testing:\($0)"] } ?? []) + ["test"],
+                           log: log("ui-test"))
         }
         let summary = try Tool.run("xcrun", ["xcresulttool", "get", "test-results", "summary", "--path", bundle.path]).stdout
         let object = try JSONSerialization.jsonObject(with: Data(summary.utf8)) as? [String: Any] ?? [:]

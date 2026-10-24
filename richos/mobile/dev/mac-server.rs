@@ -61,6 +61,12 @@ struct IsolatedBridge {
     reply_delay: Duration,
     vapid: Arc<phone::push::VapidKey>,
     origin: String,
+    /// The lab's engine state: the files Rich attached (`richos_core::rich_files`), as on a Mac.
+    files_root: PathBuf,
+    /// Files the lab attaches under each reply, as Rich's `attach_file` tool does
+    /// (`RICHOS_MOBILE_LAB_ATTACH`, paths joined by `:`); none when unset.
+    attach: Vec<PathBuf>,
+    hub: Arc<PhoneHub>,
 
 }
 impl Bridge for IsolatedBridge {
@@ -88,10 +94,21 @@ impl Bridge for IsolatedBridge {
         self.submit_words(thread_id, text, client_id, true)
     }
     fn snapshot(&self, thread_id: Option<&str>) -> Result<Value, String> {
-        crate::timeline_view::timeline_payload(
-            &*self.spine.lock().unwrap(),
-            thread_id.unwrap_or(&self.thread),
-        )
+        let thread = thread_id.unwrap_or(&self.thread);
+        let mut payload = crate::timeline_view::timeline_payload(&*self.spine.lock().unwrap(), thread)?;
+        // The cards of the files Rich attached, merged as the production snapshot merges them
+        // (`question_host::payload_in`), so this lab's rows are the rows a phone gets.
+        if let Some(items) = payload["items"].as_array_mut() {
+            items.extend(crate::rich_files_host::items(&self.files_root, self.entity.as_str(), thread));
+        }
+        Ok(payload)
+    }
+    /// "files" in the hello only when this lab attaches files, so every other lab run is as before.
+    fn files_available(&self) -> bool {
+        !self.attach.is_empty()
+    }
+    fn rich_file(&self, thread: &str, id: &str) -> Result<(String, Vec<u8>), richos_core::rich_files::Fetch> {
+        richos_core::rich_files::read_for_phone(&self.files_root, thread, id).map(|(row, body)| (row.name, body))
     }
     fn current_thread(&self) -> Option<(String, String)> {
         Some((self.thread.clone(), "Isolated mobile check".into()))
@@ -117,6 +134,8 @@ impl IsolatedBridge {
         let devices=Arc::clone(&self.devices);let push=Arc::clone(&self.push);let client=self.push_client.clone();
         let reply_thread=thread.to_string();let delay=self.reply_delay;
         let vapid=Arc::clone(&self.vapid);let origin=self.origin.clone();
+        let files_root=self.files_root.clone();let attach=self.attach.clone();let hub=Arc::clone(&self.hub);
+        let entity=self.entity.as_str().to_string();
 
         self.workers
             .lock()
@@ -128,6 +147,26 @@ impl IsolatedBridge {
                     .unwrap()
                     .poll_intake()
                     .expect("isolated phone intake drain");
+                if !attach.is_empty() {
+                    let payload=crate::timeline_view::timeline_payload(&*spine.lock().unwrap(),&reply_thread).unwrap();
+                    let turn=payload["items"].as_array().and_then(|items|items.iter().rev().find(|item|item["kind"]=="rich_message"))
+                        .and_then(|item|item["turnId"].as_str()).map(str::to_string);
+                    if let Some(turn)=turn {
+                        for file in &attach {
+                            match richos_core::rich_files::attach(&files_root,&entity,&reply_thread,&turn,"front_desk",&file.to_string_lossy()) {
+                                Ok(row)=>{
+                                    let item=crate::rich_files_host::item(&row);
+                                    if let Some(mut row)=phone::rows::row_from_item(&item) {
+                                        let cursor=hub.next_cursor();row["cursor"]=json!(cursor);
+                                        drop(hub.publish("message",cursor,row.to_string()));
+                                    }
+                                    eprintln!("mac-server: attached {} to turn {turn}",row.name);
+                                }
+                                Err(error)=>eprintln!("mac-server: could not attach {}: {error}",file.display()),
+                            }
+                        }
+                    }
+                }
                 if let Some(device)=devices.paired() {
                     if let Some(subscription)=device.push.as_ref() {
                         let payload=crate::timeline_view::timeline_payload(&*spine.lock().unwrap(),&reply_thread).unwrap();
@@ -216,6 +255,7 @@ fn serve() {
     spine.set_turn_control(control.clone());
     let hub = PhoneHub::new();
     spine.set_live_observer(Box::new(PhoneLiveEmitter::new(Arc::clone(&hub))));
+    let lab_hub = Arc::clone(&hub);
     let devices = Arc::new(DeviceDesk::open(&dir).unwrap());
     let push_client=std::env::var_os("RICHOS_MOBILE_CONNECT_IDENTITY_FILE").map(|file| {
         use phone::secrets::SecretStore;
@@ -236,6 +276,8 @@ fn serve() {
         entity,
         workers: Mutex::new(vec![]),
         vapid:Arc::clone(&vapid),origin:origin.clone(),
+        files_root:dir.join("engine-state"),hub:lab_hub,
+        attach:std::env::var("RICHOS_MOBILE_LAB_ATTACH").ok().map(|list|list.split(':').filter(|p|!p.is_empty()).map(PathBuf::from).collect()).unwrap_or_default(),
         voice:if std::env::var("RICHOS_MOBILE_VOICE_TEST").as_deref()==Ok("1") {Some(phone::voice::VoiceDesk::new(dir.join("speech")))} else {None},
         devices:Arc::clone(&devices),push:Arc::new(Mutex::new(phone::notifications::Desk::open(&dir).unwrap())),push_client,
         reply_delay:Duration::from_millis(std::env::var("RICHOS_MOBILE_REPLY_DELAY_MS").ok().and_then(|s|s.parse::<u64>().ok()).unwrap_or(0).min(10000)),

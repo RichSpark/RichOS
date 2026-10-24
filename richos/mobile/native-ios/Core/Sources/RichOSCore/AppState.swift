@@ -67,6 +67,9 @@ public struct AppState: Codable, Equatable, Sendable {
     public var attachNotice: AttachNotice?
     /// TRANSIENT. The one reply being heard, if any.
     public var playback: Playback?
+    /// TRANSIENT. The files Rich attached that were tapped on this phone, by id (round 36 screen 3).
+    /// Never saved: a kept copy is found again on disk at the next tap.
+    public var fileFetches: [String: FileFetch] = [:]
 
     // MARK: voice (groups 4, 5, 6)
     /// TRANSIENT. The recording gesture in progress.
@@ -147,7 +150,7 @@ extension AppState {
     /// Every field, plus the derived `screen`, so a CLI reader sees the surface directly. Absent
     /// fields decode to a new install's values; `screen` is ignored on the way in.
     private enum CodingKeys: String, CodingKey {
-        case readingAnchor, schema, pairing, mac, fingerprintWords, macWait, consentGiven, scanner, pairingProblem, messages, draft, outbox, reply, history, following, focusedMessageID, notifiedReply, composerFocused, playback, voice, keptRecordings, voiceAvailability, microphone, microphoneCard, camera, connectionNotice, troubleSinceMs, linkOpen, tunnelUp, notifications, sheet, update, attachmentLimits, toast, appearance, screen
+        case readingAnchor, schema, pairing, mac, fingerprintWords, macWait, consentGiven, scanner, pairingProblem, messages, draft, outbox, reply, history, following, focusedMessageID, notifiedReply, composerFocused, playback, fileFetches, voice, keptRecordings, voiceAvailability, microphone, microphoneCard, camera, connectionNotice, troubleSinceMs, linkOpen, tunnelUp, notifications, sheet, update, attachmentLimits, toast, appearance, screen
     }
 
     public init(from decoder: Decoder) throws {
@@ -173,6 +176,7 @@ extension AppState {
         notifiedReply = try c.decodeIfPresent(String.self, forKey: .notifiedReply)
         composerFocused = try c.decodeIfPresent(Bool.self, forKey: .composerFocused) ?? d.composerFocused
         playback = try c.decodeIfPresent(Playback.self, forKey: .playback)
+        fileFetches = try c.decodeIfPresent([String: FileFetch].self, forKey: .fileFetches) ?? d.fileFetches
         voice = try c.decodeIfPresent(VoiceSession.self, forKey: .voice)
         keptRecordings = try c.decodeIfPresent([KeptRecording].self, forKey: .keptRecordings) ?? d.keptRecordings
         voiceAvailability = try c.decodeIfPresent(VoiceAvailability.self, forKey: .voiceAvailability) ?? d.voiceAvailability
@@ -212,6 +216,7 @@ extension AppState {
         try c.encode(notifiedReply, forKey: .notifiedReply)
         try c.encode(composerFocused, forKey: .composerFocused)
         try c.encode(playback, forKey: .playback)
+        if !fileFetches.isEmpty { try c.encode(fileFetches, forKey: .fileFetches) }
         try c.encode(voice, forKey: .voice)
         try c.encode(keptRecordings, forKey: .keptRecordings)
         try c.encode(voiceAvailability, forKey: .voiceAvailability)
@@ -446,6 +451,8 @@ public struct Message: Codable, Equatable, Identifiable, Sendable {
     /// Rich's reply whose row said `has_audio: true`. `nil` (never `false`) otherwise, so stored
     /// conversations from earlier versions read the same.
     public var hasAudio: Bool?
+    /// A file Rich attached (round 36 screen 3): the card drawn under his words. `nil` otherwise.
+    public var richFile: RichFile?
 
     public init(id: String, author: Author, kind: Kind = .text, text: String, sentAt: Int64,
                 delivery: Delivery? = nil, durationMs: Int? = nil, levels: [Double]? = nil, clientID: String? = nil, cursor: Int? = nil,

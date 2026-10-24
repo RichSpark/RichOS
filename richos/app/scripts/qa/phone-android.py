@@ -24,6 +24,10 @@
                                                                    rendered and the spacing between them (a steady
                                                                    rhythm is an animation or a timer that never ends)
     phone-android.py --serial SERIAL state --package PKG [--out F] what PKG leaves running: see below
+    phone-android.py --serial SERIAL launch                        open the TEST copy from its launcher activity (am start -W),
+                                                                   cold or warm as it stands; its launch state and time
+    phone-android.py --serial SERIAL close                         end the TEST copy (am force-stop), as the phone ends it
+                                                                   for memory; the next launch is a cold start
     phone-android.py compare BEFORE.json AFTER.json                what changed between two `state` records
     phone-android.py --serial SERIAL observe --package PKG --label L --out-dir DIR --settle S --seconds N
                      [--action home|kill|force-stop|none]
@@ -370,7 +374,7 @@ def main(argv):
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--serial")
     p.add_argument("--adb", default="adb", help="adb executable (tests substitute a scripted one)")
-    p.add_argument("command", choices=["texts", "wait", "gone", "tap", "node", "swipe", "type-file", "keys", "field", "unlabeled", "shot", "burst", "idle-frames", "observe", "state", "compare"])
+    p.add_argument("command", choices=["launch", "close", "texts", "wait", "gone", "tap", "node", "swipe", "type-file", "keys", "field", "unlabeled", "shot", "burst", "idle-frames", "observe", "state", "compare"])
     p.add_argument("value", nargs="?")
     p.add_argument("value2", nargs="?")
     p.add_argument("--timeout", type=float, default=15)
@@ -403,6 +407,19 @@ def main(argv):
         if not phone.attached():
             raise CannotAnswer(f"{a.serial} is not an attached, authorized device in `adb devices`")
         physical.gate(a.adb, a.serial)
+        # Only ever the TEST copy (physical.PACKAGE): neither step takes a package, so neither can reach the
+        # CEO's own RichConnect (CEO 2026-10-03), whatever --package says.
+        if a.command == "launch":
+            out = phone.sh(f"am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "
+                           f"-n {physical.PACKAGE}/dev.richos.android.app.MainActivity", timeout=60)
+            status, launch, total = (re.search(rf"{k}:\s*(\S+)", out) for k in ("Status", "LaunchState", "TotalTime"))
+            ok = bool(status and status.group(1) == "ok")
+            return emit({"ok": ok, "launched": physical.PACKAGE, "launchState": launch and launch.group(1),
+                         "totalMs": int(total.group(1)) if total else None,
+                         **({} if ok else {"said": out.strip()[:300]})}, 0 if ok else 1)
+        if a.command == "close":
+            phone.sh(f"am force-stop {physical.PACKAGE}")
+            return emit({"ok": True, "closed": physical.PACKAGE})
         if a.command == "texts":
             seen = [v for n in phone.nodes() for v in (n["text"], n["desc"]) if v]
             return emit({"ok": True, "texts": seen})

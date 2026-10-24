@@ -74,6 +74,7 @@ import dev.richos.android.ui.UiEvent
 import dev.richos.android.ui.attach.AlbumContent
 import dev.richos.android.ui.attach.FileContent
 import dev.richos.android.ui.attach.ReferenceChip
+import dev.richos.android.ui.attach.RichFileRows
 import dev.richos.android.ui.model.UploadStatus
 import dev.richos.android.ui.model.Body
 import dev.richos.android.ui.model.Delivery
@@ -91,7 +92,7 @@ import dev.richos.android.ui.model.Waves
 fun MessageRow(message: Message, tail: Boolean, onEvent: (UiEvent) -> Unit, modifier: Modifier = Modifier) {
     val mine = message.speaker == Speaker.ME
     val body = message.body
-    val full = body is Body.Question || body is Body.Voice || body is Body.Album || body is Body.File
+    val full = body is Body.Question || body is Body.Voice || body is Body.Album || body is Body.File || message.files.isNotEmpty()
     val fraction = when (body) {
         is Body.Question -> 0.92f
         is Body.Voice, is Body.Album -> 0.74f
@@ -195,8 +196,10 @@ private fun TextBubble(message: Message, body: Body.Text, modifier: Modifier, on
             // Still, and plainly unfinished: the ellipsis stands where the caret was. No time, which
             // belongs to a finished message; the Mac's row replaces this once the stream is back.
             message.unfinished -> BasicText(body.text.trimEnd() + "…", style = style)
-            else -> BasicText(body.text, style = style)
+            body.text.isNotEmpty() || message.files.isEmpty() -> BasicText(body.text, style = style)
         }
+        // The files Rich attached, under his words (round 36 screen 3).
+        if (message.files.isNotEmpty()) RichFileRows(message.files, onEvent)
         if (!message.replying && !message.streaming && !message.unfinished) Meta(message, Modifier.align(Alignment.End).padding(top = 4.dp))
         if (!mine && message.audio != ReplyAudio.NONE) ReplyAudioRow(message, onEvent)
     }

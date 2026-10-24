@@ -151,6 +151,27 @@ printf '%s\n' "\$*" >>"$W_NOTIFY"
 exit 0
 STUB
     chmod +x "$W_BIN/osascript"
+    # EVERY WORLD STARTS WITH A HEALTHY SCHEDULED CLEANUP: the reaper's plist is
+    # installed and its job published a healthy result just now. Cleanup health is
+    # an alarm of its own (cleanup PRD R4/R5), and a case about something else must
+    # not trip it. Cases about cleanup health replace this file.
+    : >"$W_LA/com.richos.scratch-reaper.plist"
+    healthy_reaper_state "$W_DIR/reaper-state.json"
+}
+
+# healthy_reaper_state <path> [extra python dict items] — a healthy scheduled result.
+healthy_reaper_state() {
+    python3 - "$1" "${2:-}" <<'PY'
+import json, sys, time
+extra = eval("{%s}" % sys.argv[2]) if sys.argv[2] else {}
+st = {"source": "launchd", "outcome": "healthy", "unresolved": [], "roots": [],
+      "last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+      "last_apply_epoch": int(time.time()), "result_epoch": int(time.time()),
+      "deleted": 0, "freed": 0, "undecidable": 0, "undecidable_bytes": 0,
+      "skipped": 0, "skipped_bytes": 0, "failures": 0, "verdict": "decided"}
+st.update(extra)
+json.dump(st, open(sys.argv[1], "w"))
+PY
 }
 
 # write_cfg <rich_gb> <drop_gb> <ceo_gb> <urgent_gb> [extra-volumes] [repeat-h]
@@ -194,6 +215,8 @@ CFG
 }
 
 run_wd() {                 # <mode-flags...>
+    # The escalation ledger is ALWAYS the world's own, whatever runs here.
+    RICHOS_ESCALATION_LEDGER="$W_DIR/escalations.jsonl" \
     RICHOS_MACHINE_SETTINGS_RESOLVED=1 \
     RICHOS_BULK_ROOT="$W_DIR" \
     RICHOS_BUILD_CACHE="${W_MEASURED_ROOT:-$W_DIR/measured}" \
@@ -206,6 +229,33 @@ run_wd() {                 # <mode-flags...>
     DISK_WATCHDOG_LOG="$W_LOG" \
     RICHOS_LAUNCH_AGENTS_DIR="$W_LA" \
     bash "$WD" "$@" 2>&1
+}
+
+# THE INSTALLED JOB'S TICK, as disk-watchdog.sh runs the program once launchd has
+# named it (cleanup PRD R5). launchd's XPC_SERVICE_NAME cannot be handed to a child
+# on this OS (any child reads "0"; measured 2026-10-23), so this does what the shell
+# does after deciding: export the world's declarations and DISK_WATCHDOG_SCHEDULED=1
+# and run the check. W23d proves the shell refuses a caller's own handoff.
+run_wd_scheduled() {
+    (
+        set -a
+        # shellcheck disable=SC1090
+        . "$W_CFG"
+        set +a
+        export DISK_WATCHDOG_SCHEDULED=1
+        RICHOS_ESCALATION_LEDGER="$W_DIR/escalations.jsonl" \
+        RICHOS_MACHINE_SETTINGS_RESOLVED=1 \
+        RICHOS_BULK_ROOT="$W_DIR" \
+        RICHOS_BUILD_CACHE="${W_MEASURED_ROOT:-$W_DIR/measured}" \
+        RICHOS_PROOF_RUN_DIR="${W_PROOF_ROOT:-$W_DIR/proof}" \
+        RICHOS_NATIVE_IOS_CACHE="${W_IOS_ROOT:-$W_DIR/ios}" \
+        RICHOS_CARGO_CACHE_ROOT="${W_CARGO_ROOT:-$W_DIR/cargo}" \
+        CARGO_TARGET_DIR="$W_DIR/cargo" \
+        PATH="$W_BIN:$PATH" \
+        RICHOS_LAUNCH_AGENTS_DIR="$W_LA" \
+        MODE=check STATE="$W_STATE" LOG="$W_LOG" \
+        python3 "$SCRIPT_DIR/lib/disk-watchdog.py" 2>&1
+    )
 }
 
 # ===========================================================================
@@ -953,13 +1003,9 @@ write_cfg 999999999 999999 1 1     # floors so low nothing else can alert
 sed -i.bak 's/^DISK_RICH_ALERT_GB=.*/DISK_RICH_ALERT_GB="1"/' "$W_CFG"
 touch "$W_LA/com.richos.disk-watchdog.plist"
 mkdir -p "$W_DIR/state"
-python3 - "$W_DIR/state/scratch-reaper-state.json" <<'PY'
-import json, sys
-json.dump({"last_apply": "2026-09-18T04:40:00Z", "deleted": 3, "freed": 100,
-           "undecidable": 0, "undecidable_bytes": 0,
-           "skipped": 2934, "skipped_bytes": 1125454451,
-           "failures": 0, "verdict": "decided"}, open(sys.argv[1], "w"))
-PY
+# A HEALTHY scheduled result carrying the foreign pile: this case is about the
+# report, and cleanup health has its own case (W23).
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"deleted": 3, "freed": 100, "skipped": 2934, "skipped_bytes": 1125454451'
 {
     echo "SCRATCH_REAPER_STATE=\"$W_DIR/state/scratch-reaper-state.json\""
     echo 'SCRATCH_SKIPPED_NOTICE_BYTES="1073741824"'
@@ -1007,24 +1053,17 @@ else
     bad "W18b the garbage alarm ignores its own threshold (rc=$RC)"
     printf '%s\n' "$OUT" | sed 's/^/        /' | head -10
 fi
-# The UNDECIDABLE pile has its own, lower threshold — Frank's D12, where sharing
-# SCRATCH_NOTICE_BYTES hid up to a GiB of a pile no run will ever clear.
-python3 - "$W_DIR/state/scratch-reaper-state.json" <<'PY'
-import json, sys
-json.dump({"last_apply": "2026-09-18T04:40:00Z", "deleted": 0, "freed": 0,
-           "undecidable": 23, "undecidable_bytes": 164580800,
-           "skipped": 0, "skipped_bytes": 0,
-           "failures": 0, "verdict": "undecided"}, open(sys.argv[1], "w"))
-PY
+# THE UNDECIDABLE PILE, CHANGED 2026-10-23 (cleanup PRD R4). It used to be a line
+# to READ that never raised the exit code, and that is how days of a broken
+# scheduled cleanup ("the open-file table could not be read") sat in a report
+# nobody acted on. An undecided entry in the scheduled result is an UNRESOLVED
+# cleanup: an alarm, at any size, with one owner action.
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "undecidable": 23, "undecidable_bytes": 164580800, "verdict": "undecided", "unresolved": [{"scope": "/tmp/x", "cause": "23 undecided tmp-unknown entries (157.0 MB), e.g. /tmp/x/a: wall 2"}]'
 OUT="$(run_wd --alert)"; RC=$?
-# Its own LOWER threshold is still the point of this case (D12). What changed on
-# 2026-09-19 is the response: an undecidable pile is something to READ — a wall
-# tripped, and the reason says which — not something to go and delete by hand.
-# So it reports on its own threshold and does not raise the exit code.
-if [ "$RC" = "0" ] && printf '%s' "$OUT" | grep -q 'COULD NOT BE DECIDED'; then
-    ok "W18c an undecidable pile reports on its OWN lower threshold, not the 1 GiB one"
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: /tmp/x: 23 undecided'; then
+    ok "W18c an undecided pile in the scheduled result is an UNRESOLVED cleanup, an alarm"
 else
-    bad "W18c 157 MB of permanently undecidable garbage was silent or alarmed (rc=$RC)"
+    bad "W18c an undecided pile in the scheduled result did not alarm (rc=$RC)"
     printf '%s\n' "$OUT" | sed 's/^/        /' | head -10
 fi
 
@@ -1056,6 +1095,7 @@ python3 - "$W_DIR/state/scratch-reaper-state.json" <<'PY'
 import json, sys, time
 json.dump({"last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "last_apply_epoch": int(time.time()),
+           "source": "launchd", "outcome": "healthy", "unresolved": [], "roots": [],
            "deleted": 3, "freed": 100, "undecidable": 0, "undecidable_bytes": 0,
            "skipped": 4122, "skipped_bytes": 14958789966,
            "skipped_split": {
@@ -1124,16 +1164,9 @@ world dated
 write_cfg 1 999999 1 1
 touch "$W_LA/com.richos.disk-watchdog.plist"
 mkdir -p "$W_DIR/state"
-python3 - "$W_DIR/state/scratch-reaper-state.json" <<'PY'
-import json, sys, time
-old = time.time() - 6 * 3600
-json.dump({"last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(old)),
-           "last_apply_epoch": int(old),
-           "deleted": 0, "freed": 0, "undecidable": 2,
-           "undecidable_bytes": 12228131110,
-           "skipped": 0, "skipped_bytes": 0, "failures": 0,
-           "verdict": "undecided"}, open(sys.argv[1], "w"))
-PY
+# A HEALTHY scheduled result six hours old, carrying a foreign pile to report
+# (the undecided pile is a cleanup alarm since 2026-10-23, W18c/W23).
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 6 * 3600)), "last_apply_epoch": int(time.time() - 6 * 3600), "skipped": 4122, "skipped_bytes": 12228131110'
 {
     echo "SCRATCH_REAPER_STATE=\"$W_DIR/state/scratch-reaper-state.json\""
     echo 'SCRATCH_SKIPPED_NOTICE_BYTES="1073741824"'
@@ -1162,6 +1195,14 @@ else
     bad "W20b a six-hour-old number past a one-hour window still reads as current"
     printf '%s\n' "$OUT" | sed 's/^/        /' | head -12
 fi
+# AND A SCHEDULED RESULT PAST THE WINDOW IS A CLEANUP ALARM (cleanup PRD R4): a
+# job that stopped publishing looks exactly like a machine with nothing to clean.
+if printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: the last completed scheduled run was 6 h ago, past the 1 h window'; then
+    ok "W20c past the window the stale scheduled result is also a cleanup alarm"
+else
+    bad "W20c a stale scheduled result did not alarm"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -12
+fi
 
 # ===========================================================================
 # W21 — --status RUNS THE SWEEPER; IT NEVER QUOTES A CACHED NUMBER
@@ -1174,15 +1215,7 @@ world statuslive
 write_cfg 1 999999 1 1
 touch "$W_LA/com.richos.disk-watchdog.plist"
 mkdir -p "$W_DIR/state"
-python3 - "$W_DIR/state/scratch-reaper-state.json" <<'PY'
-import json, sys, time
-old = time.time() - 6 * 3600
-json.dump({"last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(old)),
-           "last_apply_epoch": int(old), "deleted": 0, "freed": 0,
-           "undecidable": 2, "undecidable_bytes": 12228131110,
-           "skipped": 4122, "skipped_bytes": 14958789966,
-           "failures": 0, "verdict": "undecided"}, open(sys.argv[1], "w"))
-PY
+healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 6 * 3600)), "last_apply_epoch": int(time.time() - 6 * 3600), "undecidable": 2, "undecidable_bytes": 12228131110, "skipped": 4122, "skipped_bytes": 14958789966'
 # A STUB SWEEPER WHOSE ANSWER IS UNMISTAKABLY DIFFERENT from the file's. If
 # --status prints the file's 11.4 GB, it did not run anything.
 cat >"$W_DIR/fake-reaper.sh" <<'STUB'
@@ -1320,8 +1353,11 @@ with patch.dict(os.environ, env, clear=True), patch.object(Path, 'is_mount', ret
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         result = watch.main()
-    assert result == 0, result
     report = json.loads(out.getvalue())
+    # This home has no scheduled cleanup result, which is an unresolved cleanup
+    # (cleanup PRD R4) and the only thing allowed to raise the exit code here.
+    assert result == (1 if report['cleanup_problems'] else 0), result
+    assert not any(v['below_rich'] or v['drop_alert'] for v in report['volumes']), report
     assert [v['mount'] for v in report['volumes']] == [sys.argv[2]], report
     read.assert_any_call(sys.argv[2])
 PYABSENT
@@ -1332,6 +1368,241 @@ else
 fi
 
 echo ""
+# ===========================================================================
+# W23 — CLEANUP HEALTH, AND ITS ONE OWNER ACTION (cleanup PRD R4/R5, A3, A7)
+# ===========================================================================
+# On 2026-10-23 the scheduled cleanup had failed for days (lsof was not on
+# launchd's PATH) and this job printed it as "GARBAGE REPORT (not an alert)". Now
+# the scheduled result alone decides cleanup health; missing, manual, stale,
+# uninstalled or unresolved is an alarm; and the installed job (launchd's service
+# name) keeps ONE escalation for the lead in the existing ledger: raised once,
+# replaced after a permanent acknowledgement, left alone under a timed one,
+# acknowledged by the job itself when a scheduled run covering the failed scope
+# is healthy again.
+world cleanup
+write_cfg 1 999999 1 1
+touch "$W_LA/com.richos.disk-watchdog.plist"
+RS="$W_DIR/reaper-state.json"
+LEDGER="$W_DIR/escalations.jsonl"
+esc_rows() {               # <python expression over rows> -> printed value
+    python3 - "$LEDGER" "$1" <<'PY'
+import json, sys
+rows = []
+try:
+    rows = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+except OSError:
+    pass
+print(eval(sys.argv[2], {"rows": rows}))
+PY
+}
+wd_assoc() {
+    python3 -c 'import json,sys; a=json.load(open(sys.argv[1])).get("cleanup_escalation") or {}; print(a.get("id") or "")' "$W_STATE"
+}
+esc() {
+    RICHOS_ESCALATION_LEDGER="$LEDGER" bash "$SCRIPT_DIR/escalate.sh" "$@" >/dev/null 2>&1
+}
+
+rm -f "$RS"
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: no unattended cleanup result'; then
+    ok "W23  no published scheduled result is an alarm, not a healthy silence"
+else
+    bad "W23  a missing scheduled result did not alarm (rc=$RC)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -10
+fi
+python3 - "$RS" <<'PY'
+import json, sys, time
+json.dump({"last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "last_apply_epoch": int(time.time()), "deleted": 1, "freed": 1,
+           "undecidable": 0, "failures": 0, "verdict": "decided"}, open(sys.argv[1], "w"))
+PY
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'does not hold a result of the scheduled job'; then
+    ok "W23a a manual run's result does not stand in for the scheduled job's"
+else
+    bad "W23a a result with no scheduled source was read as health (rc=$RC)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -10
+fi
+healthy_reaper_state "$RS"
+rm -f "$W_LA/com.richos.scratch-reaper.plist"
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'scheduled cleanup job is not installed'; then
+    ok "W23b an uninstalled cleanup job is an alarm even beside a healthy old result"
+else
+    bad "W23b a missing cleanup job did not alarm (rc=$RC)"
+fi
+: >"$W_LA/com.richos.scratch-reaper.plist"
+healthy_reaper_state "$RS" '"last_apply_epoch": int(time.time()) - 13 * 3600'
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'past the 12 h window'; then
+    ok "W23c a result past the declared 12 h window is an alarm (a stopped job)"
+else
+    bad "W23c a 13 h old scheduled result was read as healthy (rc=$RC)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -10
+fi
+
+# --- the owner action -------------------------------------------------------
+healthy_reaper_state "$RS" '"outcome": "unresolved", "unresolved": [{"scope": "/x/root", "cause": "1 undecided tmp-unknown entry: THE OPEN-FILE TABLE COULD NOT BE READ"}]'
+# Through the shell, with the handoff forged by the caller: the shell decides from
+# launchd's own name, so a manual --check writes nothing.
+( export DISK_WATCHDOG_SCHEDULED=1; run_wd ) >/dev/null 2>&1
+if [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = "0" ]; then
+    ok "W23d a --check outside the installed job writes no escalation, even with the handoff forged"
+else
+    bad "W23d a manual --check wrote to the escalation ledger"
+fi
+run_wd_scheduled >/dev/null 2>&1
+ID1="$(wd_assoc)"
+if [ -n "$ID1" ] && [ "$(esc_rows '[(r["teammate"], r["state"], r["for"]) for r in rows if r.get("event") == "Escalation"]')" = "[('scratch-reaper', 'proceeding', 'lead')]" ]; then
+    ok "W23e the installed job raises ONE escalation for the lead, state proceeding, and remembers it"
+else
+    bad "W23e no single proceeding escalation for the lead (assoc=$ID1)"
+    cat "$LEDGER" 2>/dev/null | sed 's/^/        /' | head -5
+fi
+run_wd_scheduled >/dev/null 2>&1
+if [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = "1" ] && [ "$(wd_assoc)" = "$ID1" ]; then
+    ok "W23f the next tick raises nothing new while that escalation is open"
+else
+    bad "W23f a second tick raised another escalation for the same failure"
+fi
+OUT="$(run_wd --alert)"
+if [ "$(printf '%s\n' "$OUT" | grep -c 'CLEANUP HAS NOT RECOVERED:')" = "1" ] \
+   && printf '%s' "$OUT" | grep -q "Owner action: escalation $ID1"; then
+    ok "W23g the notice is ONE short line naming the owner action and the detail"
+else
+    bad "W23g the cleanup notice is not one line with its escalation"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -12
+fi
+esc ack "$ID1" --disposition "acknowledged permanently before any repair, for the test"
+run_wd_scheduled >/dev/null 2>&1
+ID2="$(wd_assoc)"
+if [ -n "$ID2" ] && [ "$ID2" != "$ID1" ] \
+   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = "2" ]; then
+    ok "W23h a premature PERMANENT acknowledgement gets one replacement at the next tick"
+else
+    bad "W23h a permanently acknowledged failure was not replaced (id1=$ID1 id2=$ID2)"
+fi
+esc ack "$ID2" --disposition "deferred for an hour while the cause is diagnosed" --until "$(date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)"
+run_wd_scheduled >/dev/null 2>&1
+if [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = "2" ] && [ "$(wd_assoc)" = "$ID2" ]; then
+    ok "W23i a TIMED acknowledgement gets no replacement; the same id stays associated"
+else
+    bad "W23i a timed acknowledgement was answered with a replacement"
+fi
+# Recovery before the hold expires: health clears, the association stays until the
+# id can be closed.
+healthy_reaper_state "$RS" '"roots": ["/x/root"]'
+OUT="$(run_wd --alert)"; RC=$?
+run_wd_scheduled >/dev/null 2>&1
+if [ "$RC" = "0" ] && [ "$(wd_assoc)" = "$ID2" ] \
+   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "EscalationAck"])')" = "2" ]; then
+    ok "W23j recovery during a hold clears health and keeps the id until it can be closed"
+else
+    bad "W23j recovery during a hold (rc=$RC assoc=$(wd_assoc))"
+fi
+# The hold expires (its until moved into the past): the same id reopens, and the
+# next tick, reading a healthy result, closes it permanently.
+python3 - "$LEDGER" "$ID2" <<'PY'
+import json, sys, time
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+for r in rows:
+    if r.get("event") == "EscalationAck" and r.get("id") == sys.argv[2] and r.get("until_epoch"):
+        r["until_epoch"] = time.time() - 60
+        r["until"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r["until_epoch"]))
+open(sys.argv[1], "w").write("".join(json.dumps(r) + "\n" for r in rows))
+PY
+run_wd_scheduled >/dev/null 2>&1
+if [ -z "$(wd_assoc)" ] \
+   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "EscalationAck" and r.get("id") == "'"$ID2"'" and "Recovered" in r.get("disposition", "") and not r.get("until")])')" = "1" ] \
+   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = "2" ]; then
+    ok "W23k after the hold expires the job closes the SAME id permanently; no new id"
+else
+    bad "W23k the expired hold was not closed against current health"
+    cat "$LEDGER" 2>/dev/null | sed 's/^/        /' | tail -4
+fi
+# Only a run that inspected the scope that failed clears it.
+healthy_reaper_state "$RS" '"outcome": "unresolved", "unresolved": [{"scope": "/y/root", "cause": "1 deletion failed"}]'
+run_wd_scheduled >/dev/null 2>&1
+ID3="$(wd_assoc)"
+healthy_reaper_state "$RS" '"roots": []'
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'did not inspect it'; then
+    ok "W23l a healthy run that never inspected the failed scope does not clear it"
+else
+    bad "W23l a no-op run cleared a failure in a scope it did not inspect (rc=$RC)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -8
+fi
+healthy_reaper_state "$RS" '"roots": ["/y/root"]'
+run_wd_scheduled >/dev/null 2>&1
+if [ -n "$ID3" ] && [ -z "$(wd_assoc)" ]; then
+    ok "W23m a healthy run covering the failed scope clears it and closes its escalation"
+else
+    bad "W23m recovery covering the scope did not close $ID3"
+fi
+
+# W24 — EVERY FAILED ROOT STAYS ON THE ACTION UNTIL IT IS INSPECTED HEALTHY
+# ===========================================================================
+# Mid-job review rv-20261023T222724Z-e6524552-e592 #2: the action recorded failed
+# scopes only while its list was empty, so a second root's failure never joined,
+# and a failed deletion was published as the label "deletion", which no run can
+# inspect. A healthy run of root A then cleared the action while root B's residue
+# stayed. Every failed root now joins the action and clears only when a healthy
+# scheduled run has inspected it.
+REAL="$(cd "$W_DIR" && pwd -P)"
+SA="$REAL/scope-a"; SB="$REAL/scope-b"; SC="$REAL/scope-c"
+mkdir -p "$SA" "$SB" "$SC"
+healthy_reaper_state "$RS" '"outcome": "unresolved", "roots": ["'"$SA"'", "'"$SB"'"], "unresolved": [{"scope": "'"$SA"'", "cause": "inspection unavailable"}]'
+run_wd_scheduled >/dev/null 2>&1
+ID4="$(wd_assoc)"
+healthy_reaper_state "$RS" '"outcome": "unresolved", "roots": ["'"$SA"'", "'"$SB"'"], "unresolved": [{"scope": "'"$SB"'", "cause": "inspection unavailable"}]'
+run_wd_scheduled >/dev/null 2>&1
+healthy_reaper_state "$RS" '"roots": ["'"$SA"'"]'
+run_wd_scheduled >/dev/null 2>&1
+OUT="$(run_wd --alert)"; RC=$?
+if [ -n "$ID4" ] && [ "$(wd_assoc)" = "$ID4" ] && [ "$RC" = "1" ] \
+   && printf '%s' "$OUT" | grep -q "scope-b: the last healthy run did not inspect it"; then
+    ok "W24  a second root's failure joins the action; a healthy run of the first root alone does not clear it"
+else
+    bad "W24  root B's failure was lost (rc=$RC assoc=$(wd_assoc) first=$ID4)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -6
+fi
+# A failed deletion, published by the reaper's own grouping, names its root.
+python3 - "$RS" "$SC" "$SCRIPT_DIR/lib/scratch-reaper.py" <<'PY'
+import importlib.util, json, sys, time
+from types import SimpleNamespace
+sys.path.insert(0, sys.argv[3].rsplit("/", 1)[0])
+spec = importlib.util.spec_from_file_location("srt_reaper", sys.argv[3])
+sr = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sr)
+rows = sr.unresolved_rows(SimpleNamespace(roots=[sys.argv[2]], entries=[], deferred_skipped=0),
+                          [sys.argv[2] + "/leftover: permission denied"])
+now = int(time.time())
+json.dump({"source": "launchd", "outcome": "unresolved", "roots": [sys.argv[2]],
+           "unresolved": rows, "last_apply_epoch": now, "result_epoch": now,
+           "last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))},
+          open(sys.argv[1], "w"))
+PY
+run_wd_scheduled >/dev/null 2>&1
+healthy_reaper_state "$RS" '"roots": ["'"$SA"'", "'"$SB"'"]'
+run_wd_scheduled >/dev/null 2>&1
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$(wd_assoc)" = "$ID4" ] && [ "$RC" = "1" ] \
+   && printf '%s' "$OUT" | grep -q "scope-c: the last healthy run did not inspect it"; then
+    ok "W24a a failed deletion is held by its root until a healthy run inspects that root"
+else
+    bad "W24a a failed deletion's root was dropped (rc=$RC assoc=$(wd_assoc))"
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("unresolved"))' "$RS" | sed 's/^/        /'
+fi
+healthy_reaper_state "$RS" '"roots": ["'"$SA"'", "'"$SB"'", "'"$SC"'"]'
+run_wd_scheduled >/dev/null 2>&1
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "0" ] && [ -z "$(wd_assoc)" ] \
+   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "EscalationAck" and r.get("id") == "'"$ID4"'" and "Recovered" in r.get("disposition", "")])')" = "1" ]; then
+    ok "W24b a healthy run inspecting every failed root clears it and closes the one action"
+else
+    bad "W24b recovery of all failed roots did not close $ID4 (rc=$RC assoc=$(wd_assoc))"
+fi
+
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

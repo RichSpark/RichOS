@@ -98,7 +98,7 @@
 #
 # run-tests: no-host-screen: its only capture/keystroke references are the strings it asserts those two tools REFUSE to act on, and its frames are committed PNG fixtures
 # run-tests: inputs richos/app/scripts/qa.test.sh richos/app/scripts/qa richos/mobile/conformance/vectors/fingerprint.json richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
-# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
+# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -593,6 +593,9 @@ expect "A phone tool's child ends after kill -9 of the tool (outer limit 60 s)" 
 
 run python3 "$QA/trust-reading.test.py"
 expect "rios device trust reads a launch's log lines into the right cause" 0 "OK"
+
+run python3 "$QA/crash-reading.test.py"
+expect "rios device crashes reads a crash report into its exception and the crashed thread" 0 "OK"
 
 run python3 "$QA/device-launch.test.py"
 expect "rios device launch: not connected = 0 launches; refused then ok = 2 launches 1 reboot; never a third" 0 "OK"
@@ -1386,6 +1389,20 @@ expect "I26 a runner with no step dispatcher is refused, never read as agreeing"
 SESS="$TMP/sessions"; mkdir -p "$SESS"
 export RICHOS_IOS_SESSION_LEDGER="$SESS/ledger.jsonl"   # never the operator's real run ledger
 PHONE="00000000-0000000000000000"
+PHONE_COREDEVICE="111AA1A1-11AA-1111-1A11-A111111A1A1A"   # the same fixture phone's CoreDevice UUID
+# devicectl's list, for this section only: the fixture phone under both its spellings; every other
+# xcrun call goes to the real one. Keeps the forecasts below off this Mac's own device list.
+mkdir -p "$TMP/fakexcrun"
+cat > "$TMP/fakexcrun/xcrun" <<SH
+#!/bin/sh
+if [ "\$1 \$2 \$3 \$4" = "devicectl list devices --json-output" ]; then
+  printf '%s' '{"result":{"devices":[{"identifier":"$PHONE_COREDEVICE","hardwareProperties":{"udid":"$PHONE"}}]}}' > "\$5"
+  exit 0
+fi
+exec /usr/bin/xcrun "\$@"
+SH
+chmod +x "$TMP/fakexcrun/xcrun"
+PATH_BEFORE_APPROVAL="$PATH"; export PATH="$TMP/fakexcrun:$PATH"
 session_log() {  # session_log <file> <runner hh:mm:ss.mmm> <suite hh:mm:ss.mmm or TIMEOUT> <seconds ago>
   {
     echo "Command line invocation:"
@@ -1477,6 +1494,16 @@ run forecast
 expect "FC4b the recorded run alone is a session on record that approval reads" 0 '"sessionsOnRecord": 1'
 rm -rf "$KOUT"
 rm -f "$SESS"/*.log "$SESS/ledger.jsonl"
+# FC5 (2026-10-24): `rios device run` records its row under the CoreDevice UUID, its xcodebuild log
+# (hardware UDID) is gone with its checkout's cache folder, and `perf` asks by the hardware UDID.
+# Red on main: 0 sessions, "unknown", and the phone speed check refused.
+python3 -c 'import json,sys,time; t=time.time()-120; print(json.dumps({"device": sys.argv[1], "started": t-60, "ended": t, "log": sys.argv[2], "enableWaitSeconds": 0.6, "timedOut": False, "passcodeConfigured": False, "approvalNeeded": False, "error": None}))' \
+  "$PHONE_COREDEVICE" "$SESS/deleted-checkout/physical/verify-script-1-test.log" > "$SESS/ledger.jsonl"
+run forecast
+if [ "$CODE" = 0 ] && printf '%s' "$OUT" | grep -qF '"sessionsOnRecord": 1' && printf '%s' "$OUT" | grep -qF '"approvalExpected": false'; then
+  ok "FC5 a session recorded under the CoreDevice UUID is on record when asked by the hardware UDID"
+else bad "FC5 the hardware UDID finds the CoreDevice-spelled ledger row" "exit $CODE out: $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-300)"; fi
+rm -f "$SESS"/*.log "$SESS/ledger.jsonl"
 # the P tests need a phone whose forecast IS expected: a 10 h old session of PHONE2 with no reading.
 PHONE_SAVE="$PHONE"; PHONE="00008030-0000FEEDFACE0001"
 session_log p2.log 07:47:23.244 07:47:24.000 36000
@@ -1549,6 +1576,7 @@ if [ "$CODE" = 2 ] && printf '%s' "$OUT" | grep -qF "pairing window lasts five m
    && printf '%s' "$OUT" | grep -qF '[{\"do\": \"state\"}]' && [ ! -e "$TMP/nonexistent-qa-test" ]; then
   ok "P05 a pairing list while an approval is expected is refused even when announced: spend the approval first"
 else bad "P05 pairing waits for the approval" "exit $CODE out: $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-300)"; fi
+export PATH="$PATH_BEFORE_APPROVAL"
 
 echo ""
 unset RICHOS_DEVICE_VERB

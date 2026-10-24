@@ -52,6 +52,23 @@ FAILS="$SANDBOX/scratch-failures.json"
 LEDGER_DIR="$SANDBOX/claude"
 mkdir -p "$LA" "$LEDGER_DIR/state"
 touch "$LA/com.richos.disk-watchdog.plist"      # installed, so D1 can be silent
+# AND A HEALTHY SCHEDULED CLEANUP (cleanup PRD R4): its job installed and a result
+# it published just now. A missing or manual result is a cleanup alarm (D11).
+touch "$LA/com.richos.scratch-reaper.plist"
+healthy_reaper() {         # <path> [extra python dict items]
+    python3 - "$1" "${2:-}" <<'PY'
+import json, sys, time
+extra = eval("{%s}" % sys.argv[2]) if sys.argv[2] else {}
+st = {"source": "launchd", "outcome": "healthy", "unresolved": [], "roots": [],
+      "last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+      "last_apply_epoch": int(time.time()), "deleted": 0, "freed": 0,
+      "undecidable": 0, "undecidable_bytes": 0, "skipped": 0, "skipped_bytes": 0,
+      "failures": 0, "verdict": "decided"}
+st.update(extra)
+json.dump(st, open(sys.argv[1], "w"))
+PY
+}
+healthy_reaper "$LEDGER_DIR/state/scratch-reaper-state.json"
 
 # write_cfg <rich-floor-gb> [enable]
 write_cfg() {
@@ -271,13 +288,7 @@ fi
 write_cfg 1                                   # no volume or failure condition
 rm -f "$FAILS"
 mkdir -p "$SANDBOX/rstate"
-python3 - "$SANDBOX/rstate/scratch-reaper-state.json" <<'PY'
-import json, sys
-json.dump({"last_apply": "2026-09-18T04:40:00Z", "deleted": 0, "freed": 0,
-           "undecidable": 0, "undecidable_bytes": 0,
-           "skipped": 2934, "skipped_bytes": 1125454451,
-           "failures": 0, "verdict": "decided"}, open(sys.argv[1], "w"))
-PY
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"skipped": 2934, "skipped_bytes": 1125454451'
 {
     echo "SCRATCH_REAPER_STATE=\"$SANDBOX/rstate/scratch-reaper-state.json\""
     echo 'SCRATCH_SKIPPED_NOTICE_BYTES="1073741824"'
@@ -314,6 +325,7 @@ python3 - "$SANDBOX/rstate/scratch-reaper-state.json" <<'PY'
 import json, sys, time
 json.dump({"last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "last_apply_epoch": int(time.time()),
+           "source": "launchd", "outcome": "healthy", "unresolved": [], "roots": [],
            "deleted": 0, "freed": 0, "undecidable": 0, "undecidable_bytes": 0,
            "skipped": 2935, "skipped_bytes": 14958789966,
            "skipped_split": {
@@ -340,13 +352,7 @@ else
     bad "D10a the reclaimable pile is missing, or it is still an alarm (rc=$RC)"
     printf '%s\n' "$MSG" | sed 's/^/        /' | head -4
 fi
-python3 - "$SANDBOX/rstate/scratch-reaper-state.json" <<'PY'
-import json, sys
-json.dump({"last_apply": "2026-09-18T04:40:00Z", "deleted": 0, "freed": 0,
-           "undecidable": 0, "undecidable_bytes": 0,
-           "skipped": 2934, "skipped_bytes": 1125454451,
-           "failures": 0, "verdict": "decided"}, open(sys.argv[1], "w"))
-PY
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"skipped": 2934, "skipped_bytes": 1125454451'
 # THE CONTROL: with the pile below its threshold the turn end is silent again.
 sed -i.bak 's/^SCRATCH_SKIPPED_NOTICE_BYTES=.*/SCRATCH_SKIPPED_NOTICE_BYTES="9999999999999"/' "$CFG"
 sleep 1
@@ -356,6 +362,35 @@ if [ "$RC" = "0" ] && ! printf '%s' "$OUT" | grep -q 'MASSIVE ALERT'; then
 else
     bad "D10b the turn end alerted with nothing above its threshold (rc=$RC)"
     printf '%s\n' "$OUT" | sed 's/^/        /' | head -4
+fi
+
+# ---------------------------------------------------------------------------
+# D11 — AN UNRESOLVED SCHEDULED CLEANUP IS ONE SHORT ITEM ON THE TURN-END LINE
+# ---------------------------------------------------------------------------
+# Cleanup PRD R5: the notice reads the same current health as the watchdog and
+# points at the same owner action, at most one short summary, never a list.
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": [{"scope": "/x/a", "cause": "2 undecided entries"}, {"scope": "/x/b", "cause": "1 deletion failed"}]'
+OUT="$(run_hook Stop)"; RC=$?
+MSG="$(printf '%s' "$OUT" | python3 -c '
+import json, sys
+try:
+    print((json.load(sys.stdin).get("systemMessage") or ""))
+except Exception:
+    print("")
+' 2>/dev/null)"
+if [ "$RC" = "0" ] && [ "$(printf '%s' "$MSG" | grep -o 'cleanup has not recovered:' | wc -l | tr -d ' ')" = "1" ] \
+   && printf '%s' "$MSG" | grep -q '(+1 more)' && [ "$(printf '%s' "$MSG" | wc -l | tr -d ' ')" = "0" ]; then
+    ok "D11  an unresolved scheduled cleanup is ONE item on the one turn-end line"
+else
+    bad "D11  the unresolved cleanup is missing from the turn-end line, or repeated (rc=$RC)"
+    printf '%s\n' "$MSG" | sed 's/^/        /' | head -4
+fi
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json"
+OUT="$(run_hook Stop)"
+if ! printf '%s' "$OUT" | grep -q 'cleanup has not recovered'; then
+    ok "D11b CONTROL: with the scheduled result healthy again it is gone"
+else
+    bad "D11b the cleanup item stayed after the scheduled result recovered"
 fi
 
 echo ""

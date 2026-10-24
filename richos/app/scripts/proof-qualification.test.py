@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Validate every production proof recipe and its required reader/tool inputs."""
 import json
+import importlib.util
+import shutil
+import subprocess
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 import sys
 import unittest
@@ -12,6 +18,77 @@ import proof_evidence as evidence
 
 
 class ProductionQualification(unittest.TestCase):
+    def test_native_iphone_identity_ignores_unrelated_fixtures_but_binds_real_inputs(self):
+        spec = importlib.util.spec_from_file_location('native_proof', HERE / 'proof-run.py')
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        runtime = {'runtimes': [{'identifier': 'iOS-fixture', 'buildversion': 'fixture build',
+                                 'lastUsage': {'arm64': 'first invocation'}}]}
+        def tool_output(command, **kwargs):
+            return json.dumps(runtime) if command[-1] == '-j' else 'Xcode/runtime fixture'
+        with tempfile.TemporaryDirectory() as base:
+            fixture = Path(base) / 'repo'
+            fixture.mkdir()
+            production = HERE.parents[2]
+            recipe = json.loads((HERE / 'proof-inputs.json').read_text())['checks']['native-ios-ui']
+            (fixture / 'richos/app/scripts').mkdir(parents=True)
+            (fixture / 'richos/app/scripts/proof-inputs.json').write_text(json.dumps(
+                {'schema': 1, 'checks': {'native-ios-ui': recipe}}))
+            qualification = json.loads((production / recipe['qualification']).read_text())
+            for name in (recipe['qualification'], qualification['review']):
+                destination = fixture / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(production / name, destination)
+            for name in recipe['paths']:
+                path = fixture / name
+                if path.suffix:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('reader fixture')
+                else:
+                    path.mkdir(parents=True, exist_ok=True)
+            app = fixture / 'richos/mobile/native-ios/App.swift'
+            app.write_text('app v1')
+            item = runner.Item('native-ios-ui', str(fixture / 'richos/app'),
+                               ['bash', 'scripts/native-ios-ui.test.sh'])
+            environment = {'PATH': '/usr/bin:/bin', 'HOME': str(fixture)}
+            with patch.object(runner, 'ROOT', str(fixture)), \
+                    patch.object(runner, 'execution_environment', return_value=environment), \
+                    patch.object(shutil, 'which', return_value='/usr/bin/true'), \
+                    patch.object(subprocess, 'check_output', side_effect=tool_output):
+                identity = lambda: runner.input_identity(item, SimpleNamespace(), base)
+                original = identity()
+                runtime['runtimes'][0]['lastUsage'] = {'arm64': 'later invocation'}
+                self.assertEqual(original, identity())
+                self.assertNotIn('fresh', original)
+                self.assertNotEqual(original['contract'], evidence.WHOLE_CHECKOUT)
+                (fixture / 'richos/app/scripts/merge-check-scope.test.py').write_text('unrelated fixture repair')
+                self.assertEqual(original, identity())
+                app.write_text('app v2')
+                self.assertNotEqual(original, identity())
+                app.write_text('app v1')
+                (app.parent / 'NewTest.swift').write_text('new test')
+                self.assertNotEqual(original, identity())
+                (app.parent / 'NewTest.swift').unlink()
+                helper = fixture / 'richos/app/scripts/lib/ios_ui_shards.py'
+                helper.write_text('changed retry reader')
+                self.assertNotEqual(original, identity())
+                helper.write_text('reader fixture')
+                self.assertEqual(original, identity())
+                # The land checkout must accept the same tested bytes from the author.
+                other = Path(base) / 'land-checkout'
+                shutil.copytree(fixture, other)
+                with patch.object(runner, 'ROOT', str(other)):
+                    landed = runner.Item('native-ios-ui', str(other / 'richos/app'), item.argv)
+                    self.assertEqual(original, runner.input_identity(landed, SimpleNamespace(), base))
+                runtime['runtimes'][0]['buildversion'] = 'different runtime build'
+                self.assertNotEqual(original, identity())
+                runtime['runtimes'][0]['buildversion'] = 'fixture build'
+                environment['RICHOS_NATIVE_TEST_OPTION'] = 'changed'
+                self.assertNotEqual(original, identity())
+                del environment['RICHOS_NATIVE_TEST_OPTION']
+                with patch.object(subprocess, 'check_output', side_effect=OSError('Xcode unavailable')):
+                    self.assertIn('fresh', identity())
+
     def test_production_recipes_reject_known_shared_and_fixture_tool_omissions(self):
         root = HERE.parents[2]
         checks = json.loads((HERE / "proof-inputs.json").read_text())["checks"]

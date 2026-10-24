@@ -269,6 +269,9 @@ data class AppState(
      */
     @OptIn(ExperimentalSerializationApi::class) @EncodeDefault(EncodeDefault.Mode.NEVER)
     val macWaitDueInMs: Long? = null,
+    /** The files Rich attached that were tapped on this phone, by id ([FileFetch]). */
+    @OptIn(ExperimentalSerializationApi::class) @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val fileFetches: Map<String, FileFetch> = emptyMap(),
 ) {
     /**
      * What the gold circle in the composer shows: the microphone becomes the send arrow

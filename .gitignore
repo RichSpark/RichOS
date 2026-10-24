@@ -81,3 +81,8 @@ richos/app/ui/tests/receipts/
 # and rebuilt by `cargo build` there on every run. Declared regenerable after two continuations on
 # 2026-10-19 were refused over it (1487 and 960 entries) and it was deleted by hand both times.
 #regenerable: richos/mobile/conformance/verifier/target/
+
+# The Android app's Gradle output, ignored by richos/mobile/native-android/.gitignore and rebuilt by
+# Gradle on every build. Declared regenerable after two lands on 2026-10-24 were refused over it.
+#regenerable: richos/mobile/native-android/.gradle/
+#regenerable: richos/mobile/native-android/app/build/

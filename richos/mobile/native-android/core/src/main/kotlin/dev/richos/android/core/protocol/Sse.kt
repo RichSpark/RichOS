@@ -108,6 +108,9 @@ data class Row(
      */
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     @SerialName("client_id") val clientId: String? = null,
+    /** `kind: "file"`: a file Rich put in front of the user (round 36 screen 3); null otherwise. */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val file: dev.richos.android.core.RichFile? = null,
 )
 
 @Serializable

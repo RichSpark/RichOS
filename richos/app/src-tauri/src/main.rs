@@ -87,8 +87,8 @@ mod timeline_view;
 /// The `get_machinery` command body — techy mode's read path. Its own file for the same
 /// reason `timeline_view` is: an example includes the SAME source and prints the exact
 /// JSON the webview receives.
+/// `get_machinery` adds the files Rich attached to it (`rich_files_host::machinery_with_files`).
 mod machinery_view;
-use machinery_view::machinery_payload;
 
 /// COMPANY MEMORY: where it is, whether it is readable, and — new on 2026-09-01 — how a
 /// machine that has none gets one. Its own file because `wire_company_memory` runs twice:
@@ -149,6 +149,9 @@ mod mobile_mac_server;
 /// than a URL opener: the how-to screens need five fixed destinations, so the command takes the
 /// address as a key into a table rather than as data to act on.
 mod opener;
+/// **A file Rich puts in front of the user** (§138, item 12): the cards' items, open and Show in
+/// Finder through `opener.rs`, and the watch that shows a file as soon as it is attached.
+mod rich_files_host;
 mod emission_trace;
 
 /// **DICTATION IN ANY APP** (`richos-hq/docs/plans/2026-10-08-dictation-anywhere.md`, rev 2).
@@ -2117,6 +2120,15 @@ fn main() {
         if let Err(error)=result {eprintln!("Question tool server: {error}");std::process::exit(1);}
         return;
     }
+    // A FILE PUT IN FRONT OF THE USER (`richos-core`'s `rich_files.rs`): the same executable,
+    // reading the question tool's own per-turn scope, so the model names a path and the app
+    // names the conversation.
+    if first.as_deref() == Some(std::ffi::OsStr::new("--files-mcp")) {
+        let result=args.next().ok_or_else(||"Missing file scope".to_string())
+            .and_then(|scope|richos_core::rich_files::run_stdio(Path::new(&scope)).map_err(|e|e.to_string()));
+        if let Err(error)=result {eprintln!("File tool server: {error}");std::process::exit(1);}
+        return;
+    }
     if first.as_deref() == Some(std::ffi::OsStr::new("--assignments-mcp")) {
         let result = args.next().ok_or_else(|| "Missing assignment scope".to_string())
             .and_then(|scope| richos_core::assignment_tools::run_stdio(Path::new(&scope))
@@ -3411,6 +3423,7 @@ fn main() {
             phone_runtime.resume_if_paired(app.handle().clone());
             app.manage(phone_runtime);
             question_host::start(app.handle().clone());
+            rich_files_host::start(app.handle().clone());
             peer_messages::start(app.handle().clone())?;
             // Readiness starts before the window's setup/navigation reads, with the
             // selected thread's immutable company scope. Reader snapshots stay available.
@@ -3781,6 +3794,9 @@ fn main() {
             decline_instructions_update,
             update_instructions_file,
             instructions_file_open,
+            // --- a file Rich puts in front of the user (§138, item 12) — appended ---
+            rich_files_host::rich_file_open,
+            rich_files_host::rich_file_reveal,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -8578,7 +8594,8 @@ fn get_machinery(state: State<AppState>, thread_id: String) -> Result<serde_json
     if let Ok(mut spine) = state.spine.try_lock() {
         spine.pump_between_turn();
     }
-    machinery_payload(&*state.reader.snapshot(), &thread_id)
+    // Techy Mode reloads from here, so the files Rich attached ride on this snapshot too.
+    rich_files_host::machinery_with_files(&*state.reader.snapshot(), &rich_files_host::root(&state), &thread_id)
 }
 
 /// §2.4's raw pane, one record at a time.

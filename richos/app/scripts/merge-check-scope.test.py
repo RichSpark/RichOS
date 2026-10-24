@@ -222,8 +222,23 @@ class Scope(unittest.TestCase):
             with mock.patch.object(subprocess, 'check_output', return_value='Xcode fixture'):
                 identity = ios_ui_shards.retry_identity(root, 'ios', ['SE'], ['case'])
                 with mock.patch.dict(os.environ, {'RICHOS_PROOF_RUN': 'new-attempt', 'RICHOS_TEST_DEVICE_RUN_ID': 'new-run',
-                                                   'RICHOS_TEST_RESULTS_ROOT': 'new-results', 'RICHOS_AUTOCHECK_RETRY_REASON': 'diagnosed'}):
+                                                   'RICHOS_TEST_RESULTS_ROOT': 'new-results', 'RICHOS_AUTOCHECK_RETRY_REASON': 'diagnosed',
+                                                   'RICHOS_PROCESS_SCOPE': 'random-process-tag',
+                                                   'RICHOS_HOST_SHIELD_LOG': 'new-shield-log',
+                                                   'RICHOS_HOST_SHIELD_RUNS': 'new-shield-runs',
+                                                   'RICHOS_HOST_SHIELD_TOOL': 'new-shield-path',
+                                                   'RICHOS_PROOF_RUN_SLOT_HELD': 'new-slot',
+                                                   'RICHOS_PROOF_RUN_SLOT_FDS': 'new-descriptor',
+                                                   'RICHOS_AGENT_OWNER': 'different-agent',
+                                                   'RICHOS_AGENT_SESSION': 'different-session'}):
                     self.assertEqual(identity, ios_ui_shards.retry_identity(root, 'ios', ['SE'], ['case']))
+                for name in ('RICHOS_TEST_SCOPE', 'RICHOS_IOS_TEST_MODE', 'SDKROOT'):
+                    with self.subTest(setting=name), mock.patch.dict(os.environ, {name: 'changed'}):
+                        self.assertNotEqual(identity, ios_ui_shards.retry_identity(root, 'ios', ['SE'], ['case']))
+                self.assertNotEqual(identity, ios_ui_shards.retry_identity(root, 'new-runtime', ['SE'], ['case']))
+                self.assertNotEqual(identity, ios_ui_shards.retry_identity(root, 'ios', ['SE'], ['other-case']))
+                with mock.patch.object(subprocess, 'check_output', return_value='different Xcode'):
+                    self.assertNotEqual(identity, ios_ui_shards.retry_identity(root, 'ios', ['SE'], ['case']))
                 (root / 'source/untracked.swift').write_text('two')
                 self.assertNotEqual(identity, ios_ui_shards.retry_identity(root, 'ios', ['SE'], ['case']))
                 self.assertNotEqual(identity, ios_ui_shards.retry_identity(root, 'ios', ['Pro'], ['case']))

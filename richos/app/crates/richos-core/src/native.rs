@@ -1897,6 +1897,13 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
         "type":"stdio", "command": executable,
         "args":["--questions-mcp",crate::question_tools::path(assignments_scope)]
     });
+    // **Putting a file in front of the user, on BOTH leases** (`rich_files.rs`, §138 item 12):
+    // Rich answers with a file, and Stu hands over the file his job made. It reads the
+    // question tool's scope file, so it is open exactly when a question would be.
+    config["mcpServers"][crate::rich_files::SERVER] = json!({
+        "type":"stdio", "command": executable,
+        "args":["--files-mcp",crate::question_tools::path(assignments_scope)]
+    });
     // **The company-notes tools, on the CONVERSATION lease only** (`onboarding_tools.rs`).
     //
     // **This was on both leases until 2026-09-18, and it is Ray's candidate-.8 row 1.** The
@@ -5421,7 +5428,7 @@ exec /bin/sleep 1000
             Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Conversation, Path::new("claude"));
         assert_eq!(
             names(&chat),
-            vec!["richos_assignments", "richos_continuity", "richos_onboarding", "richos_questions", "richos_status", "richos_work"],
+            vec!["richos_assignments", "richos_continuity", "richos_files", "richos_onboarding", "richos_questions", "richos_status", "richos_work"],
             "the front desk's tool list moved"
         );
         // Named on its own as well, because the list above is the WHAT and this is the WHY.
@@ -5433,7 +5440,7 @@ exec /bin/sleep 1000
             Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Work, Path::new("claude"));
         assert_eq!(
             names(&work),
-            vec!["richos_continuity", "richos_questions", "richos_quota", "richos_status", "richos_work"],
+            vec!["richos_continuity", "richos_files", "richos_questions", "richos_quota", "richos_status", "richos_work"],
             "the back end's tool list moved"
         );
         // **The back end holds the work and NOTHING ELSE, and that is the third absence.**

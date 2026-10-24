@@ -131,29 +131,21 @@ sys.exit(0 if (a and b) else 1)
 }
 
 # ===========================================================================
-# N3 — nothing installed: the who-watches-the-watchman leg
+# N3 / N4 / N5 — THE SCHEDULED JOB'S HEALTH IS NOT REPEATED HERE (2026-10-23)
 # ===========================================================================
+# Uninstalled, never run, or thirty hours stale: each is the disk watchdog's
+# cleanup alarm now (disk-watchdog.test.sh W23b, W23, W23c), delivered once with
+# its owner action at this same session start (cleanup PRD R5). This notice says
+# nothing about it, so the session start carries one summary of one failure.
 write_config 1099511627776          # 1 TiB: nothing will ever reach it
 run_hook
-if [ "$RC" = "0" ] && says "NOT INSTALLED"; then
-    ok "N3  an unscheduled reaper is reported on both channels"
+if [ "$RC" = "0" ] && [ -z "$OUT" ]; then
+    ok "N3  an uninstalled job is not repeated here (the watchdog says it once)"
 else
-    bad "N3  rc=$RC and the missing schedule was not reported"
+    bad "N3  the scratch notice still reports the scheduled job's health (rc=$RC)"
     printf '%s\n' "$OUT" | sed 's/^/        /'
 fi
-
-# ===========================================================================
-# N4 / N5 — installed, but is it working?
-# ===========================================================================
 : >"$LAUNCHD/com.richos.scratch-reaper.plist"
-run_hook
-if says "NO record of ever completing a pass"; then
-    ok "N4  installed with no state is reported"
-else
-    bad "N4  an installed job that has never run said nothing"
-    printf '%s\n' "$OUT" | sed 's/^/        /'
-fi
-
 python3 - "$HOME_DIR/state/scratch-reaper-state.json" <<'PY'
 import json, sys
 from datetime import datetime, timedelta, timezone
@@ -163,10 +155,10 @@ with open(sys.argv[1], "w", encoding="utf-8") as fh:
                "freed": 0, "undecidable": 0, "verdict": "decided"}, fh)
 PY
 run_hook
-if says "has not completed a pass in 30 hours"; then
-    ok "N5  a job that stopped running is reported, with its age"
+if [ "$RC" = "0" ] && [ -z "$OUT" ]; then
+    ok "N5  a stale scheduled pass is not repeated here either"
 else
-    bad "N5  a 30-hour-old pass was not reported"
+    bad "N5  the scratch notice still reports the scheduled job's age (rc=$RC)"
     printf '%s\n' "$OUT" | sed 's/^/        /'
 fi
 

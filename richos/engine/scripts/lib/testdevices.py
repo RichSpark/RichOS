@@ -1438,6 +1438,12 @@ def boot_ios(udid):
             try:
                 rc, _, err = simctl("shutdown", udid)
                 if rc:
+                    # A concurrent shutdown can finish before simctl answers. Confirm
+                    # this exact device is stopped before escalating to a global incident.
+                    stopped = next((d for d in ios_devices() or [] if d["udid"] == udid), None)
+                    if stopped and stopped.get("state") == "Shutdown":
+                        rc = 0
+                if rc:
                     cpu_guard.block_ios("Failed startup cleanup for %s: %s" % (udid, err), automatic=True)
                 else:
                     with registry_lock():

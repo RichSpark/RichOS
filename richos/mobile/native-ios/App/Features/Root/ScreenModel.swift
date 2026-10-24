@@ -17,6 +17,8 @@ struct ScreenModel: Equatable, Sendable {
     var sheet: Sheet?
     var banner: UpdateBanner?
     var thread = Transcript()
+    /// A file Rich attached, open in the phone's viewer (round 36 "Phone: opened"); nil otherwise.
+    var fileViewer: FileViewer?
     /// The nameplate's second line: only for a persistent interruption (PRD §5 CEO experience gate).
     var connection: ConnectionLine?
     /// Cards above the composer, top to bottom.
@@ -178,6 +180,14 @@ struct ScreenModel: Equatable, Sendable {
         /// Why the Mac refused this message, in its own words ("I could not hear speech in that
         /// recording. …"), shown under it beside Discard; nil when the refusal carried no sentence.
         var refusal: String? = nil
+        /// The files Rich attached, drawn under his words in this bubble (round 36 screen 3).
+        var richFiles: [RichFileRow] = []
+    }
+
+    /// One file Rich attached, and where it stands on this phone (core `fileFetches`), or nil if never tapped.
+    struct RichFileRow: Equatable, Sendable {
+        var file: RichFile
+        var fetch: FileFetch?
     }
 
     struct ConnectionLine: Equatable, Sendable {
@@ -335,6 +345,11 @@ extension ScreenModel {
         if let playback = s.playback, let i = thread.rows.firstIndex(where: { $0.id == playback.messageID }) {
             thread.rows[i].audio = playback.phase == .preparing ? .preparing : .playing(progress: playback.progress)
         }
+        // The files Rich attached: where each stands on this phone, then each under his words.
+        for i in thread.rows.indices where !thread.rows[i].richFiles.isEmpty {
+            thread.rows[i].richFiles = thread.rows[i].richFiles.map { RichFileRow(file: $0.file, fetch: s.fileFetches[$0.file.id]) }
+        }
+        thread.rows = Self.filesUnderWords(thread.rows)
         let replyAt = s.messages.last?.sentAt ?? 0
         switch s.reply {
         case .thinking?:
@@ -345,6 +360,7 @@ extension ScreenModel {
             break
         }
         }
+        fileViewer = Self.fileViewer(s)
         thread.loadingOlder = s.history.loadingOlder
         thread.reachedBeginning = s.history.reachedBeginning
         thread.cached = s.history.showsOutOfReachLine(connectionNotice: s.connectionNotice)
@@ -492,6 +508,36 @@ extension ScreenModel.Card {
 }
 
 extension ScreenModel {
+    /// The files Rich attached sit in his bubble, under his words (round 36 "Phone: in the chat"):
+    /// the Mac sends each as its own row right after his reply (`phone/rows.rs`), and a file row
+    /// joins Rich's finished words just before it. One with no words of his before it (a file for a
+    /// job) is a bubble of its own. Android's `withFilesUnderWords`.
+    static func filesUnderWords(_ rows: [Row]) -> [Row] {
+        var out: [Row] = []
+        out.reserveCapacity(rows.count)
+        for row in rows {
+            if !row.richFiles.isEmpty, case .text(let text) = row.body, text.isEmpty,
+               let last = out.last, last.author == .rich, case .text = last.body {
+                out[out.count - 1].richFiles += row.richFiles
+            } else {
+                out.append(row)
+            }
+        }
+        return out
+    }
+
+    /// The file whose viewer is open (round 36 "Phone: opened"): kept on this phone and tapped.
+    static func fileViewer(_ s: AppState) -> FileViewer? {
+        guard let fetch = s.fileFetches.values.first(where: { $0.state == .kept && $0.open && $0.path != nil }),
+              let path = fetch.path else { return nil }
+        return FileViewer(id: fetch.id, url: URL(fileURLWithPath: path))
+    }
+
+    struct FileViewer: Equatable, Sendable {
+        var id: String
+        var url: URL
+    }
+
     /// A staged photo on this phone, or a plain tile when there is no copy to show.
     static func photoSource(path: String?, directory: URL?) -> AttachPhoto.Source {
         guard let path, let directory else { return .unavailable }
@@ -542,6 +588,8 @@ extension ScreenModel.Row {
         self.init(id: m.id, author: author, body: body, sentAt: m.sentAt, delivery: delivery,
                   isRecent: delivery == .sending || delivery == .waiting)
         if m.lineID != m.id { lineID = m.lineID }
+        // A file Rich attached (round 36 screen 3): no words of its own, the card under his.
+        if let file = m.richFile { richFiles = [ScreenModel.RichFileRow(file: file, fetch: nil)] }
     }
 }
 
@@ -554,7 +602,7 @@ final class ScreenProjectionCache {
     func model(_ state: AppState, attachments: URL?) -> ScreenModel {
         let same = directory == attachments && previous.map {
             $0.messages == state.messages && $0.outbox == state.outbox &&
-            $0.reply == state.reply && $0.playback == state.playback &&
+            $0.reply == state.reply && $0.playback == state.playback && $0.fileFetches == state.fileFetches &&
             $0.mac?.questionAnswers == state.mac?.questionAnswers && $0.mac?.replyAudio == state.mac?.replyAudio &&
             $0.connectionNotice == state.connectionNotice
         } == true

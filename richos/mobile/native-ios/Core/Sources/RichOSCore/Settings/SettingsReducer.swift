@@ -33,22 +33,38 @@ enum SettingsReducer {
             s.sheet = s.outbox.isEmpty ? .forget : .forgetBlocked
         case .confirmForget:
             guard s.sheet == .forget, s.outbox.isEmpty else { return }
-            if s.notifications.status == .on || s.notifications.status == .turningOn { effects.append(.unregisterNotifications) }
-            // Whatever the setting says now, nothing about a forgotten Mac stays on this phone (D04).
-            effects.append(.withdrawNotifications)
-            effects.append(.disconnect)
-            if let origin = s.mac?.origin { effects.append(.forgetIdentity(origin: origin)) }
-            // A recording kept for this Mac is never offered to another: it goes with the pairing,
-            // and its audio file with it (the owner's ruling on walk defect D9, 2026-10-01).
-            for kept in s.keptRecordings { effects.append(.deleteRecording(id: kept.id)) }
-            let appearance = s.appearance
-            s = AppState()
-            s.appearance = appearance
+            forget(&s, &effects)
+        case .discardUnsentAndForget:
+            // A Mac that is gone for good never takes them, and they are never sent to the next one.
+            // What is already on its way stays, and the refusal stays with it.
+            guard s.sheet == .forgetBlocked else { return }
+            let discarded = s.outbox.filter { $0.state != .sending }
+            for item in discarded { ConversationReducer.releaseFiles(of: item, &effects) }
+            let gone = Set(discarded.map(\.clientID))
+            s.outbox.removeAll { gone.contains($0.clientID) }
+            s.messages.removeAll { gone.contains($0.id) || ($0.clientID.map(gone.contains) ?? false) }
+            guard s.outbox.isEmpty else { return }
+            forget(&s, &effects)
         case .openSystemSettings:
             effects.append(.openSystemSettings)
         default:
             break
         }
+    }
+
+    /// Nothing about the forgotten Mac stays on this phone; a new install's state, in its appearance.
+    private static func forget(_ s: inout AppState, _ effects: inout [Effect]) {
+        if s.notifications.status == .on || s.notifications.status == .turningOn { effects.append(.unregisterNotifications) }
+        // Whatever the setting says now, nothing about a forgotten Mac stays on this phone (D04).
+        effects.append(.withdrawNotifications)
+        effects.append(.disconnect)
+        if let origin = s.mac?.origin { effects.append(.forgetIdentity(origin: origin)) }
+        // A recording kept for this Mac is never offered to another: it goes with the pairing,
+        // and its audio file with it (the owner's ruling on walk defect D9, 2026-10-01).
+        for kept in s.keptRecordings { effects.append(.deleteRecording(id: kept.id)) }
+        let appearance = s.appearance
+        s = AppState()
+        s.appearance = appearance
     }
 }
 

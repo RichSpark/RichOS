@@ -110,6 +110,9 @@ pub mod questions;
 pub mod question_work;
 pub mod question_engine;
 pub mod question_tools;
+/// A file Rich or Stu puts in front of the user: the `attach_file` tool and its record (§138,
+/// build plan item 12).
+pub mod rich_files;
 pub mod recovery;
 pub mod reprime;
 pub mod runtime;

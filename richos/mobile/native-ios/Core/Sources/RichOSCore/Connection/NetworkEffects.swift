@@ -9,6 +9,8 @@ public actor NetworkEffects: EffectHandler {
     private let identities: any IdentityStore
     private let recordings: (any RecordingStore)?
     private let attachments: (any AttachmentStore)?
+    /// Where the files Rich attached are kept once they came over; `nil` keeps none.
+    private let richFiles: URL?
     private let clock: any Clock
     private let deviceName: String
     private let sleep: LiveConnection.Sleep
@@ -38,11 +40,12 @@ public actor NetworkEffects: EffectHandler {
 
     public init(transport: any HTTPTransport, stream: any EventStreamTransport, identities: any IdentityStore,
                 recordings: (any RecordingStore)? = nil, attachments: (any AttachmentStore)? = nil,
-                clock: any Clock = SystemClock(), deviceName: String = "iPhone",
+                clock: any Clock = SystemClock(), richFiles: URL? = nil, deviceName: String = "iPhone",
                 sleep: @escaping LiveConnection.Sleep = { try await Task.sleep(nanoseconds: UInt64(max(0, $0)) * 1_000_000) },
                 silence: @escaping LiveConnection.Sleep = { try await Task.sleep(nanoseconds: UInt64(max(0, $0)) * 1_000_000) }) {
         self.transport = transport; self.stream = stream; self.identities = identities; self.recordings = recordings
         self.attachments = attachments
+        self.richFiles = richFiles
         self.clock = clock; self.deviceName = deviceName; self.sleep = sleep; self.silence = silence
     }
 
@@ -99,7 +102,7 @@ public actor NetworkEffects: EffectHandler {
     public nonisolated func handles(_ effect: Effect) -> Bool {
         switch effect {
         case .pair, .confirmFingerprint, .checkMacConfirmation, .forgetIdentity, .deliver, .connect, .reconnect, .disconnect, .loadOlder,
-             .requestNotifications, .unregisterNotifications, .deleteAttachments: return true
+             .requestNotifications, .unregisterNotifications, .deleteAttachments, .fetchRichFile, .findRichFile, .stopRichFile: return true
         default: return false
         }
     }
@@ -244,12 +247,106 @@ public actor NetworkEffects: EffectHandler {
             guard asked == lifecycle, !Task.isCancelled else { return [] }
             await live?.prepend(page.messages, more: page.more)
             return [.olderLoaded(page.messages.filter(\.complete).map(\.message), reachedBeginning: !page.more)]
+        case .fetchRichFile(let id, let threadID, let name, let total):
+            return await fetchRichFile(id: id, threadID: threadID, name: name, total: total, state: state)
+        case .stopRichFile(let id):
+            fileTasks.removeValue(forKey: id)?.cancel()
+            return []
+        case .findRichFile(let id, let name):
+            // Disk only, never the Mac: a copy that came over earlier opens whatever the Mac says.
+            if let directory = richFiles, let kept = RichFileRule.keptURL(directory: directory, id: id, name: name),
+               FileManager.default.fileExists(atPath: kept.path) {
+                return [.richFileArrived(id: id, path: kept.path)]
+            }
+            return [.richFileNotKept(id: id)]
         default:
             return []
         }
     }
 
     private struct OlderPage: Decodable { var messages: [StreamRow]; var more: Bool }
+
+    // MARK: a file Rich attached (round 36 screen 3)
+
+    /// The taps whose file is coming over, so × can stop them.
+    private var fileTasks: [String: Task<Void, Never>] = [:]
+
+    /// A tap on one of Rich's files: a copy already kept opens at once; otherwise its bytes come over
+    /// on ONE signed `GET /api/messages?kind=file`, read in parts so the ring fills, written beside
+    /// their final name and moved into place only when every byte arrived. It runs on its own task,
+    /// so a long file never holds this actor; its progress and outcome reach the store through the sink.
+    private func fetchRichFile(id: String, threadID: String, name: String, total: Int64?, state: AppState) async -> [Action] {
+        guard let directory = richFiles, let target = RichFileRule.keptURL(directory: directory, id: id, name: name) else {
+            return [.richFileFailed(id: id, reason: RichFileRule.failed)]
+        }
+        if FileManager.default.fileExists(atPath: target.path) { return [.richFileArrived(id: id, path: target.path)] }
+        guard let api = await client(for: state), let sink else { return [.richFileFailed(id: id, reason: RichFileRule.failed)] }
+        fileTasks[id]?.cancel()
+        let stream = self.stream
+        let path = RichFileRule.path(fileID: id, threadID: threadID)
+        fileTasks[id] = Task { [weak self] in
+            let outcome = await Self.download(api: api, stream: stream, path: path, target: target, id: id, total: total, sink: sink)
+            await self?.fileTaskEnded(id)
+            if let outcome { await sink(outcome) }
+        }
+        return []
+    }
+
+    private func fileTaskEnded(_ id: String) { fileTasks[id] = nil }
+
+    /// The download itself; `nil` when it was stopped (the reducer has already forgotten the tap).
+    private static func download(api: APIClient, stream: any EventStreamTransport, path: String, target: URL, id: String,
+                                 total: Int64?, sink: @escaping LiveConnection.Sink) async -> Action? {
+        let part = target.appendingPathExtension("part")
+        let files = FileManager.default
+        func failed(_ status: Int) -> Action {
+            try? files.removeItem(at: part)
+            switch status {
+            case 410: return .richFileFailed(id: id, reason: RichFileRule.gone)
+            case 413: return .richFileFailed(id: id, reason: RichFileRule.tooLarge)
+            default: return .richFileFailed(id: id, reason: RichFileRule.failed)
+            }
+        }
+        do {
+            try files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            _ = files.createFile(atPath: part.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: part)
+            defer { try? handle.close() }
+            // After a relaunch no challenge is held: ask for one first, as `signed` does.
+            if await api.challenge == nil { try await api.probeChallenge() }
+            let request = try await api.signedRequest("GET", path)
+            let (response, bytes) = try await stream.open(request, origin: api.origin)
+            if response.status == 404 {
+                // The held challenge was stale: the reference client's one re-sign, in one answer.
+                let again = try await api.signed("GET", path)
+                guard again.status == 200 else { return failed(again.status) }
+                try handle.write(contentsOf: again.body)
+            } else if response.status != 200 {
+                return failed(response.status)
+            } else {
+                var received: Int64 = 0
+                var shown: Int64 = 0
+                let step = max(16_000, (total ?? 0) / 50)
+                for try await chunk in bytes {
+                    try Task.checkCancellation()
+                    try handle.write(contentsOf: chunk)
+                    received += Int64(chunk.count)
+                    if received - shown >= step {
+                        shown = received
+                        await sink(.richFileProgress(id: id, received: received))
+                    }
+                }
+            }
+            try Task.checkCancellation()
+            try handle.close()
+            if files.fileExists(atPath: target.path) { try files.removeItem(at: target) }
+            try files.moveItem(at: part, to: target)
+            return .richFileArrived(id: id, path: target.path)
+        } catch {
+            try? files.removeItem(at: part)
+            return Task.isCancelled ? nil : .richFileFailed(id: id, reason: RichFileRule.failed)
+        }
+    }
 
     /// One reply's audio from the paired Mac (`GET /api/audio/<message_id>`, signed in the header as
     /// the Mac requires), or `nil` when there is none to play: no pairing or key, no answer, a refusal
