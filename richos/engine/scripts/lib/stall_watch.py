@@ -1660,6 +1660,10 @@ def _child_look(a, src, sid, sd, poll):
     cmd = [sys.executable, "-B", os.path.abspath(__file__), "--tick", "--engine-root", src.engine_root,
            "--config", a.config, "--command", a.command] + (["--jsonl"] if a.jsonl else [])
     started = time.time()
+    # The source on disk when the child STARTS. The child hashes it again after its look; a
+    # difference means it changed while the child was loading or looking, so which version
+    # it ran is unknown and the look is recorded as no version (R5).
+    before = source_identity(src.engine_root)[0]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                            env=dict(os.environ, RICHOS_SESSION_ID=sid or ""))
@@ -1676,6 +1680,8 @@ def _child_look(a, src, sid, sd, poll):
     ev = _read_json(os.path.join(sd, "evaluated.json"))
     if not isinstance(ev.get("at"), (int, float)) or ev["at"] < started:
         return False, 0, "the look recorded no evaluated source"
+    if ev.get("identity") != before:
+        _write_json(os.path.join(sd, "evaluated.json"), dict(ev, identity="changed-during-the-look"))
     return True, len([ln for ln in r.stdout.splitlines() if ln.strip()]), ""
 
 
@@ -1807,6 +1813,8 @@ def _alive_one(name, sid, engine_root, command):
     if holder and holder != str(beat.get("pid")):
         return 1, ("stall-watch: NOT ITS OWNER: the lock is held by pid %s, but the last beat was written by pid %s"
                    % (holder, beat.get("pid")))
+    if not session_alive_check(beat.get("pid"))():
+        return 1, "stall-watch: NOT WATCHED: the pid that wrote the last beat (%s) is gone" % beat.get("pid")
     if name == sid and beat.get("session") not in (None, "", sid):
         return 1, "stall-watch: the monitor here watches session %s, not %s" % (beat.get("session"), sid)
     last = beat.get("last_look")
@@ -1916,14 +1924,11 @@ def main(argv):
     if a.tick:
         sid, _spid = src.session()
         sd = session_dir(sid)
-        before, _newest = source_identity(src.engine_root)
         tick(src, sd, sid, json_lines=a.jsonl)
+        # The source on disk AFTER the look; the parent compares it with the source when the
+        # child started (_child_look) and records no version when they differ.
         ident, _newest = source_identity(src.engine_root)
-        # A source that changed during the look: which version the look loaded is unknown, so it
-        # is recorded as no version at all and the next look settles it (R5).
-        _write_json(os.path.join(sd, "evaluated.json"), {"identity": ident if ident == before else
-                                                         "changed-during-the-look", "at": time.time(),
-                                                         "pid": os.getpid()})
+        _write_json(os.path.join(sd, "evaluated.json"), {"identity": ident, "at": time.time(), "pid": os.getpid()})
         return 0
     if a.monitor and a.host_json:
         return run_host_loop(src)

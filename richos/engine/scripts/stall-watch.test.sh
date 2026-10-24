@@ -983,26 +983,56 @@ printf '1' >"$STALL_WATCH_STATE_DIR/$SID/monitor.lock"
 OUT="$(f_alive)"; RC=$?
 check "F8b  POSITIVE CONTROL: the holder named in the lock wrote the beat: healthy" \
     "$( [ "$RC" = 0 ]; echo $?)" "rc=$RC out=$OUT"
+# F10: the lock and the beat name the same pid, and that process is gone.
+( exit 0 ) & DEAD=$!; wait "$DEAD" 2>/dev/null
+printf '%s' "$DEAD" >"$STALL_WATCH_STATE_DIR/$SID/monitor.lock"
+python3 - "$STALL_WATCH_STATE_DIR/$SID" "$DEAD" "$(f_ident)" <<'PY'
+import json, os, sys, time
+d, pid, ident = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+now = time.time()
+json.dump({"pid": pid, "poll": 60, "session": os.environ["RICHOS_SESSION_ID"], "mode": "monitor",
+           "last_look": now, "open": 0, "evaluated": {"identity": ident, "at": now}},
+          open(os.path.join(d, "monitor.json"), "w"))
+PY
+OUT="$(f_alive)"; RC=$?
+check "F10  a beat whose writer, the lock's named holder, is a dead process is not healthy" \
+    "$( [ "$RC" = 1 ] && has "$OUT" "is gone"; echo $?)" "rc=$RC out=$OUT"
 kill "$FOLD" 2>/dev/null
-# F9: the evaluator's source changes while a look runs: the look records no version, so
-# --alive stays not healthy until a later look evaluates the current source.
-OUT="$(python3 -B - "$FE" "$STALL_WATCH_STATE_DIR" <<'PY'
-import json, os, sys
+# F9: the evaluator's source changes while the child loads it. The fixture's workspaces.py
+# edits itself once at import (a flag file arms it): the child started on one version and
+# the disk holds another when it ends, so the look records no version. F9b: the next look,
+# with nothing changing, records the current source.
+cat >>"$FE/mega-lander/workspaces.py" <<'PYX'
+import os as _f9_os
+_F9 = _f9_os.environ.get("F9_FLAG", "")    # set for the child only, after the harness loaded this file
+if _F9 and _f9_os.path.exists(_F9):
+    _f9_os.remove(_F9)
+    with open(__file__, "a") as _f9_fh:
+        _f9_fh.write("\n# changed while the child loaded it\n")
+PYX
+f9_look() { python3 -B - "$FE" "$STALL_WATCH_STATE_DIR" <<'PY'
+import argparse, json, os, sys
 fe, root = sys.argv[1], sys.argv[2]
 sys.path.insert(0, fe + "/scripts/lib")
 import stall_watch
-def tick(*a, **k):
-    with open(os.path.join(fe, "mega-lander", "workspaces.py"), "a") as fh:
-        fh.write("\n# changed while the look ran\n")
-stall_watch.tick = tick
-stall_watch.main(["--tick", "--engine-root", fe, "--config", "x", "--command", "sw"])
 sid = os.environ["RICHOS_SESSION_ID"]
-ev = json.load(open(os.path.join(root, sid, "evaluated.json")))
-print(ev["identity"], stall_watch.source_identity(fe)[0])
+sd = os.path.join(root, sid)
+a = argparse.Namespace(config="x", command="sw", jsonl=False)
+src = stall_watch.Sources(fe)                  # the harness's own load: the flag is not armed yet
+if os.environ.get("F9_ARM"):
+    os.environ["F9_FLAG"] = os.environ["F9_ARM"]   # armed for the child the look starts
+ok, _n, why = stall_watch._child_look(a, src, sid, sd, 30.0)
+ev = json.load(open(os.path.join(sd, "evaluated.json")))
+print(ok, ev["identity"], stall_watch.source_identity(fe)[0])
 PY
-)"
-check "F9   a source changed during the look is recorded as no version, never as the new one" \
-    "$( set -- $OUT; [ "$1" = "changed-during-the-look" ] && [ -n "$2" ]; echo $?)" "out=$OUT"
+}
+: >"$SB/f9.flag"
+OUT="$(F9_ARM="$SB/f9.flag" f9_look)"
+check "F9   a source changed while the child loaded it is recorded as no version, never as either" \
+    "$( set -- $OUT; [ "$1" = True ] && [ "$2" = "changed-during-the-look" ] && [ ! -e "$SB/f9.flag" ]; echo $?)" "out=$OUT"
+OUT="$(F9_ARM="$SB/f9.flag" f9_look)"
+check "F9b  POSITIVE CONTROL: the next look, nothing changing, records the current source" \
+    "$( set -- $OUT; [ "$1" = True ] && [ "$2" = "$3" ]; echo $?)" "out=$OUT"
 cp "$SB/f-good.py" "$FE/mega-lander/workspaces.py"
 
 # --- E: a teammate's escalation wakes an idle lead (2026-10-01) ---------------
