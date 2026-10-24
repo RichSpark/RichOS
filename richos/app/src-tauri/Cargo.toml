@@ -1,6 +1,6 @@
 [package]
 name = "richos-tauri"
-version = "1.2.3"
+version = "1.2.3-nightly.20261024.73"
 edition = "2021"
 description = "RichOS desktop shell (Tauri) — a thin CEO-facing surface over the richos-core runtime spine."
 license = "AGPL-3.0-only"
