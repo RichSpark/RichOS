@@ -1288,9 +1288,10 @@ def changelog_section(record):
 @release_step
 def validate_changelog_entry(entry):
     if (not isinstance(entry, str) or not entry or entry != entry.strip()
-            or any(not re.fullmatch(r"- (Added|Changed|Improved|Fixed) \S.*", line)
+            or any(not re.fullmatch(r"- (\[technical\] )?(Added|Changed|Improved|Fixed) \S.*", line)
                    for line in entry.splitlines())):
-        raise ValueError("changelog must contain only Added, Changed, Improved or Fixed bullet lines")
+        raise ValueError("changelog must contain only Added, Changed, Improved or Fixed bullet lines, "
+                         "each optionally tagged [technical]")
     return entry
 
 

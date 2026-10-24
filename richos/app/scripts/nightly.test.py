@@ -1098,7 +1098,8 @@ class ChangelogTests(GitFixture):
         n.git("checkout", "-q", "main")
         with self.assertRaisesRegex(ValueError, "work branch"):
             n.write_changelog_draft(request, "- Fixed a lost message")
-        for entry in ("", "Introduction\n- Fixed something", "- Internal details", "- Fixed good\n\n- Added bad"):
+        for entry in ("", "Introduction\n- Fixed something", "- Internal details", "- Fixed good\n\n- Added bad",
+                      "- [technical] Internal details", "- [Technical] Fixed a check"):
             with self.subTest(entry=entry), self.assertRaises(ValueError):
                 n.validate_changelog_entry(entry)
 
@@ -1147,6 +1148,10 @@ class CommittedChangelogTests(unittest.TestCase):
         section = n.changelog_section({"version": "9.9.9", "tag": "v9.9.9", "entry": "- Fixed a lost message"})
         self.assertNotIn("Prepared", section)
         self.assertIn("https://github.com/WebDevBooster/richos/releases/tag/v9.9.9)", section)
+
+    def test_technical_tag_marks_a_line_only_a_technical_person_would_care_about(self):
+        entry = "- Added a file card\n- [technical] Fixed a teammate's command being refused"
+        self.assertEqual(n.validate_changelog_entry(entry), entry)
 
     def test_every_approved_record_matches_its_public_user_facing_entry(self):
         records = json.loads((n.ROOT / n.CHANGELOG_RECORDS).read_text())
