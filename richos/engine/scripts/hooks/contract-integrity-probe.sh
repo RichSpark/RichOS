@@ -3789,7 +3789,7 @@ if [ "$Q_OK" -eq 1 ] && command -v git >/dev/null 2>&1 && command -v mktemp >/de
                       GIT_COMMITTER_NAME=probe GIT_COMMITTER_EMAIL=probe@example.invalid "$@"; }
         q_hook() { # <hook> <json> -> Q_RC
             set +e
-            printf '%s' "$2" | q_env bash "$ENGINE_ROOT/scripts/hooks/$1" >/dev/null 2>"$Q_DIR/err"
+            printf '%s' "$2" | q_env bash "$ENGINE_ROOT/scripts/hooks/$1" >"$Q_DIR/out" 2>"$Q_DIR/err"
             Q_RC=$?
             set -e
         }
@@ -3818,8 +3818,12 @@ if [ "$Q_OK" -eq 1 ] && command -v git >/dev/null 2>&1 && command -v mktemp >/de
             q_hook workspace-lifecycle.sh "{\"hook_event_name\":\"SubagentStop\",\"session_id\":\"probe-ws-0001\",\"agent_id\":\"$Q_AID\",\"cwd\":\"$Q_ENT\"}"
             q_hook guard-sealed-worktree.sh "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"probe-ws-0001\",\"agent_id\":\"$Q_AID\",\"agent_type\":\"zach\",\"tool_name\":\"Read\",\"cwd\":\"$Q_ENT\",\"tool_input\":{}}"
             [ "$Q_RC" -eq 2 ] || Q_PROBLEMS="$Q_PROBLEMS [point 9: a finished agent's Read was allowed (exit $Q_RC)]"
+            # Point 5 as amended 2026-10-24 (orchestration reliability R2/R3/R5): the turn end
+            # is never refused; with no healthy watcher here, the finished work is told to the
+            # lead at the turn end, by name, through its model input.
             q_hook guard-workspace-gate.sh "{\"hook_event_name\":\"Stop\",\"session_id\":\"probe-ws-0001\",\"cwd\":\"$Q_ENT\"}"
-            [ "$Q_RC" -eq 2 ] || Q_PROBLEMS="$Q_PROBLEMS [point 5: the turn was allowed to end with finished work neither landed nor discarded (exit $Q_RC)]"
+            { [ "$Q_RC" -eq 0 ] && grep -q '"additionalContext"' "$Q_DIR/out" && grep -q 'zach-opus-probe' "$Q_DIR/out"; } \
+                || Q_PROBLEMS="$Q_PROBLEMS [point 5: finished work neither landed nor discarded was not told to the lead at the turn end (exit $Q_RC)]"
             q_env git -C "$Q_ENT" merge -q --no-edit "worktree-agent-$Q_AID" >/dev/null 2>&1 || Q_SB=0
             q_hook guard-workspace-gate.sh "{\"hook_event_name\":\"Stop\",\"session_id\":\"probe-ws-0001\",\"cwd\":\"$Q_ENT\"}"
             [ "$Q_RC" -eq 0 ] || Q_PROBLEMS="$Q_PROBLEMS [point 4: merged work was not landed on its own (exit $Q_RC: $(head -c 300 "$Q_DIR/err" | tr '\n' ' '))]"
