@@ -972,6 +972,17 @@ sw.look = lambda src, n, s, th, due=True: (sw._due(_Src(), _Reg(), n, s)[0], [])
 said = io.StringIO()
 sw.tick(None, sw.session_dir(sid9), sid9, now + 60, said)
 print("H %s %s" % ("silent" if not said.getvalue() else "REPEATED", json.dumps(said.getvalue())))
+# (i) review rv-20261024T114048Z-1a5b3f3f-a4ab#1: finished work told at startup, then a
+# changes-requested review reaches the same worker; the first look tells the review.
+fin = dict(item, key="hd7i--worker-0", name="worker-opus-0", source="finished", review="", why="fixture",
+           command="land it")
+rev = dict(fin, source="review", review="rv-fixture", command="fix what the review asked")
+sidr = "hd7i-session"
+sw.record_told_due(sidr, [fin], now)
+nine[:] = [rev]
+said = io.StringIO()
+sw.tick(None, sw.session_dir(sidr), sidr, now + 60, said)
+print("I %s %s" % ("told" if "[DUE] worker-opus-0" in said.getvalue() else "SUPPRESSED", json.dumps(said.getvalue())))
 PY2
 )"
 check "HD7e the startup read the file, a tick published, the startup wrote: both updates kept" \
@@ -981,6 +992,8 @@ check "HD7g in both orders the tick tells its own new stall and never the item t
     "$( has "$OUT" "E once" && has "$OUT" "F once"; echo $?)" "out=$OUT"
 check "HD7h nine due items: the first look repeats neither the eight items nor the 'more' pointer the startup showed" \
     "$( has "$OUT" "H silent"; echo $?)" "out=$OUT"
+check "HD7i finished work the startup told, then a changes-requested review on it: the first look tells the review" \
+    "$( has "$OUT" "I told"; echo $?)" "out=$OUT"
 unset STALL_WATCH_LEAD_TRANSCRIPT
 
 # --- F: every look is fresh code (orchestration reliability R5) ------------------

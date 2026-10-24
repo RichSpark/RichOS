@@ -553,8 +553,11 @@ def _due(src, reg, now, session_id):
 
 
 def due_key(d):
-    """A due item's announce key: its work, its state and its end (its material state)."""
-    return "due:%s:%s:%s" % (d.get("key") or d["name"], d["state"], d.get("end") or "")
+    """A due item's announce key: its work, its condition (source and review) and its state
+    and end (its material state). Finished work that a changes-requested review then
+    reaches is the same work under another condition, so it is told."""
+    return "due:%s:%s:%s:%s:%s" % (d.get("key") or d["name"], d.get("source") or "", d.get("review") or "",
+                                   d["state"], d.get("end") or "")
 
 
 def record_told_due(sid, due, now=None):
