@@ -110,6 +110,9 @@
 #        a later look tells it (the reviewer's fixture capped_lost_notice.py)
 #   W34  the NOT CONVERGING notice is kept until its output is accepted, like its
 #        verdict: a failed pipe, or no acknowledgment, tells both again
+#   W36  a NO VERDICT TWICE notice is never told for a commit already on main, and one
+#        that has not landed still is (2026-10-24: four notices from a session ended
+#        2026-10-21, for landed commits, told again by a new session)
 #
 # Every case loads scripts/lib/app_review.py too: review_watch.py imports its app_paths.
 # The app mode (--app-state) and app_review.py's mid-job notice are driven over the real
@@ -2487,6 +2490,62 @@ waitcalls 1
 A="$(lastargv)"
 [ "$RC" -eq 0 ] && [ "$(ncalls)" = "1" ] && has "$A" '"--trigger", "handover"'
 check "W35 the same end with no stop or wait recorded (a silent death): still one handover review" $? "calls=$(ncalls) argv=$A out=$OUT"
+
+# --- W36 ---------------------------------------------------------------------
+# 2026-10-24 13:32Z: a new session's watcher printed four NO VERDICT TWICE notices that a session
+# ended on 2026-10-21 had already been told, for commits already on main: the work had landed.
+# Through the real tick and tell, in a real repository: an old session's two losses of a commit on
+# main and of one that is not, then a look by a new session.
+python3 - "$LIB" "$SB/w36" <<'PY'
+import io, json, os, subprocess, sys
+lib, root = sys.argv[1:3]
+os.environ["SECOND_REVIEW_STATE_DIR"] = os.path.join(root, "sr")
+os.environ["REVIEW_WATCH_STATE_DIR"] = os.path.join(root, "rw")
+os.environ.pop("RICHOS_REVIEW_WATCH_ACKS", None)
+sys.path.insert(0, lib)
+import review_watch as rw
+
+repo = os.path.join(root, "fictional-repository")
+os.makedirs(repo)
+
+
+def g(*args):
+    return subprocess.run(["git", "-C", repo, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Author",
+                           "-c", "user.email=author@example.invalid", "-c", "commit.gpgsign=false"] + list(args),
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
+g("init", "-q", "-b", "main")
+g("commit", "-q", "--allow-empty", "-m", "landed work")
+landed = g("rev-parse", "HEAD")
+g("checkout", "-q", "-b", "cc/worker-open")
+g("commit", "-q", "--allow-empty", "-m", "work that never landed")
+open_tip = g("rev-parse", "HEAD")
+g("checkout", "-q", "main")
+
+now = rw.parse_iso("2026-10-24T13:32:00Z")
+attempts = [{"repo": repo, "tip": tip, "work": "teammate:old--" + name, "name": name, "session": "lead-old",
+             "outcome": "lost", "trigger": "long-job", "why": "the reviewer exited without a verdict"}
+            for tip, name in ((landed, "worker-landed"), (open_tip, "worker-open")) for _ in range(2)]
+
+
+class Watcher(object):
+    def look(self, t, state):
+        return rw.tell(t, state, [], rw.Book([], {}, attempts), [], [], attempts)
+
+
+rw.HOST_JSON["on"] = False
+rw.MONITOR["session"] = "lead-new"
+out = io.StringIO()
+rw.tick(Watcher(), rw.session_dir("lead-new"), now=now, out=out)
+look = out.getvalue()
+got = {"the landed commit is not told": "worker-landed" not in look,
+       "the unlanded one is still told": "[NO VERDICT TWICE] worker-open" in look}
+print("    %s" % got)
+sys.exit(0 if all(got.values()) else 1)
+PY
+check "W36 a NO VERDICT TWICE notice is not told for a commit on main, and still told for one that is not" \
+    $? "see above"
 
 # --- W04 ---------------------------------------------------------------------
 resetstate

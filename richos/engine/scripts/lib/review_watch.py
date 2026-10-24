@@ -1799,8 +1799,13 @@ def tell(now, sstate, rows, book, items, problems, attempts):
     # watcher delivers to it carries its key and is recorded in `delivered` only once accepted
     # (PRINTED, tick); a refused or failed delivery tells it again at the next look. `told` still
     # holds one told under the earlier rule, and one shown to a lead that is not this watcher's.
+    # NOT FOR LANDED WORK (2026-10-24 13:32Z: four notices of a session ended 2026-10-21, for commits
+    # already on main, told again by a new session's watcher): a commit already on its repository's
+    # main is not told at all: the work landed.
     for k, key in lost_twice.items():
         if k in told or k in delivered:
+            continue
+        if key[0] and git(key[0], "merge-base", "--is-ancestor", str(key[1]), "refs/heads/main") is not None:
             continue
         a = book.losses[key][-1]
         session = a.get("session") or getattr(items_by_key.get(key + (a.get("work") or "",)), "session", "") or ""
