@@ -432,14 +432,16 @@ def run(job_path):
         return 1
     pair, request = job["pair"], job["request"]
     try:
-        if root().parent.name == "periods":
+        if job.get("collection") or root().parent.name == "periods":
             collection = job.get("collection") or {}
-            expected = {"period": root().name, "model": job["model"], "effort": job["effort"],
+            expected = {"period": root().name if root().parent.name == "periods" else "", "model": job["model"], "effort": job["effort"],
                         "source_sha256": pierce.SOURCE_SHA256,
                         "profile_sha256": hashlib.sha256(job["profile"].encode()).hexdigest(),
                         "rules_sha256": hashlib.sha256(pierce.REVIEW_RULES.encode()).hexdigest(),
+                        "access_sha256": pierce.access_fingerprint(request["project_dir"]),
                         "shadow_sha256": LOADED_SHA256}
-            if collection != expected or read(root() / "period.json") != collection:
+            if (collection != expected or request.get("access_sha256") != expected["access_sha256"]
+                    or read(root() / "period.json") != collection):
                 skip(pair, "period or inspector identity changed before twin started")
                 return 0
         kind, signals = kind_of(request)
