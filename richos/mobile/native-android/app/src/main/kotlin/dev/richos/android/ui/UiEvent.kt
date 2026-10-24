@@ -101,6 +101,8 @@ sealed interface UiEvent {
     data object WhereMessagesGo : UiEvent
     data object ForgetPairing : UiEvent
     data object ForgetConfirmed : UiEvent
+    /** The refused forget's way out: discard what waits, then forget (core `DiscardAndForget`). */
+    data object DiscardAndForget : UiEvent
     data object ShowWaiting : UiEvent
     /** The microphone-off card's "Not now". */
     data object MicrophoneNotNow : UiEvent
@@ -153,6 +155,7 @@ fun UiEvent.toAction(): Action? = when (this) {
     UiEvent.UsePairingLink -> Action.OpenSheet(Sheet.PAIRING_LINK)
     UiEvent.ForgetPairing -> Action.ForgetPairing
     UiEvent.ForgetConfirmed -> Action.ConfirmForget
+    UiEvent.DiscardAndForget -> Action.DiscardAndForget
     UiEvent.OpenSystemSettings -> Action.OpenSystemSettings
     // The microphone-off card (core `Voice.kt`, D03).
     UiEvent.MicrophoneAskAgain -> Action.AskMicrophone
