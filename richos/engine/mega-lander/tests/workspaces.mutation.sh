@@ -91,7 +91,7 @@ mutant p03-anything-rides-along-with-a-stop "test_point_03_a_forbidden_lead_can_
     "any command chained after stop.sh would run in a session point 3 refuses."
 
 mutant p05-refused-session-held "test_point_05_a_forbidden_session_is_told_once_and_never_held" "$W" \
-    '            return True, _refused_session_notice(sid, why)' \
+    '            return True, _refused_session_notice(sid, why), ""' \
     '            pass' \
     "a session that can do nothing but stop agents would be held at every turn end, which is the spin of 2026-09-22 (42 refusals in 12 minutes)."
 
