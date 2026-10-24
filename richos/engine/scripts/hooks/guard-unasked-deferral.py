@@ -416,6 +416,7 @@ CONTINUED = "\0continued"
 
 
 TAIL_CHUNK = 256 * 1024
+TAIL_BUDGET = 4 * 1024 * 1024   # a turn whose opening prompt is further back is UNKNOWN, never guessed
 _READ = {"bytes": 0}            # bytes read by the last _tools_of_turn (the suite bounds it)
 
 
@@ -472,7 +473,9 @@ def _tools_of_turn(payload):
     ONLY THE CURRENT TURN IS READ (orchestration reliability R7: no full-history
     work in a routine Stop; the lead's transcript was 10.7 MB on 2026-10-24). The
     tail is read in a window that doubles from TAIL_CHUNK until it holds the
-    prompt that opened the turn, or the whole file when the turn is that long.
+    prompt that opened the turn. A turn whose opening prompt is not found within
+    TAIL_BUDGET, or not at all, is UNKNOWN (None): the honest not-checked path,
+    never a tool set guessed from part of the history.
     """
     path = payload.get("transcript_path") or ""
     if not path or not os.path.isfile(path):
@@ -491,9 +494,11 @@ def _tools_of_turn(payload):
                 if start:
                     lines = lines[1:]            # the first line is cut by the window
                 tools, reached = _walk_turn(lines)
-                if reached or not start:
+                if reached:
                     return tools
-                window *= 2
+                if not start or window >= TAIL_BUDGET:
+                    return None
+                window = min(window * 2, TAIL_BUDGET)
     except Exception:
         return None
 

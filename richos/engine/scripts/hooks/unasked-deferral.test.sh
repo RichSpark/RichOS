@@ -250,6 +250,35 @@ if [ "$TAIL_OUT" = "['Bash'] True True" ] && spoke; then
     ok "T1g only the current turn of a 12 MB transcript is read; an earlier turn's spawn discharges nothing"
 else bad "T1g the current turn alone is read" "tail=$TAIL_OUT out=$HOUT"; fi
 
+# T1h: a transcript whose opening prompt is not within the read budget (here: none at all, an
+# older Agent call, then this turn's Bash, 5 MB) is UNKNOWN, never a tool set guessed from part of
+# it: the not-checked notice, and a bounded read (Codex's reproduction on b591a1b8b read 6.4 MB of
+# a 2.5 MB file and returned ['Agent', 'Bash']).
+python3 - "$SANDBOX/transcript.jsonl" <<'PYEOF'
+import json, sys
+pad = "x" * 2000
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "name": "Agent", "id": "old1", "input": {}}]}}) + "\n")
+    for n in range(2500):
+        fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "%d %s" % (n, pad)}]}}) + "\n")
+    fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "name": "Bash", "id": "now1", "input": {}}]}}) + "\n")
+PYEOF
+BUDGET_OUT="$(python3 - "$REPO/scripts/hooks/guard-unasked-deferral.py" "$SANDBOX/transcript.jsonl" <<'PYEOF'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("deferral", sys.argv[1])
+d = importlib.util.module_from_spec(spec); spec.loader.exec_module(d)
+tools = d._tools_of_turn({"transcript_path": sys.argv[2]})
+print(tools, d._READ["bytes"] <= 2 * d.TAIL_BUDGET, os.path.getsize(sys.argv[2]) > d.TAIL_BUDGET)
+PYEOF
+)"
+run_hook "Stream B is on hold, deliberately."
+if [ "$BUDGET_OUT" = "None True True" ] && ! spoke && names "NOT RUN this turn"; then
+    ok "T1h no opening prompt within the read budget: UNKNOWN (said as not checked), and the read is bounded"
+else bad "T1h an opening prompt beyond the budget is unknown, not guessed" "budget=$BUDGET_OUT out=$HOUT"; fi
+
 # T2 (2026-10-23): sentences that say nothing is held each opened a hold only his words
 # could end (held-3c51602a, held-77933bd6, held-a2aa88fd). Verbatim from the lead's replies.
 no_hold_case() { # <label> <text> <why>
