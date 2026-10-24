@@ -18,7 +18,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65). stu-remi
 unchanged: identity, first-run, job (stu-reminder-walk.py's JOB, which needs an engineer, so Stu has to
 save one; it must be SETTLED with no human message after the request), idle. Then:
   monitor   the Work lease's monitor (`stall_watch.py --monitor --jsonl`, native.rs StallWatch) is
-            running for the Stu session that ran the job: pid, parent, start time, RICHOS_SESSION_ID
+            running for the Stu session that ran the job: pid, parent, start time, RICHOS_SESSION_ID;
+            the probe leaves out its own process and its shell, whose command lines name those words
   fail      that pid, verified to be the same process, is killed (SIGKILL, in the disposable guest).
             PASS needs a NEW stall-watch row "the monitor stopped unexpectedly" in THIS conversation's
             inbox for Stu and its words in THIS Stu session's transcript
@@ -61,12 +62,15 @@ STEPS = ['identity', 'first-run', 'job', 'idle', 'reload', 'monitor', 'fail', 'a
 AFTER_JOB = ('Please add a file named more.md whose whole content is the line "More notes for the walk test." '
              'to the Acme repository and commit it, and land it.')
 
-PROCS = ('import json,subprocess,sys\n'
+# The Work-lease monitors running in the guest. This source names the three words it looks for, so it
+# leaves out its own process and the shell that ran it (nightly 74 walk: pid 24452 was this probe).
+PROCS = ('import json,os,subprocess,sys\n'
          'rows=[]\n'
+         'me={os.getpid(),os.getppid()}\n'
          'out=subprocess.run(["ps","-axo","pid=,ppid=,lstart=,command="],capture_output=True,text=True).stdout\n'
          'for l in out.splitlines():\n'
          '    p=l.split(None,7)\n'
-         '    if len(p)<8 or "stall_watch.py" not in p[7] or "--monitor" not in p[7] or "--jsonl" not in p[7]: continue\n'
+         '    if len(p)<8 or int(p[0]) in me or "stall_watch.py" not in p[7] or "--monitor" not in p[7] or "--jsonl" not in p[7]: continue\n'
          '    env=subprocess.run(["ps","-E","-o","command=","-p",p[0]],capture_output=True,text=True).stdout\n'
          '    sid=[w.split("=",1)[1] for w in env.split() if w.startswith("RICHOS_SESSION_ID=")]\n'
          '    par=subprocess.run(["ps","-o","command=","-p",p[1]],capture_output=True,text=True).stdout.strip()\n'

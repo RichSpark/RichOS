@@ -4,10 +4,13 @@
 (1) Nightly 74 walk: a failed final `keep` (the transcripts and rows NOT carried off the guest before
 it is deleted) left the exit code 0. A keep failure is a failed walk.
 (2) `after`: once the monitor was killed, one ordinary request to Stu is answered and its work
-settles, its turn ends, and no "monitor stopped" row follows. It reports a turn end, never a lease close."""
+settles, its turn ends, and no "monitor stopped" row follows. It reports a turn end, never a lease close.
+(3) Nightly 74 walk: the monitor probe's own `python -c` matched itself, since its source names
+`stall_watch.py --monitor --jsonl`; it leaves out itself and its parent shell."""
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -109,6 +112,18 @@ class After(unittest.TestCase):
         w.a.idle_within = 0
         with self.assertRaises(wlw.StepFailed):
             w.after()
+
+
+class ProbeLeavesOutItself(unittest.TestCase):
+    def test_the_probe_and_its_shell_are_not_monitors(self):
+        # Run as the guest runs it: a shell whose command line carries the probe's source. `; true`
+        # keeps the shell from exec'ing python, so both the shell and python name the three words.
+        shell = subprocess.Popen(['/bin/sh', '-c', 'python3 -c %s; true' % wlw.shlex.quote(wlw.PROCS)],
+                                 stdout=subprocess.PIPE, text=True)
+        out, _ = shell.communicate(timeout=60)
+        self.assertEqual(shell.returncode, 0)
+        ours = [r for r in json.loads(out) if shell.pid in (r['pid'], r['ppid'])]
+        self.assertEqual(ours, [], 'the probe counted itself or its shell as a monitor')
 
 
 if __name__ == '__main__':
