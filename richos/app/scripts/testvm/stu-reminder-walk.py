@@ -16,8 +16,8 @@ walk shows the reminder reaching Stu in the real, regular app, on fixture data i
 WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
   identity    the running app says it was built from --expect-sha
   first-run   adopt-walk.py's: company "Acme" with a folder that is a Git repository
-  relaunch    the app quit and opened again with STALL_WATCH_PENDING_WORK_SECONDS=--reminder-seconds
-              in its environment (this guest only; 12 hours otherwise), so Stu's monitor has it
+  relaunch    the app quit and opened again (command-walk.py's): due work is told at the monitor's
+              first look while Stu is idle (orchestration reliability R2), so no interval is set
   job         typed: a job for the back end (Stu); it must be SETTLED (finished successfully), or the
               step fails (Approve is pressed as asked)
   idle        the lead file of the session that ran the job says his turn ended (`turn_ended`):
@@ -56,7 +56,7 @@ STEPS = ['identity', 'first-run', 'relaunch', 'job', 'idle', 'reminder']
 # A job, as worker-approve-walk.py words one: it is registered as an assignment and run by Stu.
 JOB = ('Please add a file named notes.md whose whole content is the line "Notes for the walk test." '
        'to the Acme repository and commit it, and land it.')
-REMINDER_MARK = 'UNFINISHED-WORK'
+REMINDER_MARK = '[DUE]'
 WAIT_MARK = 'waiting for its review'
 
 
@@ -123,17 +123,6 @@ class StuReminderWalk(command_walk.CommandWalk):
                 return {'home_on_screen_after_s': seen, 'entered_with': 'Enter'}
             time.sleep(2)
         return {'home_on_screen_after_s': None}
-
-    def relaunch(self):
-        """command-walk.py's relaunch, with the shortened interval in the app's environment."""
-        import relaunch as relaunch_module
-        original = relaunch_module.relaunch
-        environment = {'STALL_WATCH_PENDING_WORK_SECONDS': str(int(self.a.reminder_seconds))}
-        relaunch_module.relaunch = lambda vm, app=None, env=None: original(vm, app, dict(environment, **(env or {})))
-        try:
-            return super().relaunch()
-        finally:
-            relaunch_module.relaunch = original
 
     def job(self):
         if not self.facts.get('thread'):

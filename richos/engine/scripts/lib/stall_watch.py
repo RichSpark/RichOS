@@ -73,13 +73,17 @@ WHAT IS A STALL (every threshold, and why)
    minutes for a turn that no hook could start. It prints its own
    ESCALATION-WATCH block, first in the look's output.
 
-5. UNRESOLVED FINISHED WORK: about every twelve hours, at an idle opportunity,
-   the canonical pending-work list is read without changing it. Recorded waits
-   are included for reassessment. An empty list produces no notification.
-   Idle is the lead's recorded turn end; under the app host (--host-json),
-   whose lead's --print transcript never records one, it is the host's word
-   that the lead's turn ended (host_child.idle). STALL_WATCH_PENDING_WORK_SECONDS
-   shortens the interval for a test guest only.
+5. DUE WORK (orchestration reliability R2, richos-hq docs/prds/2026-10-23-
+   orchestration-reliability.md): finished work with no wait, and a hold or wait
+   with no checkable end or whose end came true (workspaces.due_set, the same
+   calculation the Stop fallback and `workspaces.sh holds` use). Told at the
+   first look while the lead is idle, one line per item and at most eight, then
+   a pointer to the complete list; again after the 30-minute repeat while it
+   stays due; said nothing when it stops being due. A busy lead is told at its
+   next idle look. Idle is the lead's recorded turn end; under the app host it is
+   the host's word that the lead's turn ended (host_child.idle). A pending end (a
+   live agent, a running review, a time not reached) and a CEO-TODOs item are
+   quiet.
 
 ===========================================================================
 HOW OFTEN IT SPEAKS (nothing spams)
@@ -152,8 +156,8 @@ POLL_SECONDS = 60
 SILENT_MINUTES = 20
 SELF_WAIT_MINUTES = 2
 REPEAT_MINUTES = 30
-PENDING_WORK_SECONDS = 12 * 60 * 60
 CLEAR_AFTER_MISSES = 2
+DUE_SHOWN = 8              # due items shown one per line; the rest are one pointer line
 STATE_KEEP_SECONDS = 2 * 86400
 PROOF_SLOT_REASON = "proof-run: waiting for a proof-run slot"
 OWNER_TAG = "RICHOS_AGENT_OWNER"
@@ -436,9 +440,10 @@ def _slot_lines(src, now):
         return None, "the proof-run slots could not be read (%s)" % exc
 
 
-def look(src, now, session_id, th=None):
+def look(src, now, session_id, th=None, due=True):
     """(stalls, problems): every stall right now. Never raises for a source it
-    cannot read; that source is named in problems and the rest is still read."""
+    cannot read; that source is named in problems and the rest is still read.
+    `due` False leaves the due work out (the lead is busy: told at its next idle look)."""
     th = th or thresholds()
     reg = Registry(src)
     problems = [reg.problem] if reg.problem else []
@@ -507,48 +512,38 @@ def look(src, now, session_id, th=None):
     if why:
         problems.append(why)
     stalls += _slow_steps(src, reg, now, session_id)
-    s, why = _holds(src, reg, now, session_id)
-    stalls += s
-    if why:
-        problems.append(why)
+    if due:
+        s, why = _due(src, reg, now, session_id)
+        stalls += s
+        if why:
+            problems.append(why)
     return stalls, [p for p in problems if p]
 
 
 # ---------------------------------------------------------------------------
-# HOLDS (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-holds.md)
+# DUE WORK (orchestration reliability R2; point 5 of the module doc)
 # ---------------------------------------------------------------------------
-# The CEO: "WHEN WILL [THIS] STOP ONCE AND FOR ALL???" (his 2026-09-27 order sat
-# held for weeks). Every hold the registry knows (workspaces.py holds(): waits,
-# pauses, holds/<name>.json) is read here, paused agents included:
-#   HELD         no checkable end and 30 min old: told now and again every 30
-#                min (the stall repeat) until the work runs, lands or he decides
-#   RELEASE DUE  its end came true (the agent finished, the review ended, the
-#                time passed) and the work has not moved: told with the command
-# A hold whose end is pending, or is his decision (ceo:), is quiet.
 
-def _holds(src, reg, now, session_id):
-    if src.ws is None or reg.problem or not hasattr(src.ws, "holds"):
+def _due(src, reg, now, session_id):
+    """([DUE stalls], problem). One stall per due item, keyed by the work and its
+    material state, so an unchanged item is told once and again only at the repeat."""
+    if src.ws is None or reg.problem or not hasattr(src.ws, "due_set"):
         return [], ""
     try:
-        found = src.ws.holds(session_id, now)
-    except Exception as exc:  # noqa: BLE001: an unread hold list is a source not read
-        return [], "the held work could not be read (%s: %s)" % (exc.__class__.__name__, str(exc)[:160])
-    quiet = _env_float("RICHOS_HOLD_REPORT_SECONDS", 30 * 60)
+        if src.ws.damaged_records():
+            raise ValueError("the workspace registry contains unreadable records")
+        items = src.ws.pending(session_id, auto=False, dry=True)
+        due = src.ws.due_set(session_id, items, now)
+    except Exception as exc:  # noqa: BLE001: an unread list is a source not read, never "nothing due"
+        return [], "the due work could not be read (%s: %s)" % (exc.__class__.__name__, str(exc)[:160])
     out = []
-    for h in found:
-        why = " ".join(str(h.get("why") or "not said").split())[:200]
-        lines = ["why: " + why, "what: " + str(h.get("what"))]
-        go = src.ws.hold_command(h)
-        if h["state"] == "none" and now - h["since"] >= quiet:
-            out.append(Stall("hold:%s:%d" % (h["name"], int(h["since"])), "HELD", h["name"], h["since"],
-                             "held by Rich with nothing checkable to end it (%s)" % h["source"], lines,
-                             ["make it run: " + go,
-                              "or put it to the CEO as his choice (go, or hold until a date or event); only his "
-                              "words end it: workspaces.sh release %s --ceo-word '<his words>'" % h["name"]]))
-        elif h["state"] == "due":
-            out.append(Stall("due:%s:%s" % (h["name"], h["end"]), "RELEASE DUE", h["name"], h["since"],
-                             "its end came true: %s (%s)" % (h["detail"], h["end"]), lines,
-                             ["make it run now: " + go]))
+    for d in due[:DUE_SHOWN]:
+        why = " ".join(str(d.get("why") or "not said").split())[:200]
+        out.append(Stall("due:%s:%s:%s" % (d.get("key") or d["name"], d["state"], d.get("end") or ""), "DUE",
+                         d["name"], d["since"], d["detail"], ["why: " + why], ["next: " + d["command"]]))
+    if len(due) > DUE_SHOWN:
+        out.append(Stall("due:more", "DUE", "%d more" % (len(due) - DUE_SHOWN), now, "more due work", [],
+                         ["the complete list: workspaces.sh holds"]))
     return out, ""
 
 
@@ -1080,11 +1075,13 @@ def _slow_steps(src, reg, now, session_id):
 # what is announced, and when
 # ---------------------------------------------------------------------------
 
-def announce(state, stalls, problems, now, th):
+def announce(state, stalls, problems, now, th, keep=""):
     """(lines to print, new state). A stall is announced when first seen, again
     after th['repeat'] since its last notice, and cleared (one line) after
     CLEAR_AFTER_MISSES looks without it. A source that cannot be read is
-    announced the same way, as a stall of the watcher itself."""
+    announced the same way, as a stall of the watcher itself. Keys starting with
+    `keep` were not looked at this time and are carried unchanged; a due item
+    that stops being due ends without a line (the lead handled it)."""
     opened = dict(state.get("open") or {})
     current = {s.key: s for s in stalls}
     for p in problems:
@@ -1105,12 +1102,14 @@ def announce(state, stalls, problems, now, th):
             prev["count"] = int(prev.get("count") or 1) + 1
             again.append((s, prev["count"], prev["first"]))
     for key in list(opened):
-        if key in current:
+        if key in current or (keep and key.startswith(keep)):
             continue
         prev = opened[key]
         prev["missed"] = int(prev.get("missed") or 0) + 1
         if prev["missed"] >= CLEAR_AFTER_MISSES:
-            cleared.append(opened.pop(key))
+            gone = opened.pop(key)
+            if not key.startswith("due:"):
+                cleared.append(gone)
     lines = []
     if new or again:
         n = len(new) + len(again)
@@ -1432,7 +1431,7 @@ def escalation_watch(src, now, sid, prev, th):
 
 
 # ---------------------------------------------------------------------------
-# unfinished-work reminders
+# the lead's transcript and start (escalations; whether the lead is idle)
 # ---------------------------------------------------------------------------
 
 def lead_is_idle(src, sid):
@@ -1473,54 +1472,6 @@ def lead_is_idle(src, sid):
     except (OSError, ValueError, TypeError):
         pass
     return False
-
-
-def pending_work_reminder(src, now, sid, prev):
-    """A read-only reminder about every twelve hours, at an idle opportunity.
-
-    The existing session state preserves the clock across monitor restarts.
-    New sessions already receive the workspace lifecycle's reconciliation.
-    A recorded wait remains on this list; the reminder expires no wait and
-    never lands, discards or modifies the workspace registry.
-    """
-    prev = dict(prev or {})
-    if not sid or src.ws is None:
-        return [], prev, []
-    checked = prev.get("checked_at")
-    if not isinstance(checked, (int, float)):
-        checked = session_started(src, sid)
-        checked = now if checked is None else checked
-    if checked > now:
-        checked = now
-    state = {"checked_at": checked}
-    if prev.get("problem"):
-        state["problem"] = prev["problem"]
-    problems = [state["problem"]] if state.get("problem") else []
-    every = _env_float("STALL_WATCH_PENDING_WORK_SECONDS", PENDING_WORK_SECONDS)
-    if now - checked < every or not lead_is_idle(src, sid):
-        return [], state, problems
-    try:
-        if src.ws.damaged_records():
-            raise ValueError("the workspace registry contains unreadable records")
-        items = src.ws.pending(sid, auto=False, dry=True)
-    except Exception as exc:  # noqa: BLE001: a failed read leaves the reminder due
-        state["problem"] = "unfinished work could not be read (%s: %s)" % (
-            exc.__class__.__name__, str(exc)[:160])
-        return [], state, [state["problem"]]
-    state = {"checked_at": now}
-    if not items:
-        return [], state, []
-    lines = ["UNFINISHED-WORK %s: %d finished-work item(s) remain unresolved. Review their recorded waits "
-             "and handle anything that can now proceed; keep legitimate waits." % (hhmm(now), len(items))]
-    for item in items[:10]:
-        name = " ".join(str(item["name"]).split())
-        reason = " ".join(str(item.get("waiting_on") or item.get("why") or "unresolved").split())
-        lines.append("  %s: %s" % (name[:100], reason[:200]))
-    if len(items) > 10:
-        lines.append("  %d more item(s)." % (len(items) - 10))
-    lines.append("  Read the full pending list with mega-lander/workspaces.sh status. This is a reminder, "
-                 "not a completion deadline or authorization to discard work.")
-    return lines, state, []
 
 
 # ---------------------------------------------------------------------------
@@ -1625,7 +1576,7 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
     state = _read_json(path)
     esc_prev = state.get("esc")
     idle_prev = state.get("idle")
-    pending_lines, pending_state, pending_problems = pending_work_reminder(src, now, sid, state.get("pending_work"))
+    lead_idle = lead_is_idle(src, sid)
     try:
         # Before the look, so a stall it ends is never also announced as one.
         idle_lines, idle_state = idle_end(src, now, sid, idle_prev)
@@ -1638,8 +1589,8 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
         esc_lines, esc_state = [], esc_prev
         esc_problems = ["the escalation watch failed (%s: %s)" % (exc.__class__.__name__, str(exc)[:160])]
     try:
-        stalls, problems = look(src, now, sid, th)
-        problems = problems + esc_problems + pending_problems
+        stalls, problems = look(src, now, sid, th, due=lead_idle)
+        problems = problems + esc_problems
     except Exception as exc:  # noqa: BLE001: one failed look is reported, never the end of watching
         stalls, problems = [], []
         problems.append("a look failed (%s: %s)" % (exc.__class__.__name__, str(exc)[:160]))
@@ -1653,15 +1604,14 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
                          "what": "a look failed", "missed": 0}
         state = {"open": keep, "at": now}
     else:
-        lines, state = announce(state, stalls, problems, now, th)
+        lines, state = announce(state, stalls, problems, now, th, keep="" if lead_idle else "due:")
     if esc_state is not None:
         state["esc"] = esc_state
     state["idle"] = idle_state
-    state["pending_work"] = pending_state
     # The ESCALATION-WATCH block goes FIRST: a monitor event counts as having
     # told the lead only when its <event> body starts with ESCALATION-WATCH
     # (escalations.monitor_event_keys).
-    lines = esc_lines + idle_lines + lines + pending_lines
+    lines = esc_lines + idle_lines + lines
     if lines:
         text = "\n".join(lines)
         out.write((json.dumps({"text": text}) if json_lines else text) + "\n")

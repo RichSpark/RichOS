@@ -3339,6 +3339,43 @@ def holds(me="", at=None, cache=None):
     return out
 
 
+def due_set(me="", items=None, at=None, cache=None):
+    """THE ONE CURRENT-STATUS CALCULATION (orchestration reliability R2): every piece
+    of work this session must act on now, read from the registry's own facts. Used by
+    the stall watcher, the Stop/startup fallback and `workspaces.sh holds`.
+
+    Due: a hold or wait with no checkable end, or whose end came true (holds():
+    state none/due); and finished work that is neither landed nor discarded and has
+    no wait, no live continuation and no merge in progress (`items`, from pending()).
+    Quiet: a pending end (a live agent, a running review, a time not yet reached)
+    and an item on his CEO-TODOs page (his decision, on its own reminder route).
+    Nothing here marks anything complete."""
+    cache = {} if cache is None else cache
+    found = holds(me, at, cache)
+    out = [dict(h, command=hold_command(h)) for h in found if h["state"] in ("none", "due")]
+    seen = {h["key"] for h in found if h["key"]}
+    for it in items or []:
+        if not it.get("key") or it["key"] in seen or it.get("waiting") or it.get("damaged"):
+            continue
+        rec = load_agent(it["key"]) or {}
+        since = ((rec.get("end") or {}).get("at")) or now()
+        out.append({"name": it["name"], "what": "the finished work of %s" % it["name"], "why": it["why"],
+                    "since": float(since), "end": "", "state": "none", "detail": "finished, not landed or discarded",
+                    "source": "finished", "key": it["key"], "review": "",
+                    "command": "land it (workspaces.sh land %s), discard it, or spawn its continuation" % it["name"]})
+    return out
+
+
+def due_lines(due, limit=8):
+    """The compact due set: one line per item, at most `limit`, then a pointer to the
+    complete list. Never says the shown part is the whole."""
+    lines = ["%s: %s (%s). Next: %s." % (d["name"], " ".join(str(d.get("why") or d["detail"]).split())[:160],
+                                          d["detail"], d["command"]) for d in due[:limit]]
+    if len(due) > limit:
+        lines.append("%d more due; the complete list: workspaces.sh holds" % (len(due) - limit))
+    return lines
+
+
 def _commit_time(repo, tip):
     rc, out, _e = git(repo, "log", "-1", "--format=%ct", tip)
     try:

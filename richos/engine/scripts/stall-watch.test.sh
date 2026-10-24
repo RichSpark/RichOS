@@ -752,16 +752,23 @@ tick 120; tick 180
 check "L03  three 10-min run-tests.sh steps are exempt; the fast teammate clears once" \
     "$( [ "$(count "$OUT" "STALL-CLEARED")" -eq 1 ] && has "$OUT" "papa-opus-w1" && ! has "$OUT" "[SLOW-STEPS]"; echo $?)" "out=$OUT"
 
-# --- HD: no silent holds (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-holds.md) ----
-# The CEO: "WHEN WILL [THIS] STOP ONCE AND FOR ALL???". Every hold is in sight
-# until its work runs, lands or he decides, paused agents included.
+# --- HD: due work (orchestration reliability R2, richos-hq docs/prds/2026-10-23-orchestration-reliability.md) ---
+# One calculation (workspaces.due_set): finished work with no wait, a hold or wait with no
+# checkable end, or one whose end came true, is DUE and told at the first look while the
+# lead is idle; a pending end and a time not reached are quiet. Told again only after the
+# 30-min repeat; a busy lead is told at its next idle look.
 new_registry hd; new_state hd
+lead_idle() { export STALL_WATCH_LEAD_TRANSCRIPT="$SB/lead-hd.jsonl"
+              printf '%s\n' '{"type":"system","subtype":"turn_duration"}' >"$STALL_WATCH_LEAD_TRANSCRIPT"; }
+lead_busy() { export STALL_WATCH_LEAD_TRANSCRIPT="$SB/lead-hd.jsonl"
+              printf '%s\n' '{"type":"assistant","message":{"content":[]}}' >"$STALL_WATCH_LEAD_TRANSCRIPT"; }
 add_agent papa-opus-w1 a0000000000fixw "$SID" 600 600 30
 add_agent quebec-opus-s1 a0000000000fixs "$SID" 3600 3500 3000 end
 add_agent romeo-opus-y1 a0000000000fixy "$SID" 600 600 30
 add_agent sierra-opus-f1 a0000000000fixf "$SID" 3600 3500 3000 end
 add_agent tango-opus-p1 a0000000000fixt "$SID" 600 600 30
 add_agent uniform-opus-q1 a0000000000fixu "$SID" 600 600 30
+add_agent whisky-opus-n1 a0000000000fixn "$SID" 3600 3500 3000 end
 hold_fixture() { python3 - "$ENGINE" "$@" <<'PY2'
 import json, os, sys, time
 sys.path.insert(0, os.path.join(sys.argv[1], "mega-lander"))
@@ -772,17 +779,17 @@ def edit(name, **kw):
     p = os.path.join(os.environ["RICHOS_WORKSPACES_DIR"], "agents", "%s--%s.json" % (sid, name))
     rec = json.load(open(p)); rec.update(kw); json.dump(rec, open(p, "w"))
 if what == "setup":
-    # T2: a message telling a live teammate to wait, through the real SendMessage parser.
-    _ctx, notes = ws.lifecycle({"hook_event_name": "PostToolUse", "tool_name": "SendMessage", "session_id": sid,
-                                "tool_input": {"to": "papa-opus-w1", "message":
-                                               "Commit what you have. Then wait for my go before the walk."}}, "")
-    assert any(n.startswith("HOLD RECORDED on papa-opus-w1") for n in notes), notes
-    # T3: free text on a finished agent; and one whose end is a live agent.
-    ws.wait("quebec-opus-s1", "started", "code done, real-app and phone checks left", "", sid)
-    ws.wait("sierra-opus-f1", "started", "romeo carries the rest", "", sid, "agent:romeo-opus-y1")
-    # T4: the generated manual pause (no end) and a quota pause (at: its reset).
-    import pause_protocol
     now = time.time()
+    # Legacy records (written before 2026-10-24): a message's "wait for my go" on a live
+    # teammate, and a free-text --started on a finished one. Both read as due.
+    edit("papa-opus-w1", waiting={"kind": "held", "on": "told to wait: Then wait for my go before the walk",
+                                  "todo": "", "at": now, "end": ""})
+    edit("quebec-opus-s1", waiting={"kind": "started", "on": "code done, real-app and phone checks left",
+                                    "todo": "", "at": now, "end": ""})
+    # A checkable end on a live agent: quiet until it finishes.
+    ws.wait("sierra-opus-f1", "started", "romeo carries the rest", "", sid, "agent:romeo-opus-y1")
+    # The generated manual pause (no end) and a quota pause (at: its reset).
+    import pause_protocol
     edit("tango-opus-p1", pause={"at": now, "until": pause_protocol.until_text("manual"), "control": True,
                                  "end": pause_protocol.end_of("manual")})
     reset = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 3600))
@@ -794,34 +801,36 @@ elif what == "romeo-done":
 PY2
 }
 PYTHONPATH="$ENGINE/scripts/lib" hold_fixture setup; RC=$?
-check "HD0  the fixture: a 'wait for my go' message is recorded as a hold on papa-opus-w1" "$RC" "setup failed"
+check "HD0  the fixture: legacy waits, an agent: end, two pauses and finished work with no wait" "$RC" "setup failed"
+lead_busy
 tick 0
-check "HD1  nothing is told before a hold is 30 min old" \
-    "$( ! has "$OUT" "[HELD]" && ! has "$OUT" "[RELEASE DUE]"; echo $?)" "out=$OUT"
-tick 1860
-check "T2   'wait for my go' sent to a live teammate: a stall-watch tick at +31 min reports it" \
-    "$( has "$OUT" "[HELD] papa-opus-w1: held by Rich with nothing checkable to end it" \
-        && has "$OUT" "why: told to wait: Then wait for my go before the walk"; echo $?)" "out=$OUT"
-check "T3a  a free-text --started on a finished agent is reported at +31 min" \
-    "$( has "$OUT" "[HELD] quebec-opus-s1" && has "$OUT" "code done, real-app and phone checks left"; echo $?)" "out=$OUT"
+check "HD1  a busy lead is not told yet" "$( ! has "$OUT" "[DUE]"; echo $?)" "out=$OUT"
+lead_idle
+tick 60
+check "T2   a legacy 'wait for my go' hold on a live teammate is due at the first idle look" \
+    "$( has "$OUT" "[DUE] papa-opus-w1" && has "$OUT" "why: told to wait: Then wait for my go before the walk"; echo $?)" "out=$OUT"
+check "T3a  a legacy free-text --started on a finished agent is due (R2: a stated 'running now' ends nothing)" \
+    "$( has "$OUT" "[DUE] quebec-opus-s1" && has "$OUT" "code done, real-app and phone checks left"; echo $?)" "out=$OUT"
 check "T3b  agent:Y is quiet while Y is live" "$( ! has "$OUT" "sierra-opus-f1"; echo $?)" "out=$OUT"
-check "T4a  a manual pause is reported at +31 min (its end is Rich's resume)" \
-    "$( has "$OUT" "[HELD] tango-opus-p1" && has "$OUT" "why: Rich's resume" \
-        && has "$OUT" "workspaces.sh resume tango-opus-p1"; echo $?)" "out=$OUT"
+check "T4a  a manual pause is due, with the command that resumes it" \
+    "$( has "$OUT" "[DUE] tango-opus-p1" && has "$OUT" "workspaces.sh resume tango-opus-p1"; echo $?)" "out=$OUT"
 check "T4b  a quota pause is quiet until its at: passes" "$( ! has "$OUT" "uniform-opus-q1"; echo $?)" "out=$OUT"
-tick 1920
-check "HD2  told again only after the 30-min repeat" "$( ! has "$OUT" "[HELD]"; echo $?)" "out=$OUT"
+check "T5   finished work with no wait is due, with its next action" \
+    "$( has "$OUT" "[DUE] whisky-opus-n1" && has "$OUT" "workspaces.sh land whisky-opus-n1"; echo $?)" "out=$OUT"
+tick 120
+check "HD2  told again only after the 30-min repeat" "$( ! has "$OUT" "[DUE]"; echo $?)" "out=$OUT"
 hold_fixture romeo-done
-tick 1980
-check "T3c  Y finishes: RELEASE DUE for the work it was holding, with the command" \
-    "$( has "$OUT" "[RELEASE DUE] sierra-opus-f1: its end came true: agent romeo-opus-y1 has finished" \
+tick 180
+check "T3c  Y finishes: the work it carried is due now, with the command" \
+    "$( has "$OUT" "[DUE] sierra-opus-f1" && has "$OUT" "agent romeo-opus-y1 has finished" \
         && has "$OUT" "continues: sierra-opus-f1"; echo $?)" "out=$OUT"
 tick 3700
-check "T4c  the quota reset passes: RELEASE DUE for the quota pause" \
-    "$( has "$OUT" "[RELEASE DUE] uniform-opus-q1" && has "$OUT" "workspaces.sh resume uniform-opus-q1" \
-        && has "$OUT" "[HELD] papa-opus-w1"; echo $?)" "out=$OUT"
-OUT="$(STALL_WATCH_NOW=$(( $(date +%s) + 1860 )) bash "$SW" --once 2>&1)"; RC=$?
-check "HD3  --once lists the holds too" "$( has "$OUT" "[HELD] quebec-opus-s1"; echo $?)" "out=$OUT"
+check "T4c  the quota reset passes: due, and the older items repeat after 30 min" \
+    "$( has "$OUT" "[DUE] uniform-opus-q1" && has "$OUT" "workspaces.sh resume uniform-opus-q1" \
+        && has "$OUT" "[DUE] papa-opus-w1"; echo $?)" "out=$OUT"
+check "HD3  an item that stops being due ends without a line" "$( ! has "$OUT" "STALL-CLEARED"; echo $?)" "out=$OUT"
+OUT="$(STALL_WATCH_NOW=$(( $(date +%s) + 60 )) bash "$SW" --once 2>&1)"; RC=$?
+check "HD3b --once lists the due work too" "$( has "$OUT" "[DUE] quebec-opus-s1"; echo $?)" "out=$OUT"
 
 # Second review rv-20261022T013056Z-12c77c90-1291, finding 4: in the app the watcher runs in Stu's
 # lease, and a hold of Rich's lease (another RUNNING session of the same conversation partition)
@@ -838,18 +847,18 @@ python3 - "$ENGINE" "$SID_RICH" <<'PY2'
 import os, sys, time
 sys.path.insert(0, os.path.join(sys.argv[1], "mega-lander"))
 import workspaces as ws
-ws.wait("%s--victor-opus-a1" % sys.argv[2], "started", "code done, real-app checks left", "", sys.argv[2])
 rec = ws.load_agent("%s--victor-opus-a1" % sys.argv[2])
-rec["waiting"]["at"] = time.time() - 40 * 60
+rec["waiting"] = {"kind": "started", "on": "code done, real-app checks left", "todo": "", "at": time.time(), "end": ""}
 ws.save_agent(rec)
 PY2
 tick 0
-check "HD4  a terminal session does not tell another running session's hold" \
-    "$( ! has "$OUT" "victor-opus-a1: held by Rich"; echo $?)" "out=$OUT"
+check "HD4  a terminal session does not tell another running session's due work" \
+    "$( ! has "$OUT" "victor-opus-a1"; echo $?)" "out=$OUT"
 new_state hd4b
 OUT="$(RICHOS_APP_ENTITY=acme RICHOS_APP_THREAD=thread-1 STALL_WATCH_NOW=$(date +%s) bash "$SW" --tick 2>&1)"
-check "HD5  in the app (one conversation's partition) Stu's watcher tells the hold of Rich's running lease" \
-    "$( has "$OUT" "[HELD] victor-opus-a1: held by Rich"; echo $?)" "out=$OUT"
+check "HD5  in the app (one conversation's partition) Stu's watcher tells the due work of Rich's running lease" \
+    "$( has "$OUT" "[DUE] victor-opus-a1"; echo $?)" "out=$OUT"
+unset STALL_WATCH_LEAD_TRANSCRIPT
 
 # --- E: a teammate's escalation wakes an idle lead (2026-10-01) ---------------
 # richos-hq docs/operations/2026-10-01-escalation-wakes-the-lead.md, built past
