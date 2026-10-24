@@ -808,6 +808,36 @@ def shadow_model(project):
     return value if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value) else ""
 
 
+def shadow_fingerprint(period, model, profile):
+    return {"period": period, "model": model, "effort": SHADOW_EFFORT,
+            "source_sha256": SOURCE_SHA256,
+            "profile_sha256": hashlib.sha256(profile.encode()).hexdigest(),
+            "rules_sha256": hashlib.sha256(REVIEW_RULES.encode()).hexdigest(),
+            "shadow_sha256": hashlib.sha256(Path(__file__).with_name("pierce_shadow.py").read_bytes()).hexdigest()}
+
+
+def shadow_revision_period(project, report, profile):
+    """Continue only the preceding review's collection, with its original input pins."""
+    root = None
+    try:
+        model = shadow_model(project)
+        if not model or "shadow_period" not in report:
+            return None
+        period = report["shadow_period"]
+        root = shadow_dir(period=period)
+        expected = shadow_fingerprint(period, model, profile)
+        inspection = report.get("inspection", {})
+        if any(inspection.get(key) != expected[key] for key in
+               ("source_sha256", "profile_sha256", "rules_sha256")):
+            raise ValueError("preceding review inputs changed; revision not collected")
+        if period and json.loads((root / "period.json").read_text()) != expected:
+            raise ValueError("shadow inputs changed; revision not collected")
+        return period
+    except Exception as error:  # collection failures must never change the live verdict
+        shadow_log(f"revision collection unavailable: {error}", root)
+        return None
+
+
 def shadow_start(payload, review, profile, identity, project):
     """Start the twin of this initial review, detached in its own session: never waited on,
     never raises. Returns the job path, pinning both sides to its period, or None."""
@@ -820,11 +850,7 @@ def shadow_start(payload, review, profile, identity, project):
         if (root / "complete.json").exists():
             return None
         period = root.name if root.parent.name == "periods" else ""
-        fingerprint = {"period": period, "model": model, "effort": SHADOW_EFFORT,
-                       "source_sha256": SOURCE_SHA256,
-                       "profile_sha256": hashlib.sha256(profile.encode()).hexdigest(),
-                       "rules_sha256": hashlib.sha256(REVIEW_RULES.encode()).hexdigest(),
-                       "shadow_sha256": hashlib.sha256(Path(__file__).with_name("pierce_shadow.py").read_bytes()).hexdigest()}
+        fingerprint = shadow_fingerprint(period, model, profile)
         if period:
             root.mkdir(parents=True, exist_ok=True, mode=0o700)
             with locked(root / "period.lock"):
@@ -990,11 +1016,7 @@ def inspect(payload):
                         track_root = Path(pair).parent.parent
                         selected_period = track_root.name if track_root.parent.name == "periods" else ""
                 else:
-                    try:
-                        if shadow_model(project):
-                            selected_period = shadow_period(project)
-                    except (OSError, ValueError) as error:
-                        shadow_log(f"revision collection unavailable: {error}")
+                    selected_period = shadow_revision_period(project, report, profile)
                 try:
                     verdict = invoke(review, profile)
                     checked_classification(request, verdict)
@@ -1056,12 +1078,12 @@ def main():
             atomic(path, value)
         # The lead's action on Opus's findings is the track's cross-check on its judge.
         try:
-            track_root = shadow_dir(period=value.get("shadow_period", ""))
+            track_root = shadow_dir(period=value["shadow_period"])
             if track_root.is_dir():
                 with open(track_root / "dismissals.jsonl", "a") as out:
                     out.write(json.dumps({"id": args.dismiss, "at": time.time(),
                                           "reason": args.reason.strip()}, ensure_ascii=False) + "\n")
-        except (OSError, ValueError):
+        except (OSError, ValueError, KeyError):
             pass
         print("Pierce report dismissed for this exact assignment: " + args.reason.strip())
         return 0

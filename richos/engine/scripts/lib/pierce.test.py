@@ -1307,6 +1307,71 @@ class HaikuParallelTrack(unittest.TestCase):
         self.assertFalse((self.shadow / "dismissals.jsonl").exists())
         self.assertFalse((self.shadow / "periods/next-period").exists())
 
+    def test_revision_keeps_its_origin_after_config_switch(self):
+        _, _, first = self.job(period="original-period")
+        config = self.project / "orchestration.config"
+        config.write_text(config.read_text().replace("original-period", "new-period"))
+        with patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS"}):
+            revision = P.inspect(self.revised())
+        self.assertEqual(revision["review_mode"], "revision")
+        self.assertEqual(revision["shadow_period"], "original-period")
+        row = self.shadow / "periods/original-period/revisions" / (revision["id"] + ".json")
+        self.assertEqual(json.loads(row.read_text())["revises"], first["id"])
+        self.assertFalse((self.shadow / "periods/new-period").exists())
+
+    def test_legacy_revision_does_not_enter_a_new_period(self):
+        self.job()
+        config = self.project / "orchestration.config"
+        config.write_text(config.read_text() + 'PIERCE_SHADOW_PERIOD="new-period"\n')
+        with patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS"}):
+            revision = P.inspect(self.revised())
+        self.assertEqual(revision["review_mode"], "revision")
+        self.assertEqual(revision["shadow_period"], "")
+        self.assertTrue((self.shadow / "revisions" / (revision["id"] + ".json")).exists())
+        self.assertFalse((self.shadow / "periods/new-period").exists())
+
+    def test_revision_rejects_changed_period_inputs_without_changing_opus(self):
+        self.job(period="pinned-revisions")
+        root = self.shadow / "periods/pinned-revisions"
+        manifest = (root / "period.json").read_bytes()
+        with patch.object(P, "SOURCE_SHA256", "changed-inspector"), patch.object(P, "invoke", return_value={
+                "verdict": "PASS", "report": "PASS"}):
+            revision = P.inspect(self.revised())
+        self.assertEqual((revision["review_mode"], revision["verdict"]), ("revision", "PASS"))
+        self.assertNotIn("shadow_period", revision)
+        self.assertFalse((root / "revisions").exists())
+        self.assertEqual((root / "period.json").read_bytes(), manifest)
+
+    def test_revision_checks_every_named_period_manifest_pin(self):
+        _, _, first = self.job(period="revision-manifest")
+        root = self.shadow / "periods/revision-manifest"
+        path = root / "period.json"
+        original = json.loads(path.read_text())
+        profile = (ENGINE / "agents/pierce.md").read_text().split("---", 2)[-1].strip()
+        self.assertEqual(P.shadow_revision_period(self.project, first, profile), "revision-manifest")
+        self.assertIsNone(P.shadow_revision_period(self.project, {**first, "inspection": None}, profile))
+        for key in original:
+            with self.subTest(pin=key):
+                path.write_text(json.dumps({**original, key: "changed-value"}))
+                self.assertIsNone(P.shadow_revision_period(self.project, first, profile))
+        path.write_text(json.dumps(original))
+        self.assertEqual(P.shadow_revision_period(self.project, first, profile), "revision-manifest")
+        path.unlink()
+        self.assertIsNone(P.shadow_revision_period(self.project, first, profile))
+        self.assertFalse(path.exists(), "a revision must never mint its own period binding")
+
+    def test_unowned_dismissal_does_not_append_to_legacy_collection(self):
+        self.turn_on()
+        self.shadow.mkdir(parents=True)
+        (self.shadow / "complete.json").write_text('{"legacy": true}')
+        with patch.object(P, "invoke", return_value={"verdict": "FINDINGS", "report": "A material fault"}):
+            result = P.inspect(self.payload)
+        self.assertNotIn("shadow_period", result)
+        dismissed = subprocess.run([sys.executable, "-B", str(HERE / "pierce.py"), "--dismiss", result["id"],
+                                    "--reason", "Fixture only."], env=self.env, capture_output=True, text=True)
+        self.assertEqual(dismissed.returncode, 0, dismissed.stderr)
+        self.assertFalse((self.shadow / "dismissals.jsonl").exists())
+
     def test_status_reads_only_the_governed_repositorys_selected_period(self):
         S = shadow_module()
         self.job(period="status-period")
