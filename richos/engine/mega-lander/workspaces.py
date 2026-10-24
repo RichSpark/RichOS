@@ -3362,10 +3362,15 @@ def due_set(me="", items=None, at=None, cache=None):
             continue
         rec = load_agent(it["key"]) or {}
         since = ((rec.get("end") or {}).get("at")) or now()
+        stopped = (rec.get("end") or {}).get("signal") == "stopped"
         out.append({"name": it["name"], "what": "the finished work of %s" % it["name"], "why": it["why"],
                     "since": float(since), "end": "", "state": "none", "detail": "finished, not landed or discarded",
                     "source": "finished", "key": it["key"], "review": "",
-                    "command": "land it (workspaces.sh land %s), discard it, or spawn its continuation" % it["name"]})
+                    # Stopped work is never revived (A4; CLAUDE.md §92): no land, no continuation.
+                    "command": ("save its commits on shelved/%s and discard it with his words "
+                                "(workspaces.sh discard %s --ceo-word '<his words>'); never land or continue it"
+                                % (it["name"], it["name"])) if stopped else
+                               "land it (workspaces.sh land %s), discard it, or spawn its continuation" % it["name"]})
     return out
 
 

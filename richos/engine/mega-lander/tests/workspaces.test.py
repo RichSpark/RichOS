@@ -7346,6 +7346,19 @@ class NoSilentHolds(Base):
         send("Go: run the walk now.")
         self.assertEqual(ws.holds(self.sid), [])
 
+    def test_r2_stopped_work_is_offered_only_shelving_and_discard(self):
+        """Frank D4: a stopped agent's due line said "land it ... or spawn its continuation"."""
+        aid, npath = self.spawn("zach-opus-sp")
+        self.commit(npath)
+        ws.stop("zach-opus-sp", "he said stop", self.sid)
+        due = [d for d in ws.due_set(self.sid, ws.pending(self.sid, self.entity, auto=False, dry=True))
+               if d["name"] == "zach-opus-sp"]
+        self.assertEqual(len(due), 1)
+        self.assertIn("--ceo-word", due[0]["command"])
+        self.assertIn("shelved/zach-opus-sp", due[0]["command"])
+        self.assertNotIn("land it", due[0]["command"])
+        self.assertNotIn("spawn its continuation", due[0]["command"])
+
     def test_r6_a_due_set_that_merely_emptied_is_not_told(self):
         """Sage D2 / Frank D3: in journey-due-work-acted-on the lead resumed the due item and the
         next Stop said "Nothing is due now.", which cost a model turn that did nothing."""
