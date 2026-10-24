@@ -92,6 +92,10 @@ struct Inner {
     move_check: Option<bool>,
     /// The account Stu was told he is being moved to (`account_switch`), until he has moved.
     switch_told: Option<String>,
+    /// Inbox offsets of handoffs whose screen wait ended with the screen back (§56,
+    /// [`WorkHost::held_for_screen`]). Later input may have been delivered past them meanwhile,
+    /// so they are delivered from here rather than found again by reading forward.
+    screen_released: Vec<u64>,
 }
 struct Backend {
     live_delivery: Mutex<()>,
@@ -116,6 +120,9 @@ pub struct WorkHost {
     closing: Mutex<bool>,
     notifier: Arc<dyn WorkNotifier>,
     screen: Mutex<Arc<dyn crate::screen::ScreenSource>>,
+    /// Every job waiting for the screen (§56), by assignment id: the wait a Stop or a quit ends.
+    screen_waits: Mutex<std::collections::HashMap<String, Arc<crate::screen::ScreenWatch>>>,
+    screen_poll: Mutex<std::time::Duration>,
     quota: Mutex<Option<Arc<crate::quota::Service>>>,
     output: Mutex<Option<crate::output::OutputStore>>,
     retry_clock: Mutex<Arc<dyn crate::upstream::RetryClock>>,
@@ -133,6 +140,8 @@ impl WorkHost {
             closing: Mutex::new(false),
             notifier,
             screen: Mutex::new(Arc::new(crate::screen::UnknownScreen)),
+            screen_waits: Mutex::new(Default::default()),
+            screen_poll: Mutex::new(crate::screen::SCREEN_POLL),
             quota: Mutex::new(None),
             output: Mutex::new(None),
             retry_clock: Mutex::new(Arc::new(crate::upstream::SystemRetryClock)),
@@ -386,6 +395,122 @@ impl WorkHost {
         self.screen.lock().unwrap().read()
     }
 
+    #[cfg(test)]
+    fn set_screen_poll(&self, poll: std::time::Duration) {
+        *self.screen_poll.lock().unwrap() = poll;
+    }
+
+    /// **Does this input wait for the screen?** The CEO's ruling §56: a job that declared
+    /// [`Assignment::needs_screen`] and has not started, on a screen read as locked, is not
+    /// handed to Stu. Its record says `WaitingForScreen`, and a [`crate::screen::ScreenWatch`]
+    /// on its own thread hands it over when the screen is usable: nothing asks him to unlock.
+    /// Anything else (other input, an unmarked job, a started or stopped one, an unknown or
+    /// unlocked screen, a record that cannot be read) is never held.
+    fn held_for_screen(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding,
+        message: &crate::session_tools::Message, through: u64) -> bool {
+        if !message.handoff {
+            return false;
+        }
+        let Ok(Some(work)) = crate::session_tools::work_reference(&self.message_scope(binding), message) else {
+            return false;
+        };
+        let id = work.assignment_id;
+        if self.screen_waits.lock().unwrap().contains_key(&id) {
+            return true;
+        }
+        let (entity, thread) = (binding.entity_id().to_string(), binding.thread_id().to_string());
+        let Ok(record) = assignment::read(&self.state, &entity, &thread, &id) else { return false };
+        if !record.needs_screen || !record.accepts_input()
+            || !matches!(record.state, AssignmentState::Registered | AssignmentState::WaitingForScreen) {
+            return false;
+        }
+        let source = self.screen.lock().unwrap().clone();
+        let watch = crate::screen::ScreenWatch::with_poll(source, *self.screen_poll.lock().unwrap());
+        if watch.read().usable() {
+            // A wait that outlived a relaunch, on a screen that is back.
+            if record.state == AssignmentState::WaitingForScreen {
+                if let Err(error) = assignment::record_screen_wait(&self.state, &entity, &thread, &id, false) {
+                    eprintln!("[richos] the screen wait could not be closed: {error}");
+                }
+            }
+            return false;
+        }
+        // In the map before the record says it waits, so a Stop that sees the record reaches it.
+        self.screen_waits.lock().unwrap().insert(id.clone(), watch.clone());
+        if let Err(error) = assignment::record_screen_wait(&self.state, &entity, &thread, &id, true) {
+            eprintln!("[richos] the screen wait could not be recorded, so the job goes ahead: {error}");
+            self.screen_waits.lock().unwrap().remove(&id);
+            return false;
+        }
+        let waiter = std::thread::Builder::new().name("richos-screen-wait".into()).spawn({
+            let (host, backend, binding) = (Arc::clone(self), Arc::clone(backend), binding.clone());
+            let (watch, id, entity, thread) = (watch.clone(), id.clone(), entity.clone(), thread.clone());
+            move || {
+                let outcome = watch.wait_quietly();
+                host.screen_waits.lock().unwrap().retain(|key, held| key != &id || !Arc::ptr_eq(held, &watch));
+                if !outcome.is_available() {
+                    return;
+                }
+                if let Err(error) = assignment::record_screen_wait(&host.state, &entity, &thread, &id, false) {
+                    eprintln!("[richos] the screen is back but the job's record could not say so: {error}");
+                }
+                backend.inner.lock().unwrap().screen_released.push(through);
+                host.wake_messages(&binding);
+            }
+        });
+        if let Err(error) = waiter {
+            // Waiting is the defect here (screen.rs, the polarity rule): without a waiter the job goes ahead.
+            eprintln!("[richos] the screen wait could not start, so the job goes ahead: {error}");
+            self.screen_waits.lock().unwrap().remove(&id);
+            if let Err(error) = assignment::record_screen_wait(&self.state, &entity, &thread, &id, false) {
+                eprintln!("[richos] the job's record still says it waits for the screen: {error}");
+            }
+            return false;
+        }
+        true
+    }
+
+    /// End one job's screen wait, or every one when `id` is `None`. A Stop or a quit must
+    /// reach a waiter, because §56 gives the wait no timeout.
+    fn end_screen_waits(&self, id: Option<&str>) {
+        let ended: Vec<_> = {
+            let mut waits = self.screen_waits.lock().unwrap();
+            match id {
+                Some(id) => waits.remove(id).into_iter().collect(),
+                None => waits.drain().map(|(_, watch)| watch).collect(),
+            }
+        };
+        for watch in ended {
+            watch.stop();
+        }
+    }
+
+    /// The next input for Stu: a handoff whose screen wait just ended first (`released`, the
+    /// back end's [`Inner::screen_released`]), then the inbox in order from `after`, passing
+    /// over every handoff still waiting for the screen. Never locks the back end itself: the
+    /// run loop calls it holding that lock.
+    fn next_for_stu(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, mut after: u64,
+        released: &mut Vec<u64>) -> Result<Option<(crate::session_tools::Message, u64)>, String> {
+        let scope = self.message_scope(binding);
+        while let Some(through) = released.pop() {
+            let message = crate::session_tools::saved_input(&scope, "stu", through)
+                .inspect_err(|_| released.push(through))?;
+            if !self.held_for_screen(backend, binding, &message, through) {
+                return Ok(Some((message, through)));
+            }
+        }
+        loop {
+            let Some((message, through)) = crate::session_tools::pending_after(&scope, "stu", after)? else {
+                return Ok(None);
+            };
+            if !self.held_for_screen(backend, binding, &message, through) {
+                released.retain(|offset| *offset != through);
+                return Ok(Some((message, through)));
+            }
+            after = through;
+        }
+    }
+
     pub fn remember_binding(self: &Arc<Self>, binding: &ThreadBinding) {
         if let Some(backend) = self.backend_for(binding.thread_id()) {
             backend.inner.lock().unwrap().binding = Some(binding.clone());
@@ -441,12 +566,13 @@ impl WorkHost {
             let mut after = after;
             loop {
             let (mut message, through) = loop {
-                let Some((message, through)) =
-                    crate::session_tools::pending_after(&scope, "stu", after)?
+                // A handoff whose screen wait ended is the run loop's to deliver (§56).
+                let Some((message, through)) = self.next_for_stu(&backend, binding, after, &mut Vec::new())?
                 else {
                     return Ok::<_, String>(());
                 };
                 if !self.handoff_stopped(binding, &message)? {
+                    backend.inner.lock().unwrap().screen_released.retain(|offset| *offset != through);
                     break (message, through);
                 }
                 crate::session_tools::acknowledge(&scope, "stu", through)?;
@@ -1118,7 +1244,8 @@ impl WorkHost {
                             inner.processing = true;
                             break Next::Answer(binding, answer);
                         }
-                        match crate::session_tools::pending_after(&self.message_scope(&binding), "stu",inner.peer_active_through.unwrap_or(0)) {
+                        let after = inner.peer_active_through.unwrap_or(0);
+                        match self.next_for_stu(&backend, &binding, after, &mut inner.screen_released) {
                             Ok(Some((message, through))) => {
                                 inner.processing = true;
                                 break Next::Message(binding, message, through);
@@ -1285,6 +1412,7 @@ impl WorkHost {
         }
         let stopped = assignment::record_user_stop(&self.state, entity, thread, id)
             .map_err(|e| e.to_string())?;
+        self.end_screen_waits(Some(id));
         let stopper = self
             .backend(thread)
             .and_then(|b| b.inner.lock().unwrap().peer_stopper.clone());
@@ -1403,6 +1531,8 @@ impl WorkHost {
     /// Quit ends provider connections. Job reports, questions and inbox receipts remain unchanged.
     pub fn shutdown(&self) {
         *self.closing.lock().unwrap() = true;
+        // A job waiting for the screen keeps its record; the next launch looks again.
+        self.end_screen_waits(None);
         let backends: Vec<_> = self.backends.lock().unwrap().values().cloned().collect();
         for backend in &backends {
             let cancel = {
@@ -1887,6 +2017,145 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "{what}");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    /// §56: a job of his on turn `turn`, registered (`needs_screen` as given) and handed to Stu
+    /// by Rich, exactly as a conversation does it. Returns the record and the message scope.
+    fn screen_job(h: &Harness, turn: &str, text: &str, needs_screen: bool) -> (Assignment, crate::status_tools::StatusToolScope) {
+        use sha2::Digest;
+        use std::io::Write;
+        let sha = format!("{:x}", sha2::Sha256::digest(text.as_bytes()));
+        let ledger = h.root.join("conversation-ledger.jsonl");
+        if !std::fs::read_to_string(&ledger).unwrap().contains(&format!("\"{turn}\"")) {
+            let line = serde_json::json!({"event":"PromptReceived","entity_id":"depot","thread_id":"thread-one",
+                "turn_id":turn,"source":"text","text":text}).to_string() + "\n";
+            std::fs::OpenOptions::new().append(true).open(&ledger).unwrap().write_all(line.as_bytes()).unwrap();
+        }
+        let receipt = assignment::register(&h.state, &Registration {
+            obligation_id: format!("obligation-{turn}"),
+            instruction_ledger_ref: format!("ledger:thread-one:{turn}"),
+            instruction_sha256: sha.clone(),
+            title: text.into(),
+            needs_screen,
+            ..registration(h)
+        }).unwrap();
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.state.join(format!("rich-status-{turn}.json"));
+        let instruction = crate::ecs::UserInstruction::with_text(format!("ledger:thread-one:{turn}"), sha, Some(text));
+        crate::session_tools::bind(&path, &scope, "native-rich", "rich", Some(instruction)).unwrap();
+        crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":format!("Handoff: {text}")})).unwrap();
+        (assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap(), scope)
+    }
+
+    fn job(h: &Harness, id: &str) -> Assignment {
+        assignment::read(&h.state, "depot", "thread-one", id).unwrap()
+    }
+
+    fn handed_over(h: &Harness, text: &str) -> usize {
+        h.work_prompts.lock().unwrap().iter().filter(|prompt| prompt.contains(text)).count()
+    }
+
+    /// **THE CEO'S §56, END TO END.** A job marked `needs_screen`, on a locked screen, is not
+    /// handed to Stu: it says one plain line where he and Rich look, asks nobody for anything,
+    /// and goes to Stu by itself the moment the screen is back.
+    #[test]
+    fn a_job_that_needs_the_screen_waits_while_it_is_locked_and_carries_on_at_unlock() {
+        use crate::screen::{FakeScreen, ScreenReading};
+        let h = harness(0);
+        let screen = FakeScreen::locked();
+        h.host.set_screen(screen.clone());
+        h.host.set_screen_poll(std::time::Duration::from_millis(2));
+        let (record, scope) = screen_job(&h, "turn-7", "landing the three branches", true);
+        h.host.wake_messages(&h.binding);
+        // load-bound: hang guards only; the verdicts are the record, the prompts and the reads.
+        until("the job never went to waiting for the screen", || job(&h, &record.id).state == AssignmentState::WaitingForScreen);
+        until("the wait never polled the screen", || screen.reads() >= 5);
+        assert_eq!(handed_over(&h, "Handoff: landing"), 0, "a locked screen let the job through to Stu");
+        assert_eq!(job(&h, &record.id).detail, crate::screen::says::detail());
+        // The status read: one row under its own heading, with the one plain line.
+        let status = h.state.join("status-look.json");
+        crate::status_tools::write_scope(&status, &scope).unwrap();
+        let look = crate::status_tools::call(&status, screen.as_ref(), crate::status_tools::LOOK_TOOL_NAME, serde_json::json!({})).unwrap();
+        let rows = look["waiting_for_the_screen"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{look}");
+        assert_eq!(rows[0]["detail"], crate::screen::says::detail());
+        assert!(look["starting"].as_array().unwrap().is_empty() && look["waiting_for_you"].as_array().unwrap().is_empty(), "{look}");
+        // Nothing asks him to unlock: no notice, nothing for Rich to pass on.
+        assert!(job(&h, &record.id).notices.is_empty());
+        assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none(), "the wait sent Rich something to say");
+        screen.set(ScreenReading::unlocked());
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)), "hang guard: the job never carried on");
+        assert_eq!(handed_over(&h, "Handoff: landing"), 1, "the job must go to Stu once, by itself");
+        let resumed = job(&h, &record.id);
+        assert_eq!(resumed.state, AssignmentState::Registered, "a resumed job must not keep claiming it is waiting");
+        assert_eq!(resumed.detail, crate::screen::says::carrying_on());
+        assert!(h.host.screen_waits.lock().unwrap().is_empty());
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// §56 is only for work that said it needs the screen. An unmarked job on a locked screen
+    /// goes straight to Stu without the screen being read at all, and so does one given while
+    /// a marked job is still waiting: nothing queues behind the wait.
+    #[test]
+    fn a_job_not_marked_never_waits_for_the_screen() {
+        use crate::screen::{FakeScreen, ScreenReading};
+        let h = harness(0);
+        let screen = FakeScreen::locked();
+        h.host.set_screen(screen.clone());
+        h.host.set_screen_poll(std::time::Duration::from_millis(2));
+        let (plain, _) = screen_job(&h, "turn-7", "landing the three branches", false);
+        h.host.wake_messages(&h.binding);
+        // load-bound: hang guards only; the verdicts are the prompts, the records and the reads.
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)), "hang guard: the unmarked job waited");
+        assert_eq!(handed_over(&h, "Handoff: landing"), 1);
+        assert_eq!(job(&h, &plain.id).state, AssignmentState::Registered);
+        assert_eq!(screen.reads(), 0, "an unmarked job must not even look at the screen");
+        let (marked, _) = screen_job(&h, "turn-8", "walking the build on screen", true);
+        h.host.wake_messages(&h.binding);
+        until("the marked job never waited", || job(&h, &marked.id).state == AssignmentState::WaitingForScreen);
+        let (later, _) = screen_job(&h, "turn-9", "fixing the readme typo", false);
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(2, std::time::Duration::from_secs(10)), "hang guard: the unmarked job queued behind the wait");
+        assert_eq!(handed_over(&h, "Handoff: fixing"), 1);
+        assert_eq!(handed_over(&h, "Handoff: walking"), 0);
+        assert_eq!(job(&h, &later.id).state, AssignmentState::Registered);
+        // The waiting job, released after later input went past it, still goes to Stu once.
+        screen.set(ScreenReading::unlocked());
+        assert!(h.host.wait_for_completed(3, std::time::Duration::from_secs(10)), "hang guard: the marked job never carried on");
+        assert_eq!(handed_over(&h, "Handoff: walking"), 1);
+        assert_eq!(h.work_prompts.lock().unwrap().len(), 3, "{:?}", h.work_prompts.lock().unwrap());
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// §56 gives the wait no timeout, so his Stop must reach it: the waiter ends at once, the
+    /// job is stopped, and the screen coming back afterwards hands nothing to Stu.
+    #[test]
+    fn stopping_a_job_that_waits_for_the_screen_ends_the_wait() {
+        use crate::screen::{FakeScreen, ScreenReading};
+        let h = harness(0);
+        let screen = FakeScreen::locked();
+        h.host.set_screen(screen.clone());
+        h.host.set_screen_poll(std::time::Duration::from_secs(3600));
+        let (record, _) = screen_job(&h, "turn-7", "landing the three branches", true);
+        h.host.wake_messages(&h.binding);
+        // load-bound: hang guards only; the verdicts are the watch, the record and the prompts.
+        until("the job never went to waiting for the screen", || job(&h, &record.id).state == AssignmentState::WaitingForScreen);
+        let watch = h.host.screen_waits.lock().unwrap().get(&record.id).cloned().unwrap();
+        h.host.stop_assignment("depot", "thread-one", &record.id).unwrap();
+        assert!(watch.is_stopped(), "the Stop did not reach the wait");
+        // An hour-long poll: only the Stop can have ended the waiter's thread this soon.
+        until("the waiter's thread never ended", || Arc::strong_count(&watch) == 1);
+        assert!(h.host.screen_waits.lock().unwrap().is_empty());
+        assert_eq!(job(&h, &record.id).reported_state(), Some(AssignmentState::Interrupted));
+        screen.set(ScreenReading::unlocked());
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)), "hang guard: Stu was not told of the Stop");
+        assert_eq!(handed_over(&h, "Handoff: landing"), 0, "a stopped job reached Stu when the screen came back");
+        assert_eq!(handed_over(&h, "user_stop"), 1);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
     }
 
     #[test]
