@@ -9,7 +9,13 @@ What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, new
 - Added file cards in the conversation: when Rich sends you a file from your Mac, it shows under his reply with its type, size and a PDF's page count; click it to open it in its usual app or use Show in Finder and a file since moved or deleted says so and offers Ask Rich again
 - Added the same file cards on the phone page: tap one to bring the file over from your Mac and open it or save it when your phone cannot show it; files over 100 MB open only on the Mac
 - Changed what Rich does with work left on hold or finished but not merged into your project: instead of asking you after 30 minutes whether to go ahead, he goes ahead, merges or drops it himself and asks you only about a decision that is truly yours
+- Improved Stu's reminder about a teammate's finished work that is not yet merged: it now comes as soon as he is free and every 30 minutes until the work is handled, instead of after about 12 hours
 - Fixed a job sitting still after Stu added a new teammate for it; the new teammate now picks it up
+- Fixed Rich saying he had saved or written something down when he had not: he is now told as he finishes and either saves it or tells you it was not saved
+- [technical] Changed jobs that change only a project's changelog files so they get no automatic review while they run
+- [technical] Changed the ready-made release notes writer on the teammate shelf to run on Opus instead of Sonnet
+- [technical] Improved the check that reads each job before a teammate starts it: it now reads the whole job first and no longer turns a job back over a contradiction it misread or a setting it could not see
+- [technical] Fixed a teammate's ordinary command being refused as a hidden shell command when a folder name in it started with a dash, as Claude's own temporary folders do
 
 ## 1.2.2-nightly.20261023.71
 
