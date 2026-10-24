@@ -57,6 +57,7 @@
 #     (n14) app: Done report, the turn landed but never closed     -> exit 2
 #     (n15) app: Done report, the close was refused                -> exit 2
 #     (n16) app: wait reply, the save replaced (no reload comes)   -> exit 2
+#     (n17) app: Done report, a save and then a refused close      -> exit 2
 #   ARM 3 — APP RECORD TOOLS
 #     (R56) app team saves answered with paths, "I saved Norm"     -> no alert
 #     (R57) saved paths named + job report recorded: true          -> no alert
@@ -500,12 +501,17 @@ specs = {
     # the wait reply over a save that replaced an existing teammate: no reload follows that
     "replaced": [{"machine": notice("Activate Norm for Acme")},
                  {"app": save + [dict(saved, replaced=True)]}],
+    # the second review's fixture (rv-20261024T230343Z-5ff59ca2-e966): Stu saves Norm, the
+    # close is refused, and the reply reports the job closed. The save is a reload, not a close.
+    "save-close-refused": [{"machine": notice("Activate Norm for Acme")}, {"app": save + [saved]},
+                           {"app": complete + ["this assignment still has unresolved execution; "
+                                               "reconcile it before completion", True]}],
 }
 for name, spec in specs.items():
     with open(os.path.join(out, name + ".json"), "w", encoding="utf-8") as fh:
         json.dump(spec, fh)
 PY
-for s in wait done landed-open close-refused replaced; do
+for s in wait done landed-open close-refused replaced save-close-refused; do
     mk_tr "$SANDBOX/app-$s.jsonl" "$(cat "$APP_SPECS/$s.json")"
 done
 # Row 142, verbatim.
@@ -540,6 +546,9 @@ run_hook "$SANDBOX/app-close-refused.jsonl" "$STU_DONE"
 
 run_hook "$SANDBOX/app-replaced.jsonl" "$STU_WAIT"
 [ "$RC" -eq 2 ] && ok "n16. a wait on a reload that is not coming (an existing teammate replaced) is still refused" || bad "n16. replaced teammate" "rc=$RC"
+
+run_hook "$SANDBOX/app-save-close-refused.jsonl" "Done. notes.md is committed and landed on main. The job is closed."
+[ "$RC" -eq 2 ] && ok "n17. a teammate save does not excuse a Done report over a close the app refused in the same turn" || bad "n17. save then refused close" "rc=$RC"
 
 # R56-R58: ARM 3 over the app's own record tools, from the walk of f7db19c03 (Stu's transcript
 # 49b30d21…jsonl, richos-hq docs/audits/2026-10-15-nightly-root/evidence/
