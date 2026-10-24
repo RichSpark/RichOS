@@ -862,6 +862,7 @@ function render(forceBottom) {
 
 function renderRow(row, isLastDelivered) {
 	if (row.kind === 'question' && row.question && api && api.offers('questions')) return questionCard(row);
+	if (row.kind === 'file' && row.file) return fileCard(row);
 	const li = document.createElement('li');
 	const mine = row.role === 'ceo' || row.pending;
 	li.className = `msg ${mine ? 'msg-mine' : 'msg-rich'}`;
@@ -952,6 +953,103 @@ function renderRow(row, isLastDelivered) {
 	}
 
 	return li;
+}
+
+// ---------------------------------------------------------------------------------------------
+// A file from Rich — the Mac's card (`app/ui/rich-files.js`, round 36 screen 3) on this page
+// ---------------------------------------------------------------------------------------------
+//
+// The Mac sends each file Rich attached as a Rich row of kind `file` (`phone/rows.rs`), carrying
+// the card's own description and an id, never a path. Until this card the page drew that row as a
+// bubble holding the file's name and nothing to open it with. A tap brings the bytes over on one
+// signed `GET /api/messages?kind=file` (`api.fetchFile`) and opens them in the browser's own
+// viewer, as the Mac opens the file in its usual app. A file moved or deleted on the Mac says so in
+// the Mac's own sentence and offers "Ask Rich again", which sends what the Mac's card sends.
+//
+// What a tap is doing is kept per file id, because a streaming reply rebuilds every row.
+const FILE_GONE = 'No longer on this Mac. It was moved or deleted.';
+const FILE_PAGE = '<svg viewBox="0 0 40 48" aria-hidden="true"><path class="pg" d="M4 4.5A4 4 0 0 1 8 .5h18l13.5 13.5v29.5a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4z"/><path class="fold" d="M26 .5v9.5a4 4 0 0 0 4 4h9.5z"/></svg>';
+const fileTaps = new Map();
+
+function fileCard(row) {
+	const f = row.file;
+	const name = f.name || row.text || 'File';
+	const tap = fileTaps.get(f.id) || {};
+	const state = f.exists === false || tap.gone ? 'missing' : tap.busy ? 'opening' : 'ready';
+	const line = state === 'missing' ? FILE_GONE : tap.busy ? 'Coming over from your Mac…' : tap.note || f.meta || f.type || '';
+	const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
+	const li = el('li', 'msg msg-rich msg-file');
+	li.dataset.messageId = row.id;
+	li.dataset.s = state;
+	const card = el('button', 'file-card');
+	card.type = 'button';
+	// The name a screen reader says stands in for the card's children, so it carries the line.
+	card.setAttribute('aria-label', `Open ${name}` + (line ? `, ${line}` : ''));
+	const glyph = el('span', 'file-glyph');
+	glyph.innerHTML = FILE_PAGE;
+	// The type inside the page, as on the Mac's card (16px here: this page claims no exemption).
+	glyph.appendChild(el('span', 'file-ext', f.ext || 'FILE'));
+	const text = el('span', 'file-text');
+	text.append(el('span', 'file-name', name), el('span', 'file-line', line));
+	card.append(glyph, text);
+	card.addEventListener('click', () => openFile(row, name));
+	li.appendChild(card);
+	if (state === 'missing') {
+		const ask = el('button', 'hear', 'Ask Rich again');
+		ask.type = 'button';
+		ask.addEventListener('click', () => askAgain(row.thread_id || currentThreadId, name));
+		li.appendChild(ask);
+	}
+	const meta = el('p', 'msg-meta');
+	meta.appendChild(el('span', null, timeOf(row)));
+	li.appendChild(meta);
+	return li;
+}
+
+async function openFile(row, name) {
+	const f = row.file;
+	const tap = fileTaps.get(f.id) || {};
+	if (f.exists === false || tap.gone || tap.busy) return;
+	// The viewer's window is opened INSIDE the tap: a browser lets a page open one only then, and
+	// the file takes longer than that to come over. It is pointed at the file when it is here.
+	const view = window.open('', '_blank');
+	fileTaps.set(f.id, { busy: true });
+	scheduleRender();
+	try {
+		const blob = await api.fetchFile(f.id, row.thread_id || currentThreadId);
+		const url = URL.createObjectURL(blob);
+		if (view) view.location.href = url;
+		else {
+			// No window was allowed (an installed app may refuse one): the file is saved instead.
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = name;
+			link.click();
+		}
+		setTimeout(() => URL.revokeObjectURL(url), 60000);
+		fileTaps.delete(f.id);
+	} catch (err) {
+		if (view) view.close();
+		// A refusal the Mac marked final carries its own sentence (`routes.rs` `rich_file`).
+		const sentence = err && err.message;
+		fileTaps.set(f.id, sentence === FILE_GONE ? { gone: true }
+			: { note: err && err.reason === 'unreachable' ? 'Your Mac isn’t reachable from here. Tap to try again.'
+				: err && err.aboutThisMessage ? sentence : 'Your Mac could not send this file. Tap to try again.' });
+		if (err && err.reason === 'revoked') handleApiError(err);
+	}
+	scheduleRender();
+}
+
+/// "Ask Rich again" on a file that is gone: the sentence the Mac's card sends, through the same
+/// queue as anything typed here.
+async function askAgain(threadId, name) {
+	try {
+		await queue.enqueue({ clientId: newClientId(), threadId, kind: 'text', text: `Please send ${name} again.`, sentAt: new Date().toISOString() });
+		render(currentThreadId === threadId);
+		flushQueue();
+	} catch {
+		setHoldNote('Your message was not saved. Try again.', true);
+	}
 }
 
 // ---------------------------------------------------------------------------------------------
