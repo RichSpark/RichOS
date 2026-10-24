@@ -998,15 +998,14 @@ def shadow_start(payload, review, profile, identity, project):
         fingerprint = shadow_fingerprint(period, model, profile, project)
         if review.get("access_sha256") != fingerprint["access_sha256"]:
             raise ValueError("configured review access changed before collection")
-        if period:
-            root.mkdir(parents=True, exist_ok=True, mode=0o700)
-            with locked(root / "period.lock"):
-                manifest = root / "period.json"
-                if manifest.exists():
-                    if json.loads(manifest.read_text()) != fingerprint:
-                        raise ValueError("shadow inputs changed; select a new PIERCE_SHADOW_PERIOD")
-                else:
-                    atomic(manifest, fingerprint)
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with locked(root / "period.lock"):
+            manifest = root / "period.json"
+            if manifest.exists():
+                if json.loads(manifest.read_text()) != fingerprint:
+                    raise ValueError("shadow inputs changed; select a new PIERCE_SHADOW_PERIOD")
+            else:
+                atomic(manifest, fingerprint)
         (root / "jobs").mkdir(parents=True, exist_ok=True, mode=0o700)
         (root / "pairs").mkdir(exist_ok=True, mode=0o700)
         at = time.time()

@@ -432,9 +432,9 @@ def run(job_path):
         return 1
     pair, request = job["pair"], job["request"]
     try:
-        if root().parent.name == "periods":
+        if job.get("collection") or root().parent.name == "periods":
             collection = job.get("collection") or {}
-            expected = {"period": root().name, "model": job["model"], "effort": job["effort"],
+            expected = {"period": root().name if root().parent.name == "periods" else "", "model": job["model"], "effort": job["effort"],
                         "source_sha256": pierce.SOURCE_SHA256,
                         "profile_sha256": hashlib.sha256(job["profile"].encode()).hexdigest(),
                         "rules_sha256": hashlib.sha256(pierce.REVIEW_RULES.encode()).hexdigest(),

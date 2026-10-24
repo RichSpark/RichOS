@@ -1449,8 +1449,14 @@ class HaikuParallelTrack(unittest.TestCase):
         self.assertIn("inputs changed", (root / "shadow.log").read_text())
 
     def test_access_change_cannot_enter_an_existing_period_or_start_a_queued_twin(self):
+        self.assert_access_change_is_rejected("before-access-change")
+
+    def test_legacy_collection_also_pins_configured_access(self):
+        self.assert_access_change_is_rejected(None)
+
+    def assert_access_change_is_rejected(self, period):
         S = shadow_module()
-        path, pair, first = self.job(period="before-access-change")
+        path, pair, first = self.job(period=period)
         root = path.parent.parent
         manifest = (root / "period.json").read_bytes()
         private = self.root / "new private root"
