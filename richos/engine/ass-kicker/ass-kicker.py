@@ -1266,12 +1266,11 @@ def _staged_in_commit(path, traffic):
 
 
 # AN EXISTING RECORD IS LOOKED UP, NOT RE-DEMANDED (orchestration reliability R6/A7,
-# richos-hq docs/prds/2026-10-23-orchestration-reliability.md). 2026-10-23 14:06-14:12Z:
-# "That's on the follow-up list in the private repo (`docs/plans/follow-ups.md`, commit
-# `f0db3a01b`)" was alerted twice as "in no committed repository file", though f0db3a01b
-# (an earlier turn) had added that item. Two traps: code spans are stripped before claims
-# are read, so the path and SHA must come from the raw reply; and a SHA counted only when
-# this turn's traffic carried it.
+# richos-hq docs/prds/2026-10-23-orchestration-reliability.md). A reply saying an item is
+# already on the follow-up list and citing the commit that added it is checked against
+# that commit, never alerted as "in no committed repository file". Two traps: code spans
+# are stripped before claims are read, so the path and SHA must come from the raw reply;
+# and a commit made in an earlier turn counts, not only one this turn's traffic carried.
 #
 # WHAT THE LOOKUP ESTABLISHES, AND WHAT IT DOES NOT. When the claim's paragraph names the
 # follow-up list and cites a commit, the commit is resolved in the repositories the

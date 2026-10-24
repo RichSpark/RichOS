@@ -16367,7 +16367,7 @@
     },
     "ass-kicker/ass-kicker.py": {
       "source": "ass-kicker/ass-kicker.py",
-      "sha256": "d7df49730856f8c4c9b7536c32e45ef1e9a1cb9e8ddaaf659087902b9149b667",
+      "sha256": "988262e23d836fb79fc90fe0993f245c028d23131567cb5c12deed57743a08d6",
       "evidence": "AST I/O/import boundaries: parses payload/transcript data, lists role names, reads team JSON and appends a verdict ledger. The only dynamic imports are the fixed turn-manifest and idle-land analyzers. Neither transcript commands nor role Markdown are executed. Ambient roster inputs require separate execution-reuse qualification. ARM 3 (record claims) additionally reads the turn's tool inputs and results from the transcript, checks each write target's ancestors for a .git entry, and runs a read-only git check-ignore there; it writes nothing beyond the same verdict ledger and, on stdout, one RICHOS_RECORD_ALERT line the wrapper turns into lead-only context (read-only, no new file or key).",
       "keys": [],
       "edges": [
@@ -17170,7 +17170,7 @@
         "ass-kicker/tests/record-claims.replay.py": "4f3825c0c465b209a9a32296bd4768c0cc3e911368248bf7822f980ac6acff4d",
         "scripts/hooks/guard-no-shell-c.sh": "dbd0dfb97e292c47b04cfce97b09e3fb18c642b7fd88de21850a4d255069094e",
         "scripts/lib/host_child.py": "59fdb01f44f03ef847210ea9e55aa6b2adc226827c10f11805a2bc2335210b4a",
-        "ass-kicker/ass-kicker.py": "d7df49730856f8c4c9b7536c32e45ef1e9a1cb9e8ddaaf659087902b9149b667",
+        "ass-kicker/ass-kicker.py": "988262e23d836fb79fc90fe0993f245c028d23131567cb5c12deed57743a08d6",
         "ass-kicker/tests/ass-kicker.test.sh": "7f6decadf86610426bca65a511937200b91ad3c9a0730b063accb7e7911a6576",
         "scripts/hooks/ass-kicker.sh": "67958c5559f0271a699ee95462636009f5547ad1212124139137827b0a6006c1"
       }
@@ -17848,7 +17848,7 @@
         "scripts/lib/shared_scratchpad.py": "3f246169938d8471e79b09b272118401d836fcd55f485397c8ba142bdd23adf3",
         "scripts/hooks/guard-no-shell-c.sh": "dbd0dfb97e292c47b04cfce97b09e3fb18c642b7fd88de21850a4d255069094e",
         "scripts/hooks/ass-kicker.sh": "67958c5559f0271a699ee95462636009f5547ad1212124139137827b0a6006c1",
-        "ass-kicker/ass-kicker.py": "d7df49730856f8c4c9b7536c32e45ef1e9a1cb9e8ddaaf659087902b9149b667"
+        "ass-kicker/ass-kicker.py": "988262e23d836fb79fc90fe0993f245c028d23131567cb5c12deed57743a08d6"
       },
       "evidence": "Enumerates PreToolUse/Stop registrations and matcher payloads; boundary assertion classifies every event. Full dynamic helper inventory is source-bound."
     },
