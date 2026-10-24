@@ -110,6 +110,9 @@
 #        a later look tells it (the reviewer's fixture capped_lost_notice.py)
 #   W34  the NOT CONVERGING notice is kept until its output is accepted, like its
 #        verdict: a failed pipe, or no acknowledgment, tells both again
+#   W36  a NO VERDICT TWICE notice is told once across sessions, not once per session,
+#        and never for a commit already on main (2026-10-24: four notices from a session
+#        ended 2026-10-21, for landed commits, told again by a new session)
 #
 # Every case loads scripts/lib/app_review.py too: review_watch.py imports its app_paths.
 # The app mode (--app-state) and app_review.py's mid-job notice are driven over the real
@@ -2487,6 +2490,66 @@ waitcalls 1
 A="$(lastargv)"
 [ "$RC" -eq 0 ] && [ "$(ncalls)" = "1" ] && has "$A" '"--trigger", "handover"'
 check "W35 the same end with no stop or wait recorded (a silent death): still one handover review" $? "calls=$(ncalls) argv=$A out=$OUT"
+
+# --- W36 ---------------------------------------------------------------------
+# 2026-10-24 13:32Z: a new session's watcher printed four NO VERDICT TWICE notices that a session
+# ended on 2026-10-21 had already been told, for commits already on main. The told mark of a notice
+# for another session's lead lived only in this session's told.json, so every new session told them
+# again. Through the real tick and tell, in a real repository: an old session's two losses of a
+# commit on main and of one that is not, then a look by a new session and a look by the next one.
+python3 - "$LIB" "$SB/w36" <<'PY'
+import io, json, os, subprocess, sys
+lib, root = sys.argv[1:3]
+os.environ["SECOND_REVIEW_STATE_DIR"] = os.path.join(root, "sr")
+os.environ["REVIEW_WATCH_STATE_DIR"] = os.path.join(root, "rw")
+os.environ.pop("RICHOS_REVIEW_WATCH_ACKS", None)
+sys.path.insert(0, lib)
+import review_watch as rw
+
+repo = os.path.join(root, "fictional-repository")
+os.makedirs(repo)
+
+
+def g(*args):
+    return subprocess.run(["git", "-C", repo, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Author",
+                           "-c", "user.email=author@example.invalid", "-c", "commit.gpgsign=false"] + list(args),
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
+g("init", "-q", "-b", "main")
+g("commit", "-q", "--allow-empty", "-m", "landed work")
+landed = g("rev-parse", "HEAD")
+g("checkout", "-q", "-b", "cc/worker-open")
+g("commit", "-q", "--allow-empty", "-m", "work that never landed")
+open_tip = g("rev-parse", "HEAD")
+g("checkout", "-q", "main")
+
+now = rw.parse_iso("2026-10-24T13:32:00Z")
+attempts = [{"repo": repo, "tip": tip, "work": "teammate:old--" + name, "name": name, "session": "lead-old",
+             "outcome": "lost", "trigger": "long-job", "why": "the reviewer exited without a verdict"}
+            for tip, name in ((landed, "worker-landed"), (open_tip, "worker-open")) for _ in range(2)]
+
+
+class Watcher(object):
+    def look(self, t, state):
+        return rw.tell(t, state, [], rw.Book([], {}, attempts), [], [], attempts)
+
+
+rw.HOST_JSON["on"] = False
+looks = []
+for n, lead in enumerate(("lead-new", "lead-next")):
+    rw.MONITOR["session"] = lead
+    out = io.StringIO()
+    rw.tick(Watcher(), rw.session_dir(lead), now=now + 60 * n, out=out)
+    looks.append(out.getvalue())
+got = {"the landed commit is never told": not any("worker-landed" in b for b in looks),
+       "the new session tells the unlanded one": "[NO VERDICT TWICE] worker-open" in looks[0],
+       "the next session tells it no more": "NO VERDICT TWICE" not in looks[1]}
+print("    %s" % got)
+sys.exit(0 if all(got.values()) else 1)
+PY
+check "W36 a new session never re-tells an older session's NO VERDICT TWICE notice, and never one for a commit on main" \
+    $? "see above"
 
 # --- W04 ---------------------------------------------------------------------
 resetstate

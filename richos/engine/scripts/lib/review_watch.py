@@ -1798,17 +1798,22 @@ def tell(now, sstate, rows, book, items, problems, attempts):
     # this is the only word that automatic reviews of the commit have stopped. For an owner this
     # watcher delivers to it carries its key and is recorded in `delivered` only once accepted
     # (PRINTED, tick); a refused or failed delivery tells it again at the next look. `told` still
-    # holds one told under the earlier rule, and one shown to a lead that is not this watcher's.
+    # holds one told under the earlier rule.
+    # ONCE, NOT ONCE PER SESSION (2026-10-24 13:32Z: four notices of a session ended 2026-10-21, for
+    # commits already on main, told again by a new session's watcher): one shown to a lead that is
+    # not this watcher's is recorded in the shared `delivered` too, never only in this session's
+    # `told`, and a commit already on its repository's main is not told at all: the work landed.
     for k, key in lost_twice.items():
         if k in told or k in delivered:
+            continue
+        if key[0] and git(key[0], "merge-base", "--is-ancestor", str(key[1]), "refs/heads/main") is not None:
             continue
         a = book.losses[key][-1]
         session = a.get("session") or getattr(items_by_key.get(key + (a.get("work") or "",)), "session", "") or ""
         add(["  [NO VERDICT TWICE] %s, %s@%s: %s" % (a.get("name"), os.path.basename(key[0] or ""),
                                                     str(key[1])[:12], " ".join(str(a.get("why")).split())[:300]),
              "      Nothing more starts for this commit by itself. You can: fix the cause, then run "
-             "%s by hand." % "second-review.sh"], session=session, key=k if ours(session) else None,
-            mark=None if ours(session) else (k, {"first": now}))
+             "%s by hand." % "second-review.sh"], session=session, key=k)
     # -- what could not be read or started ------------------------------------------
     for p in problems:
         k = "problem:" + p[:120]
