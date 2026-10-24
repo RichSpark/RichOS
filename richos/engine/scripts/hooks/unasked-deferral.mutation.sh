@@ -189,7 +189,7 @@ mutant unquoted-notice "1b " "$H" \
     "quoting the construction is what lets the lead check it against the original request."
 
 mutant vague-notice "1c " "$H" \
-    'check his original request' \
+    'check the original request' \
     'FYI' \
     "the notice must name the lead's next action, not merely announce that something happened."
 

@@ -315,5 +315,5 @@ fi
 # and nothing is said to the person. The lead reads it once in a continued turn,
 # checks the original request and records the real work or drops the match.
 stop_notice_lead "$KEY" \
-    "DEFERRAL CHECK (unverified, report only): this reply says \"${QUOTE}\". If it postpones work Alex asked for and he did not choose that, check his original request, then start it, put the choice to him in your reply with the current default, or record the real work with workspaces.sh hold <name> --what '...' --until <agent:|review:|at:|ceo:end>. If it does not postpone his work, ignore this. It is not a work item and nothing was recorded. $HOOK_TAG"
+    "DEFERRAL CHECK (unverified, report only): this reply says \"${QUOTE}\". If it postpones work the CEO asked for and the CEO did not choose that, check the original request, then start it, put the choice to the CEO in your reply with the current default, or record the real work with workspaces.sh hold <name> --what '...' --until <agent:|review:|at:|ceo:end>. If it does not postpone work the CEO asked for, ignore this. It is not a work item and nothing was recorded. $HOOK_TAG"
 exit 0

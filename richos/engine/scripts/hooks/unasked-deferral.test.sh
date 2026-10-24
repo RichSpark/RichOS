@@ -157,8 +157,8 @@ if names "deliberately not spawning"; then
     ok "1b  the notice QUOTES the construction it matched, not a count"
 else bad "1b  the notice QUOTES the construction it matched" "$HOUT"; fi
 
-if names "check his original request"; then
-    ok "1c  the notice tells the lead what to do: check his original request, then act or drop it"
+if names "check the original request"; then
+    ok "1c  the notice tells the lead what to do: check the original request, then act or drop it"
 else bad "1c  the notice names the lead's next action" "$HOUT"; fi
 
 if [ "$HRC" -eq 0 ]; then ok "1d  it REPORTS, it does not block — exit 0"
