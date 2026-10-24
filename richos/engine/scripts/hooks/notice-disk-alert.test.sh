@@ -393,6 +393,94 @@ else
     bad "D11b the cleanup item stayed after the scheduled result recovered"
 fi
 
+# ---------------------------------------------------------------------------
+# D12 — KEPT LEFTOVERS ARE TOLD ONCE PER SET; EVERY ALARM STILL REPEATS
+# ---------------------------------------------------------------------------
+# CEO, 2026-10-24: "remove obsolete instructions and repeated administrative
+# noise without hiding genuine failures". The mixed state of 16:00:44Z that day
+# had no failure, only leftovers the scheduled cleanup kept on purpose, and the
+# turn end printed MASSIVE ALERT about them every turn. A REAL session here: a
+# payload with a session id and an adopted root, so the ledger exists and the
+# once-per-set memory is the one a lead's session has.
+SESSION_PAYLOAD="$SANDBOX/payload.json"
+printf '{"session_id": "d12sess-0001", "cwd": "%s"}\n' "$SANDBOX" >"$SESSION_PAYLOAD"
+run_session_hook() {
+    DISK_WATCHDOG_CONFIG="$CFG" \
+    DISK_WATCHDOG_LOG="$LOG" \
+    RICHOS_LAUNCH_AGENTS_DIR="$LA" \
+    CLAUDE_CONFIG_DIR="$LEDGER_DIR" \
+    RICHOS_ENTITY_ROOT="$SANDBOX" \
+    bash "$HOOK" --event Stop <"$SESSION_PAYLOAD" 2>"$SANDBOX/err.txt" | python3 -c '
+import json, sys
+text = sys.stdin.read().strip()
+try:
+    print((json.loads(text).get("systemMessage") or "") if text else "")
+except Exception:
+    print("UNPARSEABLE: " + text)
+'
+}
+KEPT_ROWS='{"scope": "/v/ab/worktrees", "class": "codex-worktree", "condition": "main-unreadable", "count": 1, "bytes": 0, "identity": "aaaa", "cause": "1 undecided codex-worktree entry (0 B), e.g. /v/ab/worktrees/hh/prospects: main of /u/prospects cannot be read"}, {"scope": "/v/codex/worktrees", "class": "codex-worktree", "condition": "chat-attached", "count": 13, "bytes": 0, "identity": "bbbb", "cause": "13 undecided codex-worktree entries (0 B), e.g. /v/codex/worktrees/a/richos: finished, but a Codex chat still has it attached, so it is kept"}, {"scope": "/v/tmp/codex", "class": "tmp-unknown", "condition": "wall-2", "count": 13, "bytes": 6299191717, "identity": "cccc", "cause": "13 undecided tmp-unknown entries (5.9 GB), e.g. /v/tmp/codex/h: wall 2: this tree contains a .git"}'
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "failures": 0, "undecidable": 27, "verdict": "undecided", "unresolved": ['"$KEPT_ROWS"']'
+M1="$(run_session_hook)"; M2="$(run_session_hook)"
+if printf '%s' "$M1" | grep -q '^Cleanup, kept or undecided: 27 entries in 3 group(s) the scheduled run of .* left in place and will not delete on its own; told once per set' \
+   && ! printf '%s' "$M1" | grep -q 'MASSIVE ALERT' && [ -z "$M2" ]; then
+    ok "D12  kept leftovers with no failure: one honest short line, then quiet the next turn"
+else
+    bad "D12  kept leftovers alarmed or repeated (turn 1: $M1 | turn 2: $M2)"
+fi
+# Only sizes and times change: still the same set, still quiet.
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "last_apply_epoch": int(time.time()) - 600, "unresolved": ['"$(printf '%s' "$KEPT_ROWS" | sed 's/6299191717/7299191717/; s/(5.9 GB)/(6.8 GB)/')"']'
+M3="$(run_session_hook)"
+if [ -z "$M3" ]; then
+    ok "D12a an unchanged set whose sizes and times moved stays quiet"
+else
+    bad "D12a a size or time change re-told the same kept set: $M3"
+fi
+# A new leftover changes the set: told once more, then quiet again.
+NEW_ROWS="$(printf '%s' "$KEPT_ROWS" | sed 's/"count": 13, "bytes": 0, "identity": "bbbb"/"count": 14, "bytes": 0, "identity": "bbbd"/')"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": ['"$NEW_ROWS"']'
+M4="$(run_session_hook)"; M5="$(run_session_hook)"
+if printf '%s' "$M4" | grep -q '^Cleanup, kept or undecided: 28 entries' && [ -z "$M5" ]; then
+    ok "D12b a new leftover is told once more, and the new set then goes quiet"
+else
+    bad "D12b a changed kept set was not told once (turn 1: $M4 | turn 2: $M5)"
+fi
+# The SAME entries in a changed condition are a changed set: told once more.
+COND_ROWS="$(printf '%s' "$NEW_ROWS" | sed 's/"condition": "main-unreadable", "count": 1, "bytes": 0, "identity": "aaaa"/"condition": "chat-attached", "count": 1, "bytes": 0, "identity": "aaab"/')"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": ['"$COND_ROWS"']'
+M6="$(run_session_hook)"; M7="$(run_session_hook)"
+if printf '%s' "$M6" | grep -q '^Cleanup, kept or undecided: 28 entries' && [ -z "$M7" ]; then
+    ok "D12b2 the same entries in a changed condition are told once more"
+else
+    bad "D12b2 a changed condition on the same entries was not told (turn 1: $M6 | turn 2: $M7)"
+fi
+NEW_ROWS="$COND_ROWS"
+# EVERY ALARM STILL REPEATS EVERY TURN beside the told set: a real deletion
+# failure, a failed (refused) run, a stale run, and low disk.
+alarm_twice() {          # <label> ; prints PASS/FAIL for two consecutive turns
+    local a b
+    a="$(run_session_hook)"; b="$(run_session_hook)"
+    if printf '%s' "$a" | grep -q "^MASSIVE ALERT — DISK: .*$2" \
+       && printf '%s' "$b" | grep -q "^MASSIVE ALERT — DISK: .*$2" \
+       && ! printf '%s' "$b" | grep -q 'Cleanup, kept or undecided'; then
+        ok "$1"
+    else
+        bad "$1 (turn 1: $a | turn 2: $b)"
+    fi
+}
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "failures": 1, "unresolved": ['"$NEW_ROWS"', {"scope": "/v/tmp", "class": "deletion", "count": 1, "cause": "1 deletion(s) failed, e.g. /v/tmp/x: permission denied"}]'
+alarm_twice "D12c a new real deletion failure beside the told set alerts, every turn" "cleanup has not recovered: /v/tmp: 1 deletion(s) failed"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": [{"scope": "run", "cause": "the run refused: lsof is not on PATH"}]'
+alarm_twice "D12d a failed scheduled run alerts, every turn" "cleanup has not recovered: run: the run refused"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "last_apply_epoch": int(time.time()) - 13 * 3600, "unresolved": ['"$NEW_ROWS"']'
+alarm_twice "D12e a stale scheduled run alerts, every turn" "past the 12 h window"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": ['"$NEW_ROWS"']'
+cp "$CFG" "$CFG.d12"
+sed -i.bak 's/^DISK_RICH_ALERT_GB=.*/DISK_RICH_ALERT_GB="999999"/' "$CFG"
+alarm_twice "D12f low disk beside the told set alerts, every turn" "below the declared"
+cp "$CFG.d12" "$CFG"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json"
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
