@@ -163,6 +163,12 @@ pub(crate) fn observe_account_switch(scope:&StatusToolScope,facts:&Value)->Resul
     append(scope,"stu",&Message {handoff:false,from:"account-switch".into(),text:facts.to_string(),instruction:None,work:None})
 }
 
+/// The reload after Stu's turn registered a changed team (`work_host.rs` run_message): one
+/// more turn for him, so the work he left for it goes on. A host observation, like the others.
+pub(crate) fn observe_team_reloaded(scope:&StatusToolScope)->Result<(),String> {
+    append(scope,"stu",&Message {handoff:false,from:"team-reload".into(),text:json!({"event":"team_reloaded"}).to_string(),instruction:None,work:None})
+}
+
 pub(crate) fn observe_user_stop(scope:&StatusToolScope,assignment:&str,obligation:&str,at:u64)->Result<(),String> {
     append(scope,"stu",&Message {handoff:false,from:"user-control".into(),text:json!({"event":"user_stop",
         "assignment_id":assignment,"obligation_id":obligation,"requested_at_ms":at}).to_string(),instruction:None,work:None})
