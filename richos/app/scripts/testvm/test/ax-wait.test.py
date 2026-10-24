@@ -74,6 +74,7 @@ WALKS = {
     'hire-walk.py': 'HireWalk', 'stu-reminder-walk.py': 'StuReminderWalk', 'handoff-real-walk.py': 'HandoffWalk',
     'dictation-sheet-walk.py': 'SheetWalk', 'output-walk.py': 'OutputWalk', 'first-send-walk.py': 'FirstSendWalk',
     'video-watch-walk.py': 'VideoWatchWalk', 'worker-approve-walk.py': 'WorkerApproveWalk',
+    'work-lease-walk.py': 'WorkLeaseWalk',
 }
 
 
