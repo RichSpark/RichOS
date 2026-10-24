@@ -560,29 +560,32 @@ def due_key(d):
 def record_told_due(sid, due, now=None):
     """The SessionStart notice (workspaces.lifecycle) told these due items: they are
     recorded in this session's announced.json under the key the first look makes, so
-    that look does not tell them again unchanged. A changed item has another key."""
+    that look does not tell them again unchanged. A changed item has another key. Past
+    DUE_SHOWN items the notice showed the "more due" pointer, recorded under due:more."""
     if not sid or not due:
         return
     now = clock() if now is None else now
+    told = [(due_key(d), d["since"], d["name"], d["detail"]) for d in due[:DUE_SHOWN]]
+    if len(due) > DUE_SHOWN:
+        told.append(("due:more", now, "%d more" % (len(due) - DUE_SHOWN), "more due work"))
     sd = session_dir(sid)
     path = os.path.join(sd, "announced.json")
     with announced_lock(sd):
         state = _read_json(path)
         opened = dict(state.get("open") or {})
-        for d in due[:DUE_SHOWN]:
-            prev = opened.get(due_key(d)) or {"first": now, "count": 1, "since": d["since"], "who": d["name"],
-                                             "what": d["detail"]}
+        for key, since, who, what in told:
+            prev = opened.get(key) or {"first": now, "count": 1, "since": since, "who": who, "what": what}
             prev.update(last=now, missed=0)
-            opened[due_key(d)] = prev
+            opened[key] = prev
         state["open"] = opened
         _write_json(path, state)
 
 
 class announced_lock(object):
     """A short exclusive lock around one read-modify-write of a session's announced.json.
-    Its two writers (the tick's final write, record_told_due) each read the file inside it,
-    so neither ever replaces the file with a copy older than the other's write. Held for a
-    read and a write only, never across a look. A lock that cannot be opened is not taken."""
+    Its two writers (the tick's announce decision and write, record_told_due) each read the
+    file inside it, so neither decides from or writes back a copy older than the other's
+    write. Never held across a look. A lock that cannot be opened is not taken."""
 
     def __init__(self, sd):
         self.path, self.fd = os.path.join(sd, "announced.lock"), None
@@ -1628,7 +1631,6 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
     th = thresholds()
     path = os.path.join(sd, "announced.json")
     state = _read_json(path)
-    read_keys = set(state.get("open") or {})
     esc_prev = state.get("esc")
     idle_prev = state.get("idle")
     lead_idle = lead_is_idle(src, sid)
@@ -1643,40 +1645,41 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
     except Exception as exc:  # noqa: BLE001: a failed escalation look is reported, never the end of watching
         esc_lines, esc_state = [], esc_prev
         esc_problems = ["the escalation watch failed (%s: %s)" % (exc.__class__.__name__, str(exc)[:160])]
+    failed = ""
     try:
         stalls, problems = look(src, now, sid, th, due=lead_idle)
         problems = problems + esc_problems
     except Exception as exc:  # noqa: BLE001: one failed look is reported, never the end of watching
-        stalls, problems = [], []
-        problems.append("a look failed (%s: %s)" % (exc.__class__.__name__, str(exc)[:160]))
-        keep = dict(state.get("open") or {})
-        lines, _new = announce({"open": {}}, [], problems, now, th)
-        key = "blind:" + problems[0][:80]
-        if key in keep:
-            lines = []
-        else:
-            keep[key] = {"first": now, "last": now, "count": 1, "since": now, "who": "stall-watch",
-                         "what": "a look failed", "missed": 0}
-        state = {"open": keep, "at": now}
-    else:
-        lines, state = announce(state, stalls, problems, now, th, keep="" if lead_idle else "due:")
-    if esc_state is not None:
-        state["esc"] = esc_state
-    state["idle"] = idle_state
-    # The ESCALATION-WATCH block goes FIRST: a monitor event counts as having
-    # told the lead only when its <event> body starts with ESCALATION-WATCH
-    # (escalations.monitor_event_keys).
-    lines = esc_lines + idle_lines + lines
-    if lines:
-        text = "\n".join(lines)
-        out.write((json.dumps({"text": text}) if json_lines else text) + "\n")
-        out.flush()
-    # A key written during this look by another writer (the SessionStart notice,
-    # record_told_due) is kept, never overwritten by the state read before it.
+        failed = "a look failed (%s: %s)" % (exc.__class__.__name__, str(exc)[:160])
+    # The look ran outside the lock; what to announce is decided inside it, against the
+    # state as it is now. The SessionStart notice (record_told_due) may have recorded an
+    # item during the look, and an item it told is not told again by this tick.
     with announced_lock(sd):
-        for k, v in (_read_json(path).get("open") or {}).items():
-            if k not in read_keys and k not in state.setdefault("open", {}):
-                state["open"][k] = v
+        state = _read_json(path)
+        if failed:
+            problems = [failed]
+            keep = dict(state.get("open") or {})
+            lines, _new = announce({"open": {}}, [], problems, now, th)
+            key = "blind:" + problems[0][:80]
+            if key in keep:
+                lines = []
+            else:
+                keep[key] = {"first": now, "last": now, "count": 1, "since": now, "who": "stall-watch",
+                             "what": "a look failed", "missed": 0}
+            state = {"open": keep, "at": now}
+        else:
+            lines, state = announce(state, stalls, problems, now, th, keep="" if lead_idle else "due:")
+        if esc_state is not None:
+            state["esc"] = esc_state
+        state["idle"] = idle_state
+        # The ESCALATION-WATCH block goes FIRST: a monitor event counts as having
+        # told the lead only when its <event> body starts with ESCALATION-WATCH
+        # (escalations.monitor_event_keys).
+        lines = esc_lines + idle_lines + lines
+        if lines:
+            text = "\n".join(lines)
+            out.write((json.dumps({"text": text}) if json_lines else text) + "\n")
+            out.flush()
         _write_json(path, state)
     return len(lines), len(state.get("open") or {})
 
