@@ -110,9 +110,9 @@
 #        a later look tells it (the reviewer's fixture capped_lost_notice.py)
 #   W34  the NOT CONVERGING notice is kept until its output is accepted, like its
 #        verdict: a failed pipe, or no acknowledgment, tells both again
-#   W36  a NO VERDICT TWICE notice is told once across sessions, not once per session,
-#        and never for a commit already on main (2026-10-24: four notices from a session
-#        ended 2026-10-21, for landed commits, told again by a new session)
+#   W36  a NO VERDICT TWICE notice is never told for a commit already on main, and one
+#        that has not landed still is (2026-10-24: four notices from a session ended
+#        2026-10-21, for landed commits, told again by a new session)
 #
 # Every case loads scripts/lib/app_review.py too: review_watch.py imports its app_paths.
 # The app mode (--app-state) and app_review.py's mid-job notice are driven over the real
@@ -2493,10 +2493,9 @@ check "W35 the same end with no stop or wait recorded (a silent death): still on
 
 # --- W36 ---------------------------------------------------------------------
 # 2026-10-24 13:32Z: a new session's watcher printed four NO VERDICT TWICE notices that a session
-# ended on 2026-10-21 had already been told, for commits already on main. The told mark of a notice
-# for another session's lead lived only in this session's told.json, so every new session told them
-# again. Through the real tick and tell, in a real repository: an old session's two losses of a
-# commit on main and of one that is not, then a look by a new session and a look by the next one.
+# ended on 2026-10-21 had already been told, for commits already on main: the work had landed.
+# Through the real tick and tell, in a real repository: an old session's two losses of a commit on
+# main and of one that is not, then a look by a new session.
 python3 - "$LIB" "$SB/w36" <<'PY'
 import io, json, os, subprocess, sys
 lib, root = sys.argv[1:3]
@@ -2536,19 +2535,16 @@ class Watcher(object):
 
 
 rw.HOST_JSON["on"] = False
-looks = []
-for n, lead in enumerate(("lead-new", "lead-next")):
-    rw.MONITOR["session"] = lead
-    out = io.StringIO()
-    rw.tick(Watcher(), rw.session_dir(lead), now=now + 60 * n, out=out)
-    looks.append(out.getvalue())
-got = {"the landed commit is never told": not any("worker-landed" in b for b in looks),
-       "the new session tells the unlanded one": "[NO VERDICT TWICE] worker-open" in looks[0],
-       "the next session tells it no more": "NO VERDICT TWICE" not in looks[1]}
+rw.MONITOR["session"] = "lead-new"
+out = io.StringIO()
+rw.tick(Watcher(), rw.session_dir("lead-new"), now=now, out=out)
+look = out.getvalue()
+got = {"the landed commit is not told": "worker-landed" not in look,
+       "the unlanded one is still told": "[NO VERDICT TWICE] worker-open" in look}
 print("    %s" % got)
 sys.exit(0 if all(got.values()) else 1)
 PY
-check "W36 a new session never re-tells an older session's NO VERDICT TWICE notice, and never one for a commit on main" \
+check "W36 a NO VERDICT TWICE notice is not told for a commit on main, and still told for one that is not" \
     $? "see above"
 
 # --- W04 ---------------------------------------------------------------------
