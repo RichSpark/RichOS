@@ -204,6 +204,42 @@ else
     bad "3b. a repository that declares no CEO record is never checked" "rc=$UNGOV_RC: $UNGOV_OUT"
 fi
 
+# 3d (orchestration reliability R3, 2026-10-24): "Asking an actually needed question must not
+# be intercepted by a contradictory premise check." On 2026-10-23 the dispatch gate demanded
+# the Windows CEO-TODO question and this check then intercepted it. A question that matches
+# a prepared item on his list was premise-checked when it was prepared: it goes through.
+cp "$HQ/wiki/open-items.md" "$SANDBOX/open-items.saved"
+cp "$HQ/.ceo-todos" "$SANDBOX/ceo-todos.saved"
+printf 'TODO_VIEW="CEO-TODOs.md"\nROOT_README="README.md"\nARTIFACT_ROOTS="q=."\n' >> "$HQ/.ceo-todos"
+mkdir -p "$HQ/docs"; echo "# protocol" > "$HQ/docs/windows-protocol.md"
+echo "# hq" > "$HQ/README.md"; echo "# view" > "$HQ/CEO-TODOs.md"
+cat >> "$HQ/wiki/open-items.md" <<'REC'
+
+### 1.2 READY-FOR-CEO — Windows real-capture test
+
+- **Open:** `q/docs/windows-protocol.md`
+- **Time:** 20 minutes
+- **Done:** every check in the protocol marked pass or fail
+- **Unblocks:** the Windows capture path
+
+## 3. Buildable now — nobody blocked
+REC
+fresh_state
+run_gate "Windows real-capture test: will you run the 20-minute protocol on a real Windows machine now? It unblocks the Windows capture path; every check gets pass or fail. The host keeps no question off your terminal when a hook fails." "Run it now." sess-9
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q "NOT A REFUSAL"; then
+    ok "3d. his prepared CEO-TODO question goes straight through, not intercepted (R3)"
+else
+    bad "3d. his prepared CEO-TODO question was intercepted" "rc=$RC $(printf '%s' "$OUT" | head -2 | tr '\n' ' ')"
+fi
+run_gate "G0 came back BLOCKED. The host keeps no question off your terminal when a hook fails, times out or is switched off." "RichOS draws its own prompts." sess-9b
+if [ "$RC" -eq 2 ]; then
+    ok "3e. POSITIVE CONTROL: with the prepared item on the list, an unrelated unmarked question is still checked"
+else
+    bad "3e. an unrelated question went through because a prepared item exists" "rc=$RC"
+fi
+cp "$SANDBOX/open-items.saved" "$HQ/wiki/open-items.md"
+cp "$SANDBOX/ceo-todos.saved" "$HQ/.ceo-todos"
+
 # FAIL OPEN. A gate that can wedge the ability to ask the CEO anything is worse
 # than the failure it prevents, so a broken predicate lets the question through.
 BROKEN="$SANDBOX/broken-engine"

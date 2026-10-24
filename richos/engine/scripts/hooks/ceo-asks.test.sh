@@ -136,7 +136,6 @@ write_seat_config() { # <CEO_TODOS_REPOS value, or empty to omit the key>
 write_seat_config "$TODOREPO"
 
 LEDGER="$SEAT/.claude/state/ceo-asks.jsonl"
-DEFERS="$SEAT/.claude/state/ceo-todos-defers.log"
 
 # --- payload builders ------------------------------------------------------
 # The tool_input shape here is COPIED from a real AskUserQuestion call recovered
@@ -364,30 +363,31 @@ else
 fi
 
 echo ""
-echo "=== C. the gate: a teammate dispatch while he has not been asked ==="
+echo "=== C. nothing refused; whether he was asked is the session's verdict ==="
+
+# asked <session> [app run] -> RC 0 when this session (or app run) has put an item to him
+asked() {
+    OUT="$(env -u RICHOS_OPERATOR_LEAD ${2:+RICHOS_OPERATOR_LEAD=$2} RICHOS_ENTITY_ROOT="$SEAT" bash "$STATUS" "$SEAT" --session "$1" 2>&1)"
+    RC=$?
+    return 0
+}
 
 reset_ledger
 run_hook "$GATE" "$(agent_payload S1 "do the thing")"
 say "C1" "$ERR"
-if [ "$RC" -eq 2 ] && printf '%s' "$ERR" | grep -q 'REFUSING THIS DISPATCH' \
-   && printf '%s' "$ERR" | grep -q '1\.1'; then
-    ok "C1. an unasked prepared item BLOCKS the dispatch and names the item"
+if [ "$RC" -eq 0 ] && [ -z "$ERR" ]; then
+    ok "C1. an unasked prepared item refuses NO dispatch (orchestration reliability R3) and adds nothing to it"
 else
-    bad "C1. an unasked prepared item BLOCKS the dispatch and names the item" "rc=$RC"
-fi
-if printf '%s' "$ERR" | grep -q 'AskUserQuestion'; then
-    ok "C1b. the refusal says how to discharge it — with AskUserQuestion"
-else
-    bad "C1b. the refusal says how to discharge it — with AskUserQuestion" "$ERR"
+    bad "C1. an unasked prepared item refuses NO dispatch" "rc=$RC $ERR"
 fi
 
 reset_ledger
 run_hook "$WITNESS" "$(ask_payload S1 - "$Q_SIGNING" "$L_SIGNING" "$D_SIGNING")"
-run_hook "$GATE" "$(agent_payload S1 "do the thing")"
+asked S1
 if [ "$RC" -eq 0 ]; then
-    ok "C2. one prepared item actually asked opens the gate for the session"
+    ok "C2. one prepared item actually asked makes the session's verdict SATISFIED"
 else
-    bad "C2. one prepared item actually asked opens the gate for the session" "rc=$RC $ERR"
+    bad "C2. one prepared item actually asked makes the session's verdict SATISFIED" "rc=$RC $OUT"
 fi
 
 # ===========================================================================
@@ -395,29 +395,29 @@ fi
 # ===========================================================================
 reset_ledger
 run_hook "$WITNESS" "$(ask_payload S1 - "What should we work on next?" "Ship it" "get moving")"
-run_hook "$GATE" "$(agent_payload S1 "do the thing")"
-if [ "$RC" -eq 2 ]; then
-    ok "C3. A JUNK QUESTION DISCHARGES NOTHING — the gate is still closed after it"
+asked S1
+if [ "$RC" -eq 1 ]; then
+    ok "C3. A JUNK QUESTION DISCHARGES NOTHING — the session is still OPEN after it"
 else
-    bad "C3. A JUNK QUESTION DISCHARGES NOTHING — the gate is still closed after it" "rc=$RC"
+    bad "C3. A JUNK QUESTION DISCHARGES NOTHING — the session is still OPEN after it" "rc=$RC"
 fi
 
 reset_ledger
 run_hook "$WITNESS" "$(ask_payload S1 agent-7 "$Q_SIGNING" "$L_SIGNING" "$D_SIGNING")"
-run_hook "$GATE" "$(agent_payload S1 "do the thing")"
-if [ "$RC" -eq 2 ]; then
-    ok "C4. a WORKER's matching question does not open the gate for the lead"
+asked S1
+if [ "$RC" -eq 1 ]; then
+    ok "C4. a WORKER's matching question does not count as the lead asking him"
 else
-    bad "C4. a WORKER's matching question does not open the gate for the lead" "rc=$RC"
+    bad "C4. a WORKER's matching question does not count as the lead asking him" "rc=$RC"
 fi
 
 reset_ledger
 run_hook "$WITNESS" "$(ask_payload S0 - "$Q_SIGNING" "$L_SIGNING" "$D_SIGNING")"
-run_hook "$GATE" "$(agent_payload S1 "do the thing")"
-if [ "$RC" -eq 2 ]; then
-    ok "C5. a question asked in ANOTHER session does not open this session's gate"
+asked S1
+if [ "$RC" -eq 1 ]; then
+    ok "C5. a question asked in ANOTHER session does not count for this one"
 else
-    bad "C5. a question asked in ANOTHER session does not open this session's gate" "rc=$RC"
+    bad "C5. a question asked in ANOTHER session does not count for this one" "rc=$RC"
 fi
 
 # C5b-C5g: THE APP RUN (operator contract notes §4 item 2, Frank's F10). In the
@@ -430,32 +430,23 @@ if grep -q '"app_run": "app-run-1"' "$LEDGER" 2>/dev/null && grep -q '"discharge
 else
     bad "C5b. the app's display witness records the app run beside the session" "$(cat "$LEDGER" 2>/dev/null)"
 fi
-run_hook_in_run app-run-1 "$GATE" "$(agent_payload S1 "do the thing")"
+asked S1 app-run-1
 if [ "$RC" -eq 0 ]; then
-    ok "C5c. an ask made once in an app run opens the gate for ANOTHER conversation's lead in that run"
+    ok "C5c. an ask made once in an app run counts for ANOTHER conversation's lead in that run"
 else
-    bad "C5c. an ask made once in an app run opens the gate for ANOTHER conversation's lead in that run" "rc=$RC $ERR"
+    bad "C5c. an ask made once in an app run counts for ANOTHER conversation's lead in that run" "rc=$RC $OUT"
 fi
-run_hook_in_run app-run-2 "$GATE" "$(agent_payload S1 "do the thing")"
-if [ "$RC" -eq 2 ]; then
-    ok "C5d. an ask from an EARLIER app run opens nothing in this one"
+asked S1 app-run-2
+if [ "$RC" -eq 1 ]; then
+    ok "C5d. an ask from an EARLIER app run counts for nothing in this one"
 else
-    bad "C5d. an ask from an EARLIER app run opens nothing in this one" "rc=$RC"
+    bad "C5d. an ask from an EARLIER app run counts for nothing in this one" "rc=$RC"
 fi
-run_hook "$GATE" "$(agent_payload S1 "do the thing")"
-if [ "$RC" -eq 2 ]; then
+asked S1
+if [ "$RC" -eq 1 ]; then
     ok "C5e. a session outside the app (no app run) is still keyed to its own session"
 else
     bad "C5e. a session outside the app (no app run) is still keyed to its own session" "rc=$RC"
-fi
-reset_ledger
-run_hook "$WITNESS" "$(ask_payload S0 - "$Q_SIGNING" "$L_SIGNING" "$D_SIGNING")"
-run_hook_in_run app-run-1 "$GATE" "$(agent_payload S1 "urgent work
-Another conversation already put 1.1 to him in this app run.")"
-if [ "$RC" -eq 2 ]; then
-    ok "C5f. a lead SAYING another conversation asked opens nothing; only a witnessed ask in this run does (§17)"
-else
-    bad "C5f. a lead SAYING another conversation asked opens nothing; only a witnessed ask in this run does (§17)" "rc=$RC"
 fi
 reset_ledger
 run_hook_in_run app-run-1 "$WITNESS" "$(app_ask_payload S0 app-run-1 q-2)"
@@ -464,27 +455,6 @@ if [ -z "$OUT" ]; then
     ok "C5g. a new conversation's lead in the same run is not told to put the same item to him again"
 else
     bad "C5g. a new conversation's lead in the same run is not told to put the same item to him again" "$OUT"
-fi
-
-reset_ledger
-rm -f "$DEFERS"
-run_hook "$GATE" "$(agent_payload S1 "urgent work
-ceo-todos-deferred: he said get on with it
-more prompt")"
-if [ "$RC" -eq 0 ] && [ -f "$DEFERS" ] && grep -q 'get on with it' "$DEFERS"; then
-    ok "C6. the 'ceo-todos-deferred:' prompt line permits the dispatch and is logged"
-else
-    bad "C6. the 'ceo-todos-deferred:' prompt line permits the dispatch and is logged" "rc=$RC $(cat "$DEFERS" 2>/dev/null)"
-fi
-
-reset_ledger
-run_hook "$GATE" "$(agent_payload S1 "urgent work
-ceo-todos-deferred:
-more prompt")"
-if [ "$RC" -eq 2 ]; then
-    ok "C7. a bare 'ceo-todos-deferred:' with no reason does NOT permit the dispatch"
-else
-    bad "C7. a bare 'ceo-todos-deferred:' with no reason does NOT permit the dispatch" "rc=$RC"
 fi
 
 reset_ledger
@@ -546,10 +516,11 @@ open(p, "w", encoding="utf-8").write(s)
 PY
 reset_ledger
 run_hook "$GATE" "$(agent_payload S1 "do the thing")"
+asked S1
 if [ "$RC" -eq 0 ]; then
-    ok "C11. NOTHING PREPARED: a list of unprepared items blocks nothing"
+    ok "C11. NOTHING PREPARED: a list of unprepared items asks for nothing"
 else
-    bad "C11. NOTHING PREPARED: a list of unprepared items blocks nothing" "rc=$RC $ERR"
+    bad "C11. NOTHING PREPARED: a list of unprepared items asks for nothing" "rc=$RC $OUT"
 fi
 write_record
 
@@ -559,12 +530,16 @@ echo "=== D. the Stop notice: a turn does not end quietly ==="
 reset_ledger
 run_hook "$STOPN" "$(stop_payload S1)"
 say "D1" "$OUT"
-if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'systemMessage' \
-   && printf '%s' "$OUT" | grep -q 'HE HAS NOT BEEN ASKED' \
-   && printf '%s' "$OUT" | grep -q '1\.1'; then
-    ok "D1. an unasked item ends the turn with a named item on the operator channel"
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | python3 -c 'import json,sys
+d = json.loads(sys.stdin.readline() or "{}")
+h = d.get("hookSpecificOutput") or {}
+sys.exit(0 if h.get("hookEventName") == "Stop" and "systemMessage" not in d
+         and "has not been put to him" in h.get("additionalContext", "")
+         and "1.1" in h.get("additionalContext", "")
+         and "next reply" in h.get("additionalContext", "") else 1)'; then
+    ok "D1. an unasked item reaches the LEAD's model input at turn end, named, to ask in its next reply (R3); nothing for the person"
 else
-    bad "D1. an unasked item ends the turn with a named item on the operator channel" "rc=$RC $OUT"
+    bad "D1. an unasked item reaches the LEAD's model input at turn end, named" "rc=$RC $OUT"
 fi
 if printf '%s' "$OUT" | grep -q '?'; then
     ok "D1b. it is rendered as a QUESTION, not as a count"
@@ -585,6 +560,40 @@ if printf '%s' "$OUT" | grep -q '1\.2'; then
     ok "D3. asking one item changes the set, so the notice speaks again with the next one"
 else
     bad "D3. asking one item changes the set, so the notice speaks again with the next one" "$OUT"
+fi
+
+# D5-D6 (orchestration reliability R3, A1): a question put in the REPLY is an ask
+# (CLAUDE.md §125), and an item already asked stays quiet.
+reset_ledger
+REPLY_PAYLOAD="$(CA_CWD="$SEAT" CA_Q="$Q_SIGNING $L_SIGNING: $D_SIGNING. Default meanwhile: I keep signing as it is." python3 -c '
+import json, os
+print(json.dumps({"hook_event_name": "Stop", "session_id": "S7", "cwd": os.environ["CA_CWD"],
+                  "stop_hook_active": False, "last_assistant_message": os.environ["CA_Q"]}))')"
+run_hook "$STOPN" "$REPLY_PAYLOAD"
+asked S7
+if [ "$RC" -eq 0 ] && grep -q '"source_hook": "Stop\[reply\]"' "$LEDGER" 2>/dev/null \
+   && grep -q '"matched_item": "1.1"' "$LEDGER"; then
+    ok "D5. his prepared question asked in the reply, with its default, is witnessed as the ask (§125)"
+else
+    bad "D5. his prepared question asked in the reply is witnessed as the ask" "rc=$RC $(cat "$LEDGER" 2>/dev/null)"
+fi
+run_hook "$STOPN" "$(stop_payload S7)"
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q '1\.1'; then
+    ok "D6. an item already asked is not asked again"
+else
+    bad "D6. an item already asked is not asked again" "rc=$RC $OUT"
+fi
+reset_ledger
+JUNK_REPLY="$(CA_CWD="$SEAT" python3 -c '
+import json, os
+print(json.dumps({"hook_event_name": "Stop", "session_id": "S8", "cwd": os.environ["CA_CWD"],
+                  "stop_hook_active": False, "last_assistant_message": "What should we work on next?"}))')"
+run_hook "$STOPN" "$JUNK_REPLY"
+asked S8
+if [ "$RC" -eq 1 ]; then
+    ok "D7. POSITIVE CONTROL: a reply asking an unrelated question asks nothing of his list"
+else
+    bad "D7. a reply asking an unrelated question asks nothing" "rc=$RC"
 fi
 
 write_seat_config "$SANDBOX/no-such-repo"
@@ -616,15 +625,16 @@ else
     bad "E2. it names the top item rather than counting the items" "$OUT"
 fi
 
-if printf '%s' "$OUT" | grep -q 'ceo-todos-deferred: <truthful reason>' \
+if printf '%s' "$OUT" | grep -q 'PUT THIS TO THE CEO IN YOUR NEXT REPLY' \
+   && printf '%s' "$OUT" | grep -q 'still current' \
+   && printf '%s' "$OUT" | grep -q 'Nothing is refused meanwhile' \
    && printf '%s' "$OUT" | grep -q 'cancellation as an answer' \
    && printf '%s' "$OUT" | grep -q 'complete current work queue' \
-   && printf '%s' "$OUT" | grep -q 'PUT THIS TO THE CEO BEFORE DISPATCHING ANYONE' \
    && printf '%s' "$OUT" | grep -q 'on 2026-08-31' \
-   && printf '%s' "$OUT" | grep -q 'for work he has directed in this session'; then
-    ok "E4. startup accurately explains authorized deferral without fabricating an answer"
+   && ! printf '%s' "$OUT" | grep -q 'ceo-todos-deferred'; then
+    ok "E4. startup asks for the question in the next reply, checked current first, and refuses nothing (R3)"
 else
-    bad "E4. startup deferral contract" "$OUT"
+    bad "E4. startup ask contract" "$OUT"
 fi
 
 write_seat_config ""
@@ -642,7 +652,7 @@ echo "=== F. the CLI face gives the same verdict the hooks give ==="
 reset_ledger
 OUT="$(bash "$STATUS" "$SEAT" 2>&1)"; RC=$?
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'verdict    : OPEN' \
-   && printf '%s' "$OUT" | grep -q 'ceo-todos-deferred:'; then
+   && printf '%s' "$OUT" | grep -q 'refuses nothing' && ! printf '%s' "$OUT" | grep -q 'ceo-todos-deferred:'; then
     ok "F1. ceo-asks-status.sh exits 1 and reports OPEN when he has not been asked"
 else
     bad "F1. ceo-asks-status.sh exits 1 and reports OPEN when he has not been asked" "rc=$RC $OUT"

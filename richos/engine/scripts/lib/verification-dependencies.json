@@ -395,7 +395,7 @@
     },
     "scripts/hooks/guard-ceo-ask-first.sh": {
       "source": "scripts/hooks/guard-ceo-ask-first.sh",
-      "sha256": "4dc92ca5c60ff39ed949fc88a8a4955264ece2d17bc689f9c2a2eb8b1bae0728",
+      "sha256": "f4ede84780824e4b6065b68b603ffc94f7e1a65affa48a3b9b91c386f119d20a",
       "evidence": "Resolves the governed root then delegates config access to ca_resolve. Its other inputs are the hook payload and per-session ledger.",
       "keys": [],
       "edges": [
@@ -409,7 +409,7 @@
     },
     "scripts/hooks/notice-ceo-unasked.sh": {
       "source": "scripts/hooks/notice-ceo-unasked.sh",
-      "sha256": "f4af34765475356f416a9b7e429dc320e17fbaf63969f8de1a6b34e5a5d859c1",
+      "sha256": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
       "evidence": "Resolves the governed root then delegates config access to ca_resolve. Its other inputs are the hook payload and per-session ledger.",
       "keys": [],
       "edges": [
@@ -426,7 +426,7 @@
     },
     "scripts/hooks/session-start-ceo-ask.sh": {
       "source": "scripts/hooks/session-start-ceo-ask.sh",
-      "sha256": "722f3e24fc066989c8721ccfa8a5b0e4b1746b265edca30083c2e3febd297079",
+      "sha256": "5880b3f3a494bd25f9320b6786efe37cb357edde9406974e6b064ee274744b26",
       "evidence": "Resolves the governed root then delegates config access to ca_resolve. Its other inputs are the hook payload and per-session ledger.",
       "keys": [],
       "edges": [
@@ -440,7 +440,7 @@
     },
     "scripts/ceo-asks-status.sh": {
       "source": "scripts/ceo-asks-status.sh",
-      "sha256": "ee087fd11e7a3a9507845240dd367c3528935f31d85c1ba7bb9eca004de2f7cf",
+      "sha256": "bd01c8ce9d195b5c77cc0011b08b8ac983865d08c3a8f0e8feb31d103fb2a650",
       "evidence": "Uses the supplied entity-root argument, delegates config access to ca_resolve and reads that root\u2019s ask ledger.",
       "keys": [],
       "edges": [
@@ -565,7 +565,7 @@
     },
     "scripts/hooks/ceo-asks.test.sh": {
       "source": "scripts/hooks/ceo-asks.test.sh",
-      "sha256": "b7eea03ad88a87128b1f582f6352244b523c047b2292374d33caf9be65b240b0",
+      "sha256": "2b2c76a46d7b8bc71b476a5d2c721129fc0b915b25273fd0ae5819fb34b9b1e7",
       "evidence": "Creates a private entity config and private TODO declaration from literal values. Every hook/status invocation receives that entity root. Real hooks.json, installer, probe and notice text are read as registration/source data only. It never transports the real config. Nested mutations rebuild the same fixtures.",
       "keys": [],
       "edges": [
@@ -600,7 +600,7 @@
     },
     "scripts/hooks/ceo-asks.mutation.sh": {
       "source": "scripts/hooks/ceo-asks.mutation.sh",
-      "sha256": "725db41447a235f5ed23adda76b69987dda3e350b20fe9e932ae7f942573dfb1",
+      "sha256": "c7fb7f6d9c35b8c6f5193772563f7310d07cf5506a82fd7bee7d665f484b7320",
       "evidence": "Copies a finite hook/helper list, never the real configuration. Thirteen literal mutations change matching, gating and reporting, not config provenance. Nested ceo-asks.test.sh reconstructs private configs before execution. The ledger mutation needle now matches append/read mode, without changing executed helpers or settings provenance.",
       "keys": [],
       "edges": [
@@ -973,7 +973,7 @@
     },
     "scripts/hooks/guard-ceo-ruled-ask.sh": {
       "source": "scripts/hooks/guard-ceo-ruled-ask.sh",
-      "sha256": "be83072dbcedb12c393d97662c5f584cc97ff75d5d9c1c15368f2f1b7a59d5f3",
+      "sha256": "7d09f36f96bffd9aa0acf6fad76c77ceef5ebf5cf57fbdf12ce4ae54187b92bc",
       "evidence": "Resolves the governed entity then calls the deaf-lead, premise and ruling helpers; all setting reads are in those helpers. Renewed 2026-10-01: CHECK 0 pipes the payload to scripts/lib/blocking_ask.py check with the resolved entity and engine roots and acts only on its first field.",
       "keys": [],
       "edges": [
@@ -2632,7 +2632,7 @@
     },
     "scripts/hooks/premise-ask.test.sh": {
       "source": "scripts/hooks/premise-ask.test.sh",
-      "sha256": "144b1582a26e61b661e109ce58fa7cbf824ef1ee2527aed6491c655bbefc490d",
+      "sha256": "82535499f8bae0c1999047207c5827a0bb6e7358f1e5c6d72fdc0e96ef2e5e7f",
       "evidence": "Every gate call uses a generated CEO declaration or empty adopted config. The optional archive reads supplied transcript JSON and invokes only the premise predicate. The mutation callback reconstructs these same literal settings.",
       "keys": [],
       "edges": [
@@ -7274,7 +7274,7 @@
     },
     "scripts/hooks/notice-ceo-unasked.sh#unadopted-stop": {
       "source": "scripts/hooks/notice-ceo-unasked.sh",
-      "sha256": "f4af34765475356f416a9b7e429dc320e17fbaf63969f8de1a6b34e5a5d859c1",
+      "sha256": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
       "evidence": "Visibility suite invokes this hook with no CLI arguments and a new unadopted directory, first as explicit bad root then as cwd/payload. Root-failure/not-adopted paths terminate before entity config, transcript predicates or live-state checks. Bootstrap, module initialization and any pre-root session-recovery helper remain bound. The negative control only replaces stop_notice_abnormal output.",
       "keys": [],
       "edges": [
@@ -16695,7 +16695,7 @@
         "session-start-ceo-ask.sh"
       ],
       "sources": {
-        "scripts/hooks/ceo-asks.test.sh": "b7eea03ad88a87128b1f582f6352244b523c047b2292374d33caf9be65b240b0",
+        "scripts/hooks/ceo-asks.test.sh": "2b2c76a46d7b8bc71b476a5d2c721129fc0b915b25273fd0ae5819fb34b9b1e7",
         "scripts/hooks/notice-ceo-asks.sh": "a69920c5d344cc2f050112281e96c948b884b40a2c91416f01499d25f0618330",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -16703,12 +16703,12 @@
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "scripts/lib/ceo-todos.py": "5e6264edc76c9dc03b0c569c63de251dd5b053bd88e40aa7101538bbbeaf406b",
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
-        "scripts/hooks/guard-ceo-ask-first.sh": "4dc92ca5c60ff39ed949fc88a8a4955264ece2d17bc689f9c2a2eb8b1bae0728",
-        "scripts/hooks/notice-ceo-unasked.sh": "f4af34765475356f416a9b7e429dc320e17fbaf63969f8de1a6b34e5a5d859c1",
+        "scripts/hooks/guard-ceo-ask-first.sh": "f4ede84780824e4b6065b68b603ffc94f7e1a65affa48a3b9b91c386f119d20a",
+        "scripts/hooks/notice-ceo-unasked.sh": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
         "scripts/lib/stop-hook-notice.sh": "f1431988b7e290d871da89518cd3c6c2bfc455558517862097659472ddcf409d",
-        "scripts/hooks/session-start-ceo-ask.sh": "722f3e24fc066989c8721ccfa8a5b0e4b1746b265edca30083c2e3febd297079",
-        "scripts/ceo-asks-status.sh": "ee087fd11e7a3a9507845240dd367c3528935f31d85c1ba7bb9eca004de2f7cf",
-        "scripts/hooks/ceo-asks.mutation.sh": "725db41447a235f5ed23adda76b69987dda3e350b20fe9e932ae7f942573dfb1",
+        "scripts/hooks/session-start-ceo-ask.sh": "5880b3f3a494bd25f9320b6786efe37cb357edde9406974e6b064ee274744b26",
+        "scripts/ceo-asks-status.sh": "bd01c8ce9d195b5c77cc0011b08b8ac983865d08c3a8f0e8feb31d103fb2a650",
+        "scripts/hooks/ceo-asks.mutation.sh": "c7fb7f6d9c35b8c6f5193772563f7310d07cf5506a82fd7bee7d665f484b7320",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
@@ -16737,7 +16737,7 @@
       ],
       "sources": {
         "scripts/hooks/ceo-ruled.test.sh": "e135b5b7c3ad3cf859acaa38ced4c58e973e5df651315f1147fd4483f1e30c0d",
-        "scripts/hooks/guard-ceo-ruled-ask.sh": "be83072dbcedb12c393d97662c5f584cc97ff75d5d9c1c15368f2f1b7a59d5f3",
+        "scripts/hooks/guard-ceo-ruled-ask.sh": "7d09f36f96bffd9aa0acf6fad76c77ceef5ebf5cf57fbdf12ce4ae54187b92bc",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/premise-ask.sh": "54ed7bab6c1f1632458c6dbabc05f13dcec91f6ab262bfe3c5c2ae20b4b91080",
@@ -16859,7 +16859,7 @@
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
         "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
         "scripts/lib/record-canary.sh": "2cf0fc8ace8e444b2af29265e4fbb0fb08047e1b13978c7d41a79e594ede5c72",
-        "scripts/hooks/session-start-ceo-ask.sh": "722f3e24fc066989c8721ccfa8a5b0e4b1746b265edca30083c2e3febd297079",
+        "scripts/hooks/session-start-ceo-ask.sh": "5880b3f3a494bd25f9320b6786efe37cb357edde9406974e6b064ee274744b26",
         "scripts/lib/ceo-asks.sh": "90532e654d581669aafdc81d5b54f330d1488ee8161d2cef72af7421c9a2698d",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "scripts/lib/ceo-todos.py": "5e6264edc76c9dc03b0c569c63de251dd5b053bd88e40aa7101538bbbeaf406b",
@@ -16934,7 +16934,7 @@
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
-        "scripts/hooks/session-start-ceo-ask.sh": "722f3e24fc066989c8721ccfa8a5b0e4b1746b265edca30083c2e3febd297079",
+        "scripts/hooks/session-start-ceo-ask.sh": "5880b3f3a494bd25f9320b6786efe37cb357edde9406974e6b064ee274744b26",
         "scripts/lib/ceo-asks.sh": "90532e654d581669aafdc81d5b54f330d1488ee8161d2cef72af7421c9a2698d",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "scripts/lib/ceo-todos.py": "5e6264edc76c9dc03b0c569c63de251dd5b053bd88e40aa7101538bbbeaf406b",
@@ -17092,10 +17092,10 @@
         "scripts/hooks/guard-agent-state-claims.py": "341d0223962f9ccfa6298b3d6982dc55b5f3ea19ec5ea4ba1deb162380811ab5",
         "scripts/hooks/guard-brief-scope.sh": "d62b66830b5f8665bb7492b2278ad7261f3279401142b41296ab1d2ada78c9e3",
         "ass-kicker/brief-scope.py": "d6910b6891d7461b98d51b234343a004834e6fd4a3c52e5dc530b6539cf376a9",
-        "scripts/hooks/guard-ceo-ask-first.sh": "4dc92ca5c60ff39ed949fc88a8a4955264ece2d17bc689f9c2a2eb8b1bae0728",
+        "scripts/hooks/guard-ceo-ask-first.sh": "f4ede84780824e4b6065b68b603ffc94f7e1a65affa48a3b9b91c386f119d20a",
         "scripts/lib/ceo-asks.sh": "90532e654d581669aafdc81d5b54f330d1488ee8161d2cef72af7421c9a2698d",
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
-        "scripts/hooks/guard-ceo-ruled-ask.sh": "be83072dbcedb12c393d97662c5f584cc97ff75d5d9c1c15368f2f1b7a59d5f3",
+        "scripts/hooks/guard-ceo-ruled-ask.sh": "7d09f36f96bffd9aa0acf6fad76c77ceef5ebf5cf57fbdf12ce4ae54187b92bc",
         "scripts/lib/premise-ask.sh": "54ed7bab6c1f1632458c6dbabc05f13dcec91f6ab262bfe3c5c2ae20b4b91080",
         "scripts/lib/premise-ask.py": "2a6a079fbc0fab7937f90967c29c19e7ab2747a7286ec9923ec1dd685aa63e0a",
         "scripts/lib/ceo-ruled.sh": "737879339e074a0c41011974a8dcdc74bbbbf7118ffda2904e2f8da7a0b10e91",
@@ -17148,7 +17148,7 @@
         "scripts/hooks/notice-ceo-asks.sh": "a69920c5d344cc2f050112281e96c948b884b40a2c91416f01499d25f0618330",
         "scripts/hooks/notice-ceo-inputs-unheld.sh": "b0324ae5589a7116ab2416643a899de05613fda7dafb204ce56c6d6e8e784585",
         "scripts/hooks/notice-ceo-ruled-prose.sh": "b6aa4600524c27077232a5a83feab3cfe603436ae8dcaaaa0bcc9ed725c0c1b5",
-        "scripts/hooks/notice-ceo-unasked.sh": "f4af34765475356f416a9b7e429dc320e17fbaf63969f8de1a6b34e5a5d859c1",
+        "scripts/hooks/notice-ceo-unasked.sh": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
         "scripts/hooks/notice-claim-capability.sh": "f918e14199d059e57f306ee1202fe0edb3ab27711deb0003358ad36bcae3a1c5",
         "scripts/hooks/notice-disk-alert.sh": "8d30387da21de0f07be504cc9d64e73ad43455816b41af567474fc63462331f0",
         "scripts/disk-watchdog.sh": "40930d78fec671182cb8957a7b755a02ff094ec09a4ee32014d5818bb99964da",
@@ -17168,7 +17168,7 @@
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
         "scripts/hooks/release-land-leases.sh": "727ba9fd9a03fc5f3d0afa5b06ae7a6f7ee02e7cb30d3e9592073b1931ee332a",
         "scripts/hooks/release-shared-writes.sh": "da06d8fbe6b3438a0bb1c33cea6e6b4789aeb041f9aef246ec3eea24d0f4ed80",
-        "scripts/hooks/session-start-ceo-ask.sh": "722f3e24fc066989c8721ccfa8a5b0e4b1746b265edca30083c2e3febd297079",
+        "scripts/hooks/session-start-ceo-ask.sh": "5880b3f3a494bd25f9320b6786efe37cb357edde9406974e6b064ee274744b26",
         "scripts/hooks/session-start-ci-surface.sh": "a4f1b332f362a2374ae1dad83d44af14a977d8cfdb753154014bbcc7e74c05a5",
         "scripts/hooks/session-start-escalations.sh": "25af57857b1dc4a1e4a61c6848753ede1d217f3a1037379e30cee4e64b206a5f",
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
@@ -17456,7 +17456,7 @@
         "scripts/hooks/guard-workspace-gate.sh": "b5712a6240510a481dff53e39abd4e49ca99750eb70fc19280d99e9917119f90",
         "scripts/hooks/notice-ceo-inputs-unheld.sh": "b0324ae5589a7116ab2416643a899de05613fda7dafb204ce56c6d6e8e784585",
         "scripts/hooks/notice-ceo-ruled-prose.sh": "b6aa4600524c27077232a5a83feab3cfe603436ae8dcaaaa0bcc9ed725c0c1b5",
-        "scripts/hooks/notice-ceo-unasked.sh": "f4af34765475356f416a9b7e429dc320e17fbaf63969f8de1a6b34e5a5d859c1",
+        "scripts/hooks/notice-ceo-unasked.sh": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
         "scripts/hooks/notice-disk-alert.sh": "8d30387da21de0f07be504cc9d64e73ad43455816b41af567474fc63462331f0",
         "scripts/disk-watchdog.sh": "40930d78fec671182cb8957a7b755a02ff094ec09a4ee32014d5818bb99964da",
         "scripts/lib/disk-watchdog.py": "736cf708869b4d1525998d4184361337aa69e108dfd75b76be2304bc3cdba07c",
@@ -17733,12 +17733,12 @@
         "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
         "scripts/hooks/guard-brief-scope.sh": "d62b66830b5f8665bb7492b2278ad7261f3279401142b41296ab1d2ada78c9e3",
         "ass-kicker/brief-scope.py": "d6910b6891d7461b98d51b234343a004834e6fd4a3c52e5dc530b6539cf376a9",
-        "scripts/hooks/guard-ceo-ask-first.sh": "4dc92ca5c60ff39ed949fc88a8a4955264ece2d17bc689f9c2a2eb8b1bae0728",
+        "scripts/hooks/guard-ceo-ask-first.sh": "f4ede84780824e4b6065b68b603ffc94f7e1a65affa48a3b9b91c386f119d20a",
         "scripts/lib/ceo-asks.sh": "90532e654d581669aafdc81d5b54f330d1488ee8161d2cef72af7421c9a2698d",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "scripts/lib/ceo-todos.py": "5e6264edc76c9dc03b0c569c63de251dd5b053bd88e40aa7101538bbbeaf406b",
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
-        "scripts/hooks/guard-ceo-ruled-ask.sh": "be83072dbcedb12c393d97662c5f584cc97ff75d5d9c1c15368f2f1b7a59d5f3",
+        "scripts/hooks/guard-ceo-ruled-ask.sh": "7d09f36f96bffd9aa0acf6fad76c77ceef5ebf5cf57fbdf12ce4ae54187b92bc",
         "scripts/lib/premise-ask.sh": "54ed7bab6c1f1632458c6dbabc05f13dcec91f6ab262bfe3c5c2ae20b4b91080",
         "scripts/lib/premise-ask.py": "2a6a079fbc0fab7937f90967c29c19e7ab2747a7286ec9923ec1dd685aa63e0a",
         "scripts/lib/ceo-ruled.sh": "737879339e074a0c41011974a8dcdc74bbbbf7118ffda2904e2f8da7a0b10e91",
@@ -17816,7 +17816,7 @@
         "scripts/hooks/scan-secrets.sh": "fd488d5b07748fd41c773c80ec133eed526869534f4f1324c847a33701ae1ab1",
         "scripts/hooks/guard-publication-writes.sh": "8d05dfb59a29be16bdcbd19aee71b0a402f58d928c82397f0a98da96f6f2531d",
         "scripts/hooks/notice-ceo-ruled-prose.sh": "b6aa4600524c27077232a5a83feab3cfe603436ae8dcaaaa0bcc9ed725c0c1b5",
-        "scripts/hooks/notice-ceo-unasked.sh": "f4af34765475356f416a9b7e429dc320e17fbaf63969f8de1a6b34e5a5d859c1",
+        "scripts/hooks/notice-ceo-unasked.sh": "92dfd7911525a0e8bfef71102abca61493f20a3510e1986857cca81a7e552816",
         "scripts/hooks/notice-disk-alert.sh": "8d30387da21de0f07be504cc9d64e73ad43455816b41af567474fc63462331f0",
         "scripts/disk-watchdog.sh": "40930d78fec671182cb8957a7b755a02ff094ec09a4ee32014d5818bb99964da",
         "scripts/lib/disk-watchdog.py": "736cf708869b4d1525998d4184361337aa69e108dfd75b76be2304bc3cdba07c",

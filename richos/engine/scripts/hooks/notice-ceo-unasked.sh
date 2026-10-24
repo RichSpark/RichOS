@@ -188,6 +188,36 @@ try:
     d=json.load(sys.stdin); print(str(d.get("session_id","") or "") if isinstance(d,dict) else "")
 except Exception: print("")' 2>/dev/null || true)"
 
+# A QUESTION IN THE REPLY IS AN ASK (CLAUDE.md §125: "A question never holds up work:
+# it goes in the reply with the current default stated"). The reply's text is matched
+# against his prepared items exactly as an AskUserQuestion is (ca_match), and a match
+# is recorded the same way, so it is not asked again.
+REPLY="$(printf '%s' "$INPUT" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin); print(str(d.get("last_assistant_message","") or "") if isinstance(d,dict) else "")
+except Exception: print("")' 2>/dev/null || true)"
+if [ -n "$REPLY" ] && [ -n "$SESSION_ID" ]; then
+    _CU_ITEMS="$(mktemp -t ceo-unasked-items.XXXXXX)" || _CU_ITEMS=""
+    _CU_Q="$(mktemp -t ceo-unasked-q.XXXXXX)" || _CU_Q=""
+    if [ -n "$_CU_ITEMS" ] && [ -n "$_CU_Q" ] && ca_items_json "$_CU_ITEMS"; then
+        printf '%s' "$REPLY" > "$_CU_Q"
+        _CU_LINE="$(ca_match "$_CU_Q" "$_CU_ITEMS" 2>/dev/null || true)"
+        if [ "$(printf '%s' "$_CU_LINE" | cut -f1)" = "MATCH" ]; then
+            CA_LINE="$_CU_LINE" CA_SID="$SESSION_ID" CA_LEDGER="$(ca_ledger_path "$ENTITY_ROOT")" python3 -c '
+import json, os
+from datetime import datetime, timezone
+f = (os.environ["CA_LINE"].split("\t") + [""] * 7)[:7]
+rec = {"timestamp": datetime.now(timezone.utc).isoformat(), "event": "CeoAsk", "source_hook": "Stop[reply]",
+       "session_id": os.environ["CA_SID"], "matched_item": f[2], "match": f[0], "repo": f[1], "score": f[3],
+       "hits": f[4], "needed": f[5], "how": f[6], "discharges": True}
+os.makedirs(os.path.dirname(os.environ["CA_LEDGER"]), exist_ok=True)
+with open(os.environ["CA_LEDGER"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(rec) + "\n")
+' 2>/dev/null || true
+        fi
+    fi
+    rm -f "$_CU_ITEMS" "$_CU_Q"
+fi
 ARC=0
 ca_assess "$ENTITY_ROOT" "$SESSION_ID" || ARC=$?
 if [ "$ARC" -ge 2 ]; then
@@ -197,8 +227,7 @@ if [ "$ARC" -ge 2 ]; then
 fi
 
 if [ "${CA_UNASKED:-0}" -eq 0 ]; then
-    stop_notice_normal \
-        "CEO-ASK WATCH: clear — every prepared item on his TODOs has been put to him this session."
+    stop_notice_normal ""            # asked: nothing more to say to anyone
     exit 0
 fi
 
@@ -212,6 +241,13 @@ if [ "${CA_UNASKED:-0}" -gt 1 ]; then
     MORE=" ${CA_UNASKED} of his prepared items have not been put to him in this session."
 fi
 
-stop_notice_abnormal "unasked:$IDS" \
-    "HE HAS NOT BEEN ASKED — CEO TODO ${TOP_ID}: ${TOP_ASK}${MORE} Put one to him with AskUserQuestion; asking is what discharges this, not recording it. Full list: ${ENGINE_ROOT}/scripts/ceo-asks-status.sh"
+# TO THE LEAD (Stop additionalContext), once per set of unasked items: the lead asks,
+# so the lead must read it; a systemMessage reaches only the person.
+_CU_MSG="CEO TODO ${TOP_ID} has not been put to him this session: ${TOP_ASK}${MORE} First check it is still current (already done or answered: close it on the record instead). If it is, ask it in your next reply with the current default stated, and keep independent work moving (CLAUDE.md §125); a blocking AskUserQuestion only if the next action truly waits on it. Full list: ${ENGINE_ROOT}/scripts/ceo-asks-status.sh"
+if [ "$(_shn_prior)" != "unasked:$IDS" ]; then
+    _shn_record "unasked:$IDS" "$(date +%s 2>/dev/null || echo '')"
+    printf '%s\n' "{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"$(_shn_escape "$_CU_MSG")\"}}"
+else
+    _shn_record "unasked:$IDS" "$(_shn_prior_emit_epoch)"
+fi
 exit 0

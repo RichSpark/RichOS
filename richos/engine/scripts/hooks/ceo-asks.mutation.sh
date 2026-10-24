@@ -212,21 +212,19 @@ mutant blocked-counts-as-prepared "A5. " "$PY" \
     'prepared = list(items)' \
     "demanding that an UNPREPARED item be put to him is the failure the CEO-TODOs contract exists to stop, arriving from the other side."
 
-# --- 2. THE BLOCK ----------------------------------------------------------
-mutant gate-does-not-block "C1. " "$G" \
-    '} >&2\nexit 2' \
-    '} >&2\nexit 0' \
-    "the CEO ruled BLOCK, not notify. A gate that exits 0 is the option he did not take."
+# --- 2. NO BLOCK, AND THE ASK THAT IS NOT ONE ------------------------------
+# The block, its escape hatch and the bare-marker rule went with the refusal
+# (orchestration reliability R3, 2026-10-24). What is load-bearing now: nothing is
+# refused, and a reply that asks his question is recorded as the ask.
+mutant gate-refuses-again "C1. " "$G" \
+    '# default (CLAUDE.md §125); a decision that really blocks something holds only that.\nexit 0' \
+    '# default (CLAUDE.md §125); a decision that really blocks something holds only that.\nexit 2' \
+    "an unrelated prepared decision would veto a repair or an independent dispatch again (R3; 2026-10-23, the review tools' repair held for a Windows question)."
 
-mutant no-escape-hatch "C6. " "$G" \
-    'if [ -n "$DEFER_MARKER" ]; then' \
-    'if [ -n "" ]; then' \
-    "when he says get on with it, nothing may wedge — and the deferral must be on the record."
-
-mutant bare-defer-permits "C7. " "$G" \
-    '[[:space:]]*[^[:space:]].*"' \
-    '.*"' \
-    "a bare token is something a reflex types; a reason is something a person writes."
+mutant reply-ask-not-witnessed "D5. " "$N" \
+    '        _CU_LINE="$(ca_match "$_CU_Q" "$_CU_ITEMS" 2>/dev/null || true)"' \
+    '        _CU_LINE=""' \
+    "a question put to him in the reply (§125) would not count, so he would be asked the same thing again."
 
 mutant broken-fails-closed "C10. " "$G" \
     'UNGATED, and a declared-but-unreadable list is not an empty one."\n        exit 0 ;;' \
@@ -241,14 +239,14 @@ mutant no-ledger-write "B1. " "$W" \
 
 # --- 4. THE NOTICES --------------------------------------------------------
 mutant notice-counts-not-names "D1. " "$N" \
-    '"HE HAS NOT BEEN ASKED — CEO TODO ${TOP_ID}: ${TOP_ASK}${MORE}' \
-    '"HE HAS NOT BEEN ASKED — ${CA_UNASKED} items outstanding.${MORE}' \
+    '_CU_MSG="CEO TODO ${TOP_ID} has not been put to him this session: ${TOP_ASK}${MORE}' \
+    '_CU_MSG="CEO TODO ${CA_UNASKED} items have not been put to him this session.${MORE}' \
     "a count is what got demoted on 2026-08-31; a specific question is what got answered."
 
-mutant notice-blocks-the-turn "D1. " "$N" \
-    'stop_notice_abnormal "unasked:$IDS" \' \
-    'exit 2; stop_notice_abnormal "unasked:$IDS" \' \
-    "a turn that ends to answer him is a turn ending correctly; refusing those gets the hook switched off."
+mutant unasked-never-told "D1. " "$N" \
+    'if [ "$(_shn_prior)" != "unasked:$IDS" ]; then' \
+    'if false; then' \
+    "a still-current question he was never asked would reach nobody: the lead asks him, so the lead must be told (R3/R6)."
 
 mutant broken-list-is-quiet "D4. " "$N" \
     'are UNGATED and no prepared decision is being surfaced' \

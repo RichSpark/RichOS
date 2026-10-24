@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 #
-# guard-ceo-ask-first.sh — BLOCKING PreToolUse guard on the Agent tool.
+# guard-ceo-ask-first.sh — PreToolUse guard on the Agent tool. SINCE 2026-10-24 IT
+# REFUSES NOTHING (orchestration reliability R3; the end of this file): it only says
+# so when the CEO list it reads is broken. The history below is kept as the record
+# of why the ask exists; the ask itself is notice-ceo-unasked.sh's, to the lead.
 #
-# REFUSES TO DISPATCH A TEAMMATE WHILE A PREPARED CEO DECISION HAS NEVER BEEN
-# PUT TO HIM THIS SESSION.
+# (Until 2026-10-24: REFUSED TO DISPATCH A TEAMMATE WHILE A PREPARED CEO DECISION
+# HAD NEVER BEEN PUT TO HIM THIS SESSION.)
 #
 # The predicate — what counts as prepared, what counts as an ask, where the
 # ledger lives and the full fail-open/fail-closed argument — lives in
@@ -248,96 +251,27 @@ PROMPT="$(printf '%s' "$PARSED" | cut -f5- | tr '\001' '\n')"
 # except that we cannot read the escape hatch. Blocking on that would refuse a
 # dispatch the operator has no way to permit.
 if [ "$STATUS" = "PARSEFAIL" ]; then
-    announce_broken "CEO-ASK GATE: could not parse this Agent spawn, so it was not checked and the 'ceo-todos-deferred:' escape hatch could not be read either. This ONE dispatch is ungated."
+    announce_broken "CEO-ASK GATE: could not parse this Agent spawn, so the CEO list was not read for it."
     exit 0
 fi
 
-# --- The escape hatch, before the verdict ----------------------------------
-# ONE extraction, not a test followed by an extraction. Two greps with the same
-# pattern are two chances to relax one of them and not the other, and the
-# resulting hook would test strictly, extract loosely, and behave in a way
-# neither pattern describes. The REASON is required by the pattern itself:
-# `[[:space:]]*[^[:space:]].*` after the marker means at least one non-blank
-# character, so a bare `ceo-todos-deferred:` extracts to nothing and permits
-# nothing.
-DEFER_MARKER="$(printf '%s' "$PROMPT" \
-    | grep -oE "^[[:space:]]*${CA_DEFER_MARKER}[[:space:]]*[^[:space:]].*" \
-    | head -1 | sed -E 's/^[[:space:]]*//' || true)"
-
+# What remains here: a declared CEO list that cannot be read is said at dispatch
+# (BROKEN fails open, loudly). An unasked item refuses nothing (the end of this file).
 ARC=0
 ca_assess "$ENTITY_ROOT" "$SESSION_ID" || ARC=$?
 case "$ARC" in
     0) exit 0 ;;                     # SATISFIED, or nothing prepared
     1) ;;                            # OPEN — a prepared item, no ask this session
     *)
-        announce_broken "CEO-ASK GATE IS OFF: ${CA_BROKEN:-the predicate could not run}. Teammate dispatches are UNGATED."
+        announce_broken "CEO-ASK CHECK IS OFF: ${CA_BROKEN:-the predicate could not run}. His prepared questions are UNGATED: nobody is reminding the lead of them."
         exit 0 ;;
 esac
 
-if [ -n "$DEFER_MARKER" ]; then
-    # Auditable fallback opt-out taken. Best-effort log — never fail a spawn
-    # because logging failed; the marker itself is the audit trail.
-    LOG_DIR="$ENTITY_ROOT/.claude/state"
-    mkdir -p "$LOG_DIR" 2>/dev/null || true
-    {
-        printf '%s\tsession=%s\tagent=%s\tname=%s\tprepared=%s\t%s\n' \
-            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            "${SESSION_ID:-<unset>}" \
-            "${SUBAGENT_TYPE:-<unset>}" \
-            "${NAME:-<unset>}" \
-            "${CA_PREPARED:-?}" \
-            "$DEFER_MARKER"
-    } >>"$LOG_DIR/$CA_DEFER_LOG_NAME" 2>/dev/null || true
-    exit 0
-fi
-
-# --- REFUSE ----------------------------------------------------------------
-# NAMED, NOT COUNTED. "13 items waiting" is the sentence that got demoted on the
-# morning this was ordered; a specific answerable question is what got answered
-# in seconds. So the refusal carries the top item AS A QUESTION.
-TOP="$(printf '%s\n' "$CA_ASK_LINES" | head -1)"
-TOP_ID="$(printf '%s' "$TOP" | cut -f2)"
-TOP_TITLE="$(printf '%s' "$TOP" | cut -f3)"
-TOP_ASK="$(printf '%s' "$TOP" | cut -f4)"
-
-{
-    echo "=== A PREPARED CEO DECISION HAS NOT BEEN PUT TO HIM THIS SESSION — REFUSING THIS DISPATCH ==="
-    echo "  prepared items : ${CA_PREPARED:-?}"
-    echo "  asked this session : ${CA_ASKED:-0}"
-    echo ""
-    echo "  On 2026-08-31 a session prepared two decisions for the CEO, the next"
-    echo "  session opened, he asked \"what's next\", and he got a backlog report"
-    echo "  and a dispatched engineer. Every guard was green. Nobody had been"
-    echo "  asked anything. Dispatching a teammate is the act that beat the ask,"
-    echo "  so it is the act that is blocked."
-    echo ""
-    echo "  ASK HIM THIS, with the AskUserQuestion tool:"
-    echo ""
-    echo "    ${TOP_ID}  ${TOP_TITLE}"
-    echo "    ${TOP_ASK}"
-    echo ""
-    echo "  The gate reads the QUESTION TEXT, not an assertion — the question,"
-    echo "  its options and their descriptions have to actually be about one of"
-    echo "  his prepared items. A question that matches none of them is recorded"
-    echo "  UNMATCHED and discharges nothing. ONE prepared item is the whole"
-    echo "  requirement for this session; the rest are surfaced at every turn end."
-    echo ""
-    if [ "${CA_UNASKED:-0}" -gt 1 ] 2>/dev/null; then
-        echo "  The others still open this session:"
-        printf '%s\n' "$CA_ASK_LINES" | tail -n +2 | head -5 \
-            | awk -F'\t' '{printf "    %s  %s\n", $2, $3}'
-        if [ "${CA_UNASKED:-0}" -gt 6 ] 2>/dev/null; then
-            echo "    (+$((CA_UNASKED - 6)) more — $ENGINE_ROOT/scripts/ceo-asks-status.sh)"
-        fi
-        echo ""
-    fi
-    echo "  IF HE HAS ALREADY SAID GET ON WITH IT, say so on the record — add a"
-    echo "  line to this spawn prompt:"
-    echo ""
-    echo "    ${CA_DEFER_MARKER} <reason>"
-    echo ""
-    echo "  which permits this one dispatch and is logged to"
-    echo "  .claude/state/$CA_DEFER_LOG_NAME."
-    echo "(hook: scripts/hooks/guard-ceo-ask-first.sh)"
-} >&2
-exit 2
+# NO DISPATCH IS REFUSED (orchestration reliability R3, richos-hq docs/prds/
+# 2026-10-23-orchestration-reliability.md): "An unrelated prepared decision ... does
+# not veto a repair, inspection, ordinary answer or independent dispatch." On
+# 2026-10-23 this refusal held the repair of the review tools until a question about
+# a Windows test was put to him. The still-current question now reaches the LEAD at
+# its turn end (notice-ceo-unasked.sh), to go to him in the next reply with its
+# default (CLAUDE.md §125); a decision that really blocks something holds only that.
+exit 0

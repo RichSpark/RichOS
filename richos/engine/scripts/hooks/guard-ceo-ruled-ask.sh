@@ -312,12 +312,30 @@ except Exception:
                     PA_HEADER=""
                     PA_ALLTEXT=""
                     PA_DECLARED=""
+                    # HIS PREPARED QUESTION GOES THROUGH (orchestration reliability R3: "Asking an
+                    # actually needed question must not be intercepted by a contradictory premise
+                    # check; both paths use the same current facts"). 2026-10-23 19:46Z: the
+                    # CEO-TODO question the dispatch gate demanded was itself intercepted here. A
+                    # question that matches a prepared item on his list (ca_match, the matcher
+                    # that records the ask) was premise-checked when it was prepared.
+                    PA_PREPARED_ITEMS=""
+                    if [ -f "$SCRIPT_DIR/../lib/ceo-asks.sh" ]; then
+                        . "$SCRIPT_DIR/../lib/ceo-asks.sh"
+                        if ca_require && ca_resolve "$ENTITY_ROOT"; then
+                            PA_PREPARED_ITEMS="$(mktemp -t premise-ask-items.XXXXXX)" \
+                                && ca_items_json "$PA_PREPARED_ITEMS" || PA_PREPARED_ITEMS=""
+                        fi
+                    fi
                     while IFS=$'\t' read -r PA_IDX PA_QTEXT PA_WTEXT; do
                         [ -n "${PA_WTEXT:-}" ] || continue
                         printf '%s' "$PA_QTEXT" | tr '\001' '\n' > "$PA_QF"
                         printf '%s' "$PA_WTEXT" | tr '\001' '\n' > "$PA_WF"
                         [ -n "$PA_HEADER" ] || PA_HEADER="$(head -n1 "$PA_QF" 2>/dev/null || true)"
                         PA_ALLTEXT="$PA_ALLTEXT$(cat "$PA_WF")"
+                        if [ -n "$PA_PREPARED_ITEMS" ] \
+                                && [ "$(ca_match "$PA_WF" "$PA_PREPARED_ITEMS" 2>/dev/null | cut -f1)" = "MATCH" ]; then
+                            continue
+                        fi
                         if ! pa_check "$PA_QF" "$PA_WF" > "$PA_OUT" 2>/dev/null; then
                             announce_broken "PREMISE CHECK IS DEGRADED: ${PA_BROKEN:-the predicate could not run}. This question was not examined."
                             continue
