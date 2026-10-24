@@ -272,7 +272,10 @@ PY
 }
 
 # run <payload-json> [entity-root]
-# Sets LAST_RC, LAST_OUT (raw stdout) and LAST_MSG (the systemMessage, or "").
+# Sets LAST_RC, LAST_OUT (raw stdout) and LAST_MSG: the hook's own systemMessage when it said one
+# (a stand-down or a root failure), else the manifest `turn-manifest.py --show` renders for the
+# same payload. Since 2026-10-24 the hook shows no routine manifest (R6, case h); the
+# rendering is still what every case below checks.
 # NON_ZERO_EXITS accumulates any non-zero exit, because "it never blocks" is a
 # property of the whole suite, not of one case (g).
 #
@@ -290,8 +293,10 @@ run() {
     [ "$LAST_RC" -eq 0 ] || NON_ZERO_EXITS="$NON_ZERO_EXITS rc=$LAST_RC"
     if [ -n "$LAST_OUT" ]; then
         LAST_MSG="$(printf '%s' "$LAST_OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("systemMessage",""))' 2>/dev/null)"
-    else
+    elif grep -q '"stop_hook_active": true' "$SANDBOX/payload.json"; then
         LAST_MSG=""
+    else
+        LAST_MSG="$(RICHOS_MANIFEST_ENTITY_ROOT="$SANDBOX/show-log" python3 "${HOOK%.sh}.py" --show < "$SANDBOX/payload.json" 2>/dev/null)"
     fi
 }
 
@@ -510,14 +515,18 @@ has "STOOD DOWN" "g5. the opt-out announces itself through the channel the opera
 # ===========================================================================
 # (h) THE OUTPUT CONTRACT — the only shape the host will show the operator
 # ===========================================================================
+# Orchestration reliability R6: "Normal successful turns emit no routine tool manifest." The
+# turn's calls and statuses are in the log; --show renders the manifest on request.
+LOG="$ENTITY/.claude/state/turn-manifests.jsonl"
+BEFORE_ROWS="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
 run "$(payload "$MIXED_TR")"
-SHAPE="$(printf '%s' "$LAST_OUT" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-print("ok" if isinstance(d.get("systemMessage"), str) and d.get("suppressOutput") is True else "bad")
-' 2>/dev/null)"
-if [ "$SHAPE" = "ok" ]; then ok "h.  stdout is valid JSON carrying systemMessage + suppressOutput"
-else bad "h.  output contract" "stdout was not the shape the host renders: $LAST_OUT"; fi
+AFTER_ROWS="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
+if [ -z "$LAST_OUT" ] && [ "$AFTER_ROWS" -gt "$BEFORE_ROWS" ] \
+   && tail -1 "$LOG" | python3 -c 'import json,sys; d=json.loads(sys.stdin.readline()); sys.exit(0 if d.get("calls") and d.get("statuses") else 1)'; then
+    ok "h.  a routine turn shows NO manifest (R6); its calls and statuses are logged, and --show renders it"
+else bad "h.  no routine manifest" "stdout: ${LAST_OUT:-<empty>} rows: $BEFORE_ROWS -> $AFTER_ROWS"; fi
+case "$LAST_MSG" in *"TURN MANIFEST"*) ok "h2. --show still renders the turn's manifest on request" ;;
+    *) bad "h2. --show renders" "got: ${LAST_MSG:-<empty>}" ;; esac
 
 # ===========================================================================
 # (g) the global assertion: not one case above exited non-zero

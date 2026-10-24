@@ -33,13 +33,19 @@ lease_count() { ls "$OFX/locks/"*.lease 2>/dev/null | grep -c . ; }
 turn_end() { # <session>: run the Stop hook inside that session; OFX_OUT = its stdout
     ofx_in "$1" "printf '{}' | bash '$HOOK' 2>/dev/null"
 }
-is_json_or_empty() {
+is_json_or_empty() { # the notice is for the lead: Stop additionalContext (R6)
     [ -z "$1" ] && return 0
-    printf '%s' "$1" | python3 -c 'import json,sys; v=json.load(sys.stdin); sys.exit(0 if isinstance(v, dict) and v.get("systemMessage") else 1)'
+    printf '%s' "$1" | python3 -c 'import json,sys; v=json.load(sys.stdin); sys.exit(0 if isinstance(v, dict) and (v.get("hookSpecificOutput") or {}).get("additionalContext") and not v.get("systemMessage") else 1)'
+}
+turn_end_in() { # <session> <session id>: the Stop hook with a session id, so its notice ledger is in use
+    # The ledger is seated on a sandbox entity, never the engine's own .claude/state.
+    ofx_in "$1" "printf '{\"session_id\":\"$2\"}' | RICHOS_ENTITY_ROOT='$T9_ENT' bash '$HOOK' 2>/dev/null"
 }
 
 ofx_init || exit 1
-trap ofx_cleanup EXIT
+. "$ENGINE_ROOT/scripts/lib/entity-sandbox.sh"
+T9_ENT="$(entity_sandbox "$ENGINE_ROOT")"
+trap 'ofx_cleanup; rm -rf "$T9_ENT"' EXIT
 ofx_repo r; R="$OFX_R"
 ofx_install "$R" >/dev/null 2>&1 && ofx_on "$R" >/dev/null 2>&1
 ofx_session A; ofx_session B
@@ -78,6 +84,14 @@ turn_end A
 { [ "$(lease_count)" = 1 ] && printf '%s' "$OFX_OUT" | grep -q "uncommitted changes (f.txt)"; } \
     && ok "T3 a dirty path keeps the lease and the message names it" \
     || bad "T3 a dirty path keeps the lease and the message names it" "$OFX_OUT"
+# T9 (orchestration reliability R6): the same lease kept for the same reason is said
+# once to the lead, not at every turn end; the next, older turn end says nothing.
+turn_end_in A t9-session-0001; first="$OFX_OUT"
+turn_end_in A t9-session-0001; second="$OFX_OUT"
+{ printf '%s' "$first" | grep -q "still holding the lock" && is_json_or_empty "$first" && [ -z "$second" ] \
+  && [ "$(lease_count)" = 1 ]; } \
+    && ok "T9 an unchanged held lease is told to the lead once, not at every turn end" \
+    || bad "T9 an unchanged held lease is told to the lead once, not at every turn end" "first=$first second=$second"
 git -C "$R" checkout -- f.txt
 
 ( cd "$R" && git -c core.hooksPath=/dev/null switch -q -c side && printf 'side\n' > f.txt && git -c core.hooksPath=/dev/null commit -q -am side \

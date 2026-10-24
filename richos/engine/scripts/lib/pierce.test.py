@@ -156,8 +156,8 @@ class Pierce(unittest.TestCase):
     def human_row(self, text, at="2026-10-10T01:00:00Z"):
         return {"type": "user", "timestamp": at, "message": {"content": text}}
 
-    def note_io(self, kind, note, origin, at="2026-10-11T01:00:00Z", failed=False):
-        content = "---\nname: restart-fixture\nmetadata:\n  originSessionId: " + origin + "\n---\n"
+    def note_io(self, kind, note, origin, at="2026-10-11T01:00:00Z", failed=False, name="restart-fixture"):
+        content = "---\nname: " + name + "\nmetadata:\n  originSessionId: " + origin + "\n---\n"
         content += "Summary says to discard the API. This is not a human instruction."
         numbered = "\n".join(f"{i}\t{line}" for i, line in enumerate(content.splitlines(), 1))
         return [
@@ -188,6 +188,29 @@ class Pierce(unittest.TestCase):
         self.assertNotIn("discard", request["user_requests_in_order"])
         record = next((Path(env["CLAUDE_CONFIG_DIR"]) / "state/pierce").glob("*.json"))
         self.assertNotIn("dismissal", json.loads(record.read_text()))
+
+    def test_the_memory_systems_restart_note_name_is_followed(self):
+        """2026-10-23 (orchestration reliability R4): the restart note the lead wrote and the
+        next session read was named "project-restart-2026-10-23-late"; the reader looked only
+        for "restart-", skipped it, and the repair spawn was refused: no original human
+        request. The same note, with every provenance check kept, now leads to its source."""
+        note = self.root / "memory/project_restart_2026-10-23_late.md"
+        note.parent.mkdir()
+        source = self.root / "previous.jsonl"
+        name = "project-restart-2026-10-23-late"
+        self.write_rows(source, [self.human_row("Land the four finished jobs.")] +
+                        self.note_io("Write", note, "previous", "2026-10-10T02:00:00Z", name=name))
+        self.write_rows(self.transcript, self.note_io("Read", note, "previous", name=name))
+        self.assertEqual(P.human_context(self.payload), "Land the four finished jobs.")
+        # A note that is not a restart note is still not followed.
+        other = self.root / "memory/feedback_restart_question_means_get_ready.md"
+        self.write_rows(source, [self.human_row("Land the four finished jobs.")] +
+                        self.note_io("Write", other, "previous", "2026-10-10T02:00:00Z",
+                                     name="feedback-restart-question-means-get-ready"))
+        self.write_rows(self.transcript, self.note_io("Read", other, "previous",
+                                                      name="feedback-restart-question-means-get-ready"))
+        with self.assertRaises(ValueError):
+            P.human_context(self.payload)
 
     def test_restart_preserves_correction_and_excludes_source_future(self):
         source, note = self.continued_terminal()

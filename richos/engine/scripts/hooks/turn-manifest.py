@@ -424,9 +424,11 @@ def unavailable(reason):
     )
 
 
-def emit(message):
-    sys.stdout.write(json.dumps({"suppressOutput": True, "systemMessage": message}))
-    sys.stdout.write("\n")
+# NOT SHOWN AT A TURN END (orchestration reliability R6, richos-hq docs/prds/2026-10-23-
+# orchestration-reliability.md: "Normal successful turns emit no routine tool manifest";
+# the CEO's 2026-10-23 screenshot was a screenful of it under every reply). The turn's
+# calls and statuses go to the log below; `turn-manifest.py --show` renders this manifest
+# for a Stop payload on request.
 
 
 # --------------------------------------------------------------------------
@@ -434,6 +436,7 @@ def emit(message):
 # --------------------------------------------------------------------------
 
 def main():
+    show = "--show" in sys.argv[1:]
     try:
         payload = json.load(sys.stdin)
     except Exception:
@@ -441,7 +444,7 @@ def main():
         # manifest it cannot stand behind.
         return 0
 
-    if payload.get("stop_hook_active"):
+    if payload.get("stop_hook_active") and not show:
         # A re-fire after some OTHER Stop hook blocked. The manifest for this
         # turn has already been printed once; printing it again would suggest
         # a second turn happened.
@@ -463,10 +466,12 @@ def main():
             message = unavailable(err)
             rows = None
         else:
-            message = render(calls, results)
+            message = render(calls, results) if show else ""   # rendered only when asked (--show)
             rows = len(calls)
 
-    emit(message)
+    if show:
+        sys.stdout.write(message + "\n")
+        return 0
 
     # --- observation record ------------------------------------------------
     # Written every turn, so the manifest is a record rather than a rumour,
@@ -485,6 +490,8 @@ def main():
         "statuses": [status_of(results.get(t), n)[0] or "message" for t, n in calls],
         "rendered": "manifest" if rows is not None else "unavailable",
     }
+    if rows is None:
+        record["unavailable"] = message.split("\n", 1)[0]       # a gap in the record, never "ran nothing"
     try:
         root = os.environ.get("RICHOS_MANIFEST_ENTITY_ROOT") or payload.get("cwd") or os.getcwd()
         state = os.path.join(root, ".claude", "state")

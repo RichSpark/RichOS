@@ -276,7 +276,7 @@ spec = importlib.util.spec_from_file_location("workspaces", sys.argv[1])
 ws = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ws)
 ws.save_agent({"key": "wait-regression", "name": "lead-fixture", "session_id": "fixture"})
-ws.wait("wait-regression", "started", "its merge check is running", session_id="fixture")
+ws.wait("wait-regression", "started", "its merge check is running", session_id="fixture", until="at:2099-01-01T00:00:00Z")
 PY
     WS_LIB="$SCRIPT_DIR/../../mega-lander/workspaces.py"
     if RICHOS_WORKSPACES_DIR="$CFG/state/workspaces" python3 -B "$WAIT_WRITER" "$WS_LIB" \

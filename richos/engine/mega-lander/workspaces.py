@@ -2974,6 +2974,12 @@ def pause(ref, until, session_id="", notes=None, control=False, end=""):
         fin, _p_, why = finished_state(rec)
         if fin:
             raise SpecError("%s is already finished (%s); a finished agent is not paused" % (rec["name"], why))
+        # A pause names an end like a wait does, so it closes a cycle the same way (review
+        # rv-20261024T013623Z-f883a475-d24b: A paused until B, then B until A, both quiet).
+        cycle = _wait_cycle(rec.get("name") or rec["key"], end or "")
+        if cycle:
+            raise SpecError("a pause cannot end on itself: %s. Name the work that ends it instead"
+                            % " -> ".join(cycle))
         rec["pause"] = {"at": now(), "until": (until or "").strip(), "control": bool(control), "end": end}
         save_agent(rec)
     event("pause", key=rec["key"], until=until, control=bool(control), end=end)
@@ -3022,9 +3028,12 @@ def stop(ref, why, session_id="", notes=None):
 
 
 def wait(ref, kind, on, todo="", session_id="", until=""):
-    """Point 5's allowances for ending a turn, recorded by Rich. Every wait is a
-    hold (see HOLDS below): `until` is its checkable end, and without one the
-    free text keeps nothing quiet."""
+    """What finished or held work waits on, recorded by Rich. Every wait is a hold
+    (see HOLDS below) and needs an end the engine can check: `until` (agent:,
+    review:, at:, ceo:) or, for a wait outside Rich's reach, its CEO-TODOs item.
+    The free text is the why (orchestration reliability R2: a stated "running
+    now" stayed an allowance after the worker ended). A wait on the waiter itself,
+    or on an agent whose own wait leads back to it, is refused with the cycle."""
     if kind not in ("started", "outside", "ceo-discard", "held"):
         raise SpecError("unknown wait kind %r" % kind)
     if not (on or "").strip():
@@ -3033,8 +3042,16 @@ def wait(ref, kind, on, todo="", session_id="", until=""):
         raise SpecError("an item waiting on something outside Rich's reach goes on the CEO's TODO list; "
                         "pass --todo with where it is (point 5)")
     end = hold_end(until)
+    if not end and kind in ("started", "held"):
+        raise SpecError("a wait needs an end the engine can check: --until agent:<name> | review:<id> | "
+                        "at:<UTC time> | ceo:<CEO-TODOs item>. The text (%r) says why; it ends nothing"
+                        % (on or "").strip()[:80])
     with Lock():
         rec = _resolve(ref, session_id)
+        cycle = _wait_cycle(rec.get("name") or rec["key"], end)
+        if cycle:
+            raise SpecError("a wait cannot end on itself: %s. Name the work that ends it instead"
+                            % " -> ".join(cycle))
         if kind == "ceo-discard" and not rec.get("ceo_ordered"):
             raise SpecError("%s was not recorded as ordered by the CEO, so its discard does not need his word"
                             % rec["name"])
@@ -3048,6 +3065,30 @@ def wait(ref, kind, on, todo="", session_id="", until=""):
     return rec
 
 
+def _wait_end(rec):
+    """The checkable end a record's own wait or pause names, or ''."""
+    w, p = rec.get("waiting") or {}, rec.get("pause") or {}
+    return (w.get("end") or (("ceo:" + w["todo"]) if w.get("todo") else "")
+            or p.get("end") or hold_end(p.get("until"), strict=False))
+
+
+def _wait_cycle(name, end, limit=50):
+    """[name, ..., name] when waiting on `end` would close a cycle of agent: waits,
+    else []. A bounded walk over the registry's current records (R2)."""
+    if not end.startswith("agent:"):
+        return []
+    recs = [r for r in all_agents() if not r.get("disposition")]
+    path, cur, seen = [name], end.partition(":")[2], set()
+    while cur and cur not in seen and len(path) <= limit:
+        path.append(cur)
+        if cur == name:
+            return path
+        seen.add(cur)
+        nxt = [_wait_end(r) for r in recs if r.get("name") == cur]
+        cur = next((e.partition(":")[2] for e in nxt if e.startswith("agent:")), "")
+    return []
+
+
 # ---------------------------------------------------------------------------
 # HOLDS: a hold on his work stays in sight until it runs, lands or he decides
 # ---------------------------------------------------------------------------
@@ -3056,38 +3097,30 @@ def wait(ref, kind, on, todo="", session_id="", until=""):
 # silent-holds.md. Every hold counts as a hold on his work (nothing marks his
 # orders). A hold is:
 #   - a finished agent's `waiting` (workspaces.sh wait), or a live one's
-#     `waiting` of kind "held" (a SendMessage telling it to wait);
+#     `waiting` of kind "held" (workspaces.sh hold <agent>; legacy records also
+#     came from a message's words, which since 2026-10-24 record nothing);
 #   - an agent's `pause`;
 #   - holds/<name>.json, for held work with no teammate yet (workspaces.sh
-#     hold, or a deferral the Stop hook found in a reply).
+#     hold). A reply's words never open one (the deferral check only asks the
+#     lead; legacy `by: deferral` files are read like any other).
 # Only an END the engine can check keeps it quiet, from a fixed list:
 #   agent:<name>   a live teammate does it      review:<id>  a second review runs
 #   at:<UTC time>  e.g. a quota reset            ceo:<item>   his decision, on CEO-TODOs
-# Free text is the WHY and keeps nothing quiet: a hold with no end is one line
-# at every turn end (gate_stop) once it is 30 min old, and a stall-watch wake
-# every 30 min; an end that comes true wakes Rich once (RELEASE DUE).
+# Free text is the WHY and keeps nothing quiet: a hold with no end, or whose end
+# came true, is due (due_set), told by the stall watcher at its first idle look and
+# again every 30 min, and by the Stop/startup fallback while no watcher runs.
 # Three ways it ends: the work runs (a live `agent:`, a continuation spawn,
 # the agent resumed), it is done (landed or discarded), or his words
-# (`release --ceo-word`). `release --not-a-hold` takes back a false catch and
-# is shown to him once at the next turn end.
+# (`release --ceo-word`). `release --not-a-hold` takes back a false catch.
 HOLD_END_KINDS = ("agent", "review", "at", "ceo")
-HOLD_REPORT_SECONDS = 30 * 60
-HOLD_LINES = 6
 REVIEW_RUN_SECONDS = 90 * 60
 
 
 def _hold_go(text):
-    _hold_words()                        # puts scripts/lib on the path
-    import hold_words
-    return hold_words.is_go(text)
-
-
-def _hold_words():
-    """scripts/lib/hold_words.py: the one list of words that hold work, shared with
-    the deferral analyzer."""
+    """The go that ends a legacy `held` wait (scripts/lib/hold_words.py)."""
     _agent_hold()                        # puts scripts/lib on the path
     import hold_words
-    return hold_words.HOLD_WORDS_RE
+    return hold_words.is_go(text)
 
 
 def _holds_dir():
@@ -3270,6 +3303,11 @@ def holds(me="", at=None, cache=None):
     for rec in all_agents():
         if rec.get("disposition") or not _in_scope(rec.get("session_id"), rec.get("claimed_by"), me, cache):
             continue
+        # CLAIMED BY ANOTHER LIVE LEAD: its work, by the rule pending() uses, never due here
+        # (review rv-20261024T062159Z-abcb35c8-f97e: here it was told as a continuation
+        # register_spawn refuses).
+        if me and rec.get("session_id") != me and _claimed_elsewhere(rec, me, cache):
+            continue
         fin, paused_, _why = finished_state(rec, cache)
         w, p = rec.get("waiting") or {}, rec.get("pause") or {}
         name = rec.get("name") or rec["key"]
@@ -3285,15 +3323,7 @@ def holds(me="", at=None, cache=None):
             found.append(("wait", "the work of %s" % name, w.get("on") or "", w.get("at"),
                           w.get("end") or ("ceo:" + w["todo"] if w.get("todo") else "")))
         if fin:
-            # A CORRECTION ITS RUN NEVER ACTED ON (2026-10-21 23:45Z, echo-opus-andreas2:
-            # the fix for a review finding was sent, its run ended at 23:45:14Z, and the
-            # branch sat at 10df0b1fc with the hole open). Open until a commit lands
-            # after it, a continuation runs, the work lands, or his words.
             tips = [(repo, t) for repo, b in sorted(_branch_targets([rec])) for t in [branch_tip(repo, b)] if t]
-            c = rec.get("correction") or {}
-            if c and tips and not any(_commit_time(repo, t) > float(c.get("at") or 0) for repo, t in tips):
-                found.append(("correction", "the correction sent to %s" % name,
-                              "its run ended before it acted on it: %s" % (c.get("text") or ""), c.get("at"), ""))
             # A REVIEW ASKING FOR CHANGES ON THE TIP IT HANDED OVER (a mid-job or handover
             # CHANGES-REQUESTED verdict, then a hand-over without the fix).
             if tips and reviews is None:
@@ -3315,6 +3345,44 @@ def holds(me="", at=None, cache=None):
                         "state": st, "detail": detail, "source": src, "key": rec["key"],
                         "review": f[5] if len(f) > 5 else ""})
     return out
+
+
+def due_set(me="", items=None, at=None, cache=None):
+    """THE ONE CURRENT-STATUS CALCULATION (orchestration reliability R2): every piece
+    of work this session must act on now, read from the registry's own facts. Used by
+    the stall watcher, the Stop/startup fallback and `workspaces.sh holds`.
+
+    Due: a hold or wait with no checkable end, or whose end came true (holds():
+    state none/due); and finished work that is neither landed nor discarded and has
+    no wait, no live continuation and no merge in progress (`items`, from pending()).
+    Quiet: a pending end (a live agent, a running review, a time not yet reached)
+    and an item on his CEO-TODOs page (his decision, on its own reminder route).
+    Nothing here marks anything complete."""
+    cache = {} if cache is None else cache
+    found = holds(me, at, cache)
+    out = [dict(h, command=hold_command(h)) for h in found if h["state"] in ("none", "due")]
+    seen = {h["key"] for h in found if h["key"]}
+    for it in items or []:
+        if not it.get("key") or it["key"] in seen or it.get("waiting") or it.get("damaged"):
+            continue
+        rec, stopped = _stopped_record(it["key"])
+        since = ((rec.get("end") or {}).get("at")) or now()
+        out.append({"name": it["name"], "what": "the finished work of %s" % it["name"], "why": it["why"],
+                    "since": float(since), "end": "", "state": "none", "detail": "finished, not landed or discarded",
+                    "source": "finished", "key": it["key"], "review": "",
+                    "command": _stopped_command(it["name"]) if stopped else
+                               "land it (workspaces.sh land %s), discard it, or spawn its continuation" % it["name"]})
+    return out
+
+
+def due_lines(due, limit=8):
+    """The compact due set: one line per item, at most `limit`, then a pointer to the
+    complete list. Never says the shown part is the whole."""
+    lines = ["%s: %s (%s). Next: %s." % (d["name"], " ".join(str(d.get("why") or d["detail"]).split())[:900],
+                                          d["detail"], d["command"]) for d in due[:limit]]
+    if len(due) > limit:
+        lines.append("%d more due; the complete list: workspaces.sh holds" % (len(due) - limit))
+    return lines
 
 
 def _commit_time(repo, tip):
@@ -3354,8 +3422,26 @@ def _reviews_by_tip():
     return out
 
 
+def _stopped_record(key):
+    """(the platform-aware record, whether he stopped it). What the platform recorded counts
+    before the registry adopts it (the dry watcher's view): a stop seen only there is still a
+    stop (review rv-20261024T033729Z-cfc3e0e1-4e49). Reads; writes nothing."""
+    rec = (platform_view(load_agent(key) or {}) or {}) if key else {}
+    return rec, (rec.get("end") or {}).get("signal") == "stopped"
+
+
+def _stopped_command(name):
+    """Stopped work is never revived (A4; CLAUDE.md §92): no land, no continuation."""
+    return ("save its commits on shelved/%s and discard it with his words "
+            "(workspaces.sh discard %s --ceo-word '<his words>'); never land or continue it" % (name, name))
+
+
 def hold_command(h):
-    """What makes held work run: the one command for Rich."""
+    """What makes held work run: the one command for Rich. For a worker he stopped, whatever
+    else is held or due on it (a changes-requested review, a wait, a pause), only shelving
+    and discard (rv-20261024T053817Z-c68788ad-bcc2; Codex 05:51Z: one choice for every caller)."""
+    if _stopped_record(h.get("key") or "")[1]:
+        return _stopped_command(h["name"])
     if h["source"] == "pause":
         return "workspaces.sh resume %s" % h["name"]
     # Anything else, a pause whose session ended included: its run cannot resume.
@@ -3367,37 +3453,6 @@ def _span(seconds):
     return "%d h %d min" % (m // 60, m % 60) if m >= 60 else "%d min" % m
 
 
-def hold_lines(me="", at=None):
-    """The turn-end lines: one per hold with no checkable end older than 30 min,
-    at most six and then '+N', plus each `--not-a-hold` release once."""
-    t = now() if at is None else at
-    quiet = float(os.environ.get("RICHOS_HOLD_REPORT_SECONDS") or HOLD_REPORT_SECONDS)
-    loud = [h for h in holds(me, t) if h["state"] == "none" and t - h["since"] >= quiet]
-    loud.sort(key=lambda h: h["since"])
-    lines = ["HELD BY RICH, NOT BY YOU: %s since %s (%s). Why: %s. Your call: go, or hold until a date or event."
-             % (h["what"], time.strftime("%H:%MZ", time.gmtime(h["since"])), _span(t - h["since"]),
-                " ".join((h["why"] or "not said").split())[:200].rstrip(".")) for h in loud[:HOLD_LINES]]
-    if len(loud) > HOLD_LINES:
-        lines.append("+%d more held: workspaces.sh holds" % (len(loud) - HOLD_LINES))
-    try:
-        names = sorted(os.listdir(_holds_dir()))
-    except OSError:
-        names = []
-    for n in names:
-        p = os.path.join(_holds_dir(), n)
-        h = read_json(p) if n.endswith(".json") else None
-        r = (h or {}).get("released") or {}
-        if not r.get("not_a_hold") or not _in_scope(h.get("session_id"), "", me, {}):
-            continue
-        lines.append("RELEASED AS NOT A HOLD: %s. Rich's reason: %s." % (h.get("what") or h.get("name"),
-                                                                          r["not_a_hold"]))
-        try:
-            os.unlink(p)                 # shown once
-        except OSError:
-            pass
-    return lines
-
-
 def hold(name, what, until="", why="", session_id="", by="rich"):
     """`workspaces.sh hold`: held work with no teammate yet. A name that is a live
     registered agent records the hold on that agent instead (kind held)."""
@@ -3406,6 +3461,9 @@ def hold(name, what, until="", why="", session_id="", by="rich"):
     if not (what or "").strip():
         raise SpecError("say what work is held (--what)")
     end = hold_end(until)
+    if not end:
+        raise SpecError("held work needs an end the engine can check: --until agent:<name> | review:<id> | "
+                        "at:<UTC time> | ceo:<CEO-TODOs item> (orchestration reliability R1/R2)")
     try:
         rec = _resolve_record(name, session_id)
     except SpecError:
@@ -3447,14 +3505,10 @@ def _release_one(h, name, ceo_word, not_a_hold, session_id):
     with Lock():
         if h["source"] == "hold":
             rec = read_json(_hold_path(name)) or {"name": name}
-            rec["released"] = how
-            if how["not_a_hold"]:
-                write_json(_hold_path(name), rec)   # shown once at the next turn end, then gone
-            else:
-                try:
-                    os.unlink(_hold_path(name))
-                except OSError:
-                    pass
+            try:
+                os.unlink(_hold_path(name))
+            except OSError:
+                pass
         elif h["source"] == "review":
             rec = load_agent(h["key"])
             rec["reviews_released"] = (rec.get("reviews_released") or []) + [h["review"]]
@@ -3463,7 +3517,7 @@ def _release_one(h, name, ceo_word, not_a_hold, session_id):
             save_agent(rec)
         else:
             rec = load_agent(h["key"])
-            field = {"pause": "pause", "pause-ended": "pause", "correction": "correction"}.get(h["source"], "waiting")
+            field = {"pause": "pause", "pause-ended": "pause"}.get(h["source"], "waiting")
             rec.setdefault("history", []).append({"at": iso(), "fact": "hold released", field: rec.get(field),
                                                   "how": how})
             rec[field] = None
@@ -3491,6 +3545,22 @@ def _hold_runs(name, by):
 # ---------------------------------------------------------------------------
 # point 5 — the pending list, and who handles which item (point 12)
 # ---------------------------------------------------------------------------
+
+def unreadable_line():
+    """'' or ONE compact line naming the registry records that cannot be read (orchestration
+    reliability R2/R6, A7): the due work told beside it comes from the readable records only,
+    and nobody has to repair it before independent work goes on."""
+    try:
+        bad = damaged_records()
+    except Exception as e:  # noqa: BLE001: a registry that cannot be listed is said, not hidden
+        return "UNREADABLE RECORD: the workspace registry could not be listed (%s)." % e.__class__.__name__
+    if not bad:
+        return ""
+    more = " and %d more" % (len(bad) - 1) if len(bad) > 1 else ""
+    return ("UNREADABLE RECORD: %d workspace registry record(s) cannot be read (%s%s); the due work "
+            "told is from the readable records only. workspaces.sh status names it; repair or remove "
+            "it when convenient." % (len(bad), bad[0][0], more))
+
 
 def scan_unregistered(repos, record=True):
     """Point 3, hole 6: a cc/ or native workspace with no registration, and any
@@ -3622,12 +3692,13 @@ def _claimable(rec, me, cache):
         st, _ = session_state(owner, rec.get("session_identity"), cache)
         if st != "ended":
             return False
+    return not _claimed_elsewhere(rec, me, cache)
+
+
+def _claimed_elsewhere(rec, me, cache):
+    """Another session claimed this record and has not ended: the work is that lead's."""
     claim = rec.get("claimed_by")
-    if claim and claim != me:
-        st, _ = session_state(claim, None, cache)
-        if st != "ended":
-            return False
-    return True
+    return bool(claim) and claim != me and session_state(claim, None, cache)[0] != "ended"
 
 
 def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dry=False):
@@ -3722,12 +3793,18 @@ def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dr
         if not _claimable(rec, me, cache):
             continue
         if rec.get("session_id") != me and rec.get("claimed_by") != me:
+            # THE CLAIM IS DECIDED INSIDE THE LOCK (orchestration reliability R2): the
+            # read above is outside it, so a competing lead may have claimed the
+            # record since; ownership is checked again on the record as it is now.
             with Lock():
                 fresh = load_agent(rec["key"])
-                if fresh and not fresh.get("disposition"):
+                mine = bool(fresh) and not fresh.get("disposition") and _claimable(fresh, me, {})
+                if mine:
                     fresh["claimed_by"] = me
                     save_agent(fresh)
                     rec = fresh
+            if not mine:
+                continue
         refused = ""
         if auto and not _past(deadline):
             try:
@@ -3853,26 +3930,6 @@ def _active_merge(rec, cache):
             except (OSError, StopIteration, subprocess.TimeoutExpired):
                 continue
     return ""
-
-
-def gate_message(items, what):
-    lines = ["=== Finished work is not landed or discarded: you cannot %s (point 5) ===" % what,
-             "  Spec: %s. Land or discard every item first:" % SPEC]
-    for i in items:
-        w = ("  [waiting: %s — %s]" % (i["waiting"], i["waiting_on"])) if i["waiting"] else ""
-        lines.append("   - %s: %s%s" % (i["name"], i["why"], w))
-        for p, b in i["workspaces"][:4]:
-            lines.append("       %s  %s" % (p, b or ""))
-    lines += ["  How: merge its branch, then  workspaces.sh land <name>   (it also lands on its own",
-              "       once every branch is in the branch this work integrates on and nothing is",
-              "       uncommitted — `workspaces.sh integration` says which branch that is (point 14))",
-              "       or  workspaces.sh discard <name> --reason '...' (--ceo-word '...' | --not-ceo-ordered '...')",
-              "       or spawn the work that lands it, naming it:  lands-pending: <name>  /  continues: <name>"]
-    lines += ["  Independent agents may start while this work remains pending.",
-              "  Allowed while it waits (point 5): answer the CEO naming this work, or record",
-              "       workspaces.sh wait <name> --started '...'  |  --outside '...' --todo '<CEO TODO ref>'",
-              "       |  --ceo '<the question you asked him>' --todo '<CEO TODO ref>'"]
-    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -7947,146 +8004,6 @@ def recipient_state(session_id, name):
 # the Stop gate (point 5)
 # ---------------------------------------------------------------------------
 
-def _turn_started_by_person(transcript):
-    """True when the turn now ending began with a message from a person — the
-    CEO — rather than a platform notification. Read from the transcript."""
-    # Read BACKWARD in bounded chunks until a row decides, so memory stays one
-    # chunk wide (the reason the read was bounded) while a long tool-heavy turn,
-    # whose initiating row lies earlier than any fixed window, still finds it.
-    chunk = 4 * 1024 * 1024
-    try:
-        with open(transcript, "rb") as f:
-            pos = os.fstat(f.fileno()).st_size
-            tail = b""                   # the unfinished first line of the chunk after this one
-            while pos > 0:
-                start = max(0, pos - chunk)
-                f.seek(start)
-                data = f.read(pos - start) + tail
-                pos = start
-                parts = data.split(b"\n")
-                if pos > 0:
-                    tail, parts = parts[0], parts[1:]      # its start lies in an earlier chunk
-                else:
-                    tail = b""
-                for raw in reversed(parts):
-                    try:
-                        d = json.loads(raw.decode("utf-8", "replace"))
-                    except ValueError:
-                        continue
-                    if not isinstance(d, dict) or d.get("type") != "user":
-                        continue
-                    verdict = _row_is_a_persons(d)
-                    if verdict is None:
-                        continue         # this row starts no turn: the row before it does
-                    return verdict
-    except (OSError, TypeError):
-        return False
-    return False
-
-
-def _row_is_a_persons(d):
-    """None — this row starts no turn (a tool result, hook feedback, a
-    compaction summary, image metadata: skip to the row before it);
-    True — a person's turn, the CEO's; False — the platform's, a peer's, a
-    notification's.
-
-    DECIDED ON THE FIELDS THE PLATFORM STAMPS, NEVER ON THE SHAPE OF THE TEXT
-    (round 8, item 4). Until round 8 this was a deny-list of five tag names over
-    the text (`<task-notification`, `<teammate-message`, ...), so any shape the
-    platform had not been listed for read as a person — and the transcripts on
-    this machine already held one: 68 non-meta peer-message rows beginning
-    `Another Claude session sent a message:` (v2.1.229–2.1.267, origin absent)
-    passed the deny-list and spent the CEO's allowance. A textual ALLOW-list is
-    wrong the other way: the CEO's own `[Image #5] …` turns (11 rows, origin
-    human, promptSource typed/queued) begin with a bracket.
-
-    Measured over every persisted transcript on this machine on 2026-09-13
-    (2,591 files; 4,675 main-session user text rows; the census script and its
-    output are in docs/verification/round8-fixes-2026-09-13-logs/): a row a
-    person typed carries `origin.kind == "human"` (1,861 typed + 52 queued + 24
-    suggestion_accepted + 92 through the SDK, all versions 2.1.217–2.1.269); the
-    RichOS app's prompts through the `sdk-cli` entrypoint carry NO origin and
-    `promptSource: sdk` (670 rows, v2.1.250–2.1.267 — an origin-only rule
-    rejects every one of them); a notification carries `origin.kind ==
-    "task-notification"` and `promptSource: system` (1,320 rows); a peer's
-    message carries `origin.kind == "peer"` with `isMeta` (53 rows); hook
-    feedback, image metadata and local-command caveats are `isMeta` with no
-    origin (283 rows, none starts a turn); a compaction summary is
-    `isCompactSummary` (8 rows, none starts a turn); and every main-session row
-    with NO origin and NO promptSource is the platform's — `<command-name>`,
-    `<local-command-stdout>`, `[Request interrupted by user]`, the 68 old-shape
-    peer rows — 212 rows, not one of them a person's words. Both sides are
-    asserted from those shapes in the fourteen (C5.15, C5.16)."""
-    msg = d.get("message") or {}
-    content = msg.get("content")
-    texts = []
-    if isinstance(content, str):
-        texts = [content]
-    elif isinstance(content, list):
-        if any(isinstance(c, dict) and c.get("type") == "tool_result" for c in content):
-            return None
-        texts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
-    text = "\n".join(texts).strip()
-    origin = d.get("origin")
-    kind = origin.get("kind") if isinstance(origin, dict) else None
-    if d.get("isMeta") or d.get("isCompactSummary"):
-        # A meta row with a stamped non-human origin (a peer's message, the
-        # coordinator's) starts a turn that is not his. A meta row with no
-        # origin (hook feedback, image metadata, a caveat, a summary) is part of
-        # another row's turn: the row before it decides.
-        if kind and kind != "human":
-            return False
-        return None
-    if not text and not isinstance(origin, dict):
-        return None
-    if d.get("queueSkipAttachments") or d.get("promptSource") == "system":
-        return False
-    if isinstance(origin, dict):
-        return kind == "human"
-    return d.get("promptSource") in ("typed", "queued", "sdk", "suggestion_accepted")
-
-
-def _allowance_state(rec, item):
-    """WHAT THE ONE ALLOWANCE WAS SPENT ON — the item's decision-relevant state.
-
-    Point 5 allows a reply that names the pending work, and the page binds that
-    allowance in its own parenthesis: "(the reply names the pending work, WHICH
-    IS HANDLED RIGHT AFTER)". Naming it is not handling it, so the allowance is
-    spent per item and returns only when the item has MOVED. This is the
-    fingerprint of "moved": the reason it is pending, what it is recorded as
-    waiting on, the workspaces it still has, and the tip of every branch it
-    still has. Rich committing what the agent left to its branch, or merging
-    it, or recording what it waits on, all change it; a second turn that only
-    says the name again does not.
-
-    It is bounded by the ITEM's own branches — one rev-parse each — never by a
-    scan of anything (see the gate's budget)."""
-    tips = []
-    for repo, b in sorted(_branch_targets([rec])):
-        tips.append("%s\t%s\t%s" % (repo, b, branch_tip(repo, b)))
-    return hashlib.sha1(json.dumps([
-        item["why"], item["waiting"], item["waiting_on"],
-        sorted((p or "", b or "") for p, b in item["workspaces"]),
-        (rec.get("disposition") or {}).get("kind", ""),
-        sorted(rec.get("lands_pending") or []),
-        sorted(rec.get("continues") or []),
-        tips,
-    ], sort_keys=True).encode("utf-8")).hexdigest()
-
-
-def _allowance_spent_message(spent):
-    lines = ["=== That reply has already used its one allowance (point 5) ===",
-             "  Spec: %s — \"the reply names the pending work, which is HANDLED RIGHT AFTER\"." % SPEC,
-             "  Naming it a second time is not handling it. These items were named in an earlier",
-             "  reply and have not moved since — same reason, same workspaces, same branch tips:"]
-    for i, prev in spent:
-        lines.append("   - %s: named at %s; %s" % (i["name"], iso(prev.get("at")), i["why"]))
-    lines += ["  The allowance returns the moment the item MOVES: commit what it left to its branch,",
-              "  merge it, record what it waits on, start the work that lands it, or discard it.",
-              "  Handling it is the only way past this."]
-    return "\n".join(lines)
-
-
 def refused_session_text(why):
     return ("THIS SESSION IS NOT ALLOWED: %s. Nobody starts a session in its own workspace in RichOS "
             "(point 3); every tool but reading and stopping agents is refused, and retrying cannot succeed. "
@@ -8115,83 +8032,88 @@ def _refused_session_notice(sid, why):
     return refused_session_text(why)
 
 
+def _monitor_health(sid):
+    """(healthy, line) from the stall watcher's own --alive reading (stall_watch.alive_status)."""
+    try:
+        _agent_hold()                        # puts scripts/lib on the path
+        import stall_watch
+        code, line = stall_watch.alive_status(sid, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return code == 0, line
+    except Exception as e:  # noqa: BLE001: an unreadable watcher is an unwatched one
+        return False, "stall-watch could not be read (%s: %s)" % (e.__class__.__name__, str(e)[:160])
+
+
+def fallback_notice(sid, items=None):
+    """THE STOP/STARTUP FALLBACK (orchestration reliability R5): while no healthy
+    watcher evaluates this session, the lead hears the watcher's failure and the due
+    work (due_set) here, once per material change: the watcher's state and each due
+    item's work, state and end. '' while a watcher is healthy, or when nothing changed.
+    It refuses nothing and asks for no acknowledgement."""
+    if not sid:
+        return ""
+    healthy, line = _monitor_health(sid)
+    due = []
+    if healthy:
+        key = "healthy"
+        text = ""
+    else:
+        unread = ""
+        try:
+            due = due_set(sid, items if items is not None else pending(sid, auto=False, dry=True))
+        except Exception as e:  # noqa: BLE001: unread is said, never "nothing due"
+            due, unread = None, "%s: %s" % (e.__class__.__name__, str(e)[:120])
+        bad = unreadable_line()
+        state = line.split(":", 2)[1].strip() if line.count(":") >= 1 else line
+        # The material state: the watcher's state and, apart, UNKNOWN or the due items, so a
+        # read that fails after an empty one is a change and is told (never "nothing due").
+        key = hashlib.sha1(json.dumps([state[:60], "unread" if due is None else
+                                       sorted([d.get("key") or d["name"], d["state"], d.get("end") or ""]
+                                              for d in due), bad]).encode("utf-8")).hexdigest()
+        if due is None:
+            body = ("The due work could NOT be read (%s), so what is due is unknown; nothing here "
+                    "says nothing is due. workspaces.sh holds reads it again." % unread)
+        elif due:
+            body = "%d item(s) need action: " % len(due) + " | ".join(due_lines(due))
+        else:
+            body = "" if bad else "Nothing is due now."
+        body = (body + " " + bad).strip()
+        text = ("STALL WATCH NOT ACTIVE (%s): due work is told here until it is. %s" % (line, body)).strip()
+    kind = "healthy" if healthy else ("unread" if due is None else ("due" if due or bad else "empty"))
+    with Lock():
+        rec = load_session(sid) or {}
+        if rec.get("fallback_notice") == key:
+            return ""
+        prev_kind = rec.get("fallback_kind")
+        rec.update(fallback_notice=key, fallback_kind=kind)
+        write_json(session_path(sid), rec)
+    # Nothing due is nothing to act on, so nothing is said (a message here costs the lead a model
+    # turn that does nothing; in a chat-only app conversation it was every first turn end). The
+    # one exception: right after a read that failed, the recovered read is told once.
+    if kind == "empty" and prev_kind != "unread":
+        return ""
+    return text
+
+
 def gate_stop(payload, entity):
-    """(allowed, message). Point 5: Rich cannot end his turn while finished
-    work is neither landed nor discarded, except as the page allows."""
+    """(True, message for the person, message for the lead). Never refuses a turn end
+    (orchestration reliability R2/R3): finished work stays owned in the registry and
+    the watcher (or, while none runs, fallback_notice) tells the lead what is due.
+    Landed work is still landed here on its own (point 4), inside the budget."""
     sid = str(payload.get("session_id") or "")
     if not sid:
-        return True, ""
+        return True, "", ""
     s = load_session(sid)
     if s and s.get("forbidden"):
         why = forbidden_now(sid, s)
         if why:
-            return True, _refused_session_notice(sid, why)
-    # ONE BUDGET FOR THE WHOLE GATE (hunt part 4, finding 15): the retries used
-    # to run first, on their own clock, before the gate's deadline existed.
+            return True, _refused_session_notice(sid, why), ""
     deadline = _gate_deadline(GATE_STOP_BUDGET)
     retry_due(deadline=deadline)
-    report = {}
-    items = pending(sid, entity, scan=True, deadline=deadline, report=report)
-    loud = keeps_failing()
-    notes = []
-    if report.get("deferred"):
-        notes.append("NOTE: the gate answered inside its budget rather than overrunning the hook's "
-                     "timeout, which the platform would have canceled, discarding this answer. "
-                     "%d item(s) were not checked for an automatic land this turn and STAY PENDING: %s. "
-                     "That is the safe answer, not a missing one. `workspaces.sh land <name>` run by "
-                     "hand has no budget."
-                     % (len(report["deferred"]), ", ".join(sorted(set(report["deferred"])))))
-    for r in loud:
-        d = r["deletion"]
-        notes.append("TELL THE CEO: deleting %s has failed %d times since %s: %s" % (
-            r.get("name"), d.get("attempts"), iso(d.get("first_failed_at")), d.get("last_error")))
-    # THE HOLDS, AT EVERY TURN END (HOLDS above): never shown just once.
-    try:
-        notes = hold_lines(sid) + notes
-    except Exception as e:  # noqa: BLE001: an unread hold list is said, never silence
-        notes.insert(0, "HOLDS NOT READ this turn (%s: %s): held work may be out of sight; "
-                        "workspaces.sh holds" % (e.__class__.__name__, str(e)[:160]))
-    blocking = [i for i in items if i["blocks_turn_end"]]
-    if not blocking:
-        msg = "\n".join(notes)
-        if items:
-            msg = (msg + "\n" if msg else "") + "Pending finished work (waiting): " + \
-                ", ".join("%s [%s: %s]%s" % (i["name"], i["waiting"], i["waiting_on"],
-                                             " (%s)" % i["why"] if "did not land on its own" in i["why"] else "")
-                          for i in items)
-        return True, msg
-    last = str(payload.get("last_assistant_message") or "")
-    if last and _turn_started_by_person(str(payload.get("transcript_path") or "")) \
-            and all(i["name"] in last for i in blocking):
-        # THE ALLOWANCE IS CONSUMED. It used to be unlimited: ten consecutive
-        # turns whose reply merely contained each item's name all ended, and
-        # nothing anywhere made the work get handled afterwards. The page's own
-        # parenthesis binds it, so it is spent per item and returns only when
-        # that item's state has changed (_allowance_state).
-        spent, state = [], {}
-        for i in blocking:
-            rec = load_agent(i["key"])
-            if not rec:
-                continue
-            state[i["key"]] = _allowance_state(rec, i)
-            prev = rec.get("answer_allowance") or {}
-            if prev.get("state") == state[i["key"]]:
-                spent.append((i, prev))
-        if not spent:
-            for i in blocking:
-                if i["key"] not in state:
-                    continue
-                with Lock():
-                    rec = load_agent(i["key"])
-                    if not rec:
-                        continue
-                    rec["answer_allowance"] = {"at": now(), "state": state[i["key"]], "session": sid}
-                    save_agent(rec)
-                event("answer-allowance-used", key=i["key"])
-            return True, "\n".join(notes)
-        return False, _allowance_spent_message(spent) + "\n" + \
-            gate_message(blocking, "end your turn") + ("\n" + "\n".join(notes) if notes else "")
-    return False, gate_message(blocking, "end your turn") + ("\n" + "\n".join(notes) if notes else "")
+    items = pending(sid, entity, scan=True, deadline=deadline, report={})
+    person = ["TELL THE CEO: deleting %s has failed %d times since %s: %s" % (
+        r.get("name"), r["deletion"].get("attempts"), iso(r["deletion"].get("first_failed_at")),
+        r["deletion"].get("last_error")) for r in keeps_failing()]
+    return True, "\n".join(person), fallback_notice(sid, items)
 
 
 # ---------------------------------------------------------------------------
@@ -8261,9 +8183,14 @@ def lifecycle(payload, entity):
         release_session_holds(None, notices)
         retry_due()
         items = pending(sid, entity, scan=True)
-        if items:
-            ctx = ("RECONCILE FINISHED WORK FIRST (point 5); independent agents may start while it is pending.\n"
-                   + gate_message(items, "declare this work complete"))
+        due = due_set(sid, items)
+        bad = unreadable_line()
+        if due:
+            # Owned work to resume, not a gate: independent and authorized work goes on.
+            ctx = "\n".join(["DUE WORK (%d): handle it as you resume; the complete list: workspaces.sh holds"
+                             % len(due)] + due_lines(due) + ([bad] if bad else []))
+        elif bad:
+            ctx = bad
     elif ev == "SessionEnd":
         record_session_end(sid, str(payload.get("reason") or "SessionEnd"))
         release_session_holds(sid)
@@ -8311,27 +8238,15 @@ def lifecycle(payload, entity):
                                   control=_generated("pause", text), end=_generated_end(text))
                         except SpecError as e:
                             notices.append(str(e))
-                    elif _hold_words().search(text) and not finished_state(rec)[0]:
-                        # Told to wait, in any words on the list: recorded as a hold on
-                        # that agent, never refused; the message has already gone out.
-                        m = _hold_words().search(text)
-                        a, b = text.rfind(".", 0, m.start()) + 1, text.find(".", m.end())
-                        quote = " ".join(text[a:b if b >= 0 else len(text)].split())[:200]
-                        try:
-                            wait(rec["key"], "held", "told to wait: " + quote, "", sid)
-                            notices.append("HOLD RECORDED on %s: %s. It is shown at every turn end from 30 min "
-                                           "on until it runs or he decides." % (rec["name"], quote))
-                        except SpecError as e:
-                            notices.append(str(e))
                     else:
-                        if not rec.get("disposition") and not _generated("resume", text) and text.strip():
-                            # A correction: kept until a commit lands after it (HOLDS, correction).
-                            with Lock():
-                                fresh = load_agent(rec["key"])
-                                fresh["correction"] = {"at": now(), "text": " ".join(text.split())[:200]}
-                                save_agent(fresh)
-                                rec = fresh
-                        # ONLY THE GO ENDS IT (second review rv-20261022T002958Z-2ac46e09-fa4e,
+                        # A FREE-TEXT MESSAGE CREATES NO OBLIGATION (orchestration reliability R1,
+                        # richos-hq docs/prds/2026-10-23-orchestration-reliability.md): "Yes, stop
+                        # it now" and "Hand over now" were kept as corrections a later commit had
+                        # to fulfil, and "wait for my go" as a hold. Only the structured pause
+                        # above, the generated RESUME and a stop change the lifecycle; a real
+                        # correction goes in the teammate's TASK or a corrected continuation brief.
+                        # A LEGACY "held" WAIT (recorded from a message before 2026-10-24) still
+                        # ends at the go (second review rv-20261022T002958Z-2ac46e09-fa4e,
                         # finding 1): a status question or a note leaves the teammate held.
                         if (rec.get("waiting") or {}).get("kind") == "held" and _hold_go(text):
                             with Lock():
@@ -8696,12 +8611,14 @@ def main(argv):
                 print("REGISTERED\t%s" % rec["key"])
                 return 0
             if a.cmd == "gate-stop":
-                ok, msg = gate_stop(payload, entity)
-                if not ok:
-                    sys.stderr.write(msg + "\n")
-                    return 2
+                _ok, msg, lead = gate_stop(payload, entity)
+                out = {}
                 if msg:
-                    print(json.dumps({"systemMessage": msg}))
+                    out["systemMessage"] = msg
+                if lead:
+                    out["hookSpecificOutput"] = {"hookEventName": "Stop", "additionalContext": lead}
+                if out:
+                    print(json.dumps(out))
                 return 0
             ctx, notices = lifecycle(payload, entity)
             out = {}
@@ -8776,10 +8693,18 @@ def main(argv):
             release(a.name, a.ceo_word, a.not_a_hold, me)
             print("released: %s" % a.name)
         elif a.cmd == "holds":
-            for h in holds(me):
-                print("%-8s %-10s %s  since %s  end=%s (%s)  why: %s" % (
-                    h["state"].upper(), h["source"], h["name"], iso(h["since"]), h["end"] or "-", h["detail"],
-                    " ".join(h["why"].split())[:160]))
+            due = due_set(me, pending(me, entity, auto=False, dry=True))
+            quiet = [h for h in holds(me) if h["state"] not in ("none", "due")]
+            for h in due + quiet:
+                print("%-8s %-10s %s  since %s  end=%s (%s)  why: %s%s" % (
+                    "DUE" if h in due else h["state"].upper(), h["source"], h["name"], iso(h["since"]),
+                    h["end"] or "-", h["detail"], " ".join(str(h["why"]).split())[:160],
+                    ("  next: " + h["command"]) if h in due else ""))
+            bad = unreadable_line()
+            if bad:
+                print(bad)
+            if not due and not quiet and not bad:
+                print("nothing held or due")
         elif a.cmd == "integration-branch":
             # THE ONE ANSWER, FOR A SHELL CONSUMER. "Every part of the system
             # that needs to know whether work has landed asks the same

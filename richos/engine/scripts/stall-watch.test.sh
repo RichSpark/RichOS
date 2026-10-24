@@ -752,16 +752,23 @@ tick 120; tick 180
 check "L03  three 10-min run-tests.sh steps are exempt; the fast teammate clears once" \
     "$( [ "$(count "$OUT" "STALL-CLEARED")" -eq 1 ] && has "$OUT" "papa-opus-w1" && ! has "$OUT" "[SLOW-STEPS]"; echo $?)" "out=$OUT"
 
-# --- HD: no silent holds (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-holds.md) ----
-# The CEO: "WHEN WILL [THIS] STOP ONCE AND FOR ALL???". Every hold is in sight
-# until its work runs, lands or he decides, paused agents included.
+# --- HD: due work (orchestration reliability R2, richos-hq docs/prds/2026-10-23-orchestration-reliability.md) ---
+# One calculation (workspaces.due_set): finished work with no wait, a hold or wait with no
+# checkable end, or one whose end came true, is DUE and told at the first look while the
+# lead is idle; a pending end and a time not reached are quiet. Told again only after the
+# 30-min repeat; a busy lead is told at its next idle look.
 new_registry hd; new_state hd
+lead_idle() { export STALL_WATCH_LEAD_TRANSCRIPT="$SB/lead-hd.jsonl"
+              printf '%s\n' '{"type":"system","subtype":"turn_duration"}' >"$STALL_WATCH_LEAD_TRANSCRIPT"; }
+lead_busy() { export STALL_WATCH_LEAD_TRANSCRIPT="$SB/lead-hd.jsonl"
+              printf '%s\n' '{"type":"assistant","message":{"content":[]}}' >"$STALL_WATCH_LEAD_TRANSCRIPT"; }
 add_agent papa-opus-w1 a0000000000fixw "$SID" 600 600 30
 add_agent quebec-opus-s1 a0000000000fixs "$SID" 3600 3500 3000 end
 add_agent romeo-opus-y1 a0000000000fixy "$SID" 600 600 30
 add_agent sierra-opus-f1 a0000000000fixf "$SID" 3600 3500 3000 end
 add_agent tango-opus-p1 a0000000000fixt "$SID" 600 600 30
 add_agent uniform-opus-q1 a0000000000fixu "$SID" 600 600 30
+add_agent whisky-opus-n1 a0000000000fixn "$SID" 3600 3500 3000 end
 hold_fixture() { python3 - "$ENGINE" "$@" <<'PY2'
 import json, os, sys, time
 sys.path.insert(0, os.path.join(sys.argv[1], "mega-lander"))
@@ -772,17 +779,17 @@ def edit(name, **kw):
     p = os.path.join(os.environ["RICHOS_WORKSPACES_DIR"], "agents", "%s--%s.json" % (sid, name))
     rec = json.load(open(p)); rec.update(kw); json.dump(rec, open(p, "w"))
 if what == "setup":
-    # T2: a message telling a live teammate to wait, through the real SendMessage parser.
-    _ctx, notes = ws.lifecycle({"hook_event_name": "PostToolUse", "tool_name": "SendMessage", "session_id": sid,
-                                "tool_input": {"to": "papa-opus-w1", "message":
-                                               "Commit what you have. Then wait for my go before the walk."}}, "")
-    assert any(n.startswith("HOLD RECORDED on papa-opus-w1") for n in notes), notes
-    # T3: free text on a finished agent; and one whose end is a live agent.
-    ws.wait("quebec-opus-s1", "started", "code done, real-app and phone checks left", "", sid)
-    ws.wait("sierra-opus-f1", "started", "romeo carries the rest", "", sid, "agent:romeo-opus-y1")
-    # T4: the generated manual pause (no end) and a quota pause (at: its reset).
-    import pause_protocol
     now = time.time()
+    # Legacy records (written before 2026-10-24): a message's "wait for my go" on a live
+    # teammate, and a free-text --started on a finished one. Both read as due.
+    edit("papa-opus-w1", waiting={"kind": "held", "on": "told to wait: Then wait for my go before the walk",
+                                  "todo": "", "at": now, "end": ""})
+    edit("quebec-opus-s1", waiting={"kind": "started", "on": "code done, real-app and phone checks left",
+                                    "todo": "", "at": now, "end": ""})
+    # A checkable end on a live agent: quiet until it finishes.
+    ws.wait("sierra-opus-f1", "started", "romeo carries the rest", "", sid, "agent:romeo-opus-y1")
+    # The generated manual pause (no end) and a quota pause (at: its reset).
+    import pause_protocol
     edit("tango-opus-p1", pause={"at": now, "until": pause_protocol.until_text("manual"), "control": True,
                                  "end": pause_protocol.end_of("manual")})
     reset = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 3600))
@@ -794,34 +801,36 @@ elif what == "romeo-done":
 PY2
 }
 PYTHONPATH="$ENGINE/scripts/lib" hold_fixture setup; RC=$?
-check "HD0  the fixture: a 'wait for my go' message is recorded as a hold on papa-opus-w1" "$RC" "setup failed"
+check "HD0  the fixture: legacy waits, an agent: end, two pauses and finished work with no wait" "$RC" "setup failed"
+lead_busy
 tick 0
-check "HD1  nothing is told before a hold is 30 min old" \
-    "$( ! has "$OUT" "[HELD]" && ! has "$OUT" "[RELEASE DUE]"; echo $?)" "out=$OUT"
-tick 1860
-check "T2   'wait for my go' sent to a live teammate: a stall-watch tick at +31 min reports it" \
-    "$( has "$OUT" "[HELD] papa-opus-w1: held by Rich with nothing checkable to end it" \
-        && has "$OUT" "why: told to wait: Then wait for my go before the walk"; echo $?)" "out=$OUT"
-check "T3a  a free-text --started on a finished agent is reported at +31 min" \
-    "$( has "$OUT" "[HELD] quebec-opus-s1" && has "$OUT" "code done, real-app and phone checks left"; echo $?)" "out=$OUT"
+check "HD1  a busy lead is not told yet" "$( ! has "$OUT" "[DUE]"; echo $?)" "out=$OUT"
+lead_idle
+tick 60
+check "T2   a legacy 'wait for my go' hold on a live teammate is due at the first idle look" \
+    "$( has "$OUT" "[DUE] papa-opus-w1" && has "$OUT" "why: told to wait: Then wait for my go before the walk"; echo $?)" "out=$OUT"
+check "T3a  a legacy free-text --started on a finished agent is due (R2: a stated 'running now' ends nothing)" \
+    "$( has "$OUT" "[DUE] quebec-opus-s1" && has "$OUT" "code done, real-app and phone checks left"; echo $?)" "out=$OUT"
 check "T3b  agent:Y is quiet while Y is live" "$( ! has "$OUT" "sierra-opus-f1"; echo $?)" "out=$OUT"
-check "T4a  a manual pause is reported at +31 min (its end is Rich's resume)" \
-    "$( has "$OUT" "[HELD] tango-opus-p1" && has "$OUT" "why: Rich's resume" \
-        && has "$OUT" "workspaces.sh resume tango-opus-p1"; echo $?)" "out=$OUT"
+check "T4a  a manual pause is due, with the command that resumes it" \
+    "$( has "$OUT" "[DUE] tango-opus-p1" && has "$OUT" "workspaces.sh resume tango-opus-p1"; echo $?)" "out=$OUT"
 check "T4b  a quota pause is quiet until its at: passes" "$( ! has "$OUT" "uniform-opus-q1"; echo $?)" "out=$OUT"
-tick 1920
-check "HD2  told again only after the 30-min repeat" "$( ! has "$OUT" "[HELD]"; echo $?)" "out=$OUT"
+check "T5   finished work with no wait is due, with its next action" \
+    "$( has "$OUT" "[DUE] whisky-opus-n1" && has "$OUT" "workspaces.sh land whisky-opus-n1"; echo $?)" "out=$OUT"
+tick 120
+check "HD2  told again only after the 30-min repeat" "$( ! has "$OUT" "[DUE]"; echo $?)" "out=$OUT"
 hold_fixture romeo-done
-tick 1980
-check "T3c  Y finishes: RELEASE DUE for the work it was holding, with the command" \
-    "$( has "$OUT" "[RELEASE DUE] sierra-opus-f1: its end came true: agent romeo-opus-y1 has finished" \
+tick 180
+check "T3c  Y finishes: the work it carried is due now, with the command" \
+    "$( has "$OUT" "[DUE] sierra-opus-f1" && has "$OUT" "agent romeo-opus-y1 has finished" \
         && has "$OUT" "continues: sierra-opus-f1"; echo $?)" "out=$OUT"
 tick 3700
-check "T4c  the quota reset passes: RELEASE DUE for the quota pause" \
-    "$( has "$OUT" "[RELEASE DUE] uniform-opus-q1" && has "$OUT" "workspaces.sh resume uniform-opus-q1" \
-        && has "$OUT" "[HELD] papa-opus-w1"; echo $?)" "out=$OUT"
-OUT="$(STALL_WATCH_NOW=$(( $(date +%s) + 1860 )) bash "$SW" --once 2>&1)"; RC=$?
-check "HD3  --once lists the holds too" "$( has "$OUT" "[HELD] quebec-opus-s1"; echo $?)" "out=$OUT"
+check "T4c  the quota reset passes: due, and the older items repeat after 30 min" \
+    "$( has "$OUT" "[DUE] uniform-opus-q1" && has "$OUT" "workspaces.sh resume uniform-opus-q1" \
+        && has "$OUT" "[DUE] papa-opus-w1"; echo $?)" "out=$OUT"
+check "HD3  an item that stops being due ends without a line" "$( ! has "$OUT" "STALL-CLEARED"; echo $?)" "out=$OUT"
+OUT="$(STALL_WATCH_NOW=$(( $(date +%s) + 60 )) bash "$SW" --once 2>&1)"; RC=$?
+check "HD3b --once lists the due work too" "$( has "$OUT" "[DUE] quebec-opus-s1"; echo $?)" "out=$OUT"
 
 # Second review rv-20261022T013056Z-12c77c90-1291, finding 4: in the app the watcher runs in Stu's
 # lease, and a hold of Rich's lease (another RUNNING session of the same conversation partition)
@@ -838,18 +847,234 @@ python3 - "$ENGINE" "$SID_RICH" <<'PY2'
 import os, sys, time
 sys.path.insert(0, os.path.join(sys.argv[1], "mega-lander"))
 import workspaces as ws
-ws.wait("%s--victor-opus-a1" % sys.argv[2], "started", "code done, real-app checks left", "", sys.argv[2])
 rec = ws.load_agent("%s--victor-opus-a1" % sys.argv[2])
-rec["waiting"]["at"] = time.time() - 40 * 60
+rec["waiting"] = {"kind": "started", "on": "code done, real-app checks left", "todo": "", "at": time.time(), "end": ""}
 ws.save_agent(rec)
 PY2
 tick 0
-check "HD4  a terminal session does not tell another running session's hold" \
-    "$( ! has "$OUT" "victor-opus-a1: held by Rich"; echo $?)" "out=$OUT"
+check "HD4  a terminal session does not tell another running session's due work" \
+    "$( ! has "$OUT" "victor-opus-a1"; echo $?)" "out=$OUT"
 new_state hd4b
 OUT="$(RICHOS_APP_ENTITY=acme RICHOS_APP_THREAD=thread-1 STALL_WATCH_NOW=$(date +%s) bash "$SW" --tick 2>&1)"
-check "HD5  in the app (one conversation's partition) Stu's watcher tells the hold of Rich's running lease" \
-    "$( has "$OUT" "[HELD] victor-opus-a1: held by Rich"; echo $?)" "out=$OUT"
+check "HD5  in the app (one conversation's partition) Stu's watcher tells the due work of Rich's running lease" \
+    "$( has "$OUT" "[DUE] victor-opus-a1"; echo $?)" "out=$OUT"
+# Codex 03:24Z item A (Sage D6): one damaged record hid every readable due item.
+printf '{' > "$RICHOS_WORKSPACES_DIR/agents/damaged-fixture.json"
+new_state hd6
+OUT="$(RICHOS_APP_ENTITY=acme RICHOS_APP_THREAD=thread-1 STALL_WATCH_NOW=$(date +%s) bash "$SW" --tick 2>&1)"
+check "HD6  a damaged record beside readable due work: the due work is told, and one UNREADABLE RECORD line" \
+    "$( has "$OUT" "[DUE] victor-opus-a1" && has "$OUT" "UNREADABLE RECORD: 1 workspace registry record"; echo $?)" "out=$OUT"
+rm -f "$RICHOS_WORKSPACES_DIR/agents/damaged-fixture.json"
+unset STALL_WATCH_LEAD_TRANSCRIPT
+
+# --- F: every look is fresh code (orchestration reliability R5) ------------------
+# 2026-10-22/23: a watcher started 2026-10-21 kept the workspaces.py it had loaded and
+# never saw the holds feature that landed the next morning. The monitor now runs each look
+# as a fresh child, records the source it evaluated beside its beat, and --alive refuses a
+# monitor that has not evaluated the engine on disk. Run against a COPY of the engine, so a
+# change to its source and a broken source are the fixture's own.
+new_registry f; new_state f
+FE="$SB/engine-copy"
+mkdir -p "$FE/scripts"
+cp -R "$ENGINE/scripts/lib" "$FE/scripts/lib"
+cp -R "$ENGINE/mega-lander" "$FE/mega-lander"
+: >"$SB/f-config"
+f_alive() { python3 -B "$FE/scripts/lib/stall_watch.py" --alive --engine-root "$FE" --config "$SB/f-config" --command sw; }
+f_beat() { python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); print((b.get("evaluated") or {}).get("identity",""))' \
+    "$STALL_WATCH_STATE_DIR/$SID/monitor.json" 2>/dev/null; }
+f_ident() { python3 -B - "$FE" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts/lib")
+import stall_watch
+print(stall_watch.source_identity(sys.argv[1])[0])
+PY
+}
+( STALL_WATCH_POLL_SECONDS=2 exec python3 -B "$FE/scripts/lib/stall_watch.py" --monitor --engine-root "$FE" \
+    --config "$SB/f-config" --command sw >"$SB/f.out" 2>"$SB/f.err" ) &
+FMON=$!; PIDS+=("$FMON")
+f_has_ident() { [ -n "$(f_beat)" ] && [ "$(f_beat)" = "$(f_ident)" ]; }
+wait_for 30 f_has_ident
+OUT="$(f_alive)"; RC=$?
+check "F1   the monitor's beat carries the source its last look evaluated, and --alive accepts it" \
+    "$( [ "$RC" = 0 ] && has "$OUT" "source $(f_ident)"; echo $?)" "rc=$RC out=$OUT err=$(cat "$SB/f.err")"
+BEFORE="$(f_beat)"
+printf '\n# a fixture change to the evaluator\n' >>"$FE/mega-lander/workspaces.py"
+f_changed() { [ "$(f_beat)" != "$BEFORE" ] && [ "$(f_beat)" = "$(f_ident)" ]; }
+wait_for 30 f_changed
+check "F2   a change to the evaluator's source is used by the next look, with no restart" \
+    "$( f_changed; echo $?)" "beat=$(f_beat) ident=$(f_ident)"
+cp "$FE/mega-lander/workspaces.py" "$SB/f-good.py"
+# A look that hangs (the evaluator's source blocks at load): the child is ended at its timeout.
+printf 'import time\ntime.sleep(120)\n' >>"$FE/mega-lander/workspaces.py"
+f_failed() { grep -q 'the look failed' "$SB/f.out"; }
+wait_for 40 f_failed
+f_failed_at() { python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("failed") or {}).get("at",""))' \
+    "$STALL_WATCH_STATE_DIR/$SID/monitor.json" 2>/dev/null; }
+F_FIRST="$(f_failed_at)"
+f_failed_again() { local now; now="$(f_failed_at)"; [ -n "$now" ] && [ "$now" != "$F_FIRST" ]; }
+wait_for 40 f_failed_again    # a second failing look of the same streak
+# Read with the suite's own (good) stall_watch.py: the copy's workspaces.py now blocks at load.
+OUT="$(python3 -B - "$ENGINE/scripts/lib" "$FE" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import stall_watch
+code, line = stall_watch.alive_status(os.environ["RICHOS_SESSION_ID"], sys.argv[2])
+print(line)
+sys.exit(code)
+PY
+)"; RC=$?
+check "F3   a hung look is a watcher failure, told once per streak, and --alive does not read it healthy" \
+    "$( [ "$(grep -c 'the look failed' "$SB/f.out")" = 1 ] && grep -q "did not finish within" "$SB/f.out" \
+        && [ "$RC" = 1 ] && has "$OUT" "LOOKS FAILING"; echo $?)" \
+    "rc=$RC alive=$OUT out=$(cat "$SB/f.out")"
+cp "$SB/f-good.py" "$FE/mega-lander/workspaces.py"
+f_healthy() { f_alive >/dev/null; }
+wait_for 30 f_healthy
+check "F4   the next good look ends the failure" "$( f_healthy; echo $?)" "alive=$(f_alive)"
+kill "$FMON" 2>/dev/null
+f_unwatched() { ! f_alive >/dev/null; }
+wait_for 15 f_unwatched
+OUT="$(f_alive)"; RC=$?
+check "F5   the monitor gone: NOT WATCHED, whatever its last beat said" \
+    "$( [ "$RC" = 1 ] && has "$OUT" "NOT WATCHED"; echo $?)" "rc=$RC out=$OUT"
+# An older monitor (one that looks in-process and records no evaluated source) holding the lock.
+# It never named itself in the lock, so the pid the monitor above wrote there goes first.
+: >"$STALL_WATCH_STATE_DIR/$SID/monitor.lock"
+python3 - "$STALL_WATCH_STATE_DIR/$SID" <<'PY'
+import json, os, sys, time
+d = sys.argv[1]
+json.dump({"pid": 1, "poll": 60, "session": os.environ["RICHOS_SESSION_ID"], "mode": "monitor",
+           "last_look": time.time(), "open": 0}, open(os.path.join(d, "monitor.json"), "w"))
+PY
+( exec python3 -c 'import fcntl,os,sys,time; fd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o600); fcntl.flock(fd,fcntl.LOCK_EX); time.sleep(60)' \
+    "$STALL_WATCH_STATE_DIR/$SID/monitor.lock" ) &
+FOLD=$!; PIDS+=("$FOLD")
+f_locked() { python3 -c 'import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_RDWR);
+try:
+    fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB); sys.exit(1)
+except OSError:
+    sys.exit(0)' "$STALL_WATCH_STATE_DIR/$SID/monitor.lock"; }
+wait_for 10 f_locked
+OUT="$(f_alive)"; RC=$?
+check "F6   a live monitor that never evaluated fresh code (an old parent) is not healthy" \
+    "$( [ "$RC" = 1 ] && has "$OUT" "OLD MONITOR"; echo $?)" "rc=$RC out=$OUT"
+# F7 (Codex 2026-10-24): the lock held and a fresh beat, but its last look evaluated an OLDER
+# source, before the source changed (the ordinary old/new interval: evaluated.at 999 < newest
+# source 1000 < now 1001): not healthy until the current source has been evaluated.
+# F7b: the same beat with the current source is healthy.
+f7_beat() { python3 - "$STALL_WATCH_STATE_DIR/$SID" "$1" "$FE" <<'PY'
+import json, os, sys, time
+d, ident, fe = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, fe + "/scripts/lib")
+import stall_watch
+newest = stall_watch.source_identity(fe)[1]
+json.dump({"pid": 1, "poll": 60, "session": os.environ["RICHOS_SESSION_ID"], "mode": "monitor",
+           "last_look": time.time(), "open": 0, "evaluated": {"identity": ident, "at": newest - 1}},
+          open(os.path.join(d, "monitor.json"), "w"))
+PY
+}
+f7_beat "an-older-source"
+OUT="$(f_alive)"; RC=$?
+check "F7   a fresh look that evaluated an older source than the engine's is not healthy" \
+    "$( [ "$RC" = 1 ] && has "$OUT" "NOT YET ON THE CURRENT SOURCE"; echo $?)" "rc=$RC out=$OUT"
+f7_beat "$(f_ident)"
+OUT="$(f_alive)"; RC=$?
+check "F7b  POSITIVE CONTROL: the same beat on the current source is healthy" \
+    "$( [ "$RC" = 0 ] && has "$OUT" "source $(f_ident)"; echo $?)" "rc=$RC out=$OUT"
+# F8: the lock names a holder that is not the beat's writer (a beat another process left).
+printf '99999' >"$STALL_WATCH_STATE_DIR/$SID/monitor.lock"
+OUT="$(f_alive)"; RC=$?
+check "F8   a beat whose writer is not the lock's holder is not healthy" \
+    "$( [ "$RC" = 1 ] && has "$OUT" "NOT ITS OWNER"; echo $?)" "rc=$RC out=$OUT"
+printf '1' >"$STALL_WATCH_STATE_DIR/$SID/monitor.lock"
+OUT="$(f_alive)"; RC=$?
+check "F8b  POSITIVE CONTROL: the holder named in the lock wrote the beat: healthy" \
+    "$( [ "$RC" = 0 ]; echo $?)" "rc=$RC out=$OUT"
+# F10: the lock and the beat name the same pid, and that process is gone.
+( exit 0 ) & DEAD=$!; wait "$DEAD" 2>/dev/null
+printf '%s' "$DEAD" >"$STALL_WATCH_STATE_DIR/$SID/monitor.lock"
+python3 - "$STALL_WATCH_STATE_DIR/$SID" "$DEAD" "$(f_ident)" <<'PY'
+import json, os, sys, time
+d, pid, ident = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+now = time.time()
+json.dump({"pid": pid, "poll": 60, "session": os.environ["RICHOS_SESSION_ID"], "mode": "monitor",
+           "last_look": now, "open": 0, "evaluated": {"identity": ident, "at": now}},
+          open(os.path.join(d, "monitor.json"), "w"))
+PY
+OUT="$(f_alive)"; RC=$?
+check "F10  a beat whose writer, the lock's named holder, is a dead process is not healthy" \
+    "$( [ "$RC" = 1 ] && has "$OUT" "is gone"; echo $?)" "rc=$RC out=$OUT"
+kill "$FOLD" 2>/dev/null
+# F11 (Frank and Sage D1): in the app, conversation A's healthy monitor must not make
+# conversation B read as watched; only a monitor of the same registry partition counts.
+OUT="$(python3 -B - "$FE" "$SB/f11" <<'PY'
+import fcntl, json, os, subprocess, sys, time
+fe, root = sys.argv[1], sys.argv[2]
+os.makedirs(os.path.join(root, "sess-A"), exist_ok=True)
+os.environ["STALL_WATCH_STATE_DIR"] = root
+sys.path.insert(0, fe + "/scripts/lib")
+import stall_watch
+lock = os.path.join(root, "sess-A", "monitor.lock")
+holder = subprocess.Popen([sys.executable, "-c",
+    "import fcntl,os,sys,time; fd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o600); fcntl.flock(fd,fcntl.LOCK_EX); "
+    "os.ftruncate(fd,0); os.pwrite(fd,str(os.getpid()).encode(),0); print('ready',flush=True); time.sleep(60)", lock],
+    stdout=subprocess.PIPE, text=True)
+holder.stdout.readline()
+try:
+    now = time.time()
+    a_part = os.path.realpath(os.path.join(root, "partition-A"))
+    json.dump({"pid": holder.pid, "poll": 60, "session": "sess-A", "mode": "monitor", "last_look": now, "open": 0,
+               "scope": a_part, "evaluated": {"identity": stall_watch.source_identity(fe)[0], "at": now}},
+              open(os.path.join(root, "sess-A", "monitor.json"), "w"))
+    os.environ.update(RICHOS_APP_ENTITY="company", RICHOS_APP_THREAD="thread-b",
+                      RICHOS_WORKSPACES_DIR=os.path.join(root, "partition-B"))
+    b = stall_watch.alive_status("sess-B", fe)[0]
+    os.environ["RICHOS_WORKSPACES_DIR"] = os.path.join(root, "partition-A")
+    a = stall_watch.alive_status("sess-B", fe)[0]
+    print(b, a)
+finally:
+    holder.kill()
+    holder.wait()
+PY
+)"
+check "F11  in the app, another partition's healthy monitor leaves this conversation NOT watched; the same partition's counts" \
+    "$( [ "$OUT" = "1 0" ]; echo $?)" "out=$OUT"
+# F9: the evaluator's source changes while the child loads it. The fixture's workspaces.py
+# edits itself once at import (a flag file arms it): the child started on one version and
+# the disk holds another when it ends, so the look records no version. F9b: the next look,
+# with nothing changing, records the current source.
+cat >>"$FE/mega-lander/workspaces.py" <<'PYX'
+import os as _f9_os
+_F9 = _f9_os.environ.get("F9_FLAG", "")    # set for the child only, after the harness loaded this file
+if _F9 and _f9_os.path.exists(_F9):
+    _f9_os.remove(_F9)
+    with open(__file__, "a") as _f9_fh:
+        _f9_fh.write("\n# changed while the child loaded it\n")
+PYX
+f9_look() { python3 -B - "$FE" "$STALL_WATCH_STATE_DIR" <<'PY'
+import argparse, json, os, sys
+fe, root = sys.argv[1], sys.argv[2]
+sys.path.insert(0, fe + "/scripts/lib")
+import stall_watch
+sid = os.environ["RICHOS_SESSION_ID"]
+sd = os.path.join(root, sid)
+a = argparse.Namespace(config="x", command="sw", jsonl=False)
+src = stall_watch.Sources(fe)                  # the harness's own load: the flag is not armed yet
+if os.environ.get("F9_ARM"):
+    os.environ["F9_FLAG"] = os.environ["F9_ARM"]   # armed for the child the look starts
+ok, _n, why = stall_watch._child_look(a, src, sid, sd, 30.0)
+ev = json.load(open(os.path.join(sd, "evaluated.json")))
+print(ok, ev["identity"], stall_watch.source_identity(fe)[0])
+PY
+}
+: >"$SB/f9.flag"
+OUT="$(F9_ARM="$SB/f9.flag" f9_look)"
+check "F9   a source changed while the child loaded it is recorded as no version, never as either" \
+    "$( set -- $OUT; [ "$1" = True ] && [ "$2" = "changed-during-the-look" ] && [ ! -e "$SB/f9.flag" ]; echo $?)" "out=$OUT"
+OUT="$(F9_ARM="$SB/f9.flag" f9_look)"
+check "F9b  POSITIVE CONTROL: the next look, nothing changing, records the current source" \
+    "$( set -- $OUT; [ "$1" = True ] && [ "$2" = "$3" ]; echo $?)" "out=$OUT"
+cp "$SB/f-good.py" "$FE/mega-lander/workspaces.py"
 
 # --- E: a teammate's escalation wakes an idle lead (2026-10-01) ---------------
 # richos-hq docs/operations/2026-10-01-escalation-wakes-the-lead.md, built past

@@ -73,13 +73,17 @@ WHAT IS A STALL (every threshold, and why)
    minutes for a turn that no hook could start. It prints its own
    ESCALATION-WATCH block, first in the look's output.
 
-5. UNRESOLVED FINISHED WORK: about every twelve hours, at an idle opportunity,
-   the canonical pending-work list is read without changing it. Recorded waits
-   are included for reassessment. An empty list produces no notification.
-   Idle is the lead's recorded turn end; under the app host (--host-json),
-   whose lead's --print transcript never records one, it is the host's word
-   that the lead's turn ended (host_child.idle). STALL_WATCH_PENDING_WORK_SECONDS
-   shortens the interval for a test guest only.
+5. DUE WORK (orchestration reliability R2, richos-hq docs/prds/2026-10-23-
+   orchestration-reliability.md): finished work with no wait, and a hold or wait
+   with no checkable end or whose end came true (workspaces.due_set, the same
+   calculation the Stop fallback and `workspaces.sh holds` use). Told at the
+   first look while the lead is idle, one line per item and at most eight, then
+   a pointer to the complete list; again after the 30-minute repeat while it
+   stays due; said nothing when it stops being due. A busy lead is told at its
+   next idle look. Idle is the lead's recorded turn end; under the app host it is
+   the host's word that the lead's turn ended (host_child.idle). A pending end (a
+   live agent, a running review, a time not reached) and a CEO-TODOs item are
+   quiet.
 
 ===========================================================================
 HOW OFTEN IT SPEAKS (nothing spams)
@@ -110,8 +114,9 @@ COMMANDS (stall-watch.sh passes --engine-root, --config and --command)
   --monitor  the plugin monitor's body: runs for the whole session and prints
              each notification block; ends with its session
   --alive    one line: is this session watched, and when did it last look.
-             0 watched; 1 nothing is watching (or the watcher stopped
-             looking); 2 no session here to check
+             0 watched; 1 nothing is watching, the watcher stopped looking,
+             its last look failed, or it has not yet evaluated the source on
+             disk; 2 no session here to check
   --watch    the fallback where plugin monitors do not run: the same loop, run
              as a BACKGROUND command; it exits after the first notification,
              so start it again after each one
@@ -119,7 +124,9 @@ COMMANDS (stall-watch.sh passes --engine-root, --config and --command)
              2 could not look at all. Keeps no state
   --notice   the SessionStart notice body (session-start-stall.sh wraps it)
   --tick     one look against the session's state, printing what the monitor
-             would print (the test suite's clock is STALL_WATCH_NOW)
+             would print (the test suite's clock is STALL_WATCH_NOW). The
+             monitor runs every look this way, as a fresh child process
+             (EVERY LOOK IS FRESH CODE below)
   --host-json  with --monitor: the RichOS app host's own child (richos-core
              team_watch.rs), from the app's launch to its quit. Each look is
              for the session of his team's lead, which the host names
@@ -152,8 +159,8 @@ POLL_SECONDS = 60
 SILENT_MINUTES = 20
 SELF_WAIT_MINUTES = 2
 REPEAT_MINUTES = 30
-PENDING_WORK_SECONDS = 12 * 60 * 60
 CLEAR_AFTER_MISSES = 2
+DUE_SHOWN = 8              # due items shown one per line; the rest are one pointer line
 STATE_KEEP_SECONDS = 2 * 86400
 PROOF_SLOT_REASON = "proof-run: waiting for a proof-run slot"
 OWNER_TAG = "RICHOS_AGENT_OWNER"
@@ -436,9 +443,10 @@ def _slot_lines(src, now):
         return None, "the proof-run slots could not be read (%s)" % exc
 
 
-def look(src, now, session_id, th=None):
+def look(src, now, session_id, th=None, due=True):
     """(stalls, problems): every stall right now. Never raises for a source it
-    cannot read; that source is named in problems and the rest is still read."""
+    cannot read; that source is named in problems and the rest is still read.
+    `due` False leaves the due work out (the lead is busy: told at its next idle look)."""
     th = th or thresholds()
     reg = Registry(src)
     problems = [reg.problem] if reg.problem else []
@@ -507,49 +515,39 @@ def look(src, now, session_id, th=None):
     if why:
         problems.append(why)
     stalls += _slow_steps(src, reg, now, session_id)
-    s, why = _holds(src, reg, now, session_id)
-    stalls += s
-    if why:
-        problems.append(why)
+    if due:
+        s, why = _due(src, reg, now, session_id)
+        stalls += s
+        if why:
+            problems.append(why)
     return stalls, [p for p in problems if p]
 
 
 # ---------------------------------------------------------------------------
-# HOLDS (2026-10-22, richos-hq docs/plans/2026-10-22-no-silent-holds.md)
+# DUE WORK (orchestration reliability R2; point 5 of the module doc)
 # ---------------------------------------------------------------------------
-# The CEO: "WHEN WILL [THIS] STOP ONCE AND FOR ALL???" (his 2026-09-27 order sat
-# held for weeks). Every hold the registry knows (workspaces.py holds(): waits,
-# pauses, holds/<name>.json) is read here, paused agents included:
-#   HELD         no checkable end and 30 min old: told now and again every 30
-#                min (the stall repeat) until the work runs, lands or he decides
-#   RELEASE DUE  its end came true (the agent finished, the review ended, the
-#                time passed) and the work has not moved: told with the command
-# A hold whose end is pending, or is his decision (ceo:), is quiet.
 
-def _holds(src, reg, now, session_id):
-    if src.ws is None or reg.problem or not hasattr(src.ws, "holds"):
+def _due(src, reg, now, session_id):
+    """([DUE stalls], problem). One stall per due item, keyed by the work and its
+    material state, so an unchanged item is told once and again only at the repeat."""
+    if src.ws is None or reg.problem or not hasattr(src.ws, "due_set"):
         return [], ""
     try:
-        found = src.ws.holds(session_id, now)
-    except Exception as exc:  # noqa: BLE001: an unread hold list is a source not read
-        return [], "the held work could not be read (%s: %s)" % (exc.__class__.__name__, str(exc)[:160])
-    quiet = _env_float("RICHOS_HOLD_REPORT_SECONDS", 30 * 60)
+        items = src.ws.pending(session_id, auto=False, dry=True)
+        due = src.ws.due_set(session_id, items, now)
+    except Exception as exc:  # noqa: BLE001: an unread list is a source not read, never "nothing due"
+        return [], "the due work could not be read (%s: %s)" % (exc.__class__.__name__, str(exc)[:160])
     out = []
-    for h in found:
-        why = " ".join(str(h.get("why") or "not said").split())[:200]
-        lines = ["why: " + why, "what: " + str(h.get("what"))]
-        go = src.ws.hold_command(h)
-        if h["state"] == "none" and now - h["since"] >= quiet:
-            out.append(Stall("hold:%s:%d" % (h["name"], int(h["since"])), "HELD", h["name"], h["since"],
-                             "held by Rich with nothing checkable to end it (%s)" % h["source"], lines,
-                             ["make it run: " + go,
-                              "or put it to the CEO as his choice (go, or hold until a date or event); only his "
-                              "words end it: workspaces.sh release %s --ceo-word '<his words>'" % h["name"]]))
-        elif h["state"] == "due":
-            out.append(Stall("due:%s:%s" % (h["name"], h["end"]), "RELEASE DUE", h["name"], h["since"],
-                             "its end came true: %s (%s)" % (h["detail"], h["end"]), lines,
-                             ["make it run now: " + go]))
-    return out, ""
+    for d in due[:DUE_SHOWN]:
+        why = " ".join(str(d.get("why") or "not said").split())[:200]
+        out.append(Stall("due:%s:%s:%s" % (d.get("key") or d["name"], d["state"], d.get("end") or ""), "DUE",
+                         d["name"], d["since"], d["detail"], ["why: " + why], ["next: " + d["command"]]))
+    if len(due) > DUE_SHOWN:
+        out.append(Stall("due:more", "DUE", "%d more" % (len(due) - DUE_SHOWN), now, "more due work", [],
+                         ["the complete list: workspaces.sh holds"]))
+    # One damaged record never hides the readable due work above: it is one compact problem.
+    bad = src.ws.unreadable_line() if hasattr(src.ws, "unreadable_line") else ""
+    return out, bad
 
 
 def _proof_stall(src, reg, w, holders, slots, now, th, table):
@@ -1080,11 +1078,13 @@ def _slow_steps(src, reg, now, session_id):
 # what is announced, and when
 # ---------------------------------------------------------------------------
 
-def announce(state, stalls, problems, now, th):
+def announce(state, stalls, problems, now, th, keep=""):
     """(lines to print, new state). A stall is announced when first seen, again
     after th['repeat'] since its last notice, and cleared (one line) after
     CLEAR_AFTER_MISSES looks without it. A source that cannot be read is
-    announced the same way, as a stall of the watcher itself."""
+    announced the same way, as a stall of the watcher itself. Keys starting with
+    `keep` were not looked at this time and are carried unchanged; a due item
+    that stops being due ends without a line (the lead handled it)."""
     opened = dict(state.get("open") or {})
     current = {s.key: s for s in stalls}
     for p in problems:
@@ -1105,12 +1105,14 @@ def announce(state, stalls, problems, now, th):
             prev["count"] = int(prev.get("count") or 1) + 1
             again.append((s, prev["count"], prev["first"]))
     for key in list(opened):
-        if key in current:
+        if key in current or (keep and key.startswith(keep)):
             continue
         prev = opened[key]
         prev["missed"] = int(prev.get("missed") or 0) + 1
         if prev["missed"] >= CLEAR_AFTER_MISSES:
-            cleared.append(opened.pop(key))
+            gone = opened.pop(key)
+            if not key.startswith("due:"):
+                cleared.append(gone)
     lines = []
     if new or again:
         n = len(new) + len(again)
@@ -1432,7 +1434,7 @@ def escalation_watch(src, now, sid, prev, th):
 
 
 # ---------------------------------------------------------------------------
-# unfinished-work reminders
+# the lead's transcript and start (escalations; whether the lead is idle)
 # ---------------------------------------------------------------------------
 
 def lead_is_idle(src, sid):
@@ -1473,54 +1475,6 @@ def lead_is_idle(src, sid):
     except (OSError, ValueError, TypeError):
         pass
     return False
-
-
-def pending_work_reminder(src, now, sid, prev):
-    """A read-only reminder about every twelve hours, at an idle opportunity.
-
-    The existing session state preserves the clock across monitor restarts.
-    New sessions already receive the workspace lifecycle's reconciliation.
-    A recorded wait remains on this list; the reminder expires no wait and
-    never lands, discards or modifies the workspace registry.
-    """
-    prev = dict(prev or {})
-    if not sid or src.ws is None:
-        return [], prev, []
-    checked = prev.get("checked_at")
-    if not isinstance(checked, (int, float)):
-        checked = session_started(src, sid)
-        checked = now if checked is None else checked
-    if checked > now:
-        checked = now
-    state = {"checked_at": checked}
-    if prev.get("problem"):
-        state["problem"] = prev["problem"]
-    problems = [state["problem"]] if state.get("problem") else []
-    every = _env_float("STALL_WATCH_PENDING_WORK_SECONDS", PENDING_WORK_SECONDS)
-    if now - checked < every or not lead_is_idle(src, sid):
-        return [], state, problems
-    try:
-        if src.ws.damaged_records():
-            raise ValueError("the workspace registry contains unreadable records")
-        items = src.ws.pending(sid, auto=False, dry=True)
-    except Exception as exc:  # noqa: BLE001: a failed read leaves the reminder due
-        state["problem"] = "unfinished work could not be read (%s: %s)" % (
-            exc.__class__.__name__, str(exc)[:160])
-        return [], state, [state["problem"]]
-    state = {"checked_at": now}
-    if not items:
-        return [], state, []
-    lines = ["UNFINISHED-WORK %s: %d finished-work item(s) remain unresolved. Review their recorded waits "
-             "and handle anything that can now proceed; keep legitimate waits." % (hhmm(now), len(items))]
-    for item in items[:10]:
-        name = " ".join(str(item["name"]).split())
-        reason = " ".join(str(item.get("waiting_on") or item.get("why") or "unresolved").split())
-        lines.append("  %s: %s" % (name[:100], reason[:200]))
-    if len(items) > 10:
-        lines.append("  %d more item(s)." % (len(items) - 10))
-    lines.append("  Read the full pending list with mega-lander/workspaces.sh status. This is a reminder, "
-                 "not a completion deadline or authorization to discard work.")
-    return lines, state, []
 
 
 # ---------------------------------------------------------------------------
@@ -1625,7 +1579,7 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
     state = _read_json(path)
     esc_prev = state.get("esc")
     idle_prev = state.get("idle")
-    pending_lines, pending_state, pending_problems = pending_work_reminder(src, now, sid, state.get("pending_work"))
+    lead_idle = lead_is_idle(src, sid)
     try:
         # Before the look, so a stall it ends is never also announced as one.
         idle_lines, idle_state = idle_end(src, now, sid, idle_prev)
@@ -1638,8 +1592,8 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
         esc_lines, esc_state = [], esc_prev
         esc_problems = ["the escalation watch failed (%s: %s)" % (exc.__class__.__name__, str(exc)[:160])]
     try:
-        stalls, problems = look(src, now, sid, th)
-        problems = problems + esc_problems + pending_problems
+        stalls, problems = look(src, now, sid, th, due=lead_idle)
+        problems = problems + esc_problems
     except Exception as exc:  # noqa: BLE001: one failed look is reported, never the end of watching
         stalls, problems = [], []
         problems.append("a look failed (%s: %s)" % (exc.__class__.__name__, str(exc)[:160]))
@@ -1653,21 +1607,88 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
                          "what": "a look failed", "missed": 0}
         state = {"open": keep, "at": now}
     else:
-        lines, state = announce(state, stalls, problems, now, th)
+        lines, state = announce(state, stalls, problems, now, th, keep="" if lead_idle else "due:")
     if esc_state is not None:
         state["esc"] = esc_state
     state["idle"] = idle_state
-    state["pending_work"] = pending_state
     # The ESCALATION-WATCH block goes FIRST: a monitor event counts as having
     # told the lead only when its <event> body starts with ESCALATION-WATCH
     # (escalations.monitor_event_keys).
-    lines = esc_lines + idle_lines + lines + pending_lines
+    lines = esc_lines + idle_lines + lines
     if lines:
         text = "\n".join(lines)
         out.write((json.dumps({"text": text}) if json_lines else text) + "\n")
         out.flush()
     _write_json(path, state)
     return len(lines), len(state.get("open") or {})
+
+
+# ---------------------------------------------------------------------------
+# EVERY LOOK IS FRESH CODE (orchestration reliability R5)
+# ---------------------------------------------------------------------------
+# 2026-10-22/23: the holds feature landed at 06:44:57Z and the turn-end hooks used it
+# at once, but the session's watcher (PID 71067, started 2026-10-21 14:01Z) had loaded
+# workspaces.py once and never saw it: a healthy heartbeat over code that could not
+# see a hold. So the monitor keeps only its lock, its session's liveness and its
+# output; every look is `--tick` in a fresh child, which loads the engine from disk.
+# The child records the source identity it evaluated (evaluated.json); the parent
+# copies it beside the beat (monitor.json). A child that fails or outlives its
+# timeout is a watcher failure, told once per failing streak, and the beat's
+# last_look does not move, so --alive and the Stop fallback see it.
+EVALUATOR_SOURCES = ("scripts/lib/stall_watch.py", "mega-lander/workspaces.py", "scripts/lib/resource_waits.py",
+                     "scripts/lib/escalations.py", "scripts/lib/host_child.py")
+
+
+def source_identity(engine_root):
+    """(sha256 of the evaluator's source files as they are on disk, newest mtime)."""
+    import hashlib
+    h, newest = hashlib.sha256(), 0.0
+    for rel in EVALUATOR_SOURCES:
+        path = os.path.join(engine_root, rel)
+        try:
+            with open(path, "rb") as fh:
+                h.update(rel.encode() + b"\0" + fh.read() + b"\0")
+            newest = max(newest, os.path.getmtime(path))
+        except OSError:
+            h.update(rel.encode() + b"\0missing\0")
+    return h.hexdigest()[:16], newest
+
+
+def _child_look(a, src, sid, sd, poll):
+    """(ok, lines printed, why). One look in a fresh child of this same script."""
+    timeout = max(5.0, min(poll - 5.0, 0.75 * poll))
+    cmd = [sys.executable, "-B", os.path.abspath(__file__), "--tick", "--engine-root", src.engine_root,
+           "--config", a.config, "--command", a.command] + (["--jsonl"] if a.jsonl else [])
+    started = time.time()
+    # The source on disk when the child STARTS. The child hashes it again after its look; a
+    # difference means it changed while the child was loading or looking, so which version
+    # it ran is unknown and the look is recorded as no version (R5).
+    before = source_identity(src.engine_root)[0]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           env=dict(os.environ, RICHOS_SESSION_ID=sid or ""))
+    except subprocess.TimeoutExpired:
+        return False, 0, "the look did not finish within %.0f s" % timeout
+    except OSError as exc:
+        return False, 0, "the look could not start (%s)" % exc
+    if r.stdout:
+        sys.stdout.write(r.stdout)
+        sys.stdout.flush()
+    if r.returncode != 0:
+        tail = " ".join((r.stderr or "").strip().splitlines()[-2:])[:200]
+        return False, 0, "the look exited %d%s" % (r.returncode, (": " + tail) if tail else "")
+    ev = _read_json(os.path.join(sd, "evaluated.json"))
+    if not isinstance(ev.get("at"), (int, float)) or ev["at"] < started:
+        return False, 0, "the look recorded no evaluated source"
+    if ev.get("identity") != before:
+        _write_json(os.path.join(sd, "evaluated.json"), dict(ev, identity="changed-during-the-look"))
+    return True, len([ln for ln in r.stdout.splitlines() if ln.strip()]), ""
+
+
+def _failure_block(a, why, now):
+    text = ("STALL-WATCH %s: the look failed (%s). Nothing is seen until a look succeeds; nothing was paused, "
+            "stopped or killed. Check: %s --alive" % (hhmm(now), why, a.command))
+    return (json.dumps({"text": text}) if a.jsonl else text) + "\n"
 
 
 def _nap(seconds, alive):
@@ -1691,15 +1712,38 @@ def run_loop(a, src, exit_on_notice=False):
             print("stall-watch: this session is already watched (pid %s); nothing to start." % mon.get("pid", "?"))
         return 0
     prune_state(sd)
+    # The holder names itself in the lock, so --alive can tell the monitor that holds it from
+    # a beat another process left behind (R5: the owner, not just "some lock is held").
+    try:
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, str(os.getpid()).encode(), 0)
+    except OSError:
+        pass
     alive = session_alive_check(spid) if spid else None
     poll = _env_float("STALL_WATCH_POLL_SECONDS", POLL_SECONDS)
     beat = {"pid": os.getpid(), "started": int(time.time()), "poll": poll, "session": sid,
+            # The registry partition this monitor reads (in the app, one conversation's):
+            # another conversation's reader may count this monitor only for the same one.
+            "scope": os.path.realpath(os.environ["RICHOS_WORKSPACES_DIR"])
+                     if (os.environ.get("RICHOS_WORKSPACES_DIR") or "").strip() else "",
             "mode": "watch" if exit_on_notice else "monitor", "last_look": None, "open": 0}
+    failing = ""
     try:
         while alive is None or alive():
-            printed, open_n = tick(src, sd, sid, json_lines=a.jsonl)
-            beat["last_look"] = time.time()
-            beat["open"] = open_n
+            ok, printed, why = _child_look(a, src, sid, sd, poll)
+            if ok:
+                beat["last_look"] = time.time()
+                beat["open"] = len(_read_json(os.path.join(sd, "announced.json")).get("open") or {})
+                beat["evaluated"] = _read_json(os.path.join(sd, "evaluated.json"))
+                beat.pop("failed", None)
+                failing = ""
+            else:
+                beat["failed"] = {"at": time.time(), "why": why}
+                if why != failing:            # once per failing streak and reason
+                    sys.stdout.write(_failure_block(a, why, clock()))
+                    sys.stdout.flush()
+                    printed = 1
+                failing = why
             _write_json(os.path.join(sd, "monitor.json"), beat)
             if printed and exit_on_notice:
                 print("  To be told of the next one, start this again as a background command: %s --watch" % a.command)
@@ -1735,32 +1779,88 @@ def run_host_loop(src):
     return 0
 
 
+def alive_status(sid, engine_root, command="stall-watch.sh"):
+    """(code, line): is `sid` watched by a live monitor that evaluated the engine's
+    current source? 0 yes; 1 no, with why; 2 no session. The one reading --alive and the
+    Stop/startup fallback (workspaces.py) share. In the app the registry is one
+    conversation's partition and its one monitor runs under the Work lease's session, so
+    there a healthy monitor of another session counts only when its beat's `scope` is this
+    caller's registry partition (RICHOS_WORKSPACES_DIR)."""
+    if not sid:
+        return 2, "stall-watch: no session here; nothing to check"
+    names = [sid]
+    if (os.environ.get("RICHOS_APP_ENTITY") or "").strip() and (os.environ.get("RICHOS_APP_THREAD") or "").strip():
+        try:
+            names += sorted(n for n in os.listdir(state_root()) if n != sid)
+        except OSError:
+            pass
+    mine = os.path.realpath(os.environ["RICHOS_WORKSPACES_DIR"]) \
+        if (os.environ.get("RICHOS_WORKSPACES_DIR") or "").strip() else ""
+    first = None
+    for name in names:
+        if name != sid and (not mine or _read_json(os.path.join(state_root(), name, "monitor.json"))
+                            .get("scope") != mine):
+            continue          # another conversation's monitor watches another partition
+        code, line = _alive_one(name, sid, engine_root, command)
+        if code == 0:
+            return code, line
+        first = first or (code, line)
+    return first
+
+
+def _alive_one(name, sid, engine_root, command):
+    sd = os.path.join(state_root(), name)
+    beat = _read_json(os.path.join(sd, "monitor.json"))
+    if not lock_held(os.path.join(sd, "monitor.lock")):
+        return 1, ("stall-watch: NOT WATCHED: nothing looks for stalls in this session. Start as a background "
+                   "command (Bash with run_in_background: true): %s --watch" % command)
+    poll = float(beat.get("poll") or POLL_SECONDS)
+    try:
+        with open(os.path.join(sd, "monitor.lock"), encoding="utf-8") as fh:
+            holder = fh.read().strip()
+    except OSError:
+        holder = ""
+    if holder and holder != str(beat.get("pid")):
+        return 1, ("stall-watch: NOT ITS OWNER: the lock is held by pid %s, but the last beat was written by pid %s"
+                   % (holder, beat.get("pid")))
+    if not session_alive_check(beat.get("pid"))():
+        return 1, "stall-watch: NOT WATCHED: the pid that wrote the last beat (%s) is gone" % beat.get("pid")
+    if name == sid and beat.get("session") not in (None, "", sid):
+        return 1, "stall-watch: the monitor here watches session %s, not %s" % (beat.get("session"), sid)
+    last = beat.get("last_look")
+    failed = beat.get("failed") or {}
+    if failed and float(failed.get("at") or 0) >= float(last or 0):
+        return 1, "stall-watch: LOOKS FAILING: %s pid %s: %s" % (beat.get("mode", "monitor"), beat.get("pid"),
+                                                               failed.get("why"))
+    if not last:
+        return 1, "stall-watch: %s pid %s started, no look finished yet" % (beat.get("mode", "monitor"), beat.get("pid"))
+    age = time.time() - float(last)
+    if age > 3 * poll + 30:
+        return 1, "stall-watch: STOPPED LOOKING: %s pid %s last looked %s, %s ago (it looks every %.0f s)" % (
+            beat.get("mode", "monitor"), beat.get("pid"), hms(last), span(age), poll)
+    ident, newest = source_identity(engine_root)
+    ev = beat.get("evaluated") or {}
+    if not ev.get("identity"):
+        return 1, ("stall-watch: OLD MONITOR: %s pid %s looks in-process with the code it started with; it is "
+                   "replaced when its session restarts" % (beat.get("mode", "monitor"), beat.get("pid")))
+    if ev["identity"] != ident:
+        # Until a look has evaluated the CURRENT source, nothing says the change is watched:
+        # the ordinary old/new interval is not healthy, so the Stop/startup fallback stays on.
+        return 1, ("stall-watch: NOT YET ON THE CURRENT SOURCE: its last look evaluated %s, the engine's is %s; "
+                   "the next look uses it" % (ev["identity"], ident))
+    return 0, "stall-watch: watching (%s pid %s, every %.0f s; last look %s, %.0f s ago; %d open stall%s; source %s)" % (
+        beat.get("mode", "monitor"), beat.get("pid"), poll, hms(last), age, int(beat.get("open") or 0),
+        "" if int(beat.get("open") or 0) == 1 else "s", ev["identity"])
+
+
 def mode_alive(a, src):
     sid, spid = src.session()
     if not spid and not sid:
         print("stall-watch: no session here; nothing to check")
         return 2
-    sd = os.path.join(state_root(), sid or "no-session")
-    beat = _read_json(os.path.join(sd, "monitor.json"))
-    held = lock_held(os.path.join(sd, "monitor.lock"))
-    poll = float(beat.get("poll") or POLL_SECONDS)
-    if not held:
-        print("stall-watch: NOT WATCHED: nothing looks for stalls in this session. Start as a background command "
-              "(Bash with run_in_background: true): %s --watch" % a.command)
-        return 1
-    last = beat.get("last_look")
-    if not last:
-        print("stall-watch: %s pid %s started, no look finished yet" % (beat.get("mode", "monitor"), beat.get("pid")))
-        return 0
-    age = time.time() - float(last)
-    if age > 3 * poll + 30:
-        print("stall-watch: STOPPED LOOKING: %s pid %s last looked %s, %s ago (it looks every %.0f s)" % (
-            beat.get("mode", "monitor"), beat.get("pid"), hms(last), span(age), poll))
-        return 1
-    print("stall-watch: watching (%s pid %s, every %.0f s; last look %s, %.0f s ago; %d open stall%s)" % (
-        beat.get("mode", "monitor"), beat.get("pid"), poll, hms(last), age, int(beat.get("open") or 0),
-        "" if int(beat.get("open") or 0) == 1 else "s"))
-    return 0
+    code, line = alive_status(sid or "no-session", src.engine_root, a.command)
+    print(line)
+    return code
 
 
 def mode_once(a, src):
@@ -1833,7 +1933,12 @@ def main(argv):
         return mode_once(a, src)
     if a.tick:
         sid, _spid = src.session()
-        tick(src, session_dir(sid), sid, json_lines=a.jsonl)
+        sd = session_dir(sid)
+        tick(src, sd, sid, json_lines=a.jsonl)
+        # The source on disk AFTER the look; the parent compares it with the source when the
+        # child started (_child_look) and records no version when they differ.
+        ident, _newest = source_identity(src.engine_root)
+        _write_json(os.path.join(sd, "evaluated.json"), {"identity": ident, "at": time.time(), "pid": os.getpid()})
         return 0
     if a.monitor and a.host_json:
         return run_host_loop(src)

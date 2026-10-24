@@ -59,7 +59,7 @@
 #     check in this engine has been retired for: a rule enforced by attention
 #     is a rule that holds until the session is busy.
 #
-# CHAIN POSITION: LAST, appended after guard-ceo-ask-first.sh. The four
+# CHAIN POSITION: LAST, after verify-agent-prompt.sh. The four
 # structural guards decide whether the SPAWN is well formed; a dispatch that is
 # both malformed and over the ceiling should hear about the malformed half
 # first, because that is the half the operator can fix without leaving the

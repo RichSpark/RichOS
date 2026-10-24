@@ -117,6 +117,11 @@ def branches(repo):
     return run("git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout.split()
 
 
+def SOON():
+    """A checkable end an hour away (orchestration reliability R2: every new wait names one)."""
+    return "at:" + ws.iso(ws.now() + 3600)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.env = Env()
@@ -985,17 +990,17 @@ class Point03_TheLeadIsNeverLockedOutByASubagent(Base):
         aid, npath = self.spawn("zach-opus-sp")
         self.commit(npath)
         self.finish(aid)
-        self.assertFalse(ws.gate_stop({"session_id": self.sid}, self.entity)[0])   # CONTROL: held
+        self.assertIn("zach-opus-sp", ws.gate_stop({"session_id": self.sid}, self.entity)[2])   # CONTROL: told
         wt = self.session_workspace()
         self.platform(self.sid, wt)                         # this lead WAS launched in a workspace
         ws.lifecycle({"hook_event_name": "SessionStart", "source": "startup", "session_id": self.sid,
                       "cwd": wt}, self.entity)
         self.assertEqual(self.lead()[0], "FORBIDDEN")
-        ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
+        ok, msg, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
         self.assertTrue(ok)
         self.assertIn("TaskStop", msg)
         self.assertIn("stop.sh", msg)
-        ok, msg2 = ws.gate_stop({"session_id": self.sid}, self.entity)
+        ok, msg2, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
         self.assertTrue(ok)
         self.assertNotIn("TaskStop", msg2)                 # said once, not every turn
 
@@ -1147,7 +1152,7 @@ class Point05_Guarantee(Base):
             self.spawn("zach-opus-independent")
         self.assertIn("zach-opus-p5", self.names())
         self.assertIsNone(self.rec("zach-opus-p5")["disposition"])
-        self.assertFalse(ws.gate_stop({"session_id": self.sid}, self.entity)[0])
+        self.assertIn("zach-opus-p5", ws.gate_stop({"session_id": self.sid}, self.entity)[2])   # told, not held
 
     def test_point_05_slow_failed_merge_does_not_block_unrelated_spawn(self):
         aid, npath = self._pending_one()
@@ -1175,14 +1180,16 @@ class Point05_Guarantee(Base):
             self.assertIsNone(proc.poll(), "merge check ended before the unrelated spawn")
             self.assertIn("zach-opus-p5", self.names())
             registry = ws.state_dir()
+            ws.gate_stop({"session_id": self.sid}, self.entity)  # the fallback's own once-only state settles
             before = {os.path.relpath(os.path.join(root, name), registry): open(os.path.join(root, name), "rb").read()
                       for root, _dirs, files in os.walk(registry) for name in files}
-            ok, message = ws.gate_stop({"session_id": self.sid}, self.entity)
+            ok, message, lead = ws.gate_stop({"session_id": self.sid}, self.entity)
             self.assertTrue(ok, message)
-            self.assertIn("Git is merging", message)
+            self.assertNotIn("zach-opus-p5", lead)              # a live merge is not due
             after = {os.path.relpath(os.path.join(root, name), registry): open(os.path.join(root, name), "rb").read()
                      for root, _dirs, files in os.walk(registry) for name in files}
             self.assertEqual(before, after, "the active merge allowance wrote a registry wait")
+            self.assertIsNone(self.rec("zach-opus-p5").get("waiting"))
             with patch.object(ws, "branch_tip_read", return_value=("", "unreadable ref")):
                 self.assertFalse(ws._active_merge(self.rec("zach-opus-p5"), {}))
             with patch.object(ws, "integration_target", return_value=("dev/another-target", "", "")):
@@ -1204,9 +1211,9 @@ class Point05_Guarantee(Base):
         self.assertIsNone(self.rec("zach-opus-p5")["disposition"])
         self.assertTrue(os.path.isdir(npath))
         self.assertIn("worktree-agent-" + aid, branches(self.entity))
-        ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
-        self.assertFalse(ok)
-        self.assertIn("zach-opus-p5", msg)
+        ok, _msg, lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        self.assertIn("zach-opus-p5", lead)                      # the merge failed: due, and told
 
     def test_point_05_new_work_starts_while_finished_work_is_pending(self):
         self._pending_one()
@@ -1215,34 +1222,20 @@ class Point05_Guarantee(Base):
         self.assertIsNone(self.rec("zach-opus-p5")["disposition"])
         self.spawn("zach-opus-fix", extra="lands-pending: zach-opus-p5\n")
 
-    def test_point_05_no_turn_end_while_finished_work_is_pending(self):
+    def test_r2_a_turn_ends_with_finished_work_pending_and_the_lead_is_told_once(self):
+        """Orchestration reliability R2/R5: no blanket refusal to end a turn. While no
+        watcher runs, the Stop fallback tells the lead the due work, once per change."""
         self._pending_one()
-        ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
-        self.assertFalse(ok)
-        self.assertIn("zach-opus-p5", msg)
-
-    def test_point_05_answering_the_ceo_names_the_pending_work(self):
-        """The NEGATIVE case comes FIRST: the one allowance is spent by the
-        reply that uses it, and a refusal after that would be for the wrong
-        reason (round 8: a mutant that let a notification count as the CEO
-        survived the old order, because the second gate call was refused for
-        the spent allowance, not for the notification)."""
-        self._pending_one()
-        tr = os.path.join(self.env.root, "t.jsonl")
-        # a notification is not the CEO — stamped as the platform stamps it
-        with open(tr, "w") as f:
-            f.write(json.dumps({"type": "user", "origin": {"kind": "task-notification"}, "promptSource": "system",
-                                "queueSkipAttachments": True,
-                                "message": {"role": "user", "content": "<task-notification>x</task-notification>"}}) + "\n")
-        ok, _m = ws.gate_stop({"session_id": self.sid, "transcript_path": tr,
-                               "last_assistant_message": "Pending: zach-opus-p5."}, self.entity)
-        self.assertFalse(ok)
-        with open(tr, "w") as f:
-            f.write(json.dumps({"type": "user", "origin": {"kind": "human"}, "promptSource": "typed",
-                                "message": {"role": "user", "content": "stop everything"}}) + "\n")
-        ok, _m = ws.gate_stop({"session_id": self.sid, "transcript_path": tr,
-                               "last_assistant_message": "Stopping. Pending: zach-opus-p5."}, self.entity)
+        ok, msg, lead = ws.gate_stop({"session_id": self.sid}, self.entity)
         self.assertTrue(ok)
+        self.assertEqual(msg, "")                                          # nothing for the person
+        self.assertIn("STALL WATCH NOT ACTIVE", lead)
+        self.assertIn("zach-opus-p5", lead)
+        self.assertEqual(ws.gate_stop({"session_id": self.sid}, self.entity)[2], "")   # unchanged: said once
+        with patch.object(ws, "_monitor_health", return_value=(True, "stall-watch: watching")):
+            self.assertEqual(ws.gate_stop({"session_id": self.sid}, self.entity)[2], "")  # a watcher tells it
+        self.assertIn("zach-opus-p5", ws.gate_stop({"session_id": self.sid}, self.entity)[2])  # watcher gone: again
+        self.assertIsNone(self.rec("zach-opus-p5")["disposition"])                        # still owned
 
     def test_point_05_the_gate_answers_inside_its_budget(self):
         """"This is a guarantee, not a habit: it holds whether or not Rich
@@ -1257,10 +1250,9 @@ class Point05_Guarantee(Base):
         self.merge(self.entity, "worktree-agent-" + aid)     # it would auto-land
         os.environ["RICHOS_WORKSPACES_GATE_BUDGET"] = "0"
         try:
-            ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
-            self.assertFalse(ok)                             # a decision, not a dead hook
-            self.assertIn("zach-opus-p5", msg)               # and it names the item
-            self.assertIn("budget", msg)                     # and says why it is still pending
+            ok, _msg, lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+            self.assertTrue(ok)                              # a decision, not a dead hook
+            self.assertIn("zach-opus-p5", lead)              # and the item stays due, named
             self.assertIsNone(self.rec("zach-opus-p5")["disposition"])
             self.assertTrue(os.path.exists(npath))
             self.spawn("zach-opus-nb")                      # independent of the scan budget
@@ -1270,26 +1262,6 @@ class Point05_Guarantee(Base):
         # with its budget the same call decides the other way, on the same facts
         self.assertTrue(ws.gate_stop({"session_id": self.sid}, self.entity)[0])
         self.assertFalse(os.path.exists(npath))
-
-    def test_point_05_the_answer_allowance_is_spent_once_per_item(self):
-        """"...the reply names the pending work, WHICH IS HANDLED RIGHT AFTER."
-        Naming it again is not handling it: the allowance is spent per item and
-        returns only when that item has moved."""
-        _aid, npath = self._pending_one()
-        tr = os.path.join(self.env.root, "allowance.jsonl")
-        with open(tr, "w") as f:
-            f.write(json.dumps({"type": "user", "origin": {"kind": "human"}, "promptSource": "typed",
-                                "message": {"role": "user", "content": "what is the state of things?"}}) + "\n")
-        answer = {"session_id": self.sid, "transcript_path": tr,
-                  "last_assistant_message": "Answering. Pending: zach-opus-p5 — handled right after."}
-        self.assertTrue(ws.gate_stop(dict(answer), self.entity)[0])     # the one allowance
-        ok, msg = ws.gate_stop(dict(answer), self.entity)               # the same reply, nothing handled
-        self.assertFalse(ok)
-        self.assertIn("already used its one allowance", msg)
-        self.assertIn("zach-opus-p5", msg)
-        self.commit(npath, "left-behind.txt")                           # the item MOVES
-        self.assertTrue(ws.gate_stop(dict(answer), self.entity)[0])     # so it may be named again
-        self.assertFalse(ws.gate_stop(dict(answer), self.entity)[0])    # and it is spent again
 
     def test_point_05_waiting_items_allow_turn_end_and_new_work(self):
         self._pending_one()
@@ -1337,7 +1309,7 @@ class Point05_Guarantee(Base):
     def test_point_05_pending_merge_state_does_not_control_spawn(self):
         self._merged_but_pending()
         self.spawn("zach-opus-n1")
-        ws.wait("zach-opus-p5", "started", "land checks running on the merged tree", "", self.sid)
+        ws.wait("zach-opus-p5", "started", "land checks running on the merged tree", "", self.sid, SOON())
         self.spawn("zach-opus-n2")
         self.assertIsNone(self.rec("zach-opus-p5")["disposition"])
         self.assertIn("zach-opus-p5", self.names())
@@ -1349,7 +1321,7 @@ class Point05_Guarantee(Base):
 
     def test_point_05_unmerged_started_work_does_not_block_new_work(self):
         self._pending_one()
-        ws.wait("zach-opus-p5", "started", "about to merge it", "", self.sid)
+        ws.wait("zach-opus-p5", "started", "about to merge it", "", self.sid, SOON())
         self.assertTrue(ws.gate_stop({"session_id": self.sid}, self.entity)[0])
         self.spawn("zach-opus-n4")
         self.assertIn("zach-opus-p5", self.names())
@@ -1379,7 +1351,7 @@ class Point05_Guarantee(Base):
         ctx, _n = ws.lifecycle({"hook_event_name": "SessionStart", "session_id": "sess-bbbbbbbb-2222",
                                 "cwd": self.entity}, self.entity)
         self.assertIn("zach-opus-p5", ctx)
-        self.assertIn("FIRST", ctx)
+        self.assertIn("DUE WORK", ctx)
 
 
 class Point06_Native(Base):
@@ -2220,7 +2192,7 @@ class Point13_Retry(Base):
             for _ in range(ws.RETRY_TELL_CEO_AFTER):
                 ws.retry_due()
             self.assertTrue(ws.keeps_failing())               # only now does the CEO hear of it
-            ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
+            ok, msg, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
             self.assertIn("TELL THE CEO", msg)
         finally:
             os.chmod(parent, 0o755)
@@ -3599,7 +3571,7 @@ class Finding13_NoSpeculativeShutdown(Base):
     def test_finding_13_a_pending_scan_leaves_unmerged_work_running(self):
         aid, npath, pr = self._unmerged_with_process("zach-opus-spec")
         self.assertEqual(self.names(), ["zach-opus-spec"])       # the automatic attempt
-        self.assertFalse(ws.gate_stop({"session_id": self.sid}, self.entity)[0])
+        self.assertTrue(ws.gate_stop({"session_id": self.sid}, self.entity)[0])
         self.assertIsNone(pr.poll(), "an automatic land attempt stopped a process of unmerged work")
         with self.assertRaises(ws.SpecError) as e:              # and a land by hand says why
             ws.land("zach-opus-spec", self.sid)
@@ -3793,7 +3765,7 @@ class Finding15_TheBudgetReachesTheWork(Base):
         try:
             t0 = time.monotonic()
             with patch.object(ws, "_same_file", self._slow_same_file()):
-                ok, _msg = ws.gate_stop({"session_id": self.sid}, self.entity)
+                ok, _msg, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
             took = time.monotonic() - t0
         finally:
             os.environ.pop("RICHOS_WORKSPACES_GATE_BUDGET", None)
@@ -4232,6 +4204,19 @@ class HuntV2_05_StatusReadsTheRecordedStop(Base):
                          ["zach-opus-stv2"])
         self.assertEqual(self.rec("zach-opus-stv2")["end"]["signal"], "stopped")
 
+    def test_r2_a_stop_only_the_platform_recorded_offers_only_shelving_and_discard(self):
+        """Review rv-20261024T033729Z-cfc3e0e1-4e49 #1: the watcher's dry read saw the platform's
+        stop, but due_set reloaded the stored record and offered "land it ... or spawn its
+        continuation" for work he had stopped. Nothing is adopted by the question."""
+        self._stopped_by_user("zach-opus-stv3")
+        due = [d for d in ws.due_set(self.sid, ws.pending(self.sid, self.entity, auto=False, dry=True))
+               if d["name"] == "zach-opus-stv3"]
+        self.assertEqual(len(due), 1, due)
+        self.assertIn("shelved/zach-opus-stv3", due[0]["command"])
+        self.assertNotIn("land it", due[0]["command"])
+        self.assertNotIn("spawn its continuation", due[0]["command"])
+        self.assertIsNone(self.rec("zach-opus-stv3")["end"])
+
     def test_v2_05_a_running_worker_is_still_working(self):
         import io
         from contextlib import redirect_stdout
@@ -4283,28 +4268,6 @@ def _resolve_names(names, loader):
 
 class Hunt4_TurnEndPauseAndPathChecks(Base):
     """Part 4 of the 2026-09-29 hunt, findings 8, 9 and 10."""
-
-    def test_hunt4_08_a_long_tool_heavy_turn_still_finds_the_person_who_began_it(self):
-        """Finding 8: only the last 4 MiB was read, so a turn whose initiating
-        row lay earlier, followed by nothing but tool results, read as no
-        person's turn and the reply was refused."""
-        tr = os.path.join(self.env.root, "long.jsonl")
-        with open(tr, "w") as f:
-            f.write(json.dumps({"type": "user", "origin": {"kind": "human"}, "promptSource": "typed",
-                                "message": {"role": "user", "content": "do the long thing"}}) + "\n")
-            row = json.dumps({"type": "user", "message": {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "t", "content": "x" * 9000}]}}) + "\n"
-            for _ in range((9 * 1024 * 1024) // len(row)):        # about 9 MiB of tool output
-                f.write(row)
-        self.assertTrue(ws._turn_started_by_person(tr))
-        # and a long turn begun by the platform still reads as not a person's
-        tr2 = os.path.join(self.env.root, "long2.jsonl")
-        with open(tr2, "w") as f:
-            f.write(json.dumps({"type": "user", "origin": {"kind": "task-notification"}, "promptSource": "system",
-                                "message": {"role": "user", "content": "<task-notification>x</task-notification>"}}) + "\n")
-            for _ in range((9 * 1024 * 1024) // len(row)):
-                f.write(row)
-        self.assertFalse(ws._turn_started_by_person(tr2))
 
     def test_hunt4_09_a_pause_addressed_by_agent_id_operates_the_pause_record(self):
         aid, _n = self.spawn("zach-opus-pid")
@@ -4433,9 +4396,9 @@ class AutoLand_MergedAndEndedLandsOnItsOwn(Base):
 
     def test_a_merged_ended_workspace_with_a_stale_wait_note_lands_on_its_own(self):
         cc, npath = self._finished_with_ignored_file("zach-opus-al")
-        ws.wait("zach-opus-al", "started", "merging now (land chain 5, one merge)", "", self.sid)
+        ws.wait("zach-opus-al", "started", "merging now (land chain 5, one merge)", "", self.sid, SOON())
         self.merge(self.other, "cc/zach-opus-al")
-        ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)     # the lead's turn ends
+        ok, msg, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)     # the lead's turn ends
         self.assertTrue(ok, msg)
         self.assertFalse(os.path.exists(cc), "the merged, ended cc/ workspace is still there")
         self.assertFalse(os.path.exists(npath), "its native workspace is still there")
@@ -4550,7 +4513,8 @@ class CarriedWait_EndsWhenItsCarrierLands(Base):
         self.commit(cc, "first.txt")
         self.commit(npath_a, "second.txt")
         self.finish(aid_a)
-        ws.wait("zach-opus-ca", "started", "carried by zach-opus-cb, lands with it", "", self.sid)
+        ws.wait("zach-opus-ca", "started", "carried by zach-opus-cb, lands with it", "", self.sid,
+                "agent:zach-opus-cb")
         aid_b, npath_b = self.spawn("zach-opus-cb", extra="lands-pending: zach-opus-ca\n")
         self.commit(npath_b, "carrier.txt")
         self.finish(aid_b)
@@ -4562,10 +4526,10 @@ class CarriedWait_EndsWhenItsCarrierLands(Base):
         self.assertEqual(item[0]["waiting"], "")                   # the wait ended with B's land
         self.assertTrue(item[0]["blocks_turn_end"])
         self.assertIn("worktree-agent-" + aid_a, item[0]["why"])   # the branch still out is named
-        ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
-        self.assertFalse(ok)
-        self.assertIn("zach-opus-ca", msg)
-        self.assertIn("worktree-agent-" + aid_a, msg)
+        ok, _msg, lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        self.assertIn("zach-opus-ca", lead)
+        self.assertIn("worktree-agent-" + aid_a, lead)
 
     def _gate_pass_that_lands_the_carrier(self, first):
         """Review rv-20261011T230453Z-7b7f2a33-fec0: pending() built A's item
@@ -4577,7 +4541,8 @@ class CarriedWait_EndsWhenItsCarrierLands(Base):
         self.commit(cc, "first.txt")
         self.commit(npath_a, "second.txt")
         self.finish(aid_a)
-        ws.wait("zach-opus-ca", "started", "carried by zach-opus-cb, lands with it", "", self.sid)
+        ws.wait("zach-opus-ca", "started", "carried by zach-opus-cb, lands with it", "", self.sid,
+                "agent:zach-opus-cb")
         aid_b, npath_b = self.spawn("zach-opus-cb", extra="lands-pending: zach-opus-ca\n")
         self.commit(npath_b, "carrier.txt")
         self.finish(aid_b)
@@ -4589,11 +4554,11 @@ class CarriedWait_EndsWhenItsCarrierLands(Base):
             return sorted(real_all_agents(include_done), key=lambda r: r.get("name") != first)
 
         with patch.object(ws, "all_agents", ordered):
-            ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
+            ok, _msg, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
         recs = {r.get("name"): r for r in real_all_agents(True)}
         self.assertEqual(recs["zach-opus-cb"]["disposition"]["kind"], "landed")   # B landed in this pass
         self.assertIsNone(recs["zach-opus-ca"].get("waiting"))
-        self.assertFalse(ok, msg)                                                  # and this same gate refuses
+        self.assertTrue(ok, msg)                                                   # and this same gate tells it
         self.assertIn("zach-opus-ca", msg)
         self.assertIn("worktree-agent-" + aid_a, msg)                              # naming A's branch still out
         self.assertNotIn("carried by zach-opus-cb", msg)
@@ -7435,7 +7400,7 @@ class NoSilentHolds(Base):
         return aid, npath
 
     def test_holds_t5_release_without_his_word_or_running_work_is_refused(self):
-        ws.hold("stream-b", "Stream B of his spelling order", "", "on hold, deliberately", self.sid)
+        ws.hold("stream-b", "Stream B of his spelling order", "ceo:CEO-TODOs 9.1", "on hold, deliberately", self.sid)
         self.assertEqual([h["name"] for h in ws.holds(self.sid)], ["stream-b"])
         with self.assertRaises(ws.SpecError) as cm:
             ws.release("stream-b", session_id=self.sid)
@@ -7449,30 +7414,34 @@ class NoSilentHolds(Base):
         ws.hold("stream-c", "Stream C", "agent:zach-opus-y", "", self.sid)
         self.assertEqual(ws.holds(self.sid)[0]["state"], "pending")                 # Y does it: quiet
         ws.release("stream-c", session_id=self.sid)                                   # the work runs
-        ws.hold("held-1a2b3c4d", "it goes in with the next land", "", "a reply held it", self.sid)
+        ws.hold("held-1a2b3c4d", "it goes in with the next land", "ceo:CEO-TODOs 9.2", "a reply held it", self.sid)
         with self.assertRaises(ws.SpecError):
             ws.release("held-1a2b3c4d", not_a_hold="short", session_id=self.sid)
         ws.release("held-1a2b3c4d", not_a_hold="a description of a bundle that exists", session_id=self.sid)
         self.assertEqual(ws.holds(self.sid), [])
-        first = ws.hold_lines(self.sid)
-        self.assertEqual(len([l for l in first if l.startswith("RELEASED AS NOT A HOLD")]), 1)
-        self.assertEqual(ws.hold_lines(self.sid), [])                                 # once
-        ws.hold("stream-d", "Stream D", "", "", self.sid)
+        ws.hold("stream-d", "Stream D", "ceo:CEO-TODOs 9.3", "", self.sid)
         self.spawn("zach-opus-d", extra="continues: stream-d\n")                      # a continuation runs it
         self.assertEqual(ws.holds(self.sid), [])
 
-    def test_holds_a_message_telling_a_teammate_to_wait_is_a_hold_and_a_later_one_its_go(self):
-        """The words are scripts/lib/hold_words.py's, the one list the deferral analyzer
-        shares (2026-10-21: "wait for my go" sent to a teammate went quiet)."""
+    def test_holds_r1_a_free_text_message_creates_no_obligation_and_a_legacy_hold_ends_at_the_go(self):
+        """Orchestration reliability R1 (richos-hq docs/prds/2026-10-23-orchestration-
+        reliability.md): "Yes, stop it now", "Hand over now" and "wait for my go" were each
+        kept as an obligation a later commit or his word had to end. A message's words record
+        nothing now; a legacy `held` wait still ends at the go, never at a question."""
         aid, _n = self.spawn("zach-opus-w7")
         send = lambda text: ws.lifecycle({"hook_event_name": "PostToolUse", "tool_name": "SendMessage",
                                           "session_id": self.sid, "tool_input": {"to": "zach-opus-w7",
                                                                                  "message": text}}, self.entity)
-        _ctx, notes = send("Commit what you have. Then wait for my go before the walk.")
-        self.assertTrue(any(n.startswith("HOLD RECORDED on zach-opus-w7") for n in notes), notes)
-        self.assertEqual([(h["name"], h["source"]) for h in ws.holds(self.sid)], [("zach-opus-w7", "wait")])
-        # Review rv-20261022T002958Z-2ac46e09-fa4e finding 1, rechecked in
-        # rv-20261022T023129Z-cefd17cf-7c77 (fixtures/hold_edges.py): none of these is the go.
+        for text in ["Commit what you have. Then wait for my go before the walk.", "Yes, stop it now",
+                     "Hand over now", "Fix review finding #1: quota.rs:702."]:
+            _ctx, notes = send(text)
+            self.assertEqual(ws.holds(self.sid), [], text)
+            self.assertFalse(any(n.startswith("HOLD RECORDED") for n in notes), notes)
+        rec = self.rec("zach-opus-w7")
+        self.assertNotIn("correction", rec)
+        rec["waiting"] = {"kind": "held", "on": "told to wait: wait for my go", "todo": "", "at": ws.now(),
+                          "end": ""}                                   # a legacy record
+        ws.save_agent(rec)
         for text in ["What is your current status?", "What do you need before you can proceed?",
                      "Do not resume yet; the review is still running."]:
             send(text)
@@ -7481,16 +7450,96 @@ class NoSilentHolds(Base):
         send("Go: run the walk now.")
         self.assertEqual(ws.holds(self.sid), [])
 
-    def test_holds_the_gates_turn_end_message_carries_the_lines(self):
-        """The workspace gate (Stop) puts the hold lines in its systemMessage, at every turn end."""
-        ws.hold("stream-b", "Stream B of his spelling order", "", "on hold, deliberately", self.sid)
-        h = ws.read_json(ws._hold_path("stream-b"))
-        h["at"] -= 31 * 60
-        ws.write_json(ws._hold_path("stream-b"), h)
-        for _turn in range(2):
-            ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
-            self.assertTrue(ok, msg)
-            self.assertIn("HELD BY RICH, NOT BY YOU: Stream B of his spelling order since", msg)
+    def test_r2_stopped_work_is_offered_only_shelving_and_discard(self):
+        """Frank D4: a stopped agent's due line said "land it ... or spawn its continuation"."""
+        aid, npath = self.spawn("zach-opus-sp")
+        self.commit(npath)
+        ws.stop("zach-opus-sp", "he said stop", self.sid)
+        due = [d for d in ws.due_set(self.sid, ws.pending(self.sid, self.entity, auto=False, dry=True))
+               if d["name"] == "zach-opus-sp"]
+        self.assertEqual(len(due), 1)
+        self.assertIn("--ceo-word", due[0]["command"])
+        self.assertIn("shelved/zach-opus-sp", due[0]["command"])
+        self.assertNotIn("land it", due[0]["command"])
+        self.assertNotIn("spawn its continuation", due[0]["command"])
+        # Review rv-20261024T053817Z-c68788ad-bcc2 #1: a mid-job review asked for changes, then
+        # he stopped the worker. Its review obligation is due too, and is offered only shelving.
+        # Only the registry's Git readers are stubbed (its branch, its tip and the review of it).
+        tip = "1234567890abcdef1234567890abcdef12345678"
+        review = {"id": "rv-fixture", "verdict": "changes-requested", "findings": 1,
+                  "finished_at": "2026-10-24T01:00:00Z"}
+        items = ws.pending(self.sid, self.entity, auto=False, dry=True)
+        with patch.object(ws, "_reviews_by_tip", return_value={tip: review}), \
+                patch.object(ws, "_branch_targets", return_value={(self.entity, "fixture-branch")}), \
+                patch.object(ws, "branch_tip", return_value=tip):
+            due = [d for d in ws.due_set(self.sid, items) if d["name"] == "zach-opus-sp"]
+            # The same one choice in the release error's advice (Codex 05:51Z).
+            with self.assertRaises(ws.SpecError) as refused:
+                ws.release("zach-opus-sp", session_id=self.sid)
+        self.assertEqual([d["source"] for d in due], ["review"], due)
+        self.assertIn("shelved/zach-opus-sp", due[0]["command"])
+        self.assertNotIn("spawn the teammate", due[0]["command"])
+        self.assertNotIn("continues:", due[0]["command"])
+        self.assertIn("shelved/zach-opus-sp", str(refused.exception))
+        self.assertNotIn("continues:", str(refused.exception))
+
+    def test_r6_a_due_set_that_merely_emptied_is_not_told(self):
+        """Sage D2 / Frank D3: in journey-due-work-acted-on the lead resumed the due item and the
+        next Stop said "Nothing is due now.", which cost a model turn that did nothing."""
+        self._pending_one()
+        lead = lambda: ws.gate_stop({"session_id": self.sid}, self.entity)[2]
+        self.assertIn("zach-opus-p5", lead())                            # due: told
+        ws.discard("zach-opus-p5", "handled by the lead in this fixture", not_ceo_ordered="a test fixture, not his order", me=self.sid)
+        self.assertEqual(lead(), "")                                     # emptied, same watcher: quiet
+
+    def test_r2_an_unreadable_record_never_hides_the_readable_due_work(self):
+        """Codex 03:24Z item A (Sage D6): one damaged registry record made the watcher drop
+        every readable due item. Readable due work is told, with one UNREADABLE RECORD line,
+        in the fallback, at session start and in `holds`; nothing refuses anything."""
+        import io
+        from contextlib import redirect_stdout
+        self._pending_one()
+        with open(ws.agent_path("damaged-fixture"), "w") as f:
+            f.write("{")
+        ok, person, lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        self.assertIn("zach-opus-p5", lead)
+        self.assertIn("UNREADABLE RECORD: 1 workspace registry record", lead)
+        self.assertIn("damaged-fixture", lead)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            ws.main(["--session", self.sid, "--entity", self.entity, "holds"])
+        self.assertIn("zach-opus-p5", buf.getvalue())
+        self.assertIn("UNREADABLE RECORD", buf.getvalue())
+        os.unlink(ws.agent_path("damaged-fixture"))
+        self.assertEqual(ws.unreadable_line(), "")
+
+    def test_r5_an_unreadable_due_set_is_never_told_as_nothing_due(self):
+        """Codex 2026-10-24 (R5/R6/A7): an exception reading the due set became an empty set,
+        "Nothing is due now." was appended, and the once-only key ignored the failure, so a
+        failed read after an empty one said nothing at all. Unavailable stays distinct from
+        verified-empty in the message and in the once-only state."""
+        lead = lambda: ws.gate_stop({"session_id": self.sid}, self.entity)[2]
+        first = lead()                                                   # no watcher, nothing due
+        self.assertEqual(first, "")                                      # nothing to act on: quiet (F1)
+        with patch.object(ws, "due_set", side_effect=OSError("registry unreadable")):
+            failed = lead()
+            self.assertIn("could NOT be read", failed)                 # a change: told
+            self.assertIn("registry unreadable", failed)
+            self.assertNotIn("Nothing is due now.", failed)            # never "nothing due"
+            self.assertEqual(lead(), "")                               # the same failure: once
+        self.assertIn("Nothing is due now.", lead())                    # read again: told again
+
+    def test_r6_a_hold_reaches_the_lead_once_never_a_wall_at_every_turn_end(self):
+        """Orchestration reliability R6: the 2026-10-23 screenshot turn carried 7,849
+        characters of hold and pending lines, repeated at every turn end, to the person.
+        A due hold is told to the lead, once per change, and only while no watcher runs."""
+        ws.hold("stream-b", "Stream B of his spelling order", "ceo:CEO-TODOs 9.1", "on hold, deliberately", self.sid)
+        first = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertEqual(first[1], "")
+        self.assertIn("stream-b", first[2])
+        self.assertNotIn("HELD BY RICH", first[2])
+        self.assertEqual(ws.gate_stop({"session_id": self.sid}, self.entity)[2], "")
 
     def test_holds_a_pause_outlives_its_session(self):
         """Review rv-20261022T013056Z-12c77c90-1291 finding 5: a manual pause, then an ordinary
@@ -7502,20 +7551,19 @@ class NoSilentHolds(Base):
         held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-ps"]
         self.assertEqual([h["source"] for h in held], ["pause-ended"])
         self.assertIn("continues: zach-opus-ps", ws.hold_command(held[0]))
-        self.assertTrue(any("the work of zach-opus-ps" in l for l in ws.hold_lines(self.sid, at=ws.now() + 31 * 60)))
+        self.assertTrue(any(l.startswith("zach-opus-ps:") for l in ws.due_lines(ws.due_set(self.sid))))
 
     def test_holds_a_repeated_wait_keeps_the_age_of_the_hold(self):
         """Review rv-20261022T002958Z-2ac46e09-fa4e finding 2: repeating an unresolved wait every
         20 minutes must not make a 2-hour hold look new."""
         self._pending_one()
-        ws.wait("zach-opus-p5", "started", "real-app checks left", "", self.sid)
+        ws.wait("zach-opus-p5", "started", "real-app checks left", "", self.sid, SOON())
         rec = self.rec("zach-opus-p5")
         rec["waiting"]["at"] -= 139 * 60
         ws.save_agent(rec)
-        ws.wait("zach-opus-p5", "started", "real-app checks left (still)", "", self.sid)
+        ws.wait("zach-opus-p5", "started", "real-app checks left (still)", "", self.sid, SOON())
         held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-p5"]
         self.assertGreaterEqual(ws.now() - held[0]["since"], 139 * 60)
-        self.assertTrue(any("(2 h 19 min)" in l or "(2 h 20 min)" in l for l in ws.hold_lines(self.sid)))
 
     def test_holds_a_todo_reference_is_his_only_when_it_is_on_his_page(self):
         """Review rv-20261022T002958Z-2ac46e09-fa4e finding 3: a GitHub outage with a TODO
@@ -7531,28 +7579,16 @@ class NoSilentHolds(Base):
             held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-p5"]
             self.assertEqual(held[0]["state"], "ceo")              # on his page: his decision, quiet
 
-    def test_holds_t6_a_correction_its_run_never_acted_on_stays_in_sight(self):
-        """2026-10-21 23:45Z, echo-opus-andreas2: Rich sent the fix for review finding
-        rv-20261021T233844Z-10df0b1f-1846#1, its run ended at 23:45:14Z, and the branch sat
-        at 10df0b1fc with the hole open; only the agent's own last words said so."""
+    def test_holds_r1_a_legacy_correction_field_is_never_an_obligation(self):
+        """2026-10-22/23: "Yes, stop it now" (honorfile1) and "Hand over now" (filecard3) were
+        reported the next day as corrections their runs never acted on, though both runs had
+        stopped and handed over. The generic field is no longer read."""
         aid, npath = self.spawn("zach-opus-c6")
         self.commit(npath)
-        ws.lifecycle({"hook_event_name": "PostToolUse", "tool_name": "SendMessage", "session_id": self.sid,
-                      "tool_input": {"to": "zach-opus-c6", "message": "Fix review finding #1: quota.rs:702."}},
-                     self.entity)
-        self.finish(aid)                                       # its run ends before it acts on it
-        held = [h for h in ws.holds(self.sid) if h["source"] == "correction"]
-        self.assertEqual([h["name"] for h in held], ["zach-opus-c6"])
-        self.assertIn("Fix review finding #1", held[0]["why"])
-        lines = ws.hold_lines(self.sid, at=ws.now() + 31 * 60)
-        self.assertTrue(any(l.startswith("HELD BY RICH, NOT BY YOU: the correction sent to zach-opus-c6")
-                            for l in lines), lines)
-        with self.assertRaises(ws.SpecError):
-            ws.release("zach-opus-c6", session_id=self.sid)    # Rich saying so ends nothing
-        rec = self.rec("zach-opus-c6")                         # the correction was sent a minute ago
-        rec["correction"]["at"] -= 60
+        self.finish(aid)
+        rec = self.rec("zach-opus-c6")
+        rec["correction"] = {"at": ws.now(), "text": "Hand over now"}  # written before 2026-10-24
         ws.save_agent(rec)
-        self.commit(npath, "fix.txt")                          # and it is acted on now
         self.assertEqual([h for h in ws.holds(self.sid) if h["source"] == "correction"], [])
 
     def test_holds_t6_a_changes_requested_review_handed_over_without_the_fix(self):
@@ -7569,6 +7605,122 @@ class NoSilentHolds(Base):
         self.assertEqual([(h["name"], h["review"]) for h in held], [("zach-opus-r6", "rv-fixture-cr")])
         ws.release("zach-opus-r6", ceo_word="ship it as it is", session_id=self.sid)
         self.assertEqual([h for h in ws.holds(self.sid) if h["source"] == "review"], [])
+
+class OrchestrationR2Waits(Base):
+    """Orchestration reliability R2 (richos-hq docs/prds/2026-10-23-orchestration-
+    reliability.md): a wait names an end the engine can check; a self-wait or an agent:
+    cycle is refused with the cycle; ownership is decided inside the registry lock."""
+
+    def _finished(self, name):
+        aid, npath = self.spawn(name)
+        self.commit(npath)
+        self.finish(aid)
+        return aid, npath
+
+    def test_r2_a_new_wait_needs_a_checkable_end(self):
+        self._finished("zach-opus-w1")
+        with self.assertRaises(ws.SpecError) as cm:
+            ws.wait("zach-opus-w1", "started", "honorfile3 is running now", "", self.sid)
+        self.assertIn("--until", str(cm.exception))
+        with self.assertRaises(ws.SpecError):
+            ws.hold("stream-e", "Stream E", "", "on hold", self.sid)
+        ws.wait("zach-opus-w1", "started", "the carrier lands it", "", self.sid, "agent:zach-opus-w2")
+        self.assertEqual(self.rec("zach-opus-w1")["waiting"]["end"], "agent:zach-opus-w2")
+
+    def test_r2_the_detail_command_lists_every_due_item_past_the_shown_eight(self):
+        """Review rv-20261024T013623Z-f883a475-d24b: the watcher showed eight due items and
+        pointed to `workspaces.sh holds`, which read holds() alone and printed nothing for
+        finished work without a wait, so the ninth worker was never named (the lead had 12
+        such items on 2026-10-23). The detail command reads the same due calculation."""
+        names = ["zach-opus-n%d" % i for i in range(1, 10)]
+        for n in names:
+            self._finished(n)
+        due = ws.due_set(self.sid, ws.pending(self.sid, self.entity, auto=False, dry=True))
+        self.assertEqual(sorted(d["name"] for d in due), names)
+        shown = ws.due_lines(due)
+        self.assertEqual(len(shown), 9)                                  # eight, then the pointer
+        self.assertIn("workspaces.sh holds", shown[-1])
+        import contextlib, io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = ws.main(["--session", self.sid, "--entity", self.entity, "holds"])
+        out = buf.getvalue()
+        self.assertEqual(rc, 0, out)
+        for n in names:
+            self.assertRegex(out, r"(?m)^DUE .*%s" % n)                  # all nine, the ninth too
+
+    def test_r2_a_pause_cycle_is_refused_like_a_wait_cycle(self):
+        """Review rv-20261024T013623Z-f883a475-d24b: pause(B, until A) after pause(A, until B)
+        was accepted and both holds stayed quiet, the two-agent deadlock R2 names."""
+        self.spawn("zach-opus-pa")
+        self.spawn("zach-opus-pb")
+        ws.pause("zach-opus-pa", "agent:zach-opus-pb", self.sid)
+        with self.assertRaises(ws.SpecError) as cm:
+            ws.pause("zach-opus-pb", "agent:zach-opus-pa", self.sid)
+        self.assertIn("zach-opus-pb -> zach-opus-pa -> zach-opus-pb", str(cm.exception))
+        self.assertFalse(self.rec("zach-opus-pb").get("pause"))
+        ws.pause("zach-opus-pb", "at:2099-01-01T00:00:00Z", self.sid)     # control: an end that is not a cycle
+        self.assertTrue(self.rec("zach-opus-pb").get("pause"))
+
+    def test_r2_a_self_wait_and_an_agent_cycle_are_refused_with_the_cycle(self):
+        self._finished("zach-opus-c1")
+        self._finished("zach-opus-c2")
+        with self.assertRaises(ws.SpecError) as cm:
+            ws.wait("zach-opus-c1", "started", "itself", "", self.sid, "agent:zach-opus-c1")
+        self.assertIn("zach-opus-c1 -> zach-opus-c1", str(cm.exception))
+        ws.wait("zach-opus-c1", "started", "c2 lands it", "", self.sid, "agent:zach-opus-c2")
+        with self.assertRaises(ws.SpecError) as cm:
+            ws.wait("zach-opus-c2", "started", "c1 lands it", "", self.sid, "agent:zach-opus-c1")
+        self.assertIn("zach-opus-c2 -> zach-opus-c1 -> zach-opus-c2", str(cm.exception))
+        self.assertIsNone(self.rec("zach-opus-c2").get("waiting"))       # only the mutation was refused
+
+    def test_r2_a_legacy_free_text_wait_reads_as_due(self):
+        self._finished("zach-opus-l1")
+        rec = self.rec("zach-opus-l1")
+        rec["waiting"] = {"kind": "started", "on": "filecard3 is running now", "todo": "", "at": ws.now(), "end": ""}
+        ws.save_agent(rec)                                               # written before 2026-10-24
+        held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-l1"]
+        self.assertEqual([h["state"] for h in held], ["none"])
+
+    def test_r2_the_claim_is_decided_again_inside_the_lock(self):
+        """Two leads: the read outside the lock said claimable; inside it the record is
+        another live lead's. It is neither claimed nor handled here."""
+        self._finished("zach-opus-k1")
+        rec = self.rec("zach-opus-k1")
+        rec["session_id"] = "sess-ended-0000"
+        ws.save_agent(rec)
+        with patch.object(ws, "_claimable", side_effect=[True, False]):
+            items = ws.pending(self.sid, self.entity, auto=False)
+        self.assertEqual([i["name"] for i in items], [])
+        self.assertNotEqual(ws.load_agent(rec["key"]).get("claimed_by"), self.sid)
+
+    def test_r2_work_another_live_lead_claimed_is_not_due_here(self):
+        """Review rv-20261024T062159Z-abcb35c8-f97e: an ended session's due work, claimed by
+        one live lead, was still due for a second live lead through holds(), whose fallback
+        and watcher told it to spawn a continuation that register_spawn refuses. Due work
+        follows the ownership pending() uses; once the claimant's session ends, it is due
+        here again."""
+        self._finished("zach-opus-k2")
+        rec = self.rec("zach-opus-k2")
+        rec["session_id"] = "sess-ended-0002"
+        rec["waiting"] = {"kind": "started", "on": "the prerequisite has ended", "at": ws.now(),
+                          "end": "at:2000-01-01T00:00:00Z"}
+        ws.save_agent(rec)
+        ws.record_session_end("sess-ended-0002")
+        due_here = lambda: [d["name"] for d in ws.due_set(self.sid, ws.pending(self.sid, self.entity, auto=False, dry=True))]
+        self.assertEqual(due_here(), ["zach-opus-k2"])                     # control: unclaimed, due here
+        other = "sess-bbbbbbbb-2222"
+        self.env.session(other, self.entity)
+        ws.pending(other, self.entity, auto=False)                        # the other lead claims it
+        self.env.use(self.sess)
+        self.assertEqual(ws.load_agent(rec["key"]).get("claimed_by"), other)
+        self.assertEqual(ws.pending(self.sid, self.entity, auto=False, dry=True), [])
+        self.assertEqual(due_here(), [])                                   # the claimant's, not ours
+        self.assertNotIn("zach-opus-k2", [h["name"] for h in ws.holds(self.sid)])
+        self.assertNotIn("continues: zach-opus-k2", ws.fallback_notice(self.sid) or "")
+        ws.record_session_end(other)
+        self.assertEqual(due_here(), ["zach-opus-k2"])                     # its claimant ended: ours again
+
 
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,

@@ -262,6 +262,38 @@ _shn_record() {
     return 0
 }
 
+# stop_notice_lead <state-key> <message>
+#
+# TO THE LEAD, once per state: stop_notice_abnormal's state-change dedup on the MODEL channel
+# (Stop hookSpecificOutput.additionalContext), which the lead reads and answers in a continued
+# turn; a systemMessage reaches only the person (orchestration reliability R6). Measured: the
+# frozen 2026-10-23 native request carried such a notice as model input and the lead answered it
+# (richos-hq docs/verification/2026-10-23-orchestration-reliability-prd/author-v2-checks.json).
+stop_notice_lead() {
+    local state="${1:-lead}" msg="${2:-}"
+    if [ "$(_shn_prior)" != "$state" ]; then
+        _shn_record "$state" "$(date +%s 2>/dev/null || echo '')"
+        printf '%s\n' "{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"$(_shn_escape "$msg")\"}}"
+    else
+        _shn_record "$state" "$(_shn_prior_emit_epoch)"
+    fi
+    return 0
+}
+
+# stop_notice_seen <key> — 0 when <key> was already told in this session (a seen-set beside
+# the ledger, one key per line); else records it and returns 1. Without a ledger nothing is
+# remembered and every key is new (announce, the safe direction).
+stop_notice_seen() {
+    local seen
+    [ -n "$_SHN_LEDGER" ] || return 1
+    seen="${_SHN_LEDGER%.state}.seen"
+    if grep -qxF -- "${1:-}" "$seen" 2>/dev/null; then
+        return 0
+    fi
+    printf '%s\n' "${1:-}" >> "$seen" 2>/dev/null || true
+    return 1
+}
+
 # stop_notice_abnormal <state-key> <message>
 #
 # The guard is not doing its job. Announce on entry to this state, and stay

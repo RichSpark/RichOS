@@ -326,7 +326,12 @@ def terminal_messages(path, seen=None, cutoff=None, written_note=None):
                 header = re.match(r"\A---\s*\n(.*?)\n---(?:\n|$)", text, re.S)
                 if not header:
                     continue
-                if not re.search(r"(?m)^name:\s*restart-", header[1]):
+                # The writer's names: "restart-..." and the memory system's own
+                # "project-restart-..." (file project_restart_*.md, the shape
+                # handoff-facts-annotate.sh keys on). 2026-10-23: the incident note
+                # was "project-restart-2026-10-23-late" and was skipped, so a resumed
+                # session found no original request (orchestration reliability R4).
+                if not re.search(r"(?m)^name:\s*(?:project[-_])?restart[-_]", header[1]):
                     continue
                 origins = re.findall(r"(?m)^\s*originSessionId:\s*([A-Za-z0-9_-]+)\s*$", header[1])
                 if len(origins) != 1 or not row.get("timestamp"):

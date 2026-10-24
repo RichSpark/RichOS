@@ -26,8 +26,8 @@
 #   workspaces.sh pause <agent> --until '<what ends it>'   /  resume <agent>  /  stop <agent>
 #       point 11. A SendMessage carrying a line `pause-until: <what ends it>`
 #       records the same pause; a later message to the paused agent resumes it.
-#   workspaces.sh wait <agent> --started '<what>' | --outside '<what>' --todo '<ref>' | --ceo '<question>' --todo '<ref>'
-#       point 5's allowances for ending a turn while an item waits
+#   workspaces.sh wait <agent> --started '<what>' --until <agent:|review:|at:|ceo:end> | --outside '<what>' --todo '<ref>' | --ceo '<question>' --todo '<ref>'
+#       what finished work waits on, with an end the engine can check; due when it comes true
 #   workspaces.sh retry
 #       run every due deletion retry now (point 13 retries on its own anyway)
 #   workspaces.sh withdraw-cc --name <agent> [--why '<why>']

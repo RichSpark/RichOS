@@ -288,8 +288,8 @@ expect_fraction "1a  baseline: banner reports ${EXPECT_N}/${EXPECT_N}, matching 
 # 34 -> 38 on 2026-08-31: the CEO-ask gate, wired as FOUR, because the four
 # questions it has to answer happen on four different events and no one of them
 # can answer another. notice-ceo-asks.sh witnesses the lead actually asking, on
-# PostToolUse[AskUserQuestion]; guard-ceo-ask-first.sh REFUSES a teammate
-# dispatch while nothing has been asked; notice-ceo-unasked.sh will not let a
+# PostToolUse[AskUserQuestion]; guard-ceo-ask-first.sh REFUSED a teammate
+# dispatch while nothing had been asked (removed 2026-10-24); notice-ceo-unasked.sh will not let a
 # turn end quietly with a prepared decision never surfaced; and
 # session-start-ceo-ask.sh opens with the question rather than with a count of
 # the questions. Eighth firing, and the largest single move this line has taken
@@ -913,6 +913,9 @@ expect_fraction "1a  baseline: banner reports ${EXPECT_N}/${EXPECT_N}, matching 
 # review, richos-hq 8ba32b71, item 9). Derived inventories, all carrying it:
 # hooks/hooks.json, .claude/settings.local.json, this set, and the probe's
 # BR_EXPECTED. Suite: blocking-ask.test.sh (Q01-Q04).
+# guard-ceo-ask-first.sh, REMOVED 2026-10-24 — it refused nothing after orchestration
+# reliability R3 (an unrelated prepared decision never vetoes a dispatch); the turn-end
+# notice to the lead (notice-ceo-unasked.sh) carries the ask. Suite: ceo-asks.test.sh.
 ACKNOWLEDGED_SCRIPTS="$(LC_ALL=C sort <<'ACK'
 notice-unanswered-question.sh
 guard-record-owner-memory.sh
@@ -950,7 +953,6 @@ dispatch-pretooluse.sh
 engine-status.sh
 guard-agent-state-claims.sh
 guard-bash-main-writes.sh
-guard-ceo-ask-first.sh
 guard-ceo-ruled-ask.sh
 guard-ceo-todos-commits.sh
 guard-ci-red-lands.sh
