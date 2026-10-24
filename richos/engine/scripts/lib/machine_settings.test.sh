@@ -77,7 +77,7 @@ class Settings(unittest.TestCase):
   spec=importlib.util.spec_from_file_location('fixture_reaper',pathlib.Path(sys.argv[1],'scratch-reaper.py'))
   R=importlib.util.module_from_spec(spec);spec.loader.exec_module(R)
   class Walls:
-   def check(self,*args):return None
+   def check(self,*args,**kwargs):return None
   with tempfile.TemporaryDirectory() as root:
    base=pathlib.Path(root).resolve();job=base/'nightly/home.noindex/tmp';job.mkdir(parents=True)
    allocator=job/'richos-scratch';dead=allocator/'dead';live=allocator/'live'
@@ -87,7 +87,7 @@ class Settings(unittest.TestCase):
    reaper=R.Reaper.__new__(R.Reaper);reaper.cfg=cfg;reaper.now=10000;reaper.floor=3600;reaper.roots=[];reaper._standing=set()
    decisions=[];reaper.add=lambda path,kind,size,status,reason:decisions.append((path,status))
    reaper.owner_state=lambda pid,*args:(pid==102,'controlled generation')
-   reaper.open_under_alloc=lambda:set()
+   reaper.open_under_alloc=lambda *root:set()
    with patch.dict(os.environ,{'TMPDIR':str(job),'SCRATCH_LEDGER':str(base/'ledger')}),patch.object(R,'read_ledger',return_value=rows),patch.object(R,'measure',return_value=(1,0,False)):
     reaper.scan_scratch_root(Walls())
    self.assertIn((str(dead),R.DELETE),decisions)

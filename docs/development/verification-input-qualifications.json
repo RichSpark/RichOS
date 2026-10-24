@@ -429,7 +429,7 @@
       "review": "The full parser/dependency suite reads engine sources as data and creates private fixture repositories. The new spawn closure assertion also validates an optional fixed external scope guard by bytes. The private execution profile clears RICHOS_SPAWN_TEST_REAL_PROJECT so the bound literal default is the only external location. HOME-based optional dispatcher lookup is private; fixtures patch HOME for their own cases. External absence is part of identity, never an invented runtime pass. Renewed 2026-09-28 for verification_inputs.py's source_inventory, repository-rooted and default_engine external bindings: the suite's closures over the real dependency map compare the digests of three repository files outside richos/engine and richos/app/scripts (cpu_guard.py#policy-fixtures), so those files are now declared paths. The new affected_units.py cases run git and the selector on private fixture repositories; RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT is set and cleared by the suite itself.",
       "sources": {
         "richos/engine/scripts/verification-inputs.test.sh": "5c1044eb2b8c463aa4667b1f48c68e306157d3e72df91f700220498d97e4ba2e",
-        "richos/engine/scripts/verification-inputs.test.py": "0399449fce9f3231bf607ec191bff0b333cbdd59c27ee822afb7d0455e92a7a9",
+        "richos/engine/scripts/verification-inputs.test.py": "d443af3cb8fdf471b5e1c0a1234c1a5892313b4daa0c449797804c9162b2e8a9",
         "richos/engine/scripts/lib/verification_inputs.py": "9de2c79483d0ccca373b1489668b6e9f75fb1bf3876f406f5d9b5f4cc7c19544"
       },
       "requires": {
@@ -2038,7 +2038,7 @@
         "richos/engine/scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
-        "richos/engine/orchestration.config": "2c834409e17e74c6aac13ba38e7b0c0f92d68fe89aaa323b8fb0045f2d5663ad"
+        "richos/engine/orchestration.config": "268cc52a1ede42377a3af4022676ae814953a4482a9639557c370f4980633721"
       },
       "requires": {
         "paths": [],
