@@ -82,7 +82,9 @@ HAND-ROLLED (any other registered worktree — the shape this whole operation
 actually runs in: /Users/alex/ab/richos-wt/<name>): NO LOCK IS EVER TAKEN, so
 the lock signal says nothing at all. Absence of a lock here is absence of
 evidence, and the doctrine is explicit that an agent is never inferred dead
-from filesystem quiet. So a hand-rolled worktree is PRESUMED LIVE.
+from filesystem quiet. So a hand-rolled worktree is PRESUMED LIVE — when it
+names a teammate (a teammate-shaped basename, or a registered workspace's
+cc/<name> branch). One that names nobody is not a teammate and is owed nothing.
 
 That presumption is deliberately the over-blocking direction, and it is bounded
 by two things that cost the lander seconds rather than minutes: a worktree
@@ -461,8 +463,8 @@ def identity_index(teams_dir, transcript_path="", session_id=""):
                 "found": []}
 
 
-def resolve_worktree_identity(wt_path, index):
-    """(kind, agent_id, name, role, how) for a worktree path.
+def resolve_worktree_identity(wt_path, index, branch=""):
+    """(kind, agent_id, name, role, how) for a worktree path and its branch.
 
     NAME and ROLE are different fields and are never conflated again. `name` is
     the unique spawn name SendMessage addresses; `role` is the agent_type, and
@@ -488,7 +490,12 @@ def resolve_worktree_identity(wt_path, index):
     # is the name, not a guess about one.
     if IDENTITY is not None and IDENTITY.looks_like_teammate_name(base):
         return "hand-rolled", "", base, IDENTITY.role_of(base), "worktree basename"
-    return "hand-rolled", "", "", "", "token-match"
+    # A registered workspace may sit under any directory name (--dir), but its
+    # branch is always cc/<teammate name>, minted at registration.
+    cc_name = branch[len("cc/"):] if (branch or "").startswith("cc/") else ""
+    if IDENTITY is not None and IDENTITY.looks_like_teammate_name(cc_name):
+        return "hand-rolled", "", cc_name, IDENTITY.role_of(cc_name), "cc/ branch"
+    return "hand-rolled", "", "", "", "unresolved"
 
 
 def credit_notices(worktrees, notices, tip, index=None):
@@ -1226,7 +1233,7 @@ def assess(repo, tip=None, teams_dir="", timeout_min=DEFAULT_ACK_TIMEOUT_MIN,
             # teammate nobody can see.
             result["retired_workspaces"].append({"path": path, "reason": why_retired})
             continue
-        kind, agent_id, name, role, how = resolve_worktree_identity(path, index)
+        kind, agent_id, name, role, how = resolve_worktree_identity(path, index, entry["branch"])
         base = os.path.basename(path.rstrip("/"))
         # EVERY EXACT WAY THIS WORKTREE CAN BE ADDRESSED. A notice is credited
         # on equality with one of these and on nothing looser; the role is
@@ -1265,6 +1272,12 @@ def assess(repo, tip=None, teams_dir="", timeout_min=DEFAULT_ACK_TIMEOUT_MIN,
                 else:
                     wt["liveness"] = "not-live (stale lock, pid %s is dead)" % m.group(1)
                     wt["live"] = False
+        elif not name:
+            # The nightly's frozen source, a release check, a codex/ branch, the
+            # lead's own checkout: nothing names a teammate here, so nobody here
+            # can be told, ack or be stopped (2026-10-24).
+            wt["liveness"] = "not a teammate (hand-rolled checkout that resolves to no teammate name)"
+            wt["live"] = False
         else:
             wt["liveness"] = "presumed LIVE (hand-rolled worktree — no lock is ever taken here, so quiet is not death)"
             wt["live"] = True

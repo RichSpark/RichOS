@@ -3754,7 +3754,7 @@
     },
     "scripts/lib/inflight.py": {
       "source": "scripts/lib/inflight.py",
-      "sha256": "5e6596f5a7eb395b724f624166dc83ab0ce428165c0d85f2fee9cfaf82f26d44",
+      "sha256": "323e7fe192bd5e324381f78517b33eec5ee95036152c37f56e75701b1859bd35",
       "evidence": "Reads Git worktree/ref/diff metadata, acknowledgement and notice ledgers, timestamps and PID liveness. Its only dynamic imports are teammate-identity and the workspaces integration_for reader. It never reads orchestration.config, runs payload commands or invokes workspace lifecycle actions. The full module was reviewed, including default-tip and durable-ack paths. Since 2026-10-22 it also reads and rewrites richos-inflight-answers.json in the repository's own git common directory: answers about pairs of full commit ids (is-ancestor, merge-base, rev-list, diff --name-only), reused while the same ids are asked about; no setting, and a question git could not answer is never stored.",
       "keys": [],
       "edges": [
@@ -16393,7 +16393,7 @@
     },
     "scripts/lib/inflight-gaps.test.py": {
       "source": "scripts/lib/inflight-gaps.test.py",
-      "sha256": "7ed521aa99ef7e50aa3e60b7920f93bfc1c88e285eb39b5c8e43f9db40fa516e",
+      "sha256": "1b66af75979b4d428b3be413e42453ce86663dac788c408c7f58ded0dfe57f8d",
       "evidence": "Fixed Python fixture: builds a private Git repository and one linked worktree under its own temporary directory, points RICHOS_INFLIGHT_ACK_LEDGER at a private file and calls inflight.assess/main with an explicit tip and teams directory. Git failures are simulated by patching the module's own helpers; no orchestration setting or operator ledger is read.",
       "keys": [],
       "edges": [
@@ -17051,7 +17051,7 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/lib/hook-dependencies.py": "013b187a06ddb52d8e679407b45d635d8a6c693348d0bcb4998b58f6ec44debe",
         "scripts/lib/hook-dependencies.sh": "a4634dd1f95fe9c518055fd324d4b56a07186aafb8828e387c890c3cbd0e4621",
-        "scripts/lib/inflight.py": "5e6596f5a7eb395b724f624166dc83ab0ce428165c0d85f2fee9cfaf82f26d44",
+        "scripts/lib/inflight.py": "323e7fe192bd5e324381f78517b33eec5ee95036152c37f56e75701b1859bd35",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/lib/interactive-prompt.py": "fd95664d486aa1cde400a9c216e1d2fda2eeb5f21a202a8ccce2b2d1a7b11af8",
         "scripts/lib/mechanical-findings.py": "0942c108c40a62c831eaee4d569f8def0178903e17a289e221cc93ed7f51db78",
@@ -17844,7 +17844,7 @@
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
         "scripts/hooks/notice-inflight-acks.sh": "472a52d1fe0e78b0f4f166da9402fae9acf3eba3f6329c3afeb7460ced547a32",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
-        "scripts/lib/inflight.py": "5e6596f5a7eb395b724f624166dc83ab0ce428165c0d85f2fee9cfaf82f26d44",
+        "scripts/lib/inflight.py": "323e7fe192bd5e324381f78517b33eec5ee95036152c37f56e75701b1859bd35",
         "scripts/hooks/notice-mechanical-findings.sh": "1b3ba1af8d15b64cd8eda504e691347f0ef923bd78e53f235223589248bb1c07",
         "scripts/lib/mechanical-findings.sh": "1c67019e979adea3071d160882f26acb6bd14c032162ba31d7a1020ad06509bb",
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",

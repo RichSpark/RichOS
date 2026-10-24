@@ -171,6 +171,62 @@ class InflightGaps(unittest.TestCase):
         run("git", "merge", "-q", "--no-edit", "main", cwd=self.wt)
         self.assertEqual([w["verdict"] for w in self.assess()["worktrees"]], ["CLEAN-NOT-BEHIND"])
 
+    # 2026-10-24: the Stop notice named the nightly's frozen `source`, detached release checks,
+    # codex/ branches and the lead's own checkouts as NEVER TOLD and told the lead to message or
+    # stop them. A checkout that resolves to no teammate is not a teammate. The hook names exactly
+    # these verdicts, so a checkout carrying none of them is never named.
+    NAMED = ("OWED-NO-NOTICE", "NOTIFIED-NO-ACK", "NOTIFIED-ACK-INVALID")
+
+    def checkout(self, path, *branch):
+        """A checkout cut from the base with a commit of its own, so main moved under it."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        run("git", "worktree", "add", "-q", *branch, path, "HEAD~1", cwd=self.repo)
+        with open(os.path.join(path, "src", "own.txt"), "w") as fh:
+            fh.write(path + "\n")
+        run("git", "add", "-A", cwd=path)
+        run("git", "commit", "-q", "-m", "own work", cwd=path)
+        return path
+
+    def native(self, agent_id):
+        path = self.checkout(os.path.join(self.repo, ".claude", "worktrees", "agent-" + agent_id),
+                             "-b", "worktree-" + agent_id)
+        run("git", "worktree", "lock", "--reason", "agent running (pid %d)" % os.getpid(), path,
+            cwd=self.repo)
+        return path
+
+    def verdicts(self):
+        return {os.path.basename(w["path"]): w["verdict"] for w in self.assess()["worktrees"]}
+
+    def test_10_a_checkout_that_is_no_teammate_is_never_named(self):
+        self.checkout(os.path.join(self.tmp, "nightly", "source"), "--detach")
+        self.checkout(os.path.join(self.tmp, "lead", "richos-hq"), "-b", "codex/owned-outcome-prd")
+        res = self.assess()
+        got = self.verdicts()
+        for base in ("source", "richos-hq"):
+            self.assertNotIn(got[base], self.NAMED, got)
+        self.assertEqual(res["blocking"], [self.wt])     # the real teammate is still owed
+        self.assertFalse(res.get("error"), res.get("error"))
+
+    def test_11_a_teammate_named_checkout_never_told_is_still_named(self):
+        self.checkout(os.path.join(self.tmp, "wt", "zach-opus-u1"), "-b", "worktree-zach-u1")
+        got = self.verdicts()
+        self.assertEqual(got["zach-opus-u1"], "OWED-NO-NOTICE")
+        self.assertEqual(got["norm-sonnet-x1"], "OWED-NO-NOTICE")
+
+    def test_12_a_native_worktree_whose_name_did_not_resolve_is_still_named(self):
+        self.native("a5a1c0ffee1122334")
+        res = self.assess()
+        wt = [w for w in res["worktrees"] if w["kind"] == "native"]
+        self.assertEqual([(w["resolved_name"], w["verdict"]) for w in wt], [("", "OWED-NO-NOTICE")])
+
+    def test_13_a_registered_workspace_under_another_directory_name_is_still_named(self):
+        # create-teammate-worktree.sh --dir may put a workspace anywhere; its branch is always
+        # cc/<teammate name>, minted at registration.
+        self.checkout(os.path.join(self.tmp, "elsewhere", "richos"), "-b", "cc/zach-opus-q1")
+        res = self.assess()
+        wt = [w for w in res["worktrees"] if w["branch"] == "cc/zach-opus-q1"]
+        self.assertEqual([w["verdict"] for w in wt], ["OWED-NO-NOTICE"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
