@@ -8143,6 +8143,14 @@ def lifecycle(payload, entity):
             # Owned work to resume, not a gate: independent and authorized work goes on.
             ctx = "\n".join(["DUE WORK (%d): handle it as you resume; the complete list: workspaces.sh holds"
                              % len(due)] + due_lines(due) + ([bad] if bad else []))
+            try:
+                # What this notice told goes into the watcher's own announce state, so
+                # its first look does not tell the same unchanged items again (R6).
+                _agent_hold()                        # puts scripts/lib on the path
+                import stall_watch
+                stall_watch.record_told_due(sid, due)
+            except Exception:  # noqa: BLE001: unrecorded only means the first look may repeat it
+                pass
         elif bad:
             ctx = bad
     elif ev == "SessionEnd":

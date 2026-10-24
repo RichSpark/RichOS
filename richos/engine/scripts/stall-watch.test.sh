@@ -59,6 +59,8 @@
 #        while Y is live and is RELEASE DUE when Y finishes
 #   T4   a manual pause is told at +31 min; a quota pause is quiet until its at: passes
 #   HD0-HD3  nothing before 30 min; the 30-min repeat; --once lists holds
+#   HD7  a due item the SessionStart notice told is not told again by the first
+#        look; the same item, changed, is
 #   E01  THE 2026-10-01 INCIDENT: a teammate of this session raises a proceeding,
 #        for=lead escalation after the session started; the next look prints
 #        ONE ESCALATION-WATCH block, FIRST, with its key, sender and question
@@ -865,6 +867,41 @@ OUT="$(RICHOS_APP_ENTITY=acme RICHOS_APP_THREAD=thread-1 STALL_WATCH_NOW=$(date 
 check "HD6  a damaged record beside readable due work: the due work is told, and one UNREADABLE RECORD line" \
     "$( has "$OUT" "[DUE] victor-opus-a1" && has "$OUT" "UNREADABLE RECORD: 1 workspace registry record"; echo $?)" "out=$OUT"
 rm -f "$RICHOS_WORKSPACES_DIR/agents/damaged-fixture.json"
+# Codex 2026-10-24T09:36Z (R6, A4 delivered once): the SessionStart notice told a due item
+# and the watcher's first look told it again, unchanged: an extra lead turn at every start.
+new_registry hd7; new_state hd7
+add_agent xray-opus-n1 a0000000000fixx "$SID" 3600 3500 3000 end
+add_agent yankee-opus-y1 a0000000000fixz "$SID" 600 600 30
+lead_idle
+hd7_py() { PYTHONPATH="$ENGINE/scripts/lib" python3 - "$ENGINE" "$@" <<'PY2'
+import json, os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "mega-lander"))
+import workspaces as ws
+sid = os.environ["RICHOS_SESSION_ID"]
+if sys.argv[2] == "start":
+    ctx, _n = ws.lifecycle({"hook_event_name": "SessionStart", "source": "compact", "session_id": sid},
+                           os.environ["RICHOS_ENTITY_ROOT"])
+    print(ctx)
+elif sys.argv[2] == "wait":
+    ws.wait("xray-opus-n1", "started", "yankee carries the rest", "", sid, "agent:yankee-opus-y1")
+elif sys.argv[2] == "yankee-done":
+    p = os.path.join(os.environ["RICHOS_WORKSPACES_DIR"], "agents", "%s--yankee-opus-y1.json" % sid)
+    rec = json.load(open(p))
+    rec.update(end={"at": time.time(), "signal": "SubagentStop", "detail": "fixture"}, handed_in={"at": time.time()})
+    json.dump(rec, open(p, "w"))
+PY2
+}
+OUT="$(hd7_py start 2>&1)"
+check "HD7a the SessionStart notice tells the due item" \
+    "$( has "$OUT" "DUE WORK (1)" && has "$OUT" "xray-opus-n1"; echo $?)" "out=$OUT"
+tick 60
+check "HD7b the first look does not tell it again, unchanged" "$( ! has "$OUT" "[DUE]"; echo $?)" "out=$OUT"
+hd7_py wait
+tick 120
+check "HD7c a wait with a pending end is quiet" "$( ! has "$OUT" "[DUE]"; echo $?)" "out=$OUT"
+hd7_py yankee-done
+tick 180
+check "HD7d the same item, changed (its end came true), is told" "$( has "$OUT" "[DUE] xray-opus-n1"; echo $?)" "out=$OUT"
 unset STALL_WATCH_LEAD_TRANSCRIPT
 
 # --- F: every look is fresh code (orchestration reliability R5) ------------------

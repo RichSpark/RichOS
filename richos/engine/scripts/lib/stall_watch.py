@@ -79,7 +79,9 @@ WHAT IS A STALL (every threshold, and why)
    calculation the Stop fallback and `workspaces.sh holds` use). Told at the
    first look while the lead is idle, one line per item and at most eight, then
    a pointer to the complete list; again after the 30-minute repeat while it
-   stays due; said nothing when it stops being due. A busy lead is told at its
+   stays due; said nothing when it stops being due. An item the SessionStart
+   notice already told this session (record_told_due) is not told again at the
+   first look unless its state changed. A busy lead is told at its
    next idle look. Idle is the lead's recorded turn end; under the app host it is
    the host's word that the lead's turn ended (host_child.idle). A pending end (a
    live agent, a running review, a time not reached) and a CEO-TODOs item are
@@ -540,7 +542,7 @@ def _due(src, reg, now, session_id):
     out = []
     for d in due[:DUE_SHOWN]:
         why = " ".join(str(d.get("why") or "not said").split())[:200]
-        out.append(Stall("due:%s:%s:%s" % (d.get("key") or d["name"], d["state"], d.get("end") or ""), "DUE",
+        out.append(Stall(due_key(d), "DUE",
                          d["name"], d["since"], d["detail"], ["why: " + why], ["next: " + d["command"]]))
     if len(due) > DUE_SHOWN:
         out.append(Stall("due:more", "DUE", "%d more" % (len(due) - DUE_SHOWN), now, "more due work", [],
@@ -548,6 +550,30 @@ def _due(src, reg, now, session_id):
     # One damaged record never hides the readable due work above: it is one compact problem.
     bad = src.ws.unreadable_line() if hasattr(src.ws, "unreadable_line") else ""
     return out, bad
+
+
+def due_key(d):
+    """A due item's announce key: its work, its state and its end (its material state)."""
+    return "due:%s:%s:%s" % (d.get("key") or d["name"], d["state"], d.get("end") or "")
+
+
+def record_told_due(sid, due, now=None):
+    """The SessionStart notice (workspaces.lifecycle) told these due items: they are
+    recorded in this session's announced.json under the key the first look makes, so
+    that look does not tell them again unchanged. A changed item has another key."""
+    if not sid or not due:
+        return
+    now = clock() if now is None else now
+    path = os.path.join(session_dir(sid), "announced.json")
+    state = _read_json(path)
+    opened = dict(state.get("open") or {})
+    for d in due[:DUE_SHOWN]:
+        prev = opened.get(due_key(d)) or {"first": now, "count": 1, "since": d["since"], "who": d["name"],
+                                         "what": d["detail"]}
+        prev.update(last=now, missed=0)
+        opened[due_key(d)] = prev
+    state["open"] = opened
+    _write_json(path, state)
 
 
 def _proof_stall(src, reg, w, holders, slots, now, th, table):
@@ -1577,6 +1603,7 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
     th = thresholds()
     path = os.path.join(sd, "announced.json")
     state = _read_json(path)
+    read_keys = set(state.get("open") or {})
     esc_prev = state.get("esc")
     idle_prev = state.get("idle")
     lead_idle = lead_is_idle(src, sid)
@@ -1619,6 +1646,11 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
         text = "\n".join(lines)
         out.write((json.dumps({"text": text}) if json_lines else text) + "\n")
         out.flush()
+    # A key written during this look by another writer (the SessionStart notice,
+    # record_told_due) is kept, never overwritten by the state read before it.
+    for k, v in (_read_json(path).get("open") or {}).items():
+        if k not in read_keys and k not in state.setdefault("open", {}):
+            state["open"][k] = v
     _write_json(path, state)
     return len(lines), len(state.get("open") or {})
 
