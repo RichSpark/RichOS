@@ -479,6 +479,11 @@ cp "$CFG" "$CFG.d12"
 sed -i.bak 's/^DISK_RICH_ALERT_GB=.*/DISK_RICH_ALERT_GB="999999"/' "$CFG"
 alarm_twice "D12f low disk beside the told set alerts, every turn" "below the declared"
 cp "$CFG.d12" "$CFG"
+# A failed test device cleanup is an alarm too (the review of 6d7802f2e found
+# it silent at the turn end): beside the told set it alerts every turn.
+printf '%s\n' '{"sim-1": {"name": "Test iPhone", "verdict": "removal failed", "why": "simctl delete refused", "command": "xcrun simctl delete sim-1", "first": "2026-10-24T18:00:00Z", "attempts": 2}}' >"$LEDGER_DIR/state/test-device-failures.json"
+alarm_twice "D12g a failed test device cleanup beside the told set alerts, every turn" "1 test device cleanup issue(s) need attention"
+rm -f "$LEDGER_DIR/state/test-device-failures.json"
 healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json"
 
 # ---------------------------------------------------------------------------

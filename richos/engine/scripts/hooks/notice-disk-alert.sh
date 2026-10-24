@@ -206,6 +206,7 @@ if [ "$EVENT" = "Stop" ]; then
 import re, sys
 text = sys.stdin.read()
 vols, stuck, inst, klass, notinstalled, stopped = [], "", "", "", False, False
+dev, heading = "", ""
 todo = []
 cleanup = ""
 kept, kept_set = "", ""
@@ -226,6 +227,12 @@ for line in text.splitlines():
     m = re.match(r"^(\d+) TEST APP INSTANCE\(S\) WOULD NOT CLOSE", s)
     if m:
         inst = "%s test app instance(s) would not close" % m.group(1)
+    m = re.match(r"^(\d+) TEST DEVICE CLEANUP ISSUE\(S\)", s)
+    if m:
+        dev = "%s test device cleanup issue(s) need attention" % m.group(1)
+    m = re.match(r"^MASSIVE ALERT — (.+)$", s)
+    if m and not heading:
+        heading = m.group(1)
     # The scheduled cleanup has not recovered (cleanup PRD R5): the watchdog line
     # already is one short summary with its owner action and detail path.
     m = re.match(r"^CLEANUP HAS NOT RECOVERED: (.*)$", s)
@@ -260,8 +267,14 @@ if stuck:
     alarm.append(stuck)
 if inst:
     alarm.append(inst)
+if dev:
+    alarm.append(dev)
 if cleanup:
     alarm.append(cleanup)
+# AN ALARM THIS PARSER DOES NOT KNOW IS STILL AN ALARM: the MASSIVE ALERT
+# heading of the block is the item, never silence.
+if heading and not alarm:
+    alarm.append(heading)
 if alarm and klass:
     alarm.append("classification: " + klass)
 summary = ""
