@@ -46,11 +46,42 @@
 use serde_json::{json, Value};
 
 /// The rows the phone understands, in order, cursors assigned.
+///
+/// **A file Rich attached goes under his words** (round 36 screen 3): the tool is called while
+/// he works, so its item can sort before the reply it belongs to. Each `rich_file` item is
+/// moved to just after the last `rich_message` of its own turn; a file with no reply in its
+/// turn (one Stu attached for a job) keeps its own place.
 pub fn rows_from_payload(payload: &Value) -> Vec<Value> {
     let empty: Vec<Value> = Vec::new();
     let items = payload.get("items").and_then(|v| v.as_array()).unwrap_or(&empty);
+    let last_reply: std::collections::HashMap<&str, usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i["kind"] == "rich_message")
+        .filter_map(|(at, i)| Some((i["turnId"].as_str()?, at)))
+        .collect();
+    let mut ordered: Vec<&Value> = Vec::with_capacity(items.len());
+    let mut held: Vec<(usize, &Value)> = Vec::new();
+    for (at, item) in items.iter().enumerate() {
+        let after = (item["kind"] == richos_core::rich_files::ITEM_KIND)
+            .then(|| item["turnId"].as_str().and_then(|t| last_reply.get(t)).copied())
+            .flatten()
+            .filter(|reply| *reply > at);
+        match after {
+            Some(reply) => held.push((reply, item)),
+            None => ordered.push(item),
+        }
+        held.retain(|(reply, file)| {
+            if *reply == at {
+                ordered.push(file);
+                false
+            } else {
+                true
+            }
+        });
+    }
     let mut out: Vec<Value> = Vec::new();
-    for item in items {
+    for item in ordered {
         if let Some(mut row) = row_from_item(item) {
             row["cursor"] = json!(out.len() as u64 + 1);
             out.push(row);
@@ -65,7 +96,7 @@ pub fn reply_for_turn(payload: &Value, turn: &str) -> Option<Value> {
         .filter(|item| item["turnId"] == turn)
         .filter_map(|item| item["id"].as_str()).collect();
     rows_from_payload(payload).into_iter().rev().find(|row|
-        row["role"] == "rich" && row["kind"] != "question"
+        row["role"] == "rich" && row["kind"] != "question" && row["kind"] != "file"
             && row["id"].as_str().is_some_and(|id| ids.contains(id)))
 }
 
@@ -110,6 +141,26 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
             "client_id": Value::Null,
             // Nothing is synthesized until he asks for it (plan §3.4 verb 4), so a projected
             // row never claims audio is waiting. Slice B is what makes this ever true.
+            "has_audio": false,
+            "from_microphone": false,
+            "state": "complete",
+            "complete": true,
+        })),
+        // A FILE RICH PUT IN FRONT OF THE USER (round 36 screen 3): a Rich row of kind `file`,
+        // carrying the card's own description (`rich_files::file_value`): an id to ask the Mac
+        // for, never a path. The phone fetches the bytes only when the user taps it
+        // (`GET /api/messages?kind=file`, `routes.rs`). A client that does not know the kind
+        // skips it.
+        k if k == richos_core::rich_files::ITEM_KIND => Some(json!({
+            "id": id,
+            "thread_id": thread_id,
+            "cursor": 0,
+            "role": "rich",
+            "kind": "file",
+            "text": text,
+            "file": item["file"],
+            "created_at": iso8601(created_at),
+            "client_id": Value::Null,
             "has_audio": false,
             "from_microphone": false,
             "state": "complete",

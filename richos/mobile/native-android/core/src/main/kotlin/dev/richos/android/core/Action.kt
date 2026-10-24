@@ -23,6 +23,15 @@ sealed interface Action {
     /** "Stop" on the reply [id] being heard. */
     @Serializable @SerialName("reply-stop")
     data class StopReply(val id: String) : Action
+    /** A tap on a file Rich attached ([RichFile.id]): it comes over from the Mac, then opens. */
+    @Serializable @SerialName("file-open")
+    data class OpenRichFile(val id: String) : Action
+    /** The × on a file coming over: it stops, and nothing half-written is kept. */
+    @Serializable @SerialName("file-stop")
+    data class StopRichFile(val id: String) : Action
+    /** The viewer was closed, so a later arrival does not open it again by itself. */
+    @Serializable @SerialName("file-viewed")
+    data class RichFileViewed(val id: String) : Action
     @Serializable @SerialName("select-thread")
     data class SelectThread(val threadId: String) : Action
 

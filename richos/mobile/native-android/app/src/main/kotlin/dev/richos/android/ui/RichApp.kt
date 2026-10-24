@@ -66,6 +66,7 @@ import dev.richos.android.ui.attach.AttachMenu
 import dev.richos.android.ui.attach.DeniedCard
 import dev.richos.android.ui.attach.MacOffCard
 import dev.richos.android.ui.attach.PhotoViewer
+import dev.richos.android.ui.attach.RichFileViewer
 import dev.richos.android.ui.attach.RejectionCard
 import dev.richos.android.ui.attach.ShareSheetView
 import dev.richos.android.ui.attach.SystemPickerDrawing
@@ -187,6 +188,8 @@ fun RichApp(model: ScreenModel, onEvent: (UiEvent) -> Unit, camera: (@Composable
                     Conversation(shown, menuOpen, handle)
                     Overlays(model, handle)
                     viewer?.let { v -> model.thread.firstOrNull { it.id == v.messageId }?.let { PhotoViewer(it, v.index, handle) } }
+                    // A file Rich attached, once it is on this phone and was tapped (round 36 "Phone: opened").
+                    model.fileViewer?.let { (file, fetch, time) -> RichFileViewer(file, fetch, time, handle) }
                 }
             }
         }

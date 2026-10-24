@@ -9891,6 +9891,247 @@ body.bp-narrow #out-bottom .out-word {
   color: var(--trim-text);
 }
 
+/* ---- A FILE FROM RICH (round 36 screen 3, §138 item 12): the files Rich put in front of the
+   user, as cards under his words, built like the composer's attachment chip. Copied from the
+   round's own `.r36-file*` rules under the app's tokens. Contrast, from the round's README
+   (computed in WebKit with `tests/lib/contrast.js`): card text `--ink` 12.06 dark / 18.07 light,
+   the meta line `--ink-soft` 5.78 / 6.36, "Open in …" `--accent-text` 6.36 / 6.65 (5.08 / 5.83 on
+   its hover tint), the card edge against the chat 4.57 / 3.35 and on hover (gold) 7.68 / 3.15.
+   DECLARED 14px, SKIPPABLE: the file type printed inside the page glyph ("PDF"); the type
+   repeats at 16px in the line beside it (`--ink` on the glyph 14.78 dark, 15.58 light). ---- */
+.tl-rfiles {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  width: 100%;
+  max-width: 640px;
+}
+
+.tl-rfile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 10px 10px 12px;
+  border: 1px solid var(--line-control);
+  border-radius: 12px;
+  background: var(--surface);
+  transition: border-color .18s, box-shadow .18s, transform .18s var(--out-quint);
+  cursor: pointer;
+}
+
+.tl-rfile:hover {
+  border-color: var(--gold);
+  box-shadow: 0 8px 22px var(--shadow-weak);
+  transform: translateY(-1px);
+}
+
+.tl-rfile:has(.tl-rfile-main:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A card that has just arrived rises into place once (round 36 `r36-file-in`). `--arrival-delay`
+   carries its start across a rebuild of the turn (`rich-files.js`); `backwards` holds it unseen
+   until its start and leaves nothing behind, so hover keeps its lift afterwards. */
+.tl-rfile.is-arriving {
+  animation: tl-rfile-in 0.7s var(--out-quint, ease-out) var(--arrival-delay, 0ms) backwards;
+}
+
+@keyframes tl-rfile-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.tl-rfile-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+
+.tl-rfile-glyph {
+  position: relative;
+  width: 44px;
+  height: 52px;
+  flex-shrink: 0;
+}
+
+.tl-rfile-glyph svg {
+  position: absolute;
+  inset: 0;
+  width: 44px;
+  height: 52px;
+}
+
+.tl-rfile-glyph .pg {
+  fill: var(--surface-sunk);
+  stroke: var(--line-control);
+  stroke-width: 1;
+}
+
+.tl-rfile-glyph .fold {
+  fill: var(--gold);
+}
+
+.tl-rfile-ext {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 7px;
+  text-align: center;
+  font-size: .875rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--ink);
+}
+
+.tl-rfile-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.tl-rfile-name {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tl-rfile-meta {
+  font-size: 1rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.tl-rfile-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tl-rfile-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--gold);
+  background: transparent;
+  color: var(--accent-text);
+  font: 500 1rem var(--font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tl-rfile-open svg {
+  width: 14px;
+  height: 14px;
+  transition: transform .18s var(--out-quint);
+}
+
+.tl-rfile:hover .tl-rfile-open,
+.tl-rfile[data-s="opening"] .tl-rfile-open {
+  background: var(--gold-soft);
+}
+
+.tl-rfile:hover .tl-rfile-open svg {
+  transform: translate(1px, -1px);
+}
+
+.tl-rfile-finder {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--ink-soft);
+  font: 500 1rem var(--font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tl-rfile-finder:hover {
+  color: var(--ink);
+  background: var(--tint-soft);
+}
+
+.tl-rfile-finder:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tl-rfile-ask {
+  display: none;
+}
+
+.tl-rfile[data-s="missing"] {
+  cursor: default;
+  border-style: dashed;
+}
+
+.tl-rfile[data-s="missing"]:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--line-control);
+}
+
+.tl-rfile[data-s="missing"] .tl-rfile-glyph svg {
+  opacity: .5;
+}
+
+.tl-rfile[data-s="missing"] .tl-rfile-main {
+  cursor: default;
+}
+
+.tl-rfile[data-s="missing"] .tl-rfile-meta {
+  color: var(--ink);
+  white-space: normal;
+}
+
+.tl-rfile[data-s="missing"] .tl-rfile-open,
+.tl-rfile[data-s="missing"] .tl-rfile-finder {
+  display: none;
+}
+
+.tl-rfile[data-s="missing"] .tl-rfile-ask {
+  display: inline-flex;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-rfile,
+  .tl-rfile-open svg {
+    transition: none;
+  }
+
+  .tl-rfile:hover {
+    transform: none;
+  }
+
+  .tl-rfile.is-arriving {
+    animation: none;
+  }
+}
+
 /* ---- the actions (slice S6: §6.3, §6.4, §6.7, §6.8; round 17's `.oacts`, `.of-open`, `.menu`,
    `#toast`, under the app's tokens). Every text pair and indicator here is computed in both
    themes by `tests/output.js` ("the actions' text and indicators"); nothing is declared exempt.

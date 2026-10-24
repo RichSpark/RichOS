@@ -67,6 +67,9 @@ extension Action: Codable {
         var tooLarge: Bool?
         var confirmation: MacConfirmation?
         var askedAt: Int64?
+        var received: Int64?
+        var path: String?
+        var reason: String?
 
         init(_ type: String) { self.type = type }
     }
@@ -78,13 +81,14 @@ extension Action: Codable {
         "send", "answer-question", "question-answered", "delivery-accepted", "delivery-failed", "tick", "retry", "discard", "messages-arrived",
         "reply-started", "reply-delta", "reply-finished", "older", "older-loaded", "remember-reading", "set-following", "set-composer-focus",
         "notification-open", "notification-focused", "share-take", "reply-play", "playback-started", "playback-progress",
+        "file-open", "file-stop", "file-progress", "file-arrived", "file-failed", "file-viewed", "file-not-kept",
         "playback-ended", "playback-stop", "dismiss-toast",
         "network", "health", "connection-lost", "connected", "connection-diagnosed", "mac-capabilities", "mac-question-capability", "mac-audio-capability", "pairing-revoked", "foregrounded", "backgrounded", "mac-attachment-limits", "push-registered",
         "voice-press", "voice-start-locked", "microphone-permission", "dismiss-microphone-card", "voice-move", "voice-release", "voice-locked-send",
         "voice-locked-cancel", "voice-touch-canceled", "voice-interrupted", "voice-level", "voice-settled",
         "send-kept", "discard-kept", "record-play",
         "notifications-enable", "notifications-result", "notifications-disable", "dismiss-notification-offer",
-        "notifications-previews", "forget-request", "forget-pair", "settings",
+        "notifications-previews", "forget-request", "forget-pair", "discard-and-forget", "settings",
         "update-policy", "update-dismiss", "update-open", "support", "check-updates", "privacy-policy",
         "attach-menu-open", "attach-menu-close", "attach-pick", "attach-picked", "attach-refused", "attach-denied",
         "attach-remove", "attach-notice-dismiss",
@@ -143,6 +147,13 @@ extension Action: Codable {
         case "share-take": self = .takeShare(try need(w.intake, "intake"), at: w.at ?? now)
         case "notification-focused": self = .clearFocus
         case "reply-play": self = .hearReply(id: try need(w.id, "id"))
+        case "file-open": self = .openRichFile(id: try need(w.id, "id"))
+        case "file-stop": self = .stopRichFile(id: try need(w.id, "id"))
+        case "file-progress": self = .richFileProgress(id: try need(w.id, "id"), received: try need(w.received, "received"))
+        case "file-arrived": self = .richFileArrived(id: try need(w.id, "id"), path: try need(w.path, "path"))
+        case "file-failed": self = .richFileFailed(id: try need(w.id, "id"), reason: try need(w.reason, "reason"))
+        case "file-viewed": self = .richFileViewed(id: try need(w.id, "id"))
+        case "file-not-kept": self = .richFileNotKept(id: try need(w.id, "id"))
         case "playback-started": self = .playbackStarted(id: try need(w.id, "id"))
         case "playback-progress": self = .playbackProgress(id: try need(w.id, "id"), progress: try need(w.progress, "progress"))
         case "playback-ended": self = .playbackEnded
@@ -189,6 +200,7 @@ extension Action: Codable {
                 throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "forget-pair needs \"confirm\": true"))
             }
             self = .confirmForget
+        case "discard-and-forget": self = .discardUnsentAndForget
         case "settings": self = .openSystemSettings
         case "update-policy": self = .updatePolicy(w.update, voicePaused: try need(w.voicePaused, "voicePaused"))
         case "update-dismiss": self = .dismissUpdate
@@ -255,6 +267,13 @@ extension Action: Codable {
         case .takeShare(let intake, let at): w = Wire("share-take"); w.intake = intake; w.at = at
         case .clearFocus: w = Wire("notification-focused")
         case .hearReply(let id): w = Wire("reply-play"); w.id = id
+        case .openRichFile(let id): w = Wire("file-open"); w.id = id
+        case .stopRichFile(let id): w = Wire("file-stop"); w.id = id
+        case .richFileProgress(let id, let received): w = Wire("file-progress"); w.id = id; w.received = received
+        case .richFileArrived(let id, let path): w = Wire("file-arrived"); w.id = id; w.path = path
+        case .richFileFailed(let id, let reason): w = Wire("file-failed"); w.id = id; w.reason = reason
+        case .richFileViewed(let id): w = Wire("file-viewed"); w.id = id
+        case .richFileNotKept(let id): w = Wire("file-not-kept"); w.id = id
         case .playbackStarted(let id): w = Wire("playback-started"); w.id = id
         case .playbackProgress(let id, let p): w = Wire("playback-progress"); w.id = id; w.progress = p
         case .playbackEnded: w = Wire("playback-ended")
@@ -296,6 +315,7 @@ extension Action: Codable {
         case .setPreviews(let v): w = Wire("notifications-previews"); w.enabled = v
         case .forgetPairing: w = Wire("forget-request")
         case .confirmForget: w = Wire("forget-pair"); w.confirm = true
+        case .discardUnsentAndForget: w = Wire("discard-and-forget")
         case .openSystemSettings: w = Wire("settings")
         case .updatePolicy(let n, let paused): w = Wire("update-policy"); w.update = n; w.voicePaused = paused
         case .dismissUpdate: w = Wire("update-dismiss")

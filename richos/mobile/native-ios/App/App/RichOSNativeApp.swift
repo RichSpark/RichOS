@@ -213,6 +213,16 @@ enum Boot {
         return left > .zero ? left : .zero
     }
 
+    /// Where the files Rich attached are kept once they came over (round 36 screen 3): the app's own
+    /// folder (`LocalOnlyStorage.appRoot`, beside `Attachments/` and `Recordings/`), so a second tap
+    /// opens one at once, the system never purges it, and it never goes into an iCloud or Finder backup
+    /// (security review I-2). Not `Application Support` itself: on the test iPhone that belongs to root
+    /// after the start-time measurement seeds the app's state (perf/ios.py `DeviceState`), and the
+    /// folder could not be made there (NSCocoaErrorDomain 513, 2026-10-22).
+    static func richFilesDirectory() -> URL? {
+        LocalOnlyStorage.appRoot.appendingPathComponent("RichFiles", isDirectory: true)
+    }
+
     static func start() {
         guard load == nil else { return }
         startedUptime = ProcessInfo.processInfo.systemUptime
@@ -221,7 +231,8 @@ enum Boot {
         // The courier reads voice messages from the same files the recorder writes.
         let network = NetworkEffects(transport: transport, stream: transport, identities: PlatformEffects.identityStore(),
                                      recordings: FileRecordingStore(directory: VoiceRecorder.defaultDirectory()),
-                                     attachments: FileAttachmentStore(directory: ShareIntake.attachmentsDirectory()))
+                                     attachments: FileAttachmentStore(directory: ShareIntake.attachmentsDirectory()),
+                                     richFiles: richFilesDirectory())
         let platform = PlatformEffects(network: network, attachments: ShareIntake.attachmentsDirectory(),
                                        replyAudio: { id, state in await network.replyAudio(messageID: id, state: state) })
         let effects: (any EffectHandler)?

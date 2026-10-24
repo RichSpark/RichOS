@@ -326,6 +326,12 @@ fn system_apps(_path: &Path) -> Apps {
     Apps::default()
 }
 
+/// The name of the app Launch Services opens this file with, or `None` when it names none.
+/// Used by the file cards Rich puts in the conversation (`rich_files_host.rs`): *Open in Preview*.
+pub fn default_app_name(path: &Path) -> Option<String> {
+    system_apps(path).default.map(|app| app.name)
+}
+
 fn system_open(args: &[String]) -> bool {
     match Command::new("/usr/bin/open").args(args).status() {
         Ok(status) => status.success(),

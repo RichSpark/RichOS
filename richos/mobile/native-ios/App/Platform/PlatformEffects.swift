@@ -164,7 +164,7 @@ final class PlatformEffects: EffectHandler, @unchecked Sendable {
             return await network?.handle(effect, state: state) ?? []
 
         case .persist, .pair, .confirmFingerprint, .checkMacConfirmation, .deliver, .loadOlder, .connect, .reconnect, .disconnect, .deleteAttachments,
-             .unregisterNotifications:
+             .unregisterNotifications, .fetchRichFile, .findRichFile, .stopRichFile:
             return await network?.handle(effect, state: state) ?? []
         }
     }

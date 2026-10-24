@@ -115,6 +115,18 @@
                 android:resource="@xml/camera_paths" />
         </provider>
 
+        <!-- Share on a file Rich attached (round 36 screen 3): the kept copy in files/rich-files/ and
+             nothing else (res/xml/rich_files_paths.xml), granted to the app the person shares to. -->
+        <provider
+            android:name=".platform.RichFilesProvider"
+            android:authorities="${applicationId}.richfiles"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/rich_files_paths" />
+        </provider>
+
         <service
             android:name=".platform.RichMessagingService"
             android:exported="false">

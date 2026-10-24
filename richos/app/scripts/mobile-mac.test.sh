@@ -2,8 +2,8 @@
 # The actual mobile client against Rust HTTP/auth/SSE, durable intake and gated Spine
 # output. Cognition is deterministic; no physical device or live provider is claimed.
 # run-tests: no-host-screen: headless Rust listener and Node client only
-# run-tests: inputs richos/app/scripts/mobile-mac.test.sh richos/mobile/dev/mac-server.rs richos/mobile/dev/mac-server.mjs richos/mobile/test/mac-server.test.mjs richos/mobile/test/storage.cjs richos/mobile/core richos/mobile/platform richos/web/web-app richos/app/src-tauri/src richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Cargo.lock richos/app/src-tauri/build.rs richos/app/src-tauri/tauri.conf.json richos/app/src-tauri/capabilities richos/app/src-tauri/icons richos/app/crates richos/app/ui
-# run-tests: covers richos/mobile/dev/mac-server.rs richos/mobile/dev/mac-server.mjs richos/mobile/test/mac-server.test.mjs
+# run-tests: inputs richos/app/scripts/mobile-mac.test.sh richos/mobile/dev/mac-server.rs richos/mobile/dev/lab-files.py richos/mobile/dev/mac-server.mjs richos/mobile/test/mac-server.test.mjs richos/mobile/test/storage.cjs richos/mobile/core richos/mobile/platform richos/web/web-app richos/app/src-tauri/src richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Cargo.lock richos/app/src-tauri/build.rs richos/app/src-tauri/tauri.conf.json richos/app/src-tauri/capabilities richos/app/src-tauri/icons richos/app/crates richos/app/ui
+# run-tests: covers richos/mobile/dev/mac-server.rs richos/mobile/dev/mac-server.mjs richos/mobile/dev/lab-files.py richos/mobile/test/mac-server.test.mjs
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/../../.." && pwd)"

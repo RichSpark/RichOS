@@ -14884,12 +14884,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/engine/scripts/lib/testdevices.py",
-          "sha256": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
           "path": "richos/engine/scripts/lib/mutation-harness.sh",
           "sha256": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
@@ -14897,7 +14891,7 @@
         {
           "root": "repository",
           "path": "richos/mobile/native-ios/bin/rios",
-          "sha256": "33de37a2c372a3b874cde6d050b48e7e312415bf443399d3cc9764a2400ac792",
+          "sha256": "30ec0c68a4bf5aa41e1678d51238534b9801c370b3803f90ee9442483b049636",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -14914,15 +14908,15 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/lib/cargo_identity.py",
-          "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
-          "evidence": "Private-output dispatcher used by the bound app runner. Reads Cargo manifests only for its selected workspace or private fixture; fixture imports that do not enter main execute no Cargo command."
+          "path": "richos/engine/scripts/lib/proc_tree.py",
+          "sha256": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/lib/runtime_cache.py",
-          "sha256": "23879473cf282fcbb07cfc28fc18c9b993f7426d85e65e695b617348c56397ec",
-          "evidence": "Imported by proof-run.py supply_runtime and nightly-local.py Runner.runtime_path: hashes the bytes of runtime-sources.json to name the nightly's recipe-keyed runtime cache directory, and (gui_speech_models) checks whether ~/Models/Whisper/ggml-small.en.bin and ggml-large-v3-turbo-q5_0.bin under HOME are files, the speech models gui-boot's fixture needs. Stdlib only; reads no configuration and no file contents."
+          "path": "richos/app/scripts/lib/cargo_identity.py",
+          "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
+          "evidence": "Private-output dispatcher used by the bound app runner. Reads Cargo manifests only for its selected workspace or private fixture; fixture imports that do not enter main execute no Cargo command."
         },
         {
           "root": "repository",
@@ -14932,9 +14926,15 @@
         },
         {
           "root": "repository",
-          "path": "richos/engine/scripts/lib/proc_tree.py",
-          "sha256": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+          "path": "richos/engine/scripts/lib/testdevices.py",
+          "sha256": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/runtime_cache.py",
+          "sha256": "23879473cf282fcbb07cfc28fc18c9b993f7426d85e65e695b617348c56397ec",
+          "evidence": "Imported by proof-run.py supply_runtime and nightly-local.py Runner.runtime_path: hashes the bytes of runtime-sources.json to name the nightly's recipe-keyed runtime cache directory, and (gui_speech_models) checks whether ~/Models/Whisper/ggml-small.en.bin and ggml-large-v3-turbo-q5_0.bin under HOME are files, the speech models gui-boot's fixture needs. Stdlib only; reads no configuration and no file contents."
         },
         {
           "root": "repository",

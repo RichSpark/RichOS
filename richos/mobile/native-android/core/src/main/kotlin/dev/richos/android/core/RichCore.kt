@@ -63,6 +63,15 @@ class RichCore private constructor(
     private var lastSend: SendReport? = null
     private var connection = ConnectionState()
     private var unsupported = false
+    /**
+     * The files Rich attached that were tapped on this phone and where each stands (round 36
+     * screen 3); not saved: a kept copy is found again on disk. Declared before [flow], whose first
+     * snapshot reads it: Kotlin initializes properties in the order written.
+     */
+    private val fetches = LinkedHashMap<String, FileFetch>()
+
+    /** The tap whose file is coming over, so × can stop it. */
+    private val fetchJobs = HashMap<String, Job>()
     private val flow = MutableStateFlow(snapshot())
     private val api = MacApi(ports.http, ports.keys)
     private var freshChallenge: String? = null
@@ -124,6 +133,16 @@ class RichCore private constructor(
             emit()
         }
         is Action.HearReply -> hearReply(action.id)
+        is Action.OpenRichFile -> openRichFile(action.id)
+        is Action.StopRichFile -> mutex.withLock {
+            fetchJobs.remove(action.id)?.cancel()
+            if (fetches[action.id]?.state == FileFetchState.COMING || fetches[action.id]?.state == FileFetchState.WAITING) fetches.remove(action.id)
+            emit()
+        }
+        is Action.RichFileViewed -> mutex.withLock {
+            fetches[action.id]?.let { fetches[action.id] = it.copy(open = false) }
+            emit()
+        }
         is Action.StopReply -> mutex.withLock {
             if (reply?.id == action.id) {
                 endReply()
@@ -749,6 +768,119 @@ class RichCore private constructor(
             // so a storage failure here can never leave "Preparing the audio…" on screen).
             val fresh = challenge?.takeIf { it != session.pairing.challenge && session.pairing.apiBase == p.apiBase }
             if (fresh != null) commit(session.copy(pairing = session.pairing.copy(challenge = fresh))) else emit()
+        }
+    }
+
+    // --- a file Rich put in front of the user (round 36 screen 3) ---------------------------------
+    // (`fetches` and `fetchJobs` are declared at the top of the class: `flow` reads `fetches`.)
+
+    private fun fileRow(id: String): Row? = session.cache.values.asSequence().flatten().lastOrNull { it.file?.id == id }
+
+    /**
+     * A tap on one of Rich's files (round 36 "Phone: in the chat"): a copy already on this phone opens
+     * at once; otherwise it comes over from the Mac on ONE signed `GET /api/messages?kind=file`, the
+     * ring filling as the bytes arrive, and opens when it is here. With the Mac out of reach it waits
+     * (the clock; "Opens when your Mac is back online") and the app asks again when the link opens. A
+     * file the Mac says is gone, or too large, says the Mac's own sentence. × stops it, and nothing
+     * half-written is kept.
+     */
+    private suspend fun openRichFile(id: String): AppState {
+        val ask = mutex.withLock {
+            val row = fileRow(id)
+            val file = row?.file ?: return@withLock null
+            if (fetches[id]?.state == FileFetchState.COMING) return@withLock null
+            ports.richFiles.kept(id, file.name)?.let { path ->
+                fetches[id] = FileFetch(id, FileFetchState.KEPT, file.bytes ?: 0, file.bytes, path = path, open = true)
+                emit()
+                return@withLock null
+            }
+            if (!file.exists) {
+                fetches[id] = FileFetch(id, FileFetchState.FAILED, reason = RichFileRule.GONE)
+                emit()
+                return@withLock null
+            }
+            val p = session.pairing
+            if (!session.paired || !session.online || p.apiBase == null || p.deviceId == null || p.challenge == null) {
+                fetches[id] = FileFetch(id, FileFetchState.WAITING, total = file.bytes, open = true)
+                emit()
+                return@withLock null
+            }
+            fetches[id] = FileFetch(id, FileFetchState.COMING, 0, file.bytes, open = true)
+            currentCoroutineContext()[Job]?.let { fetchJobs[id] = it }
+            emit()
+            Triple(p, row.threadId, file)
+        } ?: return flow.value
+        val (p, thread, file) = ask
+        val path = RichFileRule.path(id, thread)
+        var writer: RichFileWriter? = null
+        val outcome: FileFetch = try {
+            writer = ports.richFiles.begin(id, file.name)
+                ?: return finishFetch(id, FileFetch(id, FileFetchState.FAILED, reason = RichFileRule.FAILED))
+            var received = 0L
+            var shown = 0L
+            val step = maxOf(16_000L, (file.bytes ?: 0L) / 50)
+            val status = fetchFile(p, path, { bytes ->
+                writer.write(bytes)
+                received += bytes.size
+                if (received - shown >= step) {
+                    shown = received
+                    mutex.withLock {
+                        if (fetches[id]?.state == FileFetchState.COMING) {
+                            fetches[id] = fetches[id]!!.copy(received = received)
+                            emit()
+                        }
+                    }
+                }
+            })
+            when (status) {
+                200 -> FileFetch(id, FileFetchState.KEPT, received, file.bytes ?: received, path = writer.finish(), open = true)
+                410 -> FileFetch(id, FileFetchState.FAILED, reason = RichFileRule.GONE)
+                413 -> FileFetch(id, FileFetchState.FAILED, reason = RichFileRule.TOO_LARGE)
+                else -> FileFetch(id, FileFetchState.FAILED, reason = RichFileRule.FAILED)
+            }
+        } catch (stopped: kotlinx.coroutines.CancellationException) {
+            withContext(NonCancellable) { writer?.abandon() }
+            throw stopped
+        } catch (failure: Exception) {
+            withContext(NonCancellable) { writer?.abandon() }
+            FileFetch(id, FileFetchState.FAILED, reason = RichFileRule.FAILED)
+        }
+        if (outcome.state != FileFetchState.KEPT) withContext(NonCancellable) { writer?.abandon() }
+        return finishFetch(id, outcome)
+    }
+
+    private suspend fun finishFetch(id: String, outcome: FileFetch): AppState = mutex.withLock {
+        fetchJobs.remove(id)
+        // A × meanwhile wins: the tap it stopped leaves nothing behind.
+        val open = fetches[id]?.open ?: return@withLock emit()
+        fetches[id] = outcome.copy(open = open && outcome.state == FileFetchState.KEPT)
+        emit()
+    }
+
+    /**
+     * One signed GET for a file's bytes, in parts through the app's streaming GET when it has one
+     * ([Ports.download]), else in one answer. Its status; the bytes go to [onBytes] only on a 200.
+     * A 404 is the stale-challenge case the reference client re-signs once for ([MacApi.signed]).
+     */
+    private suspend fun fetchFile(p: Pairing, path: String, onBytes: suspend (ByteArray) -> Unit): Int {
+        val apiBase = p.apiBase!!
+        val auth = api.authorization(apiBase, p.deviceId!!, p.challenge!!, path)
+        val request = dev.richos.android.core.protocol.HttpRequest("GET", apiBase + path, mapOf("Authorization" to auth), null)
+        val first = ports.download?.let { stream ->
+            var status = 0
+            stream.open(request, { status = it }) { if (status == 200) onBytes(it) }
+            status
+        } ?: ports.http.send(request).let { response ->
+            if (response.status == 200) onBytes(response.body)
+            response.status
+        }
+        if (first != 404) return first
+        return try {
+            val signed = api.signed(apiBase, p.deviceId, p.challenge, "GET", path, null)
+            onBytes(signed.response.body)
+            200
+        } catch (failure: TransportFailure) {
+            404
         }
     }
 
@@ -1451,6 +1583,7 @@ class RichCore private constructor(
             update = session.update,
             voicePaused = session.voicePaused,
             macWaitDueInMs = macWaitDue(),
+            fileFetches = fetches.toMap(),
         )
 
     // --- the connection (connection.js + client.js onState) --------------------------------------
@@ -1556,6 +1689,9 @@ class RichCore private constructor(
             is Action.PlaybackEnded -> "playback-ended"
             is Action.HearReply -> "reply-play"
             is Action.StopReply -> "reply-stop"
+            is Action.OpenRichFile -> "file-open"
+            is Action.StopRichFile -> "file-stop"
+            is Action.RichFileViewed -> "file-viewed"
             is Action.SelectThread -> "select-thread"
             is Action.RememberReading -> "remember-reading"
             is Action.Compose -> "compose"

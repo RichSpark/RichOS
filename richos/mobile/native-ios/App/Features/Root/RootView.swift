@@ -117,6 +117,13 @@ struct ScreenView: View {
                 if let viewer = model.attach.viewer, let content = viewerContent(viewer) {
                     content.transition(.opacity).zIndex(7)
                 }
+                // A file Rich attached, once it is on this phone and was tapped (round 36 "Phone: opened").
+                if let file = model.fileViewer {
+                    RichFileViewer(url: file.url) { send(.closeRichFile(id: file.id)) }
+                        .ignoresSafeArea()
+                        .transition(.opacity)
+                        .zIndex(8)
+                }
             }
             .frame(width: root.size.width, height: root.size.height)
         }

@@ -85,6 +85,16 @@ public enum Action: Equatable, Sendable {
     case clearFocus
     /// "Hear it" on one of Rich's replies.
     case hearReply(id: String)
+    /// A file Rich attached (round 36 screen 3; Android's `file-open` and its siblings): tapped,
+    /// its × while it comes over, how much has come, here and kept, refused, its viewer closed.
+    case openRichFile(id: String)
+    case stopRichFile(id: String)
+    case richFileProgress(id: String, received: Int64)
+    case richFileArrived(id: String, path: String)
+    case richFileFailed(id: String, reason: String)
+    case richFileViewed(id: String)
+    /// The phone looked for its own copy of a tapped file and has none: now the Mac is asked.
+    case richFileNotKept(id: String)
     case playbackStarted(id: String)
     case playbackProgress(id: String, progress: Double)
     case playbackEnded
@@ -159,6 +169,9 @@ public enum Action: Equatable, Sendable {
     case forgetPairing
     /// The filled, destructive button in the confirmation.
     case confirmForget
+    /// "Discard and forget" in the refusal (`settings-forget-blocked`): the waiting messages go and the
+    /// pairing is forgotten, so a phone whose Mac is gone for good can pair again.
+    case discardUnsentAndForget
     case openSystemSettings
     // update notices (group 10)
     /// The hosted policy's verdict for this app version (contract §5.10).
@@ -262,6 +275,14 @@ public enum Effect: Equatable, Sendable {
     case loadOlder(before: String?)
     /// Fetch and play the reply's audio (contract §5.6).
     case fetchReplyAudio(messageID: String)
+    /// Bring a file Rich attached over from the Mac (signed `GET /api/messages?kind=file`) and keep
+    /// it; its progress and outcome come back as `richFileProgress`, `richFileArrived`, `richFileFailed`.
+    case fetchRichFile(id: String, threadID: String, name: String, total: Int64?)
+    /// A tapped file's own copy on this phone, looked for first, before the Mac is needed (a kept
+    /// copy opens with the Mac offline or the original deleted): `richFileArrived` or `richFileNotKept`.
+    case findRichFile(id: String, name: String)
+    /// The × on a file coming over: stop it, keep nothing.
+    case stopRichFile(id: String)
     case stopAudio
     /// Open (or keep) the live connection to the paired Mac.
     case connect
@@ -332,7 +353,7 @@ public enum Reducer {
              .voiceTouchCanceled, .voiceStartFailed, .voiceInterrupted, .voiceLevel, .voiceSettled, .sendKept, .discardKept, .playRecording:
             VoiceReducer.reduce(&next, action, &effects)
         case .turnOnNotifications, .notificationsResult, .turnOffNotifications, .dismissNotificationOffer, .setPreviews,
-             .forgetPairing, .confirmForget, .openSystemSettings:
+             .forgetPairing, .confirmForget, .discardUnsentAndForget, .openSystemSettings:
             SettingsReducer.reduce(&next, action, &effects)
         case .updatePolicy, .dismissUpdate, .openAppStore, .openSupport, .checkForUpdates, .openPrivacyPolicy:
             UpdateReducer.reduce(&next, action, &effects)

@@ -2110,6 +2110,8 @@ function flushRender() {
     // link to it, a turn that wrote files says *Wrote N files*, and its produced strip names
     // them. Read from the panel's own copy of `list_output`, never a second read.
     output: window.RichOutput ? window.RichOutput.links : undefined,
+    // A file card whose file is gone offers "Ask Rich again" (`rich-files.js`): his words, sent.
+    sendText: (text) => send(text),
   });
   // The DOM was just rebuilt; re-mark the open worker's chip.
   markSelectedChip();
@@ -4203,6 +4205,17 @@ Bridge.listen("rich://question-upserted", ({payload}) => {
     }
   }
   document.dispatchEvent(new Event("richos-questions-changed"));
+});
+
+// A file Rich or Stu just put in front of the user (`rich_files_host.rs`): its card shows now,
+// not at the next reload.
+Bridge.listen("rich://rich-file", ({ payload }) => {
+  updateCachedThread("onActivityUpserted", payload);
+  const result = window.RichTimeline.onActivityUpserted(timelineModel, payload);
+  if (result.rejected) return;
+  // It rises into place once, as it arrives (`rich-files.js`); a reload draws it still.
+  if (window.RichFiles && payload) window.RichFiles.arrived(payload.file && payload.file.id ? payload.file.id : payload.id);
+  scheduleRender();
 });
 
 Bridge.listen("rich://activity-upserted", ({ payload }) => {

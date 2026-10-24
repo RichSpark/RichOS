@@ -32,6 +32,10 @@ enum Intent: Equatable, Sendable {
     case loadOlder
     case hearReply(id: String)
     case stopReply
+    /// A file Rich attached (round 36 screen 3): tapped, its × while it comes over, its viewer closed.
+    case openRichFile(id: String)
+    case stopRichFile(id: String)
+    case closeRichFile(id: String)
     case discard(id: String)
     case retryNow
     case dismissToast
@@ -64,6 +68,8 @@ enum Intent: Equatable, Sendable {
     case openPrivacyPolicy
     case forget
     case confirmForget
+    /// "Discard and forget" in the refusal: the way out for a phone whose Mac is gone for good.
+    case discardAndForget
     case showWaiting
     case closeDialog
     case setAppearance(Appearance)
@@ -109,6 +115,9 @@ enum Intent: Equatable, Sendable {
         case .loadOlder: return .loadOlder
         case .hearReply(let id): return .hearReply(id: id)
         case .stopReply: return .stopPlayback
+        case .openRichFile(let id): return .openRichFile(id: id)
+        case .stopRichFile(let id): return .stopRichFile(id: id)
+        case .closeRichFile(let id): return .richFileViewed(id: id)
         case .discard(let id): return .discardMessage(id: id)
         case .retryNow: return .retryNow(at: now)
         case .dismissToast: return .dismissToast
@@ -130,6 +139,7 @@ enum Intent: Equatable, Sendable {
         case .openWhereMessagesGo, .learnMore: return .openSheet(.whereMessagesGo)
         case .forget: return .forgetPairing
         case .confirmForget: return .confirmForget
+        case .discardAndForget: return .discardUnsentAndForget
         case .openSystemSettings: return .openSystemSettings
         case .turnOnNotifications: return .turnOnNotifications
         case .notificationsNotNow: return .dismissNotificationOffer

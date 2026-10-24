@@ -12,11 +12,16 @@ pub fn store(state: &AppState) -> Store {
 }
 pub fn payload(state: &AppState, thread: &str) -> Result<Value, String> {
     let view = state.reader.snapshot();
+    payload_in(&*view, &store(state), &crate::rich_files_host::root(state), thread)
+}
+/// [`payload`] over a published view, the question store and the engine state the file tool
+/// writes: the calm view's snapshot, as `get_timeline` and the phone read it.
+pub fn payload_in(view: &dyn SpineView, store: &Store, files_root: &std::path::Path, thread: &str) -> Result<Value, String> {
     let binding = view
         .ledger()
         .thread_binding(thread)
         .map_err(|e| e.to_string())?;
-    let mut payload = crate::timeline_view::timeline_payload(&*view, thread)?;
+    let mut payload = crate::timeline_view::timeline_payload(view, thread)?;
     if let Some(items) = payload["items"].as_array_mut() {
         items.retain(|i| {
             !(i["kind"] == "user_message"
@@ -28,9 +33,13 @@ pub fn payload(state: &AppState, thread: &str) -> Result<Value, String> {
             .active_binding()
             .filter(|b| b.thread_id() == thread)
             .map_or(binding.binding_revision(), |b| b.binding_revision());
-        for q in store(state).list(binding.entity_id().as_str(), thread)? {
+        for q in store.list(binding.entity_id().as_str(), thread)? {
             items.push(q.item(revision));
         }
+        // The files Rich and Stu put in front of the user (`rich_files_host.rs`), the same way:
+        // one item each, in the turn that attached it. The phone reads this same payload, and
+        // Techy Mode's snapshot adds the same rows (`rich_files_host::machinery_with_files`).
+        items.extend(crate::rich_files_host::items(files_root, binding.entity_id().as_str(), thread));
         items.sort_by_key(|i| i["createdAt"].as_u64().unwrap_or(0));
     }
     Ok(payload)
