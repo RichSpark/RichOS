@@ -1,6 +1,6 @@
 # RichDoctor relay, protocol 2
 
-The relay turns a report the user approved in RichDoctor into one public GitHub issue in one fixed repository, so the user needs no GitHub account. The user's approved screenshots go privately to RichOS support: they are kept in a private R2 bucket and the issue links them for staff only (RichDoctor PRD v6 §6-§8, criteria C2 and C3). It is the Worker `richos-report` at `https://report.richos.ceo`, with its own D1 database and its own bucket. It shares no code at runtime, binding, database, bucket or credential with Connect (`connect-worker.mjs`). Its only credential is a GitHub App private key held as a Worker secret; the App may write issues in the fixed repository and nothing else. No credential ships in any app.
+The relay turns a report the user approved in RichDoctor into one public GitHub issue in one fixed repository, so the user needs no GitHub account. The user's approved screenshots go privately to RichOS support: they are kept in a private R2 bucket and the issue links them for staff only (RichDoctor PRD v6 §6-§8, criteria C2 and C3). It is the Worker `richos-report` at `https://report.richos.ceo`, with its own D1 database and its own bucket. It shares no code at runtime, binding, database, bucket or credential with Connect (`connect-worker.mjs`). Its only credential is a GitHub App private key held as a Worker secret; the App may write issues and discussions in the fixed repository and nothing else. No credential ships in any app.
 
 Source: `report-worker.mjs` (main module), `report/checks.mjs`, `report/images.mjs`, `report/store.mjs`, `report/github.mjs`, `report/access.mjs`, `report/schema.sql`, golden screenshots in `report/fixtures/`. Operator tool: `cli/report.mjs`. Tests: `test/report-relay.test.js` and `test/report-screenshots.test.js` (Node, real SQLite, fake GitHub, R2 and Access) and `test/report-relay-runtime.test.js` (the exact upload in workerd, with local D1 and R2).
 
@@ -24,7 +24,7 @@ The receipt secret never appears in a URL, the issue or a log.
 
 | Field | Rule |
 | --- | --- |
-| `schema` | `"richdoctor-report/2"` (`"richdoctor-report/1"`: the same fields without `manifest`, created at once) |
+| `schema` | `"richdoctor-report/2"` (`"richdoctor-report/1"`: the same fields without `manifest`, created at once; `"richos-idea/1"`: protocol 2's fields with an empty `manifest`, a RichOS feature idea, below) |
 | `report_id` | `RD-XXXX-XXXX` from `23456789ABCDEFGHJKMNPQRSTVWXYZ`, random |
 | `receipt_secret` | 43-character base64url of 32 random bytes. The relay keeps only its SHA-256 |
 | `content_sha256` | hex SHA-256 of the UTF-8 bytes of `title + "\n\n" + body + "\n\n" + M`, where M is the manifest as a JSON array of objects whose keys are sorted, with no spaces (`[]` when empty). Protocol 1: `title + "\n\n" + body` |
@@ -36,6 +36,10 @@ The receipt secret never appears in a URL, the issue or a log.
 | `manifest` | 0 to 10 items `{"attachment_id": "n", "bytes", "filename": "screenshot-n.png" or ".jpg", "height", "media_type": "image/png" or "image/jpeg", "order": n, "sha256", "width"}`, n = 1..k in order. Each at most 5 MiB (5,242,880 bytes) and 40 megapixels, together at most 25 MiB |
 
 When k ≥ 1, the lines just before the footer are exactly `Screenshots: k, shared privately with RichOS support (staff sign-in required)` and, for each n, `n. <relay origin>/v1/reports/<report_id>/attachments/n` (the CEO-approved wording, design round 40). The origin is the one the client posts to. The client persists the ID, receipt, exact text and exact image bytes before its first request.
+
+### Feature ideas
+
+RichOS's Request a feature posts an idea through the relay as a Discussion in the fixed repository's `ideas` category, never as an issue. It is registered with `"schema": "richos-idea/1"` and an empty `manifest` (the fingerprint is protocol 2's, with `M` = `[]`), answers `ready` and is completed like any report. The same content rules, footer, caps and switch apply. At completion the relay mints a token with Discussions write only and makes two GraphQL requests: the repository's and the category's IDs, then `createDiscussion`. `delivered` carries the discussion's `https://github.com/<repository>/discussions/<n>` as `issue_url` and its number as `issue_number`. A Discussion carries no moderation label. A lost `createDiscussion` answer is never posted again and is not looked for (reconciliation reads issues): the idea becomes `unconfirmed`, on the operator's list. It is recorded as protocol 3.
 
 ## Replies
 
@@ -120,7 +124,7 @@ RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mo
 ```
 
 - The Cloudflare token needs Workers Scripts Edit, D1 Edit and Workers R2 Storage Edit on the one account, short-lived, in a mode-0600 file. For production also Access: Apps and Policies Edit, Access: Organizations, Identity Providers and Groups Read, Zone Workers Routes Edit on the relay's zone and, when no staff email is named, User Details Read.
-- `app-identity` reads the bot login and installation ID with the App's own key. It refuses an App that can do more than write issues or whose installation reaches any other repository.
+- `app-identity` reads the bot login and installation ID with the App's own key. It refuses an App that can do more than write issues and discussions (and read metadata), one that cannot write discussions or one whose installation reaches any other repository.
 - `deploy` applies the schema and uploads the exact `metadata` and `modules` (`keep_bindings: ["secret_text"]` keeps the key). It installs the key as the secret `GITHUB_APP_PRIVATE_KEY` (GitHub's PKCS#1 download is accepted as is), sets workers.dev (on only for a test relay named by its workers.dev host), sets the hourly schedule, reads back the bindings and logging settings and waits for health.
 - `staff-access` makes the one Access application for the screenshot links, whose one path is `<hostname>/v1/reports/*/attachments/*` (never the whole hostname: the app's register, upload, complete, status and retire requests carry no staff sign-in). It allows exactly the named staff emails (the token owner's own when none is named) and prints `accessTeamDomain` and `accessAud` for the profile. A rerun finds and checks the same application.
 - `deploy` attaches a relay that is not on workers.dev to its hostname as a Custom Domain before the health check.

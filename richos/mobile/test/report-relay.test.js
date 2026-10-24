@@ -465,9 +465,11 @@ test('app-identity reads the bot login and installation from GitHub and refuses 
   const f = await fixture(t), { appIdentity } = await import('../cli/report.mjs');
   const fetch = (url, init) => f.github.fetch(url, init);
   assert.deepEqual(await appIdentity('123', f.repository, f.env.GITHUB_APP_PRIVATE_KEY, { fetch }),
-    { appId: '123', botLogin: f.bot, installationId: '456', repository: f.repository, permissions: 'issues:write,metadata:read' });
+    { appId: '123', botLogin: f.bot, installationId: '456', repository: f.repository, permissions: 'discussions:write,issues:write,metadata:read' });
+  f.github.permissions = { issues: 'write', metadata: 'read' };
+  await assert.rejects(() => appIdentity('123', f.repository, f.env.GITHUB_APP_PRIVATE_KEY, { fetch }), /Issues and Discussions write only/, 'an App without Discussions cannot post ideas');
   f.github.permissions = { issues: 'write', metadata: 'read', contents: 'write' };
-  await assert.rejects(appIdentity('123', f.repository, f.env.GITHUB_APP_PRIVATE_KEY, { fetch }), /Issues write only/);
+  await assert.rejects(appIdentity('123', f.repository, f.env.GITHUB_APP_PRIVATE_KEY, { fetch }), /Issues and Discussions write only/);
   f.github.permissions = null; f.github.selection = 'all';
   await assert.rejects(appIdentity('123', f.repository, f.env.GITHUB_APP_PRIVATE_KEY, { fetch }), /one repository only/);
   f.github.selection = null; f.github.reach = [f.repository, 'WebDevBooster/richos'];
@@ -483,4 +485,40 @@ test('the content checks take linear time on the largest adversarial body', asyn
     const spent = performance.now() - started;
     assert(spent < 500, `${filler.slice(0, 12)} took ${Math.round(spent)} ms`);
   }
+});
+
+test('a RichOS feature idea becomes exactly one Discussion under Ideas with its exact words, never an issue', async t => {
+  const f = await fixture(t), idea = await f.report({ schema: 'richos-idea/1', manifest: [], title: 'Let me pin a conversation' });
+  const registered = await f.answer(await f.create(idea));
+  assert.equal(registered.body.state, 'ready', 'an idea registers like a report with no screenshots, then completes');
+  const done = await f.answer(await f.complete(idea.report_id, idea.receipt_secret));
+  assert.equal(done.status, 201);
+  assert.equal(done.body.state, 'delivered');
+  assert.equal(done.body.issue_url, `https://github.com/${f.repository}/discussions/1`); assert.equal(done.body.issue_number, 1);
+  assert.deepEqual(f.github.discussions.map(d => [d.title, d.body, d.category]), [[idea.title, idea.body, 'ideas']]);
+  assert.equal(f.posts(), 0, 'no issue was created'); assert.equal(f.github.issues.length, 0);
+  const replay = await f.answer(await f.complete(idea.report_id, idea.receipt_secret));
+  assert.equal(replay.body.issue_url, done.body.issue_url); assert.equal(f.github.discussions.length, 1, 'posted once');
+  // An idea carries no screenshots.
+  const pictured = await f.report({}, ['accept-rgb.png']);
+  const refused = await f.answer(await f.create({ ...pictured, schema: 'richos-idea/1' }));
+  assert.equal(refused.status, 400); assert.equal(refused.body.reason, 'schema');
+});
+
+test('an idea GitHub refuses is not posted and may be sent again; a lost answer is never posted twice', async t => {
+  const f = await fixture(t), idea = await f.report({ schema: 'richos-idea/1', manifest: [] });
+  await f.create(idea);
+  f.github.fault('graphql:forbidden');
+  const refused = await f.answer(await f.complete(idea.report_id, idea.receipt_secret));
+  assert.equal(refused.body.state, 'rejected'); assert.equal(refused.body.reason, 'delivery'); assert.equal(f.github.discussions.length, 0);
+  f.advance(120_000);
+  assert.equal((await f.answer(await f.complete(idea.report_id, idea.receipt_secret))).body.state, 'delivered', 'Try again with the same ID');
+  const lost = await f.report({ schema: 'richos-idea/1', manifest: [] });
+  await f.create(lost);
+  f.github.fault('graphql:lost');
+  const pending = await f.answer(await f.complete(lost.report_id, lost.receipt_secret));
+  assert.equal(pending.body.state, 'pending');
+  f.advance(200_000);
+  assert.equal((await f.answer(await f.complete(lost.report_id, lost.receipt_secret))).body.state, 'unconfirmed');
+  assert.equal(f.github.discussions.length, 2, 'the lost one was posted once and never again');
 });

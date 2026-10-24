@@ -2,7 +2,7 @@
 // repository, for users without a GitHub account, with the user's approved screenshots kept
 // privately in R2 and linked for staff only. A separate Worker with its own D1 and bucket; it
 // shares no runtime, binding or credential with Connect. Contract: RICHDOCTOR-RELAY.md. It logs nothing.
-import { checkCreate, contentProblem, hasFooterLine, sha256, REPORT_ID, SECRET } from './report/checks.mjs';
+import { checkCreate, contentProblem, hasFooterLine, sha256, IDEA, REPORT_ID, SECRET } from './report/checks.mjs';
 import { checkImage, MAX_IMAGE_BYTES } from './report/images.mjs';
 import { Store } from './report/store.mjs';
 import { GitHub } from './report/github.mjs';
@@ -101,19 +101,22 @@ class Relay {
 
   // One attempt, owned by whoever wrote its pending record. The request that runs it is
   // registered with waitUntil (see handle), so a client that disconnects or quits does not stop it.
-  async attempt(id, title, body, attemptId) {
+  // A RichOS feature idea (protocol IDEA) is posted as a Discussion under Ideas, never an issue.
+  async attempt(id, title, body, attemptId, idea = false) {
     const { store, github } = this;
     let token;
-    try { token = await github.authorize(); }
+    try { token = await github.authorize({ permission: idea ? 'discussions' : 'issues' }); }
     catch (error) {
       await store.notCreated(id, attemptId, 'delivery', this.now() + 1000 * (error.retryAfter || 60));
       return store.get(id);
     }
     if (!await store.markSent(id, attemptId)) return store.get(id);
-    const result = await github.create(token, title, body);
+    const result = idea ? await github.discuss(token, title, body) : await github.create(token, title, body);
     if (result.kind === 'created') await store.deliver(id, result.issue, this.retain);
     else if (result.kind === 'refused') await store.notCreated(id, attemptId, 'delivery', this.now() + 1000 * result.retryAfter);
-    else {
+    // A lost idea answer is not looked for (the footer listing reads issues): it is never posted
+    // again, and becomes unconfirmed, on the operator's list, when its bound passes.
+    else if (!idea) {
       // The response was lost. Never create again: look for the footer, a few times, briefly.
       const record = await store.get(id);
       for (const delay of [0, this.window / 60, this.window / 24]) {
@@ -176,9 +179,9 @@ class Relay {
       }
       const attemptId = crypto.randomUUID();
       if (!await store.claim(id, current.attempt, attemptId, this.lease, token)) { await store.refund(day); return this.view(await store.get(id)); }
-      claimed = { attemptId, title: current.title, body: current.body };
+      claimed = { attemptId, title: current.title, body: current.body, idea: current.protocol === IDEA };
     } finally { await store.release(id, token); }
-    return this.view(await this.attempt(id, claimed.title, claimed.body, claimed.attemptId), { created: true });
+    return this.view(await this.attempt(id, claimed.title, claimed.body, claimed.attemptId, claimed.idea), { created: true });
   }
 
   // Register (protocol 2) or create (protocol 1, which completes at once). Never creates for

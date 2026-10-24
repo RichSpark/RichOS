@@ -166,7 +166,8 @@ function cloudflare(accountId, token, fetchImpl) {
 
 // The profile's GitHub identifiers, read from GitHub with the App's own key, so nobody copies
 // them by hand: the bot login and the installation ID. It refuses an App that can do anything
-// but write issues (and read metadata), or whose installation reaches any other repository.
+// but write issues and discussions (a RichOS feature idea is a Discussion) and read metadata, or
+// whose installation reaches any other repository.
 export async function appIdentity(appId, repository, appKey, { fetch: fetchImpl = fetch } = {}) {
   if (!/^\d{1,12}$/.test(appId || '') || !/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(repository || '')) throw Error('Expected: app-identity <App ID> <owner/repository>');
   const { GitHub, API } = await import('../service/report/github.mjs');
@@ -178,7 +179,7 @@ export async function appIdentity(appId, repository, appKey, { fetch: fetchImpl 
   };
   const jwt = await app.jwt(), about = await get('/app', jwt), installation = await get(`/repos/${repository}/installation`, jwt);
   const permissions = Object.entries(installation.permissions || {}).map(([k, v]) => `${k}:${v}`).sort().join(',');
-  if (permissions !== 'issues:write,metadata:read') throw Error(`The App has permissions ${permissions}; it must have Issues write only`);
+  if (permissions !== 'discussions:write,issues:write,metadata:read') throw Error(`The App has permissions ${permissions}; it must have Issues and Discussions write only`);
   if (installation.repository_selection !== 'selected') throw Error('The App is installed on all repositories; install it on the one repository only');
   app.env.GITHUB_INSTALLATION_ID = String(installation.id);
   // An unrestricted installation token: a token scoped to the one repository would see only it.
