@@ -309,6 +309,22 @@ class Pierce(unittest.TestCase):
         note.unlink()
         self.assertEqual(P.human_context(self.payload), "Implement the feature. Keep the API.")
 
+    def test_removed_bash_note_keeps_its_receipt_and_an_earlier_read(self):
+        import shlex
+        source, note = self.continued_terminal()
+        self.materialize_note(note)
+        cat = self.note_io("Read", note, "previous")
+        cat[0]["message"]["content"][0].update(name="Bash", input={"command": "cat -- " + shlex.quote(str(note))})
+        cat[1]["message"]["content"][0]["content"] = note.read_text()
+        for prefix in ([], self.note_io("Read", note, "previous")):
+            self.write_rows(self.transcript, prefix + cat)
+            if note.exists():
+                note.unlink()
+            authority = {}
+            self.assertEqual(P.human_context(self.payload, authority), "Implement the feature. Keep the API.")
+            self.assertTrue(authority["complete"])
+            self.assertIn(str(source.resolve()), authority["original_transcripts"])
+
     def test_startup_snapshot_canonicalizes_a_symlinked_config_prefix(self):
         source, note = self.continued_terminal()
         self.materialize_note(note)
@@ -623,6 +639,36 @@ class Pierce(unittest.TestCase):
         self.assertNotIn(str(alias), roots)
         self.assertNotIn(str(self.root), roots)
 
+    def test_configured_terminal_roots_do_not_depend_on_brief_citations(self):
+        private = self.root / "private company # files"
+        logs = self.root / "evidence logs"
+        private.mkdir()
+        logs.mkdir()
+        alias = self.root / "private-alias"
+        alias.symlink_to(private, target_is_directory=True)
+        config = self.project / "orchestration.config"
+        config.write_text("PIERCE_READ_ROOTS='" + json.dumps([str(alias), str(logs)]) + "' # project grant\n")
+        with patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS"}) as reviewer:
+            result = P.inspect(self.payload)
+        roots = reviewer.call_args.args[0]["read_roots"]
+        self.assertIn(str(private.resolve()), roots)
+        self.assertIn(str(logs.resolve()), roots)
+        self.assertNotIn(str(self.root), roots)
+        self.assertEqual(result["inspection"]["access_sha256"], P.access_fingerprint(self.project))
+        config.write_text("PIERCE_READ_ROOTS='" + json.dumps([str(private)]) + "'\n")
+        self.assertNotEqual(result["inspection"]["access_sha256"], P.access_fingerprint(self.project))
+
+    def test_invalid_terminal_grants_never_expand_or_execute(self):
+        config = self.project / "orchestration.config"
+        marker = self.root / "must-not-exist"
+        for value in ('["/"]', json.dumps([str(Path.home())]), '["relative"]',
+                      '["/missing-private-root"]', 'null', '[42]', f'$(touch {marker})'):
+            with self.subTest(value=value):
+                config.write_text("PIERCE_READ_ROOTS='" + value + "'\n")
+                with self.assertRaises(ValueError):
+                    P.read_roots(self.project, "Read the requested files.")
+        self.assertFalse(marker.exists())
+
     def test_repository_paths_inside_quoted_commands_are_readable_without_execution(self):
         private = self.root / "connected project"
         (private / ".git").mkdir(parents=True)
@@ -653,6 +699,7 @@ class Pierce(unittest.TestCase):
         self.rows[0]["evidenceSource"] = "richos-ledger-attested-hook-v1"
         self.transcript.write_text("\n".join(map(json.dumps, self.rows)))
         prompt = f"Read `{other_company}`, `{other_evidence}` and `{redirect}`. Keep the API."
+        (self.project / "orchestration.config").write_text("PIERCE_READ_ROOTS='" + json.dumps([str(other_company)]) + "'\n")
         with patch.dict(os.environ, {"RICHOS_APP_STATE": str(state),
                 "RICHOS_APP_READ_ROOTS": json.dumps([str(connected)])}), \
              patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS"}) as reviewer:
@@ -1400,6 +1447,30 @@ class HaikuParallelTrack(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASS")
         self.assertEqual((root / "period.json").read_bytes(), manifest)
         self.assertIn("inputs changed", (root / "shadow.log").read_text())
+
+    def test_access_change_cannot_enter_an_existing_period_or_start_a_queued_twin(self):
+        S = shadow_module()
+        path, pair, first = self.job(period="before-access-change")
+        root = path.parent.parent
+        manifest = (root / "period.json").read_bytes()
+        private = self.root / "new private root"
+        private.mkdir()
+        config = self.project / "orchestration.config"
+        with config.open("a") as f:
+            f.write("PIERCE_READ_ROOTS='" + json.dumps([str(private)]) + "'\n")
+        with patch.object(P.subprocess, "Popen") as start, patch.object(P, "invoke", return_value={
+                "verdict": "PASS", "report": "PASS"}):
+            result = P.inspect({**self.payload, "tool_use_id": "after-access-change"})
+        start.assert_not_called()
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertNotIn("shadow_period", result)
+        self.assertNotEqual(first["inspection"]["access_sha256"], result["inspection"]["access_sha256"])
+        with patch.dict(os.environ, self.track_env({}, {})), \
+             patch.object(S.pierce, "run_review", side_effect=AssertionError("no model call")) as twin:
+            self.assertEqual(S.run(str(path)), 0)
+        twin.assert_not_called()
+        self.assertEqual((root / "period.json").read_bytes(), manifest)
+        self.assertFalse((root / "pairs" / (pair + ".haiku.json")).exists())
 
     def test_twin_rejects_changed_loaded_source_before_provider_call(self):
         S = shadow_module()

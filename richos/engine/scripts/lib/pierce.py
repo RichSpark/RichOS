@@ -46,6 +46,15 @@ Earlier human authorizations persist until changed, cancelled or completed.
 A later question, status request or parallel task does not revoke unfinished
 work. The planner cannot grant new scope. Your read restrictions are not the
 worker's restrictions; unavailable evidence means uncertainty, not falsity.
+Read the whole assignment before alleging a contradiction. An explicit narrow
+exception or constraint governs broader shorthand elsewhere in that assignment.
+Do not invent an interpretation that its explicit constraints rule out. One
+worker may own a narrow part of an authorized job; the brief need not assign
+every other human request to that worker. Flag a missing obligation only when
+this assignment cancels it, claims the whole job complete or makes it impossible.
+For each finding, establish the actual wrong action or invalid proof under
+those constraints from readable evidence. If its truth depends on inaccessible
+private settings or unobserved state, state the gap in notes instead of refusing.
 Resource economy does not waive required proof. A proof handoff must explicitly
 retain that obligation; do not infer it from the planner's general workflow.
 Reviewing a flawed document is legitimate work, not a reason to refuse the
@@ -394,11 +403,14 @@ def terminal_messages(path, seen=None, cutoff=None, written_note=None, sources=N
                         continue
                     # Earlier commands may print unrelated text. Match the
                     # actual note header, not an echoed or transformed substitute.
-                    with open(note) as stream:
-                        header = re.match(r"\A---\s*\n.*?\n---(?:\n|$)", stream.read(8192), re.S)
-                    if not header or header[0].rstrip("\n") not in text:
+                    # The successful native result survives note deletion or
+                    # replacement. As with Read, use that receipt, not today's
+                    # mutable disk. The predecessor must still attest its write.
+                    headers = [h for h in re.findall(r"(?m)^---[ \t]*\n.*?\n---(?:\n|$)", text, re.S)
+                               if restart_header(h)]
+                    if len(headers) != 1:
                         continue
-                    text = header[0]
+                    text = headers[0]
                 link(note, text, row)
     # Explicit successful read receipts outrank the fallback startup index.
     # Defer disk reads until now: a stale/deleted index pointer cannot erase
@@ -588,19 +600,52 @@ def effective_assignment(payload):
     return result
 
 
+def configured_read_roots(project):
+    """Host company connections or an explicit terminal project grant, never shell code."""
+    if os.environ.get("RICHOS_APP_STATE"):
+        selected = json.loads(os.environ.get("RICHOS_APP_READ_ROOTS", "null"))
+        if (not isinstance(selected, list) or any(not isinstance(p, str) or
+                not Path(p).is_absolute() for p in selected)):
+            raise ValueError("the desktop host supplied no valid company read roots")
+        return list(dict.fromkeys(str(Path(p).resolve()) for p in selected))
+    try:
+        text = (Path(project) / "orchestration.config").read_text()
+    except FileNotFoundError:
+        return []
+    selected = []
+    for line in text.splitlines():
+        match = re.match(r"^\s*PIERCE_READ_ROOTS\s*=\s*(.*)$", line)
+        if match:
+            values = shlex.split(match[1], comments=True)
+            if len(values) != 1:
+                raise ValueError("PIERCE_READ_ROOTS must be one quoted JSON array")
+            selected = json.loads(values[0])
+    if not isinstance(selected, list) or any(not isinstance(p, str) for p in selected):
+        raise ValueError("PIERCE_READ_ROOTS must be a JSON array of directory paths")
+    roots = []
+    for raw in selected:
+        path = Path(raw).expanduser()
+        if not path.is_absolute() or not path.is_dir():
+            raise ValueError("PIERCE_READ_ROOTS directory unavailable: " + raw)
+        path = path.resolve()
+        if path in (Path("/"), Path.home().resolve()):
+            raise ValueError("PIERCE_READ_ROOTS cannot grant the filesystem or whole home")
+        roots.append(str(path))
+    return list(dict.fromkeys(roots))
+
+
+def access_fingerprint(project):
+    return hashlib.sha256(json.dumps(configured_read_roots(project), sort_keys=True).encode()).hexdigest()
+
+
 def read_roots(project, assignment, payload=None):
     """Keep the reviewer restricted, including the cited repositories/evidence.
 
     No command in the brief is executed to discover access. Resolve only paths
     that exist, with canonical roots for symlinked logs and Git worktrees.
     """
-    roots = [project, ENGINE]
+    roots = [project, ENGINE, *map(Path, configured_read_roots(project))]
     if os.environ.get("RICHOS_APP_STATE"):
-        selected = json.loads(os.environ.get("RICHOS_APP_READ_ROOTS", "null"))
-        if (not isinstance(selected, list) or any(not isinstance(p, str) or
-                not Path(p).is_absolute() for p in selected)):
-            raise ValueError("the desktop host supplied no valid company read roots")
-        roots.extend(Path(p).resolve() for p in selected)
         # The hook's evidence projection is private to this native session.
         session = (payload or {}).get("session_id", "")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session):
@@ -609,7 +654,7 @@ def read_roots(project, assignment, payload=None):
         if evidence.is_dir() and not evidence.is_symlink():
             roots.append(evidence.resolve())
         return list(dict.fromkeys(str(root.resolve()) for root in roots))
-    # Terminal development sessions have no company connection registry. Read
+    # Terminal development sessions use their configured project grants plus
     # the assigned workspace and explicit existing repository/evidence paths.
     for raw in re.findall(r"(?m)^cross-repo-worktree:\s*(.+)$", assignment):
         target = Path(raw.strip()).expanduser()
@@ -907,11 +952,12 @@ def shadow_model(project):
     return value if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value) else ""
 
 
-def shadow_fingerprint(period, model, profile):
+def shadow_fingerprint(period, model, profile, project):
     return {"period": period, "model": model, "effort": SHADOW_EFFORT,
             "source_sha256": SOURCE_SHA256,
             "profile_sha256": hashlib.sha256(profile.encode()).hexdigest(),
             "rules_sha256": hashlib.sha256(REVIEW_RULES.encode()).hexdigest(),
+            "access_sha256": access_fingerprint(project),
             "shadow_sha256": hashlib.sha256(Path(__file__).with_name("pierce_shadow.py").read_bytes()).hexdigest()}
 
 
@@ -924,10 +970,10 @@ def shadow_revision_period(project, report, profile):
             return None
         period = report["shadow_period"]
         root = shadow_dir(period=period)
-        expected = shadow_fingerprint(period, model, profile)
+        expected = shadow_fingerprint(period, model, profile, project)
         inspection = report.get("inspection", {})
         if any(inspection.get(key) != expected[key] for key in
-               ("source_sha256", "profile_sha256", "rules_sha256")):
+               ("source_sha256", "profile_sha256", "rules_sha256", "access_sha256")):
             raise ValueError("preceding review inputs changed; revision not collected")
         if period and json.loads((root / "period.json").read_text()) != expected:
             raise ValueError("shadow inputs changed; revision not collected")
@@ -949,7 +995,9 @@ def shadow_start(payload, review, profile, identity, project):
         if (root / "complete.json").exists():
             return None
         period = root.name if root.parent.name == "periods" else ""
-        fingerprint = shadow_fingerprint(period, model, profile)
+        fingerprint = shadow_fingerprint(period, model, profile, project)
+        if review.get("access_sha256") != fingerprint["access_sha256"]:
+            raise ValueError("configured review access changed before collection")
         if period:
             root.mkdir(parents=True, exist_ok=True, mode=0o700)
             with locked(root / "period.lock"):
@@ -1052,7 +1100,8 @@ def inspect(payload):
         authority = {}
         request = {"user_requests_in_order": human_context(payload, authority),
                    "outgoing_assignment": assignment, "standing_instructions": instruction_text(payload),
-                   "project_dir": str(project), "read_roots": read_roots(project, assignment, payload)}
+                   "project_dir": str(project), "read_roots": read_roots(project, assignment, payload),
+                   "access_sha256": access_fingerprint(project)}
         if authority:
             request["authority_context"] = authority
             native_projects = (Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects").resolve()
@@ -1134,6 +1183,7 @@ def inspect(payload):
                       "metrics": getattr(verdict, "metrics", {}),
                       "hook_seconds": round(time.monotonic() - began, 3),
                       "inspection": {"request": review, "source_sha256": SOURCE_SHA256,
+                                     "access_sha256": request.get("access_sha256"),
                                      "profile_sha256": hashlib.sha256(profile.encode()).hexdigest(),
                                      "rules_sha256": hashlib.sha256(REVIEW_RULES.encode()).hexdigest()}}
             if request.get("recovery_observation_gaps"):
