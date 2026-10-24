@@ -53,6 +53,7 @@ _spec = importlib.util.spec_from_file_location('adopt_walk', HERE / 'adopt-walk.
 adopt = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(adopt)
 StepFailed = adopt.StepFailed
+command = adopt.command
 
 STEPS = ['identity', 'first-run', 'pair', 'rich-file', 'open', 'dark', 'missing']
 FILE_NAME = 'rich-file-check.pdf'
@@ -75,9 +76,14 @@ class Walk(adopt.Walk):
         return [json.loads(r) for r in rows.splitlines() if r.startswith('{')]
 
     def appearance(self, dark):
-        guest(self.vm, shlex.join(['osascript', '-e', 'tell application "System Events" to tell appearance preferences '
-                                   'to set dark mode to %s' % ('true' if dark else 'false')]))
+        self.script('tell application "System Events" to tell appearance preferences '
+                    'to set dark mode to %s' % ('true' if dark else 'false'))
         time.sleep(2)
+
+    def script(self, applescript):
+        """AppleScript in the guest's GUI session through ax.sh, which holds the accessibility and
+        automation grants a plain `osascript` over ssh does not ("Access not allowed", -10003)."""
+        return command([HERE / 'ax.sh', self.vm, applescript], 90)
 
     def phone_texts(self):
         nodes = [n for n in self.ax('tree', app='Safari') if not n.get('meta')]
@@ -90,7 +96,7 @@ class Walk(adopt.Walk):
                 and any(str(n.get(k) or '').startswith('Open ' + FILE_NAME) for k in ('title', 'desc'))]
 
     def front_safari(self):
-        guest(self.vm, shlex.join(['osascript', '-e', 'tell application "Safari" to activate']))
+        self.script('tell application "Safari" to activate')
         time.sleep(1)
 
     # --- steps --------------------------------------------------------------------------------
@@ -147,10 +153,14 @@ class Walk(adopt.Walk):
             self.press('Close')
         evidence = {'paired': True, 'url_host': url.split('#', 1)[0]}
         x, y, w, h = PHONE_FRAME
-        script = ('tell application "System Events" to tell process "Safari" to set {position, size} of window 1 '
-                  'to {{%d, %d}, {%d, %d}}' % (x, y, w, h))
-        guest(self.vm, shlex.join(['osascript', '-e', script]))
-        evidence['phone_frame'] = PHONE_FRAME
+        # Safari's own dictionary: System Events' set position/size of its window is refused in
+        # the guest (-10003, "Access not allowed"; walk-bc4028844d98 of candidate 73).
+        script = 'tell application "Safari" to set bounds of front window to {%d, %d, %d, %d}' % (x, y, x + w, y + h)
+        try:
+            self.script(script)
+            evidence['phone_frame'] = PHONE_FRAME
+        except StepFailed as exc:  # the picture is then at Safari's own width, and says so
+            evidence['phone_frame'] = 'not set: ' + str(exc)[-300:]
         return evidence
 
     def rich_file(self):
@@ -194,8 +204,7 @@ class Walk(adopt.Walk):
         return evidence
 
     def tabs(self):
-        out = guest(self.vm, shlex.join(['osascript', '-e',
-                    'tell application "Safari" to get URL of every tab of every window']))
+        out = self.script('tell application "Safari" to get URL of every tab of every window')
         return [s.strip() for s in out.replace('{', '').replace('}', '').split(',') if s.strip()]
 
     def open(self):
@@ -215,7 +224,7 @@ class Walk(adopt.Walk):
         if not any(u.startswith('blob:') for u in urls):
             raise StepFailed('pressing the card opened no tab holding the file: ' + json.dumps(evidence))
         # Back to the conversation: close the file's tab (it is front), keep the phone page.
-        guest(self.vm, shlex.join(['osascript', '-e', 'tell application "Safari" to close current tab of front window']))
+        self.script('tell application "Safari" to close current tab of front window')
         time.sleep(1)
         return evidence
 
