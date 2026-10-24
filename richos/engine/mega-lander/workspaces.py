@@ -3022,9 +3022,12 @@ def stop(ref, why, session_id="", notes=None):
 
 
 def wait(ref, kind, on, todo="", session_id="", until=""):
-    """Point 5's allowances for ending a turn, recorded by Rich. Every wait is a
-    hold (see HOLDS below): `until` is its checkable end, and without one the
-    free text keeps nothing quiet."""
+    """What finished or held work waits on, recorded by Rich. Every wait is a hold
+    (see HOLDS below) and needs an end the engine can check: `until` (agent:,
+    review:, at:, ceo:) or, for a wait outside Rich's reach, its CEO-TODOs item.
+    The free text is the why (orchestration reliability R2: a stated "running
+    now" stayed an allowance after the worker ended). A wait on the waiter itself,
+    or on an agent whose own wait leads back to it, is refused with the cycle."""
     if kind not in ("started", "outside", "ceo-discard", "held"):
         raise SpecError("unknown wait kind %r" % kind)
     if not (on or "").strip():
@@ -3033,8 +3036,16 @@ def wait(ref, kind, on, todo="", session_id="", until=""):
         raise SpecError("an item waiting on something outside Rich's reach goes on the CEO's TODO list; "
                         "pass --todo with where it is (point 5)")
     end = hold_end(until)
+    if not end and kind in ("started", "held"):
+        raise SpecError("a wait needs an end the engine can check: --until agent:<name> | review:<id> | "
+                        "at:<UTC time> | ceo:<CEO-TODOs item>. The text (%r) says why; it ends nothing"
+                        % (on or "").strip()[:80])
     with Lock():
         rec = _resolve(ref, session_id)
+        cycle = _wait_cycle(rec.get("name") or rec["key"], end)
+        if cycle:
+            raise SpecError("a wait cannot end on itself: %s. Name the work that ends it instead"
+                            % " -> ".join(cycle))
         if kind == "ceo-discard" and not rec.get("ceo_ordered"):
             raise SpecError("%s was not recorded as ordered by the CEO, so its discard does not need his word"
                             % rec["name"])
@@ -3046,6 +3057,30 @@ def wait(ref, kind, on, todo="", session_id="", until=""):
         save_agent(rec)
     event("wait", key=rec["key"], kind=kind, on=on, todo=todo, end=end)
     return rec
+
+
+def _wait_end(rec):
+    """The checkable end a record's own wait or pause names, or ''."""
+    w, p = rec.get("waiting") or {}, rec.get("pause") or {}
+    return (w.get("end") or (("ceo:" + w["todo"]) if w.get("todo") else "")
+            or p.get("end") or hold_end(p.get("until"), strict=False))
+
+
+def _wait_cycle(name, end, limit=50):
+    """[name, ..., name] when waiting on `end` would close a cycle of agent: waits,
+    else []. A bounded walk over the registry's current records (R2)."""
+    if not end.startswith("agent:"):
+        return []
+    recs = [r for r in all_agents() if not r.get("disposition")]
+    path, cur, seen = [name], end.partition(":")[2], set()
+    while cur and cur not in seen and len(path) <= limit:
+        path.append(cur)
+        if cur == name:
+            return path
+        seen.add(cur)
+        nxt = [_wait_end(r) for r in recs if r.get("name") == cur]
+        cur = next((e.partition(":")[2] for e in nxt if e.startswith("agent:")), "")
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -3393,6 +3428,9 @@ def hold(name, what, until="", why="", session_id="", by="rich"):
     if not (what or "").strip():
         raise SpecError("say what work is held (--what)")
     end = hold_end(until)
+    if not end:
+        raise SpecError("held work needs an end the engine can check: --until agent:<name> | review:<id> | "
+                        "at:<UTC time> | ceo:<CEO-TODOs item> (orchestration reliability R1/R2)")
     try:
         rec = _resolve_record(name, session_id)
     except SpecError:
@@ -3709,12 +3747,18 @@ def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dr
         if not _claimable(rec, me, cache):
             continue
         if rec.get("session_id") != me and rec.get("claimed_by") != me:
+            # THE CLAIM IS DECIDED INSIDE THE LOCK (orchestration reliability R2): the
+            # read above is outside it, so a competing lead may have claimed the
+            # record since; ownership is checked again on the record as it is now.
             with Lock():
                 fresh = load_agent(rec["key"])
-                if fresh and not fresh.get("disposition"):
+                mine = bool(fresh) and not fresh.get("disposition") and _claimable(fresh, me, {})
+                if mine:
                     fresh["claimed_by"] = me
                     save_agent(fresh)
                     rec = fresh
+            if not mine:
+                continue
         refused = ""
         if auto and not _past(deadline):
             try:

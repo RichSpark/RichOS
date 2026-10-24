@@ -117,6 +117,11 @@ def branches(repo):
     return run("git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout.split()
 
 
+def SOON():
+    """A checkable end an hour away (orchestration reliability R2: every new wait names one)."""
+    return "at:" + ws.iso(ws.now() + 3600)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.env = Env()
@@ -1337,7 +1342,7 @@ class Point05_Guarantee(Base):
     def test_point_05_pending_merge_state_does_not_control_spawn(self):
         self._merged_but_pending()
         self.spawn("zach-opus-n1")
-        ws.wait("zach-opus-p5", "started", "land checks running on the merged tree", "", self.sid)
+        ws.wait("zach-opus-p5", "started", "land checks running on the merged tree", "", self.sid, SOON())
         self.spawn("zach-opus-n2")
         self.assertIsNone(self.rec("zach-opus-p5")["disposition"])
         self.assertIn("zach-opus-p5", self.names())
@@ -1349,7 +1354,7 @@ class Point05_Guarantee(Base):
 
     def test_point_05_unmerged_started_work_does_not_block_new_work(self):
         self._pending_one()
-        ws.wait("zach-opus-p5", "started", "about to merge it", "", self.sid)
+        ws.wait("zach-opus-p5", "started", "about to merge it", "", self.sid, SOON())
         self.assertTrue(ws.gate_stop({"session_id": self.sid}, self.entity)[0])
         self.spawn("zach-opus-n4")
         self.assertIn("zach-opus-p5", self.names())
@@ -4433,7 +4438,7 @@ class AutoLand_MergedAndEndedLandsOnItsOwn(Base):
 
     def test_a_merged_ended_workspace_with_a_stale_wait_note_lands_on_its_own(self):
         cc, npath = self._finished_with_ignored_file("zach-opus-al")
-        ws.wait("zach-opus-al", "started", "merging now (land chain 5, one merge)", "", self.sid)
+        ws.wait("zach-opus-al", "started", "merging now (land chain 5, one merge)", "", self.sid, SOON())
         self.merge(self.other, "cc/zach-opus-al")
         ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)     # the lead's turn ends
         self.assertTrue(ok, msg)
@@ -4550,7 +4555,8 @@ class CarriedWait_EndsWhenItsCarrierLands(Base):
         self.commit(cc, "first.txt")
         self.commit(npath_a, "second.txt")
         self.finish(aid_a)
-        ws.wait("zach-opus-ca", "started", "carried by zach-opus-cb, lands with it", "", self.sid)
+        ws.wait("zach-opus-ca", "started", "carried by zach-opus-cb, lands with it", "", self.sid,
+                "agent:zach-opus-cb")
         aid_b, npath_b = self.spawn("zach-opus-cb", extra="lands-pending: zach-opus-ca\n")
         self.commit(npath_b, "carrier.txt")
         self.finish(aid_b)
@@ -4577,7 +4583,8 @@ class CarriedWait_EndsWhenItsCarrierLands(Base):
         self.commit(cc, "first.txt")
         self.commit(npath_a, "second.txt")
         self.finish(aid_a)
-        ws.wait("zach-opus-ca", "started", "carried by zach-opus-cb, lands with it", "", self.sid)
+        ws.wait("zach-opus-ca", "started", "carried by zach-opus-cb, lands with it", "", self.sid,
+                "agent:zach-opus-cb")
         aid_b, npath_b = self.spawn("zach-opus-cb", extra="lands-pending: zach-opus-ca\n")
         self.commit(npath_b, "carrier.txt")
         self.finish(aid_b)
@@ -7344,7 +7351,7 @@ class NoSilentHolds(Base):
         return aid, npath
 
     def test_holds_t5_release_without_his_word_or_running_work_is_refused(self):
-        ws.hold("stream-b", "Stream B of his spelling order", "", "on hold, deliberately", self.sid)
+        ws.hold("stream-b", "Stream B of his spelling order", "ceo:CEO-TODOs 9.1", "on hold, deliberately", self.sid)
         self.assertEqual([h["name"] for h in ws.holds(self.sid)], ["stream-b"])
         with self.assertRaises(ws.SpecError) as cm:
             ws.release("stream-b", session_id=self.sid)
@@ -7358,7 +7365,7 @@ class NoSilentHolds(Base):
         ws.hold("stream-c", "Stream C", "agent:zach-opus-y", "", self.sid)
         self.assertEqual(ws.holds(self.sid)[0]["state"], "pending")                 # Y does it: quiet
         ws.release("stream-c", session_id=self.sid)                                   # the work runs
-        ws.hold("held-1a2b3c4d", "it goes in with the next land", "", "a reply held it", self.sid)
+        ws.hold("held-1a2b3c4d", "it goes in with the next land", "ceo:CEO-TODOs 9.2", "a reply held it", self.sid)
         with self.assertRaises(ws.SpecError):
             ws.release("held-1a2b3c4d", not_a_hold="short", session_id=self.sid)
         ws.release("held-1a2b3c4d", not_a_hold="a description of a bundle that exists", session_id=self.sid)
@@ -7366,7 +7373,7 @@ class NoSilentHolds(Base):
         first = ws.hold_lines(self.sid)
         self.assertEqual(len([l for l in first if l.startswith("RELEASED AS NOT A HOLD")]), 1)
         self.assertEqual(ws.hold_lines(self.sid), [])                                 # once
-        ws.hold("stream-d", "Stream D", "", "", self.sid)
+        ws.hold("stream-d", "Stream D", "ceo:CEO-TODOs 9.3", "", self.sid)
         self.spawn("zach-opus-d", extra="continues: stream-d\n")                      # a continuation runs it
         self.assertEqual(ws.holds(self.sid), [])
 
@@ -7399,7 +7406,7 @@ class NoSilentHolds(Base):
 
     def test_holds_the_gates_turn_end_message_carries_the_lines(self):
         """The workspace gate (Stop) puts the hold lines in its systemMessage, at every turn end."""
-        ws.hold("stream-b", "Stream B of his spelling order", "", "on hold, deliberately", self.sid)
+        ws.hold("stream-b", "Stream B of his spelling order", "ceo:CEO-TODOs 9.1", "on hold, deliberately", self.sid)
         h = ws.read_json(ws._hold_path("stream-b"))
         h["at"] -= 31 * 60
         ws.write_json(ws._hold_path("stream-b"), h)
@@ -7424,14 +7431,13 @@ class NoSilentHolds(Base):
         """Review rv-20261022T002958Z-2ac46e09-fa4e finding 2: repeating an unresolved wait every
         20 minutes must not make a 2-hour hold look new."""
         self._pending_one()
-        ws.wait("zach-opus-p5", "started", "real-app checks left", "", self.sid)
+        ws.wait("zach-opus-p5", "started", "real-app checks left", "", self.sid, SOON())
         rec = self.rec("zach-opus-p5")
         rec["waiting"]["at"] -= 139 * 60
         ws.save_agent(rec)
-        ws.wait("zach-opus-p5", "started", "real-app checks left (still)", "", self.sid)
+        ws.wait("zach-opus-p5", "started", "real-app checks left (still)", "", self.sid, SOON())
         held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-p5"]
         self.assertGreaterEqual(ws.now() - held[0]["since"], 139 * 60)
-        self.assertTrue(any("(2 h 19 min)" in l or "(2 h 20 min)" in l for l in ws.hold_lines(self.sid)))
 
     def test_holds_a_todo_reference_is_his_only_when_it_is_on_his_page(self):
         """Review rv-20261022T002958Z-2ac46e09-fa4e finding 3: a GitHub outage with a TODO
@@ -7473,6 +7479,60 @@ class NoSilentHolds(Base):
         self.assertEqual([(h["name"], h["review"]) for h in held], [("zach-opus-r6", "rv-fixture-cr")])
         ws.release("zach-opus-r6", ceo_word="ship it as it is", session_id=self.sid)
         self.assertEqual([h for h in ws.holds(self.sid) if h["source"] == "review"], [])
+
+class OrchestrationR2Waits(Base):
+    """Orchestration reliability R2 (richos-hq docs/prds/2026-10-23-orchestration-
+    reliability.md): a wait names an end the engine can check; a self-wait or an agent:
+    cycle is refused with the cycle; ownership is decided inside the registry lock."""
+
+    def _finished(self, name):
+        aid, npath = self.spawn(name)
+        self.commit(npath)
+        self.finish(aid)
+        return aid, npath
+
+    def test_r2_a_new_wait_needs_a_checkable_end(self):
+        self._finished("zach-opus-w1")
+        with self.assertRaises(ws.SpecError) as cm:
+            ws.wait("zach-opus-w1", "started", "honorfile3 is running now", "", self.sid)
+        self.assertIn("--until", str(cm.exception))
+        with self.assertRaises(ws.SpecError):
+            ws.hold("stream-e", "Stream E", "", "on hold", self.sid)
+        ws.wait("zach-opus-w1", "started", "the carrier lands it", "", self.sid, "agent:zach-opus-w2")
+        self.assertEqual(self.rec("zach-opus-w1")["waiting"]["end"], "agent:zach-opus-w2")
+
+    def test_r2_a_self_wait_and_an_agent_cycle_are_refused_with_the_cycle(self):
+        self._finished("zach-opus-c1")
+        self._finished("zach-opus-c2")
+        with self.assertRaises(ws.SpecError) as cm:
+            ws.wait("zach-opus-c1", "started", "itself", "", self.sid, "agent:zach-opus-c1")
+        self.assertIn("zach-opus-c1 -> zach-opus-c1", str(cm.exception))
+        ws.wait("zach-opus-c1", "started", "c2 lands it", "", self.sid, "agent:zach-opus-c2")
+        with self.assertRaises(ws.SpecError) as cm:
+            ws.wait("zach-opus-c2", "started", "c1 lands it", "", self.sid, "agent:zach-opus-c1")
+        self.assertIn("zach-opus-c2 -> zach-opus-c1 -> zach-opus-c2", str(cm.exception))
+        self.assertIsNone(self.rec("zach-opus-c2").get("waiting"))       # only the mutation was refused
+
+    def test_r2_a_legacy_free_text_wait_reads_as_due(self):
+        self._finished("zach-opus-l1")
+        rec = self.rec("zach-opus-l1")
+        rec["waiting"] = {"kind": "started", "on": "filecard3 is running now", "todo": "", "at": ws.now(), "end": ""}
+        ws.save_agent(rec)                                               # written before 2026-10-24
+        held = [h for h in ws.holds(self.sid) if h["name"] == "zach-opus-l1"]
+        self.assertEqual([h["state"] for h in held], ["none"])
+
+    def test_r2_the_claim_is_decided_again_inside_the_lock(self):
+        """Two leads: the read outside the lock said claimable; inside it the record is
+        another live lead's. It is neither claimed nor handled here."""
+        self._finished("zach-opus-k1")
+        rec = self.rec("zach-opus-k1")
+        rec["session_id"] = "sess-ended-0000"
+        ws.save_agent(rec)
+        with patch.object(ws, "_claimable", side_effect=[True, False]):
+            items = ws.pending(self.sid, self.entity, auto=False)
+        self.assertEqual([i["name"] for i in items], [])
+        self.assertNotEqual(ws.load_agent(rec["key"]).get("claimed_by"), self.sid)
+
 
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,
