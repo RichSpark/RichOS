@@ -1910,8 +1910,11 @@ def look_lock():
         os.close(fd)
 
 
-def tick(watcher, sd, now=None, out=None):
-    """One look under the look lock; the verdicts it printed are delivered once accepted (PRINTED)."""
+def tick(watcher, sd, now=None, out=None, tell_failure=True):
+    """One look under the look lock; the verdicts it printed are delivered once accepted (PRINTED).
+    Returns what the look raised, or "" for a look that finished. With tell_failure off (the
+    monitor's own look, --monitor-look) a raised look is not printed here: the monitor tells it,
+    once per failing streak (run_loop)."""
     out = out or sys.stdout
     now = clock() if now is None else now
     with look_lock():
@@ -1919,13 +1922,14 @@ def tick(watcher, sd, now=None, out=None):
             deliver(read_acks(), now)
         path = os.path.join(sd, "told.json")
         sstate = stall_watch._read_json(path)
+        failed = ""
         try:
             lines = watcher.look(now, sstate)
         except Exception as exc:  # noqa: BLE001: one failed look is said, never the end of watching
+            failed = "%s: %s" % (exc.__class__.__name__, str(exc)[:200])
             k = "failed:%s" % exc.__class__.__name__
-            lines = [] if k in sstate.get("told", {}) else [
-                "REVIEW-WATCH %s: a look failed (%s: %s); the next look tries again" % (
-                    hhmm(now), exc.__class__.__name__, str(exc)[:200])]
+            lines = [] if not tell_failure or k in sstate.get("told", {}) else [
+                "REVIEW-WATCH %s: a look failed (%s); the next look tries again" % (hhmm(now), failed)]
             PRINTED["keys"], PRINTED["told"] = [], {k: {"first": now}}
         printed, marked = (PRINTED["keys"], PRINTED["told"]) if lines else ([], {})
         PRINTED["keys"], PRINTED["told"] = [], {}
@@ -1942,7 +1946,7 @@ def tick(watcher, sd, now=None, out=None):
                 sstate = stall_watch._read_json(path)
                 sstate.setdefault("told", {}).update(marked)
                 stall_watch._write_json(path, sstate)
-    return len(lines)
+    return failed
 
 
 def current_session(engine_root):
@@ -1965,8 +1969,9 @@ def current_session(engine_root):
 # 20:44Z it told [NOT STARTED] for exactly that READY again. stall-watch met the same thing
 # on 2026-10-22. So the plain monitor keeps only its lock, its session's liveness and its
 # output; every look is `--tick --monitor-look` in a fresh child, which loads the engine from
-# disk and records the source identity it evaluated (evaluated.json). A child that fails or
-# outlives LOOK_SECONDS is a watcher failure, told once per failing streak and reason.
+# disk and records the source identity it evaluated (evaluated.json). A child that fails, whose
+# look raised (it exits 1 and records no evaluation), or that outlives LOOK_SECONDS is a watcher
+# failure, told once per failing streak and reason.
 # The app's and the operator host's watchers (run_host_loop) end with their host and keep
 # their reviews in memory for the quit, so they still look in-process.
 EVALUATOR_SOURCES = ("scripts/lib/review_watch.py", "scripts/lib/stall_watch.py", "scripts/lib/app_review.py",
@@ -2205,8 +2210,13 @@ def main(argv):
         sd = session_dir(sid)
         if a.monitor_look:
             MONITOR["session"] = sid
-        tick(watcher, sd)
+        failed = tick(watcher, sd, tell_failure=not a.monitor_look)
         if a.monitor_look:
+            if failed:
+                # A look whose evaluation raised is a failed look (the second review of 5331505bd,
+                # finding 1): no evaluation is recorded, and the monitor tells it.
+                sys.stderr.write("the evaluation raised %s\n" % failed)
+                return 1
             # The source on disk AFTER the look; the monitor compares it with the source when
             # this child started (_child_look).
             stall_watch._write_json(os.path.join(sd, "evaluated.json"), {
