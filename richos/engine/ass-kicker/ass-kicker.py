@@ -238,6 +238,13 @@ ARM 2 — THE TURN THAT STOPS, stated precisely
     call, no backgrounded tool call), AND nothing is owed to the CEO (no
     AskUserQuestion), AND the reply carries no valid `stop-declared:` line.
 
+    IN THE APP, Stu's own work tools answer the "started nothing" term too
+    (2026-10-24, nightly 73 and 74 walks, where both of his truthful replies
+    were refused): a `complete` that closed the job means nothing of it is
+    pending, and a `team save` of a new teammate means the app resumes the job
+    with a team_reloaded message. Either discharges the arm, read from the
+    tool's answer, never from the reply. See app_job_outcome().
+
     THE TERM THAT USED TO SAY "no hold or end-of-day in his own words" IS GONE
     (2026-09-20, CEO ruling §68). No hook reads his sentences to decide
     anything. What it excused is still excusable, through the declaration.
@@ -658,10 +665,79 @@ def satisfied(who, arm, calls, inputs):
 # ARM 2 — THE TURN THAT STOPS — every term is guard-idle-land.py's, by import
 # --------------------------------------------------------------------------
 
+APP_COMPLETE = "mcp__richos_work__complete"
+APP_TEAM = "mcp__richos_work__team"
+
+
+def app_job_outcome(idle, transcript, prompt_id):
+    """What the app's own work tools answered this turn about Stu's job, as
+    (verdict, detail), or None. Read from the tools' answers, never the reply:
+      ('closed', ...)   `complete` answered obligation_closed: true. A work
+                        lease carries exactly one job, and the app closes it
+                        only when no worker of it is still running and every
+                        final worker is landed, so nothing of it is pending.
+      ('started', ...)  `team save` added a NEW teammate. The app registers
+                        him when this turn ends and then sends Stu the
+                        team_reloaded message, which starts his next turn
+                        (work_host.rs reload_team_after_turn), so the next
+                        step is already in motion.
+    A refused call counts for nothing, a replaced teammate gets no reload, and
+    a land (`integrate`) is not a close. Nightly 73 and 74 walks: both truthful
+    replies were refused without this."""
+    try:
+        offset = idle.turn_start_offset(transcript, prompt_id)
+        wanted, answers, started = {}, {}, False
+        with open(transcript, "rb") as fh:
+            fh.seek(offset)
+            for raw in fh:
+                try:
+                    rec = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                if rec.get("promptId") == prompt_id:
+                    started = True
+                if not started:
+                    continue
+                content = (rec.get("message") or {}).get("content")
+                if not isinstance(content, list):
+                    continue
+                for b in content:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "tool_use" and b.get("name") in (APP_COMPLETE, APP_TEAM):
+                        wanted[b.get("id")] = (b.get("name"), b.get("input") or {})
+                    elif (b.get("type") == "tool_result" and b.get("tool_use_id") in wanted
+                          and b.get("is_error") is not True):
+                        res = b.get("content")
+                        if isinstance(res, list):
+                            res = "".join(x.get("text", "") for x in res if isinstance(x, dict))
+                        try:
+                            answers[b["tool_use_id"]] = json.loads(res)
+                        except (TypeError, ValueError):
+                            pass
+    except (OSError, AttributeError):
+        return None
+    for tid, answer in answers.items():
+        name, inp = wanted[tid]
+        if not isinstance(answer, dict):
+            continue
+        if name == APP_COMPLETE and answer.get("obligation_closed") is True:
+            return ("closed", "the app closed the job this turn")
+    for tid, answer in answers.items():
+        name, inp = wanted[tid]
+        if (name == APP_TEAM and isinstance(answer, dict) and isinstance(inp, dict)
+                and inp.get("action") == "save" and answer.get("replaced") is False
+                and answer.get("registration_boundary") == "next_provider_connection"):
+            return ("started", "a new teammate is saved; the app reloads the team and resumes the job")
+    return None
+
+
 def stop_after_completion(idle, transcript, prompt_id, message):
     """None when ARM 2 has nothing to say, else a dict:
          finishes   titles of the agents whose completion arrived this turn
-         verdict    'started' | 'ceo-owed' | 'declared' | 'undeclared-stop'
+         verdict    'started' | 'ceo-owed' | 'closed' | 'declared' | 'undeclared-stop'
          detail     what discharged it, or the declaration, or the problem
     """
     if idle is None:
@@ -679,6 +755,9 @@ def stop_after_completion(idle, transcript, prompt_id, message):
         return {"finishes": finishes, "verdict": "started", "detail": "backgrounded tool call"}
     if "AskUserQuestion" in turn["tools"]:
         return {"finishes": finishes, "verdict": "ceo-owed", "detail": "AskUserQuestion"}
+    job = app_job_outcome(idle, transcript, prompt_id)
+    if job:
+        return {"finishes": finishes, "verdict": job[0], "detail": job[1]}
     # NO HOLD TERM (2026-09-20, CEO ruling §68). This used to call
     # idle.hold_signal(turn["said"]) -- two regexes over the CEO's own typed
     # messages -- and excuse the turn on a match. Both the predicate and the

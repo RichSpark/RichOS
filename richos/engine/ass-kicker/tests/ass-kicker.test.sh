@@ -52,6 +52,11 @@
 #     (n9) Agent "X" was stopped by user                          -> exit 0
 #     (n10) Background command "..." completed                    -> exit 0
 #     (n11) finished but <status> not completed                   -> exit 0
+#     (n12) app: new teammate saved, reload to come, reply waits   -> exit 0, nothing added
+#     (n13) app: job closed this turn, plain Done report           -> exit 0, nothing added
+#     (n14) app: Done report, the turn landed but never closed     -> exit 2
+#     (n15) app: Done report, the close was refused                -> exit 2
+#     (n16) app: wait reply, the save replaced (no reload comes)   -> exit 2
 #   SAFETY — never strand a session
 #     (r)  stop_hook_active=true, violation present               -> exit 0
 #     (s)  repository has not adopted the engine                  -> exit 0, silent
@@ -137,6 +142,9 @@ git -C "$NOROLES" commit -qm seed >/dev/null 2>&1
 #   {"edit": "<path>"}           an Edit tool_use (ARM 3)
 #   {"bashout": [cmd, out]}      a Bash tool_use whose result is <out> (ARM 3:
 #                                the commit line a SHA is checked against)
+#   {"app": [name, input, answer, refused?]}
+#                                an app work tool_use (mcp__richos_work__*) whose
+#                                result is <answer> as the app returns it (ARM 2)
 mk_tr() { # <outfile> <json-spec>
     python3 - "$1" "$2" "$PROMPT_ID" "$ENTITY" <<'PY'
 import json, sys
@@ -181,6 +189,21 @@ for step in json.loads(spec):
         call("Edit", {"file_path": step["edit"], "old_string": "a", "new_string": "b"}); continue
     if "bashout" in step:
         call("Bash", {"command": step["bashout"][0]}, step["bashout"][1]); continue
+    if "app" in step:
+        # An app work tool exactly as the provider records it: the result is a list of one
+        # text block holding the tool's JSON answer, and a refusal is marked is_error.
+        name, inp, answer = step["app"][:3]
+        refused = len(step["app"]) > 3 and step["app"][3]
+        n += 1
+        tid = "toolu_%03d" % n
+        rows.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": name, "input": inp}]}})
+        block = {"type": "tool_result", "tool_use_id": tid,
+                 "content": [{"type": "text", "text": answer if isinstance(answer, str) else json.dumps(answer)}]}
+        if refused:
+            block["is_error"] = True
+        rows.append({"type": "user", "promptId": cur, "cwd": cwd, "message": {"content": [block]}})
+        continue
 with open(out, "w", encoding="utf-8") as fh:
     for r in rows:
         fh.write(json.dumps(r) + "\n")
@@ -432,6 +455,87 @@ run_hook "$TR_SHELL" "The suite is green."
 
 run_hook "$TR_NOTDONE" "$FIN_REPORT"
 [ "$RC" -eq 0 ] && ok "n11. a notification without <status>completed</status> is not a delivery" || bad "n11. not completed" "rc=$RC"
+
+# n12-n16: STU'S TURNS IN THE APP, from the nightly 74 walk (check 5, Stu's transcript
+# 9cadeff2…jsonl, kept.tgz in richos-hq docs/audits/2026-10-15-nightly-root/evidence/
+# nightly-74-walk/check5-work-lease/kept/). The notices, the app tools' answers and the replies
+# are those rows; ids and paths are shortened. Both truthful replies were refused there
+# (rows 146 and 327), and nightly 73 refused the same pair (4beb2145…jsonl rows 160 and 308).
+APP_SPECS="$SANDBOX/app-specs"
+mkdir -p "$APP_SPECS"
+python3 - "$APP_SPECS" <<'PY'
+import json, os, sys
+out = sys.argv[1]
+def notice(title):
+    return ("<task-notification>\n<task-id>a191b4bf3c4ab6b88</task-id>\n<status>completed</status>\n"
+            "<summary>Agent \"%s\" finished</summary>\n<result>done</result>\n</task-notification>" % title)
+save = ["mcp__richos_work__team", {"action": "save", "name": "norm", "text": "---\nname: norm\n---\n"}]
+saved = {"saved": "/home/Library/Application Support/com.richos.app/team/norm.md", "name": "norm",
+         "replaced": False, "registered": False, "registration_boundary": "next_provider_connection"}
+integrate = ["mcp__richos_work__integrate", {"worker_id": "2b46", "reviewer_id": "cf86"},
+             {"work_integrated": True, "commit": "64f2ad7", "cleanup_pending": [],
+              "obligation_closed": False, "published": False}]
+complete = ["mcp__richos_work__complete", {"obligation_id": "work-94e48f43", "worker_ids": ["2b46"]}]
+closed = {"obligation_closed": True, "obligation_id": "work-94e48f43",
+          "evidence_ref": "app-completion:5860d42f", "published": False}
+send = ["mcp__richos_status__send", {"text": "Done: notes.md is committed and landed."}, {"saved": True, "to": "rich"}]
+review = {"machine": notice("Review notes.md commit for Acme")}
+specs = {
+    # rows 129-146: Dean's consult returns, Stu saves Norm, the app reloads the team after the turn
+    "wait": [{"machine": notice("Activate Norm for Acme")}, {"app": save + [saved]}],
+    # rows 261-327: the review returns, Stu lands, checks, closes the job and tells Rich
+    "done": [review, {"app": integrate}, {"bash": "git -C /home/Acme log --oneline -3"},
+             {"tool": "Read"}, {"app": complete + [closed]}, {"app": send}],
+    # the same reply over a turn that landed and never closed the job
+    "landed-open": [review, {"app": integrate}, {"bash": "git -C /home/Acme log --oneline -3"},
+                    {"app": send}],
+    # the same reply over a turn whose close the app refused
+    "close-refused": [review, {"app": integrate},
+                      {"app": complete + ["this assignment still has unresolved execution; "
+                                          "reconcile it before completion", True]}, {"app": send}],
+    # the wait reply over a save that replaced an existing teammate: no reload follows that
+    "replaced": [{"machine": notice("Activate Norm for Acme")},
+                 {"app": save + [dict(saved, replaced=True)]}],
+}
+for name, spec in specs.items():
+    with open(os.path.join(out, name + ".json"), "w", encoding="utf-8") as fh:
+        json.dump(spec, fh)
+PY
+for s in wait done landed-open close-refused replaced; do
+    mk_tr "$SANDBOX/app-$s.jsonl" "$(cat "$APP_SPECS/$s.json")"
+done
+# Row 142, verbatim.
+STU_WAIT="Norm's definition is saved, and he becomes available after the team reload. When the reload notice arrives I'll brief him to add notes.md."
+# Row 326, verbatim.
+STU_DONE='notes.md is now in the Acme repository, committed and landed on its main branch. Its only content is the line "Notes for the walk test.", and I read the file back to check the exact characters.
+
+- **The commit:** "Add notes.md" (64f2ad7) changes nothing but the new file. A separate review passed it, and it was merged into main as b12b2a5. The repository is clean, and the temporary work copies have been removed.
+- **No tests:** Acme has no automated tests, so reading the file back was the only check.
+- **Not pushed:** Acme has no online copy set up (`git remote -v` lists none), so "landed" here means the main branch on this Mac.
+- **New teammate:** None of the active teammates was an engineer, so I had Dean activate Norm, a full-stack engineer, to make the change. Norm stays on the team for future Acme work.
+
+The job record is closed.'
+
+run_hook "$SANDBOX/app-wait.jsonl" "$STU_WAIT"
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
+    ok "n12. a teammate saved in the app, its reload still to come: the truthful wait passes, and nothing is added to the reply"
+else bad "n12. truthful wait" "rc=$RC out=$(printf '%s' "$OUT" | head -c 200) err=$(printf '%s' "$ERR" | head -c 300)"; fi
+
+run_hook "$SANDBOX/app-done.jsonl" "$STU_DONE"
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
+    ok "n13. the job closed this turn: the complete Done report passes without a stop-declared line, and nothing is added"
+else bad "n13. truthful Done" "rc=$RC out=$(printf '%s' "$OUT" | head -c 200) err=$(printf '%s' "$ERR" | head -c 300)"; fi
+
+run_hook "$SANDBOX/app-landed-open.jsonl" "$STU_DONE"
+if [ "$RC" -eq 2 ] && printf '%s' "$ERR" | grep -q 'Review notes.md commit for Acme'; then
+    ok "n14. a Done report over a job this turn never closed is still REFUSED (a land is not a close)"
+else bad "n14. unclosed job" "rc=$RC err=$(printf '%s' "$ERR" | head -c 300)"; fi
+
+run_hook "$SANDBOX/app-close-refused.jsonl" "$STU_DONE"
+[ "$RC" -eq 2 ] && ok "n15. a Done report over a close the app REFUSED is still refused" || bad "n15. refused close" "rc=$RC"
+
+run_hook "$SANDBOX/app-replaced.jsonl" "$STU_WAIT"
+[ "$RC" -eq 2 ] && ok "n16. a wait on a reload that is not coming (an existing teammate replaced) is still refused" || bad "n16. replaced teammate" "rc=$RC"
 
 # ---------------------------------------------------------------------------
 # ARM 3 — RECORDED, NOT WRITTEN
