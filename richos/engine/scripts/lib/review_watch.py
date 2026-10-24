@@ -656,11 +656,14 @@ class World(object):
         if not m:
             return None
         branch = m.group(0)
-        names = []
-        rm = re.search(r"Repositor(?:y|ies):\s*([^\n]+)", text)
-        if rm:
-            names = [n for n in re.findall(r"[A-Za-z0-9._-]+", rm.group(1))
-                     if n in (self.repos or [])]
+        # Codex writes "Repository: richos only." and "Repository richos-hq only.", with or
+        # without the colon.
+        listed = [n.strip(".") for line in re.findall(r"Repositor(?:y|ies)\b([^\n]*)", text)
+                  for n in re.findall(r"[A-Za-z0-9._-]+", line)]
+        names = [n for n in listed if n in (self.repos or [])]
+        if not names and any(self.repo_named(n) for n in listed):
+            # It names only repositories that get no second review: not a review case.
+            return None
         if not names and self.repos and len(self.repos) == 1:
             names = [self.repos[0]]
         repo = self.repo_named(names[0]) if names else ""

@@ -37,7 +37,9 @@
 #   W06  a handover replaces a mid-job review of the same tip: the mid-job
 #        review is stopped by its recorded pid and the handover one starts
 #   W07  Codex's READY entry starts a review of its codex/ branch, with the
-#        to-codex.md entry that named the branch as the original words
+#        to-codex.md entry that named the branch as the original words; a READY
+#        naming only a repository with no second review is silent, while one
+#        for a reviewed repository whose commit is missing there is still told
 #   W08  a finding still open through two rechecks in a row is told once as
 #        not converging; never one filed as a follow-up (blocks false); one
 #        work in two repositories is compared repository by repository
@@ -2622,6 +2624,41 @@ W="$(cat "$(ls -d "$SB"/calls/* | tail -1)/words.txt" 2>/dev/null)"
 [ "$(ncalls)" = "1" ] && has "$A" '"--branch", "codex/fix-w7"' && has "$A" "\"--tip\", \"$CTIP\"" && has "$A" '"--author", "codex"' \
   && has "$A" "\"--base\", \"$BASE\"" && has "$W" "CODEX-ASK-LINE" && ! has "$W" "OTHER-ASK"
 check "W07 Codex's READY entry starts a review of its branch, with the entry that asked for it as the words" $? "calls=$(ncalls) argv=$A words=$W out=$OUT"
+
+# Codex's READY for the private record says "Repository richos-hq only", with no colon. The
+# watcher took richos, found no such branch there and told [NOT STARTED] (six times on
+# 2026-10-24). A repository that gets no second review is not a review case.
+HQ="$SB/richos-hq"
+H() { git -C "$HQ" -c core.hooksPath=/dev/null -c user.name=Author -c user.email=author@example.invalid -c commit.gpgsign=false "$@"; }
+mkdir -p "$HQ"; H init -q -b main
+printf 'record\n' >"$HQ/r.txt"; H add -A; H commit -qm "record base"
+H checkout -qb codex/hq-w7; printf 'record\nevidence\n' >>"$HQ/r.txt"; H commit -qam "codex: evidence"
+HQTIP="$(H rev-parse HEAD)"
+python3 -c 'import json,os,sys; json.dump({"repos": [os.path.realpath(p) for p in sys.argv[2:]]}, open(sys.argv[1], "w"))' \
+    "$SB/workspaces/repos.json" "$REPO" "$HQ"
+resetstate
+tickrw
+printf '\n## 2026-10-09T03:00:00Z READY TO LAND: codex/hq-w7\n\nRepository richos-hq only (private). Commit %s.\n' "$HQTIP" >>"$SB/codex/to-rich.md"
+tickrw; O1="$OUT"
+tickrw
+[ "$(ncalls)" = "0" ] && ! has "$O1$OUT" "NOT STARTED" && ! has "$O1$OUT" "codex/hq-w7"
+check "W07 a READY naming only a repository with no second review (Repository richos-hq only) is silent" $? "calls=$(ncalls) out=$O1 / $OUT"
+resetstate
+tickrw
+printf '\n## 2026-10-09T04:00:00Z READY TO LAND: codex/fix-w7\n\nRepositories: private richos-hq and public richos. Commit `%s`.\n' "$CTIP" >>"$SB/codex/to-rich.md"
+FAKE_SR_MODE=passed tickrw
+FAKE_SR_MODE=passed tickrw
+waitcalls 1
+A="$(lastargv)"
+[ "$(ncalls)" = "1" ] && has "$A" '"--branch", "codex/fix-w7"' && has "$A" "\"--tip\", \"$CTIP\""
+check "W07 a READY for richos (beside richos-hq) still starts its review" $? "calls=$(ncalls) argv=$A out=$OUT"
+resetstate
+tickrw
+printf '\n## 2026-10-09T05:00:00Z READY TO LAND: codex/missing-w7\n\nRepository: richos only. Commit %s.\n' "$HQTIP" >>"$SB/codex/to-rich.md"
+tickrw; O1="$OUT"
+tickrw
+[ "$(ncalls)" = "0" ] && has "$O1$OUT" "NOT STARTED" && has "$O1$OUT" "codex/missing-w7"
+check "W07 a READY for richos whose commit is not in richos still says no review started" $? "calls=$(ncalls) out=$O1 / $OUT"
 
 # --- W08 ---------------------------------------------------------------------
 resetstate
