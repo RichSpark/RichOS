@@ -415,23 +415,13 @@ MARKER = "DEFERRAL CHECK (unverified"
 CONTINUED = "\0continued"
 
 
-def _tools_of_turn(payload):
-    """The tool names used in the CURRENT turn.
+TAIL_CHUNK = 256 * 1024
+_READ = {"bytes": 0}            # bytes read by the last _tools_of_turn (the suite bounds it)
 
-    Read from the transcript, walking BACKWARD from the end to the last real
-    user prompt. Verified in guard-unresolved-claims.sh's header against the
-    shipping binary: at Stop time the transcript already holds this turn's
-    tool_use records but NOT the final assistant text — which is why the text
-    comes from `last_assistant_message` and only the tool traffic from here.
-    """
-    path = payload.get("transcript_path") or ""
-    if not path or not os.path.isfile(path):
-        return None  # UNKNOWN — never the same as "no tools used"
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            lines = fh.readlines()
-    except Exception:
-        return None
+
+def _walk_turn(lines):
+    """(tools, reached_prompt) for the newest records in `lines`, walked backward
+    to the real user prompt that opened this turn."""
     tools = set()
     # A call whose result is an error was refused or failed: a refused Agent
     # started nothing and discharges nothing (hunt part 3 v3, finding 19).
@@ -460,14 +450,52 @@ def _tools_of_turn(payload):
                     if b.get("is_error") is True and b.get("tool_use_id"):
                         refused.add(b["tool_use_id"])
                 continue  # tool results are not a prompt
-            break  # the real prompt that opened this turn
+            return tools, True  # the real prompt that opened this turn
         if rec.get("type") == "assistant" and isinstance(content, list):
             for b in content:
                 if isinstance(b, dict) and b.get("type") == "tool_use":
                     if b.get("id") and b["id"] in refused:
                         continue
                     tools.add(b.get("name") or "")
-    return tools
+    return tools, False
+
+
+def _tools_of_turn(payload):
+    """The tool names used in the CURRENT turn.
+
+    Read from the transcript, walking BACKWARD from the end to the last real
+    user prompt. Verified in guard-unresolved-claims.sh's header against the
+    shipping binary: at Stop time the transcript already holds this turn's
+    tool_use records but NOT the final assistant text — which is why the text
+    comes from `last_assistant_message` and only the tool traffic from here.
+
+    ONLY THE CURRENT TURN IS READ (orchestration reliability R7: no full-history
+    work in a routine Stop; the lead's transcript was 10.7 MB on 2026-10-24). The
+    tail is read in a window that doubles from TAIL_CHUNK until it holds the
+    prompt that opened the turn, or the whole file when the turn is that long.
+    """
+    path = payload.get("transcript_path") or ""
+    if not path or not os.path.isfile(path):
+        return None  # UNKNOWN — never the same as "no tools used"
+    _READ["bytes"] = 0
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            window = TAIL_CHUNK
+            while True:
+                start = max(0, size - window)
+                fh.seek(start)
+                data = fh.read(size - start)
+                _READ["bytes"] += len(data)
+                lines = data.decode("utf-8", "replace").splitlines()
+                if start:
+                    lines = lines[1:]            # the first line is cut by the window
+                tools, reached = _walk_turn(lines)
+                if reached or not start:
+                    return tools
+                window *= 2
+    except Exception:
+        return None
 
 
 def main():

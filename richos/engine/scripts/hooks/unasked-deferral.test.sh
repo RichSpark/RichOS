@@ -218,6 +218,38 @@ run_hook "- Then I parked everything behind the nightly and the stable."
 if no_record; then ok "T1f a retrospective explanation creates no work record (held-643a9400 specimen)"
 else bad "T1f a retrospective explanation creates no work record" "ws=$(ls -R "$RICHOS_WORKSPACES_DIR")"; fi
 
+# T1g (orchestration reliability R7): only the current turn is read. A 12 MB history
+# whose earlier turn spawned an Agent, then this turn (Bash only): the spawn of an
+# earlier turn discharges nothing, and well under 1 MB of the file is read.
+python3 - "$SANDBOX/transcript.jsonl" <<'PYEOF'
+import json, sys
+pad = "x" * 2000
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": "start the stream"}}) + "\n")
+    fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "name": "Agent", "id": "old1", "input": {}}]}}) + "\n")
+    for n in range(6000):
+        fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "%d %s" % (n, pad)}]}}) + "\n")
+    fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": "and the other stream?"}}) + "\n")
+    fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "name": "Bash", "id": "now1", "input": {}}]}}) + "\n")
+    fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "now1", "content": "ok"}]}}) + "\n")
+PYEOF
+TAIL_OUT="$(python3 - "$REPO/scripts/hooks/guard-unasked-deferral.py" "$SANDBOX/transcript.jsonl" <<'PYEOF'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("deferral", sys.argv[1])
+d = importlib.util.module_from_spec(spec); spec.loader.exec_module(d)
+tools = d._tools_of_turn({"transcript_path": sys.argv[2]})
+print(sorted(tools), d._READ["bytes"] < 1024 * 1024, os.path.getsize(sys.argv[2]) > 10 * 1024 * 1024)
+PYEOF
+)"
+run_hook "Stream B is on hold, deliberately."
+if [ "$TAIL_OUT" = "['Bash'] True True" ] && spoke; then
+    ok "T1g only the current turn of a 12 MB transcript is read; an earlier turn's spawn discharges nothing"
+else bad "T1g the current turn alone is read" "tail=$TAIL_OUT out=$HOUT"; fi
+
 # T2 (2026-10-23): sentences that say nothing is held each opened a hold only his words
 # could end (held-3c51602a, held-77933bd6, held-a2aa88fd). Verbatim from the lead's replies.
 no_hold_case() { # <label> <text> <why>
