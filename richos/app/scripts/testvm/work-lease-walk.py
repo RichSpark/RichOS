@@ -26,9 +26,11 @@ save one; it must be SETTLED with no human message after the request), idle. The
             and the transcript lines carrying `team_reloaded`; FAIL when there is none (the job did
             not go through a team change, so the question was not asked)
   after     after `fail`: one ordinary request (--after-task) is typed; it must be SETTLED, the lead
-            file of the session that ran it must say its turn ended after the send (the Work lease
-            closed normally), and no NEW "monitor stopped" row may reach Stu's inbox up to
-            --after-quiet seconds after that close
+            file of the session that ran it must say its turn ended after the send, and no NEW
+            "monitor stopped" row may reach Stu's inbox up to --after-quiet seconds after that turn
+            end. A turn end is idle between turns (native.rs LeadSignal), not the lease's disposal, so
+            this step reports only the turn end; a normal lease close is the a6-app-work-lease-eof
+            walk's (richos-hq docs/verification/2026-10-24-orchestration-reliability-impl)
   keep      ALWAYS, pass or fail, before run-walk.py deletes the guest: every session transcript
             (~/.claude/projects), the app's engine-state, the conversation ledger and the bundle's
             Info.plist, as kept/kept.tgz on the host. The first such walk lost the rows.
@@ -179,24 +181,24 @@ class WorkLeaseWalk(srw.StuReminderWalk):
         session = record.get('work_session')
         idle_end = time.monotonic() + self.a.idle_within
         while True:
-            closed = [d for d in self.lead_files()
-                      if d.get('session') == session and (d.get('turn_ended') or 0) > sent[1] / 1000]
-            if closed or time.monotonic() >= idle_end:
+            ended = [d for d in self.lead_files()
+                     if d.get('session') == session and (d.get('turn_ended') or 0) > sent[1] / 1000]
+            if ended or time.monotonic() >= idle_end:
                 break
             time.sleep(5)
-        if closed:
-            time.sleep(self.a.after_quiet)  # a row from the close would come within seconds of it
-        ev.update({'work_session': session, 'lease_closed': closed[-1] if closed else None,
+        if ended:
+            time.sleep(self.a.after_quiet)  # a failure row would come within seconds of the turn end
+        ev.update({'work_session': session, 'turn_ended': ended[-1] if ended else None,
                    'new_failure_rows': failed()[rows_before:], 'monitors_after': self.monitors(),
                    'lead_files': self.lead_files()})
         (self.out / 'after.json').write_text(json.dumps(ev, indent=2) + '\n')
-        if not closed:
+        if not ended:
             raise StepFailed('the session %s that ran the request never ended its turn within %g s; see after.json' % (
                 session, self.a.idle_within))
         if ev['new_failure_rows']:
-            raise StepFailed('a Work lease that closed normally raised a "monitor stopped" row; see after.json')
+            raise StepFailed('a "monitor stopped" row reached Stu after the request settled and its turn ended; see after.json')
         return {'job': {k: record.get(k) for k in ('id', 'state', 'title', 'work_session')},
-                'approvals_pressed': pressed, 'lease_closed': ev['lease_closed'], 'new_failure_rows': []}
+                'approvals_pressed': pressed, 'turn_ended': ev['turn_ended'], 'new_failure_rows': []}
 
     def keep(self):
         dest = self.out / 'kept'
@@ -236,7 +238,7 @@ def main():
     p.add_argument('--reminder-seconds', type=float, default=120)
     p.add_argument('--after-task', default=AFTER_JOB, help="`after`'s ordinary request")
     p.add_argument('--after-quiet', type=float, default=60,
-                   help="seconds after the lease's normal close that a failure row is waited for")
+                   help="seconds after the request's turn ended that a failure row is waited for")
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
