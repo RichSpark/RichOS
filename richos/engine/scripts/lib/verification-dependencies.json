@@ -11551,8 +11551,8 @@
           "default": "/Users/alex/ab/femcboost",
           "path": "scripts/hooks/guard-brief-verification-scope.sh",
           "optional_file": true,
-          "sha256": "4809d5e9adf47bd4dfd26c7c6f48e3dce12bafb5f951a279f898bb8464211998",
-          "evidence": "Full external guard reviewed: parses a literal Agent prompt through stdlib Python and grep, no config/import/source. The fixed test prompt has no full-suite-ack so no state write. Changed bytes require review; absent file is an explicit skipped case, not a pass."
+          "sha256": "c72be19d93dc46ee6d2e020ab3b368bf56d6528495265b255dce09c5e944cc3e",
+          "evidence": "Full external guard reviewed: parses a literal Agent prompt through stdlib Python and grep, no config/import/source. The fixed test prompt has no full-suite-ack so no state write. Changed bytes require review; absent file is an explicit skipped case, not a pass. Renewed 2026-10-24 (femcboost f6eed65ba, 3619a35d7): the FULL_SELECTION --working pattern accepts only argument tokens between the selector and --working (a new ARG regex); no new config, import, source or state write."
         }
       ]
     },
