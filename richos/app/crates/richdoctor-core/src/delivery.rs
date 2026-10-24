@@ -95,7 +95,14 @@ pub struct Approved {
     pub manifest: Vec<Entry>,
     pub approved_at: u64,
     pub installation_id: String,
+    /// A RichOS feature idea (Request a feature), posted by the relay as a Discussion under Ideas
+    /// rather than an issue: schema [`IDEA_SCHEMA`], no screenshots. Never set by RichDoctor.
+    #[serde(default)]
+    pub idea: bool,
 }
+
+/// The register schema of a RichOS feature idea (`RICHDOCTOR-RELAY.md`, "Feature ideas").
+pub const IDEA_SCHEMA: &str = "richos-idea/1";
 
 /// Freeze the approved text and screenshot manifest under `report_id`, exactly as the person
 /// reviewed it. Refused only when the manifest breaks the limits or the body does not end with
@@ -109,7 +116,7 @@ pub fn approve(report_id: &str, title: &str, body: &str, manifest: Vec<Entry>, r
     if !body.ends_with(&crate::report::ending(relay, report_id, manifest.len())) {
         return Err(problem("The report's screenshot lines or its report ID footer are missing.".into()));
     }
-    Ok(Approved { report_id: report_id.into(), title: title.into(), body: body.into(), manifest, approved_at: now, installation_id: installation_id.into() })
+    Ok(Approved { report_id: report_id.into(), title: title.into(), body: body.into(), manifest, approved_at: now, installation_id: installation_id.into(), idea: false })
 }
 
 impl Approved {
@@ -118,7 +125,7 @@ impl Approved {
     pub fn register_body(&self, receipt_secret: &str) -> Value {
         let content = crate::util::sha256_hex(format!("{}\n\n{}\n\n{}", self.title, self.body, crate::image_profile::canonical(&self.manifest)).as_bytes());
         json!({
-            "schema": "richdoctor-report/2",
+            "schema": if self.idea { IDEA_SCHEMA } else { "richdoctor-report/2" },
             "report_id": self.report_id,
             "receipt_secret": receipt_secret,
             "content_sha256": content,
@@ -204,7 +211,13 @@ pub trait Relay {
 
 /// An issue link is accepted only on the configured repository, as a plain issue number.
 pub fn issue_link_ok(url: &str, number: Option<u64>, repository: &str) -> Option<u64> {
-    let rest = url.strip_prefix(&format!("https://github.com/{repository}/issues/"))?;
+    link_ok(url, number, repository, "issues")
+}
+
+/// A link on the configured repository's `kind` page (`issues`, or `discussions` for an idea), as a
+/// plain number.
+fn link_ok(url: &str, number: Option<u64>, repository: &str, kind: &str) -> Option<u64> {
+    let rest = url.strip_prefix(&format!("https://github.com/{repository}/{kind}/"))?;
     let n: u64 = rest.parse().ok()?;
     (n > 0 && number.is_none_or(|k| k == n)).then_some(n)
 }
@@ -216,7 +229,7 @@ pub type Images<'a> = &'a dyn Fn(&Entry) -> Option<Vec<u8>>;
 /// (the issue and every screenshot confirmed), a step that went through (`next`), or not sent.
 /// Anything else, `created_checking_images` (fewer screenshots confirmed than sent) included,
 /// is not sent: Send again is offered.
-fn read(t: &Transport, next: &[&str], repository: &str, now: u64) -> Result<Option<State>, State> {
+fn read(t: &Transport, next: &[&str], repository: &str, kind: &str, now: u64) -> Result<Option<State>, State> {
     let not_sent = |why: NotSent| State::NotSent { why, at: now };
     match t {
         Transport::NotConnected { offline: true } => Err(not_sent(NotSent::Offline)),
@@ -230,7 +243,7 @@ fn read(t: &Transport, next: &[&str], repository: &str, now: u64) -> Result<Opti
                     return Ok(None);
                 }
                 if let (true, Some(u)) = (state == "delivered", b["issue_url"].as_str()) {
-                    if let Some(n) = issue_link_ok(u, b["issue_number"].as_u64(), repository) {
+                    if let Some(n) = link_ok(u, b["issue_number"].as_u64(), repository, kind) {
                         return Ok(Some(State::Submitted { issue_url: u.to_string(), issue_number: n, at: now }));
                     }
                 }
@@ -262,18 +275,20 @@ pub fn send(approved: &Approved, images: Images, dest: &Destination, relay: &dyn
     };
     let base = format!("{}/v1/reports", dest.relay);
     let steps = ["receiving", "ready"];
-    if let Err(s) = read(&relay.post(&base, &approved.register_body(&secret)), &steps, &dest.repository, now) {
+    // An idea comes back as a discussion of the configured repository, a report as an issue.
+    let kind = if approved.idea { "discussions" } else { "issues" };
+    if let Err(s) = read(&relay.post(&base, &approved.register_body(&secret)), &steps, &dest.repository, kind, now) {
         return s;
     }
     for (e, b) in approved.manifest.iter().zip(bytes) {
         let headers = [("X-Receipt-Secret".to_string(), secret.clone()), ("Content-Type".to_string(), e.media_type.clone()), ("X-Content-SHA256".to_string(), e.sha256.clone())];
         let url = format!("{base}/{}/uploads/{}", approved.report_id, e.attachment_id);
-        if let Err(s) = read(&relay.put(&url, &headers, b), &steps, &dest.repository, now) {
+        if let Err(s) = read(&relay.put(&url, &headers, b), &steps, &dest.repository, kind, now) {
             return s;
         }
     }
     let done = relay.post(&format!("{base}/{}/complete", approved.report_id), &json!({ "receipt_secret": secret }));
-    match read(&done, &[], &dest.repository, now) {
+    match read(&done, &[], &dest.repository, kind, now) {
         Ok(Some(s)) | Err(s) => s,
         Ok(None) => State::NotSent { why: NotSent::Refused { detail: "it could not be filed this time.".into(), until: None }, at: now },
     }
@@ -401,6 +416,25 @@ mod tests {
         let s = send(&a, &|_: &Entry| Some(png(99)), &dest(), &r, 5);
         assert!(matches!(s, State::NotSent { why: NotSent::Screenshot { .. }, .. }), "{s:?}");
         assert!(r.sent.borrow().is_empty());
+    }
+
+    /// A RichOS feature idea: schema richos-idea/1, register then complete, and the discussion's
+    /// link on the configured repository is "submitted"; an issue link is not this idea's post.
+    #[test]
+    fn an_idea_registers_as_an_idea_and_its_discussion_link_is_submitted() {
+        let id = "RD-7K3M-Q9VX";
+        let body = format!("### The idea\n\nPin a conversation\\.\n\n{}", crate::report::ending(BASE, id, 0));
+        let mut a = approve(id, "Pin a conversation", &body, vec![], BASE, 1_000, INST).unwrap();
+        a.idea = true;
+        let link = "https://github.com/WebDevBooster/richos-test/discussions/9";
+        let r = script(vec![ok(json!({"state": "ready", "missing": []})), ok(json!({"state": "delivered", "issue_url": link, "issue_number": 9}))]);
+        let s = send(&a, &|_: &Entry| None, &dest(), &r, 5);
+        assert_eq!(s, State::Submitted { issue_url: link.into(), issue_number: 9, at: 5 });
+        let sent = r.sent.borrow();
+        assert_eq!(sent[0].1["schema"], IDEA_SCHEMA);
+        assert_eq!(sent[0].1["manifest"], json!([]));
+        let as_issue = script(vec![ok(json!({"state": "ready"})), ok(json!({"state": "delivered", "issue_url": LINK, "issue_number": 42}))]);
+        assert!(matches!(send(&a, &|_: &Entry| None, &dest(), &as_issue, 5), State::NotSent { .. }), "an issue link is not an idea's discussion");
     }
 
     #[test]
