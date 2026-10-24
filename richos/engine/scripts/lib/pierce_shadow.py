@@ -11,11 +11,18 @@ without its section 8 switch-over limits (the CEO set none; the data decides).
 
     pierce_shadow.py run <job>   started detached by pierce.py beside every initial
                                  Opus review; never by hand
-    pierce_shadow.py status      how far the sample is, per kind (read-only)
+    pierce_shadow.py status [--project <repository>]
+                                progress in that repository's selected period
 
 On and off: PIERCE_SHADOW_MODEL in the governed repository's orchestration.config
 (empty is off). The track also stops itself once both kinds have their sample and
 raises one work-complete escalation saying so.
+
+PIERCE_SHADOW_PERIOD selects an independent collection under periods/<id>/.
+Its counters, pending judgments, skips and completion marker never read another
+period or the legacy experiment. Detached jobs retain their original directory.
+The period manifest pins reviewer/model inputs; select a new id after a change.
+Absent or blank preserves the legacy layout. Invalid ids never fall back to it.
 
 Everything is written under <state>/pierce-shadow/ (beside Pierce's own state,
 outside every repository): jobs/, pairs/<pair>.{opus,haiku,kind,adjudication}.json,
@@ -24,6 +31,7 @@ revisions/, skipped.jsonl, dismissals.jsonl, shadow.log, complete.json.
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -55,6 +63,8 @@ ADJUDICATION_LIMIT_SECONDS = 30 * 60
 ADJUDICATION_ATTEMPTS = 5
 PENDING_PER_RUN = 3
 LABELS = ("matched", "real-material", "real-minor", "false", "unverifiable")
+LOADED_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+COLLECTION_ROOT = None
 
 # ---------------------------------------------------------------------------
 # Kind 1 or kind 2: rule v1 (plan section 2), the exact rule Sage's measure.py
@@ -98,7 +108,9 @@ def kind_of(request):
 # ---------------------------------------------------------------------------
 
 def root():
-    return pierce.shadow_dir()
+    if COLLECTION_ROOT is not None:
+        return COLLECTION_ROOT
+    return pierce.shadow_dir(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
 
 
 def pairs():
@@ -118,7 +130,7 @@ def read(path):
 
 
 def log(text):
-    pierce.shadow_log(text)
+    pierce.shadow_log(text, root())
 
 
 def skip(pair, why, **extra):
@@ -410,12 +422,26 @@ def finish_if_complete():
 # ---------------------------------------------------------------------------
 
 def run(job_path):
+    # A detached worker belongs to the job's original directory. Configuration
+    # may change while it runs; never reselect or migrate its counters/evidence.
+    global COLLECTION_ROOT
+    COLLECTION_ROOT = Path(job_path).resolve().parent.parent
     job = read(job_path)
     if not job:
         log("job %s unreadable" % job_path)
         return 1
     pair, request = job["pair"], job["request"]
     try:
+        if root().parent.name == "periods":
+            collection = job.get("collection") or {}
+            expected = {"period": root().name, "model": job["model"], "effort": job["effort"],
+                        "source_sha256": pierce.SOURCE_SHA256,
+                        "profile_sha256": hashlib.sha256(job["profile"].encode()).hexdigest(),
+                        "rules_sha256": hashlib.sha256(pierce.REVIEW_RULES.encode()).hexdigest(),
+                        "shadow_sha256": LOADED_SHA256}
+            if collection != expected or read(root() / "period.json") != collection:
+                skip(pair, "period or inspector identity changed before twin started")
+                return 0
         kind, signals = kind_of(request)
         write(pairs() / (pair + ".kind.json"), {
             "pair": pair, "kind": kind, "signals": signals, "rule_version": RULE_VERSION,
@@ -495,8 +521,12 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     one = sub.add_parser("run")
     one.add_argument("job")
-    sub.add_parser("status")
+    report = sub.add_parser("status")
+    report.add_argument("--project", help="governed repository whose configured period to inspect")
     args = parser.parse_args(argv)
+    if args.command == "status" and args.project:
+        global COLLECTION_ROOT
+        COLLECTION_ROOT = pierce.shadow_dir(args.project)
     return run(args.job) if args.command == "run" else status()
 
 

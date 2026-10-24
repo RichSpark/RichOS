@@ -758,13 +758,40 @@ def invoke(request, profile):
 SHADOW_EFFORT = "high"
 
 
-def shadow_dir():
-    return state_dir().parent / "pierce-shadow"
-
-
-def shadow_log(text):
+def shadow_setting(project, key):
     try:
-        root = shadow_dir()
+        text = (Path(project) / "orchestration.config").read_text()
+    except OSError:
+        return ""
+    value = ""
+    for line in text.splitlines():
+        match = re.fullmatch(r'\s*' + re.escape(key) + r'\s*=\s*(.*?)\s*', line.split("#", 1)[0])
+        if match:
+            value = match[1].strip()
+            if len(value) >= 2 and value[0] == value[-1] == '"':
+                value = value[1:-1]
+    return value
+
+
+def shadow_period(project):
+    value = shadow_setting(project, "PIERCE_SHADOW_PERIOD")
+    if value and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}", value):
+        raise ValueError("invalid PIERCE_SHADOW_PERIOD; no legacy fallback")
+    return value
+
+
+def shadow_dir(project=None, *, period=None):
+    base = state_dir().parent / "pierce-shadow"
+    if period is None:
+        period = shadow_period(project) if project is not None else ""
+    if period and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}", period):
+        raise ValueError("invalid shadow period")
+    return base / "periods" / period if period else base
+
+
+def shadow_log(text, root=None):
+    try:
+        root = root if root is not None else shadow_dir()
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         with open(root / "shadow.log", "a") as log:
             log.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + text + "\n")
@@ -777,26 +804,36 @@ def shadow_model(project):
     is off, and the desktop app's Pierce (a product user's) never gets a twin."""
     if os.environ.get("RICHOS_APP_STATE"):
         return ""
-    try:
-        text = (Path(project) / "orchestration.config").read_text()
-    except OSError:
-        return ""
-    value = ""
-    for line in text.splitlines():
-        match = re.fullmatch(r'\s*PIERCE_SHADOW_MODEL\s*=\s*"?([^"#\s]*)"?\s*(?:#.*)?', line)
-        if match:
-            value = match[1]
+    value = shadow_setting(project, "PIERCE_SHADOW_MODEL")
     return value if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value) else ""
 
 
 def shadow_start(payload, review, profile, identity, project):
     """Start the twin of this initial review, detached in its own session: never waited on,
-    never raises. Returns the pair name, or None when no twin starts."""
+    never raises. Returns the job path, pinning both sides to its period, or None."""
+    root = None
     try:
         model = shadow_model(project)
-        root = shadow_dir()
-        if not model or (root / "complete.json").exists():
+        if not model:
             return None
+        root = shadow_dir(project)
+        if (root / "complete.json").exists():
+            return None
+        period = root.name if root.parent.name == "periods" else ""
+        fingerprint = {"period": period, "model": model, "effort": SHADOW_EFFORT,
+                       "source_sha256": SOURCE_SHA256,
+                       "profile_sha256": hashlib.sha256(profile.encode()).hexdigest(),
+                       "rules_sha256": hashlib.sha256(REVIEW_RULES.encode()).hexdigest(),
+                       "shadow_sha256": hashlib.sha256(Path(__file__).with_name("pierce_shadow.py").read_bytes()).hexdigest()}
+        if period:
+            root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with locked(root / "period.lock"):
+                manifest = root / "period.json"
+                if manifest.exists():
+                    if json.loads(manifest.read_text()) != fingerprint:
+                        raise ValueError("shadow inputs changed; select a new PIERCE_SHADOW_PERIOD")
+                else:
+                    atomic(manifest, fingerprint)
         (root / "jobs").mkdir(parents=True, exist_ok=True, mode=0o700)
         (root / "pairs").mkdir(exist_ok=True, mode=0o700)
         at = time.time()
@@ -807,39 +844,42 @@ def shadow_start(payload, review, profile, identity, project):
         atomic(job, {"pair": pair, "at": at, "model": model, "effort": SHADOW_EFFORT,
                      "session_id": payload["session_id"], "tool_use_id": payload["tool_use_id"],
                      "worker": {"name": ti.get("name"), "type": ti.get("subagent_type"), "model": ti.get("model")},
-                     "opus_result_id": identity, "profile": profile, "request": review})
+                     "opus_result_id": identity, "profile": profile, "request": review,
+                     "collection": fingerprint})
         env = dict(os.environ)
         env.pop("CLAUDECODE", None)
         with open(root / "shadow.log", "a") as log:
             subprocess.Popen([sys.executable, "-B", str(Path(__file__).resolve().parent / "pierce_shadow.py"),
                               "run", str(job)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=log, cwd=str(root), env=env, start_new_session=True, close_fds=True)
-        return pair
+        return job
     except Exception as error:  # the track must never reach the hook
-        shadow_log(f"no twin started: {type(error).__name__}: {error}")
+        shadow_log(f"no twin started: {type(error).__name__}: {error}", root)
         return None
 
 
-def shadow_opus(pair, result, metrics, began):
+def shadow_opus(job, result, metrics, began):
     """The Opus side of a pair, written after Pierce's own result."""
-    if not pair:
+    if not job:
         return
+    pair, root = Path(job).stem, Path(job).parent.parent
     try:
-        atomic(shadow_dir() / "pairs" / (pair + ".opus.json"), {
+        atomic(root / "pairs" / (pair + ".opus.json"), {
             "pair": pair, "result_id": result["id"], "verdict": result["verdict"], "report": result["report"],
             "notes": result.get("notes", []), "metrics": metrics,
             "hook_seconds": round(time.monotonic() - began, 3)})
     except Exception as error:
-        shadow_log(f"pair {pair}: Opus record not written: {type(error).__name__}: {error}")
+        shadow_log(f"pair {pair}: Opus record not written: {type(error).__name__}: {error}", root)
 
 
 def shadow_revision(project, identity, lane, revises, result):
     """A revision review gets no twin; its row says whether the lead's revision fixed Opus's findings."""
     try:
-        if not shadow_model(project):
+        if "shadow_period" not in result:
             return
-        (shadow_dir() / "revisions").mkdir(parents=True, exist_ok=True, mode=0o700)
-        atomic(shadow_dir() / "revisions" / (identity + ".json"), {
+        root = shadow_dir(period=result["shadow_period"])
+        (root / "revisions").mkdir(parents=True, exist_ok=True, mode=0o700)
+        atomic(root / "revisions" / (identity + ".json"), {
             "id": identity, "lane": lane, "revises": revises, "at": result["at"],
             "verdict": result["verdict"], "report": result["report"], "notes": result.get("notes", [])})
     except Exception as error:
@@ -940,11 +980,21 @@ def inspect(payload):
             # The Haiku twin starts beside an initial review only, before Opus, from
             # the request already built; it is never waited on (data collection only).
             pair = None
+            selected_period = None
             if missing:
                 verdict = {"verdict": "UNAVAILABLE", "report": missing}
             else:
                 if review["review"]["mode"] == "initial":
                     pair = shadow_start(payload, review, profile, identity, project)
+                    if pair:
+                        track_root = Path(pair).parent.parent
+                        selected_period = track_root.name if track_root.parent.name == "periods" else ""
+                else:
+                    try:
+                        if shadow_model(project):
+                            selected_period = shadow_period(project)
+                    except (OSError, ValueError) as error:
+                        shadow_log(f"revision collection unavailable: {error}")
                 try:
                     verdict = invoke(review, profile)
                     checked_classification(request, verdict)
@@ -962,6 +1012,8 @@ def inspect(payload):
                 result["recovery_observation_gaps"] = request["recovery_observation_gaps"]
             if classification:
                 result["classification_index"] = classification["index"]
+            if selected_period is not None:
+                result["shadow_period"] = selected_period
             atomic(path, result)
             atomic(lane_path, {"id": identity, "started": started, "request": request})
             shadow_opus(pair, result, getattr(verdict, "metrics", {}), began)
@@ -1004,11 +1056,12 @@ def main():
             atomic(path, value)
         # The lead's action on Opus's findings is the track's cross-check on its judge.
         try:
-            if shadow_dir().is_dir():
-                with open(shadow_dir() / "dismissals.jsonl", "a") as out:
+            track_root = shadow_dir(period=value.get("shadow_period", ""))
+            if track_root.is_dir():
+                with open(track_root / "dismissals.jsonl", "a") as out:
                     out.write(json.dumps({"id": args.dismiss, "at": time.time(),
                                           "reason": args.reason.strip()}, ensure_ascii=False) + "\n")
-        except OSError:
+        except (OSError, ValueError):
             pass
         print("Pierce report dismissed for this exact assignment: " + args.reason.strip())
         return 0
