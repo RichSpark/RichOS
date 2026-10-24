@@ -481,6 +481,7 @@ def _tools_of_turn(payload):
     if not path or not os.path.isfile(path):
         return None  # UNKNOWN — never the same as "no tools used"
     _READ["bytes"] = 0
+    _READ["beyond_budget"] = False
     try:
         with open(path, "rb") as fh:
             size = fh.seek(0, os.SEEK_END)
@@ -497,6 +498,7 @@ def _tools_of_turn(payload):
                 if reached:
                     return tools
                 if not start or window >= TAIL_BUDGET:
+                    _READ["beyond_budget"] = bool(start)   # the file goes on past what is read
                     return None
                 window = min(window * 2, TAIL_BUDGET)
     except Exception:
@@ -557,7 +559,7 @@ def main():
         # reported instead. Reporting 0 here used to make the wrapper announce
         # that the text had been checked, which is the same false reassurance in
         # a rarer costume.
-        print("transcript-unreadable")
+        print("turn-beyond-budget" if _READ.get("beyond_budget") else "transcript-unreadable")
         return 4
 
     if CONTINUED in tools:

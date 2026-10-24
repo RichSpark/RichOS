@@ -275,7 +275,7 @@ print(tools, d._READ["bytes"] <= 2 * d.TAIL_BUDGET, os.path.getsize(sys.argv[2])
 PYEOF
 )"
 run_hook "Stream B is on hold, deliberately."
-if [ "$BUDGET_OUT" = "None True True" ] && ! spoke && names "NOT RUN this turn"; then
+if [ "$BUDGET_OUT" = "None True True" ] && ! spoke && names "NOT RUN this turn" && names "longer than the check reads"; then
     ok "T1h no opening prompt within the read budget: UNKNOWN (said as not checked), and the read is bounded"
 else bad "T1h an opening prompt beyond the budget is unknown, not guessed" "budget=$BUDGET_OUT out=$HOUT"; fi
 
@@ -466,6 +466,12 @@ run_hook "I'm queueing the fix rather than dispatching it now, because two agent
 if spoke; then ok "6b  a DIFFERENT deferral speaks again — de-duplication is per-deferral, not a mute"
 else bad "6b  a different deferral speaks again" "$HOUT"; fi
 say "6b" "$HOUT"
+# 6c (Frank D2): a clean turn in between, then the SAME deferral repeated in a later status
+# reply: still told only once in the session.
+run_hook "All three checks passed and the branch is committed." --remember
+run_hook "$SPECIMEN" --remember
+if quiet; then ok "6c  the same deferral repeated after a clean turn is not told again in the session"
+else bad "6c  the same deferral re-fired after a clean turn" "$HOUT"; fi
 
 # ===========================================================================
 # 7. THE TRANSCRIPT IS UNREADABLE -> NO ACCUSATION, AND NO CLAIM TO HAVE LOOKED

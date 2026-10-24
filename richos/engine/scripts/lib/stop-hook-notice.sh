@@ -280,6 +280,20 @@ stop_notice_lead() {
     return 0
 }
 
+# stop_notice_seen <key> — 0 when <key> was already told in this session (a seen-set beside
+# the ledger, one key per line); else records it and returns 1. Without a ledger nothing is
+# remembered and every key is new (announce, the safe direction).
+stop_notice_seen() {
+    local seen
+    [ -n "$_SHN_LEDGER" ] || return 1
+    seen="${_SHN_LEDGER%.state}.seen"
+    if grep -qxF -- "${1:-}" "$seen" 2>/dev/null; then
+        return 0
+    fi
+    printf '%s\n' "${1:-}" >> "$seen" 2>/dev/null || true
+    return 1
+}
+
 # stop_notice_abnormal <state-key> <message>
 #
 # The guard is not doing its job. Announce on entry to this state, and stay

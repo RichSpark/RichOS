@@ -307,10 +307,10 @@ mutant silent-root-failure "5e " "$H" \
 # a hypothetical: the wrapper recorded "ok" before the analysis, so the ledger
 # alternated between "ok" and the finding key and the same deferral was
 # announced on every single turn.
-mutant normal-before-analysis "6a " "$H" \
-    'set +e@@NL@@FINDING="$(printf' \
-    'stop_notice_normal "back"@@NL@@set +e@@NL@@FINDING="$(printf' \
-    "the ledger holds ONE state per (session, hook); writing 'ok' on entry and the finding afterwards defeats de-duplication entirely."
+mutant seen-set-ignored "6c " "$H" \
+    'if command -v stop_notice_seen >/dev/null 2>&1 && stop_notice_seen "$KEY"; then' \
+    'if false; then' \
+    "the same deferral repeated in a later status reply would be told again every time a clean turn came in between (Frank D2): once per quote per session is the seen-set's job, since the one-slot ledger also carries the on/off states."
 
 mutant constant-state-key "6b " "$H" \
     'KEY="deferral:${CONSTRUCTION}:$(printf' \

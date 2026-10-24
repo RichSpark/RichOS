@@ -266,6 +266,7 @@ notice_unevaluated() { # <reason word>
         no-turn-text)          why="this turn arrived with no text for it to read" ;;
         payload-unreadable)    why="the turn-end payload could not be read" ;;
         transcript-unreadable) why="the transcript naming this turn's tool use could not be read, and two of the three discharges are decided from it" ;;
+        turn-beyond-budget)    why="this turn is longer than the check reads (its opening prompt is more than 4 MB back in the transcript), so it was not checked" ;;
         analyzer-failed)       why="the analyzer exited $RC instead of deciding" ;;
         analyzer-empty)        why="the analyzer reported a finding and then handed over nothing to report" ;;
         *)                     why="its predicate could not be evaluated" ;;
@@ -300,6 +301,12 @@ except Exception: print("")' 2>/dev/null || true)"
 # The state key is construction + quote hash: a second, DIFFERENT deferral
 # speaks again; the same one restated does not.
 KEY="deferral:${CONSTRUCTION}:$(printf '%s' "$QUOTE" | cksum | tr -d ' ')"
+# Once per quote per SESSION: a later status reply that repeats a held item's sentence is not
+# a new deferral (Frank D2). The seen-set keeps every key told; the one-slot ledger still
+# carries the on/off states.
+if command -v stop_notice_seen >/dev/null 2>&1 && stop_notice_seen "$KEY"; then
+    exit 0
+fi
 
 # REPORT ONLY, TO THE LEAD (orchestration reliability R1, richos-hq docs/prds/
 # 2026-10-23-orchestration-reliability.md): nothing is recorded, nothing blocks,
