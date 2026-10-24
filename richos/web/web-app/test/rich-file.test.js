@@ -48,7 +48,7 @@ function page(fetchFile, shown = row) {
 		api: { offers: () => true, fetchFile },
 		window: { open: (...args) => { const view = { args, location: {}, closed: false, close() { this.closed = true; } }; opened.push(view); return view; } },
 		URL: { createObjectURL: (blob) => 'blob:phone/' + blob.name, revokeObjectURL: () => {} },
-		setTimeout: () => 0,
+		setTimeout: () => 0, File,
 		queue: { enqueue: async (item) => { sent.push(item); } },
 		newClientId: () => 'client-1', currentThreadId: 'thr_A', flushQueue: () => {}, render: () => {},
 		scheduleRender: () => { renders += 1; }, setHoldNote: () => {}, handleApiError: () => {},
@@ -123,4 +123,33 @@ test('a Mac out of reach leaves the card ready, saying so, and the viewer closed
 	const li = p.draw();
 	assert.strictEqual(li.dataset.s, 'ready');
 	assert.strictEqual(cardOf(li).attributes['aria-label'], 'Open rich-file-check.pdf, Your Mac isn’t reachable from here. Tap to try again.');
+});
+
+// Second review of e2271b0ec (rv-20261024T183254Z-e2271b0e-45da, finding 1): the Mac sends every type
+// it does not name as `application/octet-stream` (`output_files.rs` `mime_of`), and a real Blob from a
+// Response has no name, so a spreadsheet opened in a window arrived as an unnamed download. Run here
+// through the shipped `lib/api.js` and a real `Response`, the way the page fetches it.
+test('a file the browser does not show is saved under its own name, with or without a window allowed', async () => {
+	const { createApi } = require(path.join(ROOT, 'lib/api.js'));
+	for (const [name, popups] of [['budget.xlsx', true], ['proposal.docx', false]]) {
+		const saved = [];
+		const opened = [];
+		const realApi = createApi({
+			state: { apiBase: 'https://mac.example:8443', deviceId: 'device', challenge: 'challenge' },
+			origin: 'https://mac.example:8443',
+			signer: { sign: async () => 'signature', sha256Hex: async () => '' },
+			fetchImpl: async () => new Response('document bytes', { headers: { 'Content-Type': 'application/octet-stream' } }),
+		});
+		const context = vm.createContext({
+			api: realApi, File, scheduleRender: () => {}, handleApiError: () => {}, currentThreadId: 'thr_A',
+			setTimeout: () => 0,
+			window: { open: () => { const view = { location: {}, close() {} }; opened.push(view); return popups ? view : null; } },
+			URL: { createObjectURL: (blob) => { saved.push({ type: blob.type, name: blob.name }); return 'blob:phone/1'; }, revokeObjectURL: () => {} },
+			document: { createElement: () => ({ click() { saved.push({ download: this.download, href: this.href }); } }) },
+		});
+		vm.runInContext(rowSource + '\nthis.openFile = openFile;', context);
+		await context.openFile({ thread_id: 'thr_A', file: { id: 'rf_2', name, exists: true } }, name);
+		assert.strictEqual(opened.length, 0, `${name}: a window was opened for a file the browser does not show`);
+		assert.deepStrictEqual(saved, [{ type: 'application/octet-stream', name }, { download: name, href: 'blob:phone/1' }], name);
+	}
 });

@@ -963,13 +963,18 @@ function renderRow(row, isLastDelivered) {
 // the card's own description and an id, never a path. Until this card the page drew that row as a
 // bubble holding the file's name and nothing to open it with. A tap brings the bytes over on one
 // signed `GET /api/messages?kind=file` (`api.fetchFile`) and opens them in the browser's own
-// viewer, as the Mac opens the file in its usual app. A file moved or deleted on the Mac says so in
+// viewer, as the Mac opens the file in its usual app; a type the browser does not show is saved
+// under its own name instead. A file moved or deleted on the Mac says so in
 // the Mac's own sentence and offers "Ask Rich again", which sends what the Mac's card sends.
 //
 // What a tap is doing is kept per file id, because a streaming reply rebuilds every row.
 const FILE_GONE = 'No longer on this Mac. It was moved or deleted.';
 const FILE_PAGE = '<svg viewBox="0 0 40 48" aria-hidden="true"><path class="pg" d="M4 4.5A4 4 0 0 1 8 .5h18l13.5 13.5v29.5a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4z"/><path class="fold" d="M26 .5v9.5a4 4 0 0 0 4 4h9.5z"/></svg>';
 const fileTaps = new Map();
+// What a phone's browser shows itself: the types the Mac names (`output_files.rs` `mime_of`) that
+// are a document, a picture or a recording. SVG is left out on purpose: opened as a page it would
+// run as this app. Anything else is saved under its own name, never opened as an unnamed page.
+const FILE_SHOWN = /\.(pdf|png|jpe?g|gif|webp|heic|mp4|mov|m4v|webm|m4a|mp3|wav)$/i;
 
 function fileCard(row) {
 	const f = row.file;
@@ -1012,15 +1017,17 @@ async function openFile(row, name) {
 	if (f.exists === false || tap.gone || tap.busy) return;
 	// The viewer's window is opened INSIDE the tap: a browser lets a page open one only then, and
 	// the file takes longer than that to come over. It is pointed at the file when it is here.
-	const view = window.open('', '_blank');
+	const view = FILE_SHOWN.test(name) ? window.open('', '_blank') : null;
 	fileTaps.set(f.id, { busy: true });
 	scheduleRender();
 	try {
 		const blob = await api.fetchFile(f.id, row.thread_id || currentThreadId);
-		const url = URL.createObjectURL(blob);
+		const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+		const url = URL.createObjectURL(file);
 		if (view) view.location.href = url;
 		else {
-			// No window was allowed (an installed app may refuse one): the file is saved instead.
+			// A file the browser does not show, or no window allowed (an installed app may refuse
+			// one): it is saved, under its own name.
 			const link = document.createElement('a');
 			link.href = url;
 			link.download = name;
