@@ -406,8 +406,16 @@ def terminal_messages(path, seen=None, cutoff=None, written_note=None, sources=N
                     # The successful native result survives note deletion or
                     # replacement. As with Read, use that receipt, not today's
                     # mutable disk. The predecessor must still attest its write.
-                    headers = [h for h in re.findall(r"(?m)^---[ \t]*\n.*?\n---(?:\n|$)", text, re.S)
-                               if restart_header(h)]
+                    # Earlier cats may print other notes. Bind metadata to the
+                    # final literal cat's filename, not just any restart header
+                    # in combined stdout. Memory uses '-' and '_' interchangeably.
+                    expected_name = re.sub(r"^project-", "", Path(note).stem.replace("_", "-"))
+                    headers = []
+                    for header in re.findall(r"(?m)^---[ \t]*\n.*?\n---(?:\n|$)", text, re.S):
+                        name = re.search(r"(?m)^name:\s*(\S+)\s*$", header)
+                        if (name and re.sub(r"^project-", "", name[1].replace("_", "-")) == expected_name
+                                and restart_header(header)):
+                            headers.append(header)
                     if len(headers) != 1:
                         continue
                     text = headers[0]

@@ -325,6 +325,43 @@ class Pierce(unittest.TestCase):
             self.assertTrue(authority["complete"])
             self.assertIn(str(source.resolve()), authority["original_transcripts"])
 
+    def test_feedback_note_quoting_restart_metadata_cannot_erase_an_actual_read(self):
+        import shlex
+        source, note = self.continued_terminal()
+        feedback = note.parent / "feedback_work.md"
+        text = "---\nname: feedback_work\n---\nAn example, not a handoff:\n---\nname: project_restart_quoted\nmetadata:\n  originSessionId: previous\n---\n"
+        calls = self.note_io("Read", note, "previous")
+        calls += [{"type": "assistant", "timestamp": "2026-10-11T01:00:00Z", "message": {"content": [
+            {"type": "tool_use", "id": "feedback", "name": "Bash", "input": {"command": "cat " + shlex.quote(str(feedback))}}]}},
+            {"type": "user", "timestamp": "2026-10-11T01:00:01Z", "message": {"content": [
+             {"type": "tool_result", "tool_use_id": "feedback", "content": text}]}}]
+        # The real historical command printed a restart note before its final
+        # cat of an ordinary feedback note. Both results must be harmless here.
+        for stdout in (text, text[text.index("---\nname: project_restart_quoted"):]):
+            calls[-1]["message"]["content"][0]["content"] = stdout
+            self.write_rows(self.transcript, calls)
+            context = {}
+            self.assertEqual(P.human_context(self.payload, context), "Implement the feature. Keep the API.")
+            self.assertTrue(context["complete"])
+
+    def test_deleted_final_cat_selects_its_own_header_after_another_restart_note(self):
+        import shlex
+        source, note = self.continued_terminal()
+        self.materialize_note(note)
+        actual = note.read_text()
+        other = note.parent / "project_restart_other.md"
+        prefix = "---\nname: project_restart_other\nmetadata:\n  originSessionId: unrelated\n---\n"
+        rows = [{"type": "assistant", "timestamp": "2026-10-11T00:00:00Z", "message": {"content": [
+            {"type": "tool_use", "id": "combined-cat", "name": "Bash", "input": {"command":
+             "cat " + shlex.quote(str(other)) + "; echo separator; cat " + shlex.quote(str(note))}}]}},
+            {"type": "user", "timestamp": "2026-10-11T00:00:01Z", "message": {"content": [
+             {"type": "tool_result", "tool_use_id": "combined-cat", "content": prefix + "separator\n" + actual}]}}]
+        self.write_rows(self.transcript, rows)
+        note.unlink()
+        context = {}
+        self.assertEqual(P.human_context(self.payload, context), "Implement the feature. Keep the API.")
+        self.assertTrue(context["complete"])
+
     def test_startup_snapshot_canonicalizes_a_symlinked_config_prefix(self):
         source, note = self.continued_terminal()
         self.materialize_note(note)
