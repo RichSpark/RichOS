@@ -828,7 +828,7 @@ def shadow_revision_period(project, report, profile):
         if period and json.loads((root / "period.json").read_text()) != expected:
             raise ValueError("shadow inputs changed; revision not collected")
         return period
-    except (OSError, ValueError, TypeError) as error:
+    except Exception as error:  # collection failures must never change the live verdict
         shadow_log(f"revision collection unavailable: {error}", root)
         return None
 

@@ -1326,6 +1326,7 @@ class HaikuParallelTrack(unittest.TestCase):
         original = json.loads(path.read_text())
         profile = (ENGINE / "agents/pierce.md").read_text().split("---", 2)[-1].strip()
         self.assertEqual(P.shadow_revision_period(self.project, first, profile), "revision-manifest")
+        self.assertIsNone(P.shadow_revision_period(self.project, {**first, "inspection": None}, profile))
         for key in original:
             with self.subTest(pin=key):
                 path.write_text(json.dumps({**original, key: "changed-value"}))
