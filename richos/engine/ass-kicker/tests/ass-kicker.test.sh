@@ -709,8 +709,12 @@ silent && ok "A7c. the truthful clarification passes with no further write, comm
 # demand, and nothing calls it verified. Catching it would take comparing wording, which is
 # deliberately not done here.
 run_hook "$TR_BASH" "Delete all release speed measurements on Windows. It is on the follow-up list (\`docs/plans/follow-ups.md\`, commit \`$INVESTIGATE_SHA\`)."
-{ silent && no_demand; } && ok "A7d. LIMIT: a cited row whose words say the opposite is cited, not verified: no alert and no write demand" \
-    || bad "A7d. opposite action" "rc=$RC out=$OUT"
+A7D_LOGGED="$(tail -1 "$ENTITY/.claude/state/stated-actions.jsonl" 2>/dev/null | python3 -c 'import json,sys
+a = json.loads(sys.stdin.readline() or "{}").get("arm3") or {}
+print("%s|%s" % (a.get("verdict"), ",".join(a.get("cited") or [])))' 2>/dev/null)"
+{ silent && no_demand && [ "$A7D_LOGGED" = "cited, content not checked|$INVESTIGATE_SHA" ]; } \
+    && ok "A7d. LIMIT: a cited row whose words say the opposite is logged 'cited, content not checked' with its commit, never verified; no alert, no write demand" \
+    || bad "A7d. opposite action" "rc=$RC out=$OUT logged=$A7D_LOGGED"
 run_hook "$TR_BASH" "It's on the follow-up list (\`docs/plans/follow-ups.md\`, commit \`$OTHER_SHA\`), to brief later."
 { alerted 'NOT VERIFIED' && alerted 'not a finding that no record exists' && no_demand; } \
     && ok "A7e. a cited commit that does not change the follow-up list is NOT VERIFIED, never 'no record', with no write demand" \

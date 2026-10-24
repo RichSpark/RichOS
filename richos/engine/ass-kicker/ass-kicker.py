@@ -1335,11 +1335,12 @@ def existing_record(window, repos):
     return "unverified", shas[0], why
 
 
-def judge_record_claims(claims, writes, raw, repos=()):
+def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
     """[(sentence, code, problem)] for every claim this turn does not back.
     code is one of: nothing, private, where, sha, state, followup, unverified.
     Pure but for `repos`: claims from record_claims(), writes from turn_writes(),
-    raw = the reply, repos = where a cited follow-up commit is looked up."""
+    raw = the reply, repos = where a cited follow-up commit is looked up;
+    `cited_out` collects the claims an earlier cited record backs."""
     failing = []
     low = raw.lower()
     concrete = bool(LOCATION_RE.search(raw))
@@ -1380,6 +1381,8 @@ def judge_record_claims(claims, writes, raw, repos=()):
                                                                  for p in repo_named)) \
                 else (existing_record(win, repos) if repos else None)
             if found and found[0] == "cited":
+                if cited_out is not None:
+                    cited_out.append({"sentence": sentence, "commit": found[1], "repo": found[2]})
                 continue
             if found:
                 failing.append((sentence, "unverified", found[2]))
@@ -1398,6 +1401,8 @@ def judge_record_claims(claims, writes, raw, repos=()):
             if not (writes["committed"] and any(_staged_in_commit(p, traffic) for p in on_list)):
                 found = existing_record(note_window(raw, sentence), repos) if repos else None
                 if found and found[0] == "cited":
+                    if cited_out is not None:
+                        cited_out.append({"sentence": sentence, "commit": found[1], "repo": found[2]})
                     continue
                 if found:
                     failing.append((sentence, "unverified", found[2]))
@@ -1481,7 +1486,10 @@ def record_claim_verdict(payload, message):
          claims   [(kind, sentence)]
          failing  [(sentence, problem)] — non-empty means REFUSE
          written  [(path, class)] this turn wrote, for the refusal
-         verdict  'backed' | 'refused' | 'unscoped' | 'unavailable: …'
+         verdict  'backed' | 'refused' | 'unscoped' | 'unavailable: …' |
+                  'cited, content not checked' (only cited earlier records back the claims:
+                  their commit and file are checked, their wording is not)
+         cited    [{sentence, commit, repo}] for those
     Every failure to READ the turn lets it end (the arm fails open like its
     siblings); a turn that was read and does not back its claim is refused."""
     try:
@@ -1505,9 +1513,14 @@ def record_claim_verdict(payload, message):
         v["verdict"] = "unavailable: " + str(err)
         return v
     v["written"] = writes["targets"]
-    v["failing"] = judge_record_claims(claims, writes, message, _record_repos(cwd))
+    cited = []
+    v["failing"] = judge_record_claims(claims, writes, message, _record_repos(cwd), cited)
+    if cited:
+        v["cited"] = cited
     if v["failing"]:
         v["verdict"] = "refused"
+    elif cited:
+        v["verdict"] = "cited, content not checked"
     return v
 
 
@@ -1520,7 +1533,8 @@ def _arm3_log(payload, v):
             f.write(json.dumps({"session": payload.get("session_id"), "prompt_id": payload.get("prompt_id"),
                                 "refire": True, "arm3": {"claims": len(v["claims"]),
                                                          "failing": len(v["failing"]),
-                                                         "verdict": v["verdict"]}}) + "\n")
+                                                         "verdict": v["verdict"],
+                                                         "cited": [c["commit"] for c in v.get("cited", [])]}}) + "\n")
     except Exception:
         pass
 
@@ -1696,7 +1710,7 @@ def main():
 
     if arm3 is not None:
         record["arm3"] = {"claims": len(arm3["claims"]), "failing": len(arm3["failing"]),
-                          "verdict": arm3["verdict"]}
+                          "verdict": arm3["verdict"], "cited": [c["commit"] for c in arm3.get("cited", [])]}
     # The alert is spoken once, on the reply that ends the turn: when ARM 1 or 2
     # is about to refuse this reply, the re-fire carries the one that counts.
     if arm3 is not None and not unmet and not undeclared:
