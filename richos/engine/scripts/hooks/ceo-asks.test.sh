@@ -595,6 +595,20 @@ if [ "$RC" -eq 1 ]; then
 else
     bad "D7. a reply asking an unrelated question asks nothing" "rc=$RC"
 fi
+# D10 (review rv-20261024T023656Z-3569ec17-4407 #1): one reply asking TWO prepared items
+# records both, so neither is put to him again.
+reset_ledger
+P="$(CA_CWD="$SEAT" python3 -c '
+import json, os
+print(json.dumps({"hook_event_name": "Stop", "session_id": "S10", "cwd": os.environ["CA_CWD"], "stop_hook_active": False,
+                  "last_assistant_message": "For Apple signing and developer enrollment, should we enroll as an individual or a company? For the call-transcription default, should we switch it now or hold it? My defaults are individual and hold."}))')"
+run_hook "$STOPN" "$P"
+if grep -q '"matched_item": "1.1"' "$LEDGER" 2>/dev/null && grep -q '"matched_item": "1.2"' "$LEDGER" \
+   && ! printf '%s' "$OUT" | grep -q '1\.2'; then
+    ok "D10. a reply asking two prepared items records both, and neither is asked again"
+else
+    bad "D10. a reply asking two prepared items records both" "$(cat "$LEDGER" 2>/dev/null) out=$OUT"
+fi
 # D8-D9 (Codex 2026-10-24): naming the item is not asking it. A reply that says it has NOT
 # asked item 1.1, and one that quotes an earlier question about it, put no question to him.
 reset_ledger

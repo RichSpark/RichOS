@@ -193,7 +193,9 @@ except Exception: print("")' 2>/dev/null || true)"
 # actually puts are matched: its sentences that end in a question mark, outside code, quotes
 # and quoted lines. A reply that only mentions an item ("I have not asked you about 1.1
 # yet") or quotes an earlier question puts nothing. Each question is matched against his
-# prepared items exactly as an AskUserQuestion is (ca_match) and recorded the same way.
+# prepared items exactly as an AskUserQuestion is (ca_match) and recorded the same way, one
+# question at a time: the matcher returns one best item, so two questions matched together
+# would record one and put the other back in front of him.
 REPLY="$(printf '%s' "$INPUT" | python3 -c 'import json, re, sys
 try:
     d = json.load(sys.stdin)
@@ -210,7 +212,9 @@ if [ -n "$REPLY" ] && [ -n "$SESSION_ID" ]; then
     _CU_ITEMS="$(mktemp -t ceo-unasked-items.XXXXXX)" || _CU_ITEMS=""
     _CU_Q="$(mktemp -t ceo-unasked-q.XXXXXX)" || _CU_Q=""
     if [ -n "$_CU_ITEMS" ] && [ -n "$_CU_Q" ] && ca_items_json "$_CU_ITEMS"; then
-        printf '%s' "$REPLY" > "$_CU_Q"
+        while IFS= read -r _CU_ONE; do
+        [ -n "$_CU_ONE" ] || continue
+        printf '%s' "$_CU_ONE" > "$_CU_Q"
         _CU_LINE="$(ca_match "$_CU_Q" "$_CU_ITEMS" 2>/dev/null || true)"
         if [ "$(printf '%s' "$_CU_LINE" | cut -f1)" = "MATCH" ]; then
             CA_LINE="$_CU_LINE" CA_SID="$SESSION_ID" CA_LEDGER="$(ca_ledger_path "$ENTITY_ROOT")" python3 -c '
@@ -225,6 +229,7 @@ with open(os.environ["CA_LEDGER"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps(rec) + "\n")
 ' 2>/dev/null || true
         fi
+        done <<<"$REPLY"
     fi
     rm -f "$_CU_ITEMS" "$_CU_Q"
 fi
