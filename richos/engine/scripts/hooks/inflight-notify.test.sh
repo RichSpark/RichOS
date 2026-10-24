@@ -1022,8 +1022,9 @@ esac
 # tip commit, an unreadable worktree inventory, git gaps) rather than raising.
 # The Stop notice used to read only the raised kind, so a returned error fell
 # through to "Nothing outstanding." Its own repository, so the state before
-# each case is known: a teammate behind and never told, that teammate gone
-# (the clean answer), then a swept directory whose tip cannot be resolved.
+# each case is known: a teammate behind and never told (CEO 2026-10-06: no
+# teammate is owed a notice, so the Stop notice says nothing about it), then a
+# swept directory whose tip cannot be resolved, then the clean answer again.
 # ==========================================================================
 CLEAN="$SANDBOX/clean-repo"
 CLEAN_TEAMS="$SANDBOX/clean-teams"
@@ -1054,24 +1055,27 @@ notice_has() { # <output> <text>
 }
 COUT="$(clean_stop)"
 say "14 teammate never told" "$COUT"
-notice_has "$COUT" "NEVER TOLD: mark-sonnet-clean1" \
-    && ok "14a. precondition: a teammate behind and never told is named" \
-    || bad "14a. precondition: a teammate behind and never told is named" "$COUT"
+case "$COUT" in
+    *mark-sonnet-clean1*|*"NEVER TOLD"*|*TaskStop*)
+        bad "14a. main moved past a live teammate with no notice sent: the Stop notice says nothing about it" "$COUT" ;;
+    *)  ok "14a. main moved past a live teammate with no notice sent: the Stop notice says nothing about it" ;;
+esac
 git -C "$CLEAN" worktree remove --force "$CLEAN_WT" >/dev/null 2>&1
-COUT="$(clean_stop)"
-say "14 nothing owed" "$COUT"
-notice_has "$COUT" "Nothing outstanding." \
-    && ok "14b. a clean assessment with nothing owed says nothing outstanding" \
-    || bad "14b. a clean assessment with nothing owed says nothing outstanding" "$COUT"
 printf '%s\n' "$SANDBOX/not-a-repo" > "$CLEAN_TEAMS/session-deadbeef/inflight-repos.txt"
 COUT="$(clean_stop)"
 say "14 returned error" "$COUT"
 if notice_has "$COUT" "NOT CHECKED, the assessment failed for: not-a-repo" \
         && ! notice_has "$COUT" "Nothing outstanding."; then
-    ok "14c. an assessment that RETURNS an error is NOT CHECKED, naming the repository"
+    ok "14b. an assessment that RETURNS an error is NOT CHECKED, naming the repository"
 else
-    bad "14c. an assessment that returns an error is NOT CHECKED, naming the repository" "$COUT"
+    bad "14b. an assessment that returns an error is NOT CHECKED, naming the repository" "$COUT"
 fi
+: > "$CLEAN_TEAMS/session-deadbeef/inflight-repos.txt"
+COUT="$(clean_stop)"
+say "14 checked again" "$COUT"
+notice_has "$COUT" "Nothing outstanding." \
+    && ok "14c. once the assessment runs again with nothing waiting, it says nothing outstanding" \
+    || bad "14c. once the assessment runs again with nothing waiting, it says nothing outstanding" "$COUT"
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then
