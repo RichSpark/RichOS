@@ -16132,14 +16132,14 @@
     },
     "scripts/lib/shell_c.py": {
       "source": "scripts/lib/shell_c.py",
-      "sha256": "f9b46867c23ac749e49d74dcde660afd55a02d70cc67c6141dd32198d39936ff",
+      "sha256": "fcdb0ec3db92d4cfd9dc6e0d6da3bf6c2807a224ec41732f62372293a421e003",
       "keys": [],
       "edges": [],
       "evidence": "Classifies the supplied command text with its own masking and word scan (json, re, sys only): a shell (bash, sh, zsh, dash, ksh) at a command position with a -c option. No orchestration key, no subprocess, no file read or write."
     },
     "scripts/hooks/guard-no-shell-c.test.sh": {
       "source": "scripts/hooks/guard-no-shell-c.test.sh",
-      "sha256": "bafd996c7d4bdc28c034241045be5bab672e492c612865a300257d881f3f046e",
+      "sha256": "4e2d77aaac32e3dd3fe4dcf4f63eeff36fd577ff910c8d6def45ad71b663107b",
       "keys": [],
       "edges": [
         {
