@@ -2472,7 +2472,7 @@
     },
     "scripts/hooks/notice-unasked-deferral.sh": {
       "source": "scripts/hooks/notice-unasked-deferral.sh",
-      "sha256": "5e1b2aacc325c73fe1c2745258c8314e685cee03f3d4a0b0493283819c4301ef",
+      "sha256": "088e945ef9938beda49a601eb17214ab1f3a5de625a7d264ed024f67be86ef8d",
       "evidence": "Reads CHECK_UNASKED_DEFERRAL from the resolved entity config, then runs the fixed sibling analyzer and notice-state library. Other paths in its diagnostic are printed only.",
       "keys": [
         "CHECK_UNASKED_DEFERRAL"
@@ -7373,7 +7373,7 @@
     },
     "scripts/hooks/notice-unasked-deferral.sh#unadopted-stop": {
       "source": "scripts/hooks/notice-unasked-deferral.sh",
-      "sha256": "5e1b2aacc325c73fe1c2745258c8314e685cee03f3d4a0b0493283819c4301ef",
+      "sha256": "088e945ef9938beda49a601eb17214ab1f3a5de625a7d264ed024f67be86ef8d",
       "evidence": "Visibility suite invokes this hook with no CLI arguments and a new unadopted directory, first as explicit bad root then as cwd/payload. Root-failure/not-adopted paths terminate before entity config, transcript predicates or live-state checks. Bootstrap, module initialization and any pre-root session-recovery helper remain bound. The negative control only replaces stop_notice_abnormal output.",
       "keys": [],
       "edges": [
@@ -17129,7 +17129,7 @@
         "scripts/hooks/notice-protected-ref-moves.sh": "15ea383b87181c6924a00f8b5f656f72f2319e9680947674f68972fbcd6c2c43",
         "scripts/lib/protected-ref-moves.py": "d4b8e7c1cb3553a722541124159906f4f9d7284aa94d311c2d4c0b2c6974c95c",
         "scripts/hooks/protected-ref-moves.test.sh": "fe6929dc70eeb05f5c17f6e2d7cba139e61b9e7f0f796f9fe2c0cc288daa45d2",
-        "scripts/hooks/notice-unasked-deferral.sh": "5e1b2aacc325c73fe1c2745258c8314e685cee03f3d4a0b0493283819c4301ef",
+        "scripts/hooks/notice-unasked-deferral.sh": "088e945ef9938beda49a601eb17214ab1f3a5de625a7d264ed024f67be86ef8d",
         "scripts/hooks/guard-unasked-deferral.py": "864b1c4366b8c20fbfb1a8ccba015bd884046de4260ae8d3143f7c7abba6a8c7",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
         "scripts/hooks/notice-unstarted-rows.sh": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",
@@ -17438,7 +17438,7 @@
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/hooks/notice-mechanical-findings.sh": "1b3ba1af8d15b64cd8eda504e691347f0ef923bd78e53f235223589248bb1c07",
         "scripts/hooks/notice-protected-ref-moves.sh": "15ea383b87181c6924a00f8b5f656f72f2319e9680947674f68972fbcd6c2c43",
-        "scripts/hooks/notice-unasked-deferral.sh": "5e1b2aacc325c73fe1c2745258c8314e685cee03f3d4a0b0493283819c4301ef",
+        "scripts/hooks/notice-unasked-deferral.sh": "088e945ef9938beda49a601eb17214ab1f3a5de625a7d264ed024f67be86ef8d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
         "scripts/hooks/notice-unstarted-rows.sh": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
@@ -17802,7 +17802,7 @@
         "scripts/hooks/notice-protected-ref-moves.sh": "15ea383b87181c6924a00f8b5f656f72f2319e9680947674f68972fbcd6c2c43",
         "scripts/lib/protected-ref-moves.py": "d4b8e7c1cb3553a722541124159906f4f9d7284aa94d311c2d4c0b2c6974c95c",
         "scripts/hooks/protected-ref-moves.test.sh": "fe6929dc70eeb05f5c17f6e2d7cba139e61b9e7f0f796f9fe2c0cc288daa45d2",
-        "scripts/hooks/notice-unasked-deferral.sh": "5e1b2aacc325c73fe1c2745258c8314e685cee03f3d4a0b0493283819c4301ef",
+        "scripts/hooks/notice-unasked-deferral.sh": "088e945ef9938beda49a601eb17214ab1f3a5de625a7d264ed024f67be86ef8d",
         "scripts/hooks/guard-unasked-deferral.py": "864b1c4366b8c20fbfb1a8ccba015bd884046de4260ae8d3143f7c7abba6a8c7",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
         "scripts/hooks/notice-unstarted-rows.sh": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",

@@ -159,8 +159,10 @@ else
         printf '%s\n' "{\"suppressOutput\":true,\"systemMessage\":\"NOTICE HELPER MISSING at $_SHN_LIB, so this is unconditional and undeduplicated: ${2:-}\"}"
         return 0
     }
-    stop_notice_lead() { stop_notice_abnormal "$@"; }
 fi
+# This hook's notice to the lead (stop_notice_lead) degrades, with the helper missing, to the
+# same unconditional announcement; kept outside the shared block above, which is byte-compared.
+command -v stop_notice_lead >/dev/null 2>&1 || stop_notice_lead() { stop_notice_abnormal "$@"; }
 INPUT="$(cat)"
 
 if resolve_entity_root "$INPUT"; then
