@@ -272,20 +272,78 @@ def session_time(value):
     return stamp
 
 
-def terminal_messages(path, seen=None, cutoff=None, written_note=None):
+def restart_header(text):
+    text = re.sub(r"(?m)^\s*\d+\u2192|^\s*\d+\t", "", text).lstrip()
+    header = re.match(r"\A---\s*\n(.*?)\n---(?:\n|$)", text, re.S)
+    if not header or not re.search(r"(?m)^name:\s*(?:project[-_])?restart[-_]", header[1]):
+        return None
+    origins = re.findall(r"(?m)^\s*originSessionId:\s*([A-Za-z0-9_-]+)\s*$", header[1])
+    if len(origins) != 1:
+        raise ValueError("restart note has no unique source session")
+    return origins[0]
+
+
+def bash_restart_read(command):
+    """Recognize a final literal cat, including after other commands. Never run it.
+
+    Pipelines, redirections, substitutions and compound shells cannot attest a
+    read. The successful result must also contain this note's actual header.
+    """
+    if not isinstance(command, str) or "memory/" not in command:
+        return None
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>()\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None  # A heredoc or unsupported shell form is not a cat witness.
+    segment = []
+    for token in tokens:
+        if token in (";", "&&", "\n"):
+            segment = []
+        elif token in ("|", "||", "&", "<", ">", "<<", ">>", "(", ")"):
+            return None
+        else:
+            segment.append(token)
+    if len(segment) == 3 and segment[1] == "--":
+        segment.pop(1)
+    if (len(segment) == 2 and segment[0] in ("cat", "/bin/cat", "/usr/bin/cat")
+            and not any(c in segment[1] for c in ("$", "`"))):
+        return segment[1]
+    return None
+
+
+def terminal_messages(path, seen=None, cutoff=None, written_note=None, sources=None, gaps=None):
     """A witnessed restart note locates originals; its prose grants no authority.
 
-    Both the read in the successor and a successful write in its named source
-    must exist in native transcripts of this same project. Never select the
-    newest neighbouring session or accept a path from the outgoing brief.
+    The successor must have received the note through a native Read/Bash cat
+    or its host-loaded AutoMem index. Its named source must witness a successful
+    write. Never select a neighbouring session or trust the note's prose.
     """
     path = Path(path).resolve()
     seen = set() if seen is None else seen
     if path in seen:
         raise ValueError("cyclic terminal continuation")
     seen.add(path)
-    calls, links, messages, writes = {}, {}, [], set()
+    calls, links, messages, writes, snapshots = {}, {}, [], set(), []
     deadline = session_time(cutoff) if cutoff else None
+
+    def link(note, text, row):
+        origin = restart_header(text)
+        if not origin:
+            return
+        if not row.get("timestamp"):
+            raise ValueError("restart note has no native time")
+        predecessor = (path.parent / (origin + ".jsonl")).resolve()
+        if predecessor.parent != path.parent:
+            raise ValueError("restart source leaves this project")
+        if predecessor != path:
+            key = (str(predecessor), str(note))
+            at = row["timestamp"]
+            if key not in links or session_time(at) < session_time(links[key]):
+                links[key] = at
+
     for row in transcript_rows(path):
         if deadline:
             stamp = row.get("timestamp")
@@ -296,6 +354,13 @@ def terminal_messages(path, seen=None, cutoff=None, written_note=None):
         if row.get("isSidechain"):
             continue
         messages.extend(human_messages([row]))
+        attachment = row.get("attachment", {}) if row.get("type") == "attachment" else {}
+        # This snapshot is what the host actually loaded, not today's mutable
+        # MEMORY.md or a guess at the most recent session. Only its restart
+        # pointer locates originals; neither index text nor note prose is authority.
+        if (isinstance(attachment, dict) and attachment.get("type") == "instructions"
+                and row.get("sessionId") == path.stem):
+            snapshots.append((attachment, row))
         parts = row.get("message", {}).get("content", [])
         if not isinstance(parts, list):
             continue
@@ -303,12 +368,14 @@ def terminal_messages(path, seen=None, cutoff=None, written_note=None):
             if not isinstance(part, dict):
                 continue
             if (row.get("type") == "assistant" and part.get("type") == "tool_use"
-                    and part.get("name") in ("Read", "Write", "Edit")):
-                raw = part.get("input", {}).get("file_path")
+                    and part.get("name") in ("Read", "Write", "Edit", "Bash")):
+                kind = part["name"]
+                raw = (bash_restart_read(part.get("input", {}).get("command")) if kind == "Bash"
+                       else part.get("input", {}).get("file_path"))
                 if isinstance(raw, str) and Path(raw).is_absolute():
                     note = Path(raw).resolve()
                     if note.parent == path.parent / "memory":
-                        calls[part.get("id")] = (part["name"], str(note))
+                        calls[part.get("id")] = (kind, str(note))
             elif row.get("type") == "user" and part.get("type") == "tool_result" and not part.get("is_error"):
                 call = calls.get(part.get("tool_use_id"))
                 if not call:
@@ -322,35 +389,57 @@ def terminal_messages(path, seen=None, cutoff=None, written_note=None):
                     text = "\n".join(p.get("text", "") for p in text if isinstance(p, dict))
                 if not isinstance(text, str):
                     continue
-                text = re.sub(r"(?m)^\s*\d+\u2192|^\s*\d+\t", "", text).lstrip()
-                header = re.match(r"\A---\s*\n(.*?)\n---(?:\n|$)", text, re.S)
-                if not header:
+                if kind == "Bash":
+                    if re.match(r"Exit code\s*:?\s*[1-9]", text):
+                        continue
+                    # Earlier commands may print unrelated text. Match the
+                    # actual note header, not an echoed or transformed substitute.
+                    with open(note) as stream:
+                        header = re.match(r"\A---\s*\n.*?\n---(?:\n|$)", stream.read(8192), re.S)
+                    if not header or header[0].rstrip("\n") not in text:
+                        continue
+                    text = header[0]
+                link(note, text, row)
+    # Explicit successful read receipts outrank the fallback startup index.
+    # Defer disk reads until now: a stale/deleted index pointer cannot erase
+    # the handoff actually read, whose metadata survives in its native result.
+    if not links:
+        for attachment, row in snapshots:
+            for item in attachment.get("files", []):
+                if (not isinstance(item, dict) or item.get("type") != "AutoMem"
+                        or not isinstance(item.get("path"), str)
+                        or not Path(item["path"]).is_absolute()
+                        or Path(item["path"]).resolve() != path.parent / "memory/MEMORY.md"
+                        or not isinstance(item.get("content"), str)):
                     continue
-                # The writer's names: "restart-..." and the memory system's own
-                # "project-restart-..." (file project_restart_*.md, the shape
-                # handoff-facts-annotate.sh keys on). 2026-10-23: the incident note
-                # was "project-restart-2026-10-23-late" and was skipped, so a resumed
-                # session found no original request (orchestration reliability R4).
-                if not re.search(r"(?m)^name:\s*(?:project[-_])?restart[-_]", header[1]):
+                # Only a leading RESTART pointer is a fallback selector. Lower
+                # historical index entries are not parallel ancestors.
+                selected = re.match(r"\A\s*-\s*\[RESTART[^\]\n]*\]\(([^)\n]+)\)",
+                                    item["content"], re.I)
+                if not selected:
                     continue
-                origins = re.findall(r"(?m)^\s*originSessionId:\s*([A-Za-z0-9_-]+)\s*$", header[1])
-                if len(origins) != 1 or not row.get("timestamp"):
-                    raise ValueError("restart note has no unique source session/time")
-                predecessor = (path.parent / (origins[0] + ".jsonl")).resolve()
-                if predecessor.parent != path.parent:
-                    raise ValueError("restart source leaves this project")
-                if predecessor != path:
-                    key = (str(predecessor), note)
-                    at = row["timestamp"]
-                    if key not in links or session_time(at) < session_time(links[key]):
-                        links[key] = at
+                note = (path.parent / "memory" / selected[1]).resolve()
+                if note.parent != path.parent / "memory" or not re.fullmatch(r"project[-_]restart[-_].+\.md", note.name):
+                    continue
+                with note.open() as stream:
+                    link(note, stream.read(8192), row)
     if written_note and written_note not in writes:
         raise ValueError("restart note has no successful write in its source session")
     if len(links) > 1:
         raise ValueError("ambiguous terminal continuation")
     if links:
         (predecessor, note), at = next(iter(links.items()))
-        messages = terminal_messages(predecessor, seen, at, note) + messages
+        try:
+            messages = terminal_messages(predecessor, seen, at, note, sources, gaps) + messages
+        except (OSError, ValueError, RecursionError) as error:
+            if gaps is None:
+                raise
+            # This session's own originals and its witnessed write remain valid
+            # even when an older link cannot be proved. Never include that link's
+            # unproved words or erase the authority already recovered.
+            gaps.append(str(error))
+    if sources is not None:
+        sources.append(str(path))
     return messages
 
 
@@ -436,7 +525,7 @@ def bounded_messages(messages, original=None):
     return [selected[0], notice] + [selected[index] for index in sorted(selected) if index]
 
 
-def human_context(payload):
+def human_context(payload, context=None):
     path = payload.get("transcript_path")
     if not path:
         raise ValueError("the runtime supplied no transcript containing the user's request")
@@ -446,12 +535,22 @@ def human_context(payload):
         messages = (desktop_messages(payload) if os.environ.get("RICHOS_APP_SCOPE") else
                     human_messages(transcript_rows(path), desktop=True))
     else:
+        sources, gaps = [], []
         try:
-            messages = terminal_messages(path)
-        except (OSError, ValueError, RecursionError):
+            messages = terminal_messages(path, sources=sources, gaps=gaps)
+            if context is not None:
+                context.update(complete=not gaps, original_transcripts=sources)
+                if gaps:
+                    context["limitation"] = ("Earlier authorization could not be recovered: " + "; ".join(gaps) +
+                        ". Missing earlier context is not evidence that earlier work was unauthorized.")
+        except (OSError, ValueError, RecursionError) as error:
             # An unproved handoff grants no older authority, but must not erase
             # original requests made in this fresh native session.
             messages = human_messages(transcript_rows(path))
+            if context is not None:
+                context.update(complete=False, original_transcripts=[str(Path(path).resolve())],
+                    limitation="Earlier authorization could not be recovered: " + str(error) +
+                    ". Missing earlier context is not evidence that earlier work was unauthorized.")
     if not messages:
         raise ValueError("no original human request could be established from the transcript")
     return "\n\n".join(bounded_messages(messages))
@@ -950,9 +1049,16 @@ def inspect(payload):
     classification = None
     try:
         assignment = effective_assignment(payload)
-        request = {"user_requests_in_order": human_context(payload),
+        authority = {}
+        request = {"user_requests_in_order": human_context(payload, authority),
                    "outgoing_assignment": assignment, "standing_instructions": instruction_text(payload),
                    "project_dir": str(project), "read_roots": read_roots(project, assignment, payload)}
+        if authority:
+            request["authority_context"] = authority
+            native_projects = (Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects").resolve()
+            request["read_roots"] = list(dict.fromkeys(request["read_roots"] +
+                [str(Path(source).parent) for source in authority["original_transcripts"]
+                 if Path(source).parent.parent == native_projects]))
         classification, recovery_gaps = recovery_context(payload, project)
         if recovery_gaps:
             request["recovery_observation_gaps"] = recovery_gaps
