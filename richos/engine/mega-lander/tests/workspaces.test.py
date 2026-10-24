@@ -7826,6 +7826,12 @@ class AppDueNotice(Base):
         self.assertIn("shelved/zach-opus-as", commands["zach-opus-as"])
         self.assertNotIn("integrate", commands["zach-opus-as"])                 # stopped: never landed
         self.assertNotIn("continu", commands["zach-opus-as"].replace("never land or continue it", ""))
+        # An action the app has no tool for is said, never dropped or shown as done: no discard,
+        # so saving a stopped worker's commits does not close it (Codex, 2026-10-24).
+        self.assertIn("The app has no tool that discards it", commands["zach-opus-af"])
+        self.assertIn("The app has no tool that discards it, so saving them does not close it",
+                      commands["zach-opus-as"])
+        self.assertIn("The app has no tool that repairs or removes it.", notices[2])
 
     def test_terminal_due_notice_is_unchanged(self):
         commands = self._every_kind_due()

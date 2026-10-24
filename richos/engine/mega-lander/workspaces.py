@@ -3385,14 +3385,16 @@ def _finished_command(name):
     if this_conversation():
         return ("integrate it after a passing review (%sprepare a reviewer with review_of its worker receipt, "
                 "then %sintegrate) or continue it (%sprepare with continue_of that receipt); %sinspect lists "
-                "the receipt named %s" % (APP_WORK, APP_WORK, APP_WORK, APP_WORK, name))
+                "the receipt named %s. The app has no tool that discards it" % (APP_WORK, APP_WORK, APP_WORK,
+                                                                             APP_WORK, name))
     return "land it (workspaces.sh land %s), discard it, or spawn its continuation" % name
 
 
 def due_list_pointer():
     """Where the rest of a shortened due list is read. The app has no tool that prints it,
     and there the notice is told again at each change, so the rest follow as these are handled."""
-    return "the rest are told as these are handled" if this_conversation() else \
+    return "the rest are told as these are handled (the app has no tool that lists them all)" \
+        if this_conversation() else \
         "the complete list: workspaces.sh holds"
 
 
@@ -3454,7 +3456,8 @@ def _stopped_record(key):
 def _stopped_command(name):
     """Stopped work is never revived (A4; CLAUDE.md §92): no land, no continuation."""
     if this_conversation():
-        return "save its commits on shelved/%s with git in its repository; never land or continue it" % name
+        return ("never land or continue it; save its commits on shelved/%s with git in its repository. The app "
+                "has no tool that discards it, so saving them does not close it and it stays due" % name)
     return ("save its commits on shelved/%s and discard it with his words "
             "(workspaces.sh discard %s --ceo-word '<his words>'); never land or continue it" % (name, name))
 
@@ -3590,7 +3593,8 @@ def unreadable_line():
         return ""
     more = " and %d more" % (len(bad) - 1) if len(bad) > 1 else ""
     return ("UNREADABLE RECORD: %d workspace registry record(s) cannot be read (%s%s); the due work "
-            "told is from the readable records only.%s" % (len(bad), bad[0][0], more, "" if this_conversation()
+            "told is from the readable records only.%s" % (len(bad), bad[0][0], more,
+            " The app has no tool that repairs or removes it." if this_conversation()
             else " workspaces.sh status names it; repair or remove it when convenient."))
 
 
