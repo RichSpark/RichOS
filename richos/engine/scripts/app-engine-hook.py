@@ -116,12 +116,12 @@ def mid_job_notice(work, active, payload, root, emit):
 
 
 def held_work_context(work, root, payload):
-    """NO SILENT HOLDS in the app (richos-hq docs/plans/2026-10-22-no-silent-holds.md):
-    every turn of the app's Rich opens with the hold lines the terminal's workspace gate
-    shows at a turn end, as context in his own turn, and his instruction file (app/agents/
-    rich.md) has him tell the user. Only the conversation lease: Stu's turns carry none.
-    The registry is this conversation's own partition (RICHOS_WORKSPACES_DIR), so every
-    hold in it is this conversation's, whichever lease made it."""
+    """THE FALLBACK FOR DUE WORK in the app (orchestration reliability R5, richos-hq docs/
+    prds/2026-10-23-orchestration-reliability.md): while no healthy stall watcher evaluates
+    this conversation, Rich's turn opens with the due work (workspaces.fallback_notice, the
+    terminal Stop gate's own reading), once per change; with a healthy watcher, nothing.
+    The old every-turn hold lines are gone (R6). Only the conversation lease: Stu's turns
+    carry none. The registry is this conversation's own partition (RICHOS_WORKSPACES_DIR)."""
     session = str(payload.get("session_id") or "")
     try:
         role = json.loads((root / "evidence" / session / "binding.json").read_text()).get("role")
@@ -130,12 +130,12 @@ def held_work_context(work, root, payload):
     if role not in (None, "rich"):
         return
     try:
-        lines = work.W.hold_lines("")
+        text = work.W.fallback_notice(session)
     except Exception as error:  # noqa: BLE001 -- an unread list is said, never silence
-        lines = [f"HOLDS NOT READ this turn ({type(error).__name__}: {str(error)[:160]})"]
-    if lines:
+        text = f"DUE WORK NOT READ this turn ({type(error).__name__}: {str(error)[:160]})"
+    if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                                 "additionalContext": "\n".join(lines)}}))
+                                                 "additionalContext": text}}))
 
 
 def handle(payload):
@@ -236,20 +236,56 @@ def handle(payload):
     if event in ("SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure"):
         work.observe(scope(), payload)
     if event == "Stop":
-        # A REPLY THAT HOLDS WORK OPENS A HOLD here too (second review
-        # rv-20261022T013056Z-12c77c90-1291, finding 1): the same analyzer as the terminal's
-        # deferral notice, writing into this conversation's registry, whose lines open Rich's
-        # next turn. Its notice text is the terminal's; nothing of it is printed here.
-        held = subprocess.run([sys.executable, str(ENGINE / "scripts/hooks/guard-unasked-deferral.py")],
-                              input=json.dumps(payload), text=True, capture_output=True, timeout=20)
-        if held.returncode not in (0, 3, 4):
-            print(f"RichOS desktop engine: the hold check failed (exit {held.returncode}): "
-                  f"{held.stderr.strip()[-300:]}", file=sys.stderr)
+        # ONE ANSWER FOR THE LEAD (orchestration reliability R1/R5/R6): the deferral check
+        # (the terminal's own wrapper, report only), the record check's alert and the
+        # due-work fallback reach the model as one Stop additionalContext. Claude Code reads
+        # a hook's stdout only as one JSON object (one_envelope below), and a bare alert line
+        # reached nobody.
+        contexts, failure = [], None
+        deferral = subprocess.run(["/bin/bash", str(ENGINE / "scripts/hooks/notice-unasked-deferral.sh")],
+                                  input=json.dumps(payload), text=True, capture_output=True, timeout=20,
+                                  env=dict(os.environ, RICHOS_ENTITY_ROOT=str(coordination)))
+        contexts += lead_contexts(deferral.stdout)
         # Context-only priming is host machinery, not a new assignment or promise.
         # The same host grant controls mutation tools and the visible-turn analyzer.
         active = scope()
         if active.get("actions_allowed") is True:
-            run([sys.executable, str(ENGINE / "ass-kicker/ass-kicker.py")], payload)
+            record = subprocess.run([sys.executable, str(ENGINE / "ass-kicker/ass-kicker.py")],
+                                    input=json.dumps(payload), text=True, capture_output=True, timeout=20)
+            for line in record.stdout.splitlines():
+                if line.startswith("RICHOS_RECORD_ALERT\t"):
+                    contexts.append(line.split("\t", 1)[1])
+                elif line.strip():
+                    sys.stdout.write(line + "\n")
+            if record.stderr:
+                sys.stderr.write(record.stderr)
+            if record.returncode:
+                failure = RuntimeError(f"Required engine control failed or refused (exit {record.returncode})")
+        try:
+            due = work.W.fallback_notice(str(payload.get("session_id") or ""))
+        except Exception as error:  # noqa: BLE001 -- an unread list is said, never silence
+            due = f"DUE WORK NOT READ this turn ({type(error).__name__}: {str(error)[:160]})"
+        if due:
+            contexts.append(due)
+        if contexts:
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "Stop",
+                                                     "additionalContext": "\n\n".join(contexts)}}))
+        if failure:
+            raise failure
+
+
+def lead_contexts(text):
+    """The additionalContext strings in a hook's JSON stdout lines."""
+    out = []
+    for line in (text or "").splitlines():
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        ctx = (obj.get("hookSpecificOutput") or {}).get("additionalContext") if isinstance(obj, dict) else None
+        if ctx:
+            out.append(ctx)
+    return out
 
 
 DECISION_RANK = {"allow": 1, "ask": 2, "defer": 3, "deny": 4}

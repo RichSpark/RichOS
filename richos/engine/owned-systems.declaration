@@ -134,10 +134,8 @@
 # ===========================================================================
 # WHAT IS DELIBERATELY NOT HERE
 # ===========================================================================
-#   PREPARED CEO DECISIONS — guard-ceo-ask-first.sh already blocks the same
-#     event on that exact fact. Two gates on one fact is double jeopardy: the
-#     second one only ever fires when the first already did, so it can teach
-#     nothing and can only add a second waiver to type.
+#   PREPARED CEO DECISIONS — notice-ceo-unasked.sh already tells the lead at the
+#     turn end on that exact fact; a second notice on one fact teaches nothing.
 #   DISK HEADROOM — a symptom of unlanded workspaces, not a system. Two rows that go
 #     red together train the eye to clear both without reading either.
 #   THE CONTRACT INTEGRITY PROBE — the right thing to watch and the wrong thing

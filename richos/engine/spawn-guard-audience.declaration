@@ -126,10 +126,6 @@ user_message: This assignment could not be prepared for a worker, so I did not s
 # OPERATOR-SESSION — the app runs none of these, ever
 # ===========================================================================
 
-id: guard-ceo-ask-first.sh
-audience: operator-session
-reason: It refuses a dispatch while a decision prepared in the DEVELOPMENT session's own CEO-TODOs has not been put to him in that session; the app user has no such ledger, and the only way to clear it is an operator asking a question in a terminal.
-
 id: guard-stale-staging.sh
 audience: operator-session
 reason: It refuses work against a product tree whose landed commits have not reached the DEVELOPMENT project's staging deployment; the app user has no staging, no deploy script and no product tree of ours.

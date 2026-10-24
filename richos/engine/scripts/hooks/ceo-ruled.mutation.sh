@@ -80,7 +80,6 @@ plant() { # <dir>
     cp "$ENGINE_ROOT/scripts/hooks/ceo-ruled.test.sh" \
        "$ENGINE_ROOT/scripts/hooks/guard-ceo-ruled-ask.sh" \
        "$ENGINE_ROOT/scripts/hooks/notice-ceo-ruled-prose.sh" \
-       "$ENGINE_ROOT/scripts/hooks/guard-ceo-ask-first.sh" \
        "$ENGINE_ROOT/scripts/hooks/contract-integrity.test.sh" \
        "$ENGINE_ROOT/scripts/hooks/install.sh" "$dir/scripts/hooks/"
     cp "$ENGINE_ROOT/scripts/lib/ceo-ruled.sh" "$ENGINE_ROOT/scripts/lib/ceo-ruled.py" \

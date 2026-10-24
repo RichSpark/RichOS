@@ -49,7 +49,7 @@
 # him". This hook is that step, and it is the only one.
 #
 # ===========================================================================
-# THIS IS THE SIBLING OF guard-ceo-ask-first.sh, ASKING THE OPPOSITE QUESTION
+# THIS WAS THE SIBLING OF guard-ceo-ask-first.sh (removed 2026-10-24), ASKING THE OPPOSITE QUESTION
 # ===========================================================================
 # That guard refuses to DISPATCH work while a prepared decision has never been
 # put to him. This one refuses to PUT a question to him he has already
@@ -306,18 +306,38 @@ except Exception:
                 PA_OUT="$(mktemp -t premise-ask-out.XXXXXX)" || PA_OUT=""
                 PA_REPORT="$(mktemp -t premise-ask-report.XXXXXX)" || PA_REPORT=""
                 if [ -n "$PA_QF" ] && [ -n "$PA_WF" ] && [ -n "$PA_OUT" ] && [ -n "$PA_REPORT" ]; then
-                    trap 'rm -f "$PA_QF" "$PA_WF" "$PA_OUT" "$PA_REPORT"' EXIT
+                    trap 'rm -f "$PA_QF" "$PA_WF" "$PA_OUT" "$PA_REPORT" "${PA_PREPARED_ITEMS:-}"' EXIT
                     PA_ANY_CHECK=0
                     PA_CODES=""
                     PA_HEADER=""
                     PA_ALLTEXT=""
                     PA_DECLARED=""
+                    # HIS PREPARED QUESTION GOES THROUGH (orchestration reliability R3: "Asking an
+                    # actually needed question must not be intercepted by a contradictory premise
+                    # check; both paths use the same current facts"). 2026-10-23 19:46Z: the
+                    # CEO-TODO question the dispatch gate demanded was itself intercepted here. A
+                    # question that matches a prepared item on his list (ca_match, the matcher
+                    # that records the ask) was premise-checked when it was prepared.
+                    PA_PREPARED_ITEMS=""
+                    if [ -f "$SCRIPT_DIR/../lib/ceo-asks.sh" ]; then
+                        . "$SCRIPT_DIR/../lib/ceo-asks.sh"
+                        if ca_require && ca_resolve "$ENTITY_ROOT"; then
+                            PA_PREPARED_ITEMS="$(mktemp -t premise-ask-items.XXXXXX)" || PA_PREPARED_ITEMS=""
+                            if [ -n "$PA_PREPARED_ITEMS" ] && ! ca_items_json "$PA_PREPARED_ITEMS"; then
+                                rm -f "$PA_PREPARED_ITEMS"; PA_PREPARED_ITEMS=""
+                            fi
+                        fi
+                    fi
                     while IFS=$'\t' read -r PA_IDX PA_QTEXT PA_WTEXT; do
                         [ -n "${PA_WTEXT:-}" ] || continue
                         printf '%s' "$PA_QTEXT" | tr '\001' '\n' > "$PA_QF"
                         printf '%s' "$PA_WTEXT" | tr '\001' '\n' > "$PA_WF"
                         [ -n "$PA_HEADER" ] || PA_HEADER="$(head -n1 "$PA_QF" 2>/dev/null || true)"
                         PA_ALLTEXT="$PA_ALLTEXT$(cat "$PA_WF")"
+                        if [ -n "$PA_PREPARED_ITEMS" ] \
+                                && [ "$(ca_match "$PA_WF" "$PA_PREPARED_ITEMS" 2>/dev/null | cut -f1)" = "MATCH" ]; then
+                            continue
+                        fi
                         if ! pa_check "$PA_QF" "$PA_WF" > "$PA_OUT" 2>/dev/null; then
                             announce_broken "PREMISE CHECK IS DEGRADED: ${PA_BROKEN:-the predicate could not run}. This question was not examined."
                             continue
@@ -398,7 +418,7 @@ PA_QLIST_EOF
                     else
                         pa_record "$ENTITY_ROOT" "$PA_SESSION" "UNGATED" "$PA_HEADER" "" "$PA_ALLTEXT"
                     fi
-                    rm -f "$PA_QF" "$PA_WF" "$PA_OUT" "$PA_REPORT"
+                    rm -f "$PA_QF" "$PA_WF" "$PA_OUT" "$PA_REPORT" "${PA_PREPARED_ITEMS:-}"
                     trap - EXIT
                 fi
             fi

@@ -788,7 +788,7 @@ fi
 # The root-resolution bootstrap is byte-identical across every rooted hook, and
 # probe Layer R asserts it. Checked here too so a divergence is caught by the
 # suite that owns these files rather than by a 14-minute probe.
-REF="$(sed -n '/^SCRIPT_DIR=/,/^ENGINE_ROOT=/p' "$SRC_DIR/guard-ceo-ask-first.sh" | grep -v '^  echo "  hook:')"
+REF="$(sed -n '/^SCRIPT_DIR=/,/^ENGINE_ROOT=/p' "$SRC_DIR/guard-stale-staging.sh" | grep -v '^  echo "  hook:')"
 for h in guard-ceo-ruled-ask.sh notice-ceo-ruled-prose.sh; do
     MINE="$(sed -n '/^SCRIPT_DIR=/,/^ENGINE_ROOT=/p' "$SRC_DIR/$h" | grep -v '^  echo "  hook:')"
     if [ "$(printf '%s' "$REF" | grep -vc 'hook: scripts')" = "$(printf '%s' "$MINE" | grep -vc 'hook: scripts')" ]; then

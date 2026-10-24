@@ -174,9 +174,9 @@ A="scripts/hooks/guard-unasked-deferral.py"
 
 # --- 1. THE NOTICE ITSELF, AND THE POSITIVE CONTROLS UNDER THE SILENCES ----
 mutant no-notice "1a " "$H" \
-    'stop_notice_abnormal "$KEY" \' \
-    'notice_clean; stop_notice_abnormal "$KEY" \' \
-    "the whole point: a deferral he was not asked about must end the turn with something on screen."
+    'stop_notice_lead "$KEY" \' \
+    'notice_clean; stop_notice_lead "$KEY" \' \
+    "the whole point: a deferral he was not asked about must reach the lead once, so it checks his request."
 
 mutant matcher-dead "1a " "$A" \
     '    scan = strip_quoted(text)' \
@@ -184,19 +184,29 @@ mutant matcher-dead "1a " "$A" \
     "a matcher that matches nothing passes every silence case in sections 3-5. This is the trap the positive controls exist for."
 
 mutant unquoted-notice "1b " "$H" \
-    'THIS TURN DEFERS WORK: \"${QUOTE}\"' \
-    'THIS TURN DEFERS WORK.' \
-    "quoting the construction is what makes the notice actionable rather than a scold — he can see the sentence he wrote."
+    'this reply says \"${QUOTE}\"' \
+    'this reply defers something' \
+    "quoting the construction is what lets the lead check it against the original request."
 
 mutant vague-notice "1c " "$H" \
-    'A deferral you did not choose is a decision taken on your behalf' \
+    'check the original request' \
     'FYI' \
-    "the notice must name the harm, not merely announce that something happened."
+    "the notice must name the lead's next action, not merely announce that something happened."
 
 mutant blocking "1d " "$H" \
-    'stop_notice_abnormal "$KEY" \' \
-    'exit 2; stop_notice_abnormal "$KEY" \' \
+    'stop_notice_lead "$KEY" \' \
+    'exit 2; stop_notice_lead "$KEY" \' \
     "a Stop hook that refuses turns over a regex on prose wedges the session and earns CHECK_UNASKED_DEFERRAL=0."
+
+mutant person-channel "T1a " "$H" \
+    'stop_notice_lead "$KEY" \' \
+    'stop_notice_abnormal "$KEY" \' \
+    "a systemMessage reaches only the person: the lead never reads it, and the person gets a wall he did not need (R1)."
+
+mutant continuation-is-fresh-input "T1b " "$A" \
+    '    if CONTINUED in tools:' \
+    '    if False and CONTINUED in tools:' \
+    "the lead's answer to the diagnostic would be read as a new reply, and a restated sentence would start a loop (R1, N4)."
 
 # --- T2. A SENTENCE THAT HOLDS NOTHING OPENS NO HOLD (2026-10-23) ----------
 mutant denial-is-a-hold "T2a " "scripts/lib/hold_words.py" \
@@ -297,10 +307,10 @@ mutant silent-root-failure "5e " "$H" \
 # a hypothetical: the wrapper recorded "ok" before the analysis, so the ledger
 # alternated between "ok" and the finding key and the same deferral was
 # announced on every single turn.
-mutant normal-before-analysis "6a " "$H" \
-    'set +e@@NL@@FINDING="$(printf' \
-    'stop_notice_normal "back"@@NL@@set +e@@NL@@FINDING="$(printf' \
-    "the ledger holds ONE state per (session, hook); writing 'ok' on entry and the finding afterwards defeats de-duplication entirely."
+mutant seen-set-ignored "6c " "$H" \
+    'if command -v stop_notice_seen >/dev/null 2>&1 && stop_notice_seen "$KEY"; then' \
+    'if false; then' \
+    "the same deferral repeated in a later status reply would be told again every time a clean turn came in between (Frank D2): once per quote per session is the seen-set's job, since the one-slot ledger also carries the on/off states."
 
 mutant constant-state-key "6b " "$H" \
     'KEY="deferral:${CONSTRUCTION}:$(printf' \

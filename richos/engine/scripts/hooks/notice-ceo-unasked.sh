@@ -11,8 +11,8 @@
 # ===========================================================================
 # WHY IT DOES NOT BLOCK, WHEN ITS SIBLING DOES
 # ===========================================================================
-# guard-ceo-ask-first.sh BLOCKS a teammate dispatch, on the CEO's explicit
-# ruling. This hook deliberately does not block the TURN, and the two are not in
+# guard-ceo-ask-first.sh BLOCKED a teammate dispatch until 2026-10-24 (removed
+# with orchestration reliability R3). This hook deliberately does not block the TURN, and the two are not in
 # tension: they are aimed at different things.
 #
 # Dispatching a teammate is MOTION — the specific act that beat the ask on
@@ -171,9 +171,7 @@ case "$RRC" in
         stop_notice_normal ""
         exit 0 ;;
     *)
-        # THE LOUD FAIL-OPEN. guard-ceo-ask-first.sh also announces this, but on
-        # a channel that is unproven for PreToolUse. This is the one that is
-        # measured, so this is the guarantee.
+        # THE LOUD FAIL-OPEN, on the channel that is measured.
         stop_notice_abnormal "broken:$(printf '%s' "$CA_REASON" | cksum | tr -d ' ')" \
             "CEO-ASK WATCH IS BROKEN: this repository DECLARES CEO TODOs and they cannot be read — ${CA_REASON}. Teammate dispatches are UNGATED and no prepared decision is being surfaced. A declared-but-unreadable list is not an empty one."
         exit 0 ;;
@@ -188,6 +186,51 @@ try:
     d=json.load(sys.stdin); print(str(d.get("session_id","") or "") if isinstance(d,dict) else "")
 except Exception: print("")' 2>/dev/null || true)"
 
+# A QUESTION THE REPLY PUTS TO HIM IS AN ASK (CLAUDE.md §125: "A question never holds up
+# work: it goes in the reply with the current default stated"). Only the questions the reply
+# actually puts are matched: its sentences that end in a question mark, outside code, quotes
+# and quoted lines. A reply that only mentions an item ("I have not asked you about 1.1
+# yet") or quotes an earlier question puts nothing. Each question is matched against his
+# prepared items exactly as an AskUserQuestion is (ca_match) and recorded the same way, one
+# question at a time: the matcher returns one best item, so two questions matched together
+# would record one and put the other back in front of him.
+REPLY="$(printf '%s' "$INPUT" | python3 -c 'import json, re, sys
+try:
+    d = json.load(sys.stdin)
+    t = str(d.get("last_assistant_message", "") or "") if isinstance(d, dict) else ""
+except Exception:
+    t = ""
+t = re.sub(r"```.*?```", " ", t, flags=re.S)
+t = re.sub(r"`[^`\n]*`", " ", t)
+t = "\n".join(l for l in t.splitlines() if not l.lstrip().startswith(">"))
+t = re.sub(r"\"[^\"\n]*\"|\u201c[^\u201d\n]*\u201d", " ", t)
+qs = [s.strip() for s in re.findall(r"[^.!?\n]+\?", t) if len(s.split()) >= 3]
+print("\n".join(qs))' 2>/dev/null || true)"
+if [ -n "$REPLY" ] && [ -n "$SESSION_ID" ]; then
+    _CU_ITEMS="$(mktemp -t ceo-unasked-items.XXXXXX)" || _CU_ITEMS=""
+    _CU_Q="$(mktemp -t ceo-unasked-q.XXXXXX)" || _CU_Q=""
+    if [ -n "$_CU_ITEMS" ] && [ -n "$_CU_Q" ] && ca_items_json "$_CU_ITEMS"; then
+        while IFS= read -r _CU_ONE; do
+        [ -n "$_CU_ONE" ] || continue
+        printf '%s' "$_CU_ONE" > "$_CU_Q"
+        _CU_LINE="$(ca_match "$_CU_Q" "$_CU_ITEMS" 2>/dev/null || true)"
+        if [ "$(printf '%s' "$_CU_LINE" | cut -f1)" = "MATCH" ]; then
+            CA_LINE="$_CU_LINE" CA_SID="$SESSION_ID" CA_LEDGER="$(ca_ledger_path "$ENTITY_ROOT")" python3 -c '
+import json, os
+from datetime import datetime, timezone
+f = (os.environ["CA_LINE"].split("\t") + [""] * 7)[:7]
+rec = {"timestamp": datetime.now(timezone.utc).isoformat(), "event": "CeoAsk", "source_hook": "Stop[reply]",
+       "session_id": os.environ["CA_SID"], "matched_item": f[2], "match": f[0], "repo": f[1], "score": f[3],
+       "hits": f[4], "needed": f[5], "how": f[6], "discharges": True}
+os.makedirs(os.path.dirname(os.environ["CA_LEDGER"]), exist_ok=True)
+with open(os.environ["CA_LEDGER"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(rec) + "\n")
+' 2>/dev/null || true
+        fi
+        done <<<"$REPLY"
+    fi
+    rm -f "$_CU_ITEMS" "$_CU_Q"
+fi
 ARC=0
 ca_assess "$ENTITY_ROOT" "$SESSION_ID" || ARC=$?
 if [ "$ARC" -ge 2 ]; then
@@ -197,8 +240,7 @@ if [ "$ARC" -ge 2 ]; then
 fi
 
 if [ "${CA_UNASKED:-0}" -eq 0 ]; then
-    stop_notice_normal \
-        "CEO-ASK WATCH: clear — every prepared item on his TODOs has been put to him this session."
+    stop_notice_normal ""            # asked: nothing more to say to anyone
     exit 0
 fi
 
@@ -212,6 +254,8 @@ if [ "${CA_UNASKED:-0}" -gt 1 ]; then
     MORE=" ${CA_UNASKED} of his prepared items have not been put to him in this session."
 fi
 
-stop_notice_abnormal "unasked:$IDS" \
-    "HE HAS NOT BEEN ASKED — CEO TODO ${TOP_ID}: ${TOP_ASK}${MORE} Put one to him with AskUserQuestion; asking is what discharges this, not recording it. Full list: ${ENGINE_ROOT}/scripts/ceo-asks-status.sh"
+# TO THE LEAD (Stop additionalContext), once per set of unasked items: the lead asks,
+# so the lead must read it; a systemMessage reaches only the person.
+_CU_MSG="CEO TODO ${TOP_ID} has not been put to him this session: ${TOP_ASK}${MORE} First check it is still current (already done or answered: close it on the record instead). If it is, ask it in your next reply with the current default stated, and keep independent work moving (CLAUDE.md §125); a blocking AskUserQuestion only if the next action truly waits on it. Full list: ${ENGINE_ROOT}/scripts/ceo-asks-status.sh"
+stop_notice_lead "unasked:$IDS" "$_CU_MSG"
 exit 0

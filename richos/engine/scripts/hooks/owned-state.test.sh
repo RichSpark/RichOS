@@ -351,78 +351,53 @@ echo "=== 4. the gate ==="
 write_declaration
 reset_state
 
+# Orchestration reliability R3 (2026-10-24): "An unrelated ... old health incident remains
+# owned in its current queue and existing watcher, but does not veto a repair, inspection,
+# ordinary answer or independent dispatch ... Do not require a waiver sentence or repeated
+# acknowledgement." The standing system is told to the LEAD once per session and system.
+told() { # stdout is one PreToolUse additionalContext naming the system and its evidence
+    printf '%s' "$OUT" | python3 -c 'import json,sys
+d = json.loads(sys.stdin.readline() or "{}")
+h = d.get("hookSpecificOutput") or {}
+c = h.get("additionalContext", "")
+sys.exit(0 if h.get("hookEventName") == "PreToolUse" and "OWNED SYSTEM STANDING" in c
+         and "alpha" in c and "ALPHA IS RED: 3 things wrong" in c and "systemMessage" not in d else 1)'
+}
+
 run_hook "$(payload s1 "Please refactor the login screen.")"
-if [ "$RC" -eq 2 ] \
-   && printf '%s' "$OUT" | grep -q 'REFUSING THIS DISPATCH' \
-   && printf '%s' "$OUT" | grep -q 'system   : alpha' \
-   && printf '%s' "$OUT" | grep -q 'ALPHA IS RED: 3 things wrong'; then
-    ok "4a  an unrelated dispatch is REFUSED, naming the system and quoting the evidence verbatim"
+if [ "$RC" -eq 0 ] && told; then
+    ok "4a  an unrelated dispatch goes AHEAD, and the lead is told the system and its evidence verbatim"
 else
-    bad "4a  an unrelated dispatch was not refused with its evidence" "rc=$RC"
-fi
-
-run_hook "$(payload s1 "$(printf 'Refactor.\nowned-state-ack: alpha\n')")"
-if [ "$RC" -eq 2 ]; then
-    ok "4b  a bare marker with no reason exempts nothing"
-else
-    bad "4b  a bare marker satisfied the gate" "rc=$RC"
-fi
-
-run_hook "$(payload s1 "$(printf 'Refactor.\nowned-state-ack: alpha - busy\n')")"
-if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q 'is a bare marker'; then
-    ok "4c  a reason under 15 characters is refused, and the refusal says why"
-else
-    bad "4c  a token reason satisfied the gate" "rc=$RC"
-fi
-
-run_hook "$(payload s1 "$(printf 'Refactor.\nowned-state-ack: beta — this one can certainly wait until tomorrow\n')")"
-if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q "the ack names 'beta'"; then
-    ok "4d  an ack naming a system other than the demanded one is refused, with the right one printed"
-else
-    bad "4d  the cheapest-first rotation was not blocked" "rc=$RC"
-fi
-
-run_hook "$(payload s1 "$(printf 'Refactor.\nowned-state-ack: alpha — the founder is on a live demo right now\n')")"
-if [ "$RC" -eq 0 ] && [ -z "$OUT" ] \
-   && grep -q 'how=ack' "$ENTITY/.claude/state/owned-state-acks.log" 2>/dev/null \
-   && grep -q 'live demo' "$ENTITY/.claude/state/owned-state-acks.log" 2>/dev/null; then
-    ok "4e  a well-formed ack permits the dispatch and is logged with its reason"
-else
-    bad "4e  a well-formed ack did not permit and log" "rc=$RC"
+    bad "4a  an unrelated dispatch was refused or not told" "rc=$RC $OUT"
 fi
 
 run_hook "$(payload s1 "Something else entirely, unrelated to anything.")"
 if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
-    ok "4f  ONE disposition clears the WHOLE session — this is the case that keeps the gate alive"
+    ok "4b  told ONCE per session and system: the next dispatch is silent"
 else
-    bad "4f  the gate demanded a second disposition in the same session" "rc=$RC"
+    bad "4b  the same system was told again in the same session" "rc=$RC $OUT"
 fi
 
 run_hook "$(payload s2 "Something else entirely, unrelated to anything.")"
-if [ "$RC" -eq 2 ]; then
-    ok "4g  a new session is asked again — a disposition does not carry over"
+if [ "$RC" -eq 0 ] && told; then
+    ok "4c  a new session is told again: it did not hear it"
 else
-    bad "4g  the gate stayed clear across sessions" "rc=$RC"
+    bad "4c  a new session was not told" "rc=$RC $OUT"
 fi
 
-# THE INVERSION OF THE ORIGINAL 4h (2026-09-25). This case used to assert that
-# a prompt matching the row's `match:` keywords was ALLOWED as "addressing" it.
-# That is the hole the escalation backlog grew behind, so it now asserts the
-# opposite: the fixture still declares `match: (alpha|widget)`, the prompt
-# hits both words, and the dispatch is refused with nothing recorded.
-run_hook "$(payload s3 "Fix the alpha widget pipeline end to end.")"
-if [ "$RC" -eq 2 ] \
-   && ! grep -q 'session=s3' "$ENTITY/.claude/state/owned-state-dispositions.log" 2>/dev/null; then
-    ok "4h  a prompt that merely MENTIONS a standing system is refused, and nothing is recorded"
+run_hook "$(payload s4 "$(printf 'Refactor.\nowned-state-ack: alpha\n')")"
+if [ "$RC" -eq 0 ] && told; then
+    ok "4e  a bare ack line is not needed and silences nothing: the dispatch goes ahead and is told"
 else
-    bad "4h  a keyword in the prompt still satisfies the gate" "rc=$RC"
+    bad "4e  a bare ack line changed the outcome" "rc=$RC $OUT"
 fi
 
-run_hook "$(payload s4 "$(printf 'Refactor the login screen.\nowned-state-ack: alpha\n')")"
-if [ "$RC" -eq 2 ]; then
-    ok "4i  an ack line cannot satisfy the gate by merely naming the system in its own text"
+run_hook "$(payload s6 "Fix the alpha widget pipeline end to end.")"
+if [ "$RC" -eq 0 ] && told \
+   && ! grep -q 'session=s6' "$ENTITY/.claude/state/owned-state-dispositions.log" 2>/dev/null; then
+    ok "4h  a prompt that merely MENTIONS a standing system goes ahead and is told; nothing is recorded as handled"
 else
-    bad "4i  the escape hatch is a hole: a malformed ack matched the system's own pattern" "rc=$RC"
+    bad "4h  a keyword in the prompt was recorded as handling the system" "rc=$RC"
 fi
 
 run_hook '{"tool_name":"Bash","session_id":"s5","tool_input":{"command":"ls"}}'
@@ -639,19 +614,21 @@ esc_add esc-fx-c lead 72
 # --- 7a. THE KEYWORD DISPATCH ----------------------------------------------
 # Every keyword the old `match:` pattern held, and the 2026-09-18 shape: a
 # dispatch that talks about escalations without doing anything to the backlog.
+toldsys() { printf '%s' "$OUT" | grep -q 'OWNED SYSTEM STANDING'; }
 run_hook "$(payload e1 "Please look at the escalation protocol. Run escalate.sh list, and use --disposition on the esc-2026 items when you get to them.")"
-if [ "$RC" -eq 2 ] \
-   && printf '%s' "$OUT" | grep -q 'system   : escalations' \
+if [ "$RC" -eq 0 ] && toldsys \
+   && printf '%s' "$OUT" | grep -q 'this dispatch goes ahead): escalations' \
+   && printf '%s' "$OUT" | grep -q 'oldest item raised 3.0 days ago' \
    && ! disposed e1 '[a-z]*'; then
-    ok "7a  a KEYWORD-ONLY dispatch about escalations is refused, and nothing is recorded"
+    ok "7a  a KEYWORD-ONLY dispatch about escalations goes ahead, told dated by its oldest item; nothing is recorded as handled"
 else
     bad "7a  a keyword-only dispatch satisfied the gate" "rc=$RC"
 fi
 
-# --- 7b. THE OLD BACKLOG STILL REFUSES AFTER IT ----------------------------
+# --- 7b. TOLD ONCE; THE KEYWORD DISPATCH STILL HANDLED NOTHING -------------
 run_hook "$(payload e1 "Refactor the login screen.")"
-if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q 'oldest item raised 3.0 days ago'; then
-    ok "7b  after the keyword dispatch the old backlog STILL refuses, dated by its oldest item"
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ] && ! disposed e1 '[a-z]*'; then
+    ok "7b  the next dispatch in that session is silent (told once), and the keyword dispatch is still not recorded as handling it"
 else
     bad "7b  the keyword dispatch cleared the session, or the age is not the item's own" "rc=$RC"
 fi
@@ -668,7 +645,7 @@ fi
 
 # --- 7d. THE NEXT SESSION IS ASKED AGAIN -----------------------------------
 run_hook "$(payload e2 "Refactor the login screen.")"
-if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q 'size     : size 2; 2 past the tolerated age'; then
+if [ "$RC" -eq 0 ] && toldsys && printf '%s' "$OUT" | grep -q 'size 2; 2 past the tolerated age'; then
     ok "7d  a new session is asked again while old items remain, with the size printed"
 else
     bad "7d  a drop in one session carried over to the next" "rc=$RC"
@@ -708,8 +685,8 @@ fi
 
 # --- 7g. THE ACK LINE: needs its reason, and stops no clock ----------------
 run_hook "$(payload e5 "$(printf 'Refactor.\nowned-state-ack: escalations — ok\n')")"
-if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q 'is a bare marker'; then
-    ok "7k  an escalations ack with a token reason is refused"
+if [ "$RC" -eq 0 ] && toldsys && ! disposed e5 ack; then
+    ok "7k  an escalations ack with a token reason records nothing: the lead is told as if no line were there"
 else
     bad "7k  a token reason cleared the escalations demand" "rc=$RC"
 fi
@@ -721,7 +698,7 @@ SEEN_AFTER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).ge
               "$ENTITY/.claude/state/owned-state-seen.json" 2>/dev/null)"
 run_hook "$(payload e6 "Refactor the login screen.")"
 if [ "$ACK_RC" -eq 0 ] && [ -n "$SEEN_BEFORE" ] && [ "$SEEN_BEFORE" = "$SEEN_AFTER" ] \
-   && [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q 'oldest item raised 3.0 days ago'; then
+   && [ "$RC" -eq 0 ] && toldsys && printf '%s' "$OUT" | grep -q 'oldest item raised 3.0 days ago'; then
     ok "7g  a reasoned ack clears ONE session, leaves the age clock untouched, and the next session is refused at the same age"
 else
     bad "7g  the ack reset the age or carried past its session" "ack rc=$ACK_RC seen $SEEN_BEFORE -> $SEEN_AFTER, next rc=$RC"
@@ -738,9 +715,9 @@ run_hook "$(payload e7 "Refactor the login screen.")"
 esc_ack esc-fx-h1
 esc_ack esc-fx-h2
 run_hook "$(payload e8 "Refactor the login screen.")"
-FIRST_RC=$RC
+FIRST_RC=$RC; FIRST_TOLD=0; toldsys && FIRST_TOLD=1
 run_hook "$(payload e8 "Refactor the login screen.")"
-if [ "$FIRST_RC" -eq 2 ] && [ "$RC" -eq 2 ] && ! disposed e8 progress; then
+if [ "$FIRST_RC" -eq 0 ] && [ "$FIRST_TOLD" -eq 1 ] && [ "$RC" -eq 0 ] && [ -z "$OUT" ] && ! disposed e8 progress; then
     ok "7h  a new session's baseline is taken FRESH: a drop made before it began is not credited to it"
 else
     bad "7h  a stale cached count was used as the baseline and credited a drop nobody made" "rc=$FIRST_RC then $RC"
@@ -752,7 +729,7 @@ fi
 printf 'at=2026-09-18T16:03:08Z\tsession=e9\tsystem=escalations\thow=addressed\tagent=legacy\treason=dispatch matched this system'"'"'s declared match pattern\n' \
     >>"$ENTITY/.claude/state/owned-state-dispositions.log"
 run_hook "$(payload e9 "Refactor the login screen.")"
-if [ "$RC" -eq 2 ]; then
+if [ "$RC" -eq 0 ] && toldsys; then
     ok "7j  a legacy keyword 'addressed' row in the ledger clears nothing"
 else
     bad "7j  a legacy keyword disposition still clears a session" "rc=$RC"

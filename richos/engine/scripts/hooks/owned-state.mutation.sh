@@ -62,28 +62,26 @@ mutant drop-not-credited "7c" "$L" \
     "acknowledging escalations would never clear the gate, so the one piece of real work it asks for would be answered with a waiver every session, and a gate answered with waivers is a gate that dies."
 
 # --- 3. AN OLD BACKLOG REFUSES, AFTER A KEYWORD OR NOT ---------------------
-mutant any-backlog-tolerated "7b" "$L" \
+mutant any-backlog-tolerated "7a" "$L" \
     'return r.get("status") == UNHEALTHY and r.get("backlog") == 0' \
     'return r.get("status") == UNHEALTHY and r.get("backlog") is not None' \
-    "any escalation backlog, however old, would count as 'within tolerance', so a 19-day-old escalation for the CEO would never be demanded of anyone."
+    "any escalation backlog, however old, would count as 'within tolerance', so a 19-day-old escalation for the CEO would never be told to anyone."
 
 # --- 4. NOTHING PAST THE TOLERATED AGE IS ENOUGH ---------------------------
 mutant tolerance-ignored "7e" "$L" \
     'return r.get("status") == UNHEALTHY and r.get("backlog") == 0' \
     'return False' \
-    "a lead who acknowledged every old escalation would still be refused while an hour-old one was outstanding, so the gate would fire on news rather than neglect and be waived as noise."
+    "a lead who acknowledged every old escalation would still be told of it while an hour-old one was outstanding, so the notice would fire on news rather than neglect and be read past as noise."
 
 # --- 5. A NAMED TRIAGE COUNTS ----------------------------------------------
 mutant triage-ignored "7f" "$G" \
     'pattern = d.get("triage") or ""' \
     'pattern = ""' \
-    "a dispatch whose whole job is triaging the escalation ledger would be refused as if it were unrelated work, so the natural answer to the refusal would be turned away."
+    "a dispatch whose whole job is triaging the escalation ledger would be told of the backlog as if it were unrelated work, so the natural answer to the notice would be treated as ignoring it."
 
 # --- 6. THE ACK STOPS NO CLOCK ---------------------------------------------
-mutant ack-resets-age "7g" "$L" \
-    '    ok = record_disposition(args.entity, args.session, args.system.strip(),' \
-    '    _write_json(state_path(args.entity, SEEN_NAME), {}){NL}    ok = record_disposition(args.entity, args.session, args.system.strip(),' \
-    "an owned-state-ack would reset the age of the thing it deferred, so a backlog waived once a session would look new every session."
+# (ack-resets-age went with the owned-state-ack line, 2026-10-24: no prompt line records an
+# ack any more, so nothing a dispatch says can reset an age.)
 
 # --- 7. THE BASELINE IS FRESH ----------------------------------------------
 mutant baseline-from-cache "7h" "$L" \

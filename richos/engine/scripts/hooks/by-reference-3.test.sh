@@ -8,7 +8,7 @@
 # Every engine file the undivided suite named, named here too, so a change to any of them
 # selects this suite exactly as it selected the whole (the selector's basename rule):
 #   .gitignore clark.md contract-integrity-probe.sh detect-nonnative-worktree.sh dispatch-pretooluse.manifest engine-status.sh
-#   global-state-witness.sh guard-bash-main-writes.sh guard-brief-scope.sh guard-ceo-ask-first.sh guard-definition-drift.sh guard-interactive-prompt.sh
+#   global-state-witness.sh guard-bash-main-writes.sh guard-brief-scope.sh guard-definition-drift.sh guard-model-ceiling.sh guard-interactive-prompt.sh
 #   guard-main-checkout-writes.sh guard-named-persons-writes.sh guard-resume-isolation.sh guard-vendoring-commits.sh guard-workflow-ban.sh guard-worktree-isolation.sh
 #   guard-worktree-removal.sh hooks.json install.sh notice-unlanded-branches.sh orchestration.config plugin.json
 #   registered-hooks.sh scan-secrets.sh settings.local.json shell-evidence.sh snapshot-agent-definitions.sh task-completed-handoff.sh
@@ -83,7 +83,7 @@ expect_only_layer_failed "4a.BR4-registered-script-not-on-disk" "BR4" "NOT ON DI
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-chmod -x "$SB/engine/scripts/hooks/guard-ceo-ask-first.sh"
+chmod -x "$SB/engine/scripts/hooks/guard-model-ceiling.sh"
 run_probe "$SB"
 expect_only_layer_failed "4b.BR4-registered-script-not-executable" "BR4" "not executable"
 rm -rf "$SB"

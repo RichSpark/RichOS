@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# guard-owned-state.sh — BLOCKING PreToolUse guard on the Agent tool.
-#
-# REFUSES TO DISPATCH A TEAMMATE AT UNRELATED WORK WHILE A SYSTEM THE
-# ORCHESTRATOR OWNS THE HEALTH OF IS KNOWN-BAD AND NOBODY HAS DONE ANYTHING
-# ABOUT IT THIS SESSION.
+# guard-owned-state.sh — PreToolUse hook on the Agent tool. SINCE 2026-10-24 IT
+# REFUSES NOTHING (orchestration reliability R3; the end of this file): a system the
+# orchestrator owns the health of that is known-bad, with nothing done about it this
+# session, is TOLD to the lead once per session and system, and the dispatch goes on.
+# The history below is the record of why the system is watched at all.
 #
 # The inventory, and the argument for every row in it, is in
 # `owned-systems.declaration` at the engine root. The predicate — what healthy
@@ -79,8 +79,8 @@
 # does no work directly, so a spawn is the observable form of "moving on". The
 # alternatives, argued rather than left to be re-derived:
 #
-#   Stop, blocking the turn — REJECTED for the reason guard-ceo-ask-first.sh
-#     gives on the same choice: a turn that ends because the founder
+#   Stop, blocking the turn — REJECTED for the reason the CEO-ask gate gave
+#     on the same choice: a turn that ends because the founder
 #     interrupted is a turn ending correctly, and refusing those makes this
 #     something to switch off. The end of a turn is a NOTICE's event.
 #   Every Bash call — REJECTED. Reading a file is not "getting on with
@@ -106,36 +106,18 @@
 # session for free. A keyword is not work. It is a waiver nobody had to type.
 #
 # So the predicate (scripts/lib/owned-systems.py, "WHAT ADDRESSED MEANS")
-# decides, and it counts exactly three things:
+# decides, and it counts exactly two things:
 #   progress  the system THIS SESSION WAS REFUSED OVER got smaller: its check
 #             passes, its `measure:` fell below the fresh baseline taken at that
 #             refusal, or its `backlog:` past the tolerated age reached zero.
 #             Measured by the predicate. This hook sees it as exit 0.
 #   triage    the prompt matches the DEMANDED row's `triage:` pattern, which
 #             names the system's own record (for escalations, the ledger file).
-#   ack       the line below.
-# All three are silent when they clear a dispatch. A gate that lectured the
+# Both are silent when they clear a dispatch. A gate that lectured the
 # operator at the moment he did the right thing would teach the wrong lesson.
 #
-# ===========================================================================
-# THE ESCAPE HATCH — a live prompt line, with a reason, logged
-# ===========================================================================
-#     owned-state-ack: <system id> — <why this can wait>
-#
-# anywhere on its own line in the Agent spawn prompt. Same idiom as
-# `model-ceiling-ack:`, `main-checkout-run:`, `resume-ack:`,
-# `stale-staging-ack:` and `ceo-todos-deferred:`.
-#
-#   * It must name the DEMANDED system's id. Any other id is refused with the
-#     right one printed — that is what stops the cheapest-first rotation.
-#   * The reason must be at least 15 characters. A bare marker exempts nothing,
-#     because a bare token is something a reflex types and a reason is
-#     something a person writes.
-#   * It is appended to <entity root>/.claude/state/owned-state-acks.log, which
-#     notice-waiver-repetition.py reads: an operator who types the same excuse
-#     about the same system session after session gets NAMED for it. That is
-#     the anti-habit machinery this engine already ships, and this hatch is
-#     wired into it rather than inventing a second one.
+# (Until 2026-10-24 an `owned-state-ack:` prompt line unlocked the refusal. With the
+# refusal gone it unlocked nothing, so it was removed; an old line is ignored.)
 #
 # ===========================================================================
 # FAIL OPEN, AND LOUDLY — the deliberate choice, state by state
@@ -218,7 +200,7 @@ if [ ! -f "$_RR_LIB" ]; then
     printf '%s\n' "$_RR_MSG" >&2
     _RR_J="${_RR_MSG//\\/\\\\}"; _RR_J="${_RR_J//\"/\\\"}"; _RR_J="${_RR_J//$'\n'/\\n}"
     printf '{"systemMessage":"%s"}\n' "$_RR_J"
-    exit 2
+    exit 0
 fi
 # shellcheck source=../lib/resolve-roots.sh
 . "$_RR_LIB"
@@ -322,7 +304,7 @@ NAME="$(printf '%s' "$PARSED" | cut -f4)"
 PROMPT="$(printf '%s' "$PARSED" | cut -f5- | tr '\001' '\n')"
 
 if [ "$STATUS" = "PARSEFAIL" ]; then
-    announce_off "OWNED-STATE GATE: this Agent spawn could not be parsed, so no owned system was checked and the 'owned-state-ack:' line could not be read either. This ONE dispatch is UNGATED."
+    announce_off "OWNED-STATE GATE: this Agent spawn could not be parsed, so this ONE dispatch was not checked against the owned systems (UNGATED)."
     exit 0
 fi
 
@@ -364,13 +346,6 @@ pattern = d.get("triage") or ""
 if not pattern:
     sys.exit(0)
 prompt = os.environ.get("PROMPT_TEXT", "")
-# THE ACK LINE IS NOT PART OF THE PROMPT FOR THIS TEST, and the first version of
-# this hook proved why: an ack reading `owned-state-ack: alpha - ...` matched
-# alphas own pattern and was recorded as a dispatch WORKING on the system it
-# was asking to defer. An escape hatch that satisfies the gate merely by naming
-# the system is not a hatch, it is a hole.
-prompt = "\n".join(l for l in prompt.splitlines()
-                   if not re.match(r"^\s*owned-state-ack:", l))
 try:
     m = re.search(pattern, prompt, re.IGNORECASE)
 except re.error:
@@ -386,119 +361,32 @@ if [ -n "$TRIAGED" ]; then
     exit 0
 fi
 
-# --- THE ESCAPE HATCH, BEFORE THE VERDICT ----------------------------------
-# ONE extraction, not a test followed by an extraction: two greps with the same
-# pattern are two chances to relax one of them and not the other, and the
-# resulting hook would test strictly, extract loosely, and behave in a way
-# neither pattern describes.
-ACK_LINE="$(printf '%s' "$PROMPT" \
-    | grep -oE '^[[:space:]]*owned-state-ack:[[:space:]]*[^[:space:]].*' \
-    | head -1 | sed -E 's/^[[:space:]]*//' || true)"
-
-if [ -n "$ACK_LINE" ]; then
-    # Parsed in python, not sed. The id is the FIRST WHITESPACE-DELIMITED TOKEN
-    # with any trailing separator stripped, and the reason is everything after
-    # it. A sed expression that split on the first `-` would have mangled every
-    # future id with a hyphen in it, which is a defect that shows up only once
-    # somebody adds one — the class of bug this project keeps finding in itself.
-    ACK_PARSED="$(ACK_BODY="$ACK_LINE" python3 -c '
-import os, re
-body = re.sub(r"^\s*owned-state-ack:\s*", "", os.environ.get("ACK_BODY", ""))
-parts = body.split(None, 1)
-sid = re.sub(r"[—:;,\-]+$", "", parts[0]) if parts else ""
-rest = parts[1] if len(parts) > 1 else ""
-rest = re.sub(r"^[\s—:;,\-]+", "", rest)
-print("%s\t%s" % (sid, rest.replace("\t", " ")))
-' 2>/dev/null || printf '\t')"
-    ACK_ID="$(printf '%s' "$ACK_PARSED" | cut -f1)"
-    ACK_REASON="$(printf '%s' "$ACK_PARSED" | cut -f2-)"
-    if [ "$ACK_ID" = "$DEMANDED_ID" ] && [ "${#ACK_REASON}" -ge 15 ]; then
-        python3 "$LIB" dispose --entity "$ENTITY_ROOT" --session "$SESSION_ID" \
-            --system "$DEMANDED_ID" --how ack --agent "${NAME:-${SUBAGENT_TYPE:-<unset>}}" \
-            --reason "$ACK_REASON" >/dev/null 2>&1 || true
-        exit 0
-    fi
-    ACK_PROBLEM="the ack names '${ACK_ID:-<nothing>}'"
-    [ "$ACK_ID" = "$DEMANDED_ID" ] && ACK_PROBLEM="the ack names the right system but its reason is ${#ACK_REASON} characters, and a reason under 15 is a bare marker"
-else
-    ACK_PROBLEM=""
+# --- TOLD, NEVER REFUSED (orchestration reliability R3) --------------------
+# richos-hq docs/prds/2026-10-23-orchestration-reliability.md: "An unrelated ...
+# old health incident remains owned in its current queue and existing watcher, but
+# does not veto a repair, inspection, ordinary answer or independent dispatch."
+# 2026-10-23 19:46Z: the repair of the review tools was refused over the ECS
+# capture backlog (1,143 historical records, first seen 42.9 days before) until an
+# acknowledgement line was written. The standing system is now told to the LEAD once
+# per session and system, on the model channel (PreToolUse additionalContext), with
+# its evidence and the actions that resolve it; the dispatch goes ahead.
+TOLD="$ENTITY_ROOT/.claude/state/owned-state-told.log"
+KEY="$(printf '%s\t%s' "${SESSION_ID:-<unset>}" "$DEMANDED_ID")"
+if [ -n "$SESSION_ID" ] && grep -qxF -- "$KEY" "$TOLD" 2>/dev/null; then
+    exit 0
 fi
-
-# --- REFUSE ----------------------------------------------------------------
-# NAMED, DATED AND QUOTED — never counted. "5 systems unhealthy" is the shape
-# of sentence the founder read past on the morning this was ordered; the
-# evidence line that decided it is the thing that gets acted on.
-{
-    printf '%s' "$DEMAND" | python3 -c '
-import json, sys
+mkdir -p "$(dirname "$TOLD")" 2>/dev/null && printf '%s\n' "$KEY" >>"$TOLD" 2>/dev/null || true
+printf '%s' "$DEMAND" | REPORT="${ENGINE_ROOT}/scripts/owned-state.sh ${ENTITY_ROOT}" python3 -c '
+import json, os, sys
 d = json.load(sys.stdin)
-print("=== A SYSTEM YOU OWN THE HEALTH OF IS %s AND NOTHING HAS BEEN DONE ABOUT IT THIS SESSION — REFUSING THIS DISPATCH ===" % d["status"])
-print("")
-print("  system   : %s — %s" % (d["demanded"], d["title"]))
-print("  standing : %s" % d["age"])
-if d.get("size"):
-    print("  size     : %s" % d["size"])
-print("  decided  : %s" % d.get("via", "?"))
-print("  taken    : %s%s" % (d.get("taken", "?"), " (cached)" if d.get("from_cache") else ""))
-print("")
-print("  THE EVIDENCE, VERBATIM:")
-for line in d.get("evidence", []) or ["(the check produced no output)"]:
-    print("    %s" % line.strip())
-if d.get("why"):
-    print("")
-    print("  why this is watched: %s" % d["why"])
-others = d.get("others", [])
-if others:
-    print("")
-    print("  Also standing, and NOT what this gate is asking about right now:")
-    for o in others[:6]:
-        print("    %-12s %-9s %s" % (o["id"], o["status"], o["age"]))
-'
-    echo ""
-    echo "  On 2026-09-10 the founder found a workflow red for thirteen days, 30 GB"
-    echo "  of unreclaimable worktrees and the engine's own hook text on his screen."
-    echo "  The worktree state was ALREADY in that session's start-up notice and was"
-    echo "  read past. Surfacing had already failed. So a known-bad state now costs"
-    echo "  the one thing that changes behavior: getting on with something else."
-    echo ""
-    echo "  A prompt that MENTIONS this system does not count. Until 2026-09-25 it"
-    echo "  did, and the escalations backlog reached 143 (the oldest 19 days) behind"
-    echo "  a gate that a stray keyword satisfied every session."
-    echo ""
-    echo "  ONE of these, and this session is clear — all of it, not one per system:"
-    echo ""
-    echo "    1. MAKE IT SMALLER. The next dispatch is allowed, silently, once:"
-    printf '%s' "$DEMAND" | python3 -c '
-import json, sys
-for w in json.load(sys.stdin).get("progress", []):
-    print("         - %s" % w)
+ev = " | ".join(line.strip() for line in (d.get("evidence") or [])[:4])
+ways = "; ".join(w.strip() for w in (d.get("progress") or [])[:3])
+text = ("OWNED SYSTEM STANDING (not a refusal; this dispatch goes ahead): %s (%s) is %s, standing %s%s. "
+        "Evidence: %s. What makes it smaller: %s%s. It holds no unrelated work. Full report: %s"
+        % (d["demanded"], d["title"], d["status"], d["age"], ("; %s" % d["size"]) if d.get("size") else "",
+           ev or "(none recorded)", ways or "see the report",
+           ("; or a dispatch naming its record (%s)" % d["triage"]) if d.get("triage") else "",
+           os.environ["REPORT"]))
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": text}}))
 ' 2>/dev/null || true
-    TRIAGE_PAT="$(printf '%s' "$DEMAND" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("triage") or "")' 2>/dev/null || true)"
-    if [ -n "$TRIAGE_PAT" ]; then
-        echo ""
-        echo "       Or DISPATCH A TRIAGE: a spawn whose prompt names this system's own"
-        echo "       record explicitly (pattern: ${TRIAGE_PAT}) is allowed and logged."
-    fi
-    echo ""
-    echo "    2. SAY IT CAN WAIT, ON THE RECORD. Add this line to the spawn prompt:"
-    echo ""
-    echo "         owned-state-ack: ${DEMANDED_ID} — <why this can wait>"
-    echo ""
-    echo "       It has to name ${DEMANDED_ID}, which is the OLDEST standing system —"
-    echo "       naming a cheaper one is how a thirteen-day red survives thirteen"
-    echo "       days. The reason needs 15 characters or more; a bare marker exempts"
-    echo "       nothing. It is logged to .claude/state/owned-state-acks.log, which"
-    echo "       notice-waiver-repetition.py reads, so the same excuse repeated"
-    echo "       session after session gets named. It clears THIS session only and"
-    echo "       stops no clock: the next session is asked again, older."
-    if [ -n "$ACK_PROBLEM" ]; then
-        echo ""
-        echo "  THIS PROMPT CARRIES AN ACK AND IT DOES NOT COUNT: ${ACK_PROBLEM}."
-        echo "  The demanded system is '${DEMANDED_ID}'."
-    fi
-    echo ""
-    echo "  Full report, every system including the healthy ones:"
-    echo "    ${ENGINE_ROOT}/scripts/owned-state.sh ${ENTITY_ROOT}"
-    echo "(hook: scripts/hooks/guard-owned-state.sh)"
-} >&2
-exit 2
+exit 0

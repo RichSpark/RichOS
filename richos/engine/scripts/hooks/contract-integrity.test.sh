@@ -449,9 +449,9 @@ ALL_ROOT_SCRIPTS=(
     # failure to notice, which is why it is carried too.
     scripts/lib/stop-hook-notice.sh
     # The CEO-ask predicate. On this list for the FIRST reason, not the
-    # stop-hook-notice one: guard-ceo-ask-first.sh fails OPEN without it, so a
-    # sandbox missing it would model an engine whose newest blocking guard is
-    # silently off — and it would look fine doing it.
+    # stop-hook-notice one: notice-ceo-unasked.sh fails OPEN without it, so a
+    # sandbox missing it would model an engine whose CEO-ask notice is silently
+    # off — and it would look fine doing it.
     scripts/lib/ceo-asks.sh
     scripts/lib/ceo-asks.py
     # The CEO-RULED predicate and its operator CLI. On this list for the FIRST
@@ -2815,13 +2815,14 @@ else
 fi
 rm -rf "$ROOT"
 
-# Case 45 — the Stop gate lets every turn end (sidecar refreshed): finished
-# work would sit neither landed nor discarded (point 5). Only the canary sees it.
+# Case 45 — the Stop gate tells the lead nothing (sidecar refreshed): finished work
+# would sit neither landed nor discarded and unseen (point 5, as amended 2026-10-24: the
+# turn end is allowed and the work is told). Only the canary sees it.
 ROOT="$(make_sandbox)"
-q_mutate_registry "$ROOT" '    blocking = [i for i in items if i["blocks_turn_end"]]' '    blocking = []'
+q_mutate_registry "$ROOT" '    return True, "\n".join(person), fallback_notice(sid, items)' '    return True, "\n".join(person), ""'
 set +e; PROBE_OUT="$(run_probe_in "$ROOT")"; rc=$?; set -e
-emit_case "45.gate-lets-every-turn-end-fails-layerQ-canary" 2 "$rc"
-if printf '%s' "$PROBE_OUT" | grep -F >/dev/null 'point 5: the turn was allowed to end'; then
+emit_case "45.gate-tells-the-lead-nothing-fails-layerQ-canary" 2 "$rc"
+if printf '%s' "$PROBE_OUT" | grep -F >/dev/null 'point 5: finished work neither landed nor discarded was not told'; then
     PASS=$((PASS+1)); printf '  PASS  45b.layer-Q-names-point-5\n'
 else
     FAIL=$((FAIL+1)); FAIL_NAMES+=("45b.layer-Q-names-point-5"); printf '  FAIL  45b.layer-Q-names-point-5\n'
