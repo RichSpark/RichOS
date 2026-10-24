@@ -190,7 +190,7 @@ sub "S1.8 an agent that produced nothing counts as landed (point 7)" \
 verdict
 
 # ===========================================================================
-begin S2 "A stopped agent whose work is NOT in the branch it integrates on is pending, not deleted: point 5 blocks the turn until Rich lands or discards it"
+begin S2 "A stopped agent whose work is NOT in the branch it integrates on is pending, not deleted: the lead is told at each turn end until it is shelved and discarded"
 RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-s2 >/dev/null 2>&1
 CC2="$T/other-wt/zach-opus-s2"
 spawn "zach-opus-s2" "$(printf 'write a page\ncross-repo-worktree: %s\n' "$CC2")"
@@ -198,10 +198,10 @@ platform_spawn "zach-opus-s2" "as2s2s2s2s2s2s2s2"
 commit_in "$CC2" note.txt
 platform_stops "zach-opus-s2" "as2s2s2s2s2s2s2s2"
 stop_gate; GATE_RC=$?
-sub "S2.1 the gate REFUSES the turn and names it as finished work (point 5)" \
-    "[ $GATE_RC -ne 0 ] && grep -q 'zach-opus-s2' '$T/stop.err'" "rc=$GATE_RC err=$(cat "$T/stop.err" | head -c 400)"
+sub "S2.1 the turn ends and the lead is told, by name (R2)" \
+    "[ $GATE_RC -eq 0 ] && grep -q 'zach-opus-s2' '$T/stop.out'" "rc=$GATE_RC out=$(head -c 400 "$T/stop.out") err=$(head -c 400 "$T/stop.err")"
 sub "S2.2 the reason given is the stop, quoted from the platform's record (point 11)" \
-    "grep -qi 'stopped' '$T/stop.err'" "$(grep -i stopped "$T/stop.err" | head -2)"
+    "grep -qi 'stopped' '$T/stop.out'" "$(grep -i stopped "$T/stop.out" | head -2)"
 sub "S2.3 its committed work is still there: nothing finished is discarded on its own (point 7)" \
     "[ -d '$CC2' ] && [ -f '$CC2/note.txt' ]" "cc2=$CC2"
 ws discard zach-opus-s2 --reason "the stopped-ending suite: this work was not wanted" \
