@@ -931,6 +931,8 @@ OUT="$(f_alive)"; RC=$?
 check "F5   the monitor gone: NOT WATCHED, whatever its last beat said" \
     "$( [ "$RC" = 1 ] && has "$OUT" "NOT WATCHED"; echo $?)" "rc=$RC out=$OUT"
 # An older monitor (one that looks in-process and records no evaluated source) holding the lock.
+# It never named itself in the lock, so the pid the monitor above wrote there goes first.
+: >"$STALL_WATCH_STATE_DIR/$SID/monitor.lock"
 python3 - "$STALL_WATCH_STATE_DIR/$SID" <<'PY'
 import json, os, sys, time
 d = sys.argv[1]
@@ -947,9 +949,61 @@ except OSError:
     sys.exit(0)' "$STALL_WATCH_STATE_DIR/$SID/monitor.lock"; }
 wait_for 10 f_locked
 OUT="$(f_alive)"; RC=$?
-kill "$FOLD" 2>/dev/null
 check "F6   a live monitor that never evaluated fresh code (an old parent) is not healthy" \
     "$( [ "$RC" = 1 ] && has "$OUT" "OLD MONITOR"; echo $?)" "rc=$RC out=$OUT"
+# F7 (Codex 2026-10-24): the lock held and a fresh beat, but its last look evaluated an OLDER
+# source, before the source changed (the ordinary old/new interval: evaluated.at 999 < newest
+# source 1000 < now 1001): not healthy until the current source has been evaluated.
+# F7b: the same beat with the current source is healthy.
+f7_beat() { python3 - "$STALL_WATCH_STATE_DIR/$SID" "$1" "$FE" <<'PY'
+import json, os, sys, time
+d, ident, fe = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, fe + "/scripts/lib")
+import stall_watch
+newest = stall_watch.source_identity(fe)[1]
+json.dump({"pid": 1, "poll": 60, "session": os.environ["RICHOS_SESSION_ID"], "mode": "monitor",
+           "last_look": time.time(), "open": 0, "evaluated": {"identity": ident, "at": newest - 1}},
+          open(os.path.join(d, "monitor.json"), "w"))
+PY
+}
+f7_beat "an-older-source"
+OUT="$(f_alive)"; RC=$?
+check "F7   a fresh look that evaluated an older source than the engine's is not healthy" \
+    "$( [ "$RC" = 1 ] && has "$OUT" "NOT YET ON THE CURRENT SOURCE"; echo $?)" "rc=$RC out=$OUT"
+f7_beat "$(f_ident)"
+OUT="$(f_alive)"; RC=$?
+check "F7b  POSITIVE CONTROL: the same beat on the current source is healthy" \
+    "$( [ "$RC" = 0 ] && has "$OUT" "source $(f_ident)"; echo $?)" "rc=$RC out=$OUT"
+# F8: the lock names a holder that is not the beat's writer (a beat another process left).
+printf '99999' >"$STALL_WATCH_STATE_DIR/$SID/monitor.lock"
+OUT="$(f_alive)"; RC=$?
+check "F8   a beat whose writer is not the lock's holder is not healthy" \
+    "$( [ "$RC" = 1 ] && has "$OUT" "NOT ITS OWNER"; echo $?)" "rc=$RC out=$OUT"
+printf '1' >"$STALL_WATCH_STATE_DIR/$SID/monitor.lock"
+OUT="$(f_alive)"; RC=$?
+check "F8b  POSITIVE CONTROL: the holder named in the lock wrote the beat: healthy" \
+    "$( [ "$RC" = 0 ]; echo $?)" "rc=$RC out=$OUT"
+kill "$FOLD" 2>/dev/null
+# F9: the evaluator's source changes while a look runs: the look records no version, so
+# --alive stays not healthy until a later look evaluates the current source.
+OUT="$(python3 -B - "$FE" "$STALL_WATCH_STATE_DIR" <<'PY'
+import json, os, sys
+fe, root = sys.argv[1], sys.argv[2]
+sys.path.insert(0, fe + "/scripts/lib")
+import stall_watch
+def tick(*a, **k):
+    with open(os.path.join(fe, "mega-lander", "workspaces.py"), "a") as fh:
+        fh.write("\n# changed while the look ran\n")
+stall_watch.tick = tick
+stall_watch.main(["--tick", "--engine-root", fe, "--config", "x", "--command", "sw"])
+sid = os.environ["RICHOS_SESSION_ID"]
+ev = json.load(open(os.path.join(root, sid, "evaluated.json")))
+print(ev["identity"], stall_watch.source_identity(fe)[0])
+PY
+)"
+check "F9   a source changed during the look is recorded as no version, never as the new one" \
+    "$( set -- $OUT; [ "$1" = "changed-during-the-look" ] && [ -n "$2" ]; echo $?)" "out=$OUT"
+cp "$SB/f-good.py" "$FE/mega-lander/workspaces.py"
 
 # --- E: a teammate's escalation wakes an idle lead (2026-10-01) ---------------
 # richos-hq docs/operations/2026-10-01-escalation-wakes-the-lead.md, built past

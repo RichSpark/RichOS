@@ -1706,6 +1706,13 @@ def run_loop(a, src, exit_on_notice=False):
             print("stall-watch: this session is already watched (pid %s); nothing to start." % mon.get("pid", "?"))
         return 0
     prune_state(sd)
+    # The holder names itself in the lock, so --alive can tell the monitor that holds it from
+    # a beat another process left behind (R5: the owner, not just "some lock is held").
+    try:
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, str(os.getpid()).encode(), 0)
+    except OSError:
+        pass
     alive = session_alive_check(spid) if spid else None
     poll = _env_float("STALL_WATCH_POLL_SECONDS", POLL_SECONDS)
     beat = {"pid": os.getpid(), "started": int(time.time()), "poll": poll, "session": sid,
@@ -1792,6 +1799,14 @@ def _alive_one(name, sid, engine_root, command):
         return 1, ("stall-watch: NOT WATCHED: nothing looks for stalls in this session. Start as a background "
                    "command (Bash with run_in_background: true): %s --watch" % command)
     poll = float(beat.get("poll") or POLL_SECONDS)
+    try:
+        with open(os.path.join(sd, "monitor.lock"), encoding="utf-8") as fh:
+            holder = fh.read().strip()
+    except OSError:
+        holder = ""
+    if holder and holder != str(beat.get("pid")):
+        return 1, ("stall-watch: NOT ITS OWNER: the lock is held by pid %s, but the last beat was written by pid %s"
+                   % (holder, beat.get("pid")))
     if name == sid and beat.get("session") not in (None, "", sid):
         return 1, "stall-watch: the monitor here watches session %s, not %s" % (beat.get("session"), sid)
     last = beat.get("last_look")
@@ -1810,8 +1825,11 @@ def _alive_one(name, sid, engine_root, command):
     if not ev.get("identity"):
         return 1, ("stall-watch: OLD MONITOR: %s pid %s looks in-process with the code it started with; it is "
                    "replaced when its session restarts" % (beat.get("mode", "monitor"), beat.get("pid")))
-    if ev["identity"] != ident and float(ev.get("at") or 0) > newest:
-        return 1, "stall-watch: its last look evaluated source %s, not the engine's %s" % (ev["identity"], ident)
+    if ev["identity"] != ident:
+        # Until a look has evaluated the CURRENT source, nothing says the change is watched:
+        # the ordinary old/new interval is not healthy, so the Stop/startup fallback stays on.
+        return 1, ("stall-watch: NOT YET ON THE CURRENT SOURCE: its last look evaluated %s, the engine's is %s; "
+                   "the next look uses it" % (ev["identity"], ident))
     return 0, "stall-watch: watching (%s pid %s, every %.0f s; last look %s, %.0f s ago; %d open stall%s; source %s)" % (
         beat.get("mode", "monitor"), beat.get("pid"), poll, hms(last), age, int(beat.get("open") or 0),
         "" if int(beat.get("open") or 0) == 1 else "s", ev["identity"])
@@ -1898,9 +1916,14 @@ def main(argv):
     if a.tick:
         sid, _spid = src.session()
         sd = session_dir(sid)
+        before, _newest = source_identity(src.engine_root)
         tick(src, sd, sid, json_lines=a.jsonl)
         ident, _newest = source_identity(src.engine_root)
-        _write_json(os.path.join(sd, "evaluated.json"), {"identity": ident, "at": time.time(), "pid": os.getpid()})
+        # A source that changed during the look: which version the look loaded is unknown, so it
+        # is recorded as no version at all and the next look settles it (R5).
+        _write_json(os.path.join(sd, "evaluated.json"), {"identity": ident if ident == before else
+                                                         "changed-during-the-look", "at": time.time(),
+                                                         "pid": os.getpid()})
         return 0
     if a.monitor and a.host_json:
         return run_host_loop(src)
