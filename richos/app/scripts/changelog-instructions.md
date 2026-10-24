@@ -33,13 +33,14 @@ Put the lines in that order: every Added line first, then Changed, Improved and 
 
 ## What you leave out
 
-A user never sees these, so they get no line:
+Only work that never reaches a user gets no line:
 
 - tests, test tooling, screenshots kept for tests and the test VM
 - the review process and its findings
 - building, signing, publishing and release tooling, including version bumps and this changelog itself
-- the tooling that runs the team behind the product (the engine, guards, hooks, agent definitions)
 - internal documentation and records
+
+The engine is not on this list. A change to the engine, a guard, a hook or an agent definition that changes what Rich, Stu or their workers do or say in the app gets a line like any other change. Every release carries the whole engine but the app runs only part of it, so trace each change to the part of the app that runs it; a part the app never runs reaches no user.
 
 If nothing in the merges is something a user would notice, write exactly this one line:
 
