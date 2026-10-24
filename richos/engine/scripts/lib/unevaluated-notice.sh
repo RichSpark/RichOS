@@ -212,7 +212,7 @@ _ue_log() { # <entity root> <content key>
 }
 
 # --- the operator half -----------------------------------------------------
-# THE SENTENCE IS NOT NEW. guard-ceo-ask-first.sh and guard-ceo-ruled-ask.sh are
+# THE SENTENCE IS NOT NEW. guard-ceo-ask-first.sh (removed 2026-10-24) and guard-ceo-ruled-ask.sh were
 # the two PreToolUse guards the survey found already doing this correctly, and
 # they say, verbatim:
 #

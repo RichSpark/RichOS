@@ -542,36 +542,32 @@ fn engine_seat(root: &std::path::Path) -> PathBuf {
     seat
 }
 
-/// The engine's ask-first gate on a teammate dispatch, as a lead's `claude` runs it: `run` is
-/// the lead's `RICHOS_OPERATOR_LEAD`, or none (a terminal session). Returns the exit code.
-fn ask_first_gate(seat: &std::path::Path, session: &str, run: Option<&str>) -> i32 {
-    use std::io::Write;
+/// Whether `session` (or, with `run`, the lead's `RICHOS_OPERATOR_LEAD` app run) has put a
+/// prepared item to him: the engine's own verdict, `ceo-asks-status.sh` (0 SATISFIED, 1 OPEN).
+fn asked(seat: &std::path::Path, session: &str, run: Option<&str>) -> i32 {
     let mut command = std::process::Command::new("bash");
     command
-        .arg(real_engine().join("scripts/hooks/guard-ceo-ask-first.sh"))
+        .arg(real_engine().join("scripts/ceo-asks-status.sh"))
+        .arg(seat)
+        .arg("--session")
+        .arg(session)
         .current_dir(seat)
         .env("RICHOS_ENTITY_ROOT", seat)
         .env_remove("RICHOS_OPERATOR_LEAD")
-        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     if let Some(run) = run {
         command.env("RICHOS_OPERATOR_LEAD", run);
     }
-    let mut child = command.spawn().unwrap();
-    let payload = serde_json::json!({"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":session,
-        "cwd":seat,"tool_input":{"subagent_type":"dev","name":"dev-sonnet-t1","prompt":"do the thing"}});
-    child.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
-    child.wait().unwrap().code().unwrap_or(-1)
+    command.status().unwrap().code().unwrap_or(-1)
 }
 
 /// **F10 (operator contract notes §4 item 2):** in the app each conversation's lead is its own
-/// session, and the ask-first gate was keyed per session, so every new conversation's lead was
-/// refused until it put the same top item to him again. An ask one lead put to him, witnessed
-/// when he was shown it, now satisfies the gate for every lead of the same app run, and for no
-/// session outside that run.
+/// session, and the ask was keyed per session, so every new conversation's lead was told to
+/// put the same top item to him again. An ask one lead put to him, witnessed when he was shown
+/// it, now counts for every lead of the same app run, and for no session outside that run.
 #[test]
-fn an_ask_witnessed_in_one_conversation_opens_the_gate_for_every_lead_of_the_run() {
+fn an_ask_witnessed_in_one_conversation_counts_for_every_lead_of_the_run() {
     let mut f = Fixture::new();
     let seat = engine_seat(&f.root);
     f.scope.engine = Some(real_engine());
@@ -579,8 +575,8 @@ fn an_ask_witnessed_in_one_conversation_opens_the_gate_for_every_lead_of_the_run
     f.scope.asker = "operator:conversation".into();
     f.scope.session_id = "lead-of-conversation-a".into();
     f.scope.app_run = Some("app-run-1".into());
-    assert_eq!(ask_first_gate(&seat, "lead-of-conversation-b", Some("app-run-1")), 2,
-               "before he is asked, a lead's dispatch is refused");
+    assert_eq!(asked(&seat, "lead-of-conversation-b", Some("app-run-1")), 1,
+               "before he is asked, the run has not asked him");
     let input:QuestionInput=serde_json::from_value(serde_json::json!({"text":"When should the release ship?\npremise-unverified: This test fixture has no production deadline.","options":[{"label":"Today","description":"Earlier fixes"},{"label":"Tomorrow","description":"More tests"}]})).unwrap();
     let q = f.store.ask(&f.scope, vec![input]).unwrap().remove(0);
     f.store.acknowledge("entity", "thread", &q.id, "mac").unwrap();
@@ -589,11 +585,11 @@ fn an_ask_witnessed_in_one_conversation_opens_the_gate_for_every_lead_of_the_run
     let record: serde_json::Value = serde_json::from_str(ledger.trim()).unwrap();
     assert_eq!(record["app_run"], "app-run-1", "the display witness writes the run: {record}");
     assert_eq!(record["discharges"], true, "the question is about item 1.1: {record}");
-    assert_eq!(ask_first_gate(&seat, "lead-of-conversation-b", Some("app-run-1")), 0,
-               "another conversation's lead in the same run may dispatch");
-    assert_eq!(ask_first_gate(&seat, "lead-of-conversation-b", Some("app-run-2")), 2,
+    assert_eq!(asked(&seat, "lead-of-conversation-b", Some("app-run-1")), 0,
+               "another conversation's lead in the same run counts as having asked");
+    assert_eq!(asked(&seat, "lead-of-conversation-b", Some("app-run-2")), 1,
                "a later launch of the app is a new run and was not asked");
-    assert_eq!(ask_first_gate(&seat, "terminal-session", None), 2,
+    assert_eq!(asked(&seat, "terminal-session", None), 1,
                "a session outside the app is still keyed to its own session");
 }
 

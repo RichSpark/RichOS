@@ -210,6 +210,30 @@ class GrantRuleTests(unittest.TestCase):
         self.assertEqual((L.NATIVE_ROLE, cpu_guard.NATIVE_ROLE), ('native-build', 'native-build'))
 
 
+class ObservationIsNotAnAlertTests(unittest.TestCase):
+    """Orchestration reliability R6: "CPU pressure ... are observations. A CPU alert's list of
+    unowned processes does not prove who consumed the host." On 2026-10-23 that list reached
+    every turn end (the screenshot turn's 479-character CPU alert) and every Bash call."""
+
+    def test_high_host_cpu_with_nothing_stopped_is_logged_and_never_shown(self):
+        # The controller launchd and the hooks run (cpu_guard_live_deploy.py); main's
+        # cpu_guard.py is not deployable and shows nothing anywhere.
+        for module in (L,):
+            with self.subTest(controller=module.__name__), \
+                    tempfile.TemporaryDirectory(prefix='cpu-guard-note-') as directory, \
+                    patch.object(module, 'STATE', Path(directory)), \
+                    patch.object(module, 'healthy', return_value=True):
+                module.host_pressure_note(97.8, [dict(pid=1, executable='/Applications/Terminal.app', cores=0.03)])
+                rows = [json.loads(line) for line in (Path(directory) / 'events.jsonl').read_text().splitlines()]
+                self.assertEqual(rows[-1]['host_busy'], 97.8)                    # kept in the existing log
+                self.assertIsNone(module.read_json(Path(directory) / 'alert.json'))
+                self.assertIsNone(module.notice_payload({'session_id': 's', 'hook_event_name': 'Stop'}))
+                # An action is still shown, once.
+                module.event('CPU circuit breaker stopped an owned workload', pid=50)
+                self.assertIn('stopped an owned workload',
+                              module.notice_payload({'session_id': 's', 'hook_event_name': 'Stop'})['systemMessage'])
+
+
 class RuntimeDependencyTests(unittest.TestCase):
     def test_install_stages_reader_before_launching_any_service(self):
         with tempfile.TemporaryDirectory(prefix='controller-support-') as directory:

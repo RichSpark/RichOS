@@ -84,6 +84,9 @@ bad() { printf '  FAIL  %s\n         %s\n' "$1" "$2"; FAIL=$((FAIL + 1)); }
 SANDBOX="$(mktemp -d -t ass-kicker.XXXXXX)"
 trap 'rm -rf "$SANDBOX"' EXIT
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
+# The record lookup reads the workspace registry's repository list: a sandbox one, never the
+# operator's live registry (a live richos-hq once resolved a fixture SHA here).
+export RICHOS_WORKSPACES_DIR="$SANDBOX/registry-none"
 
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 required" >&2; exit 1; }
 
@@ -665,6 +668,64 @@ alerted 'follow-ups.md' && ok "R51. 'added to the follow-ups' backed only by a c
 
 run_hook "$TR_FUP_COMMIT" "That's on the follow-up list for after the nightly"
 silent && ok "R52. 'on the follow-up list' with a committed change to the follow-up list in this turn: SILENT" || bad "R52. list committed" "rc=$RC out=$OUT"
+
+# AN EXISTING RECORD IS LOOKED UP, NOT RE-DEMANDED (orchestration reliability R6/A7). On
+# 2026-10-23 a reply citing a follow-up committed in an EARLIER turn (path and SHA in code
+# spans) was alerted twice as "in no committed repository file". The shapes below are those
+# replies' shapes (the verbatim replies are replayed in the private evidence): a paragraph, a
+# list item, and the clarification. The cited commit is resolved in the repositories the
+# workspace registry knows (repos.json), never in this turn's traffic. Observable facts only:
+# no wording is compared, so a cited row is never called verified (A7d states that limit).
+printf -- '- After the release: a land refuses a branch whose author run was made in another workspace on the exact same commit, so the same check re-ran. A passed run of the identical commit should count wherever it was made.\n' >> "$FUP_REPO/docs/plans/follow-ups.md"
+git -C "$FUP_REPO" commit -qam "Follow-ups: a passed author run of the identical commit should count from any workspace" >/dev/null 2>&1
+FUP_SHA="$(git -C "$FUP_REPO" rev-parse --short=9 HEAD)"
+printf 'other\n' > "$FUP_REPO/other.md"; git -C "$FUP_REPO" add other.md >/dev/null 2>&1
+git -C "$FUP_REPO" commit -qm "an unrelated file" >/dev/null 2>&1
+OTHER_SHA="$(git -C "$FUP_REPO" rev-parse --short=9 HEAD)"
+printf -- '- Investigate release speed measurements on Windows.\n' >> "$FUP_REPO/docs/plans/follow-ups.md"
+git -C "$FUP_REPO" commit -qam "Follow-ups: investigate the Windows release speed measurements" >/dev/null 2>&1
+INVESTIGATE_SHA="$(git -C "$FUP_REPO" rev-parse --short=9 HEAD)"
+printf -- '- A row that was later removed.\n' >> "$FUP_REPO/docs/plans/follow-ups.md"
+git -C "$FUP_REPO" commit -qam "Follow-ups: a row" >/dev/null 2>&1
+GONE_SHA="$(git -C "$FUP_REPO" rev-parse --short=9 HEAD)"
+grep -v 'A row that was later removed' "$FUP_REPO/docs/plans/follow-ups.md" > "$SANDBOX/fup.tmp"
+cp "$SANDBOX/fup.tmp" "$FUP_REPO/docs/plans/follow-ups.md"
+git -C "$FUP_REPO" commit -qam "Follow-ups: done" >/dev/null 2>&1
+mkdir -p "$SANDBOX/registry"
+printf '{"repos": ["%s"]}\n' "$FUP_REPO" > "$SANDBOX/registry/repos.json"
+export RICHOS_WORKSPACES_DIR="$SANDBOX/registry"
+no_demand() { ! printf '%s' "$OUT" | grep -q 'write it to the record now'; }
+
+run_hook "$TR_BASH" "**Fix for the notes refusal:** a passed test run of the exact same commit should count no matter which folder it ran in. That's on the follow-up list in the private repo (\`docs/plans/follow-ups.md\`, commit \`$FUP_SHA\`), to brief once the release is out."
+silent && ok "A7a. a follow-up committed in an EARLIER turn, cited with its path and SHA in code spans: SILENT (looked up)" || bad "A7a. earlier record cited" "rc=$RC out=$OUT"
+run_hook "$TR_BASH" "Two fixes:
+- **Same-commit test result counts from any folder:** this removes that re-run entirely. It's on the follow-up list (\`docs/plans/follow-ups.md\`, commit \`$FUP_SHA\`), to brief once the release is out.
+- **Release notes land without a review:** finishing its tests now."
+silent && ok "A7b. the same record cited from a list item: SILENT" || bad "A7b. list item" "rc=$RC out=$OUT"
+run_hook "$TR_BASH" "That follow-up is committed in the private repo at docs/plans/follow-ups.md, commit $FUP_SHA, pushed in an earlier turn. Nothing new needed recording."
+silent && ok "A7c. the truthful clarification passes with no further write, commit or wording" || bad "A7c. clarification" "rc=$RC out=$OUT"
+# THE STATED LIMIT (Codex 2026-10-24): the cited commit added "Investigate ..." and the reply says
+# "Delete ...". Only observable facts are checked, so this is CITED like A7a: no alert, no write
+# demand, and nothing calls it verified. Catching it would take comparing wording, which is
+# deliberately not done here.
+run_hook "$TR_BASH" "Delete all release speed measurements on Windows. It is on the follow-up list (\`docs/plans/follow-ups.md\`, commit \`$INVESTIGATE_SHA\`)."
+A7D_LOGGED="$(tail -1 "$ENTITY/.claude/state/stated-actions.jsonl" 2>/dev/null | python3 -c 'import json,sys
+a = json.loads(sys.stdin.readline() or "{}").get("arm3") or {}
+print("%s|%s" % (a.get("verdict"), ",".join(a.get("cited") or [])))' 2>/dev/null)"
+{ silent && no_demand && [ "$A7D_LOGGED" = "cited, content not checked|$INVESTIGATE_SHA" ]; } \
+    && ok "A7d. LIMIT: a cited row whose words say the opposite is logged 'cited, content not checked' with its commit, never verified; no alert, no write demand" \
+    || bad "A7d. opposite action" "rc=$RC out=$OUT logged=$A7D_LOGGED"
+run_hook "$TR_BASH" "It's on the follow-up list (\`docs/plans/follow-ups.md\`, commit \`$OTHER_SHA\`), to brief later."
+{ alerted 'NOT VERIFIED' && alerted 'not a finding that no record exists' && no_demand; } \
+    && ok "A7e. a cited commit that does not change the follow-up list is NOT VERIFIED, never 'no record', with no write demand" \
+    || bad "A7e. cited commit elsewhere" "rc=$RC out=$OUT"
+run_hook "$TR_BASH" "It's on the follow-up list (\`docs/plans/follow-ups.md\`, commit \`$GONE_SHA\`)."
+{ alerted 'NOT VERIFIED' && alerted 'no line it added is still there' && no_demand; } \
+    && ok "A7f. a cited commit whose added row is gone from the list is NOT VERIFIED" || bad "A7f. row gone" "rc=$RC out=$OUT"
+run_hook "$TR_BASH" "That's on the follow-up list for after the release."
+alerted 'write it to the record now' && ok "A7g. a genuinely missing record, nothing cited and nothing written: the alert as before" \
+    || bad "A7g. missing record" "rc=$RC out=$OUT"
+export RICHOS_WORKSPACES_DIR="$SANDBOX/registry-none"
 
 # A negation, modal or subordinate word in an EARLIER clause does not silence
 # the claim: only the claim's own clause is checked.

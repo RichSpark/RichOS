@@ -136,9 +136,9 @@ mkdir -p "$REPO/.claude/agents" "$REPO/.claude/state" "$REPO/docs"
 echo "# sandbox" > "$REPO/README.md"
 
 # THE SANDBOX MUST BE A COMPLETE ADOPTER, and this is not decoration. The survey
-# recorded that a sandbox alone gave a FALSE reading for guard-ceo-ask-first.sh:
-# it stood down there for an environmental reason while refusing at exit 2
-# against the real root. This suite reproduced that exactly — that guard and
+# recorded that a sandbox alone gave a FALSE reading for guard-ceo-ask-first.sh
+# (removed 2026-10-24): it stood down there for an environmental reason while
+# refusing at exit 2 against the real root. This suite reproduced that exactly — that guard and
 # guard-ceo-ruled-ask.sh landed in the silent-and-undeclared bucket on a bare
 # sandbox, which would have been a red for a defect that does not exist. Both
 # stand down when the repository DECLARES no CEO list and no rulings record, and
@@ -160,7 +160,7 @@ printf '# CEO decisions\n\n## 1. A ruling\n\nSomething was ruled.\n' \
 # their job and the sandbox was broken.
 #
 # Nothing prepared, because a record holding an unanswered question makes
-# guard-ceo-ask-first.sh refuse the spawn and notice-ceo-unasked.sh speak, which
+# notice-ceo-unasked.sh speak, which
 # is also correct and also not what 4d is asking about. Declared, readable and
 # satisfied is the one state that leaves the gate LIVE and the happy path
 # SILENT, which is exactly the pair of properties under test.

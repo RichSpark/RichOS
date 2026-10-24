@@ -43,8 +43,6 @@
 #   scripts/hooks/notice-ceo-asks.sh    PostToolUse[AskUserQuestion] — the
 #                                       witness. Names WHICH item was asked,
 #                                       from the words he actually saw.
-#   scripts/hooks/guard-ceo-ask-first.sh  PreToolUse[Agent] — BLOCKS a teammate
-#                                       dispatch while nothing has been asked.
 #   scripts/hooks/notice-ceo-unasked.sh Stop — a turn does not end quietly with
 #                                       a prepared item this session never
 #                                       surfaced.

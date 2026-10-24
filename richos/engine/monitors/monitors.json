@@ -8,7 +8,7 @@
   {
     "name": "stall-watch",
     "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/scripts/stall-watch.sh --monitor",
-    "description": "Wakes the lead the moment teammate work stalls or a teammate escalates: a resource wait over 10 minutes, a live teammate with no commit and no transcript activity for 20 minutes, a teammate waiting on a slot its own process holds, or a new teammate escalation (again every 10 minutes while one needs the CEO at a device). Looks every 60 s and tells each once. About every 12 hours, when the lead is idle, reminds it of unresolved finished work, including recorded waits. Also ends only owned idle commands deferring an already ended teammate turn",
+    "description": "Wakes the lead the moment teammate work stalls or a teammate escalates: a resource wait over 10 minutes, a live teammate with no commit and no transcript activity for 20 minutes, a teammate waiting on a slot its own process holds, or a new teammate escalation (again every 10 minutes while one needs the CEO at a device). Looks every 60 s and tells each once. Tells an idle lead its due work (finished work with no wait, held work with no checkable end or whose end came true) once, and again every 30 minutes while it stays due; each look runs the engine's current code in a fresh child. Also ends only owned idle commands deferring an already ended teammate turn",
     "when": "always"
   },
   {

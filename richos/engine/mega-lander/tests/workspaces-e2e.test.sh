@@ -18,8 +18,8 @@
 #   E3  a cross-repository agent with two workspaces, landed: both gone, as one
 #   E7  ONE agent with workspaces in TWO other repositories: all three of its
 #       workspaces and branches go together (point 10's "every workspace it has")
-#   E4  a session that ends mid-work: the next session is told first, is refused
-#       new work and the end of its turn, and lands it
+#   E4  a session that ends mid-work: the next session is told first, starts new
+#       work, is told at each turn end (never refused it), and lands it
 #   E6  the pair of events: a branch the agent creates inside one tool call is
 #       recorded against it by the catch-all PreToolUse + PostToolUse hooks, and
 #       is deleted with its workspace when the work lands
@@ -98,7 +98,7 @@ post_tool() { # <agent-id> <tool> -> the catch-all PostToolUse: the other half o
     python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PostToolUse","session_id":sys.argv[1],"agent_id":sys.argv[2],"agent_type":"zach","tool_name":sys.argv[3],"cwd":sys.argv[4],"tool_input":{},"tool_response":{}}))' "$CUR_SID" "$1" "$2" "$ENT" \
         | bash "$HOOKS/observe-created-refs.sh" >/dev/null 2>"$T/observe.err"
 }
-stop_gate() { # -> exit code of the Stop gate; message in $T/stop.err
+stop_gate() { # -> exit code of the Stop gate; the lead's notice in $T/stop.out, errors in $T/stop.err
     payload Stop "{\"session_id\":\"$CUR_SID\",\"cwd\":\"$ENT\",\"stop_hook_active\":false,\"last_assistant_message\":\"done\"}" \
         | bash "$HOOKS/guard-workspace-gate.sh" >"$T/stop.out" 2>"$T/stop.err"
 }
@@ -138,8 +138,8 @@ subagent_stop "ae1e1e1e1e1e1e1e1"
 barrier "ae1e1e1e1e1e1e1e1" Read; rc=$?
 check "E1.4 finished: the lock-out refuses every tool, Read included (point 9)" "[ $rc -eq 2 ]"
 stop_gate; rc=$?
-check "E1.5 the Stop gate refuses the end of the turn while it is pending (point 5)" \
-    "[ $rc -eq 2 ] && grep -q 'zach-opus-e1' '$T/stop.err'" "$(cat "$T/stop.err")"
+check "E1.5 while it is pending the turn ends and the lead is told, by name (R2)" \
+    "[ $rc -eq 0 ] && grep -q 'zach-opus-e1' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out" "$T/stop.err")"
 spawn "zach-opus-e1b" "unrelated new work"; rc=$?
 check "E1.6 unrelated work starts while finished work stays pending (point 5, amended 2026-09-30)" \
     "[ $rc -eq 0 ] && [ -e '$NP1' ]" "rc=$rc $(cat "$T/spawn.err")"
@@ -159,7 +159,7 @@ NP2="$ENT/.claude/worktrees/agent-ae2e2e2e2e2e2e2e2"
 commit_in "$NP2" e2.txt
 subagent_stop "ae2e2e2e2e2e2e2e2"
 stop_gate; rc=$?
-check "E2.2 pending: the turn cannot end" "[ $rc -eq 2 ]"
+check "E2.2 pending: the turn ends and the lead is told" "[ $rc -eq 0 ] && grep -q 'zach-opus-e2' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out")"
 RICHOS_SESSION_ID="$CUR_SID" "$WS" discard zach-opus-e2 --reason "the reviewer rejected the approach" \
     --not-ceo-ordered "an internal experiment, not the CEO's order" >"$T/discard.out" 2>&1; rc=$?
 check "E2.3 discarded with its reason recorded" "[ $rc -eq 0 ]" "$(cat "$T/discard.out")"
@@ -192,8 +192,8 @@ spawn "zach-opus-e3x" "$(printf 'x\ncross-repo-worktree: %s/rogue\n' "$T")"; rc=
 check "E3.6 a spawn naming an unregistered workspace does not happen (point 3)" \
     "[ $rc -eq 2 ] && grep -q 'could not be registered' '$T/spawn.err'" "$(cat "$T/spawn.err")"
 stop_gate; rc=$?
-check "E3.7 an unregistered cc/ workspace is finished work: the turn cannot end (point 3)" \
-    "[ $rc -eq 2 ] && grep -q 'orphan-rogue' '$T/stop.err'" "$(cat "$T/stop.err")"
+check "E3.7 an unregistered cc/ workspace is finished work the lead is told about (point 3)" \
+    "[ $rc -eq 0 ] && grep -q 'orphan-rogue' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out" "$T/stop.err")"
 RICHOS_SESSION_ID="$CUR_SID" "$WS" discard orphan-rogue --reason "made by hand, never registered" \
     --not-ceo-ordered "a test fixture made by this demonstration" >"$T/discard.out" 2>&1; rc=$?
 check "E3.8 discarded: workspace and branch gone" \
@@ -238,8 +238,8 @@ RICHOS_SESSION_ID="$CUR_SID" "$WS" withdraw-cc --name zach-opus-e7x \
 check "E7.4b the registered half of that refused spawn is withdrawn: nothing left behind (point 3)" \
     "[ $rc -eq 0 ] && [ ! -e '$CC7X' ] && ! has_branch '$OTHER' cc/zach-opus-e7x" "$(cat "$T/withdraw7.out")"
 stop_gate; rc=$?
-check "E7.4c the hand-made one is finished work of an ended session: the turn cannot end (point 3)" \
-    "[ $rc -eq 2 ] && grep -q 'orphan-rogue2' '$T/stop.err'" "$(cat "$T/stop.err")"
+check "E7.4c the hand-made one is finished work of an ended session the lead is told about (point 3)" \
+    "[ $rc -eq 0 ] && grep -q 'orphan-rogue2' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out" "$T/stop.err")"
 RICHOS_SESSION_ID="$CUR_SID" "$WS" discard orphan-rogue2 --reason "made by hand for the negative case, never registered" \
     --not-ceo-ordered "a test fixture made by this demonstration" >"$T/discard7.out" 2>&1; rc=$?
 check "E7.4d and it is discarded: workspace and branch gone" \
@@ -270,13 +270,13 @@ kill "$OLD_PID"
 while kill -0 "$OLD_PID" 2>/dev/null; do sleep 0.1; done      # the process no longer exists
 start_session "sess-e2e-two-2222"
 check "E4.2 the next session is told first (point 5)" \
-    "grep -q 'zach-opus-e4' '$T/last-start.json' && grep -q 'FIRST' '$T/last-start.json'" "$(cat "$T/last-start.json" "$T/last-start.err")"
+    "grep -q 'zach-opus-e4' '$T/last-start.json' && grep -q 'DUE WORK' '$T/last-start.json'" "$(cat "$T/last-start.json" "$T/last-start.err")"
 barrier "ae4e4e4e4e4e4e4e4" Bash; rc=$?
 check "E4.3 its agent cannot outlive the session: locked out (points 9, 12)" "[ $rc -eq 2 ]" "$(cat "$T/barrier.err")"
 spawn "zach-opus-e4b" "unrelated"; rc=$?
 check "E4.4 unrelated work starts while the previous session stays unresolved" "[ $rc -eq 0 ] && [ -e '$NP4/draft.txt' ]"
 stop_gate; rc=$?
-check "E4.5 the turn cannot end either" "[ $rc -eq 2 ] && grep -q 'zach-opus-e4' '$T/stop.err'"
+check "E4.5 its turn ends and the lead is told again" "[ $rc -eq 0 ] && grep -q 'zach-opus-e4' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out")"
 RICHOS_SESSION_ID="$CUR_SID" "$WS" land zach-opus-e4 >"$T/land.out" 2>&1; rc=$?
 # Unmerged AND uncommitted: refused, and the file is kept. Which reason speaks
 # first is not point 8's business: since 25b2b68ff (hunt part 4, finding 13)
@@ -327,8 +327,8 @@ RICHOS_SESSION_ID="$CUR_SID" "$WS" land zach-opus-e6 >"$T/land6.out" 2>&1; rc=$?
 check "E6.3 the land is held by the work it left on a side branch, by name (points 5, 8)" \
     "[ $rc -eq 2 ] && grep -q 'e6-side' '$T/land6.out'" "$(cat "$T/land6.out")"
 stop_gate; rc=$?
-check "E6.4 so the turn cannot end either (point 5)" \
-    "[ $rc -eq 2 ] && grep -q 'zach-opus-e6' '$T/stop.err'" "$(cat "$T/stop.err")"
+check "E6.4 so it stays due and the lead is told at the turn end (point 5)" \
+    "[ $rc -eq 0 ] && grep -q 'zach-opus-e6' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out" "$T/stop.err")"
 git -C "$ENT" merge -q --no-edit e6-side
 stop_gate; rc=$?
 check "E6.5 merged: nothing it produced was lost, and it lands on its own" "[ $rc -eq 0 ]" "$(cat "$T/stop.err")"

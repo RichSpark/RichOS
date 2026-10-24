@@ -284,6 +284,11 @@ quarantine_dirs() { find "$T" -maxdepth 4 \( -iname '*retired*' -o -iname '*quar
 WS="$ENGINE/mega-lander/workspaces.sh"
 CREATE="$ENGINE/mega-lander/create-teammate-worktree.sh"
 ws() { RICHOS_SESSION_ID="$CUR_SID" "$WS" "$@"; }
+# Orchestration reliability R2/R3 (richos-hq docs/prds/2026-10-23-orchestration-reliability.md):
+# the Stop gate no longer refuses a turn end; finished work stays owned and is DUE in the one
+# status calculation, which `workspaces.sh holds` prints. A case that used to read a refusal
+# naming the work now reads an allowed turn end and the work due, by name.
+due_has() { ws holds >"$T/holds.out" 2>&1; grep -qE "^DUE .*$1" "$T/holds.out"; }
 
 start_session "sess-fourteen-1111"
 
@@ -638,9 +643,9 @@ git -C "$ENT" worktree add -q "$ENT/.claude/worktrees/agent-deadbeefdeadbeef0" -
 commit_in "$ENT/.claude/worktrees/agent-deadbeefdeadbeef0" native-rogue.txt
 stop_gate; rc=$?
 sub "C3.4 an unregistered cc/ workspace is in point 5's list: the turn cannot end and it is named" \
-    "[ $rc -eq 2 ] && grep -q 'orphan-rogue-cc' '$T/stop.err'" "$(cat "$T/stop.err")"
+    "[ $rc -eq 0 ] && due_has 'orphan-rogue-cc'" "$(cat "$T/stop.err")"
 sub "C3.5 an unregistered NATIVE workspace is in point 5's list too, by name" \
-    "[ $rc -eq 2 ] && grep -q 'orphan-agent-deadbeefdeadbeef0' '$T/stop.err'" "$(cat "$T/stop.err")"
+    "[ $rc -eq 0 ] && due_has 'orphan-agent-deadbeefdeadbeef0'" "$(cat "$T/stop.err")"
 spawn "zach-opus-r2" "new work"; rc=$?
 sub "C3.6 unrelated new work starts while both orphans remain pending" "[ $rc -eq 0 ] && [ -e '$T/rogue-cc' ]" "$(cat "$T/spawn.err")"
 ws discard orphan-rogue-cc --reason "made by hand, never registered" --not-ceo-ordered "a fixture of this suite" >"$T/d1.out" 2>&1; r1=$?
@@ -653,7 +658,7 @@ STRAY_TIP="$(git -C "$OTHER" commit-tree "$(git -C "$OTHER" rev-parse 'main^{tre
 git -C "$OTHER" branch cc/stray-hand "$STRAY_TIP"
 stop_gate; rc=$?
 sub "C3.8 an unregistered cc/ BRANCH with no workspace is in point 5's list too, by name" \
-    "[ $rc -eq 2 ] && grep -q 'orphan-cc-stray-hand' '$T/stop.err'" "$(cat "$T/stop.err")"
+    "[ $rc -eq 0 ] && due_has 'orphan-cc-stray-hand'" "$(cat "$T/stop.err")"
 ws discard orphan-cc-stray-hand --reason "made by hand, never registered" --not-ceo-ordered "a fixture of this suite" >"$T/d3.out" 2>&1; r3=$?
 sub "C3.9 and it is handled under point 5 (discarded: $r3) and gone" "[ $r3 -eq 0 ] && ! has_branch '$OTHER' cc/stray-hand" "$(cat "$T/d3.out")"
 verdict
@@ -786,7 +791,7 @@ ws land zach-opus-u1 >"$T/land.out" 2>&1; r1=$?
 sub "C8.1 the land is refused while draft.txt is uncommitted (exit $r1), naming the uncommitted entry, and the tree is untouched" \
     "[ $r1 -eq 2 ] && grep -q 'uncommitted entr' '$T/land.out' && grep -q 'draft.txt' '$T/land.out' && [ -e '$NPU/draft.txt' ] && [ -e '$NPU/.env' ]" "$(cat "$T/land.out")"
 stop_gate; r2=$?
-sub "C8.2 the Stop gate does not land it either: it is pending, by name" "[ $r2 -eq 2 ] && grep -q 'zach-opus-u1' '$T/stop.err'" "$(cat "$T/stop.err")"
+sub "C8.2 the Stop gate does not land it either: it is pending, by name" "[ $r2 -eq 0 ] && due_has 'zach-opus-u1'" "$(cat "$T/stop.err")"
 git -C "$NPU" add draft.txt && git -C "$NPU" commit -q -m "what it left"
 git -C "$ENT" merge -q --no-edit "worktree-agent-au1u1u1u1u1u1u1u1"
 ws land zach-opus-u1 >"$T/land.out" 2>&1; r3=$?
@@ -1087,7 +1092,7 @@ ws pause zach-opus-s1 --until "" >"$T/pause.out" 2>&1
 subagent_stop "as1s1s1s1s1s1s1s1"
 stop_gate; r6=$?
 sub "C11.5 a pause naming NOTHING is pending work under point 5: the turn cannot end and it is named" \
-    "[ $r6 -eq 2 ] && grep -q 'zach-opus-s1' '$T/stop.err' && grep -q -i 'nothing named' '$T/stop.err'" "$(cat "$T/pause.out" "$T/stop.err")"
+    "[ $r6 -eq 0 ] && due_has 'zach-opus-s1' && grep -q -i 'nothing named' '$T/holds.out'" "$(cat "$T/pause.out" "$T/stop.err")"
 ws stop zach-opus-s1 --why "its work is no longer wanted" >/dev/null 2>&1
 subagent_stop "as1s1s1s1s1s1s1s1"
 barrier "as1s1s1s1s1s1s1s1" Edit; r7=$?
@@ -1105,8 +1110,8 @@ send_message "zach-opus-h2" "$(printf 'commit and hold\npause-until: the CEO'"'"
 subagent_stop "ah2h2h2h2h2h2h2h2"                          # its own run ends after the hand-in, pause and all
 barrier "ah2h2h2h2h2h2h2h2" Edit; rh1=$?
 stop_gate; rh2=$?
-sub "C11.7 an agent that ends AFTER HANDING IN its work is finished even though a pause was sent: locked out ($rh1) and pending ($rh2), by name" \
-    "[ $rh1 -eq 2 ] && [ $rh2 -eq 2 ] && grep -q 'zach-opus-h2' '$T/stop.err'" "$(cat "$T/barrier.err" "$T/stop.err")"
+sub "C11.7 an agent that ends AFTER HANDING IN its work is finished even though a pause was sent: locked out ($rh1) and due ($rh2), by name" \
+    "[ $rh1 -eq 2 ] && [ $rh2 -eq 0 ] && due_has 'zach-opus-h2'" "$(cat "$T/barrier.err" "$T/stop.err")"
 git -C "$ENT" merge -q --no-edit worktree-agent-ah2h2h2h2h2h2h2h2
 stop_gate >/dev/null 2>&1
 # HANDED IN AND STILL RUNNING (round 8, item 5; brief-audit-frank-round8 §5 F-F). "'Finished'
@@ -1122,7 +1127,7 @@ task_completed "ah3h3h3h3h3h3h3h3" "zach-opus-h3"          # handed in; its run 
 barrier "ah3h3h3h3h3h3h3h3" Edit; rh3=$?
 stop_gate; rh4=$?
 sub "C11.8 handed in and STILL RUNNING: not finished — it may still write ($rh3) and nothing is pending ($rh4); only its own end of run finishes it" \
-    "[ $rh3 -eq 0 ] && [ $rh4 -eq 0 ] && ! grep -q 'zach-opus-h3' '$T/stop.err'" "$(cat "$T/barrier.err" "$T/stop.err")"
+    "[ $rh3 -eq 0 ] && [ $rh4 -eq 0 ] && ! due_has 'zach-opus-h3'" "$(cat "$T/barrier.err" "$T/stop.err")"
 subagent_stop "ah3h3h3h3h3h3h3h3"
 barrier "ah3h3h3h3h3h3h3h3" Edit; rh5=$?
 sub "C11.8b and after its own end of run it is finished ($rh5 = refused), as C11.7" "[ $rh5 -eq 2 ]" "$(cat "$T/barrier.err")"
@@ -1131,7 +1136,7 @@ stop_gate >/dev/null 2>&1
 verdict
 
 # ===========================================================================
-begin C5 "Pending integration allows unrelated spawns while turn-end accounting and its allowances remain enforced (amended 2026-09-30)"
+begin C5 "Pending integration allows unrelated spawns and turn ends; the work stays owned and due (amended 2026-10-24, orchestration reliability R2/R3)"
 spawn "zach-opus-a1" "finish without being merged"
 platform_spawn "zach-opus-a1" "aa1a1a1a1a1a1a1a1"
 NPA="$ENT/.claude/worktrees/agent-aa1a1a1a1a1a1a1a1"
@@ -1141,69 +1146,14 @@ spawn "zach-opus-b1" "unrelated new work"; r1=$?
 stop_gate; r2=$?
 sub "C5.1 an unrelated spawn is allowed ($r1), leaving the finished workspace pending" \
     "[ $r1 -eq 0 ] && [ -e '$NPA' ]" "$(cat "$T/spawn.err")"
-sub "C5.1b and a turn end is refused ($r2), naming the agent" \
-    "[ $r2 -eq 2 ] && grep -q 'zach-opus-a1' '$T/stop.err'" "$(cat "$T/stop.err")"
-# THE TRANSCRIPT ROWS CARRY THE FIELDS THE PLATFORM STAMPS (round 8, item 4): a person's
-# typed turn is `origin.kind == "human"`, `promptSource: typed`; a task notification is
-# `origin.kind == "task-notification"`, `promptSource: system`, `queueSkipAttachments`. The
-# field sets are lifted from real rows of this machine's transcripts (the census is in the
-# round-8 log directory); the text is not the CEO's.
-TR="$T/transcript-ceo.jsonl"
-printf '%s\n' '{"type":"user","entrypoint":"cli","userType":"external","version":"2.1.267","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"Where is it? (the CEO)"}}' > "$TR"
-TRN="$T/transcript-notification.jsonl"
-printf '%s\n' '{"type":"user","entrypoint":"cli","userType":"external","version":"2.1.267","origin":{"kind":"task-notification"},"promptSource":"system","queueSkipAttachments":true,"message":{"role":"user","content":"<task-notification>agent done</task-notification>"}}' > "$TRN"
-# The two "nothing else" cases come FIRST: the one allowance is spent by the
-# reply that uses it, and a refusal after that would be for the wrong reason.
-stop_gate "zach-opus-a1 is pending" "$TRN"; r5=$?
-sub "C5.4 NOTHING ELSE: a turn that began with a platform notification, not the CEO, is refused even when it names the work ($r5)" "[ $r5 -eq 2 ]" "$(cat "$T/stop.err")"
-stop_gate "all good" "$TR"; r6=$?
-sub "C5.5 NOTHING ELSE: a reply to the CEO that does not name the pending work is refused ($r6)" "[ $r6 -eq 2 ]" "$(cat "$T/stop.err")"
-# WHO STARTED THE TURN IS DECIDED ON STAMPED FIELDS, BOTH SIDES MEASURED (round 8, item 4).
-# Every fixture below is the field set of a REAL row of this machine's transcripts (file,
-# uuid in the comment; text replaced), except the two marked CONSTRUCTED, which are the
-# shapes the brief named and no transcript holds. The function is asked directly for each
-# shape — the gate itself is asked in C5.2, C5.4, C5.10 and C5.16 — because the one
-# allowance is spent by every positive answer and twelve shapes cannot each spend it.
-person() { # <jsonl-file> -> True/False from _turn_started_by_person
-    python3 - "$ENGINE/mega-lander/workspaces.py" "$1" <<'PY'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("ws", sys.argv[1]); ws = importlib.util.module_from_spec(spec); spec.loader.exec_module(ws)
-print(ws._turn_started_by_person(sys.argv[2]))
-PY
-}
-row() { printf '%s\n' "$2" > "$T/row-$1.jsonl"; }
-# HIS — must count (real field sets):
-row p1 '{"type":"user","entrypoint":"cli","origin":{"kind":"human"},"promptSource":"typed","version":"2.1.267","message":{"role":"user","content":"words (the CEO typed)"}}'                              # d1380a3f…/6af45a43…
-row p2 '{"type":"user","entrypoint":"sdk-cli","promptSource":"sdk","version":"2.1.267","message":{"role":"user","content":"words (the CEO, through the RichOS app: no origin key at all)"}}'          # c8b27f16…/9a43a451… — 670 rows, the 128/512 shape
-row p3 '{"type":"user","entrypoint":"cli","origin":{"kind":"human"},"promptSource":"typed","version":"2.1.267","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":""}},{"type":"text","text":"[Image #5] words after a pasted screenshot"}]}}'   # d0eef867…/d9f42251…
-row p4 '{"type":"user","entrypoint":"cli","origin":{"kind":"human"},"promptSource":"queued","version":"2.1.267","message":{"role":"user","content":"words (the CEO, queued while a turn ran)"}}'   # d1380a3f…/7362f19c…
-row p5 "$(printf '%s\n%s' '{"type":"user","entrypoint":"cli","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"words (the CEO)"}}' '{"type":"user","entrypoint":"cli","isMeta":true,"message":{"role":"user","content":"Stop hook feedback: a guard spoke"}}')"   # 042f3850…/bcb94aab…: hook feedback continues HIS turn
-# NOT HIS — must not count:
-row n1 '{"type":"user","entrypoint":"cli","origin":{"kind":"task-notification"},"promptSource":"system","queueSkipAttachments":true,"message":{"role":"user","content":"<task-notification>agent done</task-notification>"}}'   # 0224e460…/babce063…
-row n2 "$(printf '%s\n%s' '{"type":"user","entrypoint":"cli","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"words (the CEO, an hour ago)"}}' '{"type":"user","entrypoint":"cli","origin":{"kind":"peer","from":"zach-opus-x1"},"promptSource":"system","queueSkipAttachments":true,"isMeta":true,"message":{"role":"user","content":"Another Claude session sent a message:\n<agent-message from=\"zach-opus-x1\">done</agent-message>"}}')"   # 16a15be1…/354a535c…: a peer's message AFTER his row starts a turn that is not his
-row n3 '{"type":"user","entrypoint":"cli","message":{"role":"user","content":"Another Claude session sent a message:\n<teammate-message teammate_id=\"zach-opus-x1\">done</teammate-message>"}}'   # 8a598936…/112a876f…: 68 REAL rows, no origin, no promptSource — the deny-list accepted them
-row n4 '{"type":"user","entrypoint":"cli","message":{"role":"user","content":"<cross-session-message from=\"zach-opus-x1\">stop</cross-session-message>"}}'   # CONSTRUCTED (the brief's shape; no transcript holds it): no origin, no promptSource
-row n5 '{"type":"user","entrypoint":"cli","origin":{"kind":"task-notification"},"message":{"role":"user","content":"[SYSTEM NOTIFICATION - NOT USER INPUT] agent finished"}}'   # CONSTRUCTED from the real shape (59 rows, all isMeta) with isMeta REMOVED
-row n6 '{"type":"user","entrypoint":"cli","message":{"role":"user","content":"<command-name>/exit</command-name>"}}'   # d1380a3f…/db208d0f…
-row n7 "$(printf '%s\n%s' '{"type":"user","entrypoint":"cli","origin":{"kind":"task-notification"},"promptSource":"system","queueSkipAttachments":true,"message":{"role":"user","content":"<task-notification>x</task-notification>"}}' '{"type":"user","entrypoint":"cli","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation"}}')"   # 16a15be1…/9f6baca9…: a compaction summary starts no turn; the notification before it does
-P15="$(for f in p1 p2 p3 p4 p5; do printf '%s=%s ' "$f" "$(person "$T/row-$f.jsonl")"; done)"
-sub "C5.15 EVERY SHAPE OF HIS COUNTS: typed, through the RichOS app with no origin key (670 real rows), a pasted-image turn beginning '[Image #5]', queued, and typed-then-hook-feedback [$P15]" \
-    "[ \"$P15\" = 'p1=True p2=True p3=True p4=True p5=True ' ]" "$P15"
-N15="$(for f in n1 n2 n3 n4 n5 n6 n7; do printf '%s=%s ' "$f" "$(person "$T/row-$f.jsonl")"; done)"
-sub "C5.15b NO SHAPE THAT IS NOT HIS COUNTS: a task notification, a peer message after his row, the 68 real old-shape peer rows with no stamps, a constructed <cross-session-message>, a constructed non-meta [SYSTEM NOTIFICATION …], a /exit row, a notification-then-compaction-summary [$N15]" \
-    "[ \"$N15\" = 'n1=False n2=False n3=False n4=False n5=False n6=False n7=False ' ]" "$N15"
-stop_gate "zach-opus-a1 is pending; I land it right after" "$T/row-n3.jsonl"; r16=$?
-sub "C5.16 THROUGH THE GATE: a turn begun by the real old-shape peer row (no origin, no promptSource — the deny-list read it as a person) is refused even though it names the work ($r16)" "[ $r16 -eq 2 ]" "$(cat "$T/stop.err")"
-stop_gate "zach-opus-a1 is pending; I land it right after" "$T/row-n2.jsonl"; r16b=$?
-sub "C5.16b THROUGH THE GATE: a turn begun by a peer's stamped meta row after his own row is refused ($r16b) — the row before it does not lend it his allowance" "[ $r16b -eq 2 ]" "$(cat "$T/stop.err")"
-stop_gate "It is pending: zach-opus-a1 finished and is not merged yet; I land it right after this." "$TR"; r3=$?
-sub "C5.2 ALLOWANCE 1: answering the CEO, naming the pending work, may end the turn ($r3)" "[ $r3 -eq 0 ]" "$(cat "$T/stop.err")"
-stop_gate "It is pending: zach-opus-a1 finished and is not merged yet; I land it right after this." "$TR"; r4=$?
-sub "C5.3 NOTHING ELSE: naming it a second time without handling it is refused ($r4) — the allowance is spent" "[ $r4 -eq 2 ]" "$(cat "$T/stop.err")"
+sub "C5.1b and the turn may end ($r2) with the agent due, by name" \
+    "[ $r2 -eq 0 ] && due_has 'zach-opus-a1'" "$(cat "$T/stop.err")"
+# The one answer allowance (C5.2-C5.5, C5.15, C5.16) is gone with the refusal it rationed
+# (orchestration reliability, section 3): a turn end is never refused, so there is nothing to allow.
 spawn "zach-opus-h1" "$(printf 'merge and land it\nlands-pending: zach-opus-a1\n')"; r7=$?
 sub "C5.6 ALLOWANCE 2: work whose only purpose is landing it may start ($r7)" "[ $r7 -eq 0 ]" "$(cat "$T/spawn.err")"
 stop_gate; r8=$?
-sub "C5.7 and with that work started, the turn may end ($r8) while the item waits on it" "[ $r8 -eq 0 ] && grep -q 'zach-opus-a1' '$T/stop.out'" "$(cat "$T/stop.out" "$T/stop.err")"
+sub "C5.7 and with that work started, the turn may end ($r8) while the item waits on it, quiet (not due)" "[ $r8 -eq 0 ] && ! due_has 'zach-opus-a1'" "$(cat "$T/stop.out" "$T/stop.err" "$T/holds.out")"
 spawn "zach-opus-b2" "unrelated new work"; r9=$?
 sub "C5.8 unrelated new work may start while the land helper runs ($r9)" "[ $r9 -eq 0 ]" "$(cat "$T/spawn.err")"
 platform_spawn "zach-opus-h1" "ah1h1h1h1h1h1h1h1"
@@ -1211,19 +1161,11 @@ git -C "$ENT" merge -q --no-edit "worktree-agent-aa1a1a1a1a1a1a1a1"
 subagent_stop "ah1h1h1h1h1h1h1h1"
 stop_gate; r10=$?
 sub "C5.9 merged: both are landed on their own and the turn may end ($r10)" "[ $r10 -eq 0 ] && [ ! -e '$NPA' ] && [ -n \"\$(done_rec zach-opus-a1)\" ] && [ -n \"\$(done_rec zach-opus-h1)\" ]" "$(cat "$T/stop.err")"
-# THE OTHER HALF OF ALLOWANCE 1 — "answering the CEO OR OBEYING HIS STOP ORDER" — which round 6
-# left out (Sage's round-6 finding, dropped from the first brief and restored).
 spawn "zach-opus-a2" "finish without being merged, again"
 platform_spawn "zach-opus-a2" "aa2a2a2a2a2a2a2a2"
 NPA2="$ENT/.claude/worktrees/agent-aa2a2a2a2a2a2a2a2"
 commit_in "$NPA2" a2.txt
 subagent_stop "aa2a2a2a2a2a2a2a2"
-TRS="$T/transcript-stop.jsonl"
-# His stop order, given through the RichOS app: the `sdk-cli` entrypoint writes NO origin
-# key and `promptSource: sdk` (670 real rows; the shape an origin-only rule rejects).
-printf '%s\n' '{"type":"user","entrypoint":"sdk-cli","promptSource":"sdk","version":"2.1.267","message":{"role":"user","content":"Stop everything. (the CEO)"}}' > "$TRS"
-stop_gate "Stopping. Pending and not yet handled: zach-opus-a2 finished and is not merged; it is handled right after." "$TRS"; rs=$?
-sub "C5.10 ALLOWANCE 1, the other half: obeying his STOP ORDER, naming the pending work, may end the turn ($rs) — given through the RichOS app, the row shape that carries no origin key" "[ $rs -eq 0 ]" "$(cat "$T/stop.err")"
 # "...or waiting on something outside his reach (the CEO's word, a service that is down); the
 # latter goes on the CEO's TODO list." Independent development may continue.
 ws wait zach-opus-a2 --outside "GitHub is down, the merge cannot be pushed" >"$T/wait.out" 2>&1; rw1=$?
@@ -1251,13 +1193,13 @@ ws wait zach-opus-cw --ceo "May I discard it? A reviewer rejected it." --todo "C
 stop_gate; rc2=$?
 spawn "zach-opus-b4" "unrelated new work while he is being asked"; rc3=$?
 sub "C5.13 a discard waiting on the CEO stays named with its TODO ($rc1); the turn may end ($rc2) and independent work may start ($rc3)" \
-    "[ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && grep -q 'zach-opus-cw' '$T/stop.out' && [ $rc3 -eq 0 ]" "$(cat "$T/wait.out" "$T/stop.err" "$T/stop.out" "$T/spawn.err")"
+    "[ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && due_has 'zach-opus-cw' && [ $rc3 -eq 0 ]" "$(cat "$T/wait.out" "$T/stop.err" "$T/stop.out" "$T/spawn.err")"
 subagent_stop "acw2cw2cw2cw2cw2c"
 git -C "$ENT" merge -q --no-edit worktree-agent-acw2cw2cw2cw2cw2c
 stop_gate; rc4=$?
 DCW2="$(done_rec zach-opus-cw2)"
 sub "C5.14 'blocks nothing else': the second finished item lands on its own ($rc4) while the first still waits on him — its workspace gone, its ending 'landed', the first still pending by name" \
-    "[ $rc4 -eq 0 ] && [ ! -e '$NPCW2' ] && [ -n \"$DCW2\" ] && [ \"\$(jget '$DCW2' disposition.kind)\" = landed ] && [ -e '$NPCW' ] && grep -q 'zach-opus-cw' '$T/stop.out'" "$(cat "$T/stop.err" "$T/stop.out") done=$DCW2"
+    "[ $rc4 -eq 0 ] && [ ! -e '$NPCW2' ] && [ -n \"$DCW2\" ] && [ \"\$(jget '$DCW2' disposition.kind)\" = landed ] && [ -e '$NPCW' ] && due_has 'zach-opus-cw'" "$(cat "$T/stop.err" "$T/stop.out") done=$DCW2"
 ws discard zach-opus-cw --reason "he said drop it, check 5 fixture" --ceo-word "drop it, he said 2026-09-12" >/dev/null 2>&1
 verdict
 
@@ -1342,7 +1284,7 @@ OLD_PID="$RICHOS_SESSION_PID"
 kill "$OLD_PID"; while kill -0 "$OLD_PID" 2>/dev/null; do sleep 0.1; done
 start_session "sess-fourteen-2222"
 sub "C12.4 the process is gone, read from the OS: the NEXT session is told first, by name" \
-    "grep -q 'zach-opus-w1' '$T/last-start.json' && grep -q 'FIRST' '$T/last-start.json'" "$(cat "$T/last-start.json" "$T/last-start.err")"
+    "grep -q 'zach-opus-w1' '$T/last-start.json' && grep -q 'DUE WORK' '$T/last-start.json'" "$(cat "$T/last-start.json" "$T/last-start.err")"
 spawn "zach-opus-x2" "new work in the new session"; r3=$?
 sub "C12.5 independent work starts while the previous session's finished workspace is preserved ($r3)" "[ $r3 -eq 0 ] && [ -e '$NPW' ]" "$(cat "$T/spawn.err")"
 git -C "$ENT" merge -q --no-edit "worktree-agent-aw1w1w1w1w1w1w1w1"
@@ -1364,12 +1306,12 @@ CUR_SID="sess-fourteen-2222"; export RICHOS_SESSION_PID="$PID_2222"
 stop_gate; ry1=$?
 spawn "zach-opus-x3" "new work in the second session"; ry2=$?
 sub "C12.7 TWO LIVE SESSIONS: the second neither lists nor lands the third's finished agent — its turn may end ($ry1) and it may start new work ($ry2); the workspace is untouched" \
-    "[ $ry1 -eq 0 ] && ! grep -q 'zach-opus-y1' '$T/stop.err' && [ $ry2 -eq 0 ] && [ -e '$NPY1' ]" "$(cat "$T/stop.err" "$T/spawn.err")"
+    "[ $ry1 -eq 0 ] && ! due_has 'zach-opus-y1' && [ $ry2 -eq 0 ] && [ -e '$NPY1' ]" "$(cat "$T/stop.err" "$T/spawn.err")"
 platform_spawn "zach-opus-x3" "ax3x3x3x3x3x3x3x3"; subagent_stop "ax3x3x3x3x3x3x3x3"; stop_gate >/dev/null 2>&1
 CUR_SID="sess-fourteen-3333"; export RICHOS_SESSION_PID="$PID_3333"
 stop_gate; ry3=$?
 sub "C12.8 POSITIVE CONTROL: the third session, which started it, cannot end its turn while it is pending ($ry3)" \
-    "[ $ry3 -eq 2 ] && grep -q 'zach-opus-y1' '$T/stop.err'" "$(cat "$T/stop.err")"
+    "[ $ry3 -eq 0 ] && due_has 'zach-opus-y1'" "$(cat "$T/stop.err")"
 git -C "$ENT" merge -q --no-edit worktree-agent-ay1y1y1y1y1y1y1y1
 stop_gate >/dev/null 2>&1
 # "A session has ended when it RECORDED ITS END or when its process no longer exists." Round 6
@@ -1385,7 +1327,7 @@ sub "C12.9 a session that RECORDED its end has ended even though its process sti
     "[ $ry4 -eq 2 ] && [ $ALIVE_3333 -eq 1 ] && grep -q -i 'session' '$T/barrier.err'" "$(cat "$T/barrier.err")"
 CUR_SID="sess-fourteen-2222"; export RICHOS_SESSION_PID="$PID_2222"
 stop_gate; ry5=$?
-sub "C12.10 and the running session takes its finished work over: pending by name ($ry5)" "[ $ry5 -eq 2 ] && grep -q 'zach-opus-y2' '$T/stop.err'" "$(cat "$T/stop.err")"
+sub "C12.10 and the running session takes its finished work over: pending by name ($ry5)" "[ $ry5 -eq 0 ] && due_has 'zach-opus-y2'" "$(cat "$T/stop.err")"
 git -C "$ENT" merge -q --no-edit worktree-agent-ay2y2y2y2y2y2y2y2
 ws land zach-opus-y2 >"$T/land.out" 2>&1; ry6=$?
 sub "C12.11 landed by the running session ($ry6): workspace gone" "[ $ry6 -eq 0 ] && [ ! -e '$NPY2' ]" "$(cat "$T/land.out")"
@@ -1428,7 +1370,7 @@ if [ -z "${RICHOS_MUTATION_INNER:-}" ] && [ -f "$HERE/workspace-spec-fourteen.mu
         bash "$HERE/workspace-spec-fourteen.mutation.sh"; MUT_RC=$?
         echo ""
     else
-        echo "  NOT RUN  the mutation harness (86 mutants): it runs before each nightly (CEO 2026-09-23, \"Only before nightlies\"); RICHOS_FOURTEEN_MUTANTS=1 runs it here"
+        echo "  NOT RUN  the mutation harness (79 mutants): it runs before each nightly (CEO 2026-09-23, \"Only before nightlies\"); RICHOS_FOURTEEN_MUTANTS=1 runs it here"
         echo ""
     fi
 fi

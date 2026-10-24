@@ -27,6 +27,7 @@ class DesktopHooks(unittest.TestCase):
             "RICHOS_ENGINE_ROOT": str(ENGINE), "RICHOS_SA_ENTITY_ROOT": str(self.coordination),
             "RICHOS_SA_TEAMS_DIR": str(self.root / "teams"),
             "RICHOS_WORKSPACES_DIR": str(self.root / "workspaces"),
+            "STALL_WATCH_STATE_DIR": str(self.root / "stall-watch"),
             "CLAUDE_PROJECT_DIR": str(self.coordination), "PYTHONDONTWRITEBYTECODE": "1"}
         subprocess.run(["git", "init", "-q", str(self.coordination)], check=True, capture_output=True)
 
@@ -50,28 +51,36 @@ class DesktopHooks(unittest.TestCase):
         (holds / "stream-b.json").write_text(json.dumps({"name": "stream-b", "what": "Stream B of his order",
             "why": "on hold, deliberately", "end": "", "at": time.time() - 31 * 60, "session_id": "a-stu-session"}))
 
-    def test_richs_turn_opens_with_every_hold_nothing_checkable_ends(self):
-        """No silent holds (2026-10-22): the app's Rich is told in his own turn what the
-        terminal's turn end shows, including a hold Stu's lease made."""
+    def test_richs_turn_opens_with_due_work_once_while_no_watcher_runs(self):
+        """Orchestration reliability R5/R6: with no healthy watcher for this conversation,
+        Rich's turn opens with the due work (a hold Stu's lease made included), once per
+        change; never the old wall at every turn."""
         self._wait_on_file()
         result = self.hook("UserPromptSubmit", prompt="How is it going?")
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("HELD BY RICH, NOT BY YOU: Stream B of his order since", context)
-        self.assertIn("Why: on hold, deliberately.", context)
+        self.assertIn("STALL WATCH NOT ACTIVE", context)
+        self.assertIn("stream-b", context)
+        self.assertNotIn("HELD BY RICH", context)
+        again = self.hook("UserPromptSubmit", prompt="And now?")
+        self.assertEqual((again.returncode, again.stdout.strip()), (0, ""))
 
-    def test_a_reply_holding_work_opens_a_hold_at_the_apps_turn_end(self):
-        """Second review rv-20261022T013056Z-12c77c90-1291 finding 1: the app's Stop ran only the
-        stated-actions guard, so 'Spelling work is on hold, deliberately.' opened nothing."""
+    def test_a_reply_holding_work_reaches_the_lead_at_the_apps_turn_end_and_records_nothing(self):
+        """Orchestration reliability R1 on the app host: the deferral check is report only,
+        and reaches Rich as Stop additionalContext, in one JSON answer."""
         transcript = self.root / "transcript.jsonl"
         transcript.write_text(json.dumps({"type": "user", "isSidechain": False,
                                           "message": {"role": "user", "content": "How is it going?"}}) + "\n")
+        # The app's Stop reads its own projection of the turn, which its UserPromptSubmit opens.
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="How is it going?").returncode, 0)
         result = self.hook("Stop", last_assistant_message="Spelling work is on hold, deliberately.",
                            transcript_path=str(transcript), stop_hook_active=False)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        holds = sorted((self.root / "workspaces" / "holds").glob("held-*.json"))
-        self.assertEqual(len(holds), 1, result.stderr)
-        self.assertEqual(json.loads(holds[0].read_text())["what"], "Spelling work is on hold, deliberately.")
+        self.assertEqual(sorted((self.root / "workspaces" / "holds").glob("held-*.json")), [])
+        answer = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(answer["hookEventName"], "Stop")
+        self.assertIn("DEFERRAL CHECK (unverified", answer["additionalContext"])
+        self.assertIn("Spelling work is on hold, deliberately.", answer["additionalContext"])
 
     def test_stus_turn_carries_no_hold_lines(self):
         self._wait_on_file()
@@ -79,7 +88,7 @@ class DesktopHooks(unittest.TestCase):
         (self.root / "state/evidence/fictional-session/binding.json").write_text('{"role": "stu"}')
         result = self.hook("UserPromptSubmit", prompt="Carry on.")
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertNotIn("HELD BY RICH", result.stdout)
+        self.assertNotIn("stream-b", result.stdout)
 
     def test_native_response_formatting_records_evidence_without_opening_a_work_grant(self):
         self.scope.write_text('{"version":1,"actions_allowed":false}')

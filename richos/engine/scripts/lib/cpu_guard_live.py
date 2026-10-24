@@ -145,12 +145,29 @@ def grant_groups(owned, rows, rates, roots):
     return groups
 
 
-def event(message, **details):
+def note(message, **details):
+    """Record an event in the history without raising it as the latest alert."""
     record = dict(at=time.time(), message=message, **details)
     STATE.mkdir(parents=True, exist_ok=True)
     with (STATE / 'events.jsonl').open('a') as out:
         out.write(json.dumps(record) + '\n')
+    return record
+
+
+def event(message, **details):
+    record = note(message, **details)
     write_json(STATE / 'alert.json', record)
+
+
+def host_pressure_note(busy, processes):
+    """High host CPU with nothing of ours stopped is an OBSERVATION: it goes to the event
+    history only, never to alert.json, so no hook shows it to the lead or the person. Its
+    list of unowned processes does not say who consumed the host (orchestration
+    reliability R6, richos-hq docs/prds/2026-10-23-orchestration-reliability.md); what
+    changes the work (a workload or simulator stopped, admission recovered, a failure,
+    an unhealthy guard) is still raised through event()."""
+    return note('Host CPU is high; unregistered processes reported without signals',
+                host_busy=round(busy, 1), processes=processes)
 
 
 def healthy():
@@ -534,9 +551,8 @@ def watch(engine):
                     if not candidates and now-watcher.host_since >= WINDOW and now-watcher.reported_at >= 300:
                         top = sorted(watcher.unowned_rates, key=watcher.unowned_rates.get, reverse=True)[:3]
                         if top:
-                            event('Host CPU is high; unregistered processes reported without signals',
-                                  host_busy=round(busy,1), processes=[dict(pid=p,executable=rows[p]['name'],
-                                  cores=round(watcher.unowned_rates[p],2)) for p in top])
+                            host_pressure_note(busy, [dict(pid=p, executable=rows[p]['name'],
+                                               cores=round(watcher.unowned_rates[p], 2)) for p in top])
                             watcher.reported_at = now
                 else:
                     watcher.host_since = None
