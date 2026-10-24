@@ -1,32 +1,21 @@
 #!/usr/bin/env bash
 #
-# guard-workspace-gate.sh — BLOCKING Stop hook. POINT 5 OF THE CEO'S WORKSPACE SPEC.
+# guard-workspace-gate.sh — Stop hook. POINT 5 OF THE CEO'S WORKSPACE SPEC, as
+# amended by the orchestration reliability repair (richos-hq docs/prds/2026-10-23-
+# orchestration-reliability.md, R2/R3/R5/R6, 2026-10-24).
 #
-#   "while any finished agent's work is neither landed nor discarded (point 7),
-#    Rich can neither start new work nor end his turn."
-#                                   — docs/plans/worktree-spec-2026-09-11.md
+# IT NEVER REFUSES A TURN END. Finished work stays owned in the registry; at each
+# turn end this hook lands on its own what is already landed (point 4) and, only
+# while no healthy stall watcher evaluates the session, tells the LEAD the due
+# work (workspaces.py fallback_notice: the one status calculation, due_set) on the
+# model channel, once per change. With a healthy watcher it says nothing: the
+# watcher tells due work at its next idle look. Nothing routine reaches the person;
+# a deletion that keeps failing is still told to him.
 #
-# This is the turn-end half. The start-new-work half is the spawn guard
-# (guard-worktree-isolation.sh clause 7 calls the same mega-lander/workspaces.py
-# register-spawn). Both read one list, and both land automatically, first,
-# every finished agent whose work is already in main (point 4).
-#
-# THE PAGE'S EXCEPTIONS, AND ONLY THEM
-#   - answering the CEO or obeying his stop order: the turn began with a message
-#     from him (read from the transcript, never from prose), and the reply names
-#     every pending item;
-#   - every pending item is waiting on something Rich has already started to get
-#     it landed (an agent spawned with `lands-pending: <name>` or
-#     `continues: <name>` that is not finished, or `workspaces.sh wait <name>
-#     --started '...'`), or on something outside his reach
-#     (`workspaces.sh wait <name> --outside '...' --todo '<CEO TODO ref>'`);
-#   - an item whose only way out is a discard that needs the CEO's word, asked
-#     (`workspaces.sh wait <name> --ceo '<question>' --todo '<ref>'`), blocks
-#     nothing at all.
-#
-# It is REPLACING, in the same Stop chain, notice-land-disposition.sh — a
-# non-blocking notice whose third state ("held, with a stated reason") the page
-# does not have: "Nothing finished is ever left neither landed nor discarded."
+# What it replaced: a refusal to end the turn while any finished work was
+# pending, the "answer allowance" that rationed it, and a pending/hold wall at
+# every turn end (7,849 of the 10,302 characters of the 2026-10-23 screenshot
+# turn). The exit 2 path below remains only for a refusal the library reports.
 #
 # FAILS OPEN ON ITS OWN ERROR, LOUDLY: a broken engine that could never let a
 # turn end would trap the CEO's session. The failure is announced every turn.

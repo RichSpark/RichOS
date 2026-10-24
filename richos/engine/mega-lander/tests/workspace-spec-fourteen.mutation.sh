@@ -155,43 +155,18 @@ mutant S-p04-quarantine-under-another-name "C4.4 " "$W" \
     "SPEC-DERIVED (point 4 negated, 'the workspace AND the branch are deleted'; constructed by frank-fable-c7 as F4, certification-frank-round6-2026-09-12.md §2.2, against which every round-6 sub-assertion of check 4 stayed green): a land would park the workspace under a name the old directory grep could not see, on a parked/ branch, and report it deleted."
 
 # --- point 5 ---------------------------------------------------------------
-mutant R-p05-turn-end-not-blocked "C5.1b" "$W" \
-    '    if not blocking:{NL}        msg = "\n".join(notes)' \
-    '    if True:{NL}        msg = "\n".join(notes)' \
-    "RECORDED [lifecycle-failure-record-2026-09-10.md §3.1 and §2.11, 2026-09-10: notice-unlanded-branches.sh reported, de-duplicated, and went quiet while six then five finished branches sat outside main; the turn ended every time]: Rich could end his turn with finished work neither landed nor discarded."
+# The answer allowance's mutants (S-p05-answer-allowance-unlimited and the six that defined whose
+# turn spends it) went with the allowance (orchestration reliability, section 3, 2026-10-24): a
+# turn end is never refused, so there is no allowance left to protect.
+mutant R-p05-finished-work-never-due "C5.1b" "$W" \
+    '        if not it.get("key") or it["key"] in seen or it.get("waiting") or it.get("damaged"):' \
+    '        if True:' \
+    "RECORDED [lifecycle-failure-record-2026-09-10.md §3.1 and §2.11: six then five finished branches sat outside main while the turn ended every time], amended by orchestration reliability R2 (2026-10-24): the turn end is no longer refused, so the property is that finished work neither landed nor discarded stays due and reaches the lead; without it nothing would."
 mutant S-p05-pending-work-blocks-spawn "C5.1 " "$W" \
     '    continuation_keys = []' \
     '    if pending(sid, entity):{NL}        raise SpecError("pending work blocks new agents"){NL}    continuation_keys = []' \
     "Point 5, amended 2026-09-30: unrelated development would freeze behind finished work pending integration."
 
-mutant S-p05-answer-allowance-unlimited "C5.3 " "$W" \
-    '            if prev.get("state") == state[i["key"]]:{NL}                spent.append((i, prev))' \
-    '            if False:{NL}                spent.append((i, prev))' \
-    "SPEC-DERIVED (point 5's parenthesis negated, 'the reply names the pending work, which is handled right after'): naming the work again and again would end every turn."
-mutant S-p05-notification-counts-as-the-ceo "C5.4 " "$W" \
-    '    if d.get("queueSkipAttachments") or d.get("promptSource") == "system":{NL}        return False{AND}    if isinstance(origin, dict):{NL}        return kind == "human"' \
-    '    if False:{NL}        return False{AND}    if isinstance(origin, dict):{NL}        return True' \
-    "SPEC-DERIVED (point 5's first allowance negated, 'answering the CEO'): a real notification row carries three stamps (origin task-notification, promptSource system, queueSkipAttachments) and any one of them refuses it, so all three are removed here — a turn that began with a platform notification would count as answering him."
-mutant S-p05-origin-kind-not-read "C5.15b" "$W" \
-    '    if isinstance(origin, dict):{NL}        return kind == "human"' \
-    '    if isinstance(origin, dict):{NL}        return True' \
-    "SPEC-DERIVED (point 5's first allowance negated): a stamped origin that is not a person's — the constructed non-meta [SYSTEM NOTIFICATION …] row, whose only stamp is origin.kind — would count as his."
-mutant S-p05-his-word-does-not-end-the-turn "C5.10" "$W" \
-    '    return d.get("promptSource") in ("typed", "queued", "sdk", "suggestion_accepted")' \
-    '    return d.get("promptSource") in ("typed", "queued", "suggestion_accepted")' \
-    "SPEC-DERIVED (point 5's first allowance negated, 'answering the CEO or obeying his stop order'; RECORDED shape: brief-audit-frank-round8 §4.3 measured 128 of 512 of his turns carrying no origin key — the RichOS app's sdk-cli entrypoint): his stop order given through the app could not end the turn, and an origin-only rule would reject every one of those turns. (C5.15 goes red under it too.)"
-mutant S-p05-unstamped-rows-count-as-the-ceo "C5.15b" "$W" \
-    '    return d.get("promptSource") in ("typed", "queued", "sdk", "suggestion_accepted")' \
-    '    return True' \
-    "SPEC-DERIVED (point 5's first allowance negated); RECORDED shape [this machine's transcripts, census in the round-8 logs, 2026-09-13: 68 non-meta peer-message rows with no origin and no promptSource, v2.1.229–2.1.267, which the base's deny-list read as a person]: a row the platform stamped with nothing would count as his, so a peer's message or a constructed <cross-session-message> would spend his allowance."
-mutant S-p05-peer-meta-row-lends-his-allowance "C5.15b" "$W" \
-    '        if kind and kind != "human":{NL}            return False{NL}        return None' \
-    '        return None' \
-    "SPEC-DERIVED (point 5's first allowance negated): a peer's stamped meta row would be skipped like hook feedback, so the turn it started would be judged by the CEO's row before it and spend his allowance."
-mutant S-p05-textual-allow-list-rejects-his-image-turn "C5.15 " "$W" \
-    '    if isinstance(origin, dict):{NL}        return kind == "human"' \
-    '    if isinstance(origin, dict):{NL}        return kind == "human" and text[:1].isalpha()' \
-    "SPEC-DERIVED (point 5's first allowance negated, 'answering the CEO'); RECORDED shape [brief-audit-frank-round8 §4.3 and this round's census: 11 of his turns begin '[Image #N]', origin human]: a textual allow-list ('a person's text starts with a letter') would reject the CEO's own pasted-screenshot turns, and he could not end his turn by answering."
 mutant S-p05-outside-reach-needs-no-todo "C5.11" "$W" \
     '    if kind in ("outside", "ceo-discard") and not (todo or "").strip():' \
     '    if False:' \
