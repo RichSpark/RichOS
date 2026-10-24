@@ -4601,8 +4601,8 @@
     },
     "scripts/hooks/escalations.test.sh": {
       "source": "scripts/hooks/escalations.test.sh",
-      "sha256": "40350583e1db6908d183f9d523cfe6fb7d5e8a4a7f4d2f416d6dcf93c472dde0",
-      "evidence": "Builds a private engine with literal PROTECTED_PATHS config, fixed hooks/libraries and private ledgers. All commands target these copies. Finite inline Python mutations replace a predicate or age buckets and invoke the same hooks. The leak canary reads real Git/file metadata as data; neither real config contents nor hook manifest is read. Renewed 2026-10-01: the sandbox also copies audit-report-watch.py (the Stop hook runs it) and points it, through RICHOS_AUDIT_RECORD_REPO and RICHOS_AUDIT_WATCH_STATE, at a record repository that does not exist and a sandbox state directory, so it reads and raises nothing.",
+      "sha256": "5cb2eaebad8a2bdcc5dc76343ff50d0d5e9d95e71d0208ed0a43b0986049655a",
+      "evidence": "Builds a private engine with literal PROTECTED_PATHS config, fixed hooks/libraries and private ledgers. All commands target these copies. Finite inline Python mutations replace a predicate or age buckets and invoke the same hooks. The leak canary reads real Git/file metadata as data; neither real config contents nor hook manifest is read. Renewed 2026-10-01: the sandbox also copies audit-report-watch.py (the Stop hook runs it) and points it, through RICHOS_AUDIT_RECORD_REPO and RICHOS_AUDIT_WATCH_STATE, at a record repository that does not exist and a sandbox state directory, so it reads and raises nothing. Renewed 2026-10-24: case 21 builds sandbox repositories (one carrying a literal .richos/publication-boundary fixture, a linked worktree and a sibling private checkout) with core.hooksPath=/dev/null so fixture commits are made, and the sandbox engine also copies publication-boundary.sh and declaration-path.sh, which escalate.sh sources.",
       "keys": [],
       "edges": [
         {
