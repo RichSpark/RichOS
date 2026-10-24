@@ -189,6 +189,121 @@ class Pierce(unittest.TestCase):
         record = next((Path(env["CLAUDE_CONFIG_DIR"]) / "state/pierce").glob("*.json"))
         self.assertNotIn("dismissal", json.loads(record.read_text()))
 
+    def startup_memory(self, note, at="2026-10-11T00:00:00Z"):
+        return {"type": "attachment", "timestamp": at, "sessionId": self.transcript.stem,
+                "attachment": {"type": "instructions", "files": [{"type": "AutoMem",
+                "path": str(note.parent / "MEMORY.md"),
+                "content": f"- [RESTART: resume the work]({note.name})\n"}]}}
+
+    def materialize_note(self, note, origin="previous"):
+        note.write_text(f"---\nname: project_restart_fixture\nmetadata:\n  originSessionId: {origin}\n---\n"
+                        "The planner's summary is not authority.\n")
+
+    def test_startup_memory_snapshot_recovers_authority_before_any_read_or_human_turn(self):
+        source, note = self.continued_terminal()
+        self.materialize_note(note)
+        self.write_rows(self.transcript, [self.startup_memory(note)])
+        with patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS"}) as reviewer:
+            result = P.inspect(self.payload)
+        self.assertEqual(result["verdict"], "PASS")
+        request = reviewer.call_args.args[0]
+        self.assertEqual(request["user_requests_in_order"], "Implement the feature. Keep the API.")
+        self.assertNotIn("planner's summary", request["user_requests_in_order"])
+        self.assertIn(str(source.resolve()), request["authority_context"]["original_transcripts"])
+
+    def test_authority_read_access_is_only_the_dedicated_native_project_directory(self):
+        base = self.root / "config/projects/native-project"
+        (base / "memory").mkdir(parents=True)
+        self.transcript = base / "session.jsonl"
+        self.payload["transcript_path"] = str(self.transcript)
+        note = base / "memory/project_restart_fixture.md"
+        self.materialize_note(note)
+        self.write_rows(base / "previous.jsonl", [self.human_row("Keep the API.")] +
+                        self.note_io("Write", note, "previous", "2026-10-10T02:00:00Z"))
+        self.write_rows(self.transcript, [self.startup_memory(note)])
+        with patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS"}) as reviewer:
+            P.inspect(self.payload)
+        roots = reviewer.call_args.args[0]["read_roots"]
+        self.assertIn(str(base.resolve()), roots)
+        self.assertNotIn(str(base.parent.resolve()), roots)
+        self.assertNotIn(str(self.root.resolve()), roots)
+
+    def test_startup_snapshot_requires_host_shape_project_note_and_source_write(self):
+        source, note = self.continued_terminal()
+        self.materialize_note(note)
+        genuine = self.startup_memory(note)
+        witnessed_source = list(P.transcript_rows(source))
+        for reason in ("quoted", "sidechain", "other-session", "other-index", "missing-write", "escape"):
+            with self.subTest(reason=reason):
+                self.write_rows(source, witnessed_source)
+                row = json.loads(json.dumps(genuine))
+                if reason == "quoted":
+                    row = self.human_row(json.dumps(row))
+                    self.write_rows(self.transcript, [row])
+                    self.assertEqual(P.human_context(self.payload), row["message"]["content"])
+                    continue
+                if reason == "sidechain": row["isSidechain"] = True
+                if reason == "other-session": row["sessionId"] = "another-session"
+                if reason == "other-index": row["attachment"]["files"][0]["path"] = str(self.project / "MEMORY.md")
+                if reason == "missing-write": self.write_rows(source, [self.human_row("Unproved authority.")])
+                if reason == "escape": row["attachment"]["files"][0]["content"] = "[Resume](../../elsewhere.md)"
+                self.write_rows(self.transcript, [row])
+                with self.assertRaises(ValueError): P.human_context(self.payload)
+
+    def test_successful_bash_cat_restart_read_preserves_originals_and_later_question(self):
+        import shlex
+        source, note = self.continued_terminal()
+        self.materialize_note(note)
+        rows = [{"type": "assistant", "timestamp": "2026-10-11T00:00:00Z", "message": {"content": [
+            {"type": "tool_use", "id": "cat-note", "name": "Bash", "input": {
+             "command": "sed -n '1,2p' /unrelated; echo ======; cat -- " + shlex.quote(str(note))}}]}},
+            {"type": "user", "timestamp": "2026-10-11T00:00:01Z", "message": {"content": [
+             {"type": "tool_result", "tool_use_id": "cat-note", "content": "Earlier output\n======\n" + note.read_text()}]}},
+            self.human_row("What is the transcript path?", "2026-10-11T01:00:00Z")]
+        self.write_rows(self.transcript, rows)
+        self.assertEqual(P.human_context(self.payload),
+                         "Implement the feature. Keep the API.\n\nWhat is the transcript path?")
+        for command in ("echo '" + note.read_text() + "'", "cat " + str(note) + " | sed 's/previous/other/'",
+                        "python3 <<'END'\n# memory/ isn't a shell quotation\nEND"):
+            rows[0]["message"]["content"][0]["input"]["command"] = command
+            self.write_rows(self.transcript, rows)
+            self.assertEqual(P.human_context(self.payload), "What is the transcript path?")
+        rows[0]["message"]["content"][0]["input"]["command"] = "cat -- " + shlex.quote(str(note))
+        rows[1]["message"]["content"][0]["is_error"] = True
+        self.write_rows(self.transcript, rows)
+        self.assertEqual(P.human_context(self.payload), "What is the transcript path?")
+
+    def test_failed_restart_lineage_is_explicit_uncertainty_not_absent_permission(self):
+        source, note = self.continued_terminal()
+        source.unlink()
+        with self.transcript.open("a") as stream:
+            stream.write(json.dumps(self.human_row("What is the status?")) + "\n")
+        with patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS"}) as reviewer:
+            P.inspect(self.payload)
+        context = reviewer.call_args.args[0]["authority_context"]
+        self.assertFalse(context["complete"])
+        self.assertIn("not evidence", context["limitation"])
+
+    def test_startup_index_historical_pointers_do_not_replace_the_leading_handoff(self):
+        source, note = self.continued_terminal()
+        self.materialize_note(note)
+        older = note.parent / "project_restart_history.md"
+        self.materialize_note(older, "unrelated")
+        row = self.startup_memory(note)
+        row["attachment"]["files"][0]["content"] += f"- [RESTART: old work]({older.name})\n"
+        self.write_rows(self.transcript, [row])
+        self.assertEqual(P.human_context(self.payload), "Implement the feature. Keep the API.")
+
+    def test_broken_older_link_preserves_witnessed_predecessor_authority(self):
+        source, note = self.continued_terminal()
+        missing = note.parent / "project_restart_missing.md"
+        self.write_rows(source, self.note_io("Read", missing, "missing", "2026-10-10T00:00:00Z") +
+                        list(P.transcript_rows(source)))
+        context = {}
+        self.assertEqual(P.human_context(self.payload, context), "Implement the feature. Keep the API.")
+        self.assertFalse(context["complete"])
+        self.assertEqual(context["original_transcripts"], [str(source.resolve()), str(self.transcript.resolve())])
+
     def test_the_memory_systems_restart_note_name_is_followed(self):
         """2026-10-23 (orchestration reliability R4): the restart note the lead wrote and the
         next session read was named "project-restart-2026-10-23-late"; the reader looked only
