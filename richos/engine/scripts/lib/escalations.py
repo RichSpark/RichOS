@@ -113,12 +113,15 @@ would ever close it.
 ===========================================================================
 IDENTITY, AND WHY IT IS DERIVED
 ===========================================================================
-    esc-<UTC timestamp, compact>-<first 8 hex of sha256(teammate|title|worktree)>
+    esc-<UTC timestamp, compact>-<first 8 hex of sha256(teammate|title|worktree|nonce)>
 
-Time-ordered, greppable, unique per (teammate, title, worktree) per second, and
-typed by nobody. Raising the same escalation twice produces two ids and two
-rows on purpose — a duplicate is visible, and de-duplicating would mean
-deciding that two teammates' words are the same thing, which is a judgment.
+Time-ordered, greppable, unique per raise, and typed by nobody. Raising the
+same escalation twice produces two ids and two rows on purpose — a duplicate is
+visible, and de-duplicating would mean deciding that two teammates' words are
+the same thing, which is a judgment. The random nonce is what makes that true
+inside one second: without it two raises in the same second got the same id and
+the second was merged into the first (the disk watchdog's replacement of an
+acknowledged alarm, 2026-10-24).
 
 ===========================================================================
 AGE BUCKETS — why an unacknowledged escalation gets LOUDER
@@ -306,7 +309,8 @@ def append_row(row, path=None):
 def make_id(when, teammate, title, worktree):
     stamp = when.strftime("%Y%m%dT%H%M%SZ")
     h = hashlib.sha256(
-        ("%s|%s|%s" % (teammate or "", title or "", worktree or "")).encode("utf-8")
+        ("%s|%s|%s|%s" % (teammate or "", title or "", worktree or "",
+                          os.urandom(8).hex())).encode("utf-8")
     ).hexdigest()[:8]
     return "esc-%s-%s" % (stamp, h)
 
@@ -1111,8 +1115,20 @@ def cmd_ack(args):
             % args.id)
         return 2
     if args.id not in live:
-        sys.stderr.write("escalations: %s is already acknowledged. Nothing appended.\n" % args.id)
-        return 1
+        # A TIMED HOLD MAY BE CLOSED FOR GOOD. A hold says "look again by this
+        # date"; when the answer is already in, a permanent acknowledgement
+        # replaces it, so the hold cannot expire and tell somebody about a thing
+        # that is over. Only that: an id closed permanently stays closed, and a
+        # hold is never renewed or replaced by another hold this way.
+        now_e = utcnow().timestamp()
+        acks = acks_for(rows, args.id)
+        permanent = any(not isinstance(a.get("until_epoch"), (int, float)) for a in acks)
+        held = any(isinstance(a.get("until_epoch"), (int, float)) and a["until_epoch"] > now_e
+                   for a in acks)
+        if permanent or not held or (getattr(args, "until", "") or "").strip():
+            sys.stderr.write("escalations: %s is already acknowledged. Nothing appended.\n"
+                             % args.id)
+            return 1
     row = {
         "event": "EscalationAck",
         "id": args.id,

@@ -153,9 +153,8 @@ canary_add_root() { # <dir> — resolve to a tree root and remember it once
 # when their contents change. It is the `??` entries that are invisible.
 #
 # The witness is a checksum AND, where the platform can give one, an mtime.
-# The escalation id is a timestamp with one-second resolution, so two raises
-# inside the same second produce a BYTE-IDENTICAL file at an identical path
-# that a checksum cannot tell apart. A sub-second mtime can. Case 17d is built
+# A file rewritten with identical bytes is something a checksum cannot tell
+# apart from the untouched file. A sub-second mtime can. Case 17d is built
 # not to depend on either one being available.
 CANARY_MAX_ENTRIES=2000
 
@@ -363,6 +362,31 @@ fi
 REC="$(find "$WT/docs/verification/escalations" -name '*.md' 2>/dev/null | head -1)"
 if [ -n "$REC" ]; then ok "1f  the record file went to docs/verification/escalations/"
 else bad "1f  record file" "not found under $WT/docs/verification/escalations"; fi
+# TWO RAISES IN ONE SECOND ARE TWO ESCALATIONS. The id's timestamp has one-second
+# resolution, so the same teammate raising the same title twice inside one second
+# (the disk watchdog replacing an acknowledged alarm does exactly that) must
+# still get two ids, or the second is merged into the first. The clock is pinned
+# here so the case cannot pass by straddling a second.
+SAME_SEC="$(python3 - "$ENG/scripts/lib" "$WT" <<'PY' 2>&1
+import sys, types
+from datetime import datetime, timezone
+sys.path.insert(0, sys.argv[1])
+import escalations
+when = datetime(2026, 10, 24, 18, 57, 2, tzinfo=timezone.utc)
+args = types.SimpleNamespace(
+    teammate="zach-opus-e1same", title="the same alarm, raised twice", worktree=sys.argv[2],
+    branch="", repo="", head="", state="proceeding", audience="lead",
+    question="q", tried="", meanwhile="", record="", session="s")
+a = escalations.build_row(args, when)["id"]
+b = escalations.build_row(args, when)["id"]
+ok = a != b and all(escalations.ID_RX.fullmatch(i) for i in (a, b))
+print(("DISTINCT " if ok else "SAME ") + a + " " + b)
+PY
+)"
+case "$SAME_SEC" in
+    DISTINCT*) ok "1g  two raises of the same escalation in the same second get two ids, both in the readable format (${SAME_SEC#DISTINCT })" ;;
+    *)         bad "1g  same-second ids are distinct" "$SAME_SEC" ;;
+esac
 
 # ===========================================================================
 # 2. THE STOP HOOK ANNOUNCES IT — same session, one turn later
@@ -627,6 +651,39 @@ print("yes" if o and o[0].get("reopened_by_expiry") else "no")' 2>/dev/null)"
         ok "8k  an ack with NO --until is still permanent — nothing else changed"
     else
         bad "8k  plain ack still permanent" "the item is still outstanding after a plain ack"
+    fi
+    # A HOLD MAY BE CLOSED FOR GOOD before its date: a permanent ack replaces a
+    # live timed one, so the hold cannot expire and come back. A second hold, or
+    # an ack after a permanent one, is still refused.
+    OUT="$("$ESCALATE" raise --teammate zach-opus-j2 --title "a hold closed for good" \
+        --state proceeding --question "can a held item be closed permanently?" \
+        --worktree "$SANDBOX" 2>&1)"
+    J2="$(python3 "$ENG/scripts/lib/escalations.py" list --format json 2>/dev/null | python3 -c '
+import json,sys
+o=[e for e in json.load(sys.stdin)["outstanding"] if e.get("teammate")=="zach-opus-j2"]
+print(o[0]["id"] if o else "")' 2>/dev/null)"
+    "$ESCALATE" ack "$J2" --disposition "Held while the cause is diagnosed, for the test." --until "2099-01-01" >/dev/null 2>&1
+    "$ESCALATE" ack "$J2" --disposition "Another hold on top of the first, for the test." --until "2099-02-01" >/dev/null 2>&1; RC_HOLD=$?
+    "$ESCALATE" ack "$J2" --disposition "Recovered: the cause is gone, closed for good." >/dev/null 2>&1; RC_PERM=$?
+    "$ESCALATE" ack "$J2" --disposition "A further acknowledgement after the close." >/dev/null 2>&1; RC_AGAIN=$?
+    python3 - "$LEDGER" "$J2" <<'PY'
+import datetime, json, sys
+path, jid = sys.argv[1], sys.argv[2]
+rows = [json.loads(l) for l in open(path) if l.strip()]
+past = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+for r in rows:
+    if r.get("event") == "EscalationAck" and str(r.get("id")) == jid and r.get("until_epoch"):
+        r["until"] = past.isoformat().replace("+00:00", "Z")
+        r["until_epoch"] = past.timestamp()
+open(path, "w").write("".join(json.dumps(r) + "\n" for r in rows))
+PY
+    BACK="$(python3 "$ENG/scripts/lib/escalations.py" list --format json 2>/dev/null | python3 -c '
+import json,sys
+print(len([e for e in json.load(sys.stdin)["outstanding"] if e.get("teammate")=="zach-opus-j2"]))' 2>/dev/null)"
+    if [ -n "$J2" ] && [ "$RC_HOLD" = "1" ] && [ "$RC_PERM" = "0" ] && [ "$RC_AGAIN" = "1" ] && [ "$BACK" = "0" ]; then
+        ok "8l  a live hold can be closed for good, and then never comes back; holds and repeats are refused"
+    else
+        bad "8l  closing a hold for good" "id=$J2 hold=$RC_HOLD perm=$RC_PERM again=$RC_AGAIN outstanding=$BACK"
     fi
 else
     bad "8h  --until refuses a free-text condition" "fixture: could not raise the type-J escalation"

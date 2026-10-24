@@ -95,6 +95,7 @@ import argparse
 import calendar
 import fnmatch
 import glob
+import hashlib
 import importlib.util
 import json
 import os
@@ -890,14 +891,14 @@ class Walls(object):
         """
         real = os.path.realpath(path)
         if real in self.never:
-            return "wall 4: %s is on the never-touch list" % real
+            return Refusal(4, "wall 4: %s is on the never-touch list" % real)
         if not any(inside(real, r) and real != r for r in self.roots):
-            return ("wall 1: %s is not inside any declared scratch root (%s)"
-                    % (real, ", ".join(self.roots) or "none"))
+            return Refusal(1, "wall 1: %s is not inside any declared scratch root (%s)"
+                           % (real, ", ".join(self.roots) or "none"))
         if has_git and not git_is_fixture:
-            return ("wall 2: this tree contains a .git — it is a checkout, not "
-                    "scratch. If it is a test fixture, it is yours to delete by "
-                    "hand; this program will not.")
+            return Refusal(2, "wall 2: this tree contains a .git — it is a checkout, not "
+                           "scratch. If it is a test fixture, it is yours to delete by "
+                           "hand; this program will not.")
         # WALL 2, NARROWED 2026-09-18, AND THE MEASUREMENT THAT FORCED IT.
         #
         # The first run of the widened legacy sweep returned 2,800
@@ -938,7 +939,7 @@ class Walls(object):
         # and wall 2 stands for them exactly as before.
         for reg in self.registered:
             if inside(reg, real) or inside(real, reg):
-                return ("wall 3: %s is a REGISTERED workspace" % reg)
+                return Refusal(3, "wall 3: %s is a REGISTERED workspace" % reg)
         return ""
 
 
@@ -1023,10 +1024,24 @@ def human(n):
 # the plan
 # ---------------------------------------------------------------------------
 
+class Refusal(str):
+    """A wall's refusal: its words, plus WHICH wall as a code (`wall-N`). The code
+    is what the published result calls the entry's condition, so whether a kept
+    entry is a protection never depends on reading the sentence."""
+    def __new__(cls, wall, text):
+        obj = str.__new__(cls, text)
+        obj.condition = "wall-%d" % wall
+        return obj
+
+
 class Entry(object):
-    def __init__(self, path, klass, size, action, why, standing=False):
+    def __init__(self, path, klass, size, action, why, standing=False, condition=None):
         self.path, self.klass, self.size = path, klass, size
         self.action, self.why = action, why
+        # THE PRODUCER'S OWN CODE FOR A KNOWN, KEPT UNDECIDED CONDITION (a wall's
+        # refusal, a chat-attached checkout, ...). None is every other undecided
+        # entry, which the published result keeps an alarm.
+        self.condition = condition or getattr(why, "condition", None)
         # A STANDING CONDITION: kept, and a PERSON has to do something about it.
         #
         # There are three kinds of KEEP and only two of them were distinguished.
@@ -1107,8 +1122,8 @@ class Reaper(object):
                 return True
         return False
 
-    def add(self, path, klass, size, action, why, standing=False):
-        self.entries.append(Entry(path, klass, size, action, why, standing))
+    def add(self, path, klass, size, action, why, standing=False, condition=None):
+        self.entries.append(Entry(path, klass, size, action, why, standing, condition))
 
     @staticmethod
     def reaches_outside(path, has_git, narrowed):
@@ -2069,7 +2084,8 @@ class Reaper(object):
                 self.add(path, "agent-named", size, INDETERMINATE,
                          "named-agent scratch no running agent carries (%s was stopped, "
                          "shelved or never landed). Only a land's sweep deletes named "
-                         "scratch, so remove it by hand once nothing needs it" % name)
+                         "scratch, so remove it by hand once nothing needs it" % name,
+                         condition="agent-ended")
 
     def scan_deferred_unknown(self, walls):
         """THE DEFERRED DENY-BY-DEFAULT PASS, and the ONE arm allowed to be cut
@@ -2767,7 +2783,7 @@ class Reaper(object):
 
         A worktree that closes is planned DELETE and closed in apply() by git itself
         after every check is repeated. A finished worktree a Codex chat still has
-        attached is UNDECIDED: only that chat's archive_worktree may close it. Kept
+        attached is UNDECIDED and kept: cleanup never opens, wakes or archives a chat. Kept
         work (unmerged, uncommitted, active, ignored material) is KEEP with its reason.
         """
         roots = [r for r in self.cfg.get("codex_worktree_roots") or [] if os.path.isdir(r)]
@@ -2793,7 +2809,8 @@ class Reaper(object):
             if attached is None and why_not and action == cw.UNDECIDED:
                 why = "%s (%s)" % (why, why_not)
             e = Entry(path, "codex-worktree", measure(path)[0] if action == DELETE else 0,
-                      action, why)
+                      action, why, condition=(info or {}).get("condition")
+                      if action == cw.UNDECIDED else None)
             e.close_info = info
             self.entries.append(e)
         for husk in husks:
@@ -2805,7 +2822,8 @@ class Reaper(object):
             elif any((p + "/").startswith(real + "/") for p in attached["live"]):
                 self.add(husk, "codex-husk", 0, INDETERMINATE,
                          "an emptied worktree parent that a live Codex attachment still "
-                         "names; the app has lost the checkout it shows that chat")
+                         "names; the app has lost the checkout it shows that chat",
+                         condition="husk-attached")
             else:
                 refused = walls.check(husk, False)
                 if refused:
@@ -4222,13 +4240,23 @@ def unresolved_rows(reaper, failures):
     for e in reaper.entries:
         if e.action != INDETERMINATE:
             continue
-        key = (scope_of(e.path), e.klass)
+        cond = getattr(e, "condition", None)
+        key = (scope_of(e.path), e.klass, cond)
         g = groups.setdefault(key, {"scope": key[0], "class": e.klass, "count": 0,
-                                    "bytes": 0, "example": e.path, "why": e.why})
+                                    "bytes": 0, "example": e.path, "why": e.why,
+                                    "paths": []})
+        if cond:
+            g["condition"] = cond
         g["count"] += 1
         g["bytes"] += e.size
+        g["paths"].append("%s\t%s" % (e.path, cond or ""))
     out = []
     for g in groups.values():
+        # WHICH entries and in WHAT condition, never their size or age: the turn
+        # end tells a set of kept leftovers once and a changed set again
+        # (disk-watchdog.py kept_set_id).
+        g["identity"] = hashlib.sha1("\n".join(sorted(g.pop("paths"))).encode(
+            "utf-8", "surrogateescape")).hexdigest()[:16]
         g["cause"] = ("%d undecided %s entr%s (%s), e.g. %s: %s"
                       % (g["count"], g["class"], "y" if g["count"] == 1 else "ies",
                          human(g["bytes"]), g.pop("example"), g.pop("why")[:200]))
@@ -4402,10 +4430,15 @@ def main(argv=None):
     # whole value is being able to say WHICH 12.8 GB, and re-deriving that costs
     # a full nine-second pass. Capped, largest first, and the `why` already
     # carries the exact command.
-    by_hand_rows = sorted((e for e in reaper.entries if e.standing),
-                          key=lambda e: -e.size)[:5]
+    by_hand_all = [e for e in reaper.entries if e.standing]
+    by_hand_rows = sorted(by_hand_all, key=lambda e: -e.size)[:5]
     split["by_hand"]["paths"] = [{"path": e.path, "bytes": e.size,
                                   "why": e.why} for e in by_hand_rows]
+    # WHICH places, all of them, never their sizes: the turn end tells this pile
+    # once per set (disk-watchdog.py), and the five examples above are a sample
+    # that a hidden replacement or a size reorder would fool.
+    split["by_hand"]["identity"] = hashlib.sha1("\n".join(sorted(
+        e.path for e in by_hand_all)).encode("utf-8", "surrogateescape")).hexdigest()[:16]
     failures = []
     if args.apply:
         deleted, freed, failures = reaper.apply(args.log or default_log())

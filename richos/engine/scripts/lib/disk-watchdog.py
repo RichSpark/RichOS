@@ -14,6 +14,7 @@ other wrote it, and the CEO would be notified twice for one event.
 """
 
 import calendar
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -314,9 +315,57 @@ def log(path, line):
 # acknowledgement never changes it, and nothing here runs the reaper.
 REAPER_LABEL = "com.richos.scratch-reaper"
 
+# KEPT OR UNDECIDED IS NOT A FAILURE (CEO, 2026-10-24: "remove obsolete
+# instructions and repeated administrative noise without hiding genuine
+# failures"). The reaper names the condition of an undecided group with its own
+# code; only the established ones below are quiet: reported, never alarmed on and
+# never escalated. ANYTHING ELSE stays an alarm: a failed deletion, a row with no
+# condition (a refused or unfinished run, a reading the run could not make, an
+# older result), and any code not listed here. Decided from the code, never from
+# the sentence.
+KEPT_CONDITIONS = {
+    "wall-1": "outside every declared scratch root",
+    "wall-2": "a checkout: it contains a .git",
+    "wall-3": "a registered workspace",
+    "wall-4": "on the never-touch list",
+    "chat-attached": "a finished checkout a Codex chat still has attached",
+    "husk-attached": "an emptied worktree folder a Codex chat still names",
+    "main-unreadable": "undecided: its repository's main cannot be read",
+    "agent-ended": "named scratch of an agent that is no longer running",
+}
+
+
+def kept_leftover(row):
+    """True for a published unresolved row that is a known, kept leftover."""
+    return (isinstance(row.get("condition"), str)
+            and row["condition"] in KEPT_CONDITIONS
+            and row.get("class") not in (None, "", "deletion"))
+
+
+def kept_leftovers(reaper_state):
+    """The kept leftovers in the scheduled run's published result."""
+    if not reaper_state or reaper_state.get("source") != "launchd" \
+            or reaper_state.get("outcome") != "unresolved":
+        return []
+    return [u for u in (reaper_state.get("unresolved") or [])
+            if isinstance(u, dict) and kept_leftover(u)]
+
+
+def kept_set_id(rows):
+    """WHICH leftovers in WHAT condition, never how big or how old: scope, class,
+    condition and the reaper's identity of the entries and their conditions."""
+    return set_id("%s|%s|%s|%s" % (r.get("scope"), r.get("class"), r.get("condition"),
+                                   r.get("identity") or r.get("count")) for r in rows)
+
+
+def set_id(parts):
+    """A short, order-free identity of a set of descriptive strings."""
+    return hashlib.sha1("\n".join(sorted(parts)).encode("utf-8")).hexdigest()[:12]
+
 
 def cleanup_health(reaper_state, state_path, max_age_h, now, launch_agents_dir):
-    """[problem, ...] for the last unattended cleanup result; [] when it is healthy."""
+    """[problem, ...] for the last unattended cleanup result; [] when it is healthy.
+    A kept leftover is not a problem (kept_leftover above)."""
     problems = []
     plist = os.path.join(launch_agents_dir, REAPER_LABEL + ".plist")
     if not os.path.isfile(plist):
@@ -338,7 +387,8 @@ def cleanup_health(reaper_state, state_path, max_age_h, now, launch_agents_dir):
     if reaper_state.get("outcome") == "unresolved":
         rows = [u for u in (reaper_state.get("unresolved") or []) if isinstance(u, dict)]
         for u in rows:
-            problems.append("%s: %s" % (u.get("scope") or "?", u.get("cause") or "?"))
+            if not kept_leftover(u):
+                problems.append("%s: %s" % (u.get("scope") or "?", u.get("cause") or "?"))
         if not rows:
             problems.append("the scheduled run reported an unresolved outcome")
     return problems
@@ -383,9 +433,9 @@ def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, 
     Unresolved and nothing associated, or the associated one acknowledged
     permanently: raise one (state proceeding, for the lead). Associated and open,
     or held by a timed acknowledgement: nothing; the ledger and the stall watcher
-    already repeat it, and an expiring hold reopens the same id. Healthy again:
-    acknowledge the associated id permanently, or keep the association until a
-    hold expires and it can be. Returns the association to store, or None."""
+    already repeat it, and an expiring hold reopens the same id. Healthy again
+    (kept leftovers are not a failure): acknowledge the associated id permanently,
+    open or held. Returns the association to store, or None."""
     engine_scripts = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     checkout = os.path.realpath(os.path.join(engine_scripts, "..", "..", ".."))
     assoc = prev.get("cleanup_escalation") if isinstance(prev.get("cleanup_escalation"), dict) else None
@@ -393,11 +443,15 @@ def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, 
     if not problems:
         if not assoc:
             return None
-        if status == "open":
+        # HELD IS CLOSED TOO. A timed hold left in place would expire and tell the
+        # lead again about a failure that is gone (2026-10-24: the escalation of
+        # 01:19Z was held to 22:00Z on superseded instructions).
+        if status in ("open", "held"):
             rc, out = _escalate(engine_scripts, [
                 "ack", assoc["id"], "--disposition",
-                "Recovered: the scheduled cleanup run published a healthy result at %s; "
-                "closed by the disk watchdog." % stamp])
+                "Recovered: the scheduled cleanup run's result at %s has no failure left "
+                "(what it keeps on purpose is reported, not escalated); closed by the "
+                "disk watchdog." % stamp])
             log(log_path, "%s cleanup escalation %s %s" % (
                 stamp, assoc["id"], "acknowledged (recovered)" if rc == 0 else
                 "could not be acknowledged yet (exit %d): %s" % (rc, out.strip()[:160])))
@@ -731,6 +785,8 @@ def main():
     launch_agents = expand(env("RICHOS_LAUNCH_AGENTS_DIR", "~/Library/LaunchAgents"))
     cleanup_problems = cleanup_health(published, reaper_state_path, max_age_h, now,
                                       launch_agents)
+    kept = kept_leftovers(published)
+    kept_id = kept_set_id(kept) if kept else ""
     assoc = prev.get("cleanup_escalation") if isinstance(
         prev.get("cleanup_escalation"), dict) else None
     if not cleanup_problems and assoc:
@@ -754,7 +810,8 @@ def main():
             failed = set()
             if published.get("source") == "launchd":
                 failed = {u.get("scope") for u in (published.get("unresolved") or [])
-                          if isinstance(u, dict) and str(u.get("scope") or "").startswith("/")}
+                          if isinstance(u, dict) and not kept_leftover(u)
+                          and str(u.get("scope") or "").startswith("/")}
             assoc["scopes"] = sorted(kept_scopes | set(assoc.get("scopes") or []) | failed)
     # --- THREE PILES, THREE ANSWERS, AND ONLY ONE OF THEM IS AN ALARM -------
     #
@@ -786,6 +843,8 @@ def main():
     # (d) CHANGED 2026-10-23 (cleanup PRD R4): an undecided pile is an UNRESOLVED
     #     cleanup result, an alarm with one owner action (cleanup health below),
     #     never a line to read. It is no longer part of this report.
+    #     CHANGED AGAIN 2026-10-24: only an undecided group that is a failure
+    #     (kept_leftover above) alarms; one kept or undecided has its own heading.
     garbage_report = (by_hand_b >= undec_floor or by_hand_n > 0
                       or foreign_b >= skipped_floor)
     # RETAINED UNDER ITS OLD NAME because the state file publishes it and a
@@ -1039,11 +1098,23 @@ def main():
             lines.append("  as a record and not as the state of the disk right now:")
             lines.append("    %s --verbose" % reaper_cmd)
         if by_hand_n > 0:
-            lines.append("  %s in %d place(s) IS OURS AND IS NEVER DELETED"
-                         % (human(by_hand_b), by_hand_n))
-            lines.append("  AUTOMATICALLY — a campaign root past its retention, or a")
-            lines.append("  running container on a throwaway image. Each prints its own")
-            lines.append("  command; a person runs it and the space comes back:")
+            # The set id is WHICH places (all of them, and how many), never their
+            # size or age: the turn end tells this pile once per set, exactly as
+            # it tells the kept set below (notice-disk-alert.sh). The producer's
+            # identity covers every place; the five example paths are only the
+            # fallback for a result written before it published one.
+            hand_parts = ["count|%d" % by_hand_n]
+            if by_hand.get("identity"):
+                hand_parts.append("identity|%s" % by_hand.get("identity"))
+            else:
+                hand_parts += ["path|%s" % row.get("path")
+                               for row in (by_hand.get("paths") or [])
+                               if isinstance(row, dict)]
+            lines.append("  %s in %d place(s) IS OURS AND IS NEVER DELETED AUTOMATICALLY "
+                         "(set %s):" % (human(by_hand_b), by_hand_n, set_id(hand_parts)))
+            lines.append("  a campaign root past its retention, or a running container")
+            lines.append("  on a throwaway image. Each prints its own command; a person")
+            lines.append("  runs it and the space comes back:")
             for row in (by_hand.get("paths") or [])[:5]:
                 if not isinstance(row, dict):
                     continue
@@ -1059,6 +1130,27 @@ def main():
             lines.append("  Studio Code's updater, Codex, WebKit, and the directories")
             lines.append("  macOS makes for its own agents. NOT OURS, NOT AN ALERT, and")
             lines.append("  never deleted by us. Counted only so it is not invisible.")
+        lines.append("-" * 72)
+
+    # --- KEPT OR UNDECIDED — reported, never an alarm (kept_leftover above) -
+    # Outside `condition` like the garbage report, and it says only what is true
+    # of these entries: any failure in the same result is the alarm above it. The
+    # heading carries the set's identity, so the turn end can tell a set once and
+    # a changed set again (notice-disk-alert.sh); sizes and times never change it.
+    if kept:
+        n_kept = sum(int(u.get("count") or 0) for u in kept)
+        lines.append("-" * 72)
+        lines.append("  KEPT OR UNDECIDED (not an alert): %d entr%s in %d group(s) the "
+                     "scheduled run of %s left in place and will not delete on its own "
+                     "(set %s)"
+                     % (n_kept, "y" if n_kept == 1 else "ies", len(kept),
+                        published.get("last_apply") or "an unknown time", kept_id))
+        lines.append("-" * 72)
+        for u in kept:
+            lines.append("    %s (%s): %s" % (u.get("scope") or "?",
+                                              KEPT_CONDITIONS[u["condition"]],
+                                              str(u.get("cause") or "?")[:240]))
+        lines.append("  Detail: %s --verbose and %s" % (reaper_cmd, reaper_state_path))
         lines.append("-" * 72)
 
     # --- THE WATCHMAN'S OWN ABSENCE, which is an alert of its own ------------
@@ -1139,6 +1231,8 @@ def main():
         # escalation associated with it. Carried forward by every reading.
         "cleanup_healthy": not cleanup_problems,
         "cleanup_problems": cleanup_problems,
+        "cleanup_kept": kept,
+        "cleanup_kept_set": kept_id,
         "cleanup_escalation": assoc,
         "notified": notified,
         "timer_installed": installed,
@@ -1200,6 +1294,10 @@ def main():
                              % n_dev)
         for problem in cleanup_problems:
             sys.stdout.write("ALERT  cleanup has not recovered: %s\n" % problem)
+        for u in kept:
+            sys.stdout.write("kept    %s (%s): %s\n"
+                             % (u.get("scope") or "?", KEPT_CONDITIONS[u["condition"]],
+                                u.get("cause") or "?"))
         # THREE LINES, EACH SAYING WHOSE IT IS, AND NONE OF THEM AN ALERT.
         # It was one: "ALERT  13.9 GB skipped + 11.4 GB undecidable". The 13.9
         # was mostly our own campaign roots with a printed command, the rest was

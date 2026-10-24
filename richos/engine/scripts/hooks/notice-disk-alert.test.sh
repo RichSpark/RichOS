@@ -393,6 +393,197 @@ else
     bad "D11b the cleanup item stayed after the scheduled result recovered"
 fi
 
+# ---------------------------------------------------------------------------
+# D12 — KEPT LEFTOVERS ARE TOLD ONCE PER SET; EVERY ALARM STILL REPEATS
+# ---------------------------------------------------------------------------
+# CEO, 2026-10-24: "remove obsolete instructions and repeated administrative
+# noise without hiding genuine failures". The mixed state of 16:00:44Z that day
+# had no failure, only leftovers the scheduled cleanup kept on purpose, and the
+# turn end printed MASSIVE ALERT about them every turn. A REAL session here: a
+# payload with a session id and an adopted root, so the ledger exists and the
+# once-per-set memory is the one a lead's session has.
+SESSION_PAYLOAD="$SANDBOX/payload.json"
+printf '{"session_id": "d12sess-0001", "cwd": "%s"}\n' "$SANDBOX" >"$SESSION_PAYLOAD"
+run_session_hook() {
+    DISK_WATCHDOG_CONFIG="$CFG" \
+    DISK_WATCHDOG_LOG="$LOG" \
+    RICHOS_LAUNCH_AGENTS_DIR="$LA" \
+    CLAUDE_CONFIG_DIR="$LEDGER_DIR" \
+    RICHOS_ENTITY_ROOT="$SANDBOX" \
+    bash "$HOOK" --event Stop <"$SESSION_PAYLOAD" 2>"$SANDBOX/err.txt" | python3 -c '
+import json, sys
+text = sys.stdin.read().strip()
+try:
+    print((json.loads(text).get("systemMessage") or "") if text else "")
+except Exception:
+    print("UNPARSEABLE: " + text)
+'
+}
+KEPT_ROWS='{"scope": "/v/ab/worktrees", "class": "codex-worktree", "condition": "main-unreadable", "count": 1, "bytes": 0, "identity": "aaaa", "cause": "1 undecided codex-worktree entry (0 B), e.g. /v/ab/worktrees/hh/prospects: main of /u/prospects cannot be read"}, {"scope": "/v/codex/worktrees", "class": "codex-worktree", "condition": "chat-attached", "count": 13, "bytes": 0, "identity": "bbbb", "cause": "13 undecided codex-worktree entries (0 B), e.g. /v/codex/worktrees/a/richos: finished, but a Codex chat still has it attached, so it is kept"}, {"scope": "/v/tmp/codex", "class": "tmp-unknown", "condition": "wall-2", "count": 13, "bytes": 6299191717, "identity": "cccc", "cause": "13 undecided tmp-unknown entries (5.9 GB), e.g. /v/tmp/codex/h: wall 2: this tree contains a .git"}'
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "failures": 0, "undecidable": 27, "verdict": "undecided", "unresolved": ['"$KEPT_ROWS"']'
+M1="$(run_session_hook)"; M2="$(run_session_hook)"
+if printf '%s' "$M1" | grep -q '^Cleanup, kept or undecided: 27 entries in 3 group(s) the scheduled run of .* left in place and will not delete on its own; told once per set' \
+   && ! printf '%s' "$M1" | grep -q 'MASSIVE ALERT' && [ -z "$M2" ]; then
+    ok "D12  kept leftovers with no failure: one honest short line, then quiet the next turn"
+else
+    bad "D12  kept leftovers alarmed or repeated (turn 1: $M1 | turn 2: $M2)"
+fi
+# Only sizes and times change: still the same set, still quiet.
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "last_apply_epoch": int(time.time()) - 600, "unresolved": ['"$(printf '%s' "$KEPT_ROWS" | sed 's/6299191717/7299191717/; s/(5.9 GB)/(6.8 GB)/')"']'
+M3="$(run_session_hook)"
+if [ -z "$M3" ]; then
+    ok "D12a an unchanged set whose sizes and times moved stays quiet"
+else
+    bad "D12a a size or time change re-told the same kept set: $M3"
+fi
+# A new leftover changes the set: told once more, then quiet again.
+NEW_ROWS="$(printf '%s' "$KEPT_ROWS" | sed 's/"count": 13, "bytes": 0, "identity": "bbbb"/"count": 14, "bytes": 0, "identity": "bbbd"/')"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": ['"$NEW_ROWS"']'
+M4="$(run_session_hook)"; M5="$(run_session_hook)"
+if printf '%s' "$M4" | grep -q '^Cleanup, kept or undecided: 28 entries' && [ -z "$M5" ]; then
+    ok "D12b a new leftover is told once more, and the new set then goes quiet"
+else
+    bad "D12b a changed kept set was not told once (turn 1: $M4 | turn 2: $M5)"
+fi
+# The SAME entries in a changed condition are a changed set: told once more.
+COND_ROWS="$(printf '%s' "$NEW_ROWS" | sed 's/"condition": "main-unreadable", "count": 1, "bytes": 0, "identity": "aaaa"/"condition": "chat-attached", "count": 1, "bytes": 0, "identity": "aaab"/')"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": ['"$COND_ROWS"']'
+M6="$(run_session_hook)"; M7="$(run_session_hook)"
+if printf '%s' "$M6" | grep -q '^Cleanup, kept or undecided: 28 entries' && [ -z "$M7" ]; then
+    ok "D12b2 the same entries in a changed condition are told once more"
+else
+    bad "D12b2 a changed condition on the same entries was not told (turn 1: $M6 | turn 2: $M7)"
+fi
+NEW_ROWS="$COND_ROWS"
+# EVERY ALARM STILL REPEATS EVERY TURN beside the told set: a real deletion
+# failure, a failed (refused) run, a stale run, and low disk.
+alarm_twice() {          # <label> ; prints PASS/FAIL for two consecutive turns
+    local a b
+    a="$(run_session_hook)"; b="$(run_session_hook)"
+    if printf '%s' "$a" | grep -q "^MASSIVE ALERT — DISK: .*$2" \
+       && printf '%s' "$b" | grep -q "^MASSIVE ALERT — DISK: .*$2" \
+       && ! printf '%s' "$b" | grep -q 'Cleanup, kept or undecided'; then
+        ok "$1"
+    else
+        bad "$1 (turn 1: $a | turn 2: $b)"
+    fi
+}
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "failures": 1, "unresolved": ['"$NEW_ROWS"', {"scope": "/v/tmp", "class": "deletion", "count": 1, "cause": "1 deletion(s) failed, e.g. /v/tmp/x: permission denied"}]'
+alarm_twice "D12c a new real deletion failure beside the told set alerts, every turn" "cleanup has not recovered: /v/tmp: 1 deletion(s) failed"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": [{"scope": "run", "cause": "the run refused: lsof is not on PATH"}]'
+alarm_twice "D12d a failed scheduled run alerts, every turn" "cleanup has not recovered: run: the run refused"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "last_apply_epoch": int(time.time()) - 13 * 3600, "unresolved": ['"$NEW_ROWS"']'
+alarm_twice "D12e a stale scheduled run alerts, every turn" "past the 12 h window"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json" '"outcome": "unresolved", "unresolved": ['"$NEW_ROWS"']'
+cp "$CFG" "$CFG.d12"
+sed -i.bak 's/^DISK_RICH_ALERT_GB=.*/DISK_RICH_ALERT_GB="999999"/' "$CFG"
+alarm_twice "D12f low disk beside the told set alerts, every turn" "below the declared"
+cp "$CFG.d12" "$CFG"
+# A failed test device cleanup is an alarm too (the review of 6d7802f2e found
+# it silent at the turn end): beside the told set it alerts every turn.
+printf '%s\n' '{"sim-1": {"name": "Test iPhone", "verdict": "removal failed", "why": "simctl delete refused", "command": "xcrun simctl delete sim-1", "first": "2026-10-24T18:00:00Z", "attempts": 2}}' >"$LEDGER_DIR/state/test-device-failures.json"
+alarm_twice "D12g a failed test device cleanup beside the told set alerts, every turn" "1 test device cleanup issue(s) need attention"
+rm -f "$LEDGER_DIR/state/test-device-failures.json"
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json"
+
+# ---------------------------------------------------------------------------
+# D13 — OUR PILE WAITING FOR A PERSON IS ADMINISTRATION TOO: TOLD ONCE PER SET
+# ---------------------------------------------------------------------------
+# A campaign root past its retention is not an alarm (D10a). It is told once a
+# session, and again only when WHICH places it is changes; sizes never do. A
+# real alarm beside it still repeats every turn.
+by_hand_sized() {        # <path>=<bytes> [<path>=<bytes> ...]
+    # The producer's shape (scratch-reaper.py by_hand_record): the five largest
+    # places as examples, and an identity over EVERY place, sizes left out.
+    python3 - "$SANDBOX/rstate/scratch-reaper-state.json" "$@" <<'PY'
+import hashlib, json, sys, time
+out = sys.argv[1]
+rows = [(p, int(b)) for p, b in (a.rsplit("=", 1) for a in sys.argv[2:])]
+total = sum(b for _p, b in rows)
+shown = sorted(rows, key=lambda r: -r[1])[:5]
+identity = hashlib.sha1("\n".join(sorted(p for p, _b in rows)).encode(
+    "utf-8", "surrogateescape")).hexdigest()[:16]
+json.dump({"last_apply": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "last_apply_epoch": int(time.time()),
+           "source": "launchd", "outcome": "healthy", "unresolved": [], "roots": [],
+           "deleted": 0, "freed": 0, "undecidable": 0, "undecidable_bytes": 0,
+           "skipped": len(rows), "skipped_bytes": total,
+           "skipped_split": {
+               "by_hand": {"count": len(rows), "bytes": total, "identity": identity,
+                           "paths": [
+                   {"path": p, "bytes": b,
+                    "why": "PAST ITS RETENTION ... a person removes it:  rm -rf " + p}
+                   for p, b in shown]},
+               "foreign": {"count": 0, "bytes": 0}},
+           "failures": 0, "verdict": "decided"}, open(out, "w"))
+PY
+}
+by_hand() {              # <bytes> <path> [<path> ...] — every place the same size
+    local size="$1" p
+    local args=()
+    shift
+    for p in "$@"; do args+=("$p=$size"); done
+    by_hand_sized "${args[@]}"
+}
+by_hand 13749244608 /Users/x/ab/campaign-a
+T1="$(run_session_hook)"; T2="$(run_session_hook)"
+by_hand 14749244608 /Users/x/ab/campaign-a
+T3="$(run_session_hook)"
+if printf '%s' "$T1" | grep -q '^Disk: .* is ours and waits for a person to remove it; told once per set' \
+   && [ -z "$T2" ] && [ -z "$T3" ]; then
+    ok "D13  an unchanged by-hand pile is told once, and its size changing does not re-tell it"
+else
+    bad "D13  an unchanged by-hand pile repeated (turn 1: $T1 | turn 2: $T2 | bigger: $T3)"
+fi
+by_hand 13749244608 /Users/x/ab/campaign-a /Users/x/ab/campaign-b
+T4="$(run_session_hook)"; T5="$(run_session_hook)"
+if printf '%s' "$T4" | grep -q '^Disk: .* in 2 place(s) is ours and waits' && [ -z "$T5" ]; then
+    ok "D13a a changed by-hand pile is told once more, then quiet"
+else
+    bad "D13a a changed by-hand pile was not told exactly once (turn 1: $T4 | turn 2: $T5)"
+fi
+# Mixed: low disk beside the told pile alerts every turn and does not repeat it;
+# a new pile arriving beside the alarm is told once, inside the alarm line.
+cp "$CFG" "$CFG.d13"
+sed -i.bak 's/^DISK_RICH_ALERT_GB=.*/DISK_RICH_ALERT_GB="999999"/' "$CFG"
+T6="$(run_session_hook)"; T7="$(run_session_hook)"
+by_hand 13749244608 /Users/x/ab/campaign-c
+T8="$(run_session_hook)"; T9="$(run_session_hook)"
+cp "$CFG.d13" "$CFG"
+if printf '%s' "$T6" | grep -q '^MASSIVE ALERT — DISK: .*below the declared' \
+   && printf '%s' "$T7" | grep -q '^MASSIVE ALERT — DISK: .*below the declared' \
+   && ! printf '%s%s' "$T6" "$T7" | grep -q 'waits for a person' \
+   && printf '%s' "$T8" | grep -q '^MASSIVE ALERT — DISK: .*below the declared.*| Disk: .* is ours and waits' \
+   && printf '%s' "$T9" | grep -q '^MASSIVE ALERT — DISK: .*below the declared' \
+   && ! printf '%s' "$T9" | grep -q 'waits for a person'; then
+    ok "D13b beside a real alarm the alarm repeats every turn and the pile is told once per set"
+else
+    bad "D13b mixed alarm and pile (T6: $T6 | T7: $T7 | T8: $T8 | T9: $T9)"
+fi
+# MORE THAN FIVE PLACES: the alert shows the five largest, but WHICH places it is
+# covers all of them (review rv-20261024T184407Z-f26655a1-5189). A place hidden
+# below the five is replaced: told once. The same places with their sizes
+# reordered, so a different five are shown: quiet.
+G="/Users/x/ab/campaign"
+by_hand_sized "$G-1=6000000000" "$G-2=5000000000" "$G-3=4000000000" "$G-4=3000000000" "$G-5=2000000000" "$G-6=1000000000"
+T10="$(run_session_hook)"
+by_hand_sized "$G-1=6000000000" "$G-2=5000000000" "$G-3=4000000000" "$G-4=3000000000" "$G-5=2000000000" "$G-7=1000000000"
+T11="$(run_session_hook)"; T12="$(run_session_hook)"
+if printf '%s' "$T10" | grep -q '^Disk: .* in 6 place(s) is ours and waits' \
+   && printf '%s' "$T11" | grep -q '^Disk: .* in 6 place(s) is ours and waits' && [ -z "$T12" ]; then
+    ok "D13c a place hidden below the five shown is replaced: told once, then quiet"
+else
+    bad "D13c a hidden membership change was not told exactly once (before: $T10 | replaced: $T11 | next: $T12)"
+fi
+by_hand_sized "$G-1=1000000000" "$G-2=2000000000" "$G-3=3000000000" "$G-4=4000000000" "$G-5=5000000000" "$G-7=6000000000"
+T13="$(run_session_hook)"
+if [ -z "$T13" ]; then
+    ok "D13d the same places with reordered sizes (a different five shown) stay quiet"
+else
+    bad "D13d reordered sizes of the same places told the pile again: $T13"
+fi
+healthy_reaper "$SANDBOX/rstate/scratch-reaper-state.json"
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
