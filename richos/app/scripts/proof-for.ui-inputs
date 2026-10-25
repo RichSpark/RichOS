@@ -130,6 +130,7 @@ dictation.js            @shell richos/app/ui/dictation.js richos/app/ui/settings
 bug-report.js           @shell richos/app/ui/bug-report.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js @allui
 codex-reviews.js        @shell richos/app/ui/codex-reviews.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/spend.js
 spend.js                @shell richos/app/ui/spend.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/home.js richos/app/src-tauri/src/main.rs
+terminal-and-git.js     @shell richos/app/ui/terminal-setup.js richos/app/ui/git-name.js richos/app/ui/terminal-and-git.css richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/src-tauri/src/terminal_setup_host.rs richos/app/src-tauri/src/git_name_host.rs
 provider-auth.js        @shell
 
 # ---- the timeline renderer ---------------------------------------------------------------
