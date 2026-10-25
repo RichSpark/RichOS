@@ -37,6 +37,7 @@ class Listing(unittest.TestCase):
     def walk(self, out, gone=()):
         w = gw.GarbageWalk.__new__(gw.GarbageWalk)
         w.vm, w.out, w.home, w.payload = 'walk-x', Path(out), HOME, '/Users/admin/testvm/walk-x'
+        w.data = HOME + '/Library/Application Support/com.richos.app'
         w.a = mock.Mock(gone=list(gone))
         w.facts = {'garbage': {'mark': '/m', 'roots': ROOTS, 'harness': []}}
         return w

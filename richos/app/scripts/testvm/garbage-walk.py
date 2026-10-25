@@ -121,6 +121,15 @@ WATCH = ('import json,os,subprocess,sys,time\n'
          '            sys.exit(0)\n'
          '    time.sleep(0.01)\n'
          'json.dump({"timeout":True},open(out,"w"))\n')
+# Every assignment record the work host would count as open (assignment.rs scan_open: schema 1,
+# a state other than a closed one), with its state and title, or [] when there is no register.
+ASSIGNMENTS = ('import glob,json,os,sys\n'
+               'out=[]\n'
+               'for f in sorted(glob.glob(os.path.join(sys.argv[1],"*","*.json"))):\n'
+               '    try: r=json.load(open(f))\n'
+               '    except (OSError,ValueError): out.append({"file":f,"unreadable":True}); continue\n'
+               '    out.append({"id":r.get("id"),"state":r.get("state"),"title":r.get("title")})\n'
+               'print(json.dumps(out))\n')
 # The owner record of every folder under engine-profiles (app_cleanup.rs OWNER_FILE), or null.
 OWNERS = ('import json,os,sys\n'
           'root=sys.argv[1];out={}\n'
@@ -234,7 +243,12 @@ class GarbageWalk(srw.StuReminderWalk):
             p['bytes'] += r.get('bytes', 0)
         procs = json.loads(guest(self.vm, 'python3 -c %s %s' % (shlex.quote(PROCS), shlex.quote(self.payload)), 60) or '[]')
         summary = {'entries': len(rows), 'bytes': sum(r.get('bytes', 0) for r in rows),
-                   'places': dict(sorted(places.items())), 'processes': procs}
+                   'places': dict(sorted(places.items())), 'processes': procs,
+                   # What the app's own sweeps said so far, run by run, and the work it still
+                   # counts as open (a settled sweep runs only when none is: work_host.rs).
+                   'cleanup_lines': {run: self.cleanup_lines(run) for run in ['first'] + list(self.facts.get('logs') or {})},
+                   'open_assignments': json.loads(guest(self.vm, 'python3 -c %s %s' % (
+                       shlex.quote(ASSIGNMENTS), shlex.quote(self.data + '/engine-state/assignments')), 60) or '[]')}
         (self.out / ('summary-%s.json' % name)).write_text(json.dumps(summary, indent=1) + '\n')
         before = BEFORE.get(name)
         if self.a.gone and before:
