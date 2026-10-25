@@ -7826,7 +7826,7 @@
     },
     "scripts/lib/protected-ref-moves.py": {
       "source": "scripts/lib/protected-ref-moves.py",
-      "sha256": "d4b8e7c1cb3553a722541124159906f4f9d7284aa94d311c2d4c0b2c6974c95c",
+      "sha256": "e9eabe8c92572d0a08d03938b12d59cb407a6429cc41360b11fd3e70bf30975b",
       "evidence": "Full predicate reads the event store, invokes fixed read-only Git commands over named repos and writes explicit review rows through workspaces.event. Wall clock controls age wording/rungs. No config is read and no source text or command in a record is evaluated.",
       "keys": [],
       "edges": [
@@ -7857,7 +7857,7 @@
     },
     "scripts/hooks/protected-ref-moves.test.sh": {
       "source": "scripts/hooks/protected-ref-moves.test.sh",
-      "sha256": "fe6929dc70eeb05f5c17f6e2d7cba139e61b9e7f0f796f9fe2c0cc288daa45d2",
+      "sha256": "830d43434a876df2fed6f4f989b0f9dcb8e833aad5f6977e04a54d8e529f4de1",
       "evidence": "Full suite creates private adopted Git repositories, empty literal config, event store and finite notice mutants. Copies never transport real config. observe-created-refs is inspected as text only. Fixed predicate list/review and the normal notice are the only executed engine commands.",
       "keys": [],
       "edges": [
@@ -17187,8 +17187,8 @@
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
         "scripts/hooks/notice-protected-ref-moves.sh": "15ea383b87181c6924a00f8b5f656f72f2319e9680947674f68972fbcd6c2c43",
-        "scripts/lib/protected-ref-moves.py": "d4b8e7c1cb3553a722541124159906f4f9d7284aa94d311c2d4c0b2c6974c95c",
-        "scripts/hooks/protected-ref-moves.test.sh": "fe6929dc70eeb05f5c17f6e2d7cba139e61b9e7f0f796f9fe2c0cc288daa45d2",
+        "scripts/lib/protected-ref-moves.py": "e9eabe8c92572d0a08d03938b12d59cb407a6429cc41360b11fd3e70bf30975b",
+        "scripts/hooks/protected-ref-moves.test.sh": "830d43434a876df2fed6f4f989b0f9dcb8e833aad5f6977e04a54d8e529f4de1",
         "scripts/hooks/notice-unasked-deferral.sh": "4468742f723b5f5b6fb6dc87cb47fdf168bf9f3faf4f4a6d246b34c2d161af98",
         "scripts/hooks/guard-unasked-deferral.py": "864b1c4366b8c20fbfb1a8ccba015bd884046de4260ae8d3143f7c7abba6a8c7",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
@@ -17860,8 +17860,8 @@
         "scripts/lib/row-currency.py": "484404c6143d1a5b94182321e6fa0f6250b298b27a7d3b59ba26d5ed648db677",
         "scripts/lib/mechanical-findings.py": "0942c108c40a62c831eaee4d569f8def0178903e17a289e221cc93ed7f51db78",
         "scripts/hooks/notice-protected-ref-moves.sh": "15ea383b87181c6924a00f8b5f656f72f2319e9680947674f68972fbcd6c2c43",
-        "scripts/lib/protected-ref-moves.py": "d4b8e7c1cb3553a722541124159906f4f9d7284aa94d311c2d4c0b2c6974c95c",
-        "scripts/hooks/protected-ref-moves.test.sh": "fe6929dc70eeb05f5c17f6e2d7cba139e61b9e7f0f796f9fe2c0cc288daa45d2",
+        "scripts/lib/protected-ref-moves.py": "e9eabe8c92572d0a08d03938b12d59cb407a6429cc41360b11fd3e70bf30975b",
+        "scripts/hooks/protected-ref-moves.test.sh": "830d43434a876df2fed6f4f989b0f9dcb8e833aad5f6977e04a54d8e529f4de1",
         "scripts/hooks/notice-unasked-deferral.sh": "4468742f723b5f5b6fb6dc87cb47fdf168bf9f3faf4f4a6d246b34c2d161af98",
         "scripts/hooks/guard-unasked-deferral.py": "864b1c4366b8c20fbfb1a8ccba015bd884046de4260ae8d3143f7c7abba6a8c7",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",

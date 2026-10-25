@@ -43,8 +43,9 @@ THE PREDICATE — ONE MECHANICAL QUESTION, ASKED LATER
     BRANCH?
 
 That is the whole rule. It has no threshold, no heuristic and no opinion about
-who moved anything, and it answers the only question a person actually has to
-decide about: WERE COMMITS LOST.
+who moved anything. It answers whether commits are OFF THE BRANCH, never whether
+they were lost: a relocation or a rewrite can keep the work elsewhere, so the
+notice states the tip, the count off the branch and the age, and nothing more.
 
   * `git merge-base --is-ancestor <snapshot tip> <branch now>` succeeds
     -> HEALED. Everything that was on the branch is still on it. This is the
@@ -360,11 +361,15 @@ def sentence(findings):
         more = " (and %d more — scripts/lib/protected-ref-moves.py list)" % (len(findings) - 1)
     settle = ("scripts/lib/protected-ref-moves.py review --repo %s --branch %s --tip %s --why '<reason>'"
               % (first["repo"], first["branch"], first["tip"][:12]))
-    return ("PROTECTED REF MOVED AND NOTHING WAS PUT BACK: %s%s. The engine reports this and never "
-            "moves a ref back (since 2026-09-14 — it used to, and it undid the lead's own merges: "
-            "docs/verification/ref-write-forensics-2026-09-14.md), so nobody has acted on it yet. "
-            "Look: git -C %s reflog show %s --date=iso. Then put the commits back, or settle it on "
-            "purpose: %s"
+    # ONLY WHAT IS ESTABLISHED. Non-ancestry says the tip is off the branch; it
+    # does not say the work was lost (a relocation or a rewrite keeps it
+    # elsewhere) nor that nobody acted, so the sentence claims neither
+    # (2026-10-24: main's 0899f054bf3d moved a ledger to the private record on
+    # purpose, and this line called it lost and ignored for 35 days).
+    return ("PROTECTED REF WATCH: %s%s. No settlement is recorded. The engine reports this and "
+            "never moves a ref back (docs/verification/ref-write-forensics-2026-09-14.md). "
+            "Look: git -C %s reflog show %s --date=iso. If those commits belong on the branch, "
+            "restore them; if the move was intended, settle it with the reason: %s"
             % (_one_line(first), more, first["repo"], first["branch"], settle))
 
 
