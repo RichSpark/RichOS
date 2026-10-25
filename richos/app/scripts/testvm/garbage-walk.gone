@@ -1,0 +1,9 @@
+# The kinds the app must clean up (garbage-walk.py --gone-file), from the nightly-74 discovery walk.
+# Claude Code's scratch for the app's sessions
+^/private/tmp/claude-[0-9]+/[^/]+-coordination/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+# a lease's engine profile and its -standing copy
+/com\.richos\.app/engine-profiles/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(-standing)?$
+# Claude Code's MCP logs for the app's coordination folder
+/Library/Caches/claude-cli-nodejs/[^/]+-coordination/mcp-logs-[^/]+/[^/]+$
+# the voice speed measurement's probe utterance
+/richos-voice-calibration/probe\.wav$

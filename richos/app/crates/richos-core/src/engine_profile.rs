@@ -440,6 +440,12 @@ impl EngineProfile {
         }
         let plugin = data.join("engine-profiles").join(uuid::Uuid::new_v4().to_string());
         render_team(&engine, &data, &coordination, &plugin,false)?;
+        // Who made it, so the app's sweep can tell a crash's leftover from a live lease's
+        // folder (CEO §54 addendum 2, `app_cleanup::OWNER_FILE`). Without it the folder is
+        // still taken, later, once nothing names it and it is past the reaper's age floor.
+        if let Err(e) = crate::app_cleanup::write_owner(&plugin) {
+            eprintln!("[richos] {} carries no owner record: {e}", plugin.display());
+        }
         link_skills(&engine, &plugin)?;
         // Rich's and Stu's own files are the user's from the first run on: copied once, then
         // read into this session's plugin beside this lease's engine plugin.

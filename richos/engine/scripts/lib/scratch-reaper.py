@@ -117,6 +117,9 @@ KEEP = "KEEP"
 # never the same value.
 _FAILED = object()
 
+# Who made an app's per-lease folder: richos-core app_cleanup.rs OWNER_FILE, the same name.
+OWNER_FILE = ".richos-owner.json"
+
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
@@ -134,6 +137,14 @@ class Deadline(Exception):
 
 
 _DEADLINE = [None]
+
+
+# THE APP'S SWEEP FITS INSIDE THE APP'S OWN BOUND (richos-core app_cleanup.rs BOUND, 10 s),
+# so it always gets to delete something before the app stops waiting for it: a backlog
+# whose scan alone is longer than the bound would otherwise survive every sweep, each one
+# starting the same scan again (review rv-20261025T010610Z-2cc154e7-1d03 #2). What is left
+# goes at the next start, settle or quit; the 2 s margin covers the interpreter's start.
+APP_BUDGET_SECONDS = 8.0
 
 
 def check_deadline():
@@ -287,8 +298,11 @@ def lstart_epoch(text):
 class Liveness(object):
     """Who is running, and what that lets us say about who is not."""
 
-    def __init__(self, ws):
+    def __init__(self, ws, extra_session_dirs=()):
         self.ws = ws
+        # More session registries than this program's own: the RichOS app runs each added
+        # Claude account in its own configuration folder, whose sessions register there.
+        self.extra_session_dirs = list(extra_session_dirs)
         self.registered = {}     # pid -> sessionId, from the session files
         self.running = {}        # sessionId -> (pid, why)
         self.unattributed = []   # [(pid, lstart, epoch)]
@@ -298,8 +312,10 @@ class Liveness(object):
         self._read()
 
     def _read(self):
-        sd = sessions_dir()
-        for path in sorted(glob.glob(os.path.join(sd, "*.json"))):
+        files = []
+        for sd in [sessions_dir()] + self.extra_session_dirs:
+            files += sorted(glob.glob(os.path.join(sd, "*.json")))
+        for path in files:
             try:
                 with open(path, encoding="utf-8") as fh:
                     rec = json.load(fh)
@@ -1061,6 +1077,14 @@ class Entry(object):
 
 
 class Reaper(object):
+    # THE APP'S SWEEP IS BOUNDED (--app-budget): past `app_until` no new candidate is weighed,
+    # past `app_apply_until` no new deletion starts, and each one left is counted in
+    # `app_deferred` for the app's next sweep. None outside --app. Class defaults, so a Reaper
+    # a test makes without __init__ (object.__new__) has them too.
+    app_until = None
+    app_apply_until = None
+    app_deferred = 0
+
     def __init__(self, cfg, ws):
         self.cfg = cfg
         self.ws = ws
@@ -1110,6 +1134,14 @@ class Reaper(object):
         # plan: no test devices, no Docker. See scan_agent.
         self.scope = None
         self.unattributed = 0
+
+    def app_spent(self, until):
+        """True, and one more candidate counted as left for the next sweep, once the app's
+        sweep is past `until`. Always False outside --app."""
+        if until is None or time.time() <= until:
+            return False
+        self.app_deferred += 1
+        return True
 
     def named_scratch(self, path):
         """Scheduled collection never owns named scratch or a containing tree."""
@@ -3010,6 +3042,323 @@ class Reaper(object):
         self.entries.sort(key=Entry.key)
         return self.entries
 
+    def app_sessions(self, state):
+        """The Claude sessions THE APP hosted: `<engine-state>/evidence/<session>/binding.json`,
+        written by the app when it binds a session (richos-core session_tools::bind). This is
+        the app's own record, so a session named here is the app's and no other program's."""
+        found = set()
+        try:
+            names = os.listdir(os.path.join(state, "evidence"))
+        except OSError:
+            return found
+        for name in names:
+            if UUID_RE.match(name) and os.path.isfile(os.path.join(state, "evidence", name, "binding.json")):
+                found.add(name)
+        return found
+
+    def app_account_session_dirs(self, data):
+        """<folder>/sessions for every added account: each folder <data>/claude-accounts.json
+        names (richos-core claude_accounts.rs LIST_FILE; Account 1 has none and uses the default
+        registry), and every <data>/claude-accounts/<id>, where the app makes them."""
+        out = sorted(glob.glob(os.path.join(data, "claude-accounts", "*", "sessions")))
+        try:
+            with open(os.path.join(data, "claude-accounts.json"), encoding="utf-8") as fh:
+                listed = json.load(fh)
+        except (OSError, ValueError):
+            listed = {}
+        for account in (listed.get("accounts") or []) if isinstance(listed, dict) else []:
+            folder = account.get("folder") if isinstance(account, dict) else None
+            if isinstance(folder, str) and os.path.isabs(folder):
+                sessions = os.path.join(folder, "sessions")
+                if sessions not in out:
+                    out.append(sessions)
+        return out
+
+    def scan_app(self, scope):
+        """THE APP'S SWEEP: ONLY WHAT THE RICHOS APP ITSELF LEFT BEHIND (CEO §54 addendum 2).
+
+        The app calls this at start, when its jobs have settled and at quit
+        (richos-core app_cleanup.rs), with `scope` = {"data": <the app's data folder>}.
+        Like a land's sweep (scan_agent), it never runs the machine's other arms: a
+        Codex worktree, Docker, another program's temporary files and a terminal
+        session's scratch are not the app's, so the app never takes them.
+
+        What is the app's, measured in the test VM after ordinary use, a quit, a
+        SIGKILL and a restart (garbage-walk.py, nightly 74, 2026-10-25):
+
+          app-session   Claude Code's own scratch for a session the app hosted:
+                        <claude root>/<slug>/<session>, holding its background
+                        commands' output (tasks/) and its scratchpad. Claude Code
+                        never removes it. Decided by the same liveness proof as the
+                        scheduled sweep (a session file naming a live process, by
+                        exhaustion over every running claude): RUNNING is kept,
+                        INDETERMINATE is kept and counted, and an ENDED one is kept
+                        while any process holds a file open inside it.
+          app-profile   <data>/engine-profiles/<lease> and <lease>-standing, about
+                        110 KB each: the app removes them when a lease retires, which
+                        a quit's exit path (two of three left) and a crash (all) skip.
+                        See scan_app_profiles.
+          app-mcp-log   Claude Code's MCP server logs for the app's coordination
+                        folder, about eight files per launch. See scan_app_mcp_logs.
+
+        Measured too and NOT taken, each for its one reason:
+          ~/.claude/sessions/<pid>.json and .key a crash leaves: Claude Code removes
+            them itself at the next start (measured).
+          /private/tmp/cc-socks/<pid>.sock (0 B) and <claude root>/bash-edit-diff/<hash>
+            (about 1 KB): Claude Code names them by pid or by hash, and no record of
+            the app's names that pid once a session ends cleanly, so they cannot be
+            shown to be the app's rather than a terminal session's.
+          ~/.claude/session-env/<session> (empty): Claude Code's own folder for a
+            session the app may resume later (`--resume`).
+          <data>/engine-state/scopes/*.json (under 1 KB each): grants the app's boot
+            recovery reads (richos-core recovery.rs); the app owns their lifecycle.
+
+        NO AGE FLOOR, deliberately. The floor exists "only to cover the seconds between
+        a session starting and recording itself"; here the session is named by the
+        app's own record, and a claude process that has not yet recorded itself is
+        unattributed, which makes everything written after it started INDETERMINATE.
+        A floor would keep a session that ended in a crash until an hour after the
+        next start, and the next start is exactly when that garbage must go.
+
+        Everything else it looks at in those places is UNATTRIBUTED: left alone and
+        counted. The transcripts under the Claude configuration folder and the app's
+        own records are history the app reads back (`--resume`), never scratch.
+        """
+        self.scope = {"kind": "app", "name": "app", "data": scope.get("data") or "",
+                      "given": os.path.abspath(scope.get("data") or "")}
+        data = os.path.realpath(scope.get("data") or "")
+        if not data or not os.path.isdir(data):
+            raise Fatal("the app's data folder %r is not a directory, so nothing in it can be "
+                        "shown to be the app's" % (scope.get("data") or ""))
+        state = os.path.join(data, "engine-state")
+        hosted = self.app_sessions(state)
+        # EVERY ACCOUNT'S SESSION REGISTRY, not only this program's: an added Claude account
+        # runs in its own configuration folder (the app's claude-accounts.json names it), and a
+        # live session registered there would otherwise be an unattributed process, whose
+        # resumed session's older scratch the verdict would call ENDED (review
+        # rv-20261025T000521Z-2fe81615-e0f2).
+        self.live = Liveness(self.ws, self.app_account_session_dirs(data))
+        claude_roots = [r for r in self.cfg["claude_roots"] if os.path.isdir(r)]
+        walls = Walls(claude_roots)
+
+        def held(path, size, klass, owner):
+            """True if the path was decided here as kept or undecidable."""
+            h = self.holder(path)
+            if h is None:
+                self.add(path, klass, size, INDETERMINATE,
+                         "%s, but the open-file table could not be read, and a tree "
+                         "something is reading must never be deleted from under it" % owner)
+                return True
+            if h.strip():
+                self.add(path, klass, size, KEEP,
+                         "%s, but a live process (pid %s) holds a file open inside it"
+                         % (owner, h.strip()))
+                return True
+            return False
+
+        for root in claude_roots:
+            self.roots.append(root)
+            for slug in sorted(os.listdir(root)):
+                check_deadline()
+                slug_path = os.path.join(root, slug)
+                if os.path.islink(slug_path) or not os.path.isdir(slug_path):
+                    self.unattributed += 1
+                    continue
+                try:
+                    children = sorted(os.listdir(slug_path))
+                except OSError:
+                    continue
+                for name in children:
+                    path = os.path.join(slug_path, name)
+                    if name not in hosted or os.path.islink(path) or not os.path.isdir(path):
+                        self.unattributed += 1
+                        continue
+                    owner = "Claude scratch of session %s, which the app hosted" % name[:8]
+                    if name in self.live.running:
+                        self.add(path, "app-session", 0, KEEP,
+                                 self.live.running[name][1] + " (not measured: a live "
+                                 "session is never a candidate)")
+                        continue
+                    if self.app_spent(self.app_until):
+                        continue
+                    size, newest, has_git = measure(path)
+                    verdict, why = self.live.verdict(name, newest)
+                    if verdict != ENDED:
+                        self.add(path, "app-session", size,
+                                 KEEP if verdict == RUNNING else INDETERMINATE, why)
+                        continue
+                    # AND NO RUNNING PROCESS NAMES IT: the app starts claude with
+                    # --session-id <id> or --resume <id>, so a live session is on a command
+                    # line whichever registry it signed into. Unreadable is undecidable.
+                    argv = self.command_lines()
+                    if argv is None:
+                        self.add(path, "app-session", size, INDETERMINATE,
+                                 "the process table could not be read, so it cannot be shown "
+                                 "that no running process carries this session")
+                        continue
+                    naming = [line for line in argv if name in line]
+                    if naming:
+                        self.add(path, "app-session", size, KEEP,
+                                 "a running process names this session: %s" % naming[0][:160])
+                        continue
+                    if held(path, size, "app-session", owner):
+                        continue
+                    refused = walls.check(path, has_git)
+                    if refused:
+                        self.add(path, "app-session", size, INDETERMINATE, refused)
+                        continue
+                    self.add(path, "app-session", size, DELETE, "%s: %s" % (owner, why))
+        self.scan_app_profiles(data, scope.get("exiting") or 0, held)
+        self.scan_app_mcp_logs(data)
+        self.entries.sort(key=Entry.key)
+        return self.entries
+
+    def scan_app_mcp_logs(self, data):
+        """app-mcp-log: Claude Code's MCP server logs for the app's sessions, one file per
+        server per session start, under ~/Library/Caches/claude-cli-nodejs/<slug>/mcp-logs-*/,
+        where <slug> is Claude Code's name for the app's own coordination folder (every app
+        session's working folder). Claude Code never removes them.
+
+        The claude-orphan rule, unchanged: a file last written before the earliest running
+        claude process started was written by none of them and none can write it again. With
+        no claude running at all, none can."""
+        cache = os.path.join(os.path.expanduser("~"), "Library", "Caches", "claude-cli-nodejs")
+        # The folder as the app names it, and as it really is (a /var vs /private/var spelling).
+        for spelling in sorted({data, self.scope.get("given") or data}):
+            slug = re.sub(r"[^A-Za-z0-9]", "-", os.path.join(spelling, "coordination"))
+            self.scan_app_mcp_log_root(os.path.join(cache, slug))
+
+    def scan_app_mcp_log_root(self, root):
+        try:
+            folders = sorted(n for n in os.listdir(root) if n.startswith("mcp-logs-"))
+        except OSError:
+            return
+        self.roots.append(root)
+        walls = Walls([root])
+        cutoff = self.live.oldest_start() if self.live._processes else float("inf")
+        for folder in folders:
+            fpath = os.path.join(root, folder)
+            if os.path.islink(fpath) or not os.path.isdir(fpath):
+                self.unattributed += 1
+                continue
+            for name in sorted(os.listdir(fpath)):
+                check_deadline()
+                path = os.path.join(fpath, name)
+                if os.path.islink(path) or not os.path.isfile(path):
+                    self.unattributed += 1
+                    continue
+                if self.app_spent(self.app_until):
+                    continue
+                size, newest, has_git = measure(path)
+                if cutoff is None:
+                    self.add(path, "app-mcp-log", size, INDETERMINATE,
+                             "no process start time could be read, so it cannot be shown that no "
+                             "running session writes this log")
+                    continue
+                if newest >= cutoff:
+                    self.add(path, "app-mcp-log", size, KEEP,
+                             "written after the earliest running claude process started, so a "
+                             "running session may still write it")
+                    continue
+                refused = walls.check(path, has_git)
+                if refused:
+                    self.add(path, "app-mcp-log", size, INDETERMINATE, refused)
+                    continue
+                self.add(path, "app-mcp-log", size, DELETE,
+                         "an MCP log of the app's sessions that no running claude process existed "
+                         "to write, so none wrote it and none can write it again")
+
+    def command_lines(self):
+        """Every running process's command line, or None if the table cannot be read."""
+        if "argv" not in self.__dict__:
+            try:
+                r = subprocess.run(["ps", "-axww", "-o", "command="], capture_output=True,
+                                   text=True, timeout=20, env=_ps_env())
+                self.__dict__["argv"] = r.stdout.splitlines() if r.returncode == 0 else None
+            except (OSError, subprocess.TimeoutExpired):
+                self.__dict__["argv"] = None
+        return self.__dict__["argv"]
+
+    def scan_app_profiles(self, data, exiting, held):
+        """app-profile: <data>/engine-profiles/<lease> and <lease>-standing, the per-lease
+        plugin folders the app hands each `claude` (--plugin-dir). The app removes one when its
+        lease retires, which a quit's exit path and a crash both skip.
+
+        In use is POSITIVE: a running process whose command line names the folder keeps it.
+        Otherwise its owner record (OWNER_FILE, the app's pid and start, written when the
+        folder is made) decides: the app that made it still running keeps it (that app retires
+        it), unless it is the app now quitting (`exiting`); an ended one lets it go. A folder
+        with no owner record, from an app before this one, goes once it is older than the
+        declared age floor. The open-file check and the walls apply to every one."""
+        root = os.path.join(data, "engine-profiles")
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            return
+        self.roots.append(root)
+        walls = Walls([root])
+        argv = self.command_lines()
+        for name in names:
+            check_deadline()
+            path = os.path.join(root, name)
+            base = name[:-len("-standing")] if name.endswith("-standing") else name
+            if not UUID_RE.match(base) or os.path.islink(path) or not os.path.isdir(path):
+                self.unattributed += 1
+                continue
+            if self.app_spent(self.app_until):
+                continue
+            size, newest, has_git = measure(path)
+            if argv is None:
+                self.add(path, "app-profile", size, INDETERMINATE,
+                         "the process table could not be read, so it cannot be shown that no "
+                         "running claude starts from this folder")
+                continue
+            # A lease's two folders go together: its -standing copy may not be on the command
+            # line, so the base profile being named keeps it too.
+            base_path = os.path.join(root, base)
+            named = [line for line in argv if path in line or base_path in line]
+            if named:
+                self.add(path, "app-profile", size, KEEP,
+                         "a running process starts from it: %s" % named[0][:160])
+                continue
+            try:
+                with open(os.path.join(root, base, OWNER_FILE), encoding="utf-8") as fh:
+                    owner = json.load(fh)
+            except (OSError, ValueError):
+                owner = None
+            if isinstance(owner, dict):
+                pid = owner.get("pid")
+                state, text = self.ws.process_start(pid)
+                if state == "unknown":
+                    self.add(path, "app-profile", size, INDETERMINATE,
+                             "cannot tell whether the app that made it (pid %s) runs: %s" % (pid, text))
+                    continue
+                alive = state == "ok" and text == str(owner.get("procStart") or "")
+                if alive and int(pid or 0) != int(exiting or 0):
+                    self.add(path, "app-profile", size, KEEP,
+                             "the app that made it (pid %s) is running and retires it itself" % pid)
+                    continue
+                why = ("the app that made it (pid %s) is quitting and no running process "
+                       "starts from it" % pid) if alive else (
+                       "the app that made it (pid %s) has ended and no running process starts "
+                       "from it" % pid)
+            else:
+                age = self.now - newest
+                if age < self.floor:
+                    self.add(path, "app-profile", size, KEEP,
+                             "it carries no owner record (an earlier app) and was written %d min "
+                             "ago; the floor is %d min" % (age // 60, self.cfg["age_floor_minutes"]))
+                    continue
+                why = ("it carries no owner record (an earlier app), no running process starts "
+                       "from it, and it is past the %d min floor" % self.cfg["age_floor_minutes"])
+            if held(path, size, "app-profile", "a lease's engine profile"):
+                continue
+            refused = walls.check(path, has_git)
+            if refused:
+                self.add(path, "app-profile", size, INDETERMINATE, refused)
+                continue
+            self.add(path, "app-profile", size, DELETE, why)
+
     def report(self, verbose=False):
         """The plan, with NO timestamps and no elapsed anything in it, so that
         --dry-run and --apply can be compared byte for byte."""
@@ -3138,12 +3487,18 @@ class Reaper(object):
         # an exceptional condition and reads as one.
         if self.deferred_skipped:
             line += " not_measured=%d" % self.deferred_skipped
+        if self.app_deferred:
+            line += " deferred=%d" % self.app_deferred
         if self.unknown_not_scanned:
             line += " not_scanned=%d" % self.unknown_not_scanned
         if self.scope is not None:
-            line += " scope=agent:%s unattributed=%d" % (
-                self.scope.get("name") or "?", self.unattributed)
+            line += " %s unattributed=%d" % (self.scope_label(), self.unattributed)
         return line
+
+    def scope_label(self):
+        if (self.scope or {}).get("kind") == "app":
+            return "scope=app"
+        return "scope=agent:%s" % ((self.scope or {}).get("name") or "?")
 
     def prune_docker(self):
         """Docker's own caches, which no walk of the filesystem can reclaim.
@@ -3507,6 +3862,8 @@ class Reaper(object):
         if self.scope is None:
             lines.extend(self.collect_test_devices(stamp))
         for e in order:
+            if self.app_spent(self.app_apply_until):
+                continue
             if e.klass == "codex-worktree":
                 # CLOSED BY GIT, NOT rmtree, after every check is repeated now
                 # (lib/codex_worktrees.py close): a checkout that changed since the
@@ -3545,6 +3902,12 @@ class Reaper(object):
                 for f in bad:
                     failures.append(f)
                     lines.append("%s FAILED %s class=%s error=%s" % (stamp, e.path, e.klass, f))
+                continue
+            if (self.scope or {}).get("kind") == "app" and not os.path.lexists(e.path):
+                # Gone since the plan: the scheduled sweep, or Claude Code itself, took
+                # it first. Nothing was left to delete, so nothing failed.
+                lines.append("%s GONE %s class=%s why=already removed since the plan"
+                             % (stamp, e.path, e.klass))
                 continue
             try:
                 # A DIRECTORY IS THE ONLY THING rmtree CAN TAKE. THE TEST USED TO
@@ -3659,8 +4022,8 @@ class Reaper(object):
                      % (stamp, deleted, freed, human(freed),
                         self.counts()[1], len(failures),
                         "" if self.scope is None else
-                        " scope=agent:%s unattributed=%d"
-                        % (self.scope.get("name") or "?", self.unattributed)))
+                        " %s unattributed=%d" % (self.scope_label(), self.unattributed))
+                     + (" deferred=%d" % self.app_deferred if self.app_deferred else ""))
         write_log(log_path, lines)
         self._record_failures(failures, stamp)
         return deleted, freed, failures
@@ -4329,7 +4692,20 @@ def main(argv=None):
     ap.add_argument("--hold-named", action="store_true",
                     help="with --agent: another live agent has the same name, "
                          "so its named directories are kept")
+    # THE APP'S OWN SWEEP (scan_app). An engine without this argument refuses it
+    # (argparse, exit 2), so an app newer than its engine deletes nothing rather
+    # than running the whole machine's sweep.
+    ap.add_argument("--app", default=None,
+                    help="sweep ONLY what the RichOS app with this data folder left behind")
+    ap.add_argument("--app-exiting", type=int, default=0,
+                    help="with --app: this app process is quitting, so what it made and nothing "
+                         "running uses is garbage now")
+    ap.add_argument("--app-budget", type=float, default=APP_BUDGET_SECONDS,
+                    help="with --app: seconds this sweep may take; past half of them no new "
+                         "candidate is weighed, past all of them no new deletion starts, and the "
+                         "rest is left for the app's next sweep")
     args = ap.parse_args(argv)
+    started = time.time()
 
     if args.deadline:
         _DEADLINE[0] = time.time() + args.deadline
@@ -4346,6 +4722,10 @@ def main(argv=None):
         if args.process_only:
             reaper.scope = {"kind": "process", "name": "process"}
             reaper.scan_scratch_root(Walls([os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]))
+        elif args.app is not None:
+            reaper.app_until = started + args.app_budget / 2
+            reaper.app_apply_until = started + args.app_budget
+            reaper.scan_app({"data": args.app, "exiting": args.app_exiting})
         elif args.agent is not None:
             reaper.scan_agent({"name": args.agent, "session": args.session,
                                "workspaces": args.workspace,

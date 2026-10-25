@@ -3075,6 +3075,13 @@ fn main() {
             if let Some(dir) = boot_engine.as_deref() {
                 ensure_app_review_watch(dir, &data_dir, &claude_bin, true);
             }
+            // **THE APP CLEANS UP ITS OWN GARBAGE, NO MATTER WHAT** (CEO §54 addendum 2): what an
+            // earlier run left (a crash or a force-quit included) goes now, on its own thread;
+            // again whenever Stu's jobs have settled, and at quit (the Exit arm). The engine's
+            // reaper decides and deletes, scoped to this app (`richos_core::app_cleanup`).
+            let cleanup = richos_core::app_cleanup::hook(Arc::clone(&engine_cell), data_dir.clone());
+            work.set_cleanup(Arc::clone(&cleanup));
+            cleanup(richos_core::app_cleanup::Moment::Start);
 
             // Release grants from the old process. Stu owns job recovery through his inbox.
             work.set_screen(std::sync::Arc::new(screen::MacScreen));
@@ -3924,6 +3931,14 @@ fn main() {
                     let watchers = richos_core::review_watch::stop_all();
                     if !watchers.is_empty() {
                         eprintln!("[richos] quit: the second review's watcher(s) {watchers:?} ended.");
+                    }
+                    // **WHAT THIS RUN LEFT BEHIND GOES WITH IT** (CEO §54 addendum 2), after every
+                    // lease above has ended, so their sessions are provably ended. Waited for, at
+                    // most `app_cleanup::BOUND`: destructors and threads do not run past this arm.
+                    // Anything a lease still held is the next start's.
+                    let engine = state.engine_dir.lock().map(|d| d.clone()).unwrap_or_default();
+                    if let Some(sweeper) = richos_core::app_cleanup::Sweeper::for_engine(&engine, &state.data_dir) {
+                        sweeper.run(richos_core::app_cleanup::Moment::Quit).ok();
                     }
                     if let Err(e) = state.launch.lock().unwrap().note_clean_exit() {
                         eprintln!("[richos] launch record: could not mark a clean exit: {e}");

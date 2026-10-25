@@ -118,6 +118,8 @@ pub struct WorkHost {
     screen: Mutex<Arc<dyn crate::screen::ScreenSource>>,
     quota: Mutex<Option<Arc<crate::quota::Service>>>,
     output: Mutex<Option<crate::output::OutputStore>>,
+    /// The app's own cleanup (CEO §54 addendum 2), run when nothing is left to do.
+    cleanup: Mutex<Option<crate::app_cleanup::Hook>>,
     retry_clock: Mutex<Arc<dyn crate::upstream::RetryClock>>,
 }
 impl WorkHost {
@@ -135,6 +137,7 @@ impl WorkHost {
             screen: Mutex::new(Arc::new(crate::screen::UnknownScreen)),
             quota: Mutex::new(None),
             output: Mutex::new(None),
+            cleanup: Mutex::new(None),
             retry_clock: Mutex::new(Arc::new(crate::upstream::SystemRetryClock)),
         })
     }
@@ -373,6 +376,10 @@ impl WorkHost {
     }
     pub fn set_output_store(&self, store: crate::output::OutputStore) {
         *self.output.lock().unwrap() = Some(store);
+    }
+    /// The sweep run when Stu's jobs have settled: after a turn of his, once none is open.
+    pub fn set_cleanup(&self, cleanup: crate::app_cleanup::Hook) {
+        *self.cleanup.lock().unwrap() = Some(cleanup);
     }
     pub fn set_quota(&self, quota: Arc<crate::quota::Service>) {
         *self.quota.lock().unwrap() = Some(quota);
@@ -1207,6 +1214,11 @@ impl WorkHost {
             } else {
                 drop(inner);
                 if self.open_assignments().is_ok_and(|open| open.is_empty()) {
+                    // His jobs have settled: what the app left behind goes now (§54 addendum 2),
+                    // on its own thread, so the next input never waits for it.
+                    if let Some(cleanup) = self.cleanup.lock().unwrap().clone() {
+                        cleanup(crate::app_cleanup::Moment::Settled);
+                    }
                     self.notifier.nothing_left_to_do();
                 }
             }
@@ -3109,6 +3121,31 @@ mod tests {
         assert!(crate::session_tools::pending(&scope, "stu")
             .unwrap()
             .is_none());
+        h.host.shutdown();
+    }
+
+    /// **When Stu's jobs have settled, what the app left behind goes** (CEO §54 addendum 2): after
+    /// his turn, with nothing open, the app's sweep runs through the real engine and removes an
+    /// ended session's scratch, and never a live session's.
+    #[test]
+    fn a_turn_that_leaves_nothing_open_sweeps_the_apps_leftovers_and_never_a_live_one() {
+        let h = harness(0);
+        let mut s = crate::app_cleanup::sandbox::Sandbox::new(Some(&h.root));
+        let (_, left) = s.hosted();
+        let (live, running) = s.hosted();
+        s.live(&live);
+        let sweeper = Arc::new(s.sweeper());
+        h.host.set_cleanup(Arc::new(move |moment| sweeper.spawn(moment)));
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.state.join("rich-status.json");
+        crate::session_tools::bind(&path, &scope, "native-rich", "rich", None).unwrap();
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Inspect the current evidence"})).unwrap();
+        assert!(left.exists(), "nothing is swept before his turn");
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)), "hang guard: the turn completes");
+        until("the ended session's scratch is swept once nothing is open", || !left.exists());
+        assert!(running.exists(), "a live session's scratch is never touched");
+        assert!(s.log().contains(&format!("DELETED {}", left.display())), "{}", s.log());
         h.host.shutdown();
     }
 

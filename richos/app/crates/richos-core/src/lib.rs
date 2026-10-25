@@ -240,6 +240,7 @@ pub mod hook_alarms;
 /// `review_watch` — the engine's review-watch run as the HOST's own child (automatic second
 /// review, slice 4): mid-job reviews of the app's workers.
 pub mod review_watch;
+pub mod app_cleanup;
 /// `codex_reviews` — the Settings switch "Let Codex review your team's work" (round 20.2, ruling
 /// §114): the user's choice, saved where the app's review-watch reads it, and what the Mac reports
 /// about Codex (installed, signed in), from Codex's own `login status`.
