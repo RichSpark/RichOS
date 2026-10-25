@@ -127,9 +127,13 @@ class ScreenWalk(adopt.Walk):
         return self.payload + '/' + name
 
     def records(self, name):
-        # One record per line: the app writes each as one compact JSON value with no newline.
-        text = guest(self.vm, 'for f in %s/engine-state/assignments/*/*.json; do [ -f "$f" ] && cat "$f" && echo; done; true'
-                     % shlex.quote(self.data))
+        # One record per line: the app writes each as one compact JSON value with no newline. The
+        # register is assignments/<partition>/<id>.json (assignment.rs folder) and does not exist
+        # until Rich writes the first job down. Listed with find, never a shell glob: the guest's
+        # login shell is zsh, whose unmatched glob is an error, so the first read after Send
+        # failed the 2026-10-25 walk with "no matches found" before Rich had written anything.
+        text = guest(self.vm, 'd=%s/engine-state/assignments; [ -d "$d" ] && find "$d" -mindepth 2 -maxdepth 2 -type f '
+                     "-name '*.json' ! -name '.*' -exec cat {} ';' -exec echo ';' ; true" % shlex.quote(self.data))
         (self.out / name).write_text(text + '\n')
         return [json.loads(row) for row in text.splitlines() if row.startswith('{')]
 

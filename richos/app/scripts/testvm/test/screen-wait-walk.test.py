@@ -120,5 +120,42 @@ class Steps(unittest.TestCase):
         self.assertFalse(evidence['window_still_waiting'])
 
 
+class Records(unittest.TestCase):
+    """records() as the guest runs it: ssh hands the command to the guest user's login shell,
+    zsh, where an unmatched glob is an error. The 2026-10-25 walk's first read after Send, before
+    Rich had written anything, failed exactly so ("no matches found")."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.saved = walk.guest
+        walk.guest = self.zsh
+        self.addCleanup(setattr, walk, 'guest', self.saved)
+        w = Walk(self.tmp.name, {})
+        w.data = str(Path(self.tmp.name) / 'Application Support' / 'com.richos.app')
+        self.walk = w
+
+    def zsh(self, vm, command, timeout=30):
+        r = walk.subprocess.run(['/bin/zsh', '-f', '-c', command], capture_output=True, text=True, timeout=timeout)
+        if r.returncode:
+            raise RuntimeError(r.stderr or r.stdout or 'guest command failed')
+        return r.stdout.strip()
+
+    @unittest.skipUnless(Path('/bin/zsh').exists(), 'the guest shell is zsh')
+    def test_no_register_yet_is_no_records(self):
+        self.assertEqual(self.walk.records('records.txt'), [])
+        (Path(self.walk.data) / 'engine-state' / 'assignments' / 'p').mkdir(parents=True)
+        self.assertEqual(self.walk.records('records.txt'), [])
+
+    @unittest.skipUnless(Path('/bin/zsh').exists(), 'the guest shell is zsh')
+    def test_every_record_is_one_row_and_an_incoming_file_is_not(self):
+        part = Path(self.walk.data) / 'engine-state' / 'assignments' / 'p'
+        part.mkdir(parents=True)
+        (part / 'a.json').write_text('{"id": "a", "registered_at_ms": 1}')
+        (part / 'b.json').write_text('{"id": "b", "registered_at_ms": 2}')
+        (part / '.assignment-x.incoming').write_text('{"id": "half"')
+        rows = self.walk.records('records.txt')
+        self.assertEqual(sorted(r['id'] for r in rows), ['a', 'b'])
+
+
 if __name__ == '__main__':
     unittest.main()
