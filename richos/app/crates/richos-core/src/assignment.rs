@@ -812,6 +812,26 @@ pub fn record_stop_observation(state:&Path,entity:&str,thread:&str,id:&str,detai
     update(state,entity,thread,id,|record|{record.detail=detail;})
 }
 
+/// **The app's own screen wait, the CEO's ruling §56** (`work_host.rs`, `held_for_screen`).
+/// `waiting` moves a job that declared [`Assignment::needs_screen`] from `Registered` to
+/// `WaitingForScreen`; `!waiting` moves it back once the screen is usable, with the sentence
+/// that says it is carrying on. Nothing else moves: a job that has started, finished or been
+/// stopped keeps its record exactly as it is.
+pub fn record_screen_wait(state: &Path, entity: &str, thread: &str, id: &str, waiting: bool) -> Result<Assignment, AssignmentError> {
+    update(state, entity, thread, id, |record| {
+        let (from, to, detail) = if waiting {
+            (AssignmentState::Registered, AssignmentState::WaitingForScreen, crate::screen::says::detail())
+        } else {
+            (AssignmentState::WaitingForScreen, AssignmentState::Registered, crate::screen::says::carrying_on())
+        };
+        if record.needs_screen && record.user_stop_requested_at_ms.is_none() && record.state == from {
+            record.state = to;
+            record.detail = detail.into();
+            record.updated_at_ms = now_ms();
+        }
+    })
+}
+
 #[cfg(test)]
 pub fn advance(
     state: &Path,
