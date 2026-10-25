@@ -1068,7 +1068,23 @@ def nameless_dispatch(message, prose):
 # a branch actually holding unlanded work with nothing live on it, so the
 # composite is far rarer -- and on the day it fires, it fires on the sentence
 # that was about to be sent.
-COMPLETE_QUOTED = re.compile(r"`[^`]*`|“[^”]*”|\"[^\"]{0,300}\"")
+COMPLETE_QUOTED = re.compile(r"`[^`]*`|“[^”]*”|‘[^’\n]{0,300}’|\"[^\"]{0,300}\"")
+# A markdown blockquote is somebody else's words, whole lines of them, so it is
+# dropped before the sentences are split rather than masked inside one.
+COMPLETE_BLOCKQUOTE = re.compile(r"(?m)^[ \t]*>.*$")
+# A CONDITION OR A FORECAST IS NOT A REPORT (2026-10-25). "Nightly 75 builds
+# once all the work you named has landed." was read as positive, exactly like
+# "All the work has landed.", and the operator was told YOU CALLED IT DONE every
+# turn it was repeated. The header above already named future conditionals as
+# the residual false class; this is that class, read the way polarity is: from
+# the CLAUSE the completion word sits in, and only from a cue BEFORE it. So a
+# claim with no such cue in its own clause reads exactly as it did before, and
+# "everything landed once the merge finished" (cue after the word) still counts.
+COMPLETE_CONDITION = re.compile(
+    r"\b(?:if|once|when|whenever|until|unless|after|before|as\s+soon\s+as"
+    r"|provided|will|shall|would|going\s+to|about\s+to)\b|[’']ll\b", re.I)
+# "once again", "at once": the adverb, not the conjunction.
+COMPLETE_NOT_CONDITION = re.compile(r"\bonce\s+(?:again|more)\b|\bat\s+once\b", re.I)
 COMPLETE_SCOPE = re.compile(
     r"\b(?:"
     r"everything(?!\s+else)"
@@ -1091,6 +1107,21 @@ COMPLETE_WINDOW = 120
 MAX_COMPLETE_CLAIMS = 4
 
 
+def conditional_completion(sentence, pos):
+    """True when the completion word at <pos> sits in a clause that a condition
+    or a forecast governs ("once all the work has landed", "will be merged").
+    The clause is cut exactly as claim_polarity cuts it."""
+    start, end = 0, len(sentence)
+    for m in CLAUSE_SPLIT.finditer(sentence):
+        if m.end() <= pos:
+            start = m.end()
+        elif m.start() >= pos:
+            end = m.start()
+            break
+    before = COMPLETE_NOT_CONDITION.sub(" ", sentence[start:min(pos, end)])
+    return bool(COMPLETE_CONDITION.search(before))
+
+
 def completeness_claims(text):
     """[(sentence, polarity)] -- SHA-free assertions that the work is all in.
 
@@ -1098,8 +1129,13 @@ def completeness_claims(text):
     still lines up with the original sentence and `claim_polarity` reads the
     same clause a person would. That one change is worth 13 points of precision,
     because the orchestrator quotes this exact failure constantly.
+
+    Polarity is claim_polarity's, plus 'conditional' for a positive reading
+    that a condition or forecast governs (conditional_completion). Only
+    'positive' is ever reported.
     """
     out = []
+    text = COMPLETE_BLOCKQUOTE.sub("", text)
     for s in SENTENCE_SPLIT.split(text):
         s = s.strip()
         if not s or len(s) > 600:
@@ -1110,7 +1146,10 @@ def completeness_claims(text):
             continue
         for mt in COMPLETE_STATE.finditer(probe):
             if abs(mt.start() - ms.start()) <= COMPLETE_WINDOW:
-                out.append((s[:400], claim_polarity(probe, mt.start())))
+                pol = claim_polarity(probe, mt.start())
+                if pol == "positive" and conditional_completion(probe, mt.start()):
+                    pol = "conditional"
+                out.append((s[:400], pol))
                 break
         if len(out) >= MAX_COMPLETE_CLAIMS:
             break

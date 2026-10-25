@@ -38,6 +38,9 @@
 #   C05       the SAME sentence with nothing stranded is silent
 #   C06       a NEGATED completeness claim is silent
 #   C07       a QUOTED completeness claim is silent (the 13-point precision fix)
+#   C09/C10   a CONDITIONAL sentence is extracted, read as a condition, silent
+#   C11       <-> the plain claim over the same stranded branch still fires
+#   C12/C13   a FORECAST and a BLOCKQUOTE are silent
 #   C01       it reports and NEVER blocks — exit 0, always
 #   L01..L04  the lint script's three exit codes never collapse into each other
 #
@@ -588,6 +591,57 @@ if printf '%s' "$C7_OUT" | grep -q 'DID NOT RUN\|WENT OUT UNCHECKED'; then
     ok "C08 with the sweep missing, the claim is reported as UNCHECKED rather than passed"
 else
     bad "C08 an unevaluated check says so" "output: ${C7_OUT:-<empty>}"
+fi
+
+# C09..C13 — A CONDITION, A FORECAST OR A QUOTATION IS NOT A REPORT (2026-10-25).
+# "Nightly 75 builds once all the work you named has landed." was read as a
+# POSITIVE claim, exactly like "All the work has landed.", and the operator was
+# told YOU CALLED IT DONE every turn the sentence was repeated. The sentence
+# says what happens AFTER the work lands; it claims nothing has. C09 is the
+# positive control C06a taught this suite to carry: the sentence IS extracted,
+# so C10's silence is about the reading and not about a sentence nothing saw.
+# C11 is the regression control: the plain claim, same repository, still fires.
+CONDITIONAL="Nightly 75 builds once all the work you named has landed."
+COND_POL="$(python3 - "$SCRIPT_DIR/guard-unresolved-claims.py" "$CONDITIONAL" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("g", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+c = m.completeness_claims(sys.argv[2])
+print(c[0][1] if c else "no-claim-at-all")
+PY
+)"
+if [ "$COND_POL" = "conditional" ]; then
+    ok "C09 POSITIVE CONTROL: the conditional sentence IS extracted as a claim, and read as a condition"
+else
+    bad "C09 the conditional sentence is read as a condition" "polarity: '$COND_POL' (positive means it is reported as a claim that the work is in)"
+fi
+drive "$CLAIMS" "$CONDITIONAL"
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C10 a CONDITIONAL completeness sentence raises nothing, with stranded work present"
+else
+    bad "C10 a sentence about what happens once the work lands is not a claim that it has" "stdout: $RUN_OUT"
+fi
+drive "$CLAIMS" "All the work has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' \
+   && printf '%s' "$RUN_OUT" | grep -q 'stranded'; then
+    ok "C11 REGRESSION CONTROL: the plain claim over the same stranded branch is still reported, branch named"
+else
+    bad "C11 a real completeness claim is still caught" "stdout: ${RUN_OUT:-<empty>}"
+fi
+drive "$CLAIMS" "All the work will have landed by the time the nightly starts."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C12 a FORECAST of completeness raises nothing"
+else
+    bad "C12 a sentence in the future tense is not a claim" "stdout: $RUN_OUT"
+fi
+drive "$CLAIMS" "His message, as he wrote it:
+> All the work has landed.
+I am checking that now."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C13 a BLOCKQUOTED completeness sentence raises nothing — quoting is not claiming"
+else
+    bad "C13 a markdown quotation is not the reply's own claim" "stdout: $RUN_OUT"
 fi
 
 # ===========================================================================

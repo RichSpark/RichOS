@@ -147,4 +147,12 @@ mutant lint-unread-exits-zero "L05" "$L" \
     ': # mutated' \
     "'nothing is unlanded' and 'nothing was read' would share exit 0 again -- the collapse this script's own exit-code table forbids, and the one it was shipping."
 
+# --- 13. A CONDITION IS NOT A REPORT ---------------------------------------
+# "Nightly 75 builds once all the work you named has landed." told the operator
+# YOU CALLED IT DONE every turn it was repeated (2026-10-25).
+mutant claim-reads-conditions-as-claims "C09" "$C" \
+    '                if pol == "positive" and conditional_completion(probe, mt.start()):' \
+    '                if False:' \
+    "a sentence about what happens once the work lands would be reported as a claim that it has, every turn it is repeated."
+
 mutation_end
