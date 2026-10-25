@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# notice-unstarted-rows.sh — NON-BLOCKING Stop hook. A TURN DOES NOT END
-#                            QUIETLY WHILE AN UNBLOCKED ROW HAS NOTHING
-#                            RUNNING FOR IT.
+# notice-unstarted-rows.sh — NON-BLOCKING Stop hook. AN OPEN ROW WITH NO
+#                            RUNNING WORK RECORDED IS NAMED, SO IT IS NOT
+#                            SILENTLY FORGOTTEN.
 #
 # The argument, the two failure directions it is designed against, and what it
 # cannot see are all in scripts/lib/unstarted-rows.sh. Read that first. This
@@ -13,8 +13,9 @@
 # ===========================================================================
 # `Stop` CAN block — that is measured, and guard-idle-land.sh uses it. This one
 # deliberately does not, and the reason is that its subject is a judgment the
-# hook does not have. "There is an unblocked row and nothing is running for it"
-# is a FACT; "and therefore you should not have stopped" is not. A turn that
+# hook does not have. "No branch, row directory or row claim names this open
+# row" is a FACT; "so nothing is running", "so start it now" and "so you should
+# not have stopped" are not: missing branch metadata is missing evidence. A turn that
 # ends to ask the CEO a question, or ends because he interrupted, is a turn
 # ending correctly with the same set of rows outstanding. Refusing those would
 # make the mechanism something to be switched off, and a guard people disable
@@ -29,12 +30,11 @@
 # ===========================================================================
 # systemMessage via scripts/lib/stop-hook-notice.sh, because that is the only
 # channel measured to reach the operator (see that file's table). The notice
-# speaks when the SET changes, which is exactly the moment a row is created
-# without being started, and the moment one is finally picked up, and AGAIN
+# speaks when the SET changes, which is exactly the moment a row is written
+# down with no work recorded for it, and the moment one is picked up, and AGAIN
 # EVERY 30 MINUTES while the set persists (2026-10-22, richos-hq docs/plans/
-# 2026-10-22-no-silent-holds.md): announced once is how these rows went quiet
-# while the CEO asked "WHEN WILL [THIS] STOP ONCE AND FOR ALL???". Only a
-# blocker naming the CEO quiets a row (unstarted-rows.py names_ceo).
+# 2026-10-22-no-silent-holds.md). Only a blocker naming the CEO quiets a row
+# (unstarted-rows.py names_ceo).
 #
 # UNEVALUATED-PAYLOAD-EXEMPT: payload-independent — the predicate is the row table in the record. Byte-identical
 # output on all four payload shapes.
@@ -203,13 +203,15 @@ case "$UR_VERDICT" in
         exit 0 ;;
 esac
 
-# NAMED, NOT COUNTED. A count is a number to get used to; a name is a thing to
-# go and start. Six is where one line stops being readable, and the rest are
+# NAMED, NOT COUNTED. A count is a number to get used to; a name is a row to
+# look up. Six is where one line stops being readable, and the rest are
 # reachable in one command rather than lost.
 NAMES="$(printf '%s' "$UR_UNSTARTED" | tr ' ' '\n' | head -6 | tr '\n' ' ' | sed 's/ $//' | sed 's/ /, /g')"
 MORE=""
 [ "${UR_N_UNSTARTED:-0}" -gt 6 ] && MORE=" (+$((UR_N_UNSTARTED - 6)) more)"
 
+# ONLY WHAT IT KNOWS. The sweep sees branch names, row directories and claim
+# files; it cannot see whether work is running or whether a row may start now.
 stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \
-    "UNSTARTED WORK, NOTHING RUNNING FOR IT — ${UR_N_UNSTARTED} row(s): ${NAMES}${MORE}. Nothing but Rich or earlier work holds them and no live worktree claims them, so writing them down is all that has happened. Start one, or, if it is his decision, name the CEO as its blocker: a \`Blocked by\` cell in ${UR_QUEUE_LABEL}, or \`**Blocked:** the CEO — <the CEO-TODOs item>\` in a ${UR_RECORD_LABEL} row. Detail: scripts/unstarted-rows-lint.sh" 1800
+    "OPEN ROWS WITH NO RUNNING WORK RECORDED — ${UR_N_UNSTARTED} row(s): ${NAMES}${MORE}. Detail: scripts/unstarted-rows-lint.sh" 1800
 exit 0

@@ -5834,7 +5834,7 @@
     },
     "scripts/hooks/notice-unstarted-rows.sh#fixture-records": {
       "source": "scripts/hooks/notice-unstarted-rows.sh",
-      "sha256": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",
+      "sha256": "5bbae7d3b873978071f9b63eff373d513de64cf2691dfab9591140b7e3f9f726",
       "evidence": "Normal Stop dispatch resolves adoption and notice state, then invokes the fixed unstarted-row helper. It never sources orchestration config; fixture callers construct record declarations, queue and worktree claims.",
       "keys": [],
       "edges": [
@@ -5851,7 +5851,7 @@
     },
     "scripts/hooks/unstarted-rows.test.sh": {
       "source": "scripts/hooks/unstarted-rows.test.sh",
-      "sha256": "7bc68980604712790aee34b6e1b79e5ba83efed41ec65b19615bc94f5379b721",
+      "sha256": "1933276ede73d4af29054315576f5987d9a7fcbc8a1674eb02f02692f40e8ed9",
       "evidence": "Builds a private adopted repository, literal row/CEO-TODO declarations, queue, record and claimed worktrees. Only the copied notice, lint and predicate execute. Its nested mutation harness copies the same fixed helpers and rebuilds these fixtures. Inner named witnesses now run only their required stateful fixture group with all group assertions; unmutated controls must pass first. No additional inputs or commands.",
       "keys": [],
       "edges": [
@@ -5870,7 +5870,7 @@
     },
     "scripts/hooks/unstarted-rows.mutation.sh": {
       "source": "scripts/hooks/unstarted-rows.mutation.sh",
-      "sha256": "862b208d942dce9d8e965720ab8519d7421e06c37ca7d11c53add5f26185260a",
+      "sha256": "806f33db4a1355fe8f44bbbb012f29f060586342a83075b6fae70a114218b4ef",
       "evidence": "Finite literal patches run the fixed copied unstarted-row test with RICHOS_MUTATION_INNER=1. No shipped config is copied; nested test rebuilds private configuration and records. None of the patches adds a new input or executable. Inner named witnesses now run only their required stateful fixture group with all group assertions; unmutated controls must pass first. No additional inputs or commands.",
       "keys": [],
       "edges": [
@@ -7443,7 +7443,7 @@
     },
     "scripts/hooks/notice-unstarted-rows.sh#unadopted-stop": {
       "source": "scripts/hooks/notice-unstarted-rows.sh",
-      "sha256": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",
+      "sha256": "5bbae7d3b873978071f9b63eff373d513de64cf2691dfab9591140b7e3f9f726",
       "evidence": "Visibility suite invokes this hook with no CLI arguments and a new unadopted directory, first as explicit bad root then as cwd/payload. Root-failure/not-adopted paths terminate before entity config, transcript predicates or live-state checks. Bootstrap, module initialization and any pre-root session-recovery helper remain bound. The negative control only replaces stop_notice_abnormal output.",
       "keys": [],
       "edges": [
@@ -17192,7 +17192,7 @@
         "scripts/hooks/notice-unasked-deferral.sh": "4468742f723b5f5b6fb6dc87cb47fdf168bf9f3faf4f4a6d246b34c2d161af98",
         "scripts/hooks/guard-unasked-deferral.py": "864b1c4366b8c20fbfb1a8ccba015bd884046de4260ae8d3143f7c7abba6a8c7",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/hooks/notice-unstarted-rows.sh": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",
+        "scripts/hooks/notice-unstarted-rows.sh": "5bbae7d3b873978071f9b63eff373d513de64cf2691dfab9591140b7e3f9f726",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
         "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
@@ -17500,7 +17500,7 @@
         "scripts/hooks/notice-protected-ref-moves.sh": "15ea383b87181c6924a00f8b5f656f72f2319e9680947674f68972fbcd6c2c43",
         "scripts/hooks/notice-unasked-deferral.sh": "4468742f723b5f5b6fb6dc87cb47fdf168bf9f3faf4f4a6d246b34c2d161af98",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/hooks/notice-unstarted-rows.sh": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",
+        "scripts/hooks/notice-unstarted-rows.sh": "5bbae7d3b873978071f9b63eff373d513de64cf2691dfab9591140b7e3f9f726",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
         "scripts/hooks/release-land-leases.sh": "e8830da188b023fee309d4e712a7b099a339b63b56a720080d349ea9d709a19e",
         "scripts/hooks/turn-manifest.sh": "f5e92311f9896874e5294533673dd08160f3e4cfba4a262e161ae96e377331ae",
@@ -17865,7 +17865,7 @@
         "scripts/hooks/notice-unasked-deferral.sh": "4468742f723b5f5b6fb6dc87cb47fdf168bf9f3faf4f4a6d246b34c2d161af98",
         "scripts/hooks/guard-unasked-deferral.py": "864b1c4366b8c20fbfb1a8ccba015bd884046de4260ae8d3143f7c7abba6a8c7",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/hooks/notice-unstarted-rows.sh": "16de53f48bafcf8373dae690aeec20d73e7726927161bf92adb2dbadf9479a63",
+        "scripts/hooks/notice-unstarted-rows.sh": "5bbae7d3b873978071f9b63eff373d513de64cf2691dfab9591140b7e3f9f726",
         "scripts/lib/unstarted-rows.sh": "9e464447df24f370a6803610c9e0a7fafb336eda673dc2ff9527847cb79d3809",
         "scripts/lib/unstarted-rows.py": "80476a1bcc89496a0180bd5c5d773cda94989296bf9568997d6928e3d09de576",
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",

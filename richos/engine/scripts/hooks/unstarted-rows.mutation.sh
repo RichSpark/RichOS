@@ -179,9 +179,14 @@ mutant unnamed-rows "1b " "$H" \
     "a count is a number to get used to; a name is a thing to go and start."
 
 mutant vague-notice "1c " "$H" \
-    'UNSTARTED WORK, NOTHING RUNNING FOR IT' \
+    'OPEN ROWS WITH NO RUNNING WORK RECORDED' \
     'FYI' \
-    "the notice has to say what is wrong, not merely that something is."
+    "the notice has to say what it knows, not merely that something is."
+
+mutant overclaims "1e " "$H" \
+    'OPEN ROWS WITH NO RUNNING WORK RECORDED —' \
+    'OPEN ROWS WITH NO RUNNING WORK RECORDED, NOTHING RUNNING FOR THEM — Start one.' \
+    "missing branch metadata proves neither that nothing runs nor that a row may start now."
 
 mutant blocking "1d " "$H" \
     'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \

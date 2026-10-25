@@ -8,8 +8,8 @@
 # is the one thing a test must not share with the live session.
 #
 # THE FOUR TRANSCRIPTS THE BRIEF ASKS FOR, and where each is asserted:
-#   1. an unblocked row with nothing running for it  -> NOTICE, NAMING IT
-#        cases 1a-1d
+#   1. an unblocked row with no running work recorded -> NOTICE, NAMING IT
+#        cases 1a-1e
 #   2. the same row with a live worktree for it      -> SILENT
 #        cases 2a-2e
 #   3. a row declared as waiting on the CEO          -> SILENT, and the silence
@@ -193,24 +193,31 @@ names() { printf '%s' "$HOUT" | grep -q "$1"; }
 echo "=== unstarted rows: the notice, the silences, and the loud failures ==="
 
 # ===========================================================================
-# 1. AN UNBLOCKED ROW WITH NOTHING RUNNING FOR IT -> NOTICE, NAMING IT
+# 1. AN UNBLOCKED ROW WITH NO RUNNING WORK RECORDED -> NOTICE, NAMING IT
 # ===========================================================================
 if selected_group 1; then
 run_hook
-if spoke; then ok "1a  an unblocked row with nothing running ends the turn with a notice"
-else bad "1a  an unblocked row with nothing running ends the turn with a notice" "the hook said nothing: $HOUT"; fi
+if spoke; then ok "1a  an unblocked row with no running work recorded ends the turn with a notice"
+else bad "1a  an unblocked row with no running work recorded ends the turn with a notice" "the hook said nothing: $HOUT"; fi
 say "1a" "$HOUT"
 
 if names '1, 11, 12, 3.1'; then
     ok "1b  the notice NAMES the rows rather than counting them"
 else bad "1b  the notice NAMES the rows rather than counting them" "$HOUT"; fi
 
-if names 'NOTHING RUNNING FOR IT'; then
-    ok "1c  the notice says what is wrong: nothing is running for them"
-else bad "1c  the notice says what is wrong: nothing is running for them" "$HOUT"; fi
+if names 'NO RUNNING WORK RECORDED' && names 'scripts/unstarted-rows-lint.sh'; then
+    ok "1c  the notice says what it knows: no running work recorded, and the lint for detail"
+else bad "1c  the notice says what it knows: no running work recorded, and the lint for detail" "$HOUT"; fi
 
 if [ "$HRC" -eq 0 ]; then ok "1d  it NOTICES, it does not block — exit 0"
 else bad "1d  it NOTICES, it does not block — exit 0" "rc=$HRC"; fi
+
+# Missing branch metadata is missing evidence (2026-10-24): it proves neither
+# that nothing is running nor that the row may start now, so the notice claims
+# neither.
+if ! printf '%s' "$HOUT" | grep -qi 'nothing running' && ! printf '%s' "$HOUT" | grep -qi 'start one'; then
+    ok "1e  the notice claims neither \"nothing running\" nor \"Start one\""
+else bad "1e  the notice claims neither \"nothing running\" nor \"Start one\"" "$HOUT"; fi
 
 fi
 
@@ -532,7 +539,7 @@ STUB
 chmod +x "$SANDBOX/fakegit/git"
 forget
 HOUT="$(stop_payload | PATH="$SANDBOX/fakegit:$PATH" bash "$HOOK" 2>&1)"; HRC=$?
-if spoke && names "could not be read" && ! printf '%s' "$HOUT" | grep -qi 'nothing running'; then
+if spoke && names "could not be read" && ! printf '%s' "$HOUT" | grep -qi 'no running work recorded'; then
     ok "4q  a worktree list that fails -> LOUD (\"could not be read\"), never rows called unstarted over an empty inventory"
 else bad "4q  a failed worktree list is an unknown inventory, not an empty one" "$HOUT"; fi
 forget
