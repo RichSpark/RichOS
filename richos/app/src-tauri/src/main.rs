@@ -153,6 +153,12 @@ mod opener;
 /// Finder through `opener.rs`, and the watch that shows a file as soon as it is attached.
 mod rich_files_host;
 mod emission_trace;
+/// **Settings → Terminal setup** (round 41 piece 1): what the login shell read found, and reading
+/// it again (`richos-core`'s `login_environment.rs`).
+mod terminal_setup_host;
+/// **Your name in Git** (round 41 piece 2): the card asked once in the conversation, the Settings
+/// row, and the watch that shows the card when the team's first save asks (`git_name.rs`).
+mod git_name_host;
 
 /// **DICTATION IN ANY APP** (`richos-hq/docs/plans/2026-10-08-dictation-anywhere.md`, rev 2).
 /// `dictation/` is the tool's macOS edges (the same executable started with `--richos-dictation`);
@@ -501,8 +507,12 @@ impl LeaseFactory for EngineLeaseFactory {
     /// **The user's own settings files as the next lease would read them** (build plan item 0):
     /// the central folder `EngineProfile::prepare` reads, digested the same way. The spine and
     /// the work host compare it with the lease in the chair at each boundary.
+    /// With the login environment the next lease would get (`login_environment::peek`, never a
+    /// wait), so a Terminal setup read again that found something different renews the lease.
     fn user_settings_digest(&self) -> Option<String> {
-        richos_core::company::install_central_root().map(|folder| richos_core::user_settings::digest(&folder))
+        let login = richos_core::login_environment::peek()?;
+        richos_core::company::install_central_root()
+            .map(|folder| richos_core::user_settings::with_login(richos_core::user_settings::digest(&folder), &login))
     }
 
     /// **The second lease** — the background-work spec §2.1's work lease, in this same
@@ -553,6 +563,7 @@ impl LeaseFactory for EngineLeaseFactory {
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.install_quota_gate(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
+        profile.install_git_name_wait(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
 
         // Fill-first: the work lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
@@ -621,6 +632,7 @@ impl EngineLeaseFactory {
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         if let Some(binding) = binding { profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?; }
         profile.install_quota_gate(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
+        profile.install_git_name_wait(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
 
         // Fill-first: the conversation lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
@@ -1046,7 +1058,7 @@ fn get_timeline(app: AppHandle, state: State<AppState>, thread_id: String) -> Re
     // **HIS FRONT DESK IS MADE READY HERE, AFTER THE SNAPSHOT AND NEVER BEFORE IT** — the CEO's
     // §55. See [`ready_the_front_desk`] for why this command is the hook.
     ready_the_front_desk(&app, &thread_id);
-    payload
+    git_name_host::with_card(&state, &thread_id, payload)
 }
 
 /// Prepare a conversation on a background thread, once per opened thread. Startup
@@ -2030,6 +2042,10 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("--claude-quota-gate") {
         std::process::exit(richos_core::quota::gate::run_cli());
+    }
+    // The team's first save in a connected folder waits for the user's Git name (round 41).
+    if std::env::args().nth(1).as_deref() == Some("--git-name-wait") {
+        std::process::exit(richos_core::git_name::wait_cli());
     }
     if std::env::args().nth(1).as_deref() == Some("--richos-connect-guard") {
         std::process::exit(phone::connect::supervisor::guard_main());
@@ -3424,6 +3440,7 @@ fn main() {
             app.manage(phone_runtime);
             question_host::start(app.handle().clone());
             rich_files_host::start(app.handle().clone());
+            git_name_host::start(app.handle().clone());
             peer_messages::start(app.handle().clone())?;
             // Readiness starts before the window's setup/navigation reads, with the
             // selected thread's immutable company scope. Reader snapshots stay available.
@@ -3797,6 +3814,13 @@ fn main() {
             // --- a file Rich puts in front of the user (§138, item 12) — appended ---
             rich_files_host::rich_file_open,
             rich_files_host::rich_file_reveal,
+            // --- Terminal setup and your name in Git (round 41) — appended ---
+            terminal_setup_host::terminal_setup,
+            terminal_setup_host::terminal_setup_read_again,
+            git_name_host::git_name_status,
+            git_name_host::git_name_save,
+            git_name_host::git_name_use_richos,
+            git_name_host::git_name_open_file,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -8595,7 +8619,8 @@ fn get_machinery(state: State<AppState>, thread_id: String) -> Result<serde_json
         spine.pump_between_turn();
     }
     // Techy Mode reloads from here, so the files Rich attached ride on this snapshot too.
-    rich_files_host::machinery_with_files(&*state.reader.snapshot(), &rich_files_host::root(&state), &thread_id)
+    let payload = rich_files_host::machinery_with_files(&*state.reader.snapshot(), &rich_files_host::root(&state), &thread_id);
+    git_name_host::with_card_in_machinery(&state, &thread_id, payload)
 }
 
 /// §2.4's raw pane, one record at a time.
