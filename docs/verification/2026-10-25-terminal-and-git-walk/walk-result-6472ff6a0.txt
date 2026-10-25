@@ -1,0 +1,609 @@
+[
+  {
+    "i": 0,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--title",
+        "Not now"
+      ],
+      "contains": "Not now",
+      "seconds": 180
+    },
+    "at": "03:56:53Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=20 mode=find matches=1\n            AXButton title='Not now' desc='' value='' enabled=yes pos=742 329 size=90 35\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1614}\n{\"ax_timing\": true, \"total_seconds\": 1.2323, \"preflight_seconds\": 0.6866, \"transport_seconds\": 0.5058, \"render_seconds\": 0.0402, \"guest_seconds\": 0.1614, \"transport_overhead_seconds\": 0.3444}"
+  },
+  {
+    "i": 1,
+    "step": {
+      "op": "wait",
+      "seconds": 3
+    },
+    "at": "03:57:03Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 2,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Not now"
+      ],
+      "allow_fail": true
+    },
+    "at": "03:57:06Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=20 mode=click matches=1\npressed AXButton title='Not now' desc='' pos=742 329 size=90 35 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.4099}\n{\"ax_timing\": true, \"total_seconds\": 1.6557, \"preflight_seconds\": 0.7763, \"transport_seconds\": 0.8127, \"render_seconds\": 0.067, \"guest_seconds\": 0.4099, \"transport_overhead_seconds\": 0.4028}"
+  },
+  {
+    "i": 3,
+    "step": {
+      "op": "wait",
+      "seconds": 3
+    },
+    "at": "03:57:07Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 4,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--title",
+        "Add this company"
+      ],
+      "contains": "Add this company",
+      "seconds": 60
+    },
+    "at": "03:57:10Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=84 mode=find matches=1\n            AXButton title='Add this company' desc='' value='' enabled=yes pos=647 624 size=161 35\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.2148}\n{\"ax_timing\": true, \"total_seconds\": 1.4494, \"preflight_seconds\": 0.7421, \"transport_seconds\": 0.6044, \"render_seconds\": 0.1034, \"guest_seconds\": 0.2148, \"transport_overhead_seconds\":"
+  },
+  {
+    "i": 5,
+    "step": {
+      "op": "ax",
+      "args": [
+        "type",
+        "Acme",
+        "--role",
+        "AXTextField",
+        "--title",
+        "What's the company called?"
+      ]
+    },
+    "at": "03:57:12Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=84 mode=type matches=1\ntype verified=True\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.8366}\n{\"ax_timing\": true, \"total_seconds\": 1.902, \"preflight_seconds\": 0.6978, \"transport_seconds\": 1.1526, \"render_seconds\": 0.0521, \"guest_seconds\": 0.8366, \"transport_overhead_seconds\": 0.316}"
+  },
+  {
+    "i": 6,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Add this company"
+      ]
+    },
+    "at": "03:57:14Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=84 mode=click matches=1\npressed AXButton title='Add this company' desc='' pos=647 624 size=161 35 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1795}\n{\"ax_timing\": true, \"total_seconds\": 1.1358, \"preflight_seconds\": 0.6505, \"transport_seconds\": 0.4376, \"render_seconds\": 0.0485, \"guest_seconds\": 0.1795, \"transport_overhead_seconds\": 0.2581}"
+  },
+  {
+    "i": 7,
+    "step": {
+      "op": "wait",
+      "seconds": 4
+    },
+    "at": "03:57:15Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 8,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Not now"
+      ],
+      "allow_fail": true
+    },
+    "at": "03:57:19Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=81 mode=click matches=1\npressed AXButton title='Not now' desc='' pos=812 352 size=90 34 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.2905}\n{\"ax_timing\": true, \"total_seconds\": 1.6193, \"preflight_seconds\": 0.7664, \"transport_seconds\": 0.8072, \"render_seconds\": 0.048, \"guest_seconds\": 0.2905, \"transport_overhead_seconds\": 0.5167}"
+  },
+  {
+    "i": 9,
+    "step": {
+      "op": "wait",
+      "seconds": 2
+    },
+    "at": "03:57:21Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 10,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Settings",
+        "--role",
+        "AXPopUpButton"
+      ]
+    },
+    "at": "03:57:23Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=75 mode=click matches=1\npressed AXPopUpButton title='Settings' desc='Settings' pos=1485 111 size=40 40 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.5099}\n{\"ax_timing\": true, \"total_seconds\": 2.2471, \"preflight_seconds\": 1.0948, \"transport_seconds\": 1.0428, \"render_seconds\": 0.1129, \"guest_seconds\": 0.5099, \"transport_overhead_seconds\": 0.5329}"
+  },
+  {
+    "i": 11,
+    "step": {
+      "op": "wait",
+      "seconds": 5
+    },
+    "at": "03:57:25Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 12,
+    "step": {
+      "op": "tree",
+      "name": "settings-tree"
+    },
+    "at": "03:57:30Z",
+    "exit": 0,
+    "output": "195 lines"
+  },
+  {
+    "i": 13,
+    "step": {
+      "op": "shot",
+      "name": "0-settings-open",
+      "ocr": true
+    },
+    "at": "03:57:33Z",
+    "exit": 0,
+    "output": "RichOS\n\nSearch\n\n+ New chat or company\nCorrections\n\nFeedback\n\nOldest open question\n\n\u00a9 Acme\n\nOnboarding\n\nSet your name\n\n\u00a9 Acme / Onboarding\n\nSettings\nHOW IT LOOKS\nTheme\n\nText size\n\nOxford comma: OFF\n\nOxford comma AKA serial comma is\nwhat some style guides place before\n\"and\" and \"or\". RichOS recommends to\nkeep that nuisance off.\n\nTechnical view\n\n38\u20ac@T asks where to show it.\n\nKeep the stored output\n\nO For two weeks\n\nO For three months\nForever\n\nNothing is ever removed. Using 0 bytes\nnow.\n\nYour name\n\nShown at the foot of the rail, with your\ninitials.\n\nRichos\n\nWORKING WITH RICH\nRich's model\nWhen he talks with you default\n\nOpus Fable\n\nWhen he directs your team default\nOpus - high effort Fable\nOpus is the default for both. Fable is\n\nmore capable than Opus and uses up\nyour Claude limits faster.\n\nHow much should Rich interrupt you?\nQuiet\n\nO Balanced\n\nO Only when it's urgent\n\nRichScribe\n\nOff\n\nUse Rich from your phone\nTerminal setup\n\nSplash screen\n\nShow it when RichOS starts\n\nYOUR COMPANY AND TEAM\n\nCompany {Acme -\n\nHome screen\n\nToken spend $0.00 this month\n\nClaude accounts \u2014_\n\nConnected folders (repositories)\n\nYour name in Git\nNot set yet\n\nMemory folder\n\nUpdates\nRichOS 1.2.3 is up to date.\nChecked just now.\n\nCheck for updates\n\nSee what's new \u201d\n\nBust a bug!\n\nRequest a feature\n\n{| Company button:\n[testvm] 03:57:39Z captured 1680x1050, 91.8% non-black -> /Volumes/E1TB/tmp/claude/echo-opus-r41build1/walk-out/0-settings-open.png"
+  },
+  {
+    "i": 14,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--title",
+        "when RichOS started",
+        "--contains"
+      ],
+      "contains": "when RichOS started",
+      "seconds": 60
+    },
+    "at": "03:57:39Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=191 mode=find matches=1\n              AXButton title='Terminal setup Read at 3:56 AM, when RichOS started' desc='' value='' enabled=yes pos=810 749 size=325 71\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 1.3639}\n{\"ax_timing\": true, \"total_seconds\": 4.8796, \"preflight_seconds\": 1.218, \"transport_seconds\": 3.6053, \"render_seconds\": 0.0569, \"guest_seconds\": "
+  },
+  {
+    "i": 15,
+    "step": {
+      "op": "shot",
+      "name": "1-settings-terminal-row",
+      "ocr": true
+    },
+    "at": "03:57:44Z",
+    "exit": 0,
+    "output": "RichOS\n\nSearch\n\n+ New chat or company\nCorrections\n\nFeedback\n\nOldest open question\n\n\u00a9 Acme\n\nOnboarding\n\nSet your name\n\n\u00a9 Acme / Onboarding\n\nSettings\nHOW IT LOOKS\nTheme\n\nText size\n\nOxford comma: OFF\n\nOxford comma AKA serial comma is\nwhat some style guides place before\n\"and\" and \"or\". RichOS recommends to\nkeep that nuisance off.\n\nTechnical view\n\n38\u20ac@T asks where to show it.\n\nKeep the stored output\n\nO For two weeks\n\nO For three months\nForever\n\nNothing is ever removed. Using 0 bytes\nnow.\n\nYour name\n\nShown at the foot of the rail, with your\ninitials.\n\nRichos\n\nWORKING WITH RICH\nRich's model\nWhen he talks with you default\n\nOpus Fable\n\nWhen he directs your team default\nOpus - high effort Fable\nOpus is the default for both. Fable is\n\nmore capable than Opus and uses up\nyour Claude limits faster.\n\nHow much should Rich interrupt you?\nQuiet\n\nO Balanced\n\nO Only when it's urgent\n\nRichScribe\n\nOff\n\nUse Rich from your phone\nTerminal setup\n\nSplash screen\n\nShow it when RichOS starts\n\nYOUR COMPANY AND TEAM\n\nCompany {Acme -\n\nHome screen\n\nToken spend $0.00 this month\n\nClaude accounts \u2014_\n\nConnected folders (repositories)\n\nYour name in Git\nNot set yet\n\nMemory folder\n\nUpdates\nRichOS 1.2.3 is up to date.\nChecked just now.\n\nCheck for updates\n\nSee what's new \u201d\n\nBust a bug!\n\nRequest a feature\n\n{| Company button:\n[testvm] 03:57:49Z captured 1680x1050, 91.8% non-black -> /Volumes/E1TB/tmp/claude/echo-opus-r41build1/walk-out/1-settings-terminal-row.png"
+  },
+  {
+    "i": 16,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Terminal setup",
+        "--role",
+        "AXButton",
+        "--contains"
+      ]
+    },
+    "at": "03:57:49Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=191 mode=click matches=1\npressed AXButton title='Terminal setup Read at 3:56 AM, when RichOS started' desc='' pos=810 749 size=325 71 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.2786}\n{\"ax_timing\": true, \"total_seconds\": 1.3255, \"preflight_seconds\": 0.6585, \"transport_seconds\": 0.6034, \"render_seconds\": 0.0641, \"guest_seconds\": 0.2786, \"transport_overhead_seconds\": 0.3248}"
+  },
+  {
+    "i": 17,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--title",
+        "Read it again"
+      ],
+      "contains": "Read it again",
+      "seconds": 30
+    },
+    "at": "03:57:50Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=94 mode=find matches=1\n              AXButton title='Read it again' desc='' value='' enabled=yes pos=1073 326 size=138 39\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1738}\n{\"ax_timing\": true, \"total_seconds\": 1.2011, \"preflight_seconds\": 0.6827, \"transport_seconds\": 0.4791, \"render_seconds\": 0.0398, \"guest_seconds\": 0.1738, \"transport_overhead_seconds\":"
+  },
+  {
+    "i": 18,
+    "step": {
+      "op": "wait",
+      "seconds": 1
+    },
+    "at": "03:57:51Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 19,
+    "step": {
+      "op": "shot",
+      "name": "2-sheet-start-read",
+      "ocr": true
+    },
+    "at": "03:57:52Z",
+    "exit": 0,
+    "output": "RichOS\n\nSearch\n\n+ New chat or company\nCorrections\n\nFeedback\n\nOldest open question\n\n\u00a9 Acme\n\n| Onboarding\n\nSet your name\n\nRichos\n\nAcme / Onboarding\n\nTerminal setup\n\nRich's team works with the same tools and settings as your Terminal: what a new Term\n\nwindow gets from your shell setup (~/.zprofile, ~/.zshrc). After you install a tool or\n\nyour shell s ad it again here.\n\n@ Read at 3:56 AM, when RichOS started\nFrom zsh (/bin/zsh), the way a new Terminal\n\nFolders it looks in for tools 11 folders\nIn this order, the first one that has a tool wins.\n1 /usr/local/bin\n/System/Cryptexes/App/usr/bin\nJusr/bin\n/bin\n5 /usr/sbin\n6 /sbin\n\nn there.\nRead it in\nw starts. tagal\nSettings it has 25 settings\n\nNames only. Their values go to your team as\nthey are and are never shown or kept.\n\nCLAUDE_CONFIG_DIR || COMMAND_MODE\nDISABLE_AUTOUPDATER || FPATH\n\nHOME || HOMEBREW_CELLAR\nHOMEBREW_PREFIX\nHOMEBREW_REPOSITORY || INFOPATH\n\nYour team uses this from its next job. A job already running keeps the setup it started with Done\n\n@ ( Talk to Rich...\n\nSun Oct 25 3:57AM\n[testvm] 03:57:55Z captured 1680x1050, 91.7% non-black -> /Volumes/E1TB/tmp/claude/echo-opus-r41build1/walk-out/2-sheet-start-read.png"
+  },
+  {
+    "i": 20,
+    "step": {
+      "op": "guest",
+      "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); printf '\\nexport FIXTURE_R41_TOOL_HOME=/fixture/r41\\nexport PATH=/fixture/r41/bin:$PATH\\n' >> \"$h/.zprofile\"; tail -2 \"$h/.zprofile\""
+    },
+    "at": "03:57:55Z",
+    "exit": 0,
+    "output": "export FIXTURE_R41_TOOL_HOME=/fixture/r41\nexport PATH=/fixture/r41/bin:$PATH"
+  },
+  {
+    "i": 21,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Read it again"
+      ]
+    },
+    "at": "03:57:55Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=94 mode=click matches=1\npressed AXButton title='Read it again' desc='' pos=1073 326 size=138 39 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.2142}\n{\"ax_timing\": true, \"total_seconds\": 1.2483, \"preflight_seconds\": 0.6374, \"transport_seconds\": 0.5423, \"render_seconds\": 0.0688, \"guest_seconds\": 0.2142, \"transport_overhead_seconds\": 0.3281}"
+  },
+  {
+    "i": 22,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "since",
+        "--contains"
+      ],
+      "contains": "since",
+      "seconds": 30
+    },
+    "at": "03:57:57Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=102 mode=find matches=2\n              AXStaticText title='' desc='' value='since 3:56 AM' enabled=yes pos=569 415 size=109 21\n                AXStaticText title='' desc='' value='2 changes since 3:56 AM, listed below.' enabled=yes pos=512 346 size=292 21\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 1.9491}\n{\"ax_timing\": true, \"total_seconds\": 2.9775, \"pref"
+  },
+  {
+    "i": 23,
+    "step": {
+      "op": "wait",
+      "seconds": 2
+    },
+    "at": "03:58:00Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 24,
+    "step": {
+      "op": "shot",
+      "name": "3-sheet-what-changed",
+      "ocr": true
+    },
+    "at": "03:58:02Z",
+    "exit": 0,
+    "output": "RichOS\nSearch\n\n+ New chat or company 36N)\nCorrections\nFeedback\n\nOldest open question\n\n\u00a9 Acme\n\n| Onboarding\n\nRichos\n\n\u00a9 Acme / Onboarding\n\nSun Oct 25 3:58AM\n\n@ Output (s) i\n\nSet your name\n\nTerminal setup\n\nRich's team works with the same tools and settings as your Terminal: what a new Terminal\nwindow gets from your shell setup (~/. zprofile, ~/.zshrc). After you install a tool or\nchange your shell setup, read it again here.\n\nRead again at 3:57 AM \u2014\n; aa Read it again\n2 changes since 3:56 AM, listed below.\n\n2 changes since 3:56 AM\n\n+ New tool folder /fixture/r41/bin\n\n+ New setting FIXTURE_R41_TOOL_HOME\n\nFolders it looks in for tools 12 folders Settings it has 26 settings\n\nIn this order, the first one that has a tool wins. Names only. Their values go to your team as\nthey are and are never shown or kept.\n/fixture/r41/bin (New\n\n7usr/local/bin { CLAUDE_CONFIG_DIR |{ COMMAND_MODE |\n\n/System/Cryptexes/App/usr/bin | DISABLE_AUTOUPDATER |\n\n/usr/bin FIXTURE_R41_TOOL_HOME - new\n/bin\n\n{ FPATH | HOME | { HOMEBREW_CELLAR |\nJusr/sbin ee es.\u2014t\n\n| HOMEBREW_PREFIX |\n\nYour team uses this from its next job. A job already running keeps the setup it started with. ( Done )\n\nn there.\n\nTalk to Rich... b (e Output )\n[testvm] 03:58:05Z captured 1680x1050, 91.7% non-black -> /Volumes/E1TB/tmp/claude/echo-opus-r41build1/walk-out/3-sheet-what-changed.png"
+  },
+  {
+    "i": 25,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "FIXTURE_R41_TOOL_HOME",
+        "--contains"
+      ],
+      "contains": "FIXTURE_R41_TOOL_HOME",
+      "seconds": 10
+    },
+    "at": "03:58:05Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=102 mode=find matches=2\n              AXStaticText title='' desc='' value='FIXTURE_R41_TOOL_HOME' enabled=yes pos=684 485 size=203 25\n              AXStaticText title='' desc='' value='FIXTURE_R41_TOOL_HOME' enabled=yes pos=897 703 size=203 25\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1788}\n{\"ax_timing\": true, \"total_seconds\": 1.1722, \"preflight_secon"
+  },
+  {
+    "i": 26,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Read it again"
+      ]
+    },
+    "at": "03:58:06Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=102 mode=click matches=1\npressed AXButton title='Read it again' desc='' pos=1073 325 size=138 39 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.151}\n{\"ax_timing\": true, \"total_seconds\": 1.1389, \"preflight_seconds\": 0.6808, \"transport_seconds\": 0.4158, \"render_seconds\": 0.0427, \"guest_seconds\": 0.151, \"transport_overhead_seconds\": 0.2648}"
+  },
+  {
+    "i": 27,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "Nothing changed.",
+        "--contains"
+      ],
+      "contains": "Nothing changed.",
+      "seconds": 30
+    },
+    "at": "03:58:07Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=93 mode=find matches=1\n                AXStaticText title='' desc='' value='Read again at 3:58 AM. Nothing changed.' enabled=yes pos=512 321 size=337 21\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1683}\n{\"ax_timing\": true, \"total_seconds\": 1.0869, \"preflight_seconds\": 0.6233, \"transport_seconds\": 0.434, \"render_seconds\": 0.0301, \"guest_seconds\": 0.1683,"
+  },
+  {
+    "i": 28,
+    "step": {
+      "op": "shot",
+      "name": "4-sheet-nothing-changed",
+      "ocr": true
+    },
+    "at": "03:58:09Z",
+    "exit": 0,
+    "output": "RichOS\n\nSearch\n\n+ New chat or company\nCorrections\n\nFeedback\n\nOldest open question\n\n\u00a9 Acme\n\n| Onboarding\n\nSet your name\n\nRichos\n\nAcme / Onboarding\n\nTerminal setup\n\nina\nwindow gets from your shell setup (~/.zprofile, ~/.zshrc). After you install a tool or\n\nyour shell s ad it again here.\n\nRich's team works with the same tools and settings as your Terminal: what a new Term\n\nn there.\n\nRead again at 3:58 AM. Nothing changed.\n\u00a9 itis the same as at 3:57 AM. If you just changed something, open a new Read it again\nTerminal window and check it is there: that is what RichOS reads.\n\nFolders it looks in for tools 12 folders Settings ithas 26 settings\nIn this order, the first one that has a tool wins. Names only. Their values\n1 /fixture/r41/bin they are and are never shown or kept.\n/usr/local/bin CLAUDE_CONFIG_DIR } { COMMAND_MODE\n/System/Cryptexes/App/usr/bin DISABLE_AUTOUPDATER\nJusr/bin\n/bin\n6 /usr/sbin\n\nFIXTURE_R41_TOOL_HOME || FPATH\nHOME || HOMEBREW_CELLAR\nHOMEBREW_PREFIX\n\nteam uses this from its next job. A job already running keeps the setup it started with. Done\n\n@ ( Talk to Rich...\n\nSun Oct 25 3:58AM\n[testvm] 03:58:11Z captured 1680x1050, 91.7% non-black -> /Volumes/E1TB/tmp/claude/echo-opus-r41build1/walk-out/4-sheet-nothing-changed.png"
+  },
+  {
+    "i": 29,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Done"
+      ]
+    },
+    "at": "03:58:11Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=93 mode=click matches=1\npressed AXButton title='Done' desc='' pos=1148 699 size=79 39 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.5398}\n{\"ax_timing\": true, \"total_seconds\": 2.3489, \"preflight_seconds\": 1.0659, \"transport_seconds\": 1.227, \"render_seconds\": 0.0564, \"guest_seconds\": 0.5398, \"transport_overhead_seconds\": 0.6872}"
+  },
+  {
+    "i": 30,
+    "step": {
+      "op": "wait",
+      "seconds": 1
+    },
+    "at": "03:58:14Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 31,
+    "step": {
+      "op": "push",
+      "src": "docs/verification/2026-10-25-terminal-and-git-walk/git-name-save.sh",
+      "dest": "/Users/admin/git-name-save.sh"
+    },
+    "at": "03:58:15Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 32,
+    "step": {
+      "op": "guest",
+      "command": "/bin/bash /Users/admin/git-name-save.sh"
+    },
+    "at": "03:58:15Z",
+    "exit": 0,
+    "output": "the lease's Git layer: /Users/admin/testvm/walk-76abe7eedd19/home/Library/Application Support/com.richos.app/engine-profiles/391ea9ef-c11e-492d-bd85-c5a620d4d799/gitconfig\n[hook \"richos-git-name\"]\n\tevent = prepare-commit-msg\n\tcommand = \"'/Users/admin/testvm/walk-76abe7eedd19/RichOS.app/Contents/MacOS/richos-tauri' --git-name-wait\"\ngit version 2.55.0\nconversation: thr_2cde7ea407ca46ec8f9d8e8094c9c587 (company acme)\nwould sign: RichOS <richos@localhost>\nthe first save started: pid 2047"
+  },
+  {
+    "i": 33,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "What name should go on your team",
+        "--contains"
+      ],
+      "contains": "What name should go",
+      "seconds": 30
+    },
+    "at": "03:58:16Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=95 mode=find matches=1\n                    AXStaticText title='' desc='' value='What name should go on your team\u2019s saved work?' enabled=yes pos=643 307 size=438 22\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.5984}\n{\"ax_timing\": true, \"total_seconds\": 2.9834, \"preflight_seconds\": 1.0017, \"transport_seconds\": 1.9196, \"render_seconds\": 0.0626, \"guest_secon"
+  },
+  {
+    "i": 34,
+    "step": {
+      "op": "wait",
+      "seconds": 1
+    },
+    "at": "03:58:19Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 35,
+    "step": {
+      "op": "shot",
+      "name": "5-card-asked",
+      "ocr": true
+    },
+    "at": "03:58:20Z",
+    "exit": 0,
+    "output": "Richos\n\n. \u00a9 Acme / Onboarding Output ) Ss\nRichOS 7,\n\nSearch Settings\n\nLeft with you. Ask me any time and we'll go through it.\n+ New chat or company\n\nCorrections\nFeedback Asked once\n\nOldest open question What name should go on your team\u2019s saved work?\n\u00a9 Acme Your team is about to save its first change in northwind-site. Git, which keeps\n\nthe history of that folder, puts a name and an email on every change. This Mac\n\nOnboarding doesn't have them set yet.\n\nName ( Managed via Tart }\n\nEmail ( you@yourcompany.com }\n\nIf you use GitHub, use your GitHub email so these changes\nshow as yours.\n\nYour team keeps working. Only this save waits for your answer.\n\nUse \"RichC tead\n\n7 ~\\\nSet your name Talk to Rich.. || > |(@ output )\nN y\n[testvm] 03:58:27Z captured 1680x1050, 91.9% non-black -> /Volumes/E1TB/tmp/claude/echo-opus-r41build1/walk-out/5-card-asked.png"
+  },
+  {
+    "i": 36,
+    "step": {
+      "op": "guest",
+      "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); kill -0 $(cat \"$h/git-name-commit.pid\") && echo 'the first save is waiting'; ls \"$h/Library/Application Support/com.richos.app/engine-state/git-name\""
+    },
+    "at": "03:58:27Z",
+    "exit": 0,
+    "output": "the first save is waiting\nasked.json"
+  },
+  {
+    "i": 37,
+    "step": {
+      "op": "ax",
+      "args": [
+        "type",
+        "fixture.person@example.com",
+        "--title",
+        "Email"
+      ]
+    },
+    "at": "03:58:28Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=95 mode=type matches=1\ntype verified=True\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 1.3782}\n{\"ax_timing\": true, \"total_seconds\": 2.9051, \"preflight_seconds\": 0.7806, \"transport_seconds\": 2.0603, \"render_seconds\": 0.0645, \"guest_seconds\": 1.3782, \"transport_overhead_seconds\": 0.6821}"
+  },
+  {
+    "i": 38,
+    "step": {
+      "op": "wait",
+      "seconds": 1
+    },
+    "at": "03:58:31Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 39,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Save"
+      ]
+    },
+    "at": "03:58:32Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=95 mode=click matches=1\npressed AXButton title='Save' desc='' pos=1173 619 size=75 36 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 1.4458}\n{\"ax_timing\": true, \"total_seconds\": 4.6684, \"preflight_seconds\": 1.5188, \"transport_seconds\": 3.0967, \"render_seconds\": 0.0532, \"guest_seconds\": 1.4458, \"transport_overhead_seconds\": 1.6509}"
+  },
+  {
+    "i": 40,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "ask again",
+        "--contains"
+      ],
+      "contains": "ask again",
+      "seconds": 30
+    },
+    "at": "03:58:37Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=82 mode=find matches=1\n                    AXStaticText title='' desc='' value='RichOS won\u2019t ask again. ' enabled=yes pos=675 378 size=185 20\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.3782}\n{\"ax_timing\": true, \"total_seconds\": 1.7987, \"preflight_seconds\": 0.7258, \"transport_seconds\": 1.0328, \"render_seconds\": 0.0407, \"guest_seconds\": 0.3782, \"transpor"
+  },
+  {
+    "i": 41,
+    "step": {
+      "op": "shot",
+      "name": "6-card-saved",
+      "ocr": true
+    },
+    "at": "03:58:39Z",
+    "exit": 0,
+    "output": "RichOS\n\nSearch\n\n+ New chat or company\nCorrections\n\nFeedback\n\nOldest open question\n\u00a9 Acme\n\n| Onboarding\n\nSet your name\n\nRichos\n\n\u00a9 Acme / Onboarding\n\nLeft with you. Ask me any time and we'll go through it.\n\nAsked once\n\nWhat name should go on your team\u2019s saved work?\n\n@ Your team\u2019s changes now carry Managed via Tart,\nfixture.person@example.com\n\nRichOS won't ask again. Change it in Settings\n\nTalk to Rich...\n\n\\| b \\(\u00ae output )\n\n( & output )\n[testvm] 03:58:43Z captured 1680x1050, 91.9% non-black -> /Volumes/E1TB/tmp/claude/echo-opus-r41build1/walk-out/6-card-saved.png"
+  },
+  {
+    "i": 42,
+    "step": {
+      "op": "guest",
+      "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); d=\"$h/Library/Application Support/com.richos.app\"; g=$(cat \"$h/runtime-git.path\"); l=$(ls -t \"$d\"/engine-profiles/*/gitconfig | head -1); n=0; while [ $n -lt 10 ] && kill -0 $(cat \"$h/git-name-commit.pid\") 2>/dev/null; do sleep 1; n=$((n+1)); done; cat \"$h/git-name-commit.out\"; cat \"$d/engine-state/git-name/choice.json\"; echo; HOME=\"$h\" GIT_CONFIG_SYSTEM=\"$l\" \"$g\" -C \"$h/northwind-site\" log -1 --format='saved as: %an <%ae>, committed by %cn <%ce>'"
+    },
+    "at": "03:58:43Z",
+    "exit": 0,
+    "output": "[main (root-commit) 3f643ba] Update prices\nexit 0\n{\"choice\":\"own\",\"name\":\"Managed via Tart\",\"email\":\"fixture.person@example.com\"}\nsaved as: Managed via Tart <fixture.person@example.com>, committed by Managed via Tart <fixture.person@example.com>"
+  },
+  {
+    "i": 43,
+    "step": {
+      "op": "guest",
+      "command": "/bin/bash /Users/admin/git-name-save.sh; h=$(ls -d /Users/admin/testvm/walk-*/home); d=\"$h/Library/Application Support/com.richos.app\"; g=$(cat \"$h/runtime-git.path\"); l=$(ls -t \"$d\"/engine-profiles/*/gitconfig | head -1); n=0; while [ $n -lt 5 ] && kill -0 $(cat \"$h/git-name-commit.pid\") 2>/dev/null; do sleep 1; n=$((n+1)); done; if kill -0 $(cat \"$h/git-name-commit.pid\") 2>/dev/null; then echo 'ASKED AGAIN: the second save is waiting'; else echo 'the second save went ahead, not asked again'; cat \"$h/git-name-commit.out\"; HOME=\"$h\" GIT_CONFIG_SYSTEM=\"$l\" \"$g\" -C \"$h/northwind-site\" log -1 --format='saved as: %an <%ae>'; fi"
+    },
+    "at": "03:58:44Z",
+    "exit": 0,
+    "output": "the lease's Git layer: /Users/admin/testvm/walk-76abe7eedd19/home/Library/Application Support/com.richos.app/engine-profiles/391ea9ef-c11e-492d-bd85-c5a620d4d799/gitconfig\n[hook \"richos-git-name\"]\n\tevent = prepare-commit-msg\n\tcommand = \"'/Users/admin/testvm/walk-76abe7eedd19/RichOS.app/Contents/MacOS/richos-tauri' --git-name-wait\"\ngit version 2.55.0\nconversation: thr_2cde7ea407ca46ec8f9d8e8094c9c587 (company acme)\nwould sign: Managed via Tart <fixture.person@example.com>\nthe first save started: pid 2284\nthe second save went ahead, not asked again\n[main (root-commit) 34a35f7] Update prices\nexit 0\nsaved as: Managed via Tart <fixture.person@example.com>"
+  },
+  {
+    "i": 44,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Settings",
+        "--role",
+        "AXPopUpButton"
+      ]
+    },
+    "at": "03:58:46Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=82 mode=click matches=1\npressed AXPopUpButton title='Settings' desc='Settings' pos=1485 111 size=40 40 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.4619}\n{\"ax_timing\": true, \"total_seconds\": 1.8328, \"preflight_seconds\": 0.7296, \"transport_seconds\": 1.0543, \"render_seconds\": 0.0495, \"guest_seconds\": 0.4619, \"transport_overhead_seconds\": 0.5924}"
+  },
+  {
+    "i": 45,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--title",
+        "fixture.person@example.com",
+        "--contains"
+      ],
+      "contains": "fixture.person@example.com",
+      "seconds": 30
+    },
+    "at": "03:58:48Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1078 windows=1 nodes=197 mode=find matches=1\n              AXButton title='Your name in Git Managed via Tart \u00b7 fixture.person@example.com' desc='' value='' enabled=yes pos=1163 444 size=332 71\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.2545}\n{\"ax_timing\": true, \"total_seconds\": 1.4464, \"preflight_seconds\": 0.7287, \"transport_seconds\": 0.6778, \"render_seconds\": 0.0405, \"gue"
+  },
+  {
+    "i": 46,
+    "step": {
+      "op": "shot",
+      "name": "7-settings-git-row",
+      "ocr": true
+    },
+    "at": "03:58:53Z",
+    "exit": 0,
+    "output": "RichOS\n\nSearch\n\n+ New chat or company\nCorrections\n\nFeedback\n\nOldest open question\n\n\u00a9 Acme\n\nOnboarding\n\nSet your name\n\n\u00a9 Acme / Onboarding\n\nSettings\nHOW IT LOOKS\nTheme\n\nText size\n\nOxford comma: OFF\n\nOxford comma AKA serial comma is\nwhat some style guides place before\n\"and\" and \"or\". RichOS recommends to\nkeep that nuisance off.\n\nTechnical view\n\n38\u20ac@T asks where to show it.\n\nKeep the stored output\n\nO For two weeks\n\nO For three months\nForever\n\nNothing is ever removed. Using 0 bytes\nnow.\n\nYour name\n\nShown at the foot of the rail, with your\ninitials.\n\nRichos\n\nWORKING WITH RICH\nRich's model\nWhen he talks with you default\n\nOpus Fable\n\nWhen he directs your team default\nOpus - high effort Fable\n\nOpus is the default for both. Fable is\n\nmore capable than Opus and uses up\n\nyour Claude limits faster.\n\nHow much should Rich interrupt you?\nQuiet\n\nO Balanced\n\nO Only when it's urgent\n\nRichScribe\n\nOff\n\nUse Rich from your phone\nTerminal setup\n\nSplash screen\n\nShow it when RichOS starts\n\nYOUR COMPANY AND TEAM\n\nCompany {Acme -\n\nHome screen\n\nToken spend $0.00 this month\n\nClaude accounts \u2014_\n\nConnected folders (repositories)\n\nYour name in Git\nManaged via Tart\nfixture.person@example.com\n\nMemory folder\n\nUpdates\nRichOS 1.2.3 is up to date.\nChecked 2 minutes ago.\n\nCheck for updates\n\nSee what's new \u201d\n\nBust a bug!\n\nRequest a feature\n\n{| Company button:\n[testvm] 03:58:56Z captured 1680x1050, 91.8% non-black -> /Volumes/E1TB/tmp/claude/echo-opus-r41build1/walk-out/7-settings-git-row.png"
+  }
+]

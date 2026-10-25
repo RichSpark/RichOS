@@ -176,7 +176,9 @@ if [ "$MODE" = "install" ] || [ "$MODE" = "print-plist" ]; then
         echo "disk-watchdog: DISK_WATCHDOG_MINUTES is not declared in $CONFIG." >&2
         exit 2
     fi
-    if [ "$MODE" = print-plist ]; then PLIST=/dev/stdout; else mkdir -p "$LAUNCHD_DIR" "$HOME/.claude/state"; fi
+    # --install generates beside the plist, never over it, so launchd_install can
+    # tell an unchanged job from a changed one.
+    if [ "$MODE" = print-plist ]; then NEW_PLIST=/dev/stdout; else mkdir -p "$LAUNCHD_DIR" "$HOME/.claude/state"; NEW_PLIST="$PLIST.new.$$"; fi
     {
         echo '<?xml version="1.0" encoding="UTF-8"?>'
         echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
@@ -204,16 +206,33 @@ if [ "$MODE" = "install" ] || [ "$MODE" = "print-plist" ]; then
         echo "    <key>StandardErrorPath</key><string>$HOME/.claude/state/disk-watchdog.launchd.log</string>"
         echo '</dict>'
         echo '</plist>'
-    } >"$PLIST"
+    } >"$NEW_PLIST"
     [ "$MODE" != print-plist ] || exit 0
+    # AN UNCHANGED JOB IS LEFT ALONE AND A RUNNING READING IS NEVER KILLED: the
+    # same rule, for the same install.sh-on-every-land reason, as the scratch
+    # reaper. Reloading an unchanged watchdog also restarted its 15-minute
+    # interval, so every land moved the readings the drop alarm compares.
     if command -v launchctl >/dev/null 2>&1 && [ -z "${RICHOS_LAUNCH_AGENTS_DIR:-}" ]; then
-        launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-        launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || \
-            launchctl load "$PLIST" >/dev/null 2>&1 || true
-        if ! launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
-            echo "✗ $LABEL was written to $PLIST but launchd did not load it; NOT scheduled" >&2
-            exit 1
-        fi
+        # shellcheck source=lib/launchd-install.sh
+        . "$SCRIPT_DIR/lib/launchd-install.sh"
+        launchd_install "$LABEL" "$PLIST" "$NEW_PLIST"
+        case "$LAUNCHD_INSTALL_RESULT" in
+            unchanged)
+                echo "✓ scheduled $LABEL (unchanged: already loaded from this plist, so it was not reloaded)"
+                exit 0 ;;
+            running)
+                {
+                    echo "✗ $LABEL NOT REPLACED — a reading is running now (pid ${LAUNCHD_INSTALL_PID:-unknown})."
+                    echo "  The job changed, and replacing it would kill that reading. It keeps its"
+                    echo "  current schedule; run this again in a minute:  $SCRIPT_DIR/disk-watchdog.sh --install"
+                } >&2
+                exit 3 ;;
+            failed)
+                echo "✗ $LABEL: $LAUNCHD_INSTALL_DETAIL; launchd did not load it; NOT scheduled" >&2
+                exit 1 ;;
+        esac
+    else
+        mv -f "$NEW_PLIST" "$PLIST"
     fi
     echo "✓ scheduled $LABEL every $MINUTES minutes"
     echo "  plist: $PLIST"

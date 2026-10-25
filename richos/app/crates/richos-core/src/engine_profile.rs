@@ -460,6 +460,13 @@ impl EngineProfile {
             }
         }
         user.login = login;
+        // A read again that found a different environment renews the lease at its next boundary,
+        // as a changed settings file does, so the team's next job has it (round 41 piece 1).
+        // With no login environment the files' digest stays as it is: taking it first would
+        // drop it, and an edited file would then never renew the lease.
+        if let Some(login) = user.login.as_ref() {
+            user.digest = user.digest.take().map(|digest| crate::user_settings::with_login(digest, login));
+        }
         // The Git the user's terminal runs, found on the login PATH (build plan item 8).
         if let Some(path) = user.login.as_ref().and_then(|login| login.get("PATH")) {
             let home = user.login.as_ref().and_then(|login| login.get("HOME")).map(PathBuf::from)
@@ -471,7 +478,7 @@ impl EngineProfile {
         write(&coordination.join("orchestration.config"),
               &crate::user_settings::orchestration_config(user.folder.as_deref(), &shipped_config, &quote(&state.join("teams")))?)?;
         write(&coordination.join(".gitignore"), ".claude/\norchestration.config\napp-owned-coordination.json\n")?;
-        write(&plugin.join("gitconfig"), &crate::user_git::system_layer(&user.git))?;
+        write(&plugin.join("gitconfig"), &crate::user_git::system_layer(&user.git, Some(&crate::git_name::identity_file(&state))))?;
         let command = format!("{} {}", quote(&runtime.python), quote(&engine.join("scripts/app-engine-hook.py")));
         let mut hooks = serde_json::Map::new();
         // **NO `matcher` KEY, ON ANY OF THE NINE EVENTS — SO THE `PreToolUse` REGISTRATION
@@ -532,6 +539,17 @@ impl EngineProfile {
             quote(&self.runtime.python), quote(&self.engine.join("scripts/app-engine-hook.py")));
         manifest["hooks"]["PreToolUse"][0] = json!({"hooks":[{"type":"command", "command":command, "timeout":21600}]});
         write(&path, &manifest.to_string())
+    }
+    /// **Make the team's first save in a connected folder wait for the user's Git name**
+    /// (round 41 piece 2): Git's own hook, `<executable> --git-name-wait`, added to this lease's
+    /// lowest Git layer (`git_name::hook_section`), so Git runs it at every commit the lease's Git
+    /// makes, however the command was written. It holds only a commit the stand-in would sign
+    /// (`git_name::wait_cli`).
+    pub fn install_git_name_wait(&self, executable: &Path) -> Result<(), RuntimeError> {
+        let path = self.plugin.join("gitconfig");
+        let mut layer = std::fs::read_to_string(&path).map_err(|e| RuntimeError(e.to_string()))?;
+        layer.push_str(&crate::git_name::hook_section(executable));
+        write(&path, &layer)
     }
     /// **The files the CEO attached in THIS conversation**, from his phone or his Mac:
     /// `<app data>/attachments/<conversation>`, the folder the attachment desk writes to

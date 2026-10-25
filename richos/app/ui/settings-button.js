@@ -46,6 +46,8 @@ window.RichSettings = (function () {
   var home = null; // { open() } — the home screen's company buttons: their labels and which show
   var codexReviews = null; // { render(container), onOpen() }, "Let Codex review your team's work" (round 20.2, codex-reviews.js)
   var spend = null; // { render(container), onOpen() }, "Token spend" (round 22.1, spend.js)
+  var terminalSetup = null; // { open(), paint(), onOpen() }, "Terminal setup" (round 41 piece 1, terminal-setup.js)
+  var gitName = null; // { open(), paint(), onOpen() }, "Your name in Git" (round 41 piece 2, git-name.js)
   // What the rail gear's Preferences held until round 27, owned by main.js: { parts: { model,
   // interrupt, "techy-hint", retention, name, splash } (nodes this file places), onOpen(),
   // onClose() } — onClose is where Rich's model, held while the panel is open, is saved.
@@ -564,6 +566,12 @@ window.RichSettings = (function () {
         phonePairing.open();
       }, "set-phone-state"));
     }
+    // TERMINAL SETUP (round 41 piece 1): last in the column, with the time it was last read.
+    if (terminalSetup) {
+      doors.push(buildDisclosureRow("set-terminal-open", "Terminal setup", function () {
+        terminalSetup.open();
+      }, "set-terminal-state"));
+    }
     if (doors.length && rich.length) rich.push(divider());
     rich = rich.concat(doors);
     addColumn(cols, "set-group-rich", "Working with Rich", rich);
@@ -599,6 +607,13 @@ window.RichSettings = (function () {
       places.push(buildDisclosureRow("set-repositories-open", "Connected folders (repositories)", function () {
         repositories.open();
       }));
+    }
+    // YOUR NAME IN GIT (round 41 piece 2): under the folders, with the name and email it puts on
+    // the team's saved changes.
+    if (gitName) {
+      places.push(buildDisclosureRow("set-git-open", "Your name in Git", function () {
+        gitName.open();
+      }, "set-git-state"));
     }
     // The old account row stays only where "Claude accounts" is not registered (a page with no
     // accounts sheet behind it), so the first account's sign-in always has a door.
@@ -751,6 +766,8 @@ window.RichSettings = (function () {
       var cs = company.read();
       if (cs && cs.chosen) comp.value = cs.chosen;
     }
+    if (terminalSetup && terminalSetup.paint && menuEl.querySelector("#set-terminal-open")) terminalSetup.paint();
+    if (gitName && gitName.paint && menuEl.querySelector("#set-git-open")) gitName.paint();
     var up2 = menuEl.querySelector("#set-updates");
     if (up2 && updates && updates.render) updates.render(up2);
     if (wrap) wrap.setAttribute("data-force-dark", String(T.forcedDark()));
@@ -803,6 +820,10 @@ window.RichSettings = (function () {
     // the sheet was last looked at. It is one `phone_status` call on this Mac — no network — and
     // it is never on a timer: an open menu does not poll.
     if (phonePairing && phonePairing.onOpen) phonePairing.onOpen();
+    // AND THE TWO ROUND 41 ROWS: the last read of the Terminal setup and the name in Git, which
+    // the user can change in their own files while this menu is shut. Each is one local read.
+    if (terminalSetup && terminalSetup.onOpen) terminalSetup.onOpen();
+    if (gitName && gitName.onOpen) gitName.onOpen();
     // AND CODEX, for the same reason: it can be installed, signed in or out while this menu is
     // shut, so whether the switch can be turned on is read when the menu opens (one
     // `codex_reviews_status`: Codex's own `login status`, a few milliseconds, no network).
@@ -1156,6 +1177,11 @@ window.RichSettings = (function () {
      *  it carries no row to a sheet that is not there — the same contract every other capability
      *  in this file has. */
     registerPhone: function (host) { phonePairing = host || null; rebuild(); },
+    /** "Terminal setup" (round 41 piece 1) and "Your name in Git" (piece 2): `host.open()` opens
+     *  the sheet, `host.paint()` writes the row's plain line, `host.onOpen()` reads it again as the
+     *  menu opens. `terminal-setup.js` and `git-name.js` register them when the shell is there. */
+    registerTerminalSetup: function (host) { terminalSetup = host || null; rebuild(); },
+    registerGitName: function (host) { gitName = host || null; rebuild(); },
 
     registerHome: function (host) {
       home = host || null;

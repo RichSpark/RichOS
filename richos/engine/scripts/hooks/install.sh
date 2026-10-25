@@ -1040,12 +1040,20 @@ if [ "$LAUNCHD_TOUCHABLE" -eq 1 ]; then
     for _job in disk-watchdog scratch-reaper; do
         _script="$REPO_ROOT/scripts/$_job.sh"
         [ -x "$_script" ] || continue
-        if "$_script" --install >/dev/null 2>&1; then
+        # Each --install leaves an unchanged, loaded job alone (it used to reload
+        # it on every install, which killed a cleanup in progress) and refuses
+        # to replace a changed job while it is running, exit 3, saying why.
+        _rc=0; _out="$("$_script" --install 2>&1)" || _rc=$?
+        if [ "$_rc" -eq 0 ]; then
             echo "✓ scheduled com.richos.$_job"
+        elif [ "$_rc" -eq 3 ]; then
+            echo "NOTE: com.richos.$_job changed but was NOT replaced, because it is running now:" >&2
+            printf '%s\n' "$_out" | sed 's/^/  /' >&2
         else
             echo "NOTE: could not schedule com.richos.$_job. Nothing is watching" >&2
             echo "  until it is armed; run it by hand from the main checkout:" >&2
             echo "    $_script --install" >&2
+            [ -z "$_out" ] || printf '%s\n' "$_out" | sed 's/^/  /' >&2
         fi
     done
 elif [ "$POINTER_EPHEMERAL" -eq 1 ] || [ "$POINTER_IN_WORKTREE" -eq 1 ]; then

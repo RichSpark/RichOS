@@ -21,7 +21,7 @@ SB="$(cd "$(mktemp -d "$BASE/dw-install.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$SB"' EXIT
 mkdir -p "$SB/bin" "$SB/home/Library/LaunchAgents" "$SB/engine/scripts/lib"
 cp "$SCRIPT_DIR/disk-watchdog.sh" "$SB/engine/scripts/"
-cp "$SCRIPT_DIR/lib/disk-watchdog.py" "$SB/engine/scripts/lib/"
+cp "$SCRIPT_DIR/lib/disk-watchdog.py" "$SCRIPT_DIR/lib/launchd-install.sh" "$SB/engine/scripts/lib/"
 cp "$SCRIPT_DIR/../orchestration.config" "$SB/engine/" 2>/dev/null || true
 WD="$SB/engine/scripts/disk-watchdog.sh"
 PASS=0; FAIL=0

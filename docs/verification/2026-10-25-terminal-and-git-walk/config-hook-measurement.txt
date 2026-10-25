@@ -1,0 +1,61 @@
+# config-hook-measurement.sh, run 2026-10-25 on the development Mac.
+# 1) The runtime's Git, the one a lease runs first on PATH (engine/runtime/bin/git from the
+#    nightly 74 engine archive, richos-engine-1.2.0.tar.gz):
+git version 2.55.0
+commit one: the repository's own hook
+commit two: core.hooksPath
+commit three: --no-verify
+--- what ran, in order
+app-hook-ran .git/COMMIT_EDITMSG message
+repo-hook-ran
+app-hook-ran .git/COMMIT_EDITMSG message
+husky-hook-ran
+app-hook-ran .git/COMMIT_EDITMSG message
+husky-hook-ran
+
+# 2) This Mac's own Git on PATH:
+git version 2.52.0
+commit one: the repository's own hook
+commit two: core.hooksPath
+commit three: --no-verify
+--- what ran, in order
+repo-hook-ran
+husky-hook-ran
+husky-hook-ran
+
+# Read: with Git 2.55 the hook in the layer ran at all three commits, before the repository's own
+# hook, with core.hooksPath set, and with --no-verify; Git appends its own two arguments. Git 2.52
+# runs no config hook. So the wait is in the layer of the Git the lease runs first (the runtime's);
+# a worker that runs another, older Git by its full path is not held and its commit carries the
+# stand-in, RichOS <richos@localhost>, as before this change.
+
+# The script, as run (config-hook-measurement.sh, kept here verbatim):
+#!/bin/bash
+# Does a hook.<name> setting in a GIT_CONFIG_SYSTEM file run at commit, beside a repository's own
+# hook and beside a repository that moves its hooks with core.hooksPath (as husky does)? And with
+# --no-verify? The Git name wait (richos-core git_name.rs) rests on the answer.
+#
+#   config-hook-measurement.sh [GIT]     GIT defaults to the git on PATH
+set -u
+GIT="${1:-git}"
+d=$(mktemp -d)
+cat > "$d/layer" <<EOF
+[user]
+	name = RichOS
+	email = richos@localhost
+[hook "richos-git-name"]
+	event = prepare-commit-msg
+	command = echo app-hook-ran >> "$d/log"
+EOF
+"$GIT" --version
+export GIT_CONFIG_SYSTEM="$d/layer" GIT_CONFIG_GLOBAL=/dev/null
+"$GIT" init -q "$d/repo"
+printf '#!/bin/sh\necho repo-hook-ran >> "%s/log"\n' "$d" > "$d/repo/.git/hooks/prepare-commit-msg"; chmod +x "$d/repo/.git/hooks/prepare-commit-msg"
+echo "commit one: the repository's own hook"; "$GIT" -C "$d/repo" commit -q --allow-empty -m one
+mkdir -p "$d/repo/.husky"; printf '#!/bin/sh\necho husky-hook-ran >> "%s/log"\n' "$d" > "$d/repo/.husky/prepare-commit-msg"; chmod +x "$d/repo/.husky/prepare-commit-msg"
+"$GIT" -C "$d/repo" config core.hooksPath .husky
+echo "commit two: core.hooksPath"; "$GIT" -C "$d/repo" commit -q --allow-empty -m two
+echo "commit three: --no-verify"; "$GIT" -C "$d/repo" commit -q --no-verify --allow-empty -m three
+echo "--- what ran, in order"
+cat "$d/log"
+rm -rf "$d"

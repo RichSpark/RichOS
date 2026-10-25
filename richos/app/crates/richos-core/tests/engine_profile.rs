@@ -278,6 +278,50 @@ fn generic_git_identity_is_a_default_and_explicit_assignment_identity_can_overri
     }
 }
 
+/// **The name the user gives the app reaches a running lease's next commit** (round 41 piece 2):
+/// the lease's lowest layer includes the answer's file, so a lease prepared before the answer
+/// commits as the user after it, and the user's own `~/.gitconfig` still wins over it.
+#[test]
+fn the_git_name_the_user_saves_reaches_a_running_lease_and_their_own_git_setup_still_wins() {
+    let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    let mut configured = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut configured, Path::new("/fictional/provider"), "fixture-session", &f.0.join("scope.json"));
+    let home = f.0.join("home without git settings"); std::fs::create_dir_all(&home).unwrap();
+    let ask = |key: &str| {
+        let mut git = std::process::Command::new("/usr/bin/git");
+        for (k, v) in configured.get_envs() { if let Some(v) = v { git.env(k, v); } else { git.env_remove(k); } }
+        let out = git.env("HOME", &home).env_remove("XDG_CONFIG_HOME").current_dir(&profile.coordination)
+            .args(["config", "--get", key]).output().unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    assert_eq!(ask("user.name"), "RichOS");
+    richos_core::git_name::save(&profile.state, "Fixture Whitfield", "fixture@northwind.invalid").unwrap();
+    assert_eq!((ask("user.name"), ask("user.email")), ("Fixture Whitfield".into(), "fixture@northwind.invalid".into()));
+    std::fs::write(home.join(".gitconfig"), "[user]\n\tname = Their Own\n\temail = own@example.invalid\n").unwrap();
+    assert_eq!(ask("user.name"), "Their Own", "the user's own Git setup wins");
+    richos_core::git_name::use_richos(&profile.state).unwrap();
+    std::fs::remove_file(home.join(".gitconfig")).unwrap();
+    assert_eq!(ask("user.name"), "RichOS", "Use RichOS keeps the stand-in");
+}
+
+/// The Git name wait is Git's own hook in the lease's Git layer, as the app's own executable, and
+/// no Claude Code hook changes.
+#[test]
+fn the_git_name_wait_is_a_git_hook_in_the_leases_layer_and_changes_no_claude_hook() {
+    let f = Scratch::new();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    let hooks = || std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap();
+    let (before, layer_before) = (hooks(), std::fs::read_to_string(profile.plugin.join("gitconfig")).unwrap());
+    let exe = Path::new("/Applications/RichOS Test.app/Contents/MacOS/richos");
+    profile.install_git_name_wait(exe).unwrap();
+    assert_eq!(hooks(), before, "no Claude Code hook moved");
+    let layer = std::fs::read_to_string(profile.plugin.join("gitconfig")).unwrap();
+    assert_eq!(layer, layer_before + &richos_core::git_name::hook_section(exe));
+    let event = std::process::Command::new("/usr/bin/git").args(["config", "--file"]).arg(profile.plugin.join("gitconfig"))
+        .args(["--get", "hook.richos-git-name.event"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&event.stdout).trim(), "prepare-commit-msg");
+}
+
 #[test]
 fn bypass_permissions_match_the_terminal_and_keep_company_and_thread_read_roots() {
     use richos_core::{EntityId, EntityRegistry, Ledger, Spine};
@@ -885,6 +929,25 @@ fn the_user_settings_digest_moves_with_the_users_files_and_nothing_else() {
     assert_eq!(digest(&folder), empty);
 }
 
+/// **A Terminal setup read again that found something different renews a lease** (round 41
+/// piece 1, "Your team uses this from its next job"): the lease's digest carries its login
+/// environment's fingerprint, so the same environment renews nothing and a changed one does.
+#[test]
+fn a_lease_is_renewed_when_the_terminal_setup_it_got_has_changed_and_only_then() {
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    let env = |java: &str| -> std::sync::Arc<BTreeMap<String, String>> {
+        std::sync::Arc::new([("PATH", "/usr/bin"), ("FIXTURE_JAVA_HOME", java)].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+    };
+    let prepare = |login| EngineProfile::prepare_for(&engine(), &f.0.join("data"), f.runtime(),
+        richos_core::machine_settings::Settings::default(), Some(folder.clone()), Some(login)).unwrap();
+    let (a, b, c) = (prepare(env("/jdk/17")), prepare(env("/jdk/17")), prepare(env("/jdk/21")));
+    assert_eq!(a.user.digest, b.user.digest, "the same Terminal setup renews nothing");
+    assert_ne!(a.user.digest, c.user.digest, "a changed one renews the lease at its next boundary");
+    // The app's side of the comparison is computed the same way.
+    assert_eq!(a.user.digest, Some(richos_core::user_settings::with_login(richos_core::user_settings::digest(&folder), &env("/jdk/17"))));
+}
+
 // =======================================================================================
 // THE USER'S TERMINAL ENVIRONMENT — build plan 2026-10-21, item 4
 // =======================================================================================
@@ -1118,6 +1181,6 @@ fn with_apples_git_the_lease_includes_the_file_its_osxkeychain_default_comes_fro
     for origin in &origins {
         assert!(found.system_configs.contains(origin), "{origin:?} is where Apple's Git reads its helper, and the lease does not include it: {found:?}");
     }
-    let layer = richos_core::user_git::system_layer(&found);
+    let layer = richos_core::user_git::system_layer(&found, None);
     assert!(origins.iter().all(|o| layer.contains(&format!("path = \"{}\"", o.display()))), "{layer}");
 }
