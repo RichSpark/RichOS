@@ -315,16 +315,52 @@ pub fn redo_cli() -> i32 {
 }
 
 /// Redo the commit `git_pid` made in `folder` when the wait marked it; `Ok(false)` when it did not.
+///
+/// The commit is rebuilt from ITSELF, never from the index (review
+/// rv-20261025T031723Z-5154b8c7-2b36#1: `git commit -- a` with `b` also staged commits only `a`,
+/// and an amend took `b` too): `git commit-tree` with HEAD's own tree, parents, message and author
+/// date, signed with the saved name, then HEAD moved to it with `git update-ref`, only while it
+/// still points at the commit that waited. The index and the working folder are not touched.
 pub(crate) fn redo(state: &Path, folder: &Path, git_pid: u32, env: &[(&str, &Path)]) -> Result<bool, String> {
     if std::fs::remove_file(waited(state, git_pid)).is_err() { return Ok(false); }
     let Some(Choice::Own { name, email }) = choice(state) else { return Ok(false) };
-    let output = std::process::Command::new("git").arg("-C").arg(folder)
-        .args(["-c", &format!("user.name={name}"), "-c", &format!("user.email={email}")])
-        .args(["commit", "--amend", "--reset-author", "--no-edit", "--no-verify", "--allow-empty", "--quiet"])
-        .envs(env.iter().copied()).env(REDOING, "1")
-        .env_remove("GIT_AUTHOR_NAME").env_remove("GIT_AUTHOR_EMAIL").env_remove("GIT_COMMITTER_NAME").env_remove("GIT_COMMITTER_EMAIL")
-        .stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
-    if output.status.success() { Ok(true) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
+    let base: Vec<(String, String)> = env.iter().map(|(k, v)| (k.to_string(), v.to_string_lossy().into_owned())).collect();
+    let head = git_io(folder, &["rev-parse", "--verify", "HEAD"], None, &base)?;
+    let raw = git_io(folder, &["cat-file", "commit", &head], None, &base)?;
+    let (headers, message) = raw.split_once("\n\n").unwrap_or((raw.as_str(), ""));
+    let tree = headers.lines().find_map(|l| l.strip_prefix("tree ")).ok_or("the commit has no tree")?;
+    let mut args = vec!["commit-tree", tree];
+    for parent in headers.lines().filter_map(|l| l.strip_prefix("parent ")) { args.extend(["-p", parent]); }
+    let mut signed = base.clone();
+    for key in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"] { signed.push((key.into(), name.clone())); }
+    for key in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"] { signed.push((key.into(), email.clone())); }
+    // The author's time stays the commit's own: `<seconds> <zone>` at the end of its author line.
+    if let Some((_, date)) = headers.lines().find_map(|l| l.strip_prefix("author ")).and_then(|l| l.rsplit_once("> ")) {
+        signed.push(("GIT_AUTHOR_DATE".into(), date.to_string()));
+    }
+    let mut body = message.to_string();
+    if !body.ends_with('\n') { body.push('\n'); }
+    let rebuilt = git_io(folder, &args, Some(body.as_bytes()), &signed)?;
+    git_io(folder, &["update-ref", "-m", "RichOS: the saved Git name on the commit that waited", "HEAD", &rebuilt, &head], None, &base)?;
+    Ok(true)
+}
+
+/// One `git -C folder ...` for the redo: `env` added after Git's own hook variables for the
+/// identity are dropped, its own hooks quiet ([`REDOING`]), `stdin` written when given.
+fn git_io(folder: &Path, args: &[&str], stdin: Option<&[u8]>, env: &[(String, String)]) -> Result<String, String> {
+    use std::io::Write;
+    let mut child = std::process::Command::new("git").arg("-C").arg(folder).args(args)
+        .env_remove("GIT_AUTHOR_NAME").env_remove("GIT_AUTHOR_EMAIL").env_remove("GIT_AUTHOR_DATE")
+        .env_remove("GIT_COMMITTER_NAME").env_remove("GIT_COMMITTER_EMAIL")
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str()))).env(REDOING, "1")
+        .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+        .spawn().map_err(|e| e.to_string())?;
+    let mut input = child.stdin.take().ok_or("no stdin")?;
+    if let Some(bytes) = stdin { input.write_all(bytes).map_err(|e| e.to_string())?; }
+    drop(input);
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()) }
+    else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
 }
 
 /// Wait until the answer is saved, or until `orphaned` says the caller is gone.
@@ -560,6 +596,52 @@ mod tests {
         std::fs::write(waited(&state, 4243), b"").unwrap();
         assert_eq!(redo(&state, &repo, 4243, env), Ok(false));
         assert_eq!(signed(), "RichOS <richos@localhost>|RichOS <richos@localhost>");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// **Review rv-20261025T031723Z-5154b8c7-2b36#1**: with changes to `a` and `b` staged, `git
+    /// commit -- a` commits only `a`. Putting the saved name on that commit changes nothing it
+    /// holds: the commit has only `a`, under the user's name, and `b` is still staged as it was.
+    #[test]
+    fn the_saved_name_changes_who_signed_the_commit_and_nothing_it_holds() {
+        let root = scratch("only-a");
+        let (home, state) = (root.join("home"), root.join("data/engine-state"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        let layer = root.join("layer");
+        std::fs::write(&layer, crate::user_git::system_layer(&Default::default(), Some(&identity_file(&state)))).unwrap();
+        let global = home.join(".gitconfig");
+        let env: &[(&str, &Path)] = &[("GIT_CONFIG_SYSTEM", &layer), ("GIT_CONFIG_GLOBAL", &global), ("HOME", &home)];
+        let repo = root.join("northwind-site");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git").arg("-C").arg(&repo).args(args).envs(env.iter().copied())
+                .env_remove("GIT_AUTHOR_NAME").env_remove("GIT_COMMITTER_NAME").env_remove("GIT_AUTHOR_EMAIL").env_remove("GIT_COMMITTER_EMAIL")
+                .output().unwrap();
+            assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        run(&["init", "-q"]);
+        std::fs::write(repo.join("a"), "original\n").unwrap();
+        std::fs::write(repo.join("b"), "original\n").unwrap();
+        run(&["add", "a", "b"]);
+        run(&["commit", "-q", "-m", "Start"]);
+        std::fs::write(repo.join("a"), "new prices\n").unwrap();
+        std::fs::write(repo.join("b"), "unrelated staged change\n").unwrap();
+        run(&["add", "a", "b"]);
+        // The commit that waited: only `a`, signed by the stand-in when it started.
+        run(&["commit", "-q", "-m", "Update prices", "--", "a"]);
+        let before = run(&["log", "-1", "--format=%T %P %s %ad"]);
+        save(&state, "Dana Whitfield", "dana@northwind.com").unwrap();
+        std::fs::write(waited(&state, 4244), b"").unwrap();
+        assert_eq!(redo(&state, &repo, 4244, env), Ok(true));
+        assert_eq!(run(&["log", "-1", "--format=%an <%ae>|%cn <%ce>"]), "Dana Whitfield <dana@northwind.com>|Dana Whitfield <dana@northwind.com>");
+        assert_eq!(run(&["log", "-1", "--format=%T %P %s %ad"]), before, "the same tree, parent, message and author date");
+        assert_eq!(run(&["show", "--name-only", "--format=", "HEAD"]), "a", "the commit holds only a");
+        assert_eq!(run(&["show", "HEAD:b"]), "original", "b in the commit is as it was");
+        assert_eq!(run(&["diff", "--cached", "--name-only"]), "b", "b is still staged");
+        assert_eq!(std::fs::read_to_string(repo.join("b")).unwrap(), "unrelated staged change\n");
+        assert_eq!(run(&["rev-list", "--count", "HEAD"]), "2", "the commit was replaced, not added to");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
