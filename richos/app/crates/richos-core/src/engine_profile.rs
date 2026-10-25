@@ -446,6 +446,11 @@ impl EngineProfile {
         let mut user = crate::user_settings::UserSetup::prepare(user_folder, &engine.join("app"),
             &plugin.with_file_name(format!("{}-standing", plugin.file_name().unwrap().to_string_lossy())))?;
         user.login = login;
+        // A read again that found a different environment renews the lease at its next boundary,
+        // as a changed settings file does, so the team's next job has it (round 41 piece 1).
+        if let (Some(digest), Some(login)) = (user.digest.take(), user.login.as_ref()) {
+            user.digest = Some(crate::user_settings::with_login(digest, login));
+        }
         // The Git the user's terminal runs, found on the login PATH (build plan item 8).
         if let Some(path) = user.login.as_ref().and_then(|login| login.get("PATH")) {
             let home = user.login.as_ref().and_then(|login| login.get("HOME")).map(PathBuf::from)
@@ -457,7 +462,7 @@ impl EngineProfile {
         write(&coordination.join("orchestration.config"),
               &crate::user_settings::orchestration_config(user.folder.as_deref(), &shipped_config, &quote(&state.join("teams")))?)?;
         write(&coordination.join(".gitignore"), ".claude/\norchestration.config\napp-owned-coordination.json\n")?;
-        write(&plugin.join("gitconfig"), &crate::user_git::system_layer(&user.git))?;
+        write(&plugin.join("gitconfig"), &crate::user_git::system_layer(&user.git, Some(&crate::git_name::identity_file(&state))))?;
         let command = format!("{} {}", quote(&runtime.python), quote(&engine.join("scripts/app-engine-hook.py")));
         let mut hooks = serde_json::Map::new();
         // **NO `matcher` KEY, ON ANY OF THE NINE EVENTS — SO THE `PreToolUse` REGISTRATION
@@ -517,6 +522,21 @@ impl EngineProfile {
         let command = format!("{} --claude-quota-gate {} {}", quote(executable),
             quote(&self.runtime.python), quote(&self.engine.join("scripts/app-engine-hook.py")));
         manifest["hooks"]["PreToolUse"][0] = json!({"hooks":[{"type":"command", "command":command, "timeout":21600}]});
+        write(&path, &manifest.to_string())
+    }
+    /// **Make the team's first save in a connected folder wait for the user's Git name**
+    /// (round 41 piece 2): `<executable> --git-name-wait` beside the shell hooks, bounded like
+    /// the shell evidence hook (a day), because the answer is the user's and takes as long as it
+    /// takes. It holds only a commit the stand-in would sign (`git_name::wait_cli`).
+    pub fn install_git_name_wait(&self, executable: &Path) -> Result<(), RuntimeError> {
+        let path = self.plugin.join("hooks/hooks.json");
+        let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path)
+            .map_err(|e| RuntimeError(e.to_string()))?).map_err(|e| RuntimeError(e.to_string()))?;
+        let command = format!("{} --git-name-wait", quote(executable));
+        let bash = manifest["hooks"]["PreToolUse"].as_array_mut().and_then(|entries| entries.iter_mut()
+            .find(|entry| entry["matcher"] == "Bash")).and_then(|entry| entry["hooks"].as_array_mut())
+            .ok_or_else(|| RuntimeError("the lease has no shell hooks to add the Git name wait to".into()))?;
+        bash.push(json!({"type":"command", "command":command, "timeout":86400}));
         write(&path, &manifest.to_string())
     }
     /// **The files the CEO attached in THIS conversation**, from his phone or his Mac:

@@ -64,13 +64,88 @@ pub fn discover(path: &str, home: Option<&Path>, runtime_root: &Path) -> UserGit
 }
 
 /// **The lowest Git settings layer a lease reads** (its `GIT_CONFIG_SYSTEM`): the app's own
-/// identity, used only when no other layer names one, then the user's Git's own lower files. The
-/// user's `~/.gitconfig` and each repository's own settings are read as Git always reads them,
-/// above this, so the user's name, email and helpers win.
-pub fn system_layer(git: &UserGit) -> String {
+/// identity, used only when no other layer names one, then the name and email the user gave the
+/// app (`identity`, the file `git_name::save` writes: Git reads an include that is not there as
+/// nothing, so the layer is the same before and after the answer, and a save reaches every
+/// running lease's next commit), then the user's Git's own lower files. The user's `~/.gitconfig`
+/// and each repository's own settings are read as Git always reads them, above this, so the
+/// user's name, email and helpers win.
+pub fn system_layer(git: &UserGit, identity: Option<&Path>) -> String {
     let mut layer = String::from("[user]\n\tname = RichOS\n\temail = richos@localhost\n");
-    for file in git.system_configs.iter().map(|f| f.display().to_string()).filter(|f| !f.contains(['"', '\\', '\n'])) {
+    let files = identity.into_iter().map(Path::to_path_buf).chain(git.system_configs.iter().cloned());
+    for file in files.map(|f| f.display().to_string()).filter(|f| !f.contains(['"', '\\', '\n'])) {
         layer.push_str(&format!("[include]\n\tpath = \"{file}\"\n"));
     }
     layer
+}
+
+/// A name and email the user's own Git setup gives, and the file the name is in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Identity {
+    pub name: String,
+    pub email: String,
+    pub file: PathBuf,
+}
+
+/// **Does the user's own Git setup name them?** Asked of the user's Git (`discover`'s, the first
+/// on the login `path` that is not the runtime's) or, when there is none, of `fallback` (the
+/// runtime's Git, which reads `~/.gitconfig` the same way), outside any repository and with no
+/// app layer, so only the user's own files answer. Both a name and an email, or `None`.
+pub fn identity(path: &str, home: Option<&Path>, runtime_root: &Path, fallback: &Path) -> Option<Identity> {
+    let runtime_root = std::fs::canonicalize(runtime_root).unwrap_or_else(|_| runtime_root.to_path_buf());
+    let git = path.split(':').filter(|dir| !dir.is_empty()).map(|dir| Path::new(dir).join("git"))
+        .filter(|git| git.is_file())
+        .find(|git| !std::fs::canonicalize(git).is_ok_and(|real| real.starts_with(&runtime_root)))
+        .filter(|git| runnable(git))
+        .unwrap_or_else(|| fallback.to_path_buf());
+    let mut command = std::process::Command::new(&git);
+    command.args(["config", "--list", "--show-origin"]).env_clear().env("PATH", path)
+        .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).current_dir("/");
+    if let Some(home) = home { command.env("HOME", home); }
+    let output = command.output().ok().filter(|o| o.status.success())?;
+    identity_in(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// The last `user.name` and `user.email` in `git config --list --show-origin` output, as Git
+/// itself takes the last value.
+fn identity_in(listing: &str) -> Option<Identity> {
+    let (mut name, mut email) = (None, None);
+    for line in listing.lines() {
+        let Some((origin, setting)) = line.split_once('\t') else { continue };
+        let Some((key, value)) = setting.split_once('=') else { continue };
+        let file = origin.strip_prefix("file:").map(PathBuf::from);
+        match key.to_ascii_lowercase().as_str() {
+            "user.name" if !value.trim().is_empty() => name = Some((value.trim().to_string(), file)),
+            "user.email" if !value.trim().is_empty() => email = Some(value.trim().to_string()),
+            _ => {}
+        }
+    }
+    let (name, file) = name?;
+    Some(Identity { name, email: email?, file: file? })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_users_identity_is_the_last_name_and_email_their_git_lists_with_the_names_file() {
+        let listing = "file:/etc/gitconfig\tcredential.helper=osxkeychain\n\
+                       file:/Users/dana/.gitconfig\tuser.name=Old Name\n\
+                       file:/Users/dana/.gitconfig\tuser.email=dana@northwind.com\n\
+                       file:/Users/dana/.config/git/work\tuser.name=Dana Whitfield\n";
+        assert_eq!(identity_in(listing), Some(Identity { name: "Dana Whitfield".into(), email: "dana@northwind.com".into(),
+            file: PathBuf::from("/Users/dana/.config/git/work") }));
+        assert_eq!(identity_in("file:/Users/dana/.gitconfig\tuser.name=Dana\n"), None, "a name without an email does not name them");
+        assert_eq!(identity_in(""), None);
+    }
+
+    #[test]
+    fn the_answer_is_included_after_the_stand_in_and_before_the_users_own_files() {
+        let git = UserGit { system_configs: vec![PathBuf::from("/opt/homebrew/etc/gitconfig")], exec_path: None };
+        let layer = system_layer(&git, Some(Path::new("/data/engine-state/git-name/identity.gitconfig")));
+        assert_eq!(layer, "[user]\n\tname = RichOS\n\temail = richos@localhost\n\
+            [include]\n\tpath = \"/data/engine-state/git-name/identity.gitconfig\"\n\
+            [include]\n\tpath = \"/opt/homebrew/etc/gitconfig\"\n");
+    }
 }
