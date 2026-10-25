@@ -1753,7 +1753,7 @@
     },
     "scripts/hooks/install.sh#private-home": {
       "source": "scripts/hooks/install.sh",
-      "sha256": "a2da3e29fe6ec0eafeacefd38f824424d97a44ab4592293fd7cfeb57cfb826e4",
+      "sha256": "d920fb6c3813914aae3d7b66ebb2969e72f4dbe680fe5bebcd4040d2eb6d3110",
       "evidence": "The caller supplies a newly created HOME, distinct from pwd.getpwuid(uid).pw_dir, and a copied engine. The redirected-HOME condition keeps LAUNCHD_TOUCHABLE false even with CLAUDE_CONFIG_DIR equal to HOME/.claude. Only registration generation, file hashing and the private engine pointer run; no watchdog/reaper installer or orchestration config reader executes.",
       "keys": [],
       "edges": [
@@ -5163,7 +5163,7 @@
     },
     "scripts/hooks/install.sh#private-config-dir": {
       "source": "scripts/hooks/install.sh",
-      "sha256": "a2da3e29fe6ec0eafeacefd38f824424d97a44ab4592293fd7cfeb57cfb826e4",
+      "sha256": "d920fb6c3813914aae3d7b66ebb2969e72f4dbe680fe5bebcd4040d2eb6d3110",
       "evidence": "The contract harness supplies a newly created CLAUDE_CONFIG_DIR unequal to HOME/.claude. Under this content-bound precondition install validates/generates JSON settings, hashes files and updates only the private engine pointer. LAUNCHD_TOUCHABLE stays false, so watchdog/reaper installation is not reached. The only sourced engine helper is registered-hooks; no orchestration config is read.",
       "keys": [],
       "edges": [
@@ -17040,7 +17040,7 @@
         "scripts/hooks/idle-land.mutation.sh": "50afc330c98fe2813f880ee1e6c9532b8d91f98095e7cf68b1a90c3ead07623a",
         "scripts/hooks/inflight-notify.mutation.sh": "28c0b2e8cc6077e79bf09a17d094360143cef42614fcab19ff8f8ab94f9141af",
         "scripts/hooks/inflight-notify.test.sh": "216cb4ee447375ba2d2219dd74308ff5688206d0166b596f0b737d77e3b8fa73",
-        "scripts/hooks/install.sh": "a2da3e29fe6ec0eafeacefd38f824424d97a44ab4592293fd7cfeb57cfb826e4",
+        "scripts/hooks/install.sh": "d920fb6c3813914aae3d7b66ebb2969e72f4dbe680fe5bebcd4040d2eb6d3110",
         "scripts/hooks/interactive-prompt.mutation.sh": "3872e019a151c07a5d387e3128451954efcd34e4b3ac738bfc6282a430833e27",
         "scripts/hooks/mechanical-findings.mutation.sh": "822097cb9972738d9d39a91ab187d2475cfb4008f63c3c421e5ef9e7f1818a6d",
         "scripts/hooks/mechanical-findings.test.sh": "e23f188f029e21dec0e06c0758bb6912ede88002d366c5c3b331f3a0ca7a0397",
@@ -17412,7 +17412,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
-        "scripts/hooks/install.sh": "a2da3e29fe6ec0eafeacefd38f824424d97a44ab4592293fd7cfeb57cfb826e4",
+        "scripts/hooks/install.sh": "d920fb6c3813914aae3d7b66ebb2969e72f4dbe680fe5bebcd4040d2eb6d3110",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "scripts/hooks/dispatch-pretooluse.mutation.sh": "e9a8c8dc3e22ce7747a50256af7701d9e0f52db137c699cf73f14f0bc739c28b",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
@@ -17926,7 +17926,7 @@
       "sources": {
         "scripts/hooks/by-reference.test.sh": "c4a7a6571b09d92810f0872d99a5d4debbfff56b1a62ba7b9643e3dfd7870992",
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
-        "scripts/hooks/install.sh": "a2da3e29fe6ec0eafeacefd38f824424d97a44ab4592293fd7cfeb57cfb826e4",
+        "scripts/hooks/install.sh": "d920fb6c3813914aae3d7b66ebb2969e72f4dbe680fe5bebcd4040d2eb6d3110",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "scripts/hooks/contract-integrity-probe.sh": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
@@ -18209,7 +18209,7 @@
       "sources": {
         "scripts/hooks/by-reference-2.test.sh": "c5f043a5565c46db6ce50e3150994c3b7a933651dd72149baae04195ec9a0834",
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
-        "scripts/hooks/install.sh": "a2da3e29fe6ec0eafeacefd38f824424d97a44ab4592293fd7cfeb57cfb826e4",
+        "scripts/hooks/install.sh": "d920fb6c3813914aae3d7b66ebb2969e72f4dbe680fe5bebcd4040d2eb6d3110",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "scripts/hooks/contract-integrity-probe.sh": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
@@ -18267,7 +18267,7 @@
       "sources": {
         "scripts/hooks/by-reference-3.test.sh": "011f1704931fb5194f0af06865eee584205684d2815e0b5775f8c4d5e2563c95",
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
-        "scripts/hooks/install.sh": "a2da3e29fe6ec0eafeacefd38f824424d97a44ab4592293fd7cfeb57cfb826e4",
+        "scripts/hooks/install.sh": "d920fb6c3813914aae3d7b66ebb2969e72f4dbe680fe5bebcd4040d2eb6d3110",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "scripts/hooks/contract-integrity-probe.sh": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
@@ -18325,7 +18325,7 @@
       "sources": {
         "scripts/hooks/by-reference-4.test.sh": "98cd1835e1af40de90150d5939a6096ad61f1f428a358aeb7b9b293ca557ea5e",
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
-        "scripts/hooks/install.sh": "a2da3e29fe6ec0eafeacefd38f824424d97a44ab4592293fd7cfeb57cfb826e4",
+        "scripts/hooks/install.sh": "d920fb6c3813914aae3d7b66ebb2969e72f4dbe680fe5bebcd4040d2eb6d3110",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "scripts/hooks/contract-integrity-probe.sh": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
