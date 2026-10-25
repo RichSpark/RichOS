@@ -1,0 +1,327 @@
+[
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Not now"
+  ],
+  "contains": "Not now",
+  "seconds": 180
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Not now"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Add this company"
+  ],
+  "contains": "Add this company",
+  "seconds": 60
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Acme",
+   "--role",
+   "AXTextField",
+   "--title",
+   "What's the company called?"
+  ]
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Add this company"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 4
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Not now"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Settings",
+   "--role",
+   "AXPopUpButton"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 5
+ },
+ {
+  "op": "tree",
+  "name": "settings-tree"
+ },
+ {
+  "op": "shot",
+  "name": "0-settings-open",
+  "ocr": true
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "when RichOS started",
+   "--contains"
+  ],
+  "contains": "when RichOS started",
+  "seconds": 60
+ },
+ {
+  "op": "shot",
+  "name": "1-settings-terminal-row",
+  "ocr": true
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Terminal setup",
+   "--role",
+   "AXButton",
+   "--contains"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Read it again"
+  ],
+  "contains": "Read it again",
+  "seconds": 30
+ },
+ {
+  "op": "wait",
+  "seconds": 1
+ },
+ {
+  "op": "shot",
+  "name": "2-sheet-start-read",
+  "ocr": true
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); printf '\\nexport FIXTURE_R41_TOOL_HOME=/fixture/r41\\nexport PATH=/fixture/r41/bin:$PATH\\n' >> \"$h/.zprofile\"; tail -2 \"$h/.zprofile\""
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Read it again"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "since",
+   "--contains"
+  ],
+  "contains": "since",
+  "seconds": 30
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "3-sheet-what-changed",
+  "ocr": true
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "FIXTURE_R41_TOOL_HOME",
+   "--contains"
+  ],
+  "contains": "FIXTURE_R41_TOOL_HOME",
+  "seconds": 10
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Read it again"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "Nothing changed.",
+   "--contains"
+  ],
+  "contains": "Nothing changed.",
+  "seconds": 30
+ },
+ {
+  "op": "shot",
+  "name": "4-sheet-nothing-changed",
+  "ocr": true
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Done"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 1
+ },
+ {
+  "op": "push",
+  "src": "docs/verification/2026-10-25-terminal-and-git-walk/git-name-save.sh.txt",
+  "dest": "/Users/admin/git-name-save.sh"
+ },
+ {
+  "op": "guest",
+  "command": "/bin/bash /Users/admin/git-name-save.sh"
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "What name should go on your team",
+   "--contains"
+  ],
+  "contains": "What name should go",
+  "seconds": 30
+ },
+ {
+  "op": "wait",
+  "seconds": 1
+ },
+ {
+  "op": "shot",
+  "name": "5-card-asked",
+  "ocr": true
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); kill -0 $(cat \"$h/git-name-commit.pid\") && echo 'the first save is waiting'; ls \"$h/Library/Application Support/com.richos.app/engine-state/git-name\""
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "fixture.person@example.com",
+   "--title",
+   "Email"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 1
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Save"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "ask again",
+   "--contains"
+  ],
+  "contains": "ask again",
+  "seconds": 30
+ },
+ {
+  "op": "shot",
+  "name": "6-card-saved",
+  "ocr": true
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); d=\"$h/Library/Application Support/com.richos.app\"; g=$(cat \"$h/runtime-git.path\"); l=$(ls -t \"$d\"/engine-profiles/*/gitconfig | head -1); n=0; while [ $n -lt 10 ] && kill -0 $(cat \"$h/git-name-commit.pid\") 2>/dev/null; do sleep 1; n=$((n+1)); done; cat \"$h/git-name-commit.out\"; cat \"$d/engine-state/git-name/choice.json\"; echo; HOME=\"$h\" GIT_CONFIG_SYSTEM=\"$l\" \"$g\" -C \"$h/northwind-site\" log -1 --format='saved as: %an <%ae>, committed by %cn <%ce>'"
+ },
+ {
+  "op": "guest",
+  "command": "/bin/bash /Users/admin/git-name-save.sh; h=$(ls -d /Users/admin/testvm/walk-*/home); d=\"$h/Library/Application Support/com.richos.app\"; g=$(cat \"$h/runtime-git.path\"); l=$(ls -t \"$d\"/engine-profiles/*/gitconfig | head -1); n=0; while [ $n -lt 5 ] && kill -0 $(cat \"$h/git-name-commit.pid\") 2>/dev/null; do sleep 1; n=$((n+1)); done; if kill -0 $(cat \"$h/git-name-commit.pid\") 2>/dev/null; then echo 'ASKED AGAIN: the second save is waiting'; else echo 'the second save went ahead, not asked again'; cat \"$h/git-name-commit.out\"; HOME=\"$h\" GIT_CONFIG_SYSTEM=\"$l\" \"$g\" -C \"$h/northwind-site\" log -1 --format='saved as: %an <%ae>'; fi"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Settings",
+   "--role",
+   "AXPopUpButton"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "fixture.person@example.com",
+   "--contains"
+  ],
+  "contains": "fixture.person@example.com",
+  "seconds": 30
+ },
+ {
+  "op": "shot",
+  "name": "7-settings-git-row",
+  "ocr": true
+ }
+]
