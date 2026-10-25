@@ -253,6 +253,7 @@
   // ---- THE SETTINGS ROW AND ITS SHEET ---------------------------------------------------------
   let status = null;
   let returnFocus = null;
+  let opened = false;
   const sheet = el("div", "tg-overlay");
   sheet.id = "git-name-sheet";
   sheet.hidden = true;
@@ -368,17 +369,19 @@
   async function open() {
     returnFocus = document.activeElement;
     paintSheet(false);
+    opened = true;
     sheet.hidden = false;
     await load();
     paintSheet(false);
     setTimeout(() => (status && status.source === "git" ? done : sf.email).focus(), 30);
   }
   function close() {
-    if (sheet.hidden) return;
+    if (!opened) return;
+    opened = false;
     sheet.hidden = true;
     // Back to what opened it when that is still on screen; the Settings row is not (the panel
     // closes as the sheet opens), so then to the Settings button.
-    const back = returnFocus && returnFocus.isConnected && returnFocus.getClientRects().length ? returnFocus : document.getElementById("set-btn");
+    const back = returnFocus && returnFocus !== document.body && returnFocus.isConnected && returnFocus.getClientRects().length ? returnFocus : document.getElementById("set-btn");
     if (back && back.focus) back.focus();
   }
   async function saveFromSheet() {
@@ -393,6 +396,9 @@
       note.replaceChildren(el("span", null, COULD_NOT_SAVE));
     }
   }
+  // However the sheet is hidden (Done, Escape, a click outside, or the window's own Escape
+  // handler), the focus comes back out of it.
+  new MutationObserver(() => { if (sheet.hidden && opened) close(); }).observe(sheet, { attributes: true, attributeFilter: ["hidden"] });
   cancel.addEventListener("click", close);
   done.addEventListener("click", close);
   saveSheet.addEventListener("click", saveFromSheet);

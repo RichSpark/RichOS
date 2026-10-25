@@ -923,6 +923,8 @@
   }
   const TERMINAL_NAMES = ["ANDROID_HOME", "BUN_INSTALL", "CARGO_HOME", "COLORTERM", "EDITOR", "GITHUB_TOKEN", "GOPATH", "GPG_TTY", "HOME", "HOMEBREW_CELLAR", "HOMEBREW_PREFIX", "HOMEBREW_REPOSITORY", "INFOPATH", "LANG", "LC_ALL", "LESS", "LOGNAME", "MANPATH", "NVM_DIR", "PAGER", "PATH", "PNPM_HOME", "PYENV_ROOT", "RUSTUP_HOME", "SHELL", "SSH_AUTH_SOCK", "TERM", "TMPDIR", "USER", "VOLTA_HOME", "XDG_CONFIG_HOME", "ZDOTDIR"];
   const TERMINAL_BEFORE = terminalEnv(["/opt/homebrew/bin", "/opt/homebrew/sbin", "~/.cargo/bin", "~/.local/bin", "~/.nvm/versions/node/v20.11.0/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"], TERMINAL_NAMES, false);
+  // `"reorder"`: the same folders as before with the first two swapped (the review's case).
+  const TERMINAL_REORDERED = terminalEnv(["/opt/homebrew/sbin", "/opt/homebrew/bin", "~/.cargo/bin", "~/.local/bin", "~/.nvm/versions/node/v20.11.0/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"], TERMINAL_NAMES, false);
   const TERMINAL_AFTER = terminalEnv(["/opt/homebrew/opt/openjdk/bin", "/opt/homebrew/bin", "/opt/homebrew/sbin", "~/.cargo/bin", "~/.local/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"],
     TERMINAL_NAMES.filter((n) => n !== "NVM_DIR").concat(["JAVA_HOME"]).sort(), true);
   const mockTerminal = {
@@ -939,6 +941,9 @@
     const out = [];
     for (const f of is.folders) if (!was.folders.includes(f)) out.push({ kind: "new", of: "folder", name: f });
     for (const f of was.folders) if (!is.folders.includes(f)) out.push({ kind: "gone", of: "folder", name: f });
+    const keptWas = was.folders.filter((f) => is.folders.includes(f)), keptNow = is.folders.filter((f) => was.folders.includes(f));
+    const moved = keptNow.findIndex((f, i) => f !== keptWas[i]);
+    if (moved >= 0) out.push({ kind: "changed", of: "order", name: keptNow[moved] });
     for (const n of Object.keys(is.values).sort()) if (!(n in was.values)) out.push({ kind: "new", of: "setting", name: n });
     for (const n of Object.keys(is.values).sort()) if (n !== "PATH" && n in was.values && was.values[n] !== is.values[n]) out.push({ kind: "changed", of: "setting", name: n });
     for (const n of Object.keys(was.values).sort()) if (!(n in is.values)) out.push({ kind: "gone", of: "setting", name: n });
@@ -964,7 +969,7 @@
       const outcome = t.reads.length > 1 ? t.reads.shift() : t.reads[0];
       if (outcome === "timeout") t.failed = { atMs: now(), atStart: false };
       else {
-        const env = outcome === "after" ? TERMINAL_AFTER : t.last ? t.last.env : TERMINAL_BEFORE;
+        const env = outcome === "after" ? TERMINAL_AFTER : outcome === "reorder" ? TERMINAL_REORDERED : t.last ? t.last.env : TERMINAL_BEFORE;
         t.before = t.last;
         t.last = { env, at: now(), atStart: false };
         t.failed = null;

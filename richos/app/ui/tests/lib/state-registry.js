@@ -5633,6 +5633,8 @@ module.exports = [
   {"s":"question-card ask tg-ask","c":"FRAGMENT","why":"CSS class names of the Git name card (ui/git-name.js), never rendered as text."},
   {"s":"the way a new Terminal window does. This takes a few seconds, never more than 10.","c":"FRAGMENT","why":"The tail of the Reading line after \"Starting zsh\" (the Terminal setup sheet (ui/terminal-setup.js, round 41 piece 1))."},
   {"s":"tl-rich question-row tg-ask-row","c":"FRAGMENT","why":"CSS class names of the Git name card (ui/git-name.js), never rendered as text."},
+  {"s":"Tool folders in a new order","c":"INFORMATIONAL","why":"A What changed row's word (the Terminal setup sheet (ui/terminal-setup.js, round 41 piece 1)): it says what the read again found, never asks for anything. The same tool folders in a new order, review rv-20261025T011529Z-041708c7-5916 finding 2."},
+  {"s":"now comes earlier, so a tool may come from it","c":"INFORMATIONAL","why":"The note after the folder that now comes first in a reordered PATH. A What changed row's word (the Terminal setup sheet (ui/terminal-setup.js, round 41 piece 1)): it says what the read again found, never asks for anything."},
   // A FILE RICH PUTS IN FRONT OF THE USER (round 36 screen 3, §138 item 12; `rich-files.js`, the
   // window's half `src-tauri/src/rich_files_host.rs`, the opener `opener.rs`, the phone route
   // `phone/routes.rs`). `tests/rich-files.js` renders the cards, the gone state and Ask Rich again,

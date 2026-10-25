@@ -101,7 +101,9 @@
 .tg-row-warn svg { width: 16px; height: 16px; color: var(--attention); flex: none; }
 
 /* ---- 2. YOUR NAME IN GIT: the card in the conversation (the app's question card) ---------- */
-.tg-ask { margin-top: 18px; }
+/* The card is drawn in its own place in time, the slot after Rich's reply, and the round draws it
+   36px under that reply: the space between two slots, less 40px (measured on the drawn card). */
+.tg-ask-row { margin-top: -40px; }
 .tg-ask .ask-set { color: var(--trim-text); }
 .tg-ask-lede { font-size: 1rem; line-height: 1.5; color: var(--ink-soft); margin: 8px 0 0; max-width: 60ch; }
 .tg-ask-lede b { color: var(--ink); font-weight: 600; }

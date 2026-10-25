@@ -26,6 +26,7 @@
     "gone folder": "Tool folder gone",
     "new setting": "New setting",
     "changed setting": "Changed setting",
+    "changed order": "Tool folders in a new order",
     "gone setting": "Setting gone",
   };
   const MARK = { new: "+", gone: "−", changed: "~" };
@@ -45,6 +46,7 @@
   let setup = null; // the last answer from the shell
   let reading = false;
   let returnFocus = null;
+  let opened = false;
 
   // ---- the sheet ---------------------------------------------------------------------------
   const sheet = el("div", "tg-overlay");
@@ -159,11 +161,11 @@
         mark.dataset.contrastRole = "indicator";
         row.append(mark, el("span", "tg-change-what", WHAT[c.kind + " " + c.of]));
         const name = el("span", "tg-change-name", c.name);
-        if (c.kind === "changed") name.append(el("span", "tg-change-note", "its value is different now"));
+        if (c.kind === "changed") name.append(el("span", "tg-change-note", c.of === "order" ? "now comes earlier, so a tool may come from it" : "its value is different now"));
         row.append(name);
         rows.append(row);
         if (c.kind === "new") isNew.add(c.of + ":" + c.name);
-        if (c.kind === "changed") isChanged.add(c.name);
+        if (c.kind === "changed" && c.of === "setting") isChanged.add(c.name);
       });
     }
 
@@ -245,6 +247,7 @@
   function open() {
     returnFocus = document.activeElement;
     paint();
+    opened = true;
     sheet.hidden = false;
     const panel = sheet.querySelector(".tg-sheet");
     panel.style.animation = "none";
@@ -255,14 +258,18 @@
   }
 
   function close() {
-    if (sheet.hidden) return;
+    if (!opened) return;
+    opened = false;
     sheet.hidden = true;
     // Back to what opened it when that is still on screen; the Settings row is not (the panel
     // closes as the sheet opens), so then to the Settings button.
-    const back = returnFocus && returnFocus.isConnected && returnFocus.getClientRects().length ? returnFocus : document.getElementById("set-btn");
+    const back = returnFocus && returnFocus !== document.body && returnFocus.isConnected && returnFocus.getClientRects().length ? returnFocus : document.getElementById("set-btn");
     if (back && back.focus) back.focus();
   }
 
+  // However the sheet is hidden (Done, Escape, a click outside, or the window's own Escape
+  // handler), the focus comes back out of it.
+  new MutationObserver(() => { if (sheet.hidden && opened) close(); }).observe(sheet, { attributes: true, attributeFilter: ["hidden"] });
   $("ts-read").addEventListener("click", readAgain);
   $("ts-done").addEventListener("click", close);
   sheet.addEventListener("pointerdown", (e) => {
