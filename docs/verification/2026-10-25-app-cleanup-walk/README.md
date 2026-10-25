@@ -128,3 +128,112 @@ host lock path written as `<TESTVM_ROOT>`), `facts.json`, `lead-files.json`, `li
 place, the processes still running, each run's `cleanup at` lines, the assignment register and the
 engine's deletion log tail; for `running` the keep proof, for `quit` and `final` the judgment) and
 `reaper-log.txt` (the engine's deletion log at the end). All paths are the guest's. No screenshots.
+
+# A force-quit during a dictation (branch `cc/echo-opus-appclean2`, 2026-10-25)
+
+The handover of `cc/echo-opus-appclean1` named the one gap left: one dictation's scratch folder,
+`dictation-scratch/<24 hex>/`, carried no owner record, so a kill of the dictation tool while it
+decoded left the folder, holding his recorded voice, for good. The fix uses the owner record and
+reaper path already in place for engine profiles. The tool writes the record into each folder it
+makes (`dictation/scratch.rs`, `676fa555f`). The engine's app sweep decides each folder by that
+record (`scratch-reaper.py` `scan_app_dictation`, `ee8a04d51`). A record that is there but cannot
+be read is undecidable, never treated as missing (`3f94131b3`) and so is one holding JSON
+`null` (`ccb8520e9`, after this walk's bundle). Both are error paths, covered by the unit tests
+in `scratch-reaper-app.test.py` and not walked: the walk covers the readable-record path, which
+neither commit changes.
+
+## Build identity
+
+| What | Identity |
+|---|---|
+| Commit the bundle was built from | `ed3d94d0cae9ed3af712a46f94e47f12e8e6ec7d` (the running app reported it: `dictation-report.json` step `identity`) |
+| Bundle | `testvm/branch-bundle.sh` output, `RichOS.zip`, sha256 `463a33b6d1e14f3eee55351e24fd96925e173a92a164771453d591a300e3e3cc`, identity `com.richos.app 1.2.3` |
+| Engine | `make-engine-asset.sh --runtime-dir <nightly state>/runtime-eb026316eb08` at `ed3d94d0c`, `richos-engine-1.2.0.tar.gz`, sha256 `6a4fdcd8bb08f56a6b899177198750253210587ff7958ff0b4b75512285eee82`, pinned into the bundle and handed to the guest with `--engine` |
+| Walk scripts | `garbage-walk.py` at `ed3d94d0c` |
+| Speech model | `ggml-large-v3-turbo-q5_0.bin`, copied into the guest (`stage-voice`), never fetched |
+| Guest | `walk-49559da06d63`, 4 CPUs, 5120 MB (`dictation-run-report.json`) |
+
+## Command
+
+Only the dictation case and the steps it needs. The earlier cases above are reused, not walked
+again (see "What was reused").
+
+```
+run-walk.py --bundle RichOS.zip --home <empty dir> --engine richos-engine-1.2.0.tar.gz \
+  --report run-report.json --wait 1200 -- \
+  richos/app/scripts/testvm/garbage-walk.py --out <dir> \
+  --expect-sha ed3d94d0cae9ed3af712a46f94e47f12e8e6ec7d \
+  --wav <spoken sample, say -o then afconvert to 16 kHz mono: 36564 frames / 16000 = 2.285 s> \
+  --model <ggml-large-v3-turbo-q5_0.bin> \
+  --steps identity,first-run,stage-voice,restart-dictation,kill-dictation,plant-live-dictation,quit-dictation,dictation-swept
+```
+
+`dictation-run-report.json`: boot 44 s, scenario 165 s, `scenario_exit` 0, `cleanup_complete`
+true (app quit, VM stopped, clone deleted), 213 s in all. Nothing was played. The sample is a file
+standing in for the microphone (`RICHOS_VOICE_INPUT_WAV`) and the guest's output was muted
+(`kill-dictation` evidence, `guest_output_muted`).
+
+## Every step (`dictation-report.json`)
+
+| Step | Outcome | Seconds | What it shows |
+|---|---|---|---|
+| identity | PASS | 0.2 | the app says it was built from `ed3d94d0c` |
+| first-run | PASS | 19.8 | |
+| stage-voice | PASS | 3.6 | microphone grant, sample and model in |
+| restart-dictation | PASS | 40.9 | Accessibility granted, relaunched with dictation on; tool pid 2245, the app's child, holds F1 and the app connected |
+| kill-dictation | PASS | 6.1 | F1, the sample delivered, F1; SIGKILL to the TOOL (pid 2245) when `whisper-cli ... -f .../dictation-scratch/e805a47c51cafdd62045f2c4/utt-2245.wav` was running. The folder was still there with `.richos-owner.json` (pid 2245, the record the tool wrote), `decoder.stderr`, `decoder.stdout` and `utt-2245.wav` |
+| plant-live-dictation | PASS | 0.5 | the app started the tool again (pid 2608); a folder `0d61379d867e494683e077c3` with that running tool's owner record and a one-second recording (32044 bytes) |
+| quit-dictation | PASS | 3.0 | the app's own Quit; one complete quit sweep, `deleted 19, undecidable 0, failures 0`, `kept=1`; the killed tool's folder DELETED, the running tool's folder still there and not in the deletion log |
+| dictation-swept | PASS | 90.8 | relaunched; the start sweep `deleted 1, undecidable 0, failures 0` took the planted folder, whose tool had ended with its app; `dictation-scratch` is empty |
+
+The engine's deletion log (`dictation-reaper-log.txt`) for the two folders:
+
+```
+2026-10-25T13:33:26Z DELETED .../dictation-scratch/e805a47c51cafdd62045f2c4 bytes=102592 class=app-dictation why=one dictation's scratch folder: the dictation tool that made it (pid 2245) has ended
+2026-10-25T13:33:46Z DELETED .../dictation-scratch/0d61379d867e494683e077c3 bytes=36992 class=app-dictation why=one dictation's scratch folder: the dictation tool that made it (pid 2608) has ended
+```
+
+The live folder was planted rather than caught mid-decode. A real one exists only from the
+second F1 until the decoder returns and no sweep is timed inside that window. The planted one
+carries the same name pattern and the same kind of owner record, naming a tool that was really
+running. (The watcher's `wav_bytes` and `wav_mtime` are the folder's own, because its
+"recording" argument here is the `dictation-scratch/` folder.)
+
+## What was reused
+
+The cases in the walk above (`8cde5bd71`) were not walked again: the start, settled and quit
+moments, profiles, the split pair, a spoken turn's recording, MCP logs and a failed sweep
+reported as FAILED. This branch's own changes do not touch the code that decides them.
+`git diff --stat 9ad5a334d..ed3d94d0c` (`9ad5a334d` is `cc/echo-opus-appclean1`'s tip, where this
+branch starts) lists six files: `dictation/scratch.rs`, `scratch-reaper.py` and its app test, the
+pins and `garbage-walk.py` and its test. The `scratch-reaper.py` change is 85 lines added and
+none removed (the new `scan_app_dictation`, its one call in `scan_app`, its regular expression
+and docstring lines), so `scan_app_profiles`, `scan_app_voice` and `scan_app_mcp_logs` are as
+they were. Every sweep in this walk still ran all of those scans (the quit sweep deleted 19
+paths) and none failed.
+
+The range `8cde5bd71..9ad5a334d` also carries what main had landed by the time
+`cc/echo-opus-appclean1` merged it (for example `main.rs`, `scratch-reaper.sh`). That is main's
+own work and is not judged by either walk.
+
+## How many runs and why
+
+Two runs, each a complete run under `run-walk.py --wait 1200`. Only the second is recorded here.
+The first is kept in the engineer's scratch and deleted with it.
+
+1. `walk-c96d72f9b94e`, bundle `0dac9ba80`: `kill-dictation` FAIL, "no decoder ran in
+   dictation-scratch within 300 s". In fact the watcher had killed the tool: the app started a new
+   one a second after the second F1 (`dictation.log` 13:23:26, "dictation tool started"). The
+   watcher could not then write what it saw, because `payload/garbage-walk/` is made by `mark`,
+   which this subset does not run. A harness fault, fixed in `ed3d94d0c`.
+2. `walk-49559da06d63`, bundle `ed3d94d0c`: every step passed. The bundle and the engine were
+   built again at `ed3d94d0c` because `3f94131b3` (an unreadable owner record is undecidable)
+   changed the engine between the two runs. That change is an error path covered by its unit
+   test. This walk exercises the readable-record path.
+
+## Files
+
+`dictation-report.json.txt` (every step and its evidence), `dictation-run-report.json.txt`
+(timing; the host lock path written as `<TESTVM_ROOT>`), `dictation-facts.json.txt` and
+`dictation-reaper-log.txt` (the engine's deletion log at the end). Each is the walk's own output,
+unchanged, with `.txt` added. All paths are the guest's. No screenshots.

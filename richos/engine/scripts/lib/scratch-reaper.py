@@ -123,6 +123,9 @@ OWNER_FILE = ".richos-owner.json"
 # (richos-voice stt.rs transcribe_inner and warm): scan_app_voice.
 VOICE_RECORDING_RE = re.compile(r"^utt-([1-9][0-9]{0,9})\.wav$")
 VOICE_WARMUP_RE = re.compile(r"^richos-speech-warm-([1-9][0-9]{0,9})-[0-9]+$")
+# One dictation's scratch folder, named by 12 random bytes in hex (src-tauri dictation/scratch.rs
+# Scratch::new): scan_app_dictation.
+DICTATION_SCRATCH_RE = re.compile(r"^[0-9a-f]{24}$")
 
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -3109,6 +3112,10 @@ class Reaper(object):
                         <pid>-<n>/, the decoder's warm-up at start: the app removes
                         each once the decoder returns, which a force-quit skips. See
                         scan_app_voice.
+          app-dictation <data>/dictation-scratch/<24 hex>/, one dictation's recording and
+                        the words whisper-cli wrote: the dictation tool removes it when
+                        the dictation ends, which a kill of the tool skips. See
+                        scan_app_dictation.
 
         Measured too and NOT taken, each for its one reason:
           ~/.claude/sessions/<pid>.json and .key a crash leaves: Claude Code removes
@@ -3219,6 +3226,7 @@ class Reaper(object):
                     self.add(path, "app-session", size, DELETE, "%s: %s" % (owner, why))
         self.scan_app_profiles(data, scope.get("exiting") or 0, held)
         self.scan_app_voice(data, scope.get("exiting") or 0, held)
+        self.scan_app_dictation(data, held)
         self.scan_app_mcp_logs(data)
         self.entries.sort(key=Entry.key)
         return self.entries
@@ -3469,6 +3477,86 @@ class Reaper(object):
             self.add(path, "app-voice", size, INDETERMINATE, refused)
             return
         self.add(path, "app-voice", size, DELETE, "%s: %s" % (what, why))
+
+    def scan_app_dictation(self, data, held):
+        """app-dictation: <data>/dictation-scratch/<24 hex>/, one dictation's private folder
+        (src-tauri dictation/scratch.rs): the recording, the decoder's output and its owner
+        record (OWNER_FILE, the dictation tool's pid and start, written when the folder is
+        made). The tool removes it when the dictation ends; a kill of the tool in the middle
+        leaves it.
+
+        The owner record decides, as for a profile: the tool that made it still running keeps
+        it (it may be recording or decoding into it now); an ended one lets it go. The app's
+        quitting pid (`exiting`) does not apply: the writer is the tool, not the app, and an
+        installed copy's tool outlives the app. A folder with no owner record (a tool before
+        this one, or the moment between making the folder and writing the record) goes once it
+        is older than the declared age floor; one whose record is there and cannot be read or
+        parsed is UNDECIDABLE, never treated as having none. The open-file check (the decoder an ended tool
+        left still writing into it) and the walls apply to every one; nothing else there is
+        taken."""
+        root = os.path.join(data, "dictation-scratch")
+        names = self.app_listing(root, "app-dictation")
+        if names is None:
+            return
+        self.roots.append(root)
+        walls = Walls([root])
+        for name in names:
+            check_deadline()
+            path = os.path.join(root, name)
+            if not DICTATION_SCRATCH_RE.match(name) or os.path.islink(path) or not os.path.isdir(path):
+                self.unattributed += 1
+                continue
+            if self.app_spent(self.app_until):
+                continue
+            size, newest, has_git = measure(path)
+            # ONLY A MISSING RECORD is an earlier tool's folder. One that is there and cannot be
+            # read or parsed is a failed ownership check, never permission to remove.
+            # `missing` is its own marker: a record holding JSON null parses to None, and that is
+            # a record that is there, not one that is missing.
+            missing = object()
+            try:
+                with open(os.path.join(path, OWNER_FILE), encoding="utf-8") as fh:
+                    owner = json.load(fh)
+            except FileNotFoundError:
+                owner = missing
+            except (OSError, ValueError) as exc:
+                owner = exc
+            if owner is not missing and not isinstance(owner, dict):
+                self.add(path, "app-dictation", size, INDETERMINATE,
+                         "its owner record is there but could not be read as one (%s), so whose "
+                         "it is cannot be told" % (owner if isinstance(owner, Exception)
+                                                  else "not a JSON object"))
+                continue
+            if isinstance(owner, dict):
+                pid = owner.get("pid")
+                state, text = self.ws.process_start(pid)
+                if state == "unknown":
+                    self.add(path, "app-dictation", size, INDETERMINATE,
+                             "cannot tell whether the dictation tool that made it (pid %s) runs: %s"
+                             % (pid, text))
+                    continue
+                if state == "ok" and text == str(owner.get("procStart") or ""):
+                    self.add(path, "app-dictation", size, KEEP,
+                             "the dictation tool that made it (pid %s) is running: it may be "
+                             "recording or decoding into it now" % pid)
+                    continue
+                why = "the dictation tool that made it (pid %s) has ended" % pid
+            else:
+                age = self.now - newest
+                if age < self.floor:
+                    self.add(path, "app-dictation", size, KEEP,
+                             "it carries no owner record and was written %d min ago; the floor "
+                             "is %d min" % (age // 60, self.cfg["age_floor_minutes"]))
+                    continue
+                why = ("it carries no owner record (an earlier tool) and is past the %d min floor"
+                       % self.cfg["age_floor_minutes"])
+            if held(path, size, "app-dictation", "one dictation's scratch folder"):
+                continue
+            refused = walls.check(path, has_git)
+            if refused:
+                self.add(path, "app-dictation", size, INDETERMINATE, refused)
+                continue
+            self.add(path, "app-dictation", size, DELETE, "one dictation's scratch folder: " + why)
 
     def report(self, verbose=False):
         """The plan, with NO timestamps and no elapsed anything in it, so that

@@ -1,0 +1,127 @@
+{
+  "vm": "walk-49559da06d63",
+  "expect_sha": "ed3d94d0cae9ed3af712a46f94e47f12e8e6ec7d",
+  "gone": [],
+  "steps": [
+    {
+      "step": "identity",
+      "evidence": {
+        "built_from": "ed3d94d0cae9ed3af712a46f94e47f12e8e6ec7d"
+      },
+      "outcome": "PASS",
+      "seconds": 0.2
+    },
+    {
+      "step": "first-run",
+      "evidence": {
+        "thread": "thr_d91bbe8ec212490191a722ef5f135184",
+        "title": "Onboarding"
+      },
+      "outcome": "PASS",
+      "seconds": 19.8
+    },
+    {
+      "step": "stage-voice",
+      "evidence": {
+        "microphone_grant": "kTCCServiceMicrophone|com.richos.app|2",
+        "model": "/Users/admin/testvm/walk-49559da06d63/home/.config/richos/models/ggml-large-v3-turbo-q5_0.bin",
+        "model_sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
+      },
+      "outcome": "PASS",
+      "seconds": 3.6
+    },
+    {
+      "step": "restart-dictation",
+      "evidence": {
+        "app_pid": 1771,
+        "tool_pid": 2245,
+        "log": [
+          "[richos] dictation: connected to the tool",
+          "[richos-dictation] dictation-bar window: nonactivating panel, activation prevented at the window server",
+          "[richos-dictation] dictation-flight window: nonactivating panel, activation prevented at the window server",
+          "[richos-dictation] dictation-menu window: nonactivating panel, activation prevented at the window server",
+          "[richos-dictation] the bar, the flight and the menu windows are built as the panel type",
+          "[richos-dictation] key tap created for F1",
+          "[richos-dictation] an app connected: version 1.2.3, /Users/admin/testvm/walk-49559da06d63/RichOS.app, data folder /Users/admin/testvm/walk-49559da06d63/home/Library/Application Support/com.richos.app (this tool is 1.2.3)",
+          "[richos-dictation] menu bar item at 1429,0 34x24"
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 40.9
+    },
+    {
+      "step": "kill-dictation",
+      "evidence": {
+        "folder": "/Users/admin/testvm/walk-49559da06d63/home/Library/Application Support/com.richos.app/dictation-scratch/e805a47c51cafdd62045f2c4",
+        "tool_pid": 2245,
+        "owner": {
+          "pid": 2245,
+          "procStart": "Sun Oct 25 13:33:17 2026"
+        },
+        "files": [
+          ".richos-owner.json",
+          "decoder.stderr",
+          "decoder.stdout",
+          "utt-2245.wav"
+        ],
+        "guest_output_muted": "true",
+        "watcher": {
+          "killed_at": 1792935202.798529,
+          "wav_bytes": 96,
+          "wav_mtime": 1792935202.7419791,
+          "decoder": "/Users/admin/testvm/walk-49559da06d63/engine/runtime/bin/whisper-cli -m /Users/admin/testvm/walk-49559da06d63/home/.config/richos/models/ggml-large-v3-turbo-q5_0.bin -f /Users/admin/testvm/walk-49559da06d63/home/Library/Application Support/com.richos.app/dictation-scratch/e805a47c51cafdd62045f2c4/ut"
+        }
+      },
+      "outcome": "PASS",
+      "seconds": 6.1
+    },
+    {
+      "step": "plant-live-dictation",
+      "evidence": {
+        "folder": "/Users/admin/testvm/walk-49559da06d63/home/Library/Application Support/com.richos.app/dictation-scratch/0d61379d867e494683e077c3",
+        "tool_pid": 2608,
+        "owner": {
+          "pid": 2608,
+          "procStart": "Sun Oct 25 13:33:22 2026"
+        },
+        "wav_bytes": 32044
+      },
+      "outcome": "PASS",
+      "seconds": 0.5
+    },
+    {
+      "step": "quit-dictation",
+      "evidence": {
+        "quit": {
+          "pid": 1771,
+          "asked_to_stop_work": false,
+          "gone_after_s": 2.7
+        },
+        "quit_line": "[richos] cleanup at quit: deleted 19, undecidable 0, failures 0 (verdict: decided deletable=19 reclaimable=428.5 KB kept=1 undecidable=0 skipped=0 skipped_bytes=0 B by_hand=0 by_hand_bytes=0 B foreign=0 foreign_bytes=0 B scope=app unattributed=0; applied: deleted=19 freed=428.5 KB failures=0 log=/Users/admin/testvm/walk-49559da06d63/home/.claude/state/scratch-reaper.log)",
+        "deleted": "2026-10-25T13:33:26Z DELETED /Users/admin/testvm/walk-49559da06d63/home/Library/Application Support/com.richos.app/dictation-scratch/e805a47c51cafdd62045f2c4 bytes=102592 class=app-dictation why=one dictation's scratch folder: the dictation tool that made it (pid 2245) has ended",
+        "kept": "/Users/admin/testvm/walk-49559da06d63/home/Library/Application Support/com.richos.app/dictation-scratch/0d61379d867e494683e077c3"
+      },
+      "outcome": "PASS",
+      "seconds": 3.0
+    },
+    {
+      "step": "dictation-swept",
+      "evidence": {
+        "relaunched": {
+          "pid": 2942,
+          "log": "/Users/admin/testvm/walk-49559da06d63/relaunch-1792935207696111000.log",
+          "app": "/Users/admin/testvm/walk-49559da06d63/RichOS.app",
+          "home_on_screen_after_s": 25.8,
+          "entered_with": "Enter",
+          "settled_s": 60,
+          "voice_ready": null
+        },
+        "start_line": "[richos] cleanup at start: deleted 1, undecidable 0, failures 0 (verdict: decided deletable=1 reclaimable=36.1 KB kept=0 undecidable=0 skipped=0 skipped_bytes=0 B by_hand=0 by_hand_bytes=0 B foreign=0 foreign_bytes=0 B scope=app unattributed=0; applied: deleted=1 freed=36.1 KB failures=0 log=/Users/admin/testvm/walk-49559da06d63/home/.claude/state/scratch-reaper.log)",
+        "deleted": "2026-10-25T13:33:46Z DELETED /Users/admin/testvm/walk-49559da06d63/home/Library/Application Support/com.richos.app/dictation-scratch/0d61379d867e494683e077c3 bytes=36992 class=app-dictation why=one dictation's scratch folder: the dictation tool that made it (pid 2608) has ended",
+        "dictation_scratch_now": {}
+      },
+      "outcome": "PASS",
+      "seconds": 90.8
+    }
+  ]
+}

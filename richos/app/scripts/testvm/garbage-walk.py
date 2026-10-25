@@ -61,6 +61,27 @@ automatically ... in the app just as well without any ifs and buts"), with --wav
                 pair's copy DELETED and its base FAILED, and that base is still there (made after
                 listing-kill, it is not in list-final's judgment; this step judges it)
 
+A FORCE-QUIT DURING A DICTATION, with --wav and --model, after stage-voice. The dictation tool is
+the app's child (`--richos-dictation`); each dictation decodes in its own folder,
+dictation-scratch/<24 hex>/, which the tool removes when the dictation ends and a kill of the
+tool skips. The app's own sweeps decide it by the owner record the tool writes into it:
+
+  restart-dictation       the Accessibility grant (the key tap needs it), then relaunched with the
+                          sample as the microphone and dictation on (RICHOS_DICTATION_TEST_ON); the
+                          tool runs as the app's child and the app connects to it
+  kill-dictation          F1 tapped, the sample delivered, F1 tapped again, and the WATCH watcher
+                          sends SIGKILL to the TOOL's pid the moment whisper-cli runs in
+                          dictation-scratch; the folder is still there, its owner record naming
+                          the killed tool, once no decoder is left writing into it
+  plant-live-dictation    the tool the app starts again: a folder in dictation-scratch with that
+                          running tool's owner record and a one-second recording, standing in for
+                          a dictation decoding now (a real one lives only for seconds)
+  quit-dictation          the app's own Quit: its quit sweep ran to its end, the killed tool's
+                          folder went (DELETED in the engine's log, "has ended") and the running
+                          tool's is still there
+  dictation-swept         restarted: the start sweep took the planted folder, whose tool ended
+                          with the app it belonged to
+
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
 import argparse
@@ -90,9 +111,19 @@ StepFailed = srw.StepFailed
 CONTROL = 'garbage-walk-control'
 STEPS = ['identity', 'mark', 'first-run', 'plant-live', 'job', 'idle', 'list-running', 'quit', 'list-quit',
          'stage-voice', 'restart', 'list-restart', 'kill', 'list-kill', 'plant', 'restart-after-kill',
-         'list-final', 'reported']
+         'list-final', 'reported', 'restart-dictation', 'kill-dictation', 'plant-live-dictation', 'quit-dictation',
+         'dictation-swept']
+DICTATION_STEPS = ('restart-dictation', 'kill-dictation', 'plant-live-dictation', 'quit-dictation', 'dictation-swept')
 # Without --wav: the walk as it was, a SIGKILL at an idle moment and nothing planted.
-VOICE_STEPS = ('plant-live', 'stage-voice', 'plant', 'reported')
+VOICE_STEPS = ('plant-live', 'stage-voice', 'plant', 'reported') + DICTATION_STEPS
+# The dictation tool's argument (dictation/tool.rs ARG) and capture.rs's line when an injected
+# WAV's last frame has gone downstream (dictation-walk.py SAMPLE_ENDED).
+TOOL_ARG = '--richos-dictation'
+SAMPLE_ENDED = 'INJECTED INPUT ended'
+# One dictation's folder (dictation/scratch.rs: 12 random bytes in hex).
+DICTATION_FOLDER = re.compile(r'/dictation-scratch/([0-9a-f]{24})/')
+# A process's start as the app's owner record writes it (app_cleanup.rs own_start).
+STARTED = 'LC_ALL=C LANG=C TZ=UTC0 ps -o lstart= -p %d'
 CLEANUP = '[richos] cleanup at '
 # One second of 16 kHz mono 16-bit silence, as stt.rs transcribe_inner writes a second of speech.
 WAV = ('import os,sys,wave\n'
@@ -552,6 +583,191 @@ class GarbageWalk(srw.StuReminderWalk):
             raise StepFailed('the unreadable base is gone, so nothing failed: ' + planted['undeletable_base'])
         return {'start_line': line, 'failures': int(failures.group(1)),
                 'deletion_log': sorted(l for l in deletions.splitlines() if any(w.strip() in l for w in want))}
+
+    # --- a force-quit during a dictation (module docstring) -------------------------------------
+    def dictation_scratch(self):
+        return self.data + '/dictation-scratch'
+
+    def tool_pids(self):
+        """This payload's dictation tools: pid and parent."""
+        out = []
+        for line in guest(self.vm, 'ps -axo pid=,ppid=,command=', 30).splitlines():
+            parts = line.split(None, 2)
+            if len(parts) == 3 and TOOL_ARG in parts[2] and self.payload in parts[2]:
+                out.append({'pid': int(parts[0]), 'ppid': int(parts[1])})
+        return out
+
+    def tool_of_the_app(self, within, besides=()):
+        """The one tool whose parent is the recorded app, other than `besides`, within `within` s."""
+        app = self.recorded_pid()
+        end = time.monotonic() + within
+        while time.monotonic() < end:
+            tools = [t for t in self.tool_pids() if t['ppid'] == app and t['pid'] not in besides]
+            if len(tools) == 1:
+                return tools[0]['pid']
+            time.sleep(1)
+        raise StepFailed('no one dictation tool of the app (pid %d) within %.0f s: %s' % (app, within, self.tool_pids()))
+
+    def folders(self):
+        """Each folder in dictation-scratch with its owner record (or null)."""
+        return json.loads(guest(self.vm, 'python3 -c %s %s' % (
+            shlex.quote(OWNERS), shlex.quote(self.dictation_scratch())), 60) or '{}')
+
+    def restart_dictation(self):
+        db = '"/Library/Application Support/com.apple.TCC/TCC.db"'
+        sql = ("INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, "
+               "indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) "
+               "VALUES ('kTCCServiceAccessibility', 'com.richos.app', 0, 2, 2, 1, 0, 'UNUSED', 0, strftime('%s','now'));")
+        guest(self.vm, 'sudo -n sqlite3 %s %s' % (db, shlex.quote(sql)), 30)
+        from relaunch import relaunch
+        launched = relaunch(self.vm, environment={'RICHOS_VOICE_INPUT_WAV': self.home + '/voice-sample.wav',
+                                                  'RICHOS_DICTATION_TEST_ON': '1'})
+        self.facts.setdefault('logs', {})['restart-dictation'] = launched['log']
+        self.save()
+        end = time.monotonic() + 90
+        text = ''
+        while True:
+            text = guest(self.vm, 'cat %s 2>/dev/null || true' % shlex.quote(launched['log']), 30)
+            if 'key tap created for F1' in text and 'connected to the tool' in text:
+                break
+            if time.monotonic() > end:
+                raise StepFailed('the tool did not take F1 and connect within 90 s; log tail:\n'
+                                 + '\n'.join(text.splitlines()[-30:]))
+            time.sleep(1)
+        tool = self.tool_of_the_app(10)
+        self.facts['dictation_tool'] = tool
+        self.save()
+        return {'app_pid': launched['pid'], 'tool_pid': tool,
+                'log': [l for l in text.splitlines() if 'dictation' in l][-8:]}
+
+    def kill_dictation(self):
+        """The tool killed while whisper-cli decodes in its folder. CEO §53: the sample is a file
+        standing in for the microphone and the guest's output is muted; nothing is played."""
+        tool = self.facts.get('dictation_tool')
+        if not tool:
+            raise StepFailed('restart-dictation must have run (no tool pid on record)')
+        muted = self.mute_guest_output()
+        log = self.facts['logs']['restart-dictation']
+        seen = self.payload + '/garbage-walk/kill-during-dictation.json'
+        # Made here too: `mark` makes it, and a run of only the dictation steps has no mark
+        # (walk-c96d72f9b94e: the watcher killed the tool, then could not write what it saw).
+        guest(self.vm, 'mkdir -p ' + shlex.quote(self.payload + '/garbage-walk'), 30)
+        # WATCH as it is: its "recording" is the parent folder, so the decoder it waits for is one
+        # whose arguments name a dictation's folder, and the pid it kills is the tool's.
+        guest(self.vm, 'rm -f %s; nohup /usr/bin/python3 -c %s %d %s %s %d >/dev/null 2>&1 &' % (
+            shlex.quote(seen), shlex.quote(WATCH), tool, shlex.quote(self.dictation_scratch() + '/'),
+            shlex.quote(seen), int(self.a.within)), 30)
+
+        def delivered():
+            return int(guest(self.vm, 'grep -c %s %s || true' % (shlex.quote(SAMPLE_ENDED), shlex.quote(log)), 30) or 0)
+
+        def tap():
+            guest(self.vm, 'osascript -e %s' % shlex.quote('tell application "System Events" to key code 122'), 30)
+
+        before = delivered()
+        tap()
+        end = time.monotonic() + 60
+        while delivered() <= before:
+            if time.monotonic() > end:
+                raise StepFailed('the sample was not delivered within 60 s of the first F1')
+            time.sleep(0.2)
+        tap()
+        end = time.monotonic() + self.a.within + 10
+        watched = {}
+        while time.monotonic() < end:
+            text = guest(self.vm, 'cat %s 2>/dev/null || true' % shlex.quote(seen), 30)
+            if text:
+                watched = json.loads(text)
+                break
+            time.sleep(1)
+        if not watched or watched.get('timeout'):
+            tail = guest(self.vm, 'tail -20 %s 2>/dev/null || true' % shlex.quote(self.data + '/dictation.log'), 30)
+            raise StepFailed('no decoder ran in dictation-scratch within %.0f s of the second F1; dictation.log:\n%s'
+                             % (self.a.within, tail))
+        if not self.gone(tool, 10):
+            raise StepFailed('the tool (pid %d) survived SIGKILL for 10 s' % tool)
+        found = DICTATION_FOLDER.search(watched.get('decoder', ''))
+        if not found:
+            raise StepFailed('the decoder\'s command line names no dictation folder: %r' % watched.get('decoder'))
+        folder = self.dictation_scratch() + '/' + found.group(1)
+        # Judged once nothing writes into it: a decoder the killed tool left keeps it, rightly.
+        end = time.monotonic() + 120
+        while 'whisper-cli' in guest(self.vm, 'ps -axo command= | grep -F %s | grep -v grep || true'
+                                     % shlex.quote(folder), 30):
+            if time.monotonic() > end:
+                raise StepFailed('a decoder still runs in %s 120 s after the kill' % folder)
+            time.sleep(1)
+        owner = self.folders().get(found.group(1))
+        if not isinstance(owner, dict) or owner.get('pid') != tool:
+            raise StepFailed('the killed tool\'s folder %s does not carry its owner record (pid %d): %r' % (folder, tool, owner))
+        files = guest(self.vm, 'ls -A %s' % shlex.quote(folder), 30).split()
+        self.facts['abandoned_dictation'] = {'folder': folder, 'tool_pid': tool, 'owner': owner, 'files': files}
+        self.save()
+        return dict(self.facts['abandoned_dictation'], guest_output_muted=muted, watcher=watched)
+
+    def plant_live_dictation(self):
+        killed = (self.facts.get('abandoned_dictation') or {}).get('tool_pid')
+        if not killed:
+            raise StepFailed('kill-dictation must have run (no killed tool on record)')
+        tool = self.tool_of_the_app(60, besides=(killed,))
+        start = ' '.join(guest(self.vm, STARTED % tool, 30).split())
+        if not start:
+            raise StepFailed('the start of the running tool (pid %d) could not be read' % tool)
+        folder = self.dictation_scratch() + '/' + uuid.uuid4().hex[:24]
+        record = json.dumps({'pid': tool, 'procStart': start})
+        guest(self.vm, 'mkdir -m 700 %s && printf %%s %s > %s' % (
+            shlex.quote(folder), shlex.quote(record), shlex.quote(folder + '/.richos-owner.json')), 30)
+        size = int(guest(self.vm, 'python3 -c %s %s' % (shlex.quote(WAV), shlex.quote(folder + '/utt-%d.wav' % tool)), 60))
+        self.facts['live_dictation'] = {'folder': folder, 'tool_pid': tool, 'owner': json.loads(record), 'wav_bytes': size}
+        self.save()
+        return self.facts['live_dictation']
+
+    def deletions(self):
+        return guest(self.vm, 'cat %s 2>/dev/null || true' % shlex.quote(self.home + '/.claude/state/scratch-reaper.log'), 60)
+
+    def there(self, folder):
+        return guest(self.vm, 'test -d %s && echo there || true' % shlex.quote(folder), 30) == 'there'
+
+    def quit_dictation(self):
+        abandoned, live = self.facts.get('abandoned_dictation'), self.facts.get('live_dictation')
+        if not abandoned or not live:
+            raise StepFailed('kill-dictation and plant-live-dictation must have run')
+        quit = self.quit()
+        lines = [l for l in self.cleanup_lines('restart-dictation') if l.startswith(CLEANUP + 'quit:')]
+        # Only a sweep that ran to its end weighed the live folder (kept_while_running's rule).
+        if len(lines) != 1 or lines[0].startswith(CLEANUP + 'quit: FAILED') or '(verdict: ' not in lines[0] \
+                or re.search(r' deferred=[1-9]', lines[0]):
+            raise StepFailed('the Quit did not log one complete sweep: %s' % lines)
+        log = self.deletions()
+        # A row is "<time> DELETED <path> ..." (reaper-log.txt).
+        row = [l for l in log.splitlines() if ' DELETED ' + abandoned['folder'] + ' ' in ' ' + l]
+        if not row or 'the dictation tool that made it (pid %d) has ended' % abandoned['tool_pid'] not in row[0]:
+            raise StepFailed('the engine\'s deletion log has no deletion of the killed tool\'s folder: %s' % row)
+        if self.there(abandoned['folder']):
+            raise StepFailed('the killed tool\'s folder is still there after the Quit: ' + abandoned['folder'])
+        if not self.there(live['folder']):
+            raise StepFailed('the running tool\'s folder did not survive the quit sweep: ' + live['folder'])
+        if any(' DELETED ' + live['folder'] + ' ' in ' ' + l for l in log.splitlines()):
+            raise StepFailed('the deletion log has the running tool\'s folder: ' + live['folder'])
+        return {'quit': quit, 'quit_line': lines[0], 'deleted': row[0], 'kept': live['folder']}
+
+    def dictation_swept(self):
+        live = self.facts.get('live_dictation')
+        if not live:
+            raise StepFailed('plant-live-dictation must have run')
+        relaunched = self.relaunched('dictation-swept')
+        lines = [l for l in self.cleanup_lines('dictation-swept') if l.startswith(CLEANUP + 'start:')]
+        if len(lines) != 1 or lines[0].startswith(CLEANUP + 'start: FAILED'):
+            raise StepFailed('the restart did not log one start sweep that finished: %s' % lines)
+        log = self.deletions()
+        row = [l for l in log.splitlines() if ' DELETED ' + live['folder'] + ' ' in ' ' + l]
+        if not row or 'the dictation tool that made it (pid %d) has ended' % live['tool_pid'] not in row[0]:
+            raise StepFailed('the start sweep did not delete the ended tool\'s folder: %s' % row)
+        if self.there(live['folder']):
+            raise StepFailed('the ended tool\'s folder is still there after the start sweep: ' + live['folder'])
+        (self.out / 'reaper-log.txt').write_text(log + '\n')
+        return {'relaunched': relaunched, 'start_line': lines[0], 'deleted': row[0],
+                'dictation_scratch_now': self.folders()}
 
 
 def main():
