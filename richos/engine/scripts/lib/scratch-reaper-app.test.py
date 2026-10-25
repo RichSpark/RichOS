@@ -459,6 +459,40 @@ class AppSweep(unittest.TestCase):
         self.assertTrue(base.exists(), out)
         self.assertIn("could not be read", out)
 
+    # --- app-dictation: one dictation's scratch folder a killed dictation tool left ---------------
+    def dictation_scratch(self, owner):
+        """<data>/dictation-scratch/<24 hex>/, as the tool's scratch.rs makes it: its owner record
+        (the tool's pid and start), the recording and the decoder's two output files."""
+        folder = self.data / "dictation-scratch" / uuid.uuid4().hex[:24]
+        folder.mkdir(parents=True)
+        pid, start = owner
+        (folder / ".richos-owner.json").write_text(json.dumps({"pid": pid, "procStart": start}))
+        self.recording(pid, folder)
+        (folder / "decoder.stdout").write_text(" Hello there.\n")
+        (folder / "decoder.stderr").write_text("")
+        return folder
+
+    # The handover of cc/echo-opus-appclean1: a force-quit of the dictation tool while it decodes
+    # leaves dictation-scratch/<random>, which carried no owner record and no sweep visited.
+    def test_dictation_scratch_goes_when_its_tool_has_ended_and_stays_while_it_runs_or_is_held(self):
+        abandoned = self.dictation_scratch(self.ended_app())
+        tool = subprocess.Popen(["/bin/sleep", "600"])
+        self.children.append(tool)
+        live = self.dictation_scratch((tool.pid, self.started(tool.pid)))
+        held_folder = self.dictation_scratch(self.ended_app())
+        with open(held_folder / "decoder.stdout", "ab") as out_file:
+            decoder = subprocess.Popen(["/bin/sleep", "600"], stdout=out_file)
+        self.children.append(decoder)
+        rc, out, err = self.sweep()
+        self.assertEqual(rc, 0, out + err)
+        self.assertFalse(abandoned.exists(), out)
+        self.assertIn("DELETED %s" % abandoned, self.log())
+        self.assertIn("class=app-dictation", self.log())
+        self.assertTrue(live.exists(), out)
+        self.assertIn("the dictation tool that made it (pid %d) is running" % tool.pid, out)
+        self.assertTrue(held_folder.exists(), out)
+        self.assertIn("holds a file open inside it", out)
+
     # --- app-mcp-log: Claude Code's MCP logs for the app's coordination folder ---------------------
     def mcp_log(self, folder, name="2026-10-25T00-00-00-000Z.txt"):
         slug = "".join(c if c.isalnum() else "-" for c in str(folder))
