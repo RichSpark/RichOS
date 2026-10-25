@@ -145,12 +145,7 @@ impl Sweeper {
     pub fn run(&self, moment: Moment) -> Result<Outcome, String> {
         let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let result = self.run_bounded(moment, BOUND);
-        match &result {
-            Ok(outcome) => eprintln!("[richos] cleanup at {}: deleted {}, undecidable {}, failures {} ({})",
-                                     moment.as_str(), outcome.deleted, outcome.undecidable, outcome.failures,
-                                     outcome.summary),
-            Err(error) => eprintln!("[richos] cleanup at {}: not done, the next sweep takes it ({error})", moment.as_str()),
-        }
+        eprintln!("{}", log_line(moment, &result));
         result
     }
 
@@ -190,7 +185,36 @@ impl Sweeper {
         if exit == Some(2) {
             return Err(format!("the engine refused the app's sweep: {}", err.trim().lines().last().unwrap_or("")));
         }
+        // The reaper's own exits (scratch-reaper.py main): 0 decided, 3 something undecidable,
+        // 4 a deletion failed, each after its `applied:` line. Anything else is a reaper that
+        // did not finish (a crash, a signal), and the counts it never printed would read as a
+        // clean sweep that deleted nothing.
+        if !matches!(exit, Some(0 | 3 | 4)) || !out.lines().any(|l| l.starts_with("applied:")) {
+            return Err(format!("the engine's reaper failed ({}): {}",
+                               exit.map_or_else(|| "ended by a signal".to_string(), |c| format!("exit {c}")),
+                               err.trim().lines().last().unwrap_or("it printed no error")));
+        }
         Ok(parse(&out, exit))
+    }
+}
+
+/// The app log's one line for a sweep. A clean one keeps the form it has always had; one that
+/// failed or left something undecided says so first, so it never reads as a clean sweep.
+pub fn log_line(moment: Moment, result: &Result<Outcome, String>) -> String {
+    match result {
+        Ok(outcome) => {
+            let status = if outcome.failures > 0 || outcome.exit == Some(4) {
+                "FAILED, "
+            } else if outcome.undecidable > 0 || outcome.exit == Some(3) {
+                "NOT COMPLETE, "
+            } else {
+                ""
+            };
+            format!("[richos] cleanup at {}: {status}deleted {}, undecidable {}, failures {} ({})",
+                    moment.as_str(), outcome.deleted, outcome.undecidable, outcome.failures, outcome.summary)
+        }
+        Err(error) => format!("[richos] cleanup at {}: FAILED, not done ({error}); the next sweep tries again",
+                              moment.as_str()),
     }
 }
 
@@ -445,6 +469,60 @@ mod tests {
         let refused = s.run(Moment::Start).expect_err("an older engine refuses the app's sweep");
         assert!(refused.contains("refused"), "{refused}");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// **A failed or unreadable cleanup is reported as a failure, never as success** (CEO
+    /// 2026-10-25, the app's cleanup): a reaper that dies before its `applied:` line used to be
+    /// logged "deleted 0, undecidable 0, failures 0", the line of a clean sweep.
+    #[test]
+    fn a_reaper_that_crashes_is_a_failure_never_a_clean_sweep() {
+        let root = std::env::temp_dir().join(format!("richos-app-cleanup-crash-{}", uuid::Uuid::new_v4()));
+        let engine = root.join("engine");
+        std::fs::create_dir_all(engine.join("scripts")).unwrap();
+        std::fs::write(engine.join("scripts/scratch-reaper.sh"),
+            "echo 'Traceback (most recent call last):' >&2\necho 'OSError: the disk said no' >&2\nexit 1\n").unwrap();
+        let s = Sweeper::new(&engine, "/usr/bin:/bin", &root);
+        let failed = s.run(Moment::Start).expect_err("a reaper that crashed did no sweep");
+        assert!(failed.contains("exit 1") && failed.contains("the disk said no"), "{failed}");
+        let line = log_line(Moment::Start, &Err(failed));
+        assert!(line.starts_with("[richos] cleanup at start: FAILED, not done ("), "{line}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_or_undecided_sweep_says_so_and_a_clean_one_keeps_its_line() {
+        let verdict = |u: u64| format!("verdict: decided deletable=2 reclaimable=1 KB kept=0 undecidable={u} skipped=0 \
+                                         skipped_bytes=0 B scope=app unattributed=0\n");
+        let clean = parse(&(verdict(0) + "applied: deleted=2 freed=1 KB failures=0 log=/l\n"), Some(0));
+        let line = log_line(Moment::Start, &Ok(clean));
+        // The healthy form gui-boot.test.sh accounts for, unchanged.
+        assert!(line.starts_with("[richos] cleanup at start: deleted 2, undecidable 0, failures 0 (verdict: "), "{line}");
+        let failed = parse(&(verdict(0) + "applied: deleted=1 freed=1 KB failures=1 log=/l\n"), Some(4));
+        assert!(log_line(Moment::Quit, &Ok(failed)).starts_with("[richos] cleanup at quit: FAILED, deleted 1,"));
+        let undecided = parse(&(verdict(1) + "applied: deleted=2 freed=1 KB failures=0 log=/l\n"), Some(3));
+        assert!(log_line(Moment::Settled, &Ok(undecided)).starts_with("[richos] cleanup at settled: NOT COMPLETE, deleted 2,"));
+    }
+
+    /// The same, end to end through the real engine: a crashed app's profile holding a folder
+    /// this user cannot read is decided as garbage and then cannot be deleted, so the sweep
+    /// reports a failure (exit 4), while everything else it decided is still taken.
+    #[test]
+    fn a_leftover_that_cannot_be_deleted_is_a_failed_sweep_and_the_rest_still_goes() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut s = Sandbox::new(None);
+        let (_, left) = s.hosted();
+        let (stuck, stuck_standing) = s.profile(false);
+        let locked = stuck.join("agents/locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("rich.md"), "an agent\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let swept = s.sweeper().run(Moment::Start);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).ok();
+        let outcome = swept.expect("the sweep ran to its end");
+        assert_eq!((outcome.exit, outcome.failures), (Some(4), 1), "{outcome:?}");
+        assert!(stuck.exists(), "{outcome:?}");
+        assert!(!left.exists() && !stuck_standing.exists(), "the rest of the plan still ran: {outcome:?}");
+        assert!(log_line(Moment::Start, &Ok(outcome)).starts_with("[richos] cleanup at start: FAILED, "));
     }
 
     #[test]
