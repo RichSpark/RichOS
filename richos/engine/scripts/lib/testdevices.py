@@ -78,6 +78,9 @@ UNDECIDED = "UNDECIDED"
 
 _LOCKED = contextvars.ContextVar("device_registry_locked", default=False)
 _DEADLINE = contextvars.ContextVar("device_collection_deadline", default=None)
+# The alert writer of a collection that has marked itself running, so each bounded
+# operation can move the mark's `due` (testdevice_alerts.note_operation).
+_MARK = contextvars.ContextVar("device_collection_mark", default=None)
 
 
 class BudgetExpired(TimeoutError):
@@ -109,6 +112,12 @@ def _timeout(maximum):
     remaining = maximum if deadline is None else min(maximum, deadline - time.time())
     if remaining <= 0:
         raise BudgetExpired("test-device collection deadline reached")
+    writer = _MARK.get()
+    if writer is not None:
+        try:
+            writer.note_operation(remaining)
+        except (OSError, ValueError):
+            pass                 # a missed move only makes the alert come sooner
     return remaining
 
 
@@ -1105,21 +1114,34 @@ def _collect(apply=False, departing=(), deadline=None):
     return res
 
 
-def record_collector_failure(message):
+def _alert_writer():
     path = os.path.join(os.path.dirname(__file__), "testdevice_alerts.py")
     spec = importlib.util.spec_from_file_location("device_alert_writer", path)
     writer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(writer)
-    return writer.record_failure(message, "python3 %s collect --apply" % shlex.quote(os.path.abspath(__file__)))
+    return writer
+
+
+def _collect_command():
+    return "python3 %s collect --apply" % shlex.quote(os.path.abspath(__file__))
+
+
+def record_collector_failure(message):
+    return _alert_writer().record_failure(message, _collect_command())
 
 
 def collect(apply=False, departing=(), deadline=None):
     token = _DEADLINE.set(deadline)
+    mark = _MARK.set(None)
     try:
         with registry_lock():
             if apply:
-                # A killed collector leaves an alert instead of a false clean bill.
-                record_collector_failure("cleanup started but has not completed")
+                # A killed collector leaves an alert instead of a false clean bill. The mark
+                # names this process, so while it still runs the mark reads "running", not
+                # failed (testdevice_alerts.standing); a standing failure is left as it is.
+                writer = _alert_writer()
+                writer.record_running(_collect_command())
+                _MARK.set(writer)
             return _collect(apply, departing, deadline)
     except Exception as exc:
         res = {k: [] for k in ("collected", "survivors", "left", "undecided", "deferred")}
@@ -1127,7 +1149,13 @@ def collect(apply=False, departing=(), deadline=None):
         if apply:
             res["standing"] = record_collector_failure(res["notes"][0])
         return res
+    except BaseException:
+        # Interrupted while this process lives on: the run did not complete.
+        if apply:
+            record_collector_failure("cleanup started but has not completed")
+        raise
     finally:
+        _MARK.reset(mark)
         _DEADLINE.reset(token)
 
 
