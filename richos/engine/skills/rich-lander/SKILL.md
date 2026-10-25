@@ -1,6 +1,6 @@
 ---
 name: rich-lander
-description: The orchestrator's per-handoff git landing sequence. The orchestrator is the only writer to main. This skill is the full procedure run for every engineer handoff — detect completion, verify from the worktree branch, collect evidence, merge from the main checkout, verify clean state, push, deploy, and remove the worktree deliberately. Do not delegate any step; engineers must never execute it.
+description: The orchestrator's per-handoff git landing sequence. The orchestrator is the only writer to main. This skill is the full procedure run for every engineer handoff — detect completion, verify from the worktree branch, collect evidence, merge from the main checkout, verify clean state, push, deploy and remove the worktree deliberately. Do not delegate any step; engineers must never execute it.
 ---
 
 # rich-lander — how the orchestrator lands agent work onto `main`
@@ -23,7 +23,7 @@ no-ops, wrong deploy target).
 ## Detecting a handoff — durable signals, NEVER the mailbox
 
 The agent↔lead `SendMessage` mailbox is lossy (~50% drop). The orchestrator never
-waits on, or trusts, a chat message as the trigger or the source of truth. Two
+waits on or trusts a chat message as the trigger or the source of truth. Two
 durable event logs in the session team dir are the wake signal:
 
 1. **`~/.claude/teams/session-<id>/idle-events.jsonl`** — the `TeammateIdle`
@@ -72,11 +72,11 @@ git -C "$WT" status --short                     # must be empty
   behind artifact) and triggers false alarms. `$BASE..$BR` shows only this
   teammate's changes.
 - **Verify commit count matches distinct changes** (the atomic-commit check).
-  If the teammate batched 5 changes into 1 commit, or left work uncommitted
-  (`$BASE..$BR` empty, or untracked files present), that is a bad handoff —
+  If the teammate batched 5 changes into 1 commit or left work uncommitted
+  (`$BASE..$BR` empty or untracked files present), that is a bad handoff —
   re-engage the teammate before landing.
 - **Derive `Touches`** from the changed paths (which of your source trees,
-  `docs-only`, `scripts-only`, or an explicit mix). Never guess — read the
+  `docs-only`, `scripts-only` or an explicit mix). Never guess — read the
   paths; guessing is how work ships to the wrong deploy target.
 - **On a QA handoff (ray, urban, kai, quint), count what the walk wrote from
   scratch:** `scripts/qa-throwaways.sh <transcript>` — the agent's JSONL under
@@ -84,7 +84,7 @@ git -C "$WT" status --short                     # must be empty
   the session's scratch `tasks/<id>.output` also points at. `workspaces.sh
   land` prints the same count on its own, so this is for reading it BEFORE the
   land. It is information, not a gate: a repeated helper is a missing row in
-  `app/scripts/qa/README.md`, and the answer is to add the tool there, never to
+  `app/scripts/qa/README.md` and the answer is to add the tool there, never to
   send the walk back.
 
 ### 2b. Validate publication completeness on the candidate tree
@@ -135,13 +135,13 @@ guaranteed while the worktree exists. (The dirs it collects are configured as
 is done, so this step is only for a merge typed by hand or for holding the lease
 past the merge (a push or a deploy).
 With the operator fence off this says so and does nothing.
-With it on, several conversations, and Codex, land into the same repositories,
+With it on, several conversations and Codex land into the same repositories,
 and the fence refuses a merge, commit, reset or switch in a main checkout by
 anyone who does not hold that repository's lease. **Exit 75 means another holder
 is landing**: the line names who, for how long and in what state; run the
 command again. One call waits at most 90 seconds; with the Bash tool timeout
 raised to 600000 ms you may pass `--wait 540`. If it reports an orphaned merge
-(its starter has ended, or the fence refused it), clear it with
+(its starter has ended or the fence refused it), clear it with
 `<engine>/scripts/land-lease.sh abort-orphan --repo <repo root>`, which preserves it first,
 and name the head it prints in the land's report.
 If it names a tree that a refused writer had already rewritten (paths you did not
@@ -162,9 +162,9 @@ git merge --no-ff worktree-<id>
   no-op.** Always `cd` to the repo root first.
 - Fast-forward is fine when main hasn't moved; a merge commit is fine when it
   has. On a **conflict**, stop: `git merge --abort` (your own merge, under your
-  lease), and re-engage the engineer
+  lease) and re-engage the engineer
   durably (re-spawn with the conflicted files + "rebase onto latest main,
-  resolve, recommit" in the spawn prompt, or write the correction to their
+  resolve, recommit" in the spawn prompt or write the correction to their
   task — a message to an idled teammate can drop). **The orchestrator never
   resolves semantic conflicts silently** — the engineer knows the intent.
 
@@ -212,8 +212,8 @@ unmerged branch and marking the item CLOSED on that basis. **The verdict is not 
 closure; the commit reaching main is.** A judgment written on a branch nobody merged
 has not been delivered to anyone.
 
-Any output from the loop is unfinished business: land it, or state in the handoff
-that it is held, and on whose word.
+Any output from the loop is unfinished business: land it or state in the handoff
+that it is held and on whose word.
 
 ### 6. Push origin main
 
@@ -235,9 +235,9 @@ lease released at the push lets a second lead move `main` under a deploy still r
 holding a merge in progress, uncommitted changes or unpushed commits is kept and
 announced, naming the dirty paths.)
 
-**This is where the in-flight sweep is enforced** — see §8b. If a live teammate
-is behind with no witnessed notice naming this commit, the push is refused, by
-name. Run `scripts/inflight-notify.sh status` before you get here.
+**The push needs no in-flight notice** (CEO 2026-10-06) — see §8b. A live teammate
+behind this commit is not refused for and is owed nothing: it runs `git merge main`
+itself as its last step before handover.
 
 The orchestrator is the only pusher. This makes the landed commit visible on the
 remote and keeps the local main / origin / worktree base window small.
@@ -255,7 +255,7 @@ costs QA more than a short no-op deploy).
      post-deploy build identity matches the landed commit. Never trust a
      "deployed successfully" claim without an independent check. -->
 
-### 8. Remove the worktree — DELIBERATELY, and only after shutdown
+### 8. Remove the worktree — DELIBERATELY and only after shutdown
 
 Worktree removal is a **separate, deliberate act — landing is not a cleanup
 trigger.** A worktree with commits/changes is never auto-cleaned.
@@ -264,7 +264,7 @@ trigger.** A worktree with commits/changes is never auto-cleaned.
   `locked` worktree in `git worktree list` means the agent is still running —
   **never remove a locked worktree.** Never infer death from filesystem
   inactivity.
-- Then, and only then:
+- Then and only then:
 
 ```bash
 git worktree remove .claude/worktrees/agent-<id>
@@ -273,42 +273,38 @@ git branch -d worktree-<id>
 
 If work was rejected or abandoned, record why before removing.
 
-### 8b. SWEEP THE IN-FLIGHT TEAMMATES — the step that is forgotten
+### 8b. IN-FLIGHT TEAMMATES — a notice only when one is load-bearing
 
-**Added 2026-08-30, after it was forgotten twice in one day and cost two extra
-agents. Made ENFORCEABLE the same day — this step is no longer only written
-down.**
+**The rule since 2026-10-06 (CEO): a push no longer requires a notice to or a
+waiver for any live teammate.** Every spawn prompt tells the teammate to run
+`git merge main` in its own worktree as its last step before handover
+(`prepare-agent-spawn.py` adds that line; `verify-agent-prompt.sh` check 6 refuses a
+worktree spawn without it). So main moving under a teammate creates no debt:
+`guard-inflight-notify.sh` allows the push and the turn-end notice
+(`notice-inflight-acks.sh`) never names a teammate nobody messaged.
 
-> **IT RUNS BEFORE STEP 6, NOT AFTER STEP 8.** The debt is created by the merge
-> (step 4) and the notice has to name the SHA main moved TO, so the sweep sits
-> between the clean-state verification and the push. `guard-inflight-notify.sh`
-> REFUSES `git push origin main` while a live teammate is behind with no
-> witnessed notice naming this tip. It is numbered 8b because that is where it
-> was written; it is executed at 5c.
->
-> ```bash
-> scripts/inflight-notify.sh status     # who is in flight, and what moved under them
-> ```
+```bash
+scripts/inflight-notify.sh status     # who is in flight, what moved under them, who was told, who acked
+```
 
-Landing moves `main`. Every teammate still working was cut from an older base and is
-now, silently, one revision behind. **Nothing tells them. You are the only thing that
-can.**
+The merge brings their FILES current. It does not bring their ASSUMPTIONS current.
+When a land changes a fact a running teammate is working from, message it, using
+these questions:
 
-Before this land is finished, enumerate every live worktree and ask, per teammate:
-
-1. **Did their base move under them in a way that touches their files?** If yes, they
-   will hit a merge conflict they could have avoided, or build on a fact that is no
-   longer true.
-2. **Did a record they were told to READ change?** A worktree is a snapshot: their copy
+1. **Did a record they were told to READ change?** A worktree is a snapshot: their copy
    of a wiki page, a decision file or a plan is frozen at their base. A ruling landed
-   after they were cut does not exist for them.
-3. **Did the thing they are consuming grow?** New source material, more variations,
+   after they were cut does not exist for them until their final merge, after the work
+   is done.
+2. **Did the thing they are consuming grow?** New source material, more variations,
    more entries — work sized to what existed at spawn time silently ships incomplete.
+
+A move that only touches their files needs no message: their own `git merge main`
+meets it and resolves any conflict.
 
 **Where the answer is yes, MESSAGE THEM, in this land, before you report.** The mailbox
 is lossy, so a bare send is not enough:
 
-- Say what changed, name the SHA, and say which of their assumptions it breaks.
+- Say what changed, name the SHA and say which of their assumptions it breaks.
 - Ask for a reply that **only a teammate holding the new fact could write** — quote it
   back, name the file, state the number. "Did you get it?" confirms nothing; a correct
   restatement confirms content.
@@ -316,62 +312,37 @@ is lossy, so a bare send is not enough:
   load-bearing, escalate to a fresh spawn with a corrected brief.
 
 **`TaskStop` + respawn is the FALLBACK, not the first move.** It destroys whatever the
-teammate has written; it is free only when they have written nothing, and checking that
-first is luck management, not method. Message, confirm, and respawn only when
+teammate has written; it is free only when they have written nothing and checking that
+first is luck management, not method. Message, confirm and respawn only when
 confirmation does not arrive.
 
-**The two failures that produced this step, both on 2026-08-30, both mine:**
+**The failure behind those two questions, 2026-08-30:** twelve new design variations
+landed while an agent was building a library from the seven that existed at its spawn.
+Nothing was sent. Result: the library shipped at 7 of 19 and needed another agent and
+another round to finish. No merge would have caught it; there was no file overlap.
 
-- The techy renderer landed while a second agent built the splash screen from the same
-  base. Both were known to be in `app/`. Nothing was sent. Result: eight conflicting
-  hunks across five files and a whole extra agent to resolve them.
-- Twelve new design variations landed while an agent was building a library from the
-  seven that existed at its spawn. Nothing was sent. Result: the library shipped at 7 of
-  19 and needed another agent and another round to finish.
-
-Both were reported to the CEO as news. He had to point out that the message was never
-sent at all.
-
-**WHAT ENFORCES WHICH HALF — say it plainly, because the two are different
-problems.**
+**WHAT TRACKS A NOTICE YOU DID SEND.**
 
 | | mechanism | what it actually proves |
 |---|---|---|
-| the message was SENT | `notice-inflight-sends.sh`, a PostToolUse[SendMessage] hook writing `inflight-notices.jsonl`, checked by `guard-inflight-notify.sh` at the push | ENFORCED. The record is written inside the lead's own tool call, so the only way to produce it is to actually send the message. It witnesses the send, not the delivery — which is what makes it true on a channel that drops half of everything. |
-| the message was RECEIVED and READ | an ack file the teammate writes in its own worktree (`scripts/inflight-ack.sh`), verified by `scripts/inflight-notify.sh acks` | SURFACED, not enforced. It cannot block the push — at push time the message is seconds old. `notice-inflight-acks.sh` reports a missing ack at the end of every turn once 30 minutes have passed. |
-| the message was UNDERSTOOD | the ack's `detail` line | NOT MECHANIZED, and never claimed to be. The machine checks that the line exists, is at least 40 characters, and that the `paths` beside it are real. Whether the sentence is CORRECT is comprehension, and a string match is not comprehension. The verifier prints it under HUMAN JUDGMENT REQUIRED. Read it. |
+| the message was SENT | `notice-inflight-sends.sh`, a PostToolUse[SendMessage] hook writing `inflight-notices.jsonl` | RECORDED. The record is written inside the lead's own tool call, so the only way to produce it is to actually send the message. It witnesses the send, not the delivery. The push does not check it. |
+| the message was RECEIVED and READ | an ack file the teammate writes in its own worktree (`scripts/inflight-ack.sh`), verified by `scripts/inflight-notify.sh acks` | SURFACED, not enforced. `notice-inflight-acks.sh` reports a sent notice with no ack once the timeout (30 minutes by default) has passed and reports NOT CHECKED when its assessment fails. |
+| the message was UNDERSTOOD | the ack's `detail` line | NOT MECHANIZED and never claimed to be. The machine checks that the line exists, is at least 40 characters and that the `paths` beside it are real. Whether the sentence is CORRECT is comprehension. The verifier prints it under HUMAN JUDGMENT REQUIRED. Read it. |
 
-**The ack contract must be in the SPAWN PROMPT.** You cannot bootstrap
-reliability from an unreliable channel: an instruction that travels in the
-message is lost with the message. `verify-agent-prompt.sh` check 6 refuses any
-worktree spawn whose prompt does not carry it (opt out with a live
-`no-inflight-ack: <reason>` line).
-
-**The escape hatch is a command, not a promise:**
-
-```bash
-scripts/inflight-notify.sh waive <worktree-path> --reason "<why>"
-```
-
-Recorded with the tip, the worktree, the reason and the actor — and it prints
-loudly when what you are waiving has file overlap with what just moved.
-
-**WHAT IS STILL ON YOU.** Whether a move actually breaks a given teammate's
-assumptions is a judgment no diff can make — §8b's questions 2 and 3 are about
-records READ and material CONSUMED, neither of which shows up as a file the
-teammate touched. The machine forces every live teammate to be CONSIDERED and a
-decision to be RECORDED. It cannot make the decision a good one.
+**WHAT IS STILL ON YOU.** Whether a land breaks a given teammate's assumptions is a
+judgment no diff can make: records READ and material CONSUMED do not show up as files
+the teammate touched. Nothing forces you to consider it, so consider it at every land.
 
 ### 9. Strict serialization — process the next queued handoff
 
 One handoff at a time. When this land finishes, re-check `task-events.jsonl` /
-`idle-events.jsonl` for teammates that completed while you were landing, and
+`idle-events.jsonl` for teammates that completed while you were landing and
 process them one by one. Never parallelize a land — serial landing is the
 entire point of single-writer.
 
 ### 10. Kick off QA pipeline (if user-facing)
 
-If the change touches UI, API, or anything a user could perceive, run the QA
+If the change touches UI, API or anything a user could perceive, run the QA
 gate in order: automation QA → functional QA (audits committed to `qa-audits/`)
 → design-gatekeeper signoff (`ui-ux-signoffs/SIGNOFF_YYYY-MM-DD_HH.MM.md`). See
 CLAUDE.md → QA Pipeline. All required gates pass before the CEO sees the work.
@@ -381,7 +352,7 @@ Docs/scripts/agent-file-only changes skip QA — report directly to the CEO.
 
 - **Never infer an agent is dead from filesystem inactivity.** A quiet worktree
   is not a corpse — agents do substantial in-session work before flushing to
-  disk. Require a positive termination signal, or send a shutdown and WAIT for
+  disk. Require a positive termination signal or send a shutdown and WAIT for
   confirmation. Liveness = the worktree lock (`git worktree list` → `locked`).
   Background native-isolation agents do NOT appear in the SendMessage roster —
   absence there ≠ terminated.
@@ -401,7 +372,7 @@ Docs/scripts/agent-file-only changes skip QA — report directly to the CEO.
   main checkout.
 - Do not resolve semantic conflicts yourself — abort and re-engage the engineer.
 - Do not skip step 5 (clean-state verification) — ever.
-- Do not remove a locked worktree, or any worktree before the teammate is shut
+- Do not remove a locked worktree or any worktree before the teammate is shut
   down.
 - Do not process two handoffs in parallel.
 - Do not trust a "deployed successfully" claim — verify independently at step 7.

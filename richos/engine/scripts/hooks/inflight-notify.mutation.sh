@@ -135,10 +135,32 @@ echo "=== in-flight sweep: every property, proven load-bearing by removing it ==
 # 1. THE SHA IS WHAT TIES A NOTICE TO A LAND. Without it "I messaged them at
 #    some point" clears a debt about a commit that did not exist yet.
 mutant notice-ignores-sha "3a." scripts/lib/inflight.py \
-    '        if not any(tip.startswith(tok) and len(tok) >= 7 for tok in note.get("sha_tokens", [])):
+    '        if not any((tip.startswith(tok) if tip else True) and len(tok) >= 7
+                   for tok in note.get("sha_tokens", [])):
             continue' \
     '        pass' \
     "Any message to anyone would clear any land."
+
+# 1b. A SENT NOTICE OUTLIVES THE TIP IT NAMED. Without the pass that carries it,
+#     an unacked notice for A goes silent the moment main moves to B.
+mutant pending-notice-dropped "15c." scripts/lib/inflight.py \
+    '    pending_pool = [w for w in live if not w.get("notice") and not w.get("landed")]' \
+    '    pending_pool = []' \
+    "A real, unacked notice would vanish whenever main moved on."
+
+# 1c. EVERY COMMIT THE NOTICE NAMES. Judged by its first (sorted) commit only,
+#     a "from BASE to A" notice clears on BASE, which the teammate already has.
+mutant notice-first-commit-only "16a." scripts/lib/inflight.py \
+    '        shas = notice_commits(note)' \
+    '        shas = notice_commits(note)[:1]' \
+    "A two-commit notice would clear without its newer commit ever being acked."
+
+# 1d. RELEVANCE BEFORE RECENCY. Without it a later notice about another
+#     repository replaces the open one about this repository.
+mutant notice-latest-any-repo "16b." scripts/lib/inflight.py \
+    '                   accept=lambda n: bool(notice_commits(n)))' \
+    '                   accept=None)' \
+    "A notice about another repository would hide this repository's open notice."
 
 # 2. AMBIGUITY MUST CREDIT NOTHING. Crediting the first match makes the guard
 #    report a teammate as told when a different teammate was told.

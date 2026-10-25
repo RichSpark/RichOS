@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
 #
 # notice-inflight-acks.sh — NON-BLOCKING Stop hook. Tells the OPERATOR that a
-# teammate was told main moved under it, has not proved it heard, and that the
-# timeout has passed — so the §8b fallback is now the move.
+# teammate WAS SENT a notice that main moved under it, has not proved it heard,
+# and that the timeout has passed — so the §8b fallback is now the move.
 #
 # ===========================================================================
-# THE HALF THE PUSH GUARD DELIBERATELY CANNOT DO
+# ONLY NOTICES THAT WERE SENT
 # ===========================================================================
-# guard-inflight-notify.sh enforces the SEND: no land completes with a live
-# teammate behind and un-notified. It stops there on purpose. At push time the
-# message is seconds old; the teammate has not had a tool round yet, and a
-# guard that blocked a land until another party acted would wedge the session
-# on somebody else's schedule.
-#
-# So the ack is SURFACED rather than enforced, and this is where. It also
-# closes the push guard's one stated gap: a land that merges and never pushes
-# is invisible to a guard on `git push`, but every turn ends at Stop.
+# CEO 2026-10-06: a push no longer requires a notice to, or a waiver for, any
+# live teammate; each teammate runs `git merge main` itself as its last step
+# before handover (the line prepare-agent-spawn.py puts in every spawn prompt).
+# So a teammate that main moved past and nobody messaged is owed NOTHING, and
+# this hook says nothing about it — naming it every time main moved was
+# repeated noise with no action behind it. What stays is the ack of a notice
+# that was actually sent, and the one line when its timeout has passed.
 #
 # ===========================================================================
 # WHY 30 MINUTES — MEASURED, NOT PICKED
@@ -143,7 +141,7 @@ else
     root_failure_banner "scripts/hooks/notice-inflight-acks.sh" >&2
     stop_notice_init "notice-inflight-acks.sh" "" "$INPUT"
     stop_notice_abnormal "root-failure" \
-        "IN-FLIGHT ACK WATCH IS OFF: this hook cannot tell which repository it governs (${RICHOS_ROOT_REASON:-root resolution failed}). Nobody is watching whether teammates were told main moved under them — run scripts/inflight-notify.sh status by hand."
+        "IN-FLIGHT ACK WATCH IS OFF: this hook cannot tell which repository it governs (${RICHOS_ROOT_REASON:-root resolution failed}). Nobody is watching whether sent in-flight notices were acked — run scripts/inflight-notify.sh status by hand."
     exit 0
 fi
 
@@ -210,7 +208,6 @@ import inflight
 
 seen = []
 overdue = []
-unsent = []
 failed = []
 for repo in dict.fromkeys(r for r in os.environ["IF_REPOS"].split("\n") if r.strip()):
     if repo in seen:
@@ -229,22 +226,24 @@ for repo in dict.fromkeys(r for r in os.environ["IF_REPOS"].split("\n") if r.str
         # A RETURNED error decided nothing either: same NOT CHECKED line.
         failed.append("%s (%s)" % (os.path.basename(repo.rstrip("/")) or repo, " ".join(str(res["error"]).split())))
     for wt in res["worktrees"]:
+        # A teammate nobody messaged (OWED-NO-NOTICE) is owed nothing since
+        # CEO 2026-10-06: it merges main itself before handover. A notice that
+        # WAS sent for an earlier tip is still tracked (pending_notice).
         who = wt.get("resolved_name") or os.path.basename(wt["path"].rstrip("/"))
-        if wt["verdict"] == "OWED-NO-NOTICE":
-            unsent.append(who)
-        elif wt["verdict"] in ("NOTIFIED-NO-ACK", "NOTIFIED-ACK-INVALID"):
+        if wt["verdict"] in ("NOTIFIED-NO-ACK", "NOTIFIED-ACK-INVALID"):
             ack = wt.get("ack") or {}
             if wt["verdict"] == "NOTIFIED-ACK-INVALID" or ack.get("overdue"):
                 overdue.append(who)
+        pend = wt.get("pending_notice")
+        if pend and (pend.get("invalid") or (pend.get("ack") or {}).get("overdue")):
+            overdue.append("%s (notice for %s)" % (who, pend["sha"][:12]))
 
 parts = []
-if unsent:
-    parts.append("NEVER TOLD: " + ", ".join(sorted(set(unsent))))
 if overdue:
     parts.append("no ack past the timeout: " + ", ".join(sorted(set(overdue))))
 if failed:
     parts.append("NOT CHECKED, the assessment failed for: " + ", ".join(failed))
-print("\t".join(["|".join(sorted(set(unsent + overdue)) + ["not-checked:" + f for f in failed]),
+print("\t".join(["|".join(sorted(set(overdue)) + ["not-checked:" + f for f in failed]),
                  "; ".join(parts)]))
 ' 2>/dev/null || printf 'not-checked:the sweep\tNOT CHECKED: the in-flight sweep itself failed to run')"
 
@@ -252,16 +251,16 @@ KEY="$(printf '%s' "$SUMMARY" | cut -f1)"
 TEXT="$(printf '%s' "$SUMMARY" | cut -f2-)"
 
 if [ -z "$KEY" ]; then
-    stop_notice_normal "IN-FLIGHT SWEEP: every live teammate behind the current tip has now been told and has acked. Nothing outstanding."
+    stop_notice_normal "IN-FLIGHT SWEEP: no sent notice is waiting on an ack past the timeout. Nothing outstanding."
     exit 0
 fi
 
 case "$TEXT" in
     "NOT CHECKED"*)
-        _NC_MSG="IN-FLIGHT SWEEP — $TEXT. Whether teammates behind the current tip were told and acked is unknown this turn; run scripts/inflight-notify.sh status by hand."
+        _NC_MSG="IN-FLIGHT SWEEP — $TEXT. Whether sent notices were acked is unknown this turn; run scripts/inflight-notify.sh status by hand."
         stop_notice_abnormal "outstanding:$KEY" "$_NC_MSG"
         exit 0 ;;
 esac
 stop_notice_abnormal "outstanding:$KEY" \
-    "IN-FLIGHT SWEEP (rich-lander SKILL.md §8b) — $TEXT. Main moved under them and they cannot know it. Message them naming the SHA, or if ${TIMEOUT_MIN}min has passed with no ack, TaskStop + respawn with a corrected brief. That is yours to do: scripts/inflight-notify.sh status"
+    "IN-FLIGHT SWEEP (rich-lander SKILL.md §8b) — $TEXT. They were sent a notice and have not acked it within ${TIMEOUT_MIN}min. If the fact is load-bearing, TaskStop + respawn with a corrected brief. That is yours to do: scripts/inflight-notify.sh status"
 exit 0

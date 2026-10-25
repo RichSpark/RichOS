@@ -1022,8 +1022,9 @@ esac
 # tip commit, an unreadable worktree inventory, git gaps) rather than raising.
 # The Stop notice used to read only the raised kind, so a returned error fell
 # through to "Nothing outstanding." Its own repository, so the state before
-# each case is known: a teammate behind and never told, that teammate gone
-# (the clean answer), then a swept directory whose tip cannot be resolved.
+# each case is known: a teammate behind and never told (CEO 2026-10-06: no
+# teammate is owed a notice, so the Stop notice says nothing about it), then a
+# swept directory whose tip cannot be resolved, then the clean answer again.
 # ==========================================================================
 CLEAN="$SANDBOX/clean-repo"
 CLEAN_TEAMS="$SANDBOX/clean-teams"
@@ -1054,24 +1055,198 @@ notice_has() { # <output> <text>
 }
 COUT="$(clean_stop)"
 say "14 teammate never told" "$COUT"
-notice_has "$COUT" "NEVER TOLD: mark-sonnet-clean1" \
-    && ok "14a. precondition: a teammate behind and never told is named" \
-    || bad "14a. precondition: a teammate behind and never told is named" "$COUT"
+case "$COUT" in
+    *mark-sonnet-clean1*|*"NEVER TOLD"*|*TaskStop*)
+        bad "14a. main moved past a live teammate with no notice sent: the Stop notice says nothing about it" "$COUT" ;;
+    *)  ok "14a. main moved past a live teammate with no notice sent: the Stop notice says nothing about it" ;;
+esac
 git -C "$CLEAN" worktree remove --force "$CLEAN_WT" >/dev/null 2>&1
-COUT="$(clean_stop)"
-say "14 nothing owed" "$COUT"
-notice_has "$COUT" "Nothing outstanding." \
-    && ok "14b. a clean assessment with nothing owed says nothing outstanding" \
-    || bad "14b. a clean assessment with nothing owed says nothing outstanding" "$COUT"
 printf '%s\n' "$SANDBOX/not-a-repo" > "$CLEAN_TEAMS/session-deadbeef/inflight-repos.txt"
 COUT="$(clean_stop)"
 say "14 returned error" "$COUT"
 if notice_has "$COUT" "NOT CHECKED, the assessment failed for: not-a-repo" \
         && ! notice_has "$COUT" "Nothing outstanding."; then
-    ok "14c. an assessment that RETURNS an error is NOT CHECKED, naming the repository"
+    ok "14b. an assessment that RETURNS an error is NOT CHECKED, naming the repository"
 else
-    bad "14c. an assessment that returns an error is NOT CHECKED, naming the repository" "$COUT"
+    bad "14b. an assessment that returns an error is NOT CHECKED, naming the repository" "$COUT"
 fi
+: > "$CLEAN_TEAMS/session-deadbeef/inflight-repos.txt"
+COUT="$(clean_stop)"
+say "14 checked again" "$COUT"
+notice_has "$COUT" "Nothing outstanding." \
+    && ok "14c. once the assessment runs again with nothing waiting, it says nothing outstanding" \
+    || bad "14c. once the assessment runs again with nothing waiting, it says nothing outstanding" "$COUT"
+
+# ==========================================================================
+# 15. A SENT NOTICE SURVIVES MAIN MOVING ON (review rv-20261025T001946Z#1)
+#
+# Notices were credited only when they named the CURRENT tip, so a real,
+# unacked notice for commit A went silent the moment main moved to B. No
+# notice sent is still no line at all (CEO 2026-10-06); a sent one stays until
+# a valid ack for its own commit, or the work's end, clears it.
+# ==========================================================================
+PEND="$SANDBOX/pend-repo"
+PEND_TEAMS="$SANDBOX/pend-teams"
+PEND_LEDGER="$SANDBOX/state/pend-acks.jsonl"
+PEND_WT="$SANDBOX/wt/mark-sonnet-pend1"
+mkdir -p "$PEND" "$PEND_TEAMS/session-deadbeef"
+: > "$PEND_LEDGER"
+printf 'PROTECTED_PATHS="src"\n' > "$PEND/orchestration.config"
+git -C "$PEND" init -q -b main
+git -C "$PEND" config user.email "$(git config user.email 2>/dev/null || echo tester@example.invalid)"
+git -C "$PEND" config user.name "$(git config user.name 2>/dev/null || echo tester)"
+mkdir -p "$PEND/src"
+echo "one" > "$PEND/src/a.txt"
+git -C "$PEND" add -A
+git -C "$PEND" commit -q -m "base"
+git -C "$PEND" worktree add -q -b worktree-pend "$PEND_WT" >/dev/null 2>&1
+echo "teammate work" > "$PEND_WT/src/b.txt"
+git -C "$PEND_WT" add -A
+git -C "$PEND_WT" commit -q -m "teammate commit"
+echo "two" >> "$PEND/src/a.txt"
+git -C "$PEND" add -A
+git -C "$PEND" commit -q -m "land A"
+PEND_A="$(git -C "$PEND" rev-parse HEAD)"
+: > "$PEND_TEAMS/session-deadbeef/inflight-repos.txt"
+pend_env() { RICHOS_ENTITY_ROOT="$PEND" INFLIGHT_TEAMS_DIR="$PEND_TEAMS" RICHOS_INFLIGHT_ACK_LEDGER="$PEND_LEDGER" "$@"; }
+pend_stop() { stop_payload | pend_env bash "$STOPHOOK" 2>/dev/null; }
+
+POUT="$(pend_stop)"
+say "15a no notice" "$POUT"
+case "$POUT" in
+    *mark-sonnet-pend1*) bad "15a. no notice sent: no debt and no line for the teammate" "$POUT" ;;
+    *) ok "15a. no notice sent: no debt and no line for the teammate" ;;
+esac
+
+printf '%s' "$(CWD="$PEND" send_payload "mark-sonnet-pend1" "Main moved to $PEND_A. Ack with scripts/inflight-ack.sh.")" \
+    | pend_env bash "$WITNESS" >/dev/null 2>&1
+python3 - "$PEND_TEAMS/session-deadbeef/inflight-notices.jsonl" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+p = sys.argv[1]
+rows = [json.loads(l) for l in open(p) if l.strip()]
+old = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+for r in rows:
+    r["timestamp"] = old
+open(p, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+POUT="$(pend_stop)"
+say "15b notice for A at A" "$POUT"
+notice_has "$POUT" "no ack past the timeout: mark-sonnet-pend1" \
+    && ok "15b. precondition: the sent notice for A, unacked past the timeout, is told at tip A" \
+    || bad "15b. precondition: the sent notice for A is told at tip A" "$POUT"
+
+echo "three" >> "$PEND/src/a.txt"
+git -C "$PEND" add -A
+git -C "$PEND" commit -q -m "land B, an ordinary commit"
+POUT="$(pend_stop)"
+say "15c notice for A at B" "$POUT"
+notice_has "$POUT" "mark-sonnet-pend1 (notice for ${PEND_A:0:12})" \
+    && ok "15c. the unacked notice for A is still told after main moves on to B" \
+    || bad "15c. the unacked notice for A is still told after main moves on to B" "$POUT"
+SOUT="$(pend_env bash "$RUNNER" status --repo "$PEND" 2>&1)"
+case "$SOUT" in
+    *"notice open: sent"*"${PEND_A:0:12}"*) ok "15d. status shows the open notice and its commit" ;;
+    *) bad "15d. status shows the open notice and its commit" "$SOUT" ;;
+esac
+
+pend_env bash "$ACKER" --sha "$PEND_A" --impact stale-record \
+    --detail "My copy of src/a.txt is behind commit A; I will re-read it before I touch it." \
+    --paths "src/a.txt src/b.txt" --worktree "$PEND_WT" >/dev/null 2>&1
+POUT="$(pend_stop)"
+say "15e acked" "$POUT"
+if notice_has "$POUT" "Nothing outstanding." && ! notice_has "$POUT" "mark-sonnet-pend1"; then
+    ok "15e. a valid ack for A clears it"
+else
+    bad "15e. a valid ack for A clears it" "$POUT"
+fi
+
+rm -rf "$PEND_WT/.claude/inflight-acks"
+: > "$PEND_LEDGER"
+POUT="$(pend_stop)"
+notice_has "$POUT" "mark-sonnet-pend1 (notice for ${PEND_A:0:12})" \
+    && ok "15f. precondition: with the ack gone the open notice is told again" \
+    || bad "15f. precondition: with the ack gone the open notice is told again" "$POUT"
+git -C "$PEND" worktree remove --force "$PEND_WT" >/dev/null 2>&1
+POUT="$(pend_stop)"
+say "15g work ended" "$POUT"
+if notice_has "$POUT" "Nothing outstanding." && ! notice_has "$POUT" "mark-sonnet-pend1"; then
+    ok "15g. the work's real end clears it"
+else
+    bad "15g. the work's real end clears it" "$POUT"
+fi
+
+# ==========================================================================
+# 16. WHICH NOTICE, AND WHICH OF ITS COMMITS (review rv-20261025T012040Z#1, #2)
+#
+# A "main moved from BASE to A" notice names two commits; the teammate's head
+# already holds BASE, so only A can clear it. And a later notice about another
+# repository must not replace the outstanding one about this repository.
+# ==========================================================================
+MQ="$SANDBOX/multi-repo"
+MQ_TEAMS="$SANDBOX/multi-teams"
+MQ_WT="$SANDBOX/wt/mark-sonnet-multi1"
+mkdir -p "$MQ" "$MQ_TEAMS/session-deadbeef"
+printf 'PROTECTED_PATHS="src"\n' > "$MQ/orchestration.config"
+git -C "$MQ" init -q -b main
+git -C "$MQ" config user.email "$(git config user.email 2>/dev/null || echo tester@example.invalid)"
+git -C "$MQ" config user.name "$(git config user.name 2>/dev/null || echo tester)"
+mkdir -p "$MQ/src"
+echo "one" > "$MQ/src/a.txt"
+git -C "$MQ" add -A
+git -C "$MQ" commit -q -m "base"
+MQ_BASE="$(git -C "$MQ" rev-parse HEAD)"
+git -C "$MQ" worktree add -q -b worktree-multi "$MQ_WT" >/dev/null 2>&1
+echo "teammate work" > "$MQ_WT/src/b.txt"
+git -C "$MQ_WT" add -A
+git -C "$MQ_WT" commit -q -m "teammate commit"
+echo "two" >> "$MQ/src/a.txt"
+git -C "$MQ" add -A
+git -C "$MQ" commit -q -m "land A"
+# The witness records tokens SORTED. Make BASE sort first, as it does about half
+# the time, so the case that picked BASE and cleared the notice is always met.
+n=0
+while [ "$(git -C "$MQ" rev-parse HEAD)" \< "$MQ_BASE" ] && [ "$n" -lt 64 ]; do
+    n=$((n + 1))
+    git -C "$MQ" commit -q --amend -m "land A ($n)"
+done
+MQ_A="$(git -C "$MQ" rev-parse HEAD)"
+: > "$MQ_TEAMS/session-deadbeef/inflight-repos.txt"
+mq_env() { RICHOS_ENTITY_ROOT="$MQ" INFLIGHT_TEAMS_DIR="$MQ_TEAMS" RICHOS_INFLIGHT_ACK_LEDGER="$NO_ACK_LEDGER" "$@"; }
+mq_stop() { rm -rf "$MQ/.claude/state/stop-hook-notices"; stop_payload | mq_env bash "$STOPHOOK" 2>/dev/null; }
+mq_backdate() {
+    python3 - "$MQ_TEAMS/session-deadbeef/inflight-notices.jsonl" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+p = sys.argv[1]
+rows = [json.loads(l) for l in open(p) if l.strip()]
+now = datetime.now(timezone.utc)
+for i, r in enumerate(rows):
+    r["timestamp"] = (now - timedelta(hours=3) + timedelta(minutes=i)).isoformat()
+open(p, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+}
+printf '%s' "$(CWD="$MQ" send_payload "mark-sonnet-multi1" "Main moved from $MQ_BASE to $MQ_A. Ack with scripts/inflight-ack.sh.")" \
+    | mq_env bash "$WITNESS" >/dev/null 2>&1
+mq_backdate
+echo "three" >> "$MQ/src/a.txt"
+git -C "$MQ" add -A
+git -C "$MQ" commit -q -m "land B, an ordinary commit"
+MOUT="$(mq_stop)"
+say "16a two-commit notice at B" "$MOUT"
+[ "$MQ_BASE" \< "$MQ_A" ] || bad "16a. precondition: BASE sorts before A" "BASE=$MQ_BASE A=$MQ_A"
+notice_has "$MOUT" "mark-sonnet-multi1 (notice for ${MQ_A:0:12})" \
+    && ok "16a. a 'from BASE to A' notice stays told by A when the teammate already holds BASE" \
+    || bad "16a. a 'from BASE to A' notice stays told by A when the teammate already holds BASE" "$MOUT"
+
+printf '%s' "$(CWD="$MQ" send_payload "mark-sonnet-multi1" "Main moved to $PEND_A in the other repository.")" \
+    | mq_env bash "$WITNESS" >/dev/null 2>&1
+mq_backdate
+MOUT="$(mq_stop)"
+say "16b later notice about another repository" "$MOUT"
+notice_has "$MOUT" "mark-sonnet-multi1 (notice for ${MQ_A:0:12})" \
+    && ok "16b. a later notice about another repository does not hide the open one about this repository" \
+    || bad "16b. a later notice about another repository does not hide the open one about this repository" "$MOUT"
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then
