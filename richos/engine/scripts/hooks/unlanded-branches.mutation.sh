@@ -155,4 +155,10 @@ mutant claim-reads-conditions-as-claims "C09" "$C" \
     '                if False:' \
     "a sentence about what happens once the work lands would be reported as a claim that it has, every turn it is repeated."
 
+# --- 14. RETAINED STOPPED WORK IS NOT OWED WORK ----------------------------
+mutant stops-not-honored "U23" "$C" \
+    '            owed, _retained = owed_findings(swept["findings"], recorded_stops())' \
+    '            owed, _retained = swept["findings"], []' \
+    "work the CEO stopped and ordered kept would be reported as owed by every completeness claim, as if the report had lied."
+
 mutation_end

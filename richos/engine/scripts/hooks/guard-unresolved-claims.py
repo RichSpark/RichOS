@@ -1213,6 +1213,60 @@ def unlanded_sweep(entity_root, session_id):
         return None, "the sweep raised %s: %s" % (type(exc).__name__, exc)
 
 
+def recorded_stops():
+    """({(real repo, commit)}, {(real repo, branch)}) -- the EXACT identities
+    the workspace registry holds for work that is retained and not owed: every
+    tip a DISCARD recorded (point 7; §92 shelving closes stopped work this
+    way), and the branches of an open workspace whose registry end is STOPPED
+    or which is HELD. Nothing is inferred from a branch name or its history.
+
+    Retained stopped work is not revived as owed work (2026-10-25): the CEO
+    stopped work on 2026-09-26 and ordered it kept; every completeness claim
+    after that was reported over the saved branches as if the report had lied.
+    A branch whose tip or workspace is not recorded here stays a finding.
+
+    Read only on the claim path, after a positive completeness claim. Loaded
+    from workspaces.py by path, as _recorded_integration_refs does. Any
+    failure returns nothing, which reports every branch as before."""
+    lib = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "..", "mega-lander", "workspaces.py")
+    tips, branches = set(), set()
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("workspaces_stops", lib)
+        ws = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ws)
+        records = ws.all_agents(include_done=True)
+    except Exception:
+        return tips, branches
+    for rec in records:
+        disp = rec.get("disposition") or {}
+        if disp.get("kind") == "discarded":
+            for where, tip in (disp.get("tips") or {}).items():
+                repo = str(where).rpartition(":")[0]
+                if repo and isinstance(tip, str) and tip:
+                    tips.add((os.path.realpath(repo), tip))
+        elif not disp and ((rec.get("end") or {}).get("signal") == "stopped"
+                           or (rec.get("waiting") or {}).get("kind") == "held"):
+            for w in rec.get("workspaces") or []:
+                if w.get("repo") and w.get("branch") and not w.get("branch_deleted_at"):
+                    branches.add((os.path.realpath(w["repo"]), w["branch"]))
+    return tips, branches
+
+
+def owed_findings(findings, stops):
+    """(owed, retained): the sweep's findings split by recorded_stops()."""
+    tips, branches = stops
+    owed, retained = [], []
+    for f in findings:
+        repo = os.path.realpath(f.get("repo") or "")
+        if (repo, f.get("oid") or "") in tips or (repo, f.get("branch")) in branches:
+            retained.append(f)
+        else:
+            owed.append(f)
+    return owed, retained
+
+
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
@@ -1377,7 +1431,10 @@ def main():
             # class exists to stop being invisible.
             complete_unevaluated = why
         elif swept.get("findings"):
-            complete_reports.append((cclaims[0][0], swept))
+            owed, _retained = owed_findings(swept["findings"], recorded_stops())
+            if owed:
+                complete_reports.append((cclaims[0][0],
+                                         dict(swept, findings=owed, n_findings=len(owed))))
 
     # --- observation record -------------------------------------------------
     # Written for EVERY turn, blocked or not, so the reporting layer is a record

@@ -41,6 +41,10 @@
 #   C09/C10   a CONDITIONAL sentence is extracted, read as a condition, silent
 #   C11       <-> the plain claim over the same stranded branch still fires
 #   C12/C13   a FORECAST and a BLOCKQUOTE are silent
+#   U23/U24   retained stopped work (exact recorded identity) is not owed work;
+#             an unrecorded WIP is, until its identity is recorded once
+#   U25       the sweep's inventory still lists every one of them
+#   U26       <-> a `shelved/` branch nothing records is reported, and only it
 #   C01       it reports and NEVER blocks — exit 0, always
 #   L01..L04  the lint script's three exit codes never collapse into each other
 #
@@ -642,6 +646,114 @@ if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
     ok "C13 a BLOCKQUOTED completeness sentence raises nothing — quoting is not claiming"
 else
     bad "C13 a markdown quotation is not the reply's own claim" "stdout: $RUN_OUT"
+fi
+
+# ===========================================================================
+# 4b. RETAINED STOPPED WORK IS NOT REVIVED AS OWED WORK
+#
+# The femcboost case of 2026-10-25: `wip/zach-opus-onepass1-held-guard` and a
+# shelved merge sat outside main because the CEO STOPPED that work and ordered
+# it kept (§92). A branch outside main proved only that it was outside main,
+# and every completeness claim was reported over them as if the report lied.
+#
+# Honored by EXACT recorded identity only: a tip a discard recorded, or the
+# branch of an open workspace whose registry end is stopped. The fixture is
+# the §92 history: an agent's workspace discarded with his words (tip
+# recorded, branch deleted), its shelved copy at that exact tip, a WIP commit
+# kept on top of it (an identity nothing recorded yet), and a workspace
+# stopped and not yet discarded. The WIP is reported until its identity is
+# recorded once on the same path; a `shelved/` branch nothing records is
+# always reported — a prefix decides nothing. The inventory never shrinks.
+# ===========================================================================
+STOPREPO="$SANDBOX/stopped"
+mk_repo "$STOPREPO"; adopt "$STOPREPO"; record_work "$STOPREPO"
+mk_branch "$STOPREPO" cc/dev-opus-stop1 one.txt
+S1="$(git -C "$STOPREPO" rev-parse cc/dev-opus-stop1)"
+git -C "$STOPREPO" branch shelved/dev-opus-stop1 "$S1"
+git -C "$STOPREPO" checkout -q -b wip/dev-opus-stop1-held "$S1"
+printf 'unfinished\n' > "$STOPREPO/wip.txt"
+git -C "$STOPREPO" add -- wip.txt >/dev/null 2>&1
+git -C "$STOPREPO" commit -qm "WIP (stopped by CEO order)" >/dev/null 2>&1
+git -C "$STOPREPO" checkout -q main
+git -C "$STOPREPO" branch -q -D cc/dev-opus-stop1
+W1="$(git -C "$STOPREPO" rev-parse wip/dev-opus-stop1-held)"
+mk_branch "$STOPREPO" cc/stopped-live live.txt
+STOP_KEY="abcd1234-0000-4000-8000-000000000000--dev-opus-stop1"
+python3 - "$RICHOS_WORKSPACES_DIR" "$STOPREPO" "$S1" "$STOP_KEY" <<'PY'
+import json, os, sys
+reg, repo, s1, key = sys.argv[1:5]
+def put(sub, d):
+    os.makedirs(os.path.join(reg, sub), exist_ok=True)
+    with open(os.path.join(reg, sub, d["key"] + ".json"), "w", encoding="utf-8") as f:
+        json.dump(d, f)
+put("done", {"key": key, "name": "dev-opus-stop1", "disposition": {
+        "kind": "discarded",
+        "ceo_word": "Can you not shelve or save aside the unfinished work from those that were stopped?",
+        "reason": "shelved, not dropped: every commit is saved on shelved/dev-opus-stop1",
+        "tips": {repo + ":cc/dev-opus-stop1": s1}},
+    "workspaces": [{"repo": repo, "branch": "cc/dev-opus-stop1", "kind": "cc",
+                    "branch_deleted_at": "2026-09-26T14:45:10Z"}]})
+put("agents", {"key": "abcd1234-0000-4000-8000-000000000000--dev-opus-stop3",
+               "name": "dev-opus-stop3", "disposition": None,
+               "end": {"signal": "stopped", "detail": "the platform recorded stoppedByUser"},
+               "workspaces": [{"repo": repo, "branch": "cc/stopped-live", "kind": "cc"}]})
+PY
+
+claims_at() { # <repo> <message> — sets RUN_OUT/RUN_ERR/RUN_RC
+    mk_payload "$2" control > "$SANDBOX/payload.json"
+    env RICHOS_ENTITY_ROOT="$1" CLAUDE_PROJECT_DIR="$1" \
+        CLAUDE_PLUGIN_ROOT="$ENGINE_ROOT" RICHOS_WORKTREE_LEDGER="$SANDBOX/no-such-ledger" \
+        /bin/bash "$CLAIMS" < "$SANDBOX/payload.json" > "$SANDBOX/out.txt" 2>"$SANDBOX/err.txt"
+    RUN_RC=$?
+    RUN_OUT="$(cat "$SANDBOX/out.txt")"
+    RUN_ERR="$(cat "$SANDBOX/err.txt")"
+}
+
+claims_at "$STOPREPO" "All the work has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'shelved/dev-opus-stop1\|cc/stopped-live'; then
+    bad "U23 a branch at a recorded discarded tip, or of a workspace recorded stopped, is not owed work" "stdout: $RUN_OUT"
+elif printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' \
+     && printf '%s' "$RUN_OUT" | grep -q 'wip/dev-opus-stop1-held'; then
+    ok "U23 recorded stops are not revived as owed work, and the WIP nothing records yet is still reported"
+else
+    bad "U23 the unrecorded WIP stays a finding" "stdout: ${RUN_OUT:-<empty>}"
+fi
+
+# The one-time reconciliation, on the existing record path: the WIP's exact
+# tip is added to the discard that closed its work.
+python3 - "$RICHOS_WORKSPACES_DIR/done/$STOP_KEY.json" "$STOPREPO" "$W1" <<'PY'
+import json, sys
+path, repo, w1 = sys.argv[1:4]
+d = json.load(open(path, encoding="utf-8"))
+d["disposition"]["tips"][repo + ":wip/dev-opus-stop1-held"] = w1
+json.dump(d, open(path, "w", encoding="utf-8"))
+PY
+claims_at "$STOPREPO" "All the work has landed."
+if [ "$RUN_RC" -eq 0 ] && ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "U24 with every branch outside main recorded as retained stopped work, the claim raises nothing"
+else
+    bad "U24 recorded stopped work does not turn a completeness claim into a false one" "exit $RUN_RC stdout: ${RUN_OUT:-<empty>}"
+fi
+
+S_FOUND="$(names_of "$(sweep_at "$STOPREPO")" findings)"
+if [ "$S_FOUND" = "cc/stopped-live shelved/dev-opus-stop1 wip/dev-opus-stop1-held" ]; then
+    ok "U25 the branch inventory is unchanged: every retained branch is still listed by the sweep"
+else
+    bad "U25 the sweep still lists every branch outside main" "findings: [$S_FOUND]"
+fi
+
+git -C "$STOPREPO" checkout -q -b shelved/not-recorded main
+printf 'real\n' > "$STOPREPO/real.txt"
+git -C "$STOPREPO" add -- real.txt >/dev/null 2>&1
+git -C "$STOPREPO" commit -qm "finished work nobody recorded" >/dev/null 2>&1
+git -C "$STOPREPO" checkout -q main
+claims_at "$STOPREPO" "All the work has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' \
+   && printf '%s' "$RUN_OUT" | grep -q 'shelved/not-recorded' \
+   && ! printf '%s' "$RUN_OUT" | grep -q 'dev-opus-stop1\|cc/stopped-live'; then
+    ok "U26 PAIRED TWIN: a shelved/ branch nothing records is reported, and only it — no prefix decides"
+else
+    bad "U26 an unrecorded branch is reported whatever its name, and the recorded ones are not" "stdout: ${RUN_OUT:-<empty>}"
 fi
 
 # ===========================================================================
