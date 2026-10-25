@@ -192,6 +192,9 @@ if [ "$INSTALL" = "1" ]; then
         exit 2
     fi
     mkdir -p "$LAUNCHD_DIR" "$HOME/.claude/state"
+    # Generated beside the plist, never over it: launchd_install decides whether
+    # the job changed by comparing this with the plist the job was loaded from.
+    NEW_PLIST="$PLIST.new.$$"
     {
         echo '<?xml version="1.0" encoding="UTF-8"?>'
         echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
@@ -224,17 +227,35 @@ if [ "$INSTALL" = "1" ]; then
         echo '    </dict>'
         echo '</dict>'
         echo '</plist>'
-    } >"$PLIST"
+    } >"$NEW_PLIST"
+    # AN UNCHANGED JOB IS LEFT ALONE, AND A RUNNING CLEANUP IS NEVER KILLED.
+    # install.sh calls this on every engine install. It used to bootout and
+    # bootstrap every time, and on 2026-10-25 the land at 04:42:24 booted the
+    # job out two minutes after the 04:40 cleanup was due: no deletions, no log
+    # line, no state, and launchd's run history reset to zero.
+    # launchd-install.sh carries the rule and the evidence.
     if command -v launchctl >/dev/null 2>&1 && [ -z "${RICHOS_LAUNCH_AGENTS_DIR:-}" ]; then
-        launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-        if ! launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
-            echo "scratch-reaper: wrote $PLIST but launchctl bootstrap failed — the job is NOT scheduled." >&2
-            exit 2
-        fi
-        if ! launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
-            echo "scratch-reaper: launchctl does not list $LABEL after bootstrap — the job is NOT scheduled." >&2
-            exit 2
-        fi
+        # shellcheck source=lib/launchd-install.sh
+        . "$SCRIPT_DIR/lib/launchd-install.sh"
+        launchd_install "$LABEL" "$PLIST" "$NEW_PLIST"
+        case "$LAUNCHD_INSTALL_RESULT" in
+            unchanged)
+                echo "✓ scheduled $LABEL (unchanged: already loaded from this plist, so it was not reloaded)"
+                exit 0 ;;
+            running)
+                {
+                    echo "scratch-reaper: NOT REPLACED — a scheduled cleanup is running now (pid ${LAUNCHD_INSTALL_PID:-unknown})."
+                    echo "  The job changed, and replacing it would kill that cleanup. It keeps its"
+                    echo "  current schedule; run this again once the cleanup has finished:"
+                    echo "    $SCRIPT_DIR/scratch-reaper.sh --install"
+                } >&2
+                exit 3 ;;
+            failed)
+                echo "scratch-reaper: $LAUNCHD_INSTALL_DETAIL — the job is NOT scheduled." >&2
+                exit 2 ;;
+        esac
+    else
+        mv -f "$NEW_PLIST" "$PLIST"
     fi
     echo "✓ scheduled $LABEL at $(for h in $HOURS; do printf '%02d:%s ' "$h" "$MINUTE"; done)-> $PLIST"
     echo "  It runs --apply. Read what it would do first:  $SCRIPT_DIR/scratch-reaper.sh --verbose"
