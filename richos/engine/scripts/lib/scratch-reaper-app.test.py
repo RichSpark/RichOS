@@ -515,18 +515,21 @@ class AppSweep(unittest.TestCase):
         (malformed / ".richos-owner.json").write_text("{not json")
         not_object = self.dictation_scratch(self.ended_app())
         (not_object / ".richos-owner.json").write_text("[1, 2]")
+        # JSON null parses to None, which must not read as a missing record.
+        null = self.dictation_scratch(self.ended_app())
+        (null / ".richos-owner.json").write_text("null")
         unreadable = self.dictation_scratch(self.ended_app())
         (unreadable / ".richos-owner.json").chmod(0)
-        for folder in (malformed, not_object, unreadable):
+        for folder in (malformed, not_object, null, unreadable):
             self.aged(folder)
         try:
             rc, out, err = self.sweep()
         finally:
             (unreadable / ".richos-owner.json").chmod(0o600)
         self.assertEqual(rc, 3, out + err)
-        for folder in (malformed, not_object, unreadable):
+        for folder in (malformed, not_object, null, unreadable):
             self.assertTrue(folder.exists(), out)
-        self.assertEqual(out.count("owner record is there but could not be read"), 3, out)
+        self.assertEqual(out.count("owner record is there but could not be read"), 4, out)
         self.assertNotIn("DELETED", self.log())
 
     # --- app-mcp-log: Claude Code's MCP logs for the app's coordination folder ---------------------

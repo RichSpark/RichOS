@@ -3511,14 +3511,17 @@ class Reaper(object):
             size, newest, has_git = measure(path)
             # ONLY A MISSING RECORD is an earlier tool's folder. One that is there and cannot be
             # read or parsed is a failed ownership check, never permission to remove.
+            # `missing` is its own marker: a record holding JSON null parses to None, and that is
+            # a record that is there, not one that is missing.
+            missing = object()
             try:
                 with open(os.path.join(path, OWNER_FILE), encoding="utf-8") as fh:
                     owner = json.load(fh)
             except FileNotFoundError:
-                owner = None
+                owner = missing
             except (OSError, ValueError) as exc:
                 owner = exc
-            if owner is not None and not isinstance(owner, dict):
+            if owner is not missing and not isinstance(owner, dict):
                 self.add(path, "app-dictation", size, INDETERMINATE,
                          "its owner record is there but could not be read as one (%s), so whose "
                          "it is cannot be told" % (owner if isinstance(owner, Exception)
