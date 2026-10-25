@@ -1,0 +1,33 @@
+{
+  "built_from": "ed3d94d0cae9ed3af712a46f94e47f12e8e6ec7d",
+  "thread": "thr_d91bbe8ec212490191a722ef5f135184",
+  "thread_title": "Onboarding",
+  "logs": {
+    "restart-dictation": "/Users/admin/testvm/walk-49559da06d63/relaunch-1792935157443732000.log",
+    "dictation-swept": "/Users/admin/testvm/walk-49559da06d63/relaunch-1792935207696111000.log"
+  },
+  "dictation_tool": 2245,
+  "abandoned_dictation": {
+    "folder": "/Users/admin/testvm/walk-49559da06d63/home/Library/Application Support/com.richos.app/dictation-scratch/e805a47c51cafdd62045f2c4",
+    "tool_pid": 2245,
+    "owner": {
+      "pid": 2245,
+      "procStart": "Sun Oct 25 13:33:17 2026"
+    },
+    "files": [
+      ".richos-owner.json",
+      "decoder.stderr",
+      "decoder.stdout",
+      "utt-2245.wav"
+    ]
+  },
+  "live_dictation": {
+    "folder": "/Users/admin/testvm/walk-49559da06d63/home/Library/Application Support/com.richos.app/dictation-scratch/0d61379d867e494683e077c3",
+    "tool_pid": 2608,
+    "owner": {
+      "pid": 2608,
+      "procStart": "Sun Oct 25 13:33:22 2026"
+    },
+    "wav_bytes": 32044
+  }
+}
