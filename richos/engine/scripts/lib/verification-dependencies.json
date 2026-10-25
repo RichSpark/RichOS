@@ -2874,8 +2874,8 @@
     },
     "scripts/scratch-reaper.sh": {
       "source": "scripts/scratch-reaper.sh",
-      "sha256": "155a892f1deec6463f6f316adcc3ce46cc1958c7871d7160c00c5b9a0d2a0712",
-      "evidence": "Sources exactly SCRATCH_REAPER_CONFIG or the engine default, checks enable/schedule keys and exports the finite SCRATCH/APP families to the fixed Python reaper. Plist generation contains literal commands; it does not execute another engine entrypoint.",
+      "sha256": "f6dbf5201ff9e29a1ee799fed7d6aea0e88bc2ed798fd93eba36a34e1ec7fc4f",
+      "evidence": "Sources exactly SCRATCH_REAPER_CONFIG or the engine default, checks enable/schedule keys and exports the finite SCRATCH/APP families to the fixed Python reaper. Plist generation contains literal commands; it does not execute another engine entrypoint. Renewed 2026-10-25: --install sources the fixed sibling lib/launchd-install.sh to leave an unchanged loaded job alone; it adds no configuration read.",
       "keys": [
         "SCRATCH_REAPER_ENABLE",
         "SCRATCH_REAPER_HOURS",
@@ -2884,8 +2884,18 @@
       "edges": [
         {
           "to": "scripts/lib/scratch-reaper.py"
+        },
+        {
+          "to": "scripts/lib/launchd-install.sh"
         }
       ]
+    },
+    "scripts/lib/launchd-install.sh": {
+      "source": "scripts/lib/launchd-install.sh",
+      "sha256": "97ec6e6cfb57efc7e7cfc64255cfedce754cbdaf450ccc0db11baeaed8042790",
+      "evidence": "Calls launchctl print/bootout/bootstrap, cmp, grep and sed on the label, plist and generated file its caller passes. No configuration lookup and no environment read beyond id -u.",
+      "keys": [],
+      "edges": []
     },
     "scripts/hooks/session-start-scratch.sh": {
       "source": "scripts/hooks/session-start-scratch.sh",
@@ -16881,7 +16891,7 @@
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
-        "scripts/scratch-reaper.sh": "155a892f1deec6463f6f316adcc3ce46cc1958c7871d7160c00c5b9a0d2a0712",
+        "scripts/scratch-reaper.sh": "f6dbf5201ff9e29a1ee799fed7d6aea0e88bc2ed798fd93eba36a34e1ec7fc4f",
         "scripts/lib/scratch-reaper.py": "61407ad15b6dc72a12e6c8bdbd6e4ea85fb4a777e01644dc7727a13a9fc4352f",
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
@@ -16958,7 +16968,7 @@
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
-        "scripts/scratch-reaper.sh": "155a892f1deec6463f6f316adcc3ce46cc1958c7871d7160c00c5b9a0d2a0712",
+        "scripts/scratch-reaper.sh": "f6dbf5201ff9e29a1ee799fed7d6aea0e88bc2ed798fd93eba36a34e1ec7fc4f",
         "scripts/lib/scratch-reaper.py": "61407ad15b6dc72a12e6c8bdbd6e4ea85fb4a777e01644dc7727a13a9fc4352f",
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
@@ -17100,7 +17110,7 @@
         "scripts/operator-fences.sh": "b14c4294844b4bc9dade5e32d9642824a92b2c7690d01c2c8b6e914e893dae0c",
         "scripts/row-currency-lint.sh": "47b26a433c2a96e69844fdca03b263c37bd0f80bbbbeeacd87dd4117feef1167",
         "scripts/scratch-reaper.mutation.sh": "8ef0a08373e7aed2c4f3388e701a29346b51ad2862108b8170d35f4d9c0ef6e4",
-        "scripts/scratch-reaper.sh": "155a892f1deec6463f6f316adcc3ce46cc1958c7871d7160c00c5b9a0d2a0712",
+        "scripts/scratch-reaper.sh": "f6dbf5201ff9e29a1ee799fed7d6aea0e88bc2ed798fd93eba36a34e1ec7fc4f",
         "scripts/scratch-reaper.test.sh": "63074109d11d69640585f056592b91d9a7f499b8c7f1d7d93b1a1398264c4056",
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105",
         "scripts/unstarted-rows-lint.sh": "4b654eefa4fb775ba218fbee15595b415684c7a90e2168eedf864c07f142e58e",
@@ -18049,7 +18059,7 @@
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/unlanded-branches.py": "2aa9d32b80809d78c10c9571a91c4bdbb58c7cf22197b6398fd1239b481b1810",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/scratch-reaper.sh": "155a892f1deec6463f6f316adcc3ce46cc1958c7871d7160c00c5b9a0d2a0712",
+        "scripts/scratch-reaper.sh": "f6dbf5201ff9e29a1ee799fed7d6aea0e88bc2ed798fd93eba36a34e1ec7fc4f",
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105",
         "scripts/unlanded-branches-lint.sh": "c65f6be6da126b18127b28f36860c213c9649e843831ae4c0ee1f393cc52971f"
       },
@@ -18083,7 +18093,7 @@
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
-        "scripts/scratch-reaper.sh": "155a892f1deec6463f6f316adcc3ce46cc1958c7871d7160c00c5b9a0d2a0712",
+        "scripts/scratch-reaper.sh": "f6dbf5201ff9e29a1ee799fed7d6aea0e88bc2ed798fd93eba36a34e1ec7fc4f",
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105"
       },
       "evidence": "The manifest name appears only in suite/header and helper comments or printed remedies. Reviewed finite fixture execution calls fixed hook/CLI paths; no installer, platform dispatch or registered-hook discovery runs. Shared mutation transport may copy hooks/settings bytes but this execution closure never reads them. Existing configuration/call contracts bind the same transitive sources; actual config readers and ordinary source-path selection remain required."
