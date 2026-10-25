@@ -37,9 +37,24 @@ pub fn machinery_with_files(view: &dyn SpineView, files_root: &Path, thread_id: 
     if let Ok(binding) = view.ledger().thread_binding(thread_id) {
         if let Some(items) = payload["timeline"]["items"].as_array_mut() {
             items.extend(self::items(files_root, binding.entity_id().as_str(), thread_id));
+            items.extend(richos_core::your_instructions::items(files_root, binding.entity_id().as_str(), thread_id));
         }
     }
     Ok(payload)
+}
+
+/// **The "Your instructions · Saved" cards** (round 36 screen 1, `your_instructions.rs`) added to
+/// the calm view's snapshot for the WINDOW, `get_timeline`. Not in `question_host::payload_in`,
+/// which the phone reads too: the phone has no instructions sheet for the card's button to open,
+/// so it gets no card. Placed by `createdAt`, as the payload's other rows are.
+pub fn with_instruction_cards(view: &dyn SpineView, files_root: &Path, thread_id: &str, mut payload: Value) -> Value {
+    if let Ok(binding) = view.ledger().thread_binding(thread_id) {
+        if let Some(items) = payload["items"].as_array_mut() {
+            items.extend(richos_core::your_instructions::items(files_root, binding.entity_id().as_str(), thread_id));
+            items.sort_by_key(|i| i["createdAt"].as_u64().unwrap_or(0));
+        }
+    }
+    payload
 }
 
 /// One card's item, as the window and the phone get it (the phone lab, `mobile/dev/mac-server.rs`,
@@ -175,7 +190,15 @@ pub fn start(app: AppHandle) {
             let state_root = directory.parent().map(Path::to_path_buf).unwrap_or_default();
             let mut seen: std::collections::HashSet<String> =
                 richos_core::rich_files::all(&state_root).into_iter().map(|row| row.id).collect();
+            // A save of the user's instructions (`your_instructions.rs`) is written to this same
+            // folder, so its card shows at once too: the window only, never the phone's stream.
+            seen.extend(richos_core::your_instructions::all(&state_root).into_iter().map(|card| card.id));
             for () in events {
+                for card in richos_core::your_instructions::all(&state_root) {
+                    if seen.insert(card.id.clone()) {
+                        drop(app.emit("rich://rich-file", &richos_core::your_instructions::item(&card)));
+                    }
+                }
                 for row in richos_core::rich_files::all(&state_root) {
                     if seen.insert(row.id.clone()) {
                         let item = item(&row);

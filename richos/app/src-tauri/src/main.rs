@@ -1042,7 +1042,9 @@ fn get_messages(state: State<AppState>, thread_id: String) -> Result<Vec<Message
 /// Fails closed on an unbound thread, exactly like `get_messages`.
 #[richos_command::command]
 fn get_timeline(app: AppHandle, state: State<AppState>, thread_id: String) -> Result<serde_json::Value, String> {
-    let payload = question_host::payload(&state, &thread_id);
+    let payload = question_host::payload(&state, &thread_id).map(|payload| {
+        rich_files_host::with_instruction_cards(&*state.reader.snapshot(), &rich_files_host::root(&state), &thread_id, payload)
+    });
     // **HIS FRONT DESK IS MADE READY HERE, AFTER THE SNAPSHOT AND NEVER BEFORE IT** — the CEO's
     // §55. See [`ready_the_front_desk`] for why this command is the hook.
     ready_the_front_desk(&app, &thread_id);
@@ -2166,9 +2168,15 @@ fn main() {
         return;
     }
     if first.as_deref() == Some(std::ffi::OsStr::new("--onboarding-mcp")) {
+        // The second argument, the turn's question scope, names the conversation a save of the
+        // user's instructions is shown in (`your_instructions.rs`); an older config without it
+        // still saves, without the card.
         let result = args.next().ok_or_else(|| "Missing onboarding scope".to_string())
-            .and_then(|scope| richos_core::onboarding_tools::run_stdio(Path::new(&scope))
-                .map_err(|e| e.to_string()));
+            .and_then(|scope| {
+                let cards = args.next().map(PathBuf::from);
+                richos_core::onboarding_tools::run_stdio_in(Path::new(&scope), cards.as_deref())
+                    .map_err(|e| e.to_string())
+            });
         if let Err(error) = result {
             // The second SHAPE 1 site. This one is a stdio tool server the RUNNING app spawns
             // as a child, so `activation`'s P condition (parent pid 1) is false by
@@ -3794,6 +3802,8 @@ fn main() {
             decline_instructions_update,
             update_instructions_file,
             instructions_file_open,
+            your_instructions_read,
+            your_instructions_save,
             // --- a file Rich puts in front of the user (§138, item 12) — appended ---
             rich_files_host::rich_file_open,
             rich_files_host::rich_file_reveal,
@@ -9764,7 +9774,9 @@ fn update_instructions_file(state: State<'_, AppState>, name: String) -> Result<
 /// a Finder window.
 #[richos_command::command]
 fn instructions_file_open(name: String, reveal: bool) -> Result<(), String> {
-    if ![richos_core::user_settings::RICH, richos_core::user_settings::STU].contains(&name.as_str()) {
+    // `instructions.md` too: the user's own instructions sheet (round 36 screen 1) has the same
+    // two controls under its editor.
+    if ![richos_core::user_settings::RICH, richos_core::user_settings::STU, richos_core::user_settings::INSTRUCTIONS].contains(&name.as_str()) {
         return Err(format!("{name} is not one of the instruction files"));
     }
     let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;
@@ -9775,6 +9787,30 @@ fn instructions_file_open(name: String, reveal: bool) -> Result<(), String> {
         Ok(status) => Err(format!("{name} could not be opened ({status})")),
         Err(e) => Err(format!("{name} could not be opened: {e}")),
     }
+}
+
+/// **YOUR INSTRUCTIONS** (round 36 screen 1; build plan item 1b): the user's own instructions
+/// file, the one every session of Rich and Stu appends in full (`user_settings::standing_plugin`),
+/// for Settings → Working with Rich → Your instructions. `path` is where it is, `shown` the same
+/// with the home folder written `~`, `exists` whether the file is there, and `text` what is in it
+/// now (empty when there is none yet).
+#[richos_command::command]
+fn your_instructions_read() -> Result<serde_json::Value, String> {
+    let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;
+    let path = richos_core::your_instructions::path(&folder);
+    let shown = std::env::var_os("HOME")
+        .and_then(|home| path.strip_prefix(&home).ok().map(|rest| format!("~/{}", rest.display())))
+        .unwrap_or_else(|| path.display().to_string());
+    Ok(serde_json::json!({"path": path, "shown": shown, "exists": path.exists(), "text": richos_core::your_instructions::read(&folder)?}))
+}
+
+/// The sheet saves the whole text as the user types. It applies from the user's next new
+/// conversation: an open one keeps the instructions it started with (the CEO's default,
+/// 2026-10-21).
+#[richos_command::command]
+fn your_instructions_save(text: String) -> Result<(), String> {
+    let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;
+    richos_core::your_instructions::save(&folder, &text)
 }
 
 #[cfg(test)]
