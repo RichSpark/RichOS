@@ -60,6 +60,7 @@
 #     (n17) app: two jobs finish, one is closed, report on both    -> exit 2
 #     (n18) app: two jobs finish, both are closed                  -> exit 0
 #     (n19) app: n17's turn with no work receipt to read           -> exit 0
+#     (n20) app: n17 with both teammates under one title           -> exit 2
 #   ARM 3 — APP RECORD TOOLS
 #     (R56) app team saves answered with paths, "I saved Norm"     -> no alert
 #     (R57) saved paths named + job report recorded: true          -> no alert
@@ -511,6 +512,10 @@ specs = {
              {"tool": "Read"}, {"app": complete + [closed]}, {"app": send}],
     "two-jobs-one-closed": two_jobs + [{"app": complete + [closed]}],
     "two-jobs-both-closed": two_jobs + [{"app": complete + [closed]}, closed_more],
+    # review rv-20261025T001232Z-00aed5ab-1fe4: the two jobs' teammates share one title
+    "same-title-one-closed": [{"machine": notice("Add notes to Acme", "aaff1d866a945cba3")},
+                              {"machine": notice("Add notes to Acme", "a02f76eded281b9d6")},
+                              {"app": integrate}, {"app": complete + [closed]}],
     # the same reply over a turn that landed and never closed the job
     "landed-open": [review, {"app": integrate}, {"bash": "git -C /home/Acme log --oneline -3"},
                     {"app": send}],
@@ -526,7 +531,7 @@ for name, spec in specs.items():
     with open(os.path.join(out, name + ".json"), "w", encoding="utf-8") as fh:
         json.dump(spec, fh)
 PY
-for s in wait done landed-open close-refused replaced two-jobs-one-closed two-jobs-both-closed; do
+for s in wait done landed-open close-refused replaced two-jobs-one-closed two-jobs-both-closed same-title-one-closed; do
     mk_tr "$SANDBOX/app-$s.jsonl" "$(cat "$APP_SPECS/$s.json")"
 done
 # Row 142, verbatim.
@@ -576,6 +581,9 @@ run_hook "$SANDBOX/app-two-jobs-both-closed.jsonl" "$TWO_DONE"
 if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
     ok "n18. two jobs finish in one turn and both are closed: the report on both passes"
 else bad "n18. both closed" "rc=$RC out=$(printf '%s' "$OUT" | head -c 200) err=$(printf '%s' "$ERR" | head -c 300)"; fi
+
+run_hook "$SANDBOX/app-same-title-one-closed.jsonl" "$TWO_DONE"
+[ "$RC" -eq 2 ] && ok "n20. two jobs' teammates share one title and only the first job is closed: still REFUSED (agents are told apart by id)" || bad "n20. same title" "rc=$RC"
 unset RICHOS_APP_STATE
 export RICHOS_WORKSPACES_DIR="$SAVED_WORKSPACES_DIR"
 

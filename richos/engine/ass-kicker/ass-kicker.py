@@ -674,16 +674,19 @@ TASK_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
 
 
 def finished_agents(idle, notices):
-    """{title: provider agent id} for this turn's Agent completions, both read
-    from the host's own notice (its <task-id> is the agent id the app records
-    on the teammate's work receipt)."""
-    out = {}
+    """[(provider agent id, title)] for this turn's Agent completions, both
+    read from the host's own notice (its <task-id> is the agent id the app
+    records on the teammate's work receipt). One entry per agent id: titles are
+    the caller's own descriptions, need not be unique, and are for display only
+    (review rv-20261025T001232Z-00aed5ab-1fe4)."""
+    out, seen = [], set()
     for text in notices or []:
         for part in text.split("<task-notification>")[1:]:
             part = "<task-notification>" + part
             titles, m = idle.agent_finishes([part]), TASK_ID_RE.search(part)
-            if titles and m:
-                out.setdefault(titles[0], m.group(1))
+            if titles and m and m.group(1) not in seen:
+                seen.add(m.group(1))
+                out.append((m.group(1), titles[0]))
     return out
 
 
@@ -789,9 +792,9 @@ def app_job_outcome(idle, transcript, prompt_id, agents):
                 # before it looks at the argument (mega-lander/app.py complete).
                 closed.add(answer.get("obligation_id"))
         if closed:
-            owners = receipt_obligations(set(agents.values()))
-            open_ = [t for t, a in agents.items() if a in owners and owners[a] not in closed]
-            unread = [t for t, a in agents.items() if a not in owners]
+            owners = receipt_obligations({a for a, _t in agents})
+            open_ = list(dict.fromkeys(t for a, t in agents if a in owners and owners[a] not in closed))
+            unread = list(dict.fromkeys(t for a, t in agents if a not in owners))
             if not open_:
                 return ("closed", "the app closed obligation %s this turn%s"
                         % (", ".join(sorted(str(o) for o in closed if o)),
