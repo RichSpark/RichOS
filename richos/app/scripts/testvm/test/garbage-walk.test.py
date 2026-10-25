@@ -5,7 +5,8 @@
 own files. (2) A listing whose control the search did not find fails: its silence proves nothing.
 (3) The last listing fails naming every leftover a --gone pattern matches, and passes without one.
 (4) `reported`: a failed start sweep must be said as FAILED, with every leftover in the deletion log.
-(5) The watcher kills on a running decoder only. (6) Only a finished sweep proves a live file was kept."""
+(5) The watcher kills on a running decoder only. (6) Only a finished sweep proves a live file was kept.
+(7) After a kill during a dictation, the Quit sweep took the killed tool's folder and kept the running one's."""
 import importlib.util
 import json
 from pathlib import Path
@@ -219,6 +220,55 @@ class KeptWhileRunning(unittest.TestCase):
         with tempfile.TemporaryDirectory() as out, self.answer(line):
             got = self.walk(out).kept_while_running()
         self.assertEqual(got['profiles_of_the_running_app'], ['a', 'a-standing'])
+
+
+class QuitDictation(unittest.TestCase):
+    """(7) After a kill during a dictation, the app's Quit sweep must have finished, deleted the
+    killed tool's folder (the engine's row: "<time> DELETED <path> ...") and kept the running one's."""
+    DATA = HOME + '/Library/Application Support/com.richos.app/dictation-scratch/'
+    DEAD = DATA + 'a' * 24
+    LIVE = DATA + 'b' * 24
+
+    def walk(self, out):
+        w = gw.GarbageWalk.__new__(gw.GarbageWalk)
+        w.vm, w.out, w.home, w.payload = 'walk-x', Path(out), HOME, '/Users/admin/testvm/walk-x'
+        w.facts = {'abandoned_dictation': {'folder': self.DEAD, 'tool_pid': 2001},
+                   'live_dictation': {'folder': self.LIVE, 'tool_pid': 2002},
+                   'logs': {'restart-dictation': '/Users/admin/testvm/walk-x/relaunch-2.log'}}
+        w.quit = lambda: {'pid': 2000}
+        return w
+
+    def answer(self, deletions, there):
+        def guest(vm, command, timeout=30):
+            if 'relaunch-2.log' in command:
+                return ('[richos] cleanup at quit: deleted 1, undecidable 0, failures 0 (verdict: decided '
+                        'deletable=1 scope=app; applied: deleted=1)\n')
+            if 'scratch-reaper.log' in command:
+                return deletions
+            if command.startswith('test -d'):
+                return 'there' if any(f in command for f in there) else ''
+            return ''
+        return mock.patch.object(gw, 'guest', guest)
+
+    def row(self, folder, pid):
+        return ('2026-10-25T12:00:00Z DELETED %s bytes=1 class=app-dictation why=one dictation\'s scratch '
+                'folder: the dictation tool that made it (pid %d) has ended' % (folder, pid))
+
+    def test_the_killed_tools_folder_gone_and_the_running_ones_kept_passes(self):
+        with tempfile.TemporaryDirectory() as out, self.answer(self.row(self.DEAD, 2001), [self.LIVE]):
+            got = self.walk(out).quit_dictation()
+        self.assertEqual(got['kept'], self.LIVE)
+
+    def test_a_deleted_running_tools_folder_fails(self):
+        log = self.row(self.DEAD, 2001) + '\n' + self.row(self.LIVE, 2002)
+        with tempfile.TemporaryDirectory() as out, self.answer(log, []):
+            with self.assertRaises(gw.StepFailed):
+                self.walk(out).quit_dictation()
+
+    def test_no_deletion_row_for_the_killed_tools_folder_fails(self):
+        with tempfile.TemporaryDirectory() as out, self.answer('', [self.LIVE]):
+            with self.assertRaises(gw.StepFailed):
+                self.walk(out).quit_dictation()
 
 
 if __name__ == '__main__':
