@@ -227,11 +227,16 @@ for repo in dict.fromkeys(r for r in os.environ["IF_REPOS"].split("\n") if r.str
         failed.append("%s (%s)" % (os.path.basename(repo.rstrip("/")) or repo, " ".join(str(res["error"]).split())))
     for wt in res["worktrees"]:
         # A teammate nobody messaged (OWED-NO-NOTICE) is owed nothing since
-        # CEO 2026-10-06: it merges main itself before handover.
+        # CEO 2026-10-06: it merges main itself before handover. A notice that
+        # WAS sent for an earlier tip is still tracked (pending_notice).
+        who = wt.get("resolved_name") or os.path.basename(wt["path"].rstrip("/"))
         if wt["verdict"] in ("NOTIFIED-NO-ACK", "NOTIFIED-ACK-INVALID"):
             ack = wt.get("ack") or {}
             if wt["verdict"] == "NOTIFIED-ACK-INVALID" or ack.get("overdue"):
-                overdue.append(wt.get("resolved_name") or os.path.basename(wt["path"].rstrip("/")))
+                overdue.append(who)
+        pend = wt.get("pending_notice")
+        if pend and (pend.get("invalid") or (pend.get("ack") or {}).get("overdue")):
+            overdue.append("%s (notice for %s)" % (who, pend["sha"][:12]))
 
 parts = []
 if overdue:

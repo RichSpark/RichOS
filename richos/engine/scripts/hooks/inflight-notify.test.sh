@@ -1077,6 +1077,105 @@ notice_has "$COUT" "Nothing outstanding." \
     && ok "14c. once the assessment runs again with nothing waiting, it says nothing outstanding" \
     || bad "14c. once the assessment runs again with nothing waiting, it says nothing outstanding" "$COUT"
 
+# ==========================================================================
+# 15. A SENT NOTICE SURVIVES MAIN MOVING ON (review rv-20261025T001946Z#1)
+#
+# Notices were credited only when they named the CURRENT tip, so a real,
+# unacked notice for commit A went silent the moment main moved to B. No
+# notice sent is still no line at all (CEO 2026-10-06); a sent one stays until
+# a valid ack for its own commit, or the work's end, clears it.
+# ==========================================================================
+PEND="$SANDBOX/pend-repo"
+PEND_TEAMS="$SANDBOX/pend-teams"
+PEND_LEDGER="$SANDBOX/state/pend-acks.jsonl"
+PEND_WT="$SANDBOX/wt/mark-sonnet-pend1"
+mkdir -p "$PEND" "$PEND_TEAMS/session-deadbeef"
+: > "$PEND_LEDGER"
+printf 'PROTECTED_PATHS="src"\n' > "$PEND/orchestration.config"
+git -C "$PEND" init -q -b main
+git -C "$PEND" config user.email "$(git config user.email 2>/dev/null || echo tester@example.invalid)"
+git -C "$PEND" config user.name "$(git config user.name 2>/dev/null || echo tester)"
+mkdir -p "$PEND/src"
+echo "one" > "$PEND/src/a.txt"
+git -C "$PEND" add -A
+git -C "$PEND" commit -q -m "base"
+git -C "$PEND" worktree add -q -b worktree-pend "$PEND_WT" >/dev/null 2>&1
+echo "teammate work" > "$PEND_WT/src/b.txt"
+git -C "$PEND_WT" add -A
+git -C "$PEND_WT" commit -q -m "teammate commit"
+echo "two" >> "$PEND/src/a.txt"
+git -C "$PEND" add -A
+git -C "$PEND" commit -q -m "land A"
+PEND_A="$(git -C "$PEND" rev-parse HEAD)"
+: > "$PEND_TEAMS/session-deadbeef/inflight-repos.txt"
+pend_env() { RICHOS_ENTITY_ROOT="$PEND" INFLIGHT_TEAMS_DIR="$PEND_TEAMS" RICHOS_INFLIGHT_ACK_LEDGER="$PEND_LEDGER" "$@"; }
+pend_stop() { stop_payload | pend_env bash "$STOPHOOK" 2>/dev/null; }
+
+POUT="$(pend_stop)"
+say "15a no notice" "$POUT"
+case "$POUT" in
+    *mark-sonnet-pend1*) bad "15a. no notice sent: no debt and no line for the teammate" "$POUT" ;;
+    *) ok "15a. no notice sent: no debt and no line for the teammate" ;;
+esac
+
+printf '%s' "$(CWD="$PEND" send_payload "mark-sonnet-pend1" "Main moved to $PEND_A. Ack with scripts/inflight-ack.sh.")" \
+    | pend_env bash "$WITNESS" >/dev/null 2>&1
+python3 - "$PEND_TEAMS/session-deadbeef/inflight-notices.jsonl" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+p = sys.argv[1]
+rows = [json.loads(l) for l in open(p) if l.strip()]
+old = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+for r in rows:
+    r["timestamp"] = old
+open(p, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+POUT="$(pend_stop)"
+say "15b notice for A at A" "$POUT"
+notice_has "$POUT" "no ack past the timeout: mark-sonnet-pend1" \
+    && ok "15b. precondition: the sent notice for A, unacked past the timeout, is told at tip A" \
+    || bad "15b. precondition: the sent notice for A is told at tip A" "$POUT"
+
+echo "three" >> "$PEND/src/a.txt"
+git -C "$PEND" add -A
+git -C "$PEND" commit -q -m "land B, an ordinary commit"
+POUT="$(pend_stop)"
+say "15c notice for A at B" "$POUT"
+notice_has "$POUT" "mark-sonnet-pend1 (notice for ${PEND_A:0:12})" \
+    && ok "15c. the unacked notice for A is still told after main moves on to B" \
+    || bad "15c. the unacked notice for A is still told after main moves on to B" "$POUT"
+SOUT="$(pend_env bash "$RUNNER" status --repo "$PEND" 2>&1)"
+case "$SOUT" in
+    *"notice open: sent"*"${PEND_A:0:12}"*) ok "15d. status shows the open notice and its commit" ;;
+    *) bad "15d. status shows the open notice and its commit" "$SOUT" ;;
+esac
+
+pend_env bash "$ACKER" --sha "$PEND_A" --impact stale-record \
+    --detail "My copy of src/a.txt is behind commit A; I will re-read it before I touch it." \
+    --paths "src/a.txt src/b.txt" --worktree "$PEND_WT" >/dev/null 2>&1
+POUT="$(pend_stop)"
+say "15e acked" "$POUT"
+if notice_has "$POUT" "Nothing outstanding." && ! notice_has "$POUT" "mark-sonnet-pend1"; then
+    ok "15e. a valid ack for A clears it"
+else
+    bad "15e. a valid ack for A clears it" "$POUT"
+fi
+
+rm -rf "$PEND_WT/.claude/inflight-acks"
+: > "$PEND_LEDGER"
+POUT="$(pend_stop)"
+notice_has "$POUT" "mark-sonnet-pend1 (notice for ${PEND_A:0:12})" \
+    && ok "15f. precondition: with the ack gone the open notice is told again" \
+    || bad "15f. precondition: with the ack gone the open notice is told again" "$POUT"
+git -C "$PEND" worktree remove --force "$PEND_WT" >/dev/null 2>&1
+POUT="$(pend_stop)"
+say "15g work ended" "$POUT"
+if notice_has "$POUT" "Nothing outstanding." && ! notice_has "$POUT" "mark-sonnet-pend1"; then
+    ok "15g. the work's real end clears it"
+else
+    bad "15g. the work's real end clears it" "$POUT"
+fi
+
 echo ""
 if [ "$FAIL" -eq 0 ]; then
     printf '\033[32m✓ in-flight sweep: all %s checks passed.\033[0m\n' "$PASS"

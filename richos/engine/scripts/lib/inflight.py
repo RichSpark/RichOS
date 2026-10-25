@@ -498,8 +498,12 @@ def resolve_worktree_identity(wt_path, index, branch=""):
     return "hand-rolled", "", "", "", "unresolved"
 
 
-def credit_notices(worktrees, notices, tip, index=None):
+def credit_notices(worktrees, notices, tip, index=None, field="notice"):
     """Attach each notice to at most ONE live worktree.
+
+    With a tip, only notices naming that tip count (wt["notice"]). With an
+    EMPTY tip, any notice naming a commit counts, stored under `field`: that is
+    how a sent notice for an earlier tip is still found after main moves on.
 
     THE ADDRESS IS THE JOIN. A notice records who it was addressed to; a
     worktree resolves to the set of things that address it (its unique spawn
@@ -536,9 +540,10 @@ def credit_notices(worktrees, notices, tip, index=None):
     tip = (tip or "").lower()
     names = (index or {}).get("names", {}) or {}
     for wt in worktrees:
-        wt["notice"] = None
+        wt[field] = None
     for note in notices:
-        if not any(tip.startswith(tok) and len(tok) >= 7 for tok in note.get("sha_tokens", [])):
+        if not any((tip.startswith(tok) if tip else True) and len(tok) >= 7
+                   for tok in note.get("sha_tokens", [])):
             continue
         to = note.get("to", "") or ""
         if not to:
@@ -565,17 +570,17 @@ def credit_notices(worktrees, notices, tip, index=None):
         if len(hits) != 1:
             strict = name_tokens(to, strip_digits=False)
             hits = [w for w in worktrees
-                    if strict and len(strict & w["identity_tokens_strict"]) >= 2]
+                    if strict and len(strict & set(w["identity_tokens_strict"])) >= 2]
         if len(hits) != 1:
             loose = name_tokens(to)
             hits = [w for w in worktrees
-                    if loose and len(loose & w["identity_tokens"]) >= 2]
+                    if loose and len(loose & set(w["identity_tokens"])) >= 2]
         if len(hits) != 1:
             continue  # zero matches, or ambiguous — credit nothing
         wt = hits[0]
-        prev = wt.get("notice")
+        prev = wt.get(field)
         if prev is None or note.get("timestamp", "") > prev.get("timestamp", ""):
-            wt["notice"] = note
+            wt[field] = note
 
 
 # --------------------------------------------------------------------------
@@ -1325,9 +1330,8 @@ def assess(repo, tip=None, teams_dir="", timeout_min=DEFAULT_ACK_TIMEOUT_MIN,
                 wt["overlap"] = sorted(set(wt["moved_paths"]) & set(wt["own_paths"]))
 
         result["worktrees"].append(wt)
-    memo.save()
 
-    live = [w for w in result["worktrees"] if w["live"]]
+    live =[w for w in result["worktrees"] if w["live"]]
     result["live_count"] = len(live)
     credit_notices(live, notices, tip, index)
 
@@ -1380,6 +1384,49 @@ def assess(repo, tip=None, teams_dir="", timeout_min=DEFAULT_ACK_TIMEOUT_MIN,
                               "notes": [], "detail": "", "path": "",
                               "records": [], "channel": "", "sources": [],
                               "age_sec": None, "overdue": False})
+        wt["pending_notice"] = None
+
+    # A SENT NOTICE STAYS OUTSTANDING WHEN MAIN MOVES ON. The crediting above
+    # reads only notices naming THIS tip, so a notice sent for commit A, still
+    # unacked, vanished the moment main moved to B. Since CEO 2026-10-06 no
+    # teammate is owed a notice, so the only thing worth carrying is one that
+    # WAS sent: the teammate's latest notice, judged against the notice's OWN
+    # commit with the same ack records. A valid ack for that commit, the
+    # teammate's head already containing it, the work landing or ending
+    # (not live) clears it.
+    pending_pool = [w for w in live if not w.get("notice") and not w.get("landed")]
+    credit_notices(pending_pool, notices, "", index, field="last_notice")
+    for wt in pending_pool:
+        note = wt.pop("last_notice", None)
+        if not note:
+            continue
+        sha = ""
+        for tok in note.get("sha_tokens", []):
+            if len(tok) < 7:
+                continue
+            full = tok if _FULL_SHA.match(tok) else ""
+            if not full:
+                ok, out = git_checked(root, "rev-parse", "--verify", "--quiet", tok + "^{commit}")
+                full = out.strip().lower() if ok else ""
+            if full and full != tip and memo.ask(
+                    ("is-ancestor", full, tip), (full, tip),
+                    lambda f=full: ancestor_state(root, f, tip), lambda v: v is not None):
+                sha = full
+                break
+        if not sha:
+            continue  # names no commit main moved through: not a notice about this repository
+        head = wt["head"] or ""
+        if head and memo.ask(("is-ancestor", sha, head), (sha, head),
+                             lambda: ancestor_state(root, sha, head), lambda v: v is not None):
+            continue  # its work already contains the noticed commit
+        ack = ack_status(wt, sha, note.get("timestamp", ""), updates, timeout_min,
+                         ack_ledger_rows_for_tip(_ledger_rows or [], sha, root))
+        if ack["verified"]:
+            continue
+        wt["pending_notice"] = {"sha": sha, "timestamp": note.get("timestamp", ""),
+                                "to": note.get("to", ""), "ack": ack,
+                                "invalid": ack["state"] in ("artifact", "ledger", "artifact+ledger")}
+    memo.save()
 
     # ACKS WITH NO WORKTREE LEFT AT ALL. `git worktree list` stops naming a
     # worktree the moment it is removed, so its teammate never enters the loop
@@ -1457,6 +1504,13 @@ def render_text(res):
                   % (len(wt["overlap"]), " ".join(wt["overlap"][:6]))) if wt["overlap"] else ""))
         if wt.get("notice"):
             a("      notified   : %s  (to %r)" % (wt["notice"].get("timestamp", ""), wt["notice"].get("to", "")))
+        pend = wt.get("pending_notice")
+        if pend:
+            a("      notice open: sent %s for %s, %s  (acks --tip %s)"
+              % (pend.get("timestamp", ""), pend["sha"][:12],
+                 "ack INVALID" if pend.get("invalid")
+                 else "no ack, past the timeout" if (pend.get("ack") or {}).get("overdue")
+                 else "no ack yet", pend["sha"]))
         if wt.get("waiver"):
             a("      WAIVED     : %s" % wt["waiver"].get("reason", ""))
         ack = wt.get("ack") or {}
