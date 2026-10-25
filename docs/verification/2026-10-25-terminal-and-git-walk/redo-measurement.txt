@@ -1,0 +1,77 @@
+# redo-measurement.sh, run 2026-10-25 on the development Mac with the runtime's Git
+# (engine/runtime/bin/git from the nightly 74 engine archive, richos-engine-1.2.0.tar.gz).
+#
+# Run 1, the redo amending with GIT_AUTHOR_NAME/EMAIL left as Git hands them to its hooks:
+git version 2.55.0
+the first commit:  author RichOS <richos@localhost>, committer Dana Whitfield <dana@example.com>, Update prices
+commits on main:   1
+the second commit: author Dana Whitfield <dana@example.com>, committer Dana Whitfield <dana@example.com>, Second
+
+# Run 2, the script as committed (the redo drops those two variables, as git_name::redo does):
+git version 2.55.0
+the first commit:  author Dana Whitfield <dana@example.com>, committer Dana Whitfield <dana@example.com>, Update prices
+commits on main:   1
+the second commit: author Dana Whitfield <dana@example.com>, committer Dana Whitfield <dana@example.com>, Second
+
+# Read: an answer saved while prepare-commit-msg waits does not reach that commit (review
+# rv-20261025T021627Z-c3e80047-cfea#1); the post-commit redo replaces it with the same commit signed
+# by the saved name, author and committer, and the history still has one commit.
+
+# Since review rv-20261025T031723Z-5154b8c7-2b36#1 the shipped redo (git_name::redo) no longer
+# amends from the index: it rebuilds the commit with git commit-tree from that commit's own tree,
+# parents, message and author date, signed with the saved name, and moves HEAD with git
+# update-ref; this script's amend stand-in shows only that the waited commit can be signed again.
+
+# The script, as run (redo-measurement.sh, kept here verbatim):
+#!/bin/bash
+# Review rv-20261025T021627Z-c3e80047-cfea#1, measured: Git signs a commit with the name it read at
+# the start, so an answer saved while prepare-commit-msg waits does not reach that commit; the
+# redo (post-commit: commit --amend --reset-author with the saved name) does. Shell stand-ins for
+# the app's --git-name-wait and --git-name-redo, the same Git commands they run.
+#
+#   redo-measurement.sh [GIT]     GIT defaults to the git on PATH (config hooks need Git 2.54+)
+set -u
+GIT="${1:-git}"
+d=$(mktemp -d)
+mkdir -p "$d/home"
+cat > "$d/wait.sh" <<EOF
+#!/bin/sh
+[ -n "\${RICHOS_GIT_NAME_REDO:-}" ] && exit 0
+# The card is answered while the commit waits: the identity file appears.
+printf '[user]\n\tname = "Dana Whitfield"\n\temail = "dana@example.com"\n' > "$d/identity.gitconfig"
+: > "$d/waited"
+EOF
+cat > "$d/redo.sh" <<EOF
+#!/bin/sh
+[ -n "\${RICHOS_GIT_NAME_REDO:-}" ] && exit 0
+[ -f "$d/waited" ] || exit 0
+rm -f "$d/waited"
+# Git exports the commit's author to its hooks (GIT_AUTHOR_NAME/EMAIL); the redo drops them, as redo() does.
+RICHOS_GIT_NAME_REDO=1 env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL git -c "user.name=Dana Whitfield" -c user.email=dana@example.com commit --amend --reset-author --no-edit --no-verify --allow-empty --quiet
+EOF
+chmod +x "$d/wait.sh" "$d/redo.sh"
+cat > "$d/layer" <<EOF
+[user]
+	name = RichOS
+	email = richos@localhost
+[include]
+	path = "$d/identity.gitconfig"
+[hook "richos-git-name"]
+	event = prepare-commit-msg
+	command = "$d/wait.sh"
+[hook "richos-git-name-redo"]
+	event = post-commit
+	event = post-merge
+	command = "$d/redo.sh"
+EOF
+"$GIT" --version
+export HOME="$d/home" GIT_CONFIG_SYSTEM="$d/layer" GIT_CONFIG_GLOBAL="$d/home/.gitconfig" PATH="$(dirname "$(command -v "$GIT")"):$PATH"
+"$GIT" init -q "$d/repo"
+echo "<p>New prices</p>" > "$d/repo/prices.html"
+"$GIT" -C "$d/repo" add prices.html
+"$GIT" -C "$d/repo" commit -q -m "Update prices"
+echo "the first commit:  $("$GIT" -C "$d/repo" log -1 --format='author %an <%ae>, committer %cn <%ce>, %s')"
+echo "commits on main:   $("$GIT" -C "$d/repo" rev-list --count HEAD)"
+"$GIT" -C "$d/repo" commit -q --allow-empty -m "Second"
+echo "the second commit: $("$GIT" -C "$d/repo" log -1 --format='author %an <%ae>, committer %cn <%ce>, %s')"
+rm -rf "$d"
