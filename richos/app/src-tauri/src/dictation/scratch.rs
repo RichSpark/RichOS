@@ -6,6 +6,11 @@
 //! timeout, so a shared folder would keep his voice on disk and fail the second dictation with
 //! "File exists". The pattern is the phone path's (`phone/voice.rs`, `Scratch`). A failed
 //! deletion is logged, never dropped.
+//!
+//! A kill of the tool in the middle of a dictation skips the drop, so each folder carries its
+//! owner record (`richos_core::app_cleanup::OWNER_FILE`, this tool's pid and start), as a lease's
+//! engine profile does: the app's sweep (`scratch-reaper.py` `scan_app_dictation`) takes the
+//! folder once its tool has ended, and keeps it while the tool runs or a process holds it open.
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +31,10 @@ impl Scratch {
         let path = parent.join(name);
         // Not recursive: the random name must be new, or this is not this dictation's folder.
         std::fs::DirBuilder::new().mode(0o700).create(&path)?;
+        // Without it the folder is still taken, later, once it is past the reaper's age floor.
+        if let Err(error) = richos_core::app_cleanup::write_owner(&path) {
+            super::log::line(&format!("a dictation's scratch folder carries no owner record: {error}"));
+        }
         Ok(Scratch(path))
     }
 
@@ -56,7 +65,8 @@ mod tests {
         d
     }
 
-    /// INVARIANT: each dictation's folder is new, private, and gone when the dictation ends.
+    /// INVARIANT: each dictation's folder is new, private, names its owner, and is gone when the
+    /// dictation ends.
     #[test]
     fn a_folder_is_private_new_and_removed_on_drop() {
         let d = data("drop");
@@ -65,6 +75,11 @@ mod tests {
         assert_ne!(a.path(), b.path());
         let mode = std::fs::metadata(a.path()).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+        // Its owner record: this process, as the app's sweep reads it.
+        let record: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(a.path().join(richos_core::app_cleanup::OWNER_FILE)).unwrap()).unwrap();
+        assert_eq!(record["pid"].as_u64(), Some(u64::from(std::process::id())));
+        assert_eq!(record["procStart"].as_str(), richos_core::app_cleanup::own_start().as_deref());
         std::fs::write(a.path().join("utt-1.wav"), b"his voice").unwrap();
         let (pa, pb) = (a.path().to_path_buf(), b.path().to_path_buf());
         drop(a);
