@@ -1,0 +1,4 @@
+taken: RD-9W87-3XBN richdoctor-report/2, 0 screenshot(s), title "Conversation names in the sidebar are cut off at larger text sizes"
+taken: RD-2WVX-RD9C richos-idea/1, 0 screenshot(s), title "A short weekly summary of each conversation, from Rich"
+4 request(s), 0 with an Authorization header
+ok

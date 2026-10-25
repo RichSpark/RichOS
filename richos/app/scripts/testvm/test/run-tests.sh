@@ -1692,6 +1692,10 @@ t "pointer-drag: a left drag, a right-click (--right) with no dragged event, and
   node "$HERE/pointer-drag.test.js" >"$TMP/pointer-drag.log" 2>&1; ok $? "$(cat "$TMP/pointer-drag.log")"
 t_done
 
+t "relay-log-check: a walk's relay log through the real relay's checks; a token, a second report or a wrong schema fails"
+  node "$HERE/relay-log-check.test.mjs" >"$TMP/relay-log-check.log" 2>&1; ok $? "$(cat "$TMP/relay-log-check.log")"
+t_done
+
 t "keychain: a GUI setting that did not take is a failed prerequisite"
   out="$(STUB_KEYCHAIN_SETTINGS='lock-on-sleep timeout=300s' "$TESTVM_DIR/keychain.sh" prepare richos-test-a "$GUEST_HOME_UNDER_TEST" 2>&1)"
   no $?; has "$out" "did not retain no-timeout"

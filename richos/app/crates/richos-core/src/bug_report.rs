@@ -45,15 +45,15 @@
 //! # Which account
 //!
 //! [`Credentials`] answers "who is this filed as" at send time. The app has no GitHub sign-in yet
-//! (§20 is not built), so the shell's implementation answers [`Account::Reporting`] with the token
-//! read from the login keychain ([`KEYCHAIN_SERVICE`] / [`KEYCHAIN_ACCOUNT`]), or nothing when it
-//! is not there. A signed-in user's own account slots in as [`Account::User`] in that one place;
-//! the request, the outbox and the card already carry the account rather than assume it.
+//! (§20 is not built), so the shell's implementation answers [`Account::Reporting`]: RichOS's own
+//! reporting relay, whose GitHub App files it, with no token on the Mac. A signed-in user's own
+//! account slots in as [`Account::User`] in that one place; the request, the outbox and the card
+//! already carry the account rather than assume it.
 //!
 //! # What this file does not do
 //!
 //! It opens no connection and starts no process. The shell (`src-tauri/src/bug_report.rs`) runs
-//! `claude` and makes the HTTPS request through the [`Transport`] seam, so nothing here can reach
+//! `claude` and makes the HTTPS requests through the [`Transport`] seam, so nothing here can reach
 //! GitHub and the tests below the shell cannot either.
 
 use serde::{Deserialize, Serialize};
@@ -65,27 +65,6 @@ use unicode_normalization::UnicodeNormalization;
 /// Where every report is filed: `github.com/WebDevBooster/richos` (round 21 "Premises checked",
 /// `git remote -v` in richos).
 pub const REPOSITORY: &str = "WebDevBooster/richos";
-
-/// The GitHub REST API. [`API_OVERRIDE_ENV`] points it at a local stand-in for the test VM walk.
-pub const API_BASE: &str = "https://api.github.com";
-
-/// `RICHOS_BUG_REPORT_API=http://127.0.0.1:<port>` sends to a stand-in instead of GitHub. It is
-/// how the VM walk proves sending without a real issue; whoever can set this app's environment
-/// can already read its keychain, so it opens nothing new.
-pub const API_OVERRIDE_ENV: &str = "RICHOS_BUG_REPORT_API";
-
-/// **WHERE THE RICHOS REPORTING ACCOUNT'S TOKEN IS KEPT**: a generic password in the login
-/// keychain, service [`KEYCHAIN_SERVICE`], account [`KEYCHAIN_ACCOUNT`], the token as its value
-/// (as typed, not encoded). It is read at send time and never written by the app.
-///
-/// One fixed name rather than the phone channel's per-install name (`phone/secrets.rs`
-/// `service_for`), on purpose: the phone's keys are minted by the app, this token is put there by
-/// a person, and one name is one command for him whichever folder he runs a nightly from. A test
-/// launch under a scratch `HOME` has no login keychain of his to read (that is what the phone
-/// channel's defect 4 established), so it cannot pick his token up.
-pub const KEYCHAIN_SERVICE: &str = "com.richos.app.bug-reports";
-/// See [`KEYCHAIN_SERVICE`].
-pub const KEYCHAIN_ACCOUNT: &str = "github-reporting-token";
 
 // ---------------------------------------------------------------------------------------
 // TWO KINDS OF POST: A BUG REPORT, AND A FEATURE IDEA
@@ -2295,6 +2274,12 @@ pub trait Transport {
     /// One GraphQL request (`POST /graphql`, `request` being `{query, variables}`), and GitHub's
     /// answer as it came: its HTTP status and its JSON.
     fn graphql(&self, credential: &Credential, request: &serde_json::Value) -> Reply;
+    /// **AN IDEA, POSTED** as a discussion under Ideas: through GitHub's GraphQL API
+    /// ([`post_discussion`]) unless the transport posts it in one step itself (the shell's RichOS
+    /// reporting relay does).
+    fn post_idea(&self, credential: &Credential, title: &str, body: &str) -> Outcome {
+        post_discussion(self, credential, title, body)
+    }
 }
 
 /// What came back from one GraphQL request.
@@ -2352,7 +2337,7 @@ fn graphql_outcome(reply: Reply) -> Result<serde_json::Value, Outcome> {
 /// ([`IDEAS_LOOKUP`]), then `createDiscussion` with them ([`CREATE_DISCUSSION`]). Answers a bug
 /// report's [`Outcome`]: `Created` with the discussion's number and page, or why it waits. A
 /// category that is not there is GitHub refusing it (403): there is nowhere to post an idea.
-pub fn post_discussion(transport: &dyn Transport, credential: &Credential, title: &str, body: &str) -> Outcome {
+pub fn post_discussion<T: Transport + ?Sized>(transport: &T, credential: &Credential, title: &str, body: &str) -> Outcome {
     let (owner, name) = REPOSITORY.split_once('/').unwrap_or((REPOSITORY, ""));
     let lookup = serde_json::json!({ "query": IDEAS_LOOKUP, "variables": { "owner": owner, "name": name, "slug": IDEAS_CATEGORY_SLUG } });
     let data = match graphql_outcome(transport.graphql(credential, &lookup)) {
@@ -2387,7 +2372,7 @@ pub enum Reason {
     Offline,
     /// GitHub did not answer, or answered that it is unavailable or busy.
     GithubDown,
-    /// No account to send from: the reporting account's token is not on this Mac.
+    /// No account to send from.
     NotSetUp,
     /// GitHub refused the account (a token it does not accept, or a repository it will not file in).
     Refused,
@@ -2728,7 +2713,7 @@ impl Outbox {
                         let request = serde_json::json!({ "title": pending.title, "body": pending.body });
                         transport.create_issue(&credential, &format!("/repos/{REPOSITORY}/issues"), &request)
                     }
-                    Post::Idea => post_discussion(transport, &credential, &pending.title, &pending.body),
+                    Post::Idea => transport.post_idea(&credential, &pending.title, &pending.body),
                 };
                 classify(&answer).map(|ok| (ok, credential.account)).map_err(|r| (r, Some(answer)))
             }
