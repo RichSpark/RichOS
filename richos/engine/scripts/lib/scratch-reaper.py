@@ -119,6 +119,10 @@ _FAILED = object()
 
 # Who made an app's per-lease folder: richos-core app_cleanup.rs OWNER_FILE, the same name.
 OWNER_FILE = ".richos-owner.json"
+# What the app's speech recognition writes, named by the pid of the app that wrote it
+# (richos-voice stt.rs transcribe_inner and warm): scan_app_voice.
+VOICE_RECORDING_RE = re.compile(r"^utt-([1-9][0-9]{0,9})\.wav$")
+VOICE_WARMUP_RE = re.compile(r"^richos-speech-warm-([1-9][0-9]{0,9})-[0-9]+$")
 
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -3100,6 +3104,11 @@ class Reaper(object):
                         See scan_app_profiles.
           app-mcp-log   Claude Code's MCP server logs for the app's coordination
                         folder, about eight files per launch. See scan_app_mcp_logs.
+          app-voice     <data>/voice-scratch/utt-<pid>.wav, a spoken turn's recording
+                        (one second is 32044 bytes), and $TMPDIR/richos-speech-warm-
+                        <pid>-<n>/, the decoder's warm-up at start: the app removes
+                        each once the decoder returns, which a force-quit skips. See
+                        scan_app_voice.
 
         Measured too and NOT taken, each for its one reason:
           ~/.claude/sessions/<pid>.json and .key a crash leaves: Claude Code removes
@@ -3209,6 +3218,7 @@ class Reaper(object):
                         continue
                     self.add(path, "app-session", size, DELETE, "%s: %s" % (owner, why))
         self.scan_app_profiles(data, scope.get("exiting") or 0, held)
+        self.scan_app_voice(data, scope.get("exiting") or 0, held)
         self.scan_app_mcp_logs(data)
         self.entries.sort(key=Entry.key)
         return self.entries
@@ -3367,6 +3377,99 @@ class Reaper(object):
                 self.add(path, "app-profile", size, INDETERMINATE, refused)
                 continue
             self.add(path, "app-profile", size, DELETE, why)
+
+    def app_listing(self, root, klass):
+        """The names in one of the app's own folders, or None when it does not exist. One that
+        exists and cannot be read is UNDECIDABLE, never empty: a sweep that could not look must
+        not read as a sweep that found nothing, so it reaches the app's log as not done."""
+        try:
+            return sorted(os.listdir(root))
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            self.add(root, klass, 0, INDETERMINATE,
+                     "the app's folder could not be read (%s), so what it holds cannot be "
+                     "decided" % exc)
+            return None
+
+    def scan_app_voice(self, data, exiting, held):
+        """app-voice: what the app's speech recognition writes and removes itself, which a
+        force-quit in the middle leaves (review rv-20261025T020709Z-8339d95d-d408 #1).
+
+          <data>/voice-scratch/utt-<pid>.wav   a spoken turn's recording: richos-voice stt.rs
+                                               transcribe_inner writes it, runs the decoder
+                                               on it and removes it when the decoder returns
+          $TMPDIR/richos-speech-warm-<pid>-<n>/ the decoder's warm-up at app start (stt.rs
+                                               warm), removed when the warm-up returns
+
+        THE NAME CARRIES ITS OWNER: the pid of the app that wrote it. A recording is that app's
+        while that pid runs a process that started no later than the recording was written (a
+        process that started after it cannot have written it, whatever pid it was given), so it
+        is kept: it may be decoding now. Otherwise the app has ended and it goes, as it does
+        when it is the app now quitting (`exiting`), whose recordings no turn will use. The
+        open-file check and the walls apply to every one; nothing else there is taken."""
+        root = os.path.join(data, "voice-scratch")
+        names = self.app_listing(root, "app-voice")
+        if names is not None:
+            self.roots.append(root)
+            walls = Walls([root])
+            for name in names:
+                check_deadline()
+                path = os.path.join(root, name)
+                found = VOICE_RECORDING_RE.match(name)
+                if not found or os.path.islink(path) or not os.path.isfile(path):
+                    self.unattributed += 1
+                    continue
+                self.decide_voice(path, int(found.group(1)), exiting, held, walls,
+                                  "a spoken turn's recording")
+        tmp = os.path.realpath(os.environ.get("TMPDIR") or "/tmp")
+        warm = [n for n in (self.app_listing(tmp, "app-voice") or []) if VOICE_WARMUP_RE.match(n)]
+        if warm:
+            self.roots.append(tmp)
+            walls = Walls([tmp])
+            for name in warm:
+                check_deadline()
+                path = os.path.join(tmp, name)
+                if os.path.islink(path) or not os.path.isdir(path):
+                    self.unattributed += 1
+                    continue
+                self.decide_voice(path, int(VOICE_WARMUP_RE.match(name).group(1)), exiting, held,
+                                  walls, "the speech decoder's warm-up folder")
+
+    def decide_voice(self, path, pid, exiting, held, walls, what):
+        if self.app_spent(self.app_until):
+            return
+        size, newest, has_git = measure(path)
+        state, text = self.ws.process_start(pid)
+        if state == "unknown":
+            self.add(path, "app-voice", size, INDETERMINATE,
+                     "cannot tell whether the app that wrote it (pid %d) runs: %s" % (pid, text))
+            return
+        if state == "ok":
+            started = lstart_epoch(text)
+            if started is None:
+                self.add(path, "app-voice", size, INDETERMINATE,
+                         "the start of pid %d (%r) could not be read" % (pid, text))
+                return
+            # `ps` gives the start to the whole second, rounded down, so a start AFTER the
+            # newest write is proof; anything else may be the writer.
+            if started <= newest and pid != int(exiting or 0):
+                self.add(path, "app-voice", size, KEEP,
+                         "the app that wrote it (pid %d) is running: it may be recording or "
+                         "decoding it now" % pid)
+                return
+            why = ("the app that wrote it (pid %d) is quitting" % pid) if started <= newest else (
+                   "pid %d now belongs to a process that started after it was written, so the "
+                   "app that wrote it has ended" % pid)
+        else:
+            why = "the app that wrote it (pid %d) has ended" % pid
+        if held(path, size, "app-voice", what):
+            return
+        refused = walls.check(path, has_git)
+        if refused:
+            self.add(path, "app-voice", size, INDETERMINATE, refused)
+            return
+        self.add(path, "app-voice", size, DELETE, "%s: %s" % (what, why))
 
     def report(self, verbose=False):
         """The plan, with NO timestamps and no elapsed anything in it, so that
