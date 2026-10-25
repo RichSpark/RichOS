@@ -744,7 +744,9 @@ def app_job_outcome(idle, transcript, prompt_id, agents):
                         A completion whose receipt cannot be read (no receipt
                         names the agent, or the hook runs outside the app) is
                         not guessed at: it does not keep the check, and the
-                        verdict's detail says its owner was not read.
+                        kept stop record (stated-actions.jsonl) lists it as an
+                        owner not read. That records the unknown; it does not
+                        settle it.
       ('started', ...)  `team save` added a NEW teammate. The app registers
                         him when this turn ends and then sends Stu the
                         team_reloaded message, which starts his next turn
@@ -783,8 +785,9 @@ def app_job_outcome(idle, transcript, prompt_id, agents):
         for tid, answer in answers.items():
             name, inp = wanted[tid]
             if name == APP_COMPLETE and answer.get("obligation_closed") is True:
+                # The answer's id only: the app selects the carried obligation
+                # before it looks at the argument (mega-lander/app.py complete).
                 closed.add(answer.get("obligation_id"))
-                closed.add(inp.get("obligation_id") if isinstance(inp, dict) else None)
         if closed:
             owners = receipt_obligations(set(agents.values()))
             open_ = [t for t, a in agents.items() if a in owners and owners[a] not in closed]
@@ -1880,6 +1883,9 @@ def main():
     stop = stop_after_completion(idle, transcript, prompt_id, message)
     if stop is not None:
         record["stop"] = {"finishes": stop["finishes"], "verdict": stop["verdict"]}
+        if stop["verdict"] == "closed":
+            # what discharged it, including any completion whose owner was not read
+            record["stop"]["detail"] = str(stop["detail"])[:500]
         if stop["verdict"] == "declared":
             d = stop["detail"]
             record["stop"]["declared"] = d.get("case")

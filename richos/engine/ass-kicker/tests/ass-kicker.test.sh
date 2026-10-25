@@ -580,9 +580,11 @@ unset RICHOS_APP_STATE
 export RICHOS_WORKSPACES_DIR="$SAVED_WORKSPACES_DIR"
 
 run_hook "$SANDBOX/app-two-jobs-one-closed.jsonl" "$TWO_DONE"
-if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
-    ok "n19. the same turn with no receipt to read: the owner is not guessed, so the close is not refused on a guess"
-else bad "n19. no receipts" "rc=$RC err=$(printf '%s' "$ERR" | head -c 300)"; fi
+N19_DETAIL="$(tail -1 "$ENTITY/.claude/state/stated-actions.jsonl" 2>/dev/null | python3 -c 'import json,sys
+print((json.loads(sys.stdin.read()).get("stop") or {}).get("detail", ""))' 2>/dev/null)"
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ] && printf '%s' "$N19_DETAIL" | grep -q 'owner not read for: Review notes.md commit for Acme, Add more.md to Acme'; then
+    ok "n19. the same turn with no receipt to read: the owner is not guessed, the close is not refused on a guess, and the kept record says whose owner was not read"
+else bad "n19. no receipts" "rc=$RC detail=$N19_DETAIL err=$(printf '%s' "$ERR" | head -c 300)"; fi
 
 # R56-R58: ARM 3 over the app's own record tools, from the walk of f7db19c03 (Stu's transcript
 # 49b30d21…jsonl, richos-hq docs/audits/2026-10-15-nightly-root/evidence/
