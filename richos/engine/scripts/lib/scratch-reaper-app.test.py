@@ -296,6 +296,66 @@ class AppSweep(unittest.TestCase):
         self.assertTrue(log.exists(), out)
         self.assertIn("a running session may still write it", out)
 
+    # Review rv-20261025T010610Z-2cc154e7-1d03 #2, its fixture: the app stops waiting for a
+    # sweep at 10 s (app_cleanup.rs BOUND), and a backlog whose scan alone took longer
+    # survived every sweep, each one starting the same scan again. Its cost model, not a
+    # timing: 0.51 s per open-file query (the lsof time measured in the reaper's source), on
+    # a clock that only those queries move, so the verdict cannot depend on this Mac's load.
+    def test_a_backlog_longer_than_the_apps_bound_clears_across_sweeps(self):
+        import importlib.util
+        from unittest import mock
+        sys.path.insert(0, str(HERE))
+        spec = importlib.util.spec_from_file_location("reaper_under_test", HERE / "scratch-reaper.py")
+        reaper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reaper)
+
+        class Ended:
+            def process_start(self, pid):
+                return "gone", ""
+
+            def session_state(self, session):
+                return "ended", "no process"
+
+        paths = [self.hosted()[1] for _ in range(24)]
+        remaining = []
+        env = {"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.config_dir)}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(reaper, "claude_processes", return_value=[]):
+            for _sweep in range(6):
+                clock = [1000.0]
+
+                def holder(path):
+                    clock[0] += 0.51
+                    self.assertLess(clock[0] - 1000.0, 10.0, "the sweep ran past the app's bound")
+                    return ""
+                r = reaper.Reaper({"age_floor_minutes": 60, "claude_roots": [str(self.claude_root)]}, Ended())
+                r.command_lines = lambda: []
+                r.holder = holder
+                r.collect_test_instances = lambda paths, stamp: []
+                r._record_failures = lambda failures, stamp: None
+                # What main() sets for --app, from the reaper's own default budget.
+                budget = getattr(reaper, "APP_BUDGET_SECONDS", 8.0)
+                r.app_until = 1000.0 + budget / 2
+                r.app_apply_until = 1000.0 + budget
+                with mock.patch.object(reaper.time, "time", lambda: clock[0]):
+                    r.scan_app({"data": str(self.data)})
+                    r.apply(str(self.root / "deletions.log"))
+                remaining.append(sum(p.exists() for p in paths))
+                if not remaining[-1]:
+                    break
+        self.assertEqual(remaining[-1], 0, "remaining after each sweep: %s" % remaining)
+        self.assertTrue(all(a > b for a, b in zip([24] + remaining, remaining)),
+                        "a sweep deleted nothing: remaining after each sweep %s" % remaining)
+
+    def test_a_sweep_out_of_time_defers_and_says_so(self):
+        _session, scratch = self.hosted()
+        rc, out, err = self.sweep_with("--app-budget", "0")
+        self.assertEqual(rc, 0, out + err)
+        self.assertTrue(scratch.exists(), out)
+        self.assertIn("deferred=1", out)
+        rc, out, err = self.sweep_with()
+        self.assertFalse(scratch.exists(), out + err)
+
     def test_a_missing_data_folder_refuses_and_deletes_nothing(self):
         _session, scratch = self.hosted()
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.home),

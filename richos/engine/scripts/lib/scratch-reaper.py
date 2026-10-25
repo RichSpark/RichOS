@@ -139,6 +139,14 @@ class Deadline(Exception):
 _DEADLINE = [None]
 
 
+# THE APP'S SWEEP FITS INSIDE THE APP'S OWN BOUND (richos-core app_cleanup.rs BOUND, 10 s),
+# so it always gets to delete something before the app stops waiting for it: a backlog
+# whose scan alone is longer than the bound would otherwise survive every sweep, each one
+# starting the same scan again (review rv-20261025T010610Z-2cc154e7-1d03 #2). What is left
+# goes at the next start, settle or quit; the 2 s margin covers the interpreter's start.
+APP_BUDGET_SECONDS = 8.0
+
+
 def check_deadline():
     if _DEADLINE[0] is not None and time.time() > _DEADLINE[0]:
         raise Deadline("the scan exceeded its budget")
@@ -1069,6 +1077,14 @@ class Entry(object):
 
 
 class Reaper(object):
+    # THE APP'S SWEEP IS BOUNDED (--app-budget): past `app_until` no new candidate is weighed,
+    # past `app_apply_until` no new deletion starts, and each one left is counted in
+    # `app_deferred` for the app's next sweep. None outside --app. Class defaults, so a Reaper
+    # a test makes without __init__ (object.__new__) has them too.
+    app_until = None
+    app_apply_until = None
+    app_deferred = 0
+
     def __init__(self, cfg, ws):
         self.cfg = cfg
         self.ws = ws
@@ -1118,6 +1134,14 @@ class Reaper(object):
         # plan: no test devices, no Docker. See scan_agent.
         self.scope = None
         self.unattributed = 0
+
+    def app_spent(self, until):
+        """True, and one more candidate counted as left for the next sweep, once the app's
+        sweep is past `until`. Always False outside --app."""
+        if until is None or time.time() <= until:
+            return False
+        self.app_deferred += 1
+        return True
 
     def named_scratch(self, path):
         """Scheduled collection never owns named scratch or a containing tree."""
@@ -3155,6 +3179,8 @@ class Reaper(object):
                                  self.live.running[name][1] + " (not measured: a live "
                                  "session is never a candidate)")
                         continue
+                    if self.app_spent(self.app_until):
+                        continue
                     size, newest, has_git = measure(path)
                     verdict, why = self.live.verdict(name, newest)
                     if verdict != ENDED:
@@ -3221,6 +3247,8 @@ class Reaper(object):
                 if os.path.islink(path) or not os.path.isfile(path):
                     self.unattributed += 1
                     continue
+                if self.app_spent(self.app_until):
+                    continue
                 size, newest, has_git = measure(path)
                 if cutoff is None:
                     self.add(path, "app-mcp-log", size, INDETERMINATE,
@@ -3276,6 +3304,8 @@ class Reaper(object):
             base = name[:-len("-standing")] if name.endswith("-standing") else name
             if not UUID_RE.match(base) or os.path.islink(path) or not os.path.isdir(path):
                 self.unattributed += 1
+                continue
+            if self.app_spent(self.app_until):
                 continue
             size, newest, has_git = measure(path)
             if argv is None:
@@ -3457,6 +3487,8 @@ class Reaper(object):
         # an exceptional condition and reads as one.
         if self.deferred_skipped:
             line += " not_measured=%d" % self.deferred_skipped
+        if self.app_deferred:
+            line += " deferred=%d" % self.app_deferred
         if self.unknown_not_scanned:
             line += " not_scanned=%d" % self.unknown_not_scanned
         if self.scope is not None:
@@ -3830,6 +3862,8 @@ class Reaper(object):
         if self.scope is None:
             lines.extend(self.collect_test_devices(stamp))
         for e in order:
+            if self.app_spent(self.app_apply_until):
+                continue
             if e.klass == "codex-worktree":
                 # CLOSED BY GIT, NOT rmtree, after every check is repeated now
                 # (lib/codex_worktrees.py close): a checkout that changed since the
@@ -3988,7 +4022,8 @@ class Reaper(object):
                      % (stamp, deleted, freed, human(freed),
                         self.counts()[1], len(failures),
                         "" if self.scope is None else
-                        " %s unattributed=%d" % (self.scope_label(), self.unattributed)))
+                        " %s unattributed=%d" % (self.scope_label(), self.unattributed))
+                     + (" deferred=%d" % self.app_deferred if self.app_deferred else ""))
         write_log(log_path, lines)
         self._record_failures(failures, stamp)
         return deleted, freed, failures
@@ -4665,7 +4700,12 @@ def main(argv=None):
     ap.add_argument("--app-exiting", type=int, default=0,
                     help="with --app: this app process is quitting, so what it made and nothing "
                          "running uses is garbage now")
+    ap.add_argument("--app-budget", type=float, default=APP_BUDGET_SECONDS,
+                    help="with --app: seconds this sweep may take; past half of them no new "
+                         "candidate is weighed, past all of them no new deletion starts, and the "
+                         "rest is left for the app's next sweep")
     args = ap.parse_args(argv)
+    started = time.time()
 
     if args.deadline:
         _DEADLINE[0] = time.time() + args.deadline
@@ -4683,6 +4723,8 @@ def main(argv=None):
             reaper.scope = {"kind": "process", "name": "process"}
             reaper.scan_scratch_root(Walls([os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]))
         elif args.app is not None:
+            reaper.app_until = started + args.app_budget / 2
+            reaper.app_apply_until = started + args.app_budget
             reaper.scan_app({"data": args.app, "exiting": args.app_exiting})
         elif args.agent is not None:
             reaper.scan_agent({"name": args.agent, "session": args.session,
