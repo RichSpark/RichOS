@@ -252,6 +252,16 @@
       "checkedOverShell": 98,
       "consideredOverShell": 102
     },
+    "terminal-setup": {
+      "//": "Round 41 piece 1 (CEO 2026-10-25, Build #14): the Terminal setup sheet after Read it again, so What changed is on screen with What it found. Set from its first walk on 2026-10-25, both themes: 182 measured of 938 considered; 170 and 158 over the bare shell, far outside the three-node tolerance, so the floor can bite.",
+      "checkedOverShell": 170,
+      "consideredOverShell": 158
+    },
+    "git-name-sheet": {
+      "//": "Round 41 piece 2 (CEO 2026-10-25, Build #15): Your name in Git, changed later from Settings: the two fields, the GitHub hint and Save. Set from its first walk on 2026-10-25, both themes: 28 measured of 906 considered; 16 and 126 over the bare shell, outside the three-node tolerance, so the floor can bite.",
+      "checkedOverShell": 16,
+      "consideredOverShell": 126
+    },
     "repositories": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "checkedOverShell": 16,

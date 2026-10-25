@@ -112,7 +112,7 @@
 .tg-ask-lede b { color: var(--ink); font-weight: 600; }
 .tg-fields { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 10px 14px; margin-top: 16px; max-width: 520px; }
 .tg-fields label { font-size: 1rem; font-weight: 600; color: var(--ink); }
-.tg-input { font: inherit; font-size: 1rem; color: var(--ink); background: var(--card); border: 1px solid var(--ctl-line, var(--line-control)); border-radius: 10px; padding: 9px 12px; width: 100%; box-sizing: border-box; outline: none; transition: border-color .2s, box-shadow .2s; }
+.tg-input { font: inherit; font-size: 1rem; color: var(--ink); background: var(--card); border: 1px solid var(--ctl-line, var(--line-control)); border-radius: 10px; padding: 9px 12px; width: 100%; box-sizing: border-box; outline: none; }
 .tg-sheet .tg-input { border-color: var(--line-control); background: var(--surface-sunk); }
 .tg-input::placeholder { color: var(--ink-faint); opacity: 1; }
 .tg-input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); }

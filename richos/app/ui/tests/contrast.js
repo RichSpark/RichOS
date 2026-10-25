@@ -370,6 +370,34 @@ const SURFACES = [
     },
   },
   {
+    // Round 41 piece 1. Every state of it is also measured, both themes, by
+    // tests/terminal-and-git.js; this is the shell-wide walk of its sheet, read again once so
+    // What changed (each change's sign, word and color) is on screen with What it found.
+    name: "terminal-setup",
+    what: "Terminal setup after Read it again: the status, What changed, the tool folders and the settings by name",
+    drive: async (p) => {
+      await p.click("#set-btn");
+      await p.click("#set-terminal-open");
+      await p.waitForFunction(() => document.querySelector("#ts-read") && !document.querySelector("#ts-read").disabled);
+      // Pressed without the pointer, so the walk measures the button at rest, not hovered.
+      await p.evaluate(() => document.querySelector("#ts-read").click());
+      await p.waitForSelector("#ts-changes", {state: "visible"});
+      await p.waitForFunction(() => !document.querySelector("#ts-read").disabled);
+      await overlaySettled(p, "#terminal-setup");
+    },
+  },
+  {
+    // Round 41 piece 2, changed later from Settings; also measured by tests/terminal-and-git.js.
+    name: "git-name-sheet",
+    what: "Your name in Git from Settings: the name and email fields, the GitHub hint and Save",
+    drive: async (p) => {
+      await p.click("#set-btn");
+      await p.click("#set-git-open");
+      await p.waitForFunction(() => document.activeElement && document.activeElement.id === "gn-email");
+      await overlaySettled(p, "#git-name-sheet");
+    },
+  },
+  {
     name: "repositories",
     what: "the repository connection dialog and its explicit company selection",
     drive: async (p) => {
