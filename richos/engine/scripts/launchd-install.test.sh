@@ -30,6 +30,7 @@
 #      is reported as unknown
 #   D  the health check: a pending change whose waiter has ended (crashed or
 #      killed before it could give up), or whose pid is now another process
+#   P  ...and an install that applies the wanted job clears that record
 #   S  an unchanged job that is running is left alone, exit 0
 #   L  CONTROL: a job that is not loaded is bootstrapped
 set -uo pipefail
@@ -292,6 +293,19 @@ if grep -q "^$label: a changed job is still pending, but its waiter (pid $dead) 
     && grep -q "^$label: a changed job is still pending, but its waiter's pid $$ is now another process" <<<"$H3"; then
     ok "D  a pending change whose waiter ended, or whose pid was reused, is reported"
 else bad "D  ended: $H2 | reused: $H3"; fi
+
+# P — paired with D: once an install really applies the wanted job, the dead
+# waiter's record goes with it and the health check is clean again (no
+# reminder left behind for a change that is in fact applied).
+echo "$dead" >"$pf"
+H4="$(health)"
+OUT="$(run scratch-reaper)"; RC=$?
+H5="$(health)"
+if grep -q "^$label: a changed job is still pending, but its waiter (pid $dead) has ended" <<<"$H4" \
+    && [ "$RC" = 0 ] && [ -f "$SB/ld/$label.loaded" ] && [ ! -e "$pf" ] \
+    && grep -q '^HEALTH-CHECK-RAN$' <<<"$H5" && ! grep -q "^$label: " <<<"$H5"; then
+    ok "P  a successful install of the wanted job clears a dead waiter's record from the health check"
+else bad "P  before: $H4 | install rc=$RC $OUT | after: $H5"; fi
 
 printf '\n  %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
