@@ -791,6 +791,7 @@
   /// question inside a real turn loses nothing: that turn's `work_duration` row records it.
   function placeTurn(model, item) {
     if (!item.turnId) return;
+    if (item.kind === "git_name") return placeGitName(model, item);
     // A file Rich or Stu attached (`rich_files_host.rs`) is appended the same way a question
     // is, and a background job's file carries its job as `turnId` just as its question does.
     if (item.kind !== "question" && item.kind !== "rich_file") {
@@ -974,6 +975,13 @@
     });
     if (before < 0) model.turnOrder.push(turnId);
     else model.turnOrder.splice(before, 0, turnId);
+  }
+
+  /// **THE GIT NAME CARD TAKES ITS PLACE IN TIME** (round 41 piece 2). It is asked by the team's
+  /// first save, not by a turn, so it carries its own id as `turnId` (`git_name.rs`) and is drawn
+  /// by `renderTurn`'s no-record lane where it was asked, between the turns around it.
+  function placeGitName(model, item) {
+    placeByTime(model, item.turnId, typeof item.createdAt === "number" ? item.createdAt : Date.now());
   }
 
   /// Put the carried local notices back, in time order rather than at the end.
@@ -1660,7 +1668,7 @@
   /// was wired in the same branch (`Spine::set_worker_events`) — before that, the app could
   /// not emit this kind at all and a delegation reached the CEO as one nameless activity
   /// row reading "Worked".
-  const RENDERED_STREAM_KINDS = ["question", "rich_message", "local_notice", "activity", "worker_activity"];
+  const RENDERED_STREAM_KINDS = ["question", "rich_message", "local_notice", "activity", "worker_activity", "git_name"];
 
   // -------------------------------------------------------------------------------------
   // THE RENDER
@@ -3038,6 +3046,7 @@
       const lane = elem("div", "tl-lane");
       for (const item of turn.stream) {
         if (item.kind === "question") lane.appendChild(window.RichQuestions.render(item, opts));
+        else if (item.kind === "git_name" && window.RichGitName) lane.appendChild(window.RichGitName.render(item, opts));
         else if (isLocalNotice(item) && item.text) lane.appendChild(renderLocalNotice(item));
         else if (isProse(item) && item.text) lane.appendChild(renderRichMessage(item, opts));
       }

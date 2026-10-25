@@ -909,6 +909,150 @@
     return Promise.resolve(null);
   }
 
+  // ---- ROUND 41: TERMINAL SETUP and YOUR NAME IN GIT -------------------------------------------
+  // The round's own example data: Java installed, the Android folder moved, nvm removed. What
+  // `login_environment::Setup` and `git_name_host` answer, computed the way they compute it.
+  // `{ terminal: "startfail" }` is a start read that never finished; `{ terminalReads: [...] }`
+  // is what each read again finds, in order ("after", "same", "timeout"), the last repeating.
+  // `{ gitName: "ask" }` puts the card in the Acme conversation (`"saved"`, `"richos"`: answered);
+  // `"config"` is a user whose own Git setup names them, so nothing is asked.
+  function terminalEnv(folders, names, changed) {
+    const values = {};
+    for (const n of names) values[n] = n === "ANDROID_HOME" && changed ? "/sdk/moved" : "v";
+    return { folders, values };
+  }
+  const TERMINAL_NAMES = ["ANDROID_HOME", "BUN_INSTALL", "CARGO_HOME", "COLORTERM", "EDITOR", "GITHUB_TOKEN", "GOPATH", "GPG_TTY", "HOME", "HOMEBREW_CELLAR", "HOMEBREW_PREFIX", "HOMEBREW_REPOSITORY", "INFOPATH", "LANG", "LC_ALL", "LESS", "LOGNAME", "MANPATH", "NVM_DIR", "PAGER", "PATH", "PNPM_HOME", "PYENV_ROOT", "RUSTUP_HOME", "SHELL", "SSH_AUTH_SOCK", "TERM", "TMPDIR", "USER", "VOLTA_HOME", "XDG_CONFIG_HOME", "ZDOTDIR"];
+  const TERMINAL_BEFORE = terminalEnv(["/opt/homebrew/bin", "/opt/homebrew/sbin", "~/.cargo/bin", "~/.local/bin", "~/.nvm/versions/node/v20.11.0/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"], TERMINAL_NAMES, false);
+  const TERMINAL_AFTER = terminalEnv(["/opt/homebrew/opt/openjdk/bin", "/opt/homebrew/bin", "/opt/homebrew/sbin", "~/.cargo/bin", "~/.local/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"],
+    TERMINAL_NAMES.filter((n) => n !== "NVM_DIR").concat(["JAVA_HOME"]).sort(), true);
+  const mockTerminal = {
+    last: preset.terminal === "startfail" ? null : { env: TERMINAL_BEFORE, at: now() - 38 * 60 * 1000, atStart: true },
+    before: null,
+    failed: preset.terminal === "startfail" ? { atMs: now() - 38 * 60 * 1000, atStart: true } : null,
+    reads: (preset.terminalReads || ["after", "same"]).slice(),
+    held: false,
+    release: [],
+    calls: [],
+  };
+  /// `login_environment::changes`: folders added and gone, then settings added, changed, gone.
+  function terminalChanges(was, is) {
+    const out = [];
+    for (const f of is.folders) if (!was.folders.includes(f)) out.push({ kind: "new", of: "folder", name: f });
+    for (const f of was.folders) if (!is.folders.includes(f)) out.push({ kind: "gone", of: "folder", name: f });
+    for (const n of Object.keys(is.values).sort()) if (!(n in was.values)) out.push({ kind: "new", of: "setting", name: n });
+    for (const n of Object.keys(is.values).sort()) if (n !== "PATH" && n in was.values && was.values[n] !== is.values[n]) out.push({ kind: "changed", of: "setting", name: n });
+    for (const n of Object.keys(was.values).sort()) if (!(n in is.values)) out.push({ kind: "gone", of: "setting", name: n });
+    return out;
+  }
+  /// `login_environment::setup_of`.
+  function terminalSetupView() {
+    const t = mockTerminal, last = t.last;
+    const changes = last && t.before && !last.atStart ? terminalChanges(t.before.env, last.env) : null;
+    return {
+      shell: "zsh", shellPath: "/bin/zsh",
+      readAtMs: last ? last.at : null, atStart: !!(last && last.atStart),
+      folders: last ? last.env.folders.slice() : [],
+      settings: last ? Object.keys(last.env.values).sort() : [],
+      changes, sinceMs: changes ? t.before.at : null,
+      failed: t.failed ? Object.assign({}, t.failed) : null,
+    };
+  }
+  function terminalReadAgain() {
+    const t = mockTerminal;
+    t.calls.push("terminal_setup_read_again");
+    const finish = () => {
+      const outcome = t.reads.length > 1 ? t.reads.shift() : t.reads[0];
+      if (outcome === "timeout") t.failed = { atMs: now(), atStart: false };
+      else {
+        const env = outcome === "after" ? TERMINAL_AFTER : t.last ? t.last.env : TERMINAL_BEFORE;
+        t.before = t.last;
+        t.last = { env, at: now(), atStart: false };
+        t.failed = null;
+      }
+      return terminalSetupView();
+    };
+    if (!t.held) return new Promise((resolve) => setTimeout(() => resolve(finish()), 600));
+    return new Promise((resolve) => t.release.push(() => resolve(finish())));
+  }
+
+  const mockGit = {
+    own: preset.gitName === "config" ? { name: "Dana Whitfield", email: "dana@northwind.com", file: "~/.gitconfig" } : null,
+    choice: preset.gitName === "saved" ? { choice: "own", name: "Dana Whitfield", email: "dana@northwind.com" } : preset.gitName === "richos" ? { choice: "richos" } : null,
+    asked: null,
+    failNextSave: false,
+    actions: [],
+    suggested: "Dana Whitfield",
+  };
+  /// `git_name::item`.
+  function gitNameItem(threadId) {
+    const a = mockGit.asked;
+    if (!a || a.threadId !== threadId || mockGit.own) return null;
+    const t = threads.find((x) => x.id === threadId);
+    const c = mockGit.choice;
+    const g = !c ? { state: "open", folder: a.folder, name: mockGit.suggested, email: "" }
+      : c.choice === "own" ? { state: "saved", folder: a.folder, name: c.name, email: c.email }
+      : { state: "richos", folder: a.folder, name: mockGit.suggested, email: "" };
+    return { kind: "git_name", id: "git-name", entityId: t ? t.entity_id : null, threadId, turnId: "git-name",
+      visibility: "ceo", createdAt: a.at, sequence: a.at, gitName: g };
+  }
+  /// `git_name_host::with_card`: the card in its place in time.
+  function withGitName(payload, threadId) {
+    const item = gitNameItem(threadId);
+    if (!item) return payload;
+    const at = payload.items.findIndex((i) => (i.createdAt || 0) > item.createdAt);
+    payload.items.splice(at < 0 ? payload.items.length : at, 0, item);
+    return payload;
+  }
+  function gitNameStatus() {
+    if (mockGit.own) return Object.assign({ source: "git" }, mockGit.own);
+    const c = mockGit.choice;
+    return { source: "app", choice: c ? c.choice : "none", name: (c && c.name) || null, email: (c && c.email) || null, suggested: mockGit.suggested };
+  }
+  /// `git_name::check`.
+  function gitNameProblem(name, email) {
+    if (!String(name).trim() || /[\n\r<>]/.test(name)) return "no_name";
+    const e = String(email).trim();
+    if (!e) return "no_email";
+    const at = e.indexOf("@"), domain = at > 0 ? e.slice(at + 1) : "";
+    if (!(at > 0 && domain.indexOf("@") < 0 && domain.split(".").length > 1 && domain.split(".").every((p) => p.length)) || /[\s<>]/.test(e)) return "email";
+    return null;
+  }
+  function gitNameAnnounce() {
+    const item = mockGit.asked && gitNameItem(mockGit.asked.threadId);
+    if (item) emit("rich://git-name", item);
+  }
+  function gitNameCommand(cmd, args) {
+    if (cmd === "git_name_status") return Promise.resolve(gitNameStatus());
+    if (cmd === "git_name_open_file") {
+      if (!mockGit.own) return Promise.reject("RichOS could not find your Git setup file.");
+      mockGit.actions.push(args.reveal ? "reveal" : "open");
+      return Promise.resolve(null);
+    }
+    if (cmd === "git_name_save") {
+      const why = gitNameProblem(args.name, args.email);
+      if (why) return Promise.reject(why);
+      if (mockGit.failNextSave) {
+        mockGit.failNextSave = false;
+        return Promise.reject("the answer could not be written: disk full");
+      }
+      mockGit.choice = { choice: "own", name: args.name.trim(), email: args.email.trim() };
+    } else {
+      mockGit.choice = { choice: "richos" };
+    }
+    gitNameAnnounce();
+    return Promise.resolve(gitNameStatus());
+  }
+  // The round's ask: his request for the website, Rich's reply, and the card under it.
+  if (preset.gitName === "ask" || preset.gitName === "saved" || preset.gitName === "richos") {
+    const turnId = uid("t");
+    const at = now() - 1000 * 60 * 2;
+    const ask = "now put the new prices on our website too";
+    const reply = "On it. Your team is changing the pricing page in northwind-site now. I’ll show you the page before anything goes live.";
+    seedTurn("acme", turnId, ask, reply, at, 4000);
+    messagesByThread.acme.push({ role: "user", text: ask, turn_id: turnId, at }, { role: "assistant", text: reply, turn_id: turnId, at: at + 2000 });
+    mockGit.asked = { threadId: "acme", folder: "northwind-site", at: at + 60 * 1000 };
+  }
+
   /// Round 17's `arrives`: his fifth message, Rich's reply, and the two files that turn wrote,
   /// appended to the front of the record and announced on `rich://output` once the turn is done.
   function outputArrive(threadId) {
@@ -3101,7 +3245,7 @@
           if (t && !t.entity_id) return Promise.reject(UNBOUND_ERR(id));
           // The files Rich attached ride on this snapshot because `question_host::payload_in`
           // adds them, one item each, in the turn that attached them.
-          return withRichFiles(projectTimeline(id), id);
+          return withGitName(withRichFiles(projectTimeline(id), id), id);
         }
         // ---- techy mode (techy-mode design §3.1/§3.4) ------------------------------
         case "get_machinery": {
@@ -3118,7 +3262,7 @@
           // about rows the CEO cannot see.
           // ...and on Techy Mode's because `rich_files_host::machinery_with_files` adds the same rows
           // (review rv-20261021T083350Z-8ca9bacf-e592: until it did, the cards vanished here).
-          const projected = withRichFiles(projectTimeline(id, st.state === "recorded" ? "technical" : "technical-empty"), id);
+          const projected = withGitName(withRichFiles(projectTimeline(id, st.state === "recorded" ? "technical" : "technical-empty"), id), id);
           return {
             threadId: id,
             state: st.state,
@@ -3767,6 +3911,17 @@
           return outputPreviewOf(args.outputId ?? args.output_id);
         // The actions (S6): the shell's contract, nothing opened and nothing written.
         case "output_file":
+        // Terminal setup and your name in Git (round 41).
+        case "terminal_setup":
+          mockTerminal.calls.push(cmd);
+          return Promise.resolve(terminalSetupView());
+        case "terminal_setup_read_again":
+          return terminalReadAgain();
+        case "git_name_status":
+        case "git_name_save":
+        case "git_name_use_richos":
+        case "git_name_open_file":
+          return gitNameCommand(cmd, args);
         case "output_open":
         case "output_reveal":
         case "output_save_copy":
@@ -5447,5 +5602,14 @@
     },
     FEEDBACK_STORE_ABSENT,
     FEEDBACK_PREVIEW_MISMATCH,
+    // ---- Terminal setup and your name in Git (round 41) -------------------------------------
+    /// Hold each read again until `terminalRelease()`, so a suite sees "Reading…".
+    terminalHold(on) { mockTerminal.held = on !== false; },
+    terminalRelease() { const r = mockTerminal.release.shift(); if (r) r(); return !!r; },
+    terminalCalls() { return mockTerminal.calls.slice(); },
+    /// The team's first save asks, live on `rich://git-name`, as `git_name_host::start` sends it.
+    gitNameAsk(threadId, folder) { mockGit.asked = { threadId, folder: folder || null, at: now() }; gitNameAnnounce(); },
+    gitNameFailNextSave() { mockGit.failNextSave = true; },
+    gitNameState() { return { choice: mockGit.choice && Object.assign({}, mockGit.choice), asked: !!mockGit.asked, actions: mockGit.actions.slice() }; },
   };
 })();
