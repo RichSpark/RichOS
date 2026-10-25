@@ -677,6 +677,23 @@ fn prepare_for_user(f: &Scratch, folder: &Path) -> EngineProfile {
         richos_core::machine_settings::Settings::default(), Some(folder.to_path_buf()), None).unwrap()
 }
 
+/// **Both folders of a lease say who made them** (review rv-20261025T021219Z-91f589b0-af71 #1):
+/// the app's sweep reads each folder's own owner record, so a sweep that took the base and left
+/// the `-standing` copy for the next one has not taken the copy's ownership proof with it.
+#[test]
+fn both_folders_of_a_lease_carry_this_apps_owner_record() {
+    use richos_core::app_cleanup::OWNER_FILE;
+    let f = Scratch::new();
+    let profile = prepare_for_user(&f, &f.0.join("central"));
+    let standing = profile.standing_plugin(&engine().join("app"));
+    for folder in [&profile.plugin, &standing] {
+        let record: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(folder.join(OWNER_FILE))
+            .unwrap_or_else(|e| panic!("{} carries no owner record: {e}", folder.display()))).unwrap();
+        assert_eq!(record["pid"], std::process::id(), "{}", folder.display());
+        assert_eq!(record["procStart"].as_str(), richos_core::app_cleanup::own_start().as_deref(), "{}", folder.display());
+    }
+}
+
 /// **The CEO, 2026-10-21: a technical user tweaks Rich's and Stu's own files by hand.** On
 /// first run the shipped `rich.md` and `stu.md` (and an empty `instructions.md`) are copied to
 /// the user's folder; every later session starts from those copies, an edit is in the next

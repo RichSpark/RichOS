@@ -3321,11 +3321,20 @@ class Reaper(object):
                 self.add(path, "app-profile", size, KEEP,
                          "a running process starts from it: %s" % named[0][:160])
                 continue
-            try:
-                with open(os.path.join(root, base, OWNER_FILE), encoding="utf-8") as fh:
-                    owner = json.load(fh)
-            except (OSError, ValueError):
-                owner = None
+            # THE FOLDER'S OWN RECORD FIRST. The app writes one into both folders of a pair
+            # (engine_profile.rs), so a sweep out of budget that took the base and left the
+            # -standing copy for the next sweep has not taken the copy's ownership proof with
+            # it (review rv-20261025T021219Z-91f589b0-af71 #1). A copy an earlier app made
+            # carries none and is read from its base, as before.
+            owner = None
+            for record in dict.fromkeys((os.path.join(path, OWNER_FILE),
+                                         os.path.join(base_path, OWNER_FILE))):
+                try:
+                    with open(record, encoding="utf-8") as fh:
+                        owner = json.load(fh)
+                    break
+                except (OSError, ValueError):
+                    continue
             if isinstance(owner, dict):
                 pid = owner.get("pid")
                 state, text = self.ws.process_start(pid)

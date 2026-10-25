@@ -451,6 +451,14 @@ impl EngineProfile {
         // read into this session's plugin beside this lease's engine plugin.
         let mut user = crate::user_settings::UserSetup::prepare(user_folder, &engine.join("app"),
             &plugin.with_file_name(format!("{}-standing", plugin.file_name().unwrap().to_string_lossy())))?;
+        // The copy carries its own owner record too: a sweep out of time can take the base and
+        // leave the copy for the next one, which must still be able to tell whose it is
+        // (review rv-20261025T021219Z-91f589b0-af71 #1).
+        if let Some(standing) = &user.standing {
+            if let Err(e) = crate::app_cleanup::write_owner(standing) {
+                eprintln!("[richos] {} carries no owner record: {e}", standing.display());
+            }
+        }
         user.login = login;
         // The Git the user's terminal runs, found on the login PATH (build plan item 8).
         if let Some(path) = user.login.as_ref().and_then(|login| login.get("PATH")) {

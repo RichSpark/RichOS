@@ -301,8 +301,10 @@ pub(crate) mod sandbox {
             std::fs::create_dir_all(base.join("agents")).unwrap();
             let standing = base.with_file_name(format!("{lease}-standing"));
             std::fs::create_dir_all(standing.join("agents")).unwrap();
+            // In both folders, as engine_profile.rs writes them.
             if ours {
                 write_owner(&base).unwrap();
+                write_owner(&standing).unwrap();
             } else {
                 let mut ended = Command::new("/bin/sleep").arg("600").spawn().unwrap();
                 let start = Command::new("ps").args(["-o", "lstart=", "-p", &ended.id().to_string()])
@@ -310,8 +312,10 @@ pub(crate) mod sandbox {
                 let start = String::from_utf8_lossy(&start.stdout).trim().to_string();
                 ended.kill().ok();
                 ended.wait().ok();
-                std::fs::write(base.join(OWNER_FILE),
-                    serde_json::json!({"pid": ended.id(), "procStart": start}).to_string()).unwrap();
+                for folder in [&base, &standing] {
+                    std::fs::write(folder.join(OWNER_FILE),
+                        serde_json::json!({"pid": ended.id(), "procStart": start}).to_string()).unwrap();
+                }
             }
             (base, standing)
         }

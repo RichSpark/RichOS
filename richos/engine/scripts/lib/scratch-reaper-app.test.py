@@ -268,6 +268,82 @@ class AppSweep(unittest.TestCase):
         self.assertEqual(rc, 0, out + err)
         self.assertFalse(base.exists() or standing.exists(), out)
 
+    def ended_app(self):
+        """An app process that has ended: its pid and start, as the owner record names them."""
+        app = subprocess.Popen(["/bin/sleep", "600"])
+        self.children.append(app)
+        start = self.started(app.pid)
+        app.kill()
+        app.wait()
+        return app.pid, start
+
+    # Review rv-20261025T021219Z-91f589b0-af71 #1: a sweep out of budget took a lease's base
+    # profile and left its -standing copy for the next one. The owner record was only in the
+    # base, so the copy then read as "no owner record" and waited for the 60-minute floor. The
+    # app now writes the record into both folders (engine_profile.rs), and each is decided on
+    # its own.
+    def test_a_standing_copy_whose_base_is_gone_goes_on_its_own_owner_record(self):
+        pid, start = self.ended_app()
+        base, standing = self.profile((pid, start))
+        (standing / ".richos-owner.json").write_text(json.dumps({"pid": pid, "procStart": start}))
+        shutil.rmtree(base)     # what the earlier, bounded sweep took
+        rc, out, err = self.sweep()
+        self.assertEqual(rc, 0, out + err)
+        self.assertFalse(standing.exists(), out)
+        self.assertIn("DELETED %s" % standing, self.log())
+
+    def test_a_backlog_that_splits_a_profile_pair_clears_it_across_sweeps(self):
+        """The review's fixture, its cost model unchanged: seven ended sessions, then one pair,
+        0.51 s per open-file query on a clock only those queries move."""
+        import importlib.util
+        from unittest import mock
+        sys.path.insert(0, str(HERE))
+        spec = importlib.util.spec_from_file_location("reaper_split_pair", HERE / "scratch-reaper.py")
+        reaper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reaper)
+
+        class Ended:
+            def process_start(self, pid):
+                return "gone", ""
+
+            def session_state(self, session):
+                return "ended", "no process"
+
+        for _ in range(7):
+            self.hosted()
+        lease = "11111111-1111-1111-1111-111111111111"
+        base = self.data / "engine-profiles" / lease
+        standing = base.with_name(lease + "-standing")
+        for folder in (base, standing):
+            (folder / "agents").mkdir(parents=True)
+            (folder / "agents/rich.md").write_text("agent\n")
+            (folder / reaper.OWNER_FILE).write_text(json.dumps({"pid": 999999, "procStart": "ended"}))
+        seen = []
+        env = {"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.config_dir), "TMPDIR": str(self.tmp)}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(reaper, "claude_processes", return_value=[]):
+            for _sweep in range(3):
+                clock = [1000.0]
+
+                def holder(path):
+                    clock[0] += 0.51
+                    return ""
+                r = reaper.Reaper({"age_floor_minutes": 60, "claude_roots": [str(self.claude_root)]}, Ended())
+                r.command_lines = lambda: []
+                r.holder = holder
+                r.collect_test_instances = lambda paths, stamp: []
+                r._record_failures = lambda failures, stamp: None
+                r.app_until = 1000.0 + reaper.APP_BUDGET_SECONDS / 2
+                r.app_apply_until = 1000.0 + reaper.APP_BUDGET_SECONDS
+                with mock.patch.object(reaper.time, "time", lambda: clock[0]):
+                    r.scan_app({"data": str(self.data)})
+                    r.apply(str(self.root / "deletions.log"))
+                seen.append((base.exists(), standing.exists(),
+                             [e.why for e in r.entries if e.path == str(standing)]))
+                if not base.exists() and not standing.exists():
+                    break
+        self.assertFalse(base.exists() or standing.exists(), "base, standing, why after each sweep: %s" % seen)
+
     # --- app-mcp-log: Claude Code's MCP logs for the app's coordination folder ---------------------
     def mcp_log(self, folder, name="2026-10-25T00-00-00-000Z.txt"):
         slug = "".join(c if c.isalnum() else "-" for c in str(folder))
