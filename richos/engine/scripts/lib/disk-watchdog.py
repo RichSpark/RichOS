@@ -314,6 +314,7 @@ def log(path, line):
 # result the installed launchd job published; a manual run never writes it, an
 # acknowledgement never changes it, and nothing here runs the reaper.
 REAPER_LABEL = "com.richos.scratch-reaper"
+WATCHDOG_LABEL = "com.richos.disk-watchdog"
 
 # KEPT OR UNDECIDED IS NOT A FAILURE (CEO, 2026-10-24: "remove obsolete
 # instructions and repeated administrative noise without hiding genuine
@@ -363,13 +364,82 @@ def set_id(parts):
     return hashlib.sha1("\n".join(sorted(parts)).encode("utf-8")).hexdigest()[:12]
 
 
-def cleanup_health(reaper_state, state_path, max_age_h, now, launch_agents_dir):
+def install_gave_up(state_dir):
+    """[problem, ...] for a changed scheduled job whose change was never applied.
+
+    An --install that finds the reaper or this watchdog changed while a run is in
+    progress leaves the run alone, and a waiter applies the change when the run
+    ends (scripts/lib/launchd-install.sh). A waiter that gives up writes
+    launchd-pending-<label>.gave-up, and the next install that succeeds removes
+    it; until then the job runs a schedule the engine no longer declares.
+
+    Only a MISSING file means nothing to report. A give-up file that exists and
+    cannot be read is unknown, and so is a pending change whose waiter record
+    (launchd-pending-<label>.pid) cannot be read. A pending change whose waiter
+    has ended, or whose pid is now another process, will never be applied: a
+    waiter that crashed or was killed never reached give_up(), and the job's old
+    schedule would otherwise look healthy."""
+    problems = []
+    for label in (REAPER_LABEL, WATCHDOG_LABEL):
+        path = os.path.join(state_dir, "launchd-pending-%s.gave-up" % label)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = " ".join(fh.read().split())
+            problems.append("%s: %s (%s)" % (label, text or "a changed job was not applied", path))
+        except FileNotFoundError:
+            pass
+        except (OSError, UnicodeError) as exc:
+            problems.append("%s: a give-up record exists but cannot be read (%s: %s); whether "
+                            "the changed job was applied is unknown" % (label, path, exc))
+        waiter = pending_waiter_problem(label, os.path.join(
+            state_dir, "launchd-pending-%s.pid" % label))
+        if waiter:
+            problems.append(waiter)
+    return problems
+
+
+def pending_waiter_problem(label, path):
+    """A problem string when LABEL's change is pending and its waiter is not alive
+    as that waiter; None when nothing is pending or the waiter is running."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read().strip()
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError) as exc:
+        return ("%s: a pending change's waiter record cannot be read (%s: %s); whether the "
+                "change will be applied is unknown" % (label, path, exc))
+    if not raw.isdigit():
+        return ("%s: a pending change's waiter record does not hold a pid (%s); whether the "
+                "change will be applied is unknown" % (label, path))
+    pid = int(raw)
+    # The same process-identity reads the engine's fences use: libproc for
+    # liveness, the process's own argv for which program it is.
+    import operator_fences
+    row = operator_fences.proc(pid)
+    if not row or row["zombie"]:
+        return ("%s: a changed job is still pending, but its waiter (pid %d) has ended without "
+                "applying it (%s); the job runs its previous schedule" % (label, pid, path))
+    argv = operator_fences.proc_argv(pid)
+    if not argv:
+        return ("%s: a pending change's waiter (pid %d) cannot be identified (%s); whether the "
+                "change will be applied is unknown" % (label, pid, path))
+    if not any(a.endswith("launchd-install-after-run.sh") for a in argv) or label not in argv:
+        return ("%s: a changed job is still pending, but its waiter's pid %d is now another "
+                "process (%s); the change will not be applied" % (label, pid, path))
+    return None
+
+
+def cleanup_health(reaper_state, state_path, max_age_h, now, launch_agents_dir,
+                   state_dir=None):
     """[problem, ...] for the last unattended cleanup result; [] when it is healthy.
     A kept leftover is not a problem (kept_leftover above)."""
     problems = []
     plist = os.path.join(launch_agents_dir, REAPER_LABEL + ".plist")
     if not os.path.isfile(plist):
         problems.append("the scheduled cleanup job is not installed (%s)" % plist)
+    if state_dir:
+        problems.extend(install_gave_up(state_dir))
     if not reaper_state:
         problems.append("no unattended cleanup result is published (%s is missing or "
                         "unreadable)" % state_path)
@@ -784,7 +854,7 @@ def main():
     # --- CLEANUP HEALTH, AND ITS ONE OWNER ACTION (cleanup PRD R4/R5) --------
     launch_agents = expand(env("RICHOS_LAUNCH_AGENTS_DIR", "~/Library/LaunchAgents"))
     cleanup_problems = cleanup_health(published, reaper_state_path, max_age_h, now,
-                                      launch_agents)
+                                      launch_agents, sbase)
     kept = kept_leftovers(published)
     kept_id = kept_set_id(kept) if kept else ""
     assoc = prev.get("cleanup_escalation") if isinstance(

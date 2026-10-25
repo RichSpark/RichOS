@@ -135,7 +135,10 @@ if [ "$MODE" = "uninstall" ]; then
     if command -v launchctl >/dev/null 2>&1 && [ -z "${RICHOS_LAUNCH_AGENTS_DIR:-}" ]; then
         launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
     fi
-    rm -f "$PLIST"
+    # A change still waiting for a reading to end is withdrawn with the job.
+    # shellcheck source=lib/launchd-install.sh
+    . "$SCRIPT_DIR/lib/launchd-install.sh"
+    rm -f "$PLIST" "$(launchd_install_pending_file "$LABEL")" "$(launchd_install_gave_up_file "$LABEL")"
     echo "✓ unscheduled $LABEL"
     exit 0
 fi
@@ -221,12 +224,22 @@ if [ "$MODE" = "install" ] || [ "$MODE" = "print-plist" ]; then
                 echo "✓ scheduled $LABEL (unchanged: already loaded from this plist, so it was not reloaded)"
                 exit 0 ;;
             running)
-                {
-                    echo "✗ $LABEL NOT REPLACED — a reading is running now (pid ${LAUNCHD_INSTALL_PID:-unknown})."
-                    echo "  The job changed, and replacing it would kill that reading. It keeps its"
-                    echo "  current schedule; run this again in a minute:  $SCRIPT_DIR/disk-watchdog.sh --install"
-                } >&2
-                exit 3 ;;
+                # The change waits for the reading and then applies by itself
+                # (launchd-install.sh, launchd_install_after_run).
+                _JOB_LOG="$HOME/.claude/state/disk-watchdog.launchd.log"
+                if launchd_install_after_run "$LABEL" "$_JOB_LOG" \
+                        "${LAUNCHD_APPLY_WAIT_MAX_SECONDS:-}" "${LAUNCHD_APPLY_WAIT_POLL_SECONDS:-}" \
+                        /bin/bash "$SCRIPT_DIR/disk-watchdog.sh" --install; then
+                    {
+                        echo "disk-watchdog: CHANGE PENDING — a reading is running now (pid ${LAUNCHD_INSTALL_PID:-unknown}),"
+                        echo "  so the changed job was not loaded yet and the reading was not interrupted."
+                        echo "  It applies by itself when that reading ends (waiting up to $((LAUNCHD_APPLY_WAIT_MAX_SECONDS / 60)) min,"
+                        echo "  waiter pid $LAUNCHD_INSTALL_CONTINUATION_PID, logged in $_JOB_LOG)."
+                    } >&2
+                    exit 3
+                fi
+                echo "✗ $LABEL changed while a reading is running (pid ${LAUNCHD_INSTALL_PID:-unknown}), and the wait to apply it afterwards could not start: $LAUNCHD_INSTALL_DETAIL. The job keeps its previous schedule; the health check reports it." >&2
+                exit 1 ;;
             failed)
                 echo "✗ $LABEL: $LAUNCHD_INSTALL_DETAIL; launchd did not load it; NOT scheduled" >&2
                 exit 1 ;;
