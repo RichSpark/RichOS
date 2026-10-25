@@ -3,7 +3,8 @@
 
 (1) A listing groups what is left by place, with sizes, and leaves out the control and the walk's
 own files. (2) A listing whose control the search did not find fails: its silence proves nothing.
-(3) The last listing fails naming every leftover a --gone pattern matches, and passes without one."""
+(3) The last listing fails naming every leftover a --gone pattern matches, and passes without one.
+(4) `reported`: a failed start sweep must be said as FAILED, with every leftover in the deletion log."""
 import importlib.util
 import json
 from pathlib import Path
@@ -79,6 +80,59 @@ class Listing(unittest.TestCase):
             with self.answer(scan([row(killed)])):
                 self.assertNotIn('still_there', self.walk(out, gone=gone).listing('restart'),
                                  'only the listings after the Quit and after the kill judge --gone')
+
+
+class Reported(unittest.TestCase):
+    """(4) The start sweep after the kill must say FAILED for the base it could not delete, and
+    the engine's deletion log must carry each leftover; a clean line for that sweep fails."""
+    PLANTED = {'split_standing': HOME + '/Library/Application Support/com.richos.app/engine-profiles/a-standing',
+               'undeletable_base': HOME + '/Library/Application Support/com.richos.app/engine-profiles/b',
+               'undeletable_standing': HOME + '/Library/Application Support/com.richos.app/engine-profiles/b-standing'}
+    WAV = HOME + '/Library/Application Support/com.richos.app/voice-scratch/utt-1103.wav'
+
+    def walk(self, out):
+        w = gw.GarbageWalk.__new__(gw.GarbageWalk)
+        w.vm, w.out, w.home, w.payload = 'walk-x', Path(out), HOME, '/Users/admin/testvm/walk-x'
+        w.facts = {'planted': dict(self.PLANTED), 'abandoned_recording': self.WAV,
+                   'logs': {'restart-after-kill': '/Users/admin/testvm/walk-x/relaunch-1.log'}}
+        return w
+
+    def answer(self, line, deletions, there='there'):
+        def guest(vm, command, timeout=30):
+            if 'relaunch-1.log' in command:
+                return 'other\n' + line + '\n'
+            if 'scratch-reaper.log' in command:
+                return deletions
+            if command.startswith('test -d'):
+                return there
+            return ''
+        return mock.patch.object(gw, 'guest', guest)
+
+    def log(self):
+        return '\n'.join(['t DELETED %s bytes=1 class=app-profile why=x' % self.PLANTED['split_standing'],
+                          't DELETED %s bytes=1 class=app-profile why=x' % self.PLANTED['undeletable_standing'],
+                          't FAILED %s class=app-profile error=denied' % self.PLANTED['undeletable_base'],
+                          't DELETED %s bytes=32044 class=app-voice why=x' % self.WAV])
+
+    def test_a_failed_sweep_said_as_failed_with_every_deletion_logged_passes(self):
+        line = '[richos] cleanup at start: FAILED, deleted 9, undecidable 0, failures 1 (verdict: x)'
+        with tempfile.TemporaryDirectory() as out, self.answer(line, self.log()):
+            got = self.walk(out).reported()
+        self.assertEqual(got['failures'], 1)
+
+    def test_a_clean_line_for_a_sweep_that_could_not_delete_fails(self):
+        line = '[richos] cleanup at start: deleted 9, undecidable 0, failures 0 (verdict: x)'
+        with tempfile.TemporaryDirectory() as out, self.answer(line, self.log()):
+            with self.assertRaises(gw.StepFailed):
+                self.walk(out).reported()
+
+    def test_a_leftover_missing_from_the_deletion_log_fails(self):
+        line = '[richos] cleanup at start: FAILED, deleted 9, undecidable 0, failures 1 (verdict: x)'
+        without_wav = '\n'.join(l for l in self.log().splitlines() if 'utt-1103' not in l)
+        with tempfile.TemporaryDirectory() as out, self.answer(line, without_wav):
+            with self.assertRaises(gw.StepFailed) as failed:
+                self.walk(out).reported()
+        self.assertIn('utt-1103.wav', str(failed.exception))
 
 
 if __name__ == '__main__':

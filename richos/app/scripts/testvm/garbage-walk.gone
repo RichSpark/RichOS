@@ -7,3 +7,6 @@
 /Library/Caches/claude-cli-nodejs/[^/]+-coordination/mcp-logs-[^/]+/[^/]+$
 # the voice speed measurement's probe utterance
 /richos-voice-calibration/probe\.wav$
+# a spoken turn's recording a killed app left, and the decoder's warm-up folder
+/com\.richos\.app/voice-scratch/utt-[0-9]+\.wav$
+/richos-speech-warm-[0-9]+-[0-9]+$
