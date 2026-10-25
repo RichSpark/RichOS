@@ -61,6 +61,7 @@
 #     (n18) app: two jobs finish, both are closed                  -> exit 0
 #     (n19) app: n17's turn with no work receipt to read           -> exit 0
 #     (n20) app: n17 with both teammates under one title           -> exit 2
+#     (n21) app: refused close, then a new save, truthful wait     -> exit 0, nothing added
 #   ARM 3 — APP RECORD TOOLS
 #     (R56) app team saves answered with paths, "I saved Norm"     -> no alert
 #     (R57) saved paths named + job report recorded: true          -> no alert
@@ -526,12 +527,18 @@ specs = {
     # the wait reply over a save that replaced an existing teammate: no reload follows that
     "replaced": [{"machine": notice("Activate Norm for Acme")},
                  {"app": save + [dict(saved, replaced=True)]}],
+    # the lead's 23:22 ruling on rv-20261024T230343Z-5ff59ca2-e966#1: the close fails, Stu
+    # saves a new teammate, and the reload the save queued will start his next turn
+    "close-refused-then-save": [review, {"app": integrate},
+                                {"app": complete + ["this assignment still has unresolved execution; "
+                                                    "reconcile it before completion", True]},
+                                {"app": save + [saved]}],
 }
 for name, spec in specs.items():
     with open(os.path.join(out, name + ".json"), "w", encoding="utf-8") as fh:
         json.dump(spec, fh)
 PY
-for s in wait done landed-open close-refused replaced two-jobs-one-closed two-jobs-both-closed same-title-one-closed; do
+for s in wait done landed-open close-refused replaced two-jobs-one-closed two-jobs-both-closed same-title-one-closed close-refused-then-save; do
     mk_tr "$SANDBOX/app-$s.jsonl" "$(cat "$APP_SPECS/$s.json")"
 done
 # Row 142, verbatim.
@@ -566,6 +573,11 @@ run_hook "$SANDBOX/app-close-refused.jsonl" "$STU_DONE"
 
 run_hook "$SANDBOX/app-replaced.jsonl" "$STU_WAIT"
 [ "$RC" -eq 2 ] && ok "n16. a wait on a reload that is not coming (an existing teammate replaced) is still refused" || bad "n16. replaced teammate" "rc=$RC"
+
+run_hook "$SANDBOX/app-close-refused-then-save.jsonl" "The close failed: the app says this job still has unresolved work. I saved Norm, and I am waiting for the team reload that is already queued to brief him on it."
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
+    ok "n21. a refused close, then a new teammate saved: the truthful wait on the queued reload passes with no extra step"
+else bad "n21. refused close then save" "rc=$RC out=$(printf '%s' "$OUT" | head -c 200) err=$(printf '%s' "$ERR" | head -c 300)"; fi
 
 TWO_DONE="Done. notes.md and more.md are committed and landed on main. Both jobs are closed."
 # n17/n18 run as the app runs its hooks: the work receipts beside the thread's workspace registry.

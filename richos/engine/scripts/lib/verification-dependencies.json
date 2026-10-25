@@ -16451,7 +16451,7 @@
     },
     "ass-kicker/tests/ass-kicker.test.sh": {
       "source": "ass-kicker/tests/ass-kicker.test.sh",
-      "sha256": "8364852cb79bb35d5ade109514fdedf8206855f143c5c079048ba7cbec3e9509",
+      "sha256": "1cda599bbf3f363230bc5d1c4217b95822546e0a6481b9c13574d1abd3900a2a",
       "evidence": "All hook invocations use the explicit private entity or private unadopted repository. Entity configs are empty or contain literal flag overrides; transcripts and role Markdown are generated as data. Mirror fixtures exercise missing helpers; the real analyzer is otherwise invoked. No mutation harness is called here. Case R29 runs the corpus replay tool on a generated one-session fixture directory with a sandbox --out path.",
       "keys": [],
       "edges": [
@@ -17222,7 +17222,7 @@
         "scripts/hooks/guard-no-shell-c.sh": "dbd0dfb97e292c47b04cfce97b09e3fb18c642b7fd88de21850a4d255069094e",
         "scripts/lib/host_child.py": "59fdb01f44f03ef847210ea9e55aa6b2adc226827c10f11805a2bc2335210b4a",
         "ass-kicker/ass-kicker.py": "1f866789c96ccffdb8d216cbe90cb3b17d405fe0b483ffa0dd7a51a8b07bbe61",
-        "ass-kicker/tests/ass-kicker.test.sh": "8364852cb79bb35d5ade109514fdedf8206855f143c5c079048ba7cbec3e9509",
+        "ass-kicker/tests/ass-kicker.test.sh": "1cda599bbf3f363230bc5d1c4217b95822546e0a6481b9c13574d1abd3900a2a",
         "scripts/hooks/ass-kicker.sh": "67958c5559f0271a699ee95462636009f5547ad1212124139137827b0a6006c1"
       }
     },
