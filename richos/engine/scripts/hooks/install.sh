@@ -659,13 +659,17 @@ HOOK_FILES+=(
     "$REPO_ROOT/scripts/lib/worktree-ledger.py"
     "$REPO_ROOT/scripts/lib/completion-proof.py"
     "$REPO_ROOT/mega-lander/create-teammate-worktree.sh"
-    # The dialect vocabulary. Not a hook, and hashed for the cold-open prompt's
-    # reason rather than the reaper's: it is not documentation, it IS the
-    # decision. dialect-guard.sh blocks a write on nothing but what this file
-    # says, so a quietly emptied or trimmed copy would turn the guard into a
-    # green no-op that looks exactly like a clean record — the same silent
-    # degradation every entry above exists to make impossible.
-    "$REPO_ROOT/scripts/lib/dialect-en-US.dict"
+    # The dialect table and the fixer that reads it. Not hooks, and hashed for
+    # the cold-open prompt's reason rather than the reaper's: they are not
+    # documentation, they ARE the decision. dialect-guard.sh fixes or refuses a
+    # write on nothing but what these two files say, so a quietly emptied table
+    # or a fixer that stopped refusing would turn the hook into a green no-op
+    # that looks exactly like a clean record — the same silent degradation
+    # every entry above exists to make impossible. (Until 2026-10-24 the hook
+    # read scripts/lib/dialect-en-US.dict, which is now only an input of the
+    # table's generator; dialect-table.py --check proves the table current.)
+    "$REPO_ROOT/scripts/lib/dialect/dialect-en-US.generated.dict"
+    "$REPO_ROOT/scripts/lib/dialect/dialect-fix.py"
     # The PreToolUse rule manifest. The dialect vocabulary's argument, at the
     # widest blast radius in this list: dispatch-pretooluse.sh decides WHICH
     # GUARDS RUN on nothing but what this file says. Seventeen of them, on every

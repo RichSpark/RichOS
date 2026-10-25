@@ -20,6 +20,8 @@ scripts/hooks/*.sha256
 # I protecting?" comes out of it). install.sh mints their sidecars.
 scripts/*.sha256
 scripts/lib/*.sha256
+# The American spelling table and the fixer dialect-guard.sh reads it with.
+scripts/lib/dialect/*.sha256
 mega-lander/*.sha256
 ass-kicker/*.sha256
 

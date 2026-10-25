@@ -528,10 +528,13 @@ ALL_ROOT_SCRIPTS=(
     # "did this run leave the pointer moved?", which is the question a red-run
     # fixture answered wrongly on 2026-09-01 while reporting success.
     scripts/lib/global-state-witness.sh
-    # The dialect vocabulary. dialect-guard.sh decides nothing without it and
-    # Layer T fails loudly when it is absent — first reason on this list, same
-    # as the predicates above.
-    scripts/lib/dialect-en-US.dict
+    # The American spelling table and the fixer that reads it. dialect-guard.sh
+    # decides nothing without them and Layer T fails loudly when either is
+    # absent — first reason on this list, same as the predicates above. (The
+    # derived closure above carries them too; named here because Layer T hashes
+    # them by name.)
+    scripts/lib/dialect/dialect-en-US.generated.dict
+    scripts/lib/dialect/dialect-fix.py
     # The in-flight notice predicate, both halves. guard-inflight-notify.sh
     # REFUSES TO START without inflight.sh — first reason on this list again —
     # and inflight.sh itself decides nothing without inflight.py.

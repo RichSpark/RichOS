@@ -165,7 +165,7 @@ session**, not this one.
 | `scripts/hooks/guard-ci-turn-gate.sh` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
 | `scripts/hooks/guard-completeness-commits.sh` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
 | `scripts/hooks/guard-definition-drift.sh` | a | TOOL INPUT — the orchestrator's own Agent brief | no | `ti.get("prompt")` at 238, where `ti` is tool_input: the brief Rich wrote, not a message the CEO typed |
-| `scripts/hooks/dialect-guard.sh` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
+| `scripts/hooks/guard-dialect.sh` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
 | `scripts/hooks/guard-hook-registration-commits.sh` | a | tool input / files on disk / its own state | no | 0 non-comment hits for the pattern set |
 | `scripts/hooks/guard-host-display-power.sh` | a | TOOL INPUT — the orchestrator's own Agent brief | no | `ti.get("prompt")` at 507, where `ti` is tool_input: the brief Rich wrote, not a message the CEO typed |
 | `scripts/hooks/guard-idle-land.py` | a (was b-decides) | tool calls + host notices | no — his words are read and discarded at the collection site | 233 keeps only MACHINE_PROMPT_RE matches; TERM 3b and hold_signal() DELETED this commit; the return dict has no `said` key. |

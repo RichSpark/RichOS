@@ -456,6 +456,43 @@ fi
 # ===========================================================================
 # H — THE CHOKEPOINT: the guard classifies, and refuses, a real payload
 # ===========================================================================
+# ===========================================================================
+# DR — A DATED RECORD IS NOT AN INVENTORY (2026-10-24)
+# ===========================================================================
+# An audit dated in its name that names every registered hook keeps the names
+# of its day. A registration change must pass with NO hook-inventory-ack and
+# without writing the new name into it (DR1); a real missing registration must
+# still fail on the real places (DR2); and the same file WITHOUT a date is
+# still an inventory, so the exclusion is the date rule and nothing else (DR3).
+add_audit() { # <repo> <relative name>
+    mkdir -p "$1/engine/docs/audits"
+    {
+        echo "# which hooks did what on the day"
+        echo "| hook-a.sh | hook-b.sh | hook-c.sh |"
+    } > "$1/engine/$2"
+    git -C "$1" add -A
+    git -C "$1" commit -qm "a dated audit" >/dev/null
+}
+RDR1="$SANDBOX/dr1"; make_fixture "$RDR1"; add_audit "$RDR1" "docs/audits/hooks-audit-2026-09-20.md"
+register "$RDR1" "guard-new-thing.sh" 1; complete "$RDR1" "guard-new-thing.sh" 1
+OUT="$(run "$RDR1")"; RC=$?
+if [ "$RC" = "0" ] && ! printf '%s' "$OUT" | grep -qF "hooks-audit-2026-09-20.md"; then
+    ok "DR1 a complete registration passes with no ack and leaves the dated audit alone"
+else bad "DR1 expected rc 0 and no mention of the dated audit, got $RC" "$OUT"; fi
+RDR2="$SANDBOX/dr2"; make_fixture "$RDR2"; add_audit "$RDR2" "docs/audits/hooks-audit-2026-09-20.md"
+register "$RDR2" "guard-new-thing.sh" 1
+OUT="$(run "$RDR2")"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q "MISSING from 4 place" \
+        && ! printf '%s' "$OUT" | grep -qF "hooks-audit-2026-09-20.md"; then
+    ok "DR2 a real missing registration still fails on its four real places"
+else bad "DR2 expected rc 1 naming four places and not the dated audit, got $RC" "$OUT"; fi
+RDR3="$SANDBOX/dr3"; make_fixture "$RDR3"; add_audit "$RDR3" "docs/audits/hooks-audit.md"
+register "$RDR3" "guard-new-thing.sh" 1; complete "$RDR3" "guard-new-thing.sh" 1
+OUT="$(run "$RDR3")"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -qF "docs/audits/hooks-audit.md"; then
+    ok "DR3 the same file without a date is still an inventory (control)"
+else bad "DR3 expected rc 1 naming the undated file, got $RC" "$OUT"; fi
+
 payload() {
     python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1"
 }

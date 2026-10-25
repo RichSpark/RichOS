@@ -268,10 +268,12 @@ DEMO_FILES+=(
     # moved?" — which is the question a red-run fixture got wrong on 2026-09-01
     # while reporting success, leaving a double-clicked RichOS with no lease.
     "scripts/lib/global-state-witness.sh"
-    # The dialect vocabulary. dialect-guard.sh decides nothing without it and
-    # Layer T fails loudly when it is absent — which is how this omission was
-    # found, by the probe rather than by a reader.
-    "scripts/lib/dialect-en-US.dict"
+    # The American spelling table and the fixer that reads it. dialect-guard.sh
+    # decides nothing without them and Layer T fails loudly when either is
+    # absent — which is how the old dictionary's omission was found, by the
+    # probe rather than by a reader.
+    "scripts/lib/dialect/dialect-en-US.generated.dict"
+    "scripts/lib/dialect/dialect-fix.py"
     # The vendored-material predicate — who wrote this text, and is it ours to
     # judge? guard-vendoring-commits.sh and dialect-guard.sh both REFUSE TO
     # START without it, exactly as they refuse without resolve-roots.sh, so the

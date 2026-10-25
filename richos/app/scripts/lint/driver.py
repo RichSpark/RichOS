@@ -398,7 +398,7 @@ def js_report(root, rows):
                         for rule, line in advisory_rules.scan((root / path).read_text(), row["role"], "javascript"))
         findings.extend(dict(path=path, rule="dialect", classification="structural-match", message=label)
                         for label in dialect.scan(root, path, (root / path).read_text()))
-    return {"status": "report-only; advisory candidates require review; dialect matches come from the existing hook",
+    return {"status": "report-only; advisory candidates require review; dialect matches come from the engine's dialect fixer",
             "files": len(select(rows, "javascript")), "findings": findings,
             "unsupported": ["process-pattern-kill (shell syntax only)", "process-self-wait (shell syntax only)", "timeout-success (shell syntax only)"],
             "counts": {rule: sum(f["rule"] == rule for f in findings) for rule in (*advisory_rules.RULES, "dialect")}}

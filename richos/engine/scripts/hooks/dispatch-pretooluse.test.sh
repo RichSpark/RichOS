@@ -476,11 +476,11 @@ d = json.load(open(src, encoding="utf-8"))
 d.setdefault("hooks", {}).setdefault("PreToolUse", []).append({
     "matcher": "Write|Edit|MultiEdit|NotebookEdit",
     "hooks": [{"type": "command",
-               "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/hooks/dialect-guard.sh",
+               "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/hooks/scan-secrets.sh",
                "timeout": 20}]})
 json.dump(d, open(dst, "w", encoding="utf-8"))
 PY
-if overlap_report "$D19Z_DIR/hooks.json" "$MANIFEST" | grep -q 'dialect-guard.sh'; then
+if overlap_report "$D19Z_DIR/hooks.json" "$MANIFEST" | grep -q 'scan-secrets.sh'; then
     ok "D19z NEGATIVE CONTROL: a module re-registered on its OWN chain's matcher is still caught"
 else
     bad "D19z NEGATIVE CONTROL: a module re-registered on its OWN chain's matcher was NOT caught"
