@@ -1076,22 +1076,19 @@ COMPLETE_BLOCKQUOTE = re.compile(r"(?m)^[ \t]*>.*$")
 # once all the work you named has landed." was read as positive, exactly like
 # "All the work has landed.", and the operator was told YOU CALLED IT DONE every
 # turn it was repeated. The header above already named future conditionals as
-# the residual false class; this is that class, read the way polarity is: from
-# the CLAUSE the completion word sits in, and only from a cue BEFORE it. So a
-# claim with no such cue in its own clause reads exactly as it did before, and
-# "everything landed once the merge finished" (cue after the word) still counts.
+# the residual false class. The rule is the simple one, on purpose: a future or
+# conditional marker ANYWHERE in the sentence ("will", "going to", "once",
+# "when", "if", "after", "until", "as soon as") means it is not a completion
+# claim. No clause parsing: two readings of it ("If CI passes, all the work is
+# done.", "All the work will be tested and merged.") showed that scope rules
+# keep missing ordinary sentences. It errs quiet on a past-tense sentence that
+# happens to carry one ("Everything landed once the merge finished."); a plain
+# "All the work has landed." carries none and is still checked.
 COMPLETE_CONDITION = re.compile(
-    r"\b(?:if|once|when|whenever|until|unless|after|before|as\s+soon\s+as"
-    r"|provided|will|shall|would|going\s+to|about\s+to)\b|[’']ll\b", re.I)
+    r"\b(?:will|going\s+to|once|when|whenever|if|unless|after|until"
+    r"|as\s+soon\s+as)\b|[’']ll\b", re.I)
 # "once again", "at once": the adverb, not the conjunction.
 COMPLETE_NOT_CONDITION = re.compile(r"\bonce\s+(?:again|more)\b|\bat\s+once\b", re.I)
-# A LEADING CONDITION GOVERNS PAST ITS COMMA: "If CI passes, all the work is
-# done." The comma ends the condition's clause, not its reach, so these cues
-# are read back to the sentence's own start (a terminator, colon, semicolon or
-# dash). Only the unambiguous ones: "When I checked, everything had landed."
-# is a report, so `when`, `once` and the rest stay clause-scoped above.
-COMPLETE_LEADING_CONDITION = re.compile(r"\b(?:if|unless|provided|as\s+long\s+as)\b", re.I)
-COMPLETE_SENTENCE_START = re.compile(r"[.!?:;]|\s+--\s+|\s+—\s+")
 COMPLETE_SCOPE = re.compile(
     r"\b(?:"
     r"everything(?!\s+else)"
@@ -1114,24 +1111,10 @@ COMPLETE_WINDOW = 120
 MAX_COMPLETE_CLAIMS = 4
 
 
-def conditional_completion(sentence, pos):
-    """True when the completion word at <pos> sits in a clause that a condition
-    or a forecast governs ("once all the work has landed", "will be merged").
-    The clause is cut exactly as claim_polarity cuts it."""
-    start, end = 0, len(sentence)
-    for m in CLAUSE_SPLIT.finditer(sentence):
-        if m.end() <= pos:
-            start = m.end()
-        elif m.start() >= pos:
-            end = m.start()
-            break
-    before = COMPLETE_NOT_CONDITION.sub(" ", sentence[start:min(pos, end)])
-    if COMPLETE_CONDITION.search(before):
-        return True
-    lead = 0
-    for m in COMPLETE_SENTENCE_START.finditer(sentence, 0, pos):
-        lead = m.end()
-    return bool(COMPLETE_LEADING_CONDITION.search(sentence[lead:pos]))
+def conditional_completion(sentence, _pos=None):
+    """True when the sentence carries a future or conditional marker anywhere
+    ("once all the work has landed", "will be tested and merged")."""
+    return bool(COMPLETE_CONDITION.search(COMPLETE_NOT_CONDITION.sub(" ", sentence)))
 
 
 def _blank(m):

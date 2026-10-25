@@ -56,6 +56,8 @@
 #   C16/C17   a claim naming one repository is checked there only <-> the
 #             same claim about the repository holding the owed branch fires
 #   C18       a named branch with no owner record is still checked
+#   C19       a future or conditional marker anywhere in the sentence makes it
+#             no completion claim (C11 still fires)
 #   C01       it reports and NEVER blocks — exit 0, always
 #   L01..L04  the lint script's three exit codes never collapse into each other
 #
@@ -704,6 +706,16 @@ if printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' && printf '%s' "$RUN_OU
 else
     bad "C17 a claim naming the owed branch's repository is still caught" "stdout: ${RUN_OUT:-<empty>}"
 fi
+# C19 — the third review (rv-20261025T033755Z-5fbedc97-69a2): a forecast whose
+# marker sits before a coordinated verb. A future or conditional marker ANYWHERE
+# in the sentence makes it no completion claim; C11's plain claim still fires.
+drive "$CLAIMS" "All the work will be tested and merged."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C19 'All the work will be tested and merged.' raises nothing — the marker governs the whole sentence"
+else
+    bad "C19 a future marker anywhere in the sentence means it is not a completion claim" "stdout: $RUN_OUT"
+fi
+
 # The finding's own form, `<repo> <branch> (`, never the branch name alone:
 # the operator line also quotes the sentence, which names the branch too.
 drive "$CLAIMS" "All the work on stranded in seat has landed."

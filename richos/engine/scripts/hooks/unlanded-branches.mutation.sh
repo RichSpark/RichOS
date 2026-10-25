@@ -161,11 +161,8 @@ mutant stops-not-honored "U23" "$C" \
     '            state = "owed"' \
     "work the CEO stopped and ordered kept would be reported as owed by every completeness claim, as if the report had lied."
 
-# --- 15..17. THE SENTENCE'S OWN SCOPE (second review rv-...ee69ea88-3482) ---
-mutant leading-condition-ignored "C14" "$C" \
-    '    return bool(COMPLETE_LEADING_CONDITION.search(sentence[lead:pos]))' \
-    '    return False' \
-    "'If CI passes, all the work is done.' would be reported as a claim that the work is done."
+# --- 15..16. THE SENTENCE'S OWN SCOPE (second review rv-...ee69ea88-3482) ---
+# (A condition anywhere in the sentence is mutant 13's property, C09..C19.)
 mutant repository-scope-ignored "C16" "$C" \
     '    repos = {lab for lab in labels if lab and _names(sentence, lab)}' \
     '    repos = set()' \
