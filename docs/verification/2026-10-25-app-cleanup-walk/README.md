@@ -137,7 +137,10 @@ decoded left the folder, holding his recorded voice, for good. The fix uses the 
 reaper path already in place for engine profiles. The tool writes the record into each folder it
 makes (`dictation/scratch.rs`, `676fa555f`). The engine's app sweep decides each folder by that
 record (`scratch-reaper.py` `scan_app_dictation`, `ee8a04d51`). A record that is there but cannot
-be read is undecidable, never treated as missing (`3f94131b3`).
+be read is undecidable, never treated as missing (`3f94131b3`) and so is one holding JSON
+`null` (`ccb8520e9`, after this walk's bundle). Both are error paths, covered by the unit tests
+in `scratch-reaper-app.test.py` and not walked: the walk covers the readable-record path, which
+neither commit changes.
 
 ## Build identity
 
