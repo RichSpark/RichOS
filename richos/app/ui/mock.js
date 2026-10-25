@@ -927,10 +927,14 @@
   const TERMINAL_REORDERED = terminalEnv(["/opt/homebrew/sbin", "/opt/homebrew/bin", "~/.cargo/bin", "~/.local/bin", "~/.nvm/versions/node/v20.11.0/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"], TERMINAL_NAMES, false);
   const TERMINAL_AFTER = terminalEnv(["/opt/homebrew/opt/openjdk/bin", "/opt/homebrew/bin", "/opt/homebrew/sbin", "~/.cargo/bin", "~/.local/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"],
     TERMINAL_NAMES.filter((n) => n !== "NVM_DIR").concat(["JAVA_HOME"]).sort(), true);
+  // The read RichOS made when it started, at a FIXED time so every suite's picture of the
+  // Settings panel shows the same "Read at ..." (terminal-and-git.js's own clock stands at
+  // 09:52, 38 minutes after it). A read made again in a test takes the running clock.
+  const TERMINAL_STARTED_AT = Date.parse("2026-10-21T09:14:00-04:00");
   const mockTerminal = {
-    last: preset.terminal === "startfail" ? null : { env: TERMINAL_BEFORE, at: now() - 38 * 60 * 1000, atStart: true },
+    last: preset.terminal === "startfail" ? null : { env: TERMINAL_BEFORE, at: TERMINAL_STARTED_AT, atStart: true },
     before: null,
-    failed: preset.terminal === "startfail" ? { atMs: now() - 38 * 60 * 1000, atStart: true } : null,
+    failed: preset.terminal === "startfail" ? { atMs: TERMINAL_STARTED_AT, atStart: true } : null,
     reads: (preset.terminalReads || ["after", "same"]).slice(),
     held: false,
     release: [],
