@@ -1213,58 +1213,59 @@ def unlanded_sweep(entity_root, session_id):
         return None, "the sweep raised %s: %s" % (type(exc).__name__, exc)
 
 
-def recorded_stops():
-    """({(real repo, commit)}, {(real repo, branch)}) -- the EXACT identities
-    the workspace registry holds for work that is retained and not owed: every
-    tip a DISCARD recorded (point 7; §92 shelving closes stopped work this
-    way), and the branches of an open workspace whose registry end is STOPPED
-    or which is HELD. Nothing is inferred from a branch name or its history.
+def record_states(findings):
+    """{"owed": [...], "retained": [...], "running": [...], "unknown": [...]}
+    -- each finding of the sweep, resolved through ITS OWN work record by exact
+    identity.
 
-    Retained stopped work is not revived as owed work (2026-10-25): the CEO
-    stopped work on 2026-09-26 and ordered it kept; every completeness claim
-    after that was reported over the saved branches as if the report had lied.
-    A branch whose tip or workspace is not recorded here stays a finding.
+    A branch outside main proves only that it is outside main (2026-10-25):
+    the CEO stopped work on 2026-09-26 and ordered it kept, and every
+    completeness claim after that was reported over the saved branches as if
+    the report had lied. So a finding is judged by the open workspace record
+    whose workspace IS this repository and branch, and by nothing else:
 
-    Read only on the claim path, after a positive completeness claim. Loaded
-    from workspaces.py by path, as _recorded_integration_refs does. Any
-    failure returns nothing, which reports every branch as before."""
+      * RETAINED: that record's end says stopped, or it is held or paused
+      * RUNNING:  it has no end yet; work in progress is not owed
+      * OWED:     it ended and nothing landed or decided it
+      * UNKNOWN:  no open record owns the branch (a shelved copy, a discarded
+        workspace's leftovers, a release or Codex branch). A missing identity
+        never proves that work is owed or that a report lied, so it is listed
+        and never reported as a false claim.
+
+    Only the registry's OPEN records are read (workspaces.all_agents(): the
+    current workspaces, never the closed history). Read only on the claim
+    path, after a positive completeness claim. If the registry library cannot
+    load, every finding is UNKNOWN."""
+    out = {"owed": [], "retained": [], "running": [], "unknown": []}
     lib = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "..", "mega-lander", "workspaces.py")
-    tips, branches = set(), set()
     try:
         import importlib.util
-        spec = importlib.util.spec_from_file_location("workspaces_stops", lib)
+        spec = importlib.util.spec_from_file_location("workspaces_records", lib)
         ws = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(ws)
-        records = ws.all_agents(include_done=True)
+        records = ws.all_agents()
     except Exception:
-        return tips, branches
+        out["unknown"] = list(findings)
+        return out
+    owner = {}
     for rec in records:
-        disp = rec.get("disposition") or {}
-        if disp.get("kind") == "discarded":
-            for where, tip in (disp.get("tips") or {}).items():
-                repo = str(where).rpartition(":")[0]
-                if repo and isinstance(tip, str) and tip:
-                    tips.add((os.path.realpath(repo), tip))
-        elif not disp and ((rec.get("end") or {}).get("signal") == "stopped"
-                           or (rec.get("waiting") or {}).get("kind") == "held"):
-            for w in rec.get("workspaces") or []:
-                if w.get("repo") and w.get("branch") and not w.get("branch_deleted_at"):
-                    branches.add((os.path.realpath(w["repo"]), w["branch"]))
-    return tips, branches
-
-
-def owed_findings(findings, stops):
-    """(owed, retained): the sweep's findings split by recorded_stops()."""
-    tips, branches = stops
-    owed, retained = [], []
+        for w in rec.get("workspaces") or []:
+            if w.get("repo") and w.get("branch") and not w.get("branch_deleted_at"):
+                owner[(os.path.realpath(w["repo"]), w["branch"])] = rec
     for f in findings:
-        repo = os.path.realpath(f.get("repo") or "")
-        if (repo, f.get("oid") or "") in tips or (repo, f.get("branch")) in branches:
-            retained.append(f)
+        rec = owner.get((os.path.realpath(f.get("repo") or ""), f.get("branch") or ""))
+        if not rec or rec.get("disposition"):
+            state = "unknown"
+        elif ((rec.get("end") or {}).get("signal") == "stopped" or rec.get("pause")
+              or (rec.get("waiting") or {}).get("kind") == "held"):
+            state = "retained"
+        elif not rec.get("end"):
+            state = "running"
         else:
-            owed.append(f)
-    return owed, retained
+            state = "owed"
+        out[state].append(f)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -1420,6 +1421,7 @@ def main():
     # failure this engine protects against, and "nothing has landed yet" being
     # true is not a finding.
     complete_reports = []
+    complete_unknown = []
     complete_unevaluated = ""
     cclaims = [(s, pol) for s, pol in completeness_claims(message)
                if pol == "positive"]
@@ -1431,10 +1433,12 @@ def main():
             # class exists to stop being invisible.
             complete_unevaluated = why
         elif swept.get("findings"):
-            owed, _retained = owed_findings(swept["findings"], recorded_stops())
-            if owed:
+            states = record_states(swept["findings"])
+            complete_unknown = states["unknown"]
+            if states["owed"]:
                 complete_reports.append((cclaims[0][0],
-                                         dict(swept, findings=owed, n_findings=len(owed))))
+                                         dict(swept, findings=states["owed"],
+                                              n_findings=len(states["owed"]))))
 
     # --- observation record -------------------------------------------------
     # Written for EVERY turn, blocked or not, so the reporting layer is a record
@@ -1470,6 +1474,8 @@ def main():
                                "commits": f["commits"], "tip": f["tip"]}
                               for _, sw in complete_reports
                               for f in sw["findings"]],
+        "unlanded_unknown": [{"repo": f["label"], "branch": f["branch"], "tip": f["tip"]}
+                             for f in complete_unknown],
         "unlanded_unevaluated": complete_unevaluated,
         "verdict": "block" if (unresolved_names or unresolved_shas
                                or undispatched_roles or bad_states) else "pass",
@@ -1537,6 +1543,13 @@ def main():
                 lines.append("    (reported, never enforced — this guard has three recorded")
                 lines.append("     false-positive incidents and a blocking gate with a")
                 lines.append("     false-positive class gets waived, which is how a defense dies)")
+            if complete_reports and complete_unknown:
+                lines.append("  also outside main, owned by no work record (UNKNOWN, not counted"
+                             " against this report):")
+                lines.append("    %s" % "; ".join("%s %s" % (f["label"], f["branch"])
+                                                  for f in complete_unknown[:6])
+                             + (" (+%d more)" % (len(complete_unknown) - 6)
+                                if len(complete_unknown) > 6 else ""))
             if complete_unevaluated:
                 lines.append("  a completeness claim was made and the unlanded-branch check DID NOT RUN:")
                 lines.append("    %s" % complete_unevaluated)

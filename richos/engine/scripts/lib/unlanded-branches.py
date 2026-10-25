@@ -617,9 +617,6 @@ def sweep(entity_root, session_id="", ledger_path=None, extra="", now=None):
                 "label": os.path.basename(repo),
                 "branch": branch,
                 "tip": tip[:12],
-                # The exact identity, for a caller comparing it with a recorded
-                # one (guard-unresolved-claims.py's recorded stops).
-                "oid": tip,
                 "commits": n,
                 "age_days": (round(max(0.0, (now - epoch) / 86400.0), 1)
                              if epoch else None),

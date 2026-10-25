@@ -157,8 +157,8 @@ mutant claim-reads-conditions-as-claims "C09" "$C" \
 
 # --- 14. RETAINED STOPPED WORK IS NOT OWED WORK ----------------------------
 mutant stops-not-honored "U23" "$C" \
-    '            owed, _retained = owed_findings(swept["findings"], recorded_stops())' \
-    '            owed, _retained = swept["findings"], []' \
+    '            states = record_states(swept["findings"])' \
+    '            states = {"owed": swept["findings"], "retained": [], "unknown": []}' \
     "work the CEO stopped and ordered kept would be reported as owed by every completeness claim, as if the report had lied."
 
 mutation_end
