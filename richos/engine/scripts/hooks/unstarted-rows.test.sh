@@ -610,6 +610,19 @@ if [ "$?" -eq 2 ]; then ok "7c  the lint exits 2 when it could not read — neve
 else bad "7c  the lint exits 2 when it could not read"; fi
 mv "$SANDBOX/rec.hidden" "$REPO/wiki/open-items.md"
 
+# The lint is the full inventory the notice points to: every row of both files
+# is listed with its classification, the quiet ones included.
+write_queue
+write_record
+bash "$LINT" "$REPO" > "$SANDBOX/lint7d.txt" 2>&1
+MISSING=""
+for id in 0 9 1 11 12 13 3.1 3.2; do
+    grep -qE "^  [A-Z-]+ +${id//./\\.} " "$SANDBOX/lint7d.txt" || MISSING="$MISSING $id"
+done
+if [ -z "$MISSING" ] && grep -q 'swept 8 row(s)' "$SANDBOX/lint7d.txt"; then
+    ok "7d  the lint lists every row of both files, the quiet ones included"
+else bad "7d  the lint lists every row" "missing:${MISSING:- none} $(cat "$SANDBOX/lint7d.txt")"; fi
+
 fi
 
 if [ -n "$MUTATION_CASE" ]; then

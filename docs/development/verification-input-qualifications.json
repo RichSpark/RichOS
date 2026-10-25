@@ -1798,7 +1798,7 @@
         "richos/engine/scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "richos/engine/scripts/lib/unstarted-rows.py": "80476a1bcc89496a0180bd5c5d773cda94989296bf9568997d6928e3d09de576",
         "richos/engine/scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
-        "richos/engine/scripts/hooks/unstarted-rows.test.sh": "56e9576bb104ada3ec54231e192699542960a7657745988c9f1a9c257d7903ea",
+        "richos/engine/scripts/hooks/unstarted-rows.test.sh": "dbb11e1bcca9beabaff0539fbdf3e2e15bd327e11befcdb0f4b4f199007a4d40",
         "richos/engine/scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "richos/engine/scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
