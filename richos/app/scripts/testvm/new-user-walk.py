@@ -208,8 +208,25 @@ def update_row(text):
 
 
 def settings_open(text):
-    """Whether a frame's OCR TEXT shows the Settings panel (its first column's heading)."""
-    return bool(re.search(r'^\s*HOW IT LOOKS\s*$', text or '', re.M))
+    """Whether a frame's OCR TEXT shows the Settings panel (its first column's heading). Any case:
+    the heading is 14px caps drawn by CSS, and OCR read it as "HOW IT Looks" on nightly 75's walk
+    (2026-10-25) with the panel plainly open, so a case-sensitive match called an open panel shut."""
+    return bool(re.search(r'^\s*HOW IT LOOKS\s*$', text or '', re.M | re.I))
+
+
+# The open panel measured 1070x764 in the guest (nightly 75, 2026-10-25). After six presses in a
+# row the same node once read 40x10 with nothing drawn, so a node is the open panel only at a size
+# a person could read.
+PANEL_MIN_PX = 200
+# Seconds after the one press for the panel to be there (or gone). It was there within 0.3 s on
+# every press of nightly 75's probe walk; ten is room for a slow guest, never a second press.
+SETTINGS_WITHIN = 10
+
+
+def panel_shown(node):
+    """Whether #set-menu's accessibility node is the open panel: there, and of a readable size.
+    The panel is `display: none` while closed, so it is absent from the tree then."""
+    return bool(node) and (node.get('w') or 0) >= PANEL_MIN_PX and (node.get('h') or 0) >= PANEL_MIN_PX
 
 
 def update_verdict(line, sub, screen_hits):
@@ -474,20 +491,34 @@ class NewUserWalk(setup_walk.SetupWalk):
         return {'attempts': attempts, 'external_authentication_completed': False}
 
     def settings(self, want_open, name):
-        """Open or close Settings the way a person does, with its own button, and check the frame:
-        Escape left it open on the guest walk of 2026-10-21, and the next message was typed into
-        nothing. Returns the frame's text with Settings in the state asked for."""
+        """Open or close Settings the way a person does, with ONE press of its own button, and check
+        the frame: Escape left it open on the guest walk of 2026-10-21, and the next message was
+        typed into nothing. Returns the frame's text with Settings in the state asked for.
+
+        The button TOGGLES, so it is never pressed a second time on a reading that only might be
+        wrong. Nightly 75's walk (2026-10-25) pressed it again whenever the frame's OCR missed the
+        heading: the first press opened the panel, OCR read its heading "HOW IT Looks", and the
+        second press closed it, so "Settings did not open" was reported with the panel never
+        failing to open. The state is now the panel's own node (`panel_shown`) AND the frame
+        (`settings_open`), both read again for up to SETTINGS_WITHIN seconds after the one press."""
         guest(self.vm, "osascript -e 'tell application id \"com.richos.app\" to activate'")
-        text = self.frame(name)
-        for _ in range(2):
-            if settings_open(text) == want_open:
-                return text
+        node = self.by_id('set-menu')
+        if panel_shown(node) != want_open:
             self.ax('click', '--id', 'set-btn', '--first')
-            time.sleep(2)
-            text = self.frame(name)
-        if settings_open(text) != want_open:
-            raise StepFailed('Settings did not %s' % ('open' if want_open else 'close'))
-        return text
+        end = time.monotonic() + SETTINGS_WITHIN
+        while True:
+            if panel_shown(node) == want_open:
+                text = self.frame(name)
+                if settings_open(text) == want_open:
+                    return text
+            if time.monotonic() >= end:
+                break
+            time.sleep(1)
+            node = self.by_id('set-menu')
+        self.frame(name)
+        raise StepFailed('Settings did not %s within %g s of one press of its button (panel node: %s)'
+                         % ('open' if want_open else 'close', SETTINGS_WITHIN,
+                            node and {k: node.get(k) for k in ('x', 'y', 'w', 'h')}))
 
     def update(self):
         text = self.settings(True, 'update-before')
