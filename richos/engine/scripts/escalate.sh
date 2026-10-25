@@ -230,19 +230,74 @@ case "$REPO_NAME" in ""|.|.git) REPO_NAME="$(basename "${WT%/}")" ;; esac
 [ -n "$TEAMMATE" ] || TEAMMATE="$(basename "${WT%/}")"
 
 # --- WHERE THE RECORD FILE GOES, AND WHY IT MAY GO NOWHERE -----------------
-# `docs/verification/escalations/`, per ceo-decisions.md 27, which names
-# `docs/verification/` as the home for a block record — and NEVER at a
-# repository root, which is nine entries by permanent ruling.
+# A record names this machine's paths, a branch, a HEAD and who raised what,
+# so it is a private record: plans, research and private incident details
+# belong in the private record repository, never in a publication-bound one
+# (working rule 5; ceo-decisions.md 127). Written into a public repository's
+# worktree, it would be published with the next land of that branch.
 #
-# It is written ONLY into a `docs/` directory that ALREADY EXISTS. Creating
-# `docs/` in a repository that has none would add a root entry, which is the
-# very rule this is obeying. A repository without one gets the ledger row and
-# no file, and this says so rather than failing.
+#   NOT PUBLICATION-BOUND   the worktree's own docs/verification/escalations/.
+#   PUBLICATION-BOUND       the private record checkout its declaration names
+#                           in PRIVATE_SOURCES (scripts/lib/publication-
+#                           boundary.sh resolves it, worktree first, then the
+#                           main checkout), under docs/verification/escalations/.
+#   NO PRIVATE CHECKOUT     no file at all, never the public worktree instead.
+#
+# Either way it is written ONLY into a `docs/` directory that ALREADY EXISTS.
+# Creating `docs/` in a repository that has none would add a root entry, and a
+# repository root is nine entries by permanent ruling (ceo-decisions.md 27). A
+# repository without one gets the ledger row and no file, and this says so
+# rather than failing.
 RECORD=""
 RECORD_NOTE=""
+RECORD_PRIVATE=0
+# record_base: sets RECORD_BASE to the checkout the record goes under, or
+# leaves it empty with RECORD_NOTE saying why there is none.
+record_base() {
+    RECORD_BASE="$WT"
+    local lib="$SCRIPT_DIR/lib/publication-boundary.sh" root rc decl src top
+    if [ ! -f "$lib" ]; then
+        RECORD_BASE=""
+        RECORD_NOTE="scripts/lib/publication-boundary.sh is missing at $lib, so it cannot be told whether $WT is publication-bound, and no record file was written. The ledger row below IS the escalation."
+        return 0
+    fi
+    # shellcheck source=lib/resolve-main-checkout.sh
+    [ -f "$SCRIPT_DIR/lib/resolve-main-checkout.sh" ] && . "$SCRIPT_DIR/lib/resolve-main-checkout.sh"
+    # shellcheck source=lib/publication-boundary.sh
+    . "$lib"
+    root="$(pb_repo_root "$WT")" || return 0
+    rc=0; pb_load_declaration "$root" || rc=$?
+    case "$rc" in
+        0) ;;
+        1) return 0 ;;
+        *) RECORD_BASE=""
+           RECORD_NOTE="the publication declaration of $root cannot be read ($PB_BROKEN_REASON), so no record file was written: it may be publication-bound. The ledger row below IS the escalation."
+           return 0 ;;
+    esac
+    decl="$PB_DECLARATION_FILE"
+    RECORD_BASE=""
+    rc=0; pb_resolve_sources "$root" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        local IFS=$'\t'
+        for src in $PB_SOURCES_OK; do
+            [ -n "$src" ] && [ -d "$src/docs" ] || continue
+            top="$(git -C "$src" rev-parse --show-toplevel 2>/dev/null)" || continue
+            [ "$(pb_physical "$top")" = "$(pb_physical "$src")" ] || continue
+            rc=0; pb_load_declaration "$src" || rc=$?
+            [ "$rc" -eq 1 ] || continue
+            RECORD_BASE="$src"
+            RECORD_PRIVATE=1
+            return 0
+        done
+    fi
+    RECORD_NOTE="$root is publication-bound ($decl) and none of its PRIVATE_SOURCES is a private record checkout with a docs/ directory on this machine, so no record file was written. A record never goes into the publication-bound repository. The ledger row below IS the escalation."
+}
 if [ "$NO_RECORD" -eq 0 ]; then
-    if [ -d "$WT/docs" ]; then
-        RECORD_DIR="$WT/docs/verification/escalations"
+    record_base
+    if [ -z "$RECORD_BASE" ]; then
+        :
+    elif [ -d "$RECORD_BASE/docs" ]; then
+        RECORD_DIR="$RECORD_BASE/docs/verification/escalations"
         SLUG="$(printf '%s' "$TITLE" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//' | cut -c1-60)"
         [ -n "$SLUG" ] || SLUG="escalation"
         RECORD="$RECORD_DIR/$(date -u +%Y-%m-%d)-$TEAMMATE-$SLUG.md"
@@ -305,7 +360,12 @@ echo "            ^^ outside every repository and every session. It reaches the 
 echo "               NO MERGE, and it survives this session, this worktree and you."
 if [ -n "$RECORD" ]; then
     echo "  record  : $RECORD"
-    echo "            Commit it with your work. Nothing depends on it being merged."
+    if [ "$RECORD_PRIVATE" -eq 1 ]; then
+        echo "            In the private record checkout, not on your branch, because your"
+        echo "            repository is publication-bound. Nothing depends on it being committed."
+    else
+        echo "            Commit it with your work. Nothing depends on it being merged."
+    fi
 fi
 [ -n "$RECORD_NOTE" ] && echo "  note    : $RECORD_NOTE"
 echo "  state   : $STATE"

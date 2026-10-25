@@ -281,7 +281,8 @@ chmod +x "$ENG/scripts/hooks/notice-escalations.sh" "$ENG/scripts/hooks/session-
 cp "$ENGINE_ROOT/scripts/escalate.sh" "$ENG/scripts/"
 chmod +x "$ENG/scripts/escalate.sh"
 for l in escalations.py escalations.sh resolve-roots.sh resolve-main-checkout.sh \
-         seat-jurisdiction.sh stop-hook-notice.sh audit-report-watch.py; do
+         seat-jurisdiction.sh stop-hook-notice.sh audit-report-watch.py \
+         publication-boundary.sh declaration-path.sh; do
     cp "$SRC_DIR/../lib/$l" "$ENG/scripts/lib/$l" 2>/dev/null || true
 done
 # The Stop hook runs audit-report-watch.py before it reads the ledger (eefae0cef).
@@ -879,6 +880,98 @@ case "$OUT" in
     *"no record file was written"*) ok "15d and it says why, rather than failing silently" ;;
     *) bad "15d explains" "got: $OUT" ;;
 esac
+
+# ===========================================================================
+# 21. A PUBLICATION-BOUND REPOSITORY'S RECORD GOES TO THE PRIVATE RECORD.
+#     A record names this Mac's paths, a branch, a HEAD and who raised what.
+#     Plans, research and private incident details belong in the private
+#     record repository, never a publication-bound one; written into the
+#     worktree, the record reaches the public repository with the land.
+#     The layout is this machine's: a main checkout, a teammate worktree in
+#     `<repo>-wt/<name>`, and the private checkout the declaration's
+#     PRIVATE_SOURCES names as a sibling of the MAIN checkout, so the
+#     worktree-to-main fallback is exercised, not skipped.
+# ===========================================================================
+# The operator's own git hooks (an identity guard among them) are switched off
+# for these fixture repositories, so the commits a worktree needs are made.
+g21() { git -c core.hooksPath=/dev/null "$@"; }
+mk21() { # <dir> [<publication declaration>] — a repository with docs/ and one commit
+    mkdir -p "$1/docs"
+    g21 init -q "$1" 2>/dev/null
+    g21 -C "$1" config user.email "t@example.invalid" 2>/dev/null
+    g21 -C "$1" config user.name "Test" 2>/dev/null
+    g21 -C "$1" checkout -q -b main 2>/dev/null
+    printf 'seed\n' > "$1/docs/seed.md"
+    if [ -n "${2:-}" ]; then mkdir -p "$1/.richos"; printf '%s\n' "$2" > "$1/.richos/publication-boundary"; fi
+    g21 -C "$1" add -A 2>/dev/null
+    g21 -C "$1" commit -q -m seed 2>/dev/null
+}
+P21="$SANDBOX/pub21"
+mk21 "$P21/public" 'PRIVATE_RECORD="private-hq, the sibling checkout"
+PRIVATE_SOURCES="../private-hq"'
+mkdir -p "$P21/public-wt"
+g21 -C "$P21/public" worktree add -q -b cc/zach-opus-e1pub "$P21/public-wt/zach-opus-e1pub" 2>/dev/null
+WT21="$P21/public-wt/zach-opus-e1pub"
+mk21 "$P21/private-hq"
+L21="$SANDBOX/state/pub21.jsonl"
+OUT="$(RICHOS_ESCALATION_LEDGER="$L21" "$ESCALATE" raise --title "a record from a public worktree" \
+        --state proceeding --question "does the record stay out of the publication-bound repository?" \
+        --worktree "$WT21" --teammate zach-opus-e1pub 2>&1)"
+RC=$?
+say "21 publication-bound" "$OUT"
+REC21="$(find "$P21/private-hq/docs/verification/escalations" -name '*zach-opus-e1pub*' 2>/dev/null | head -1)"
+if [ "$RC" -eq 0 ] && [ -n "$REC21" ] && grep -q 'a record from a public worktree' "$REC21"; then
+    ok "21a the record went to the PRIVATE checkout's docs/verification/escalations/"
+else bad "21a record in the private checkout" "rc=$RC, nothing under $P21/private-hq/docs/verification/escalations: $OUT"; fi
+if find "$WT21" "$P21/public" -path '*/docs/verification/escalations/*' 2>/dev/null | grep -q .; then
+    bad "21b nothing in the publication-bound repository" "a record was written into $WT21 or its main checkout"
+else ok "21b and nothing was written into the publication-bound worktree or its main checkout"; fi
+if [ -n "$REC21" ] && grep -qF "\"record\": \"$REC21\"" "$L21"; then
+    ok "21c the ledger row names where the record went"
+else bad "21c ledger row names the record" "$(cat "$L21" 2>/dev/null)"; fi
+case "$OUT" in
+    *"Commit it with your work"*) bad "21d it does not tell the teammate to commit a file that is not on the branch" "got: $OUT" ;;
+    *"record  : $REC21"*) ok "21d and the teammate is told where it is" ;;
+    *) bad "21d names the record" "got: $OUT" ;;
+esac
+
+# --- no private checkout on this machine: no file, and it says so ----------
+mv "$P21/private-hq" "$P21/private-hq.away"
+L21B="$SANDBOX/state/pub21b.jsonl"
+OUT="$(RICHOS_ESCALATION_LEDGER="$L21B" "$ESCALATE" raise --title "a record with nowhere private to go" \
+        --state proceeding --question "does it fall back to the public worktree?" \
+        --worktree "$WT21" --teammate zach-opus-e1pub 2>&1)"
+RC=$?
+say "21 no private checkout" "$OUT"
+if [ "$RC" -eq 0 ] && [ -s "$L21B" ]; then ok "21e without a private checkout the escalation is still delivered"
+else bad "21e delivered" "rc=$RC: $OUT"; fi
+if find "$WT21" "$P21/public" -path '*/docs/verification/escalations/*' 2>/dev/null | grep -q .; then
+    bad "21f no fallback into the publication-bound repository" "a record was written into $WT21 or its main checkout"
+else ok "21f and no record was written into the publication-bound repository instead"; fi
+case "$OUT" in
+    *"no record file was written"*) ok "21g and it says why, as it does for a repository without docs/" ;;
+    *) bad "21g explains" "got: $OUT" ;;
+esac
+mv "$P21/private-hq.away" "$P21/private-hq"
+
+# --- THE TWIN: the same layout without the declaration behaves as before ----
+P21N="$SANDBOX/priv21"
+mk21 "$P21N/plain"
+mkdir -p "$P21N/plain-wt"
+g21 -C "$P21N/plain" worktree add -q -b cc/zach-opus-e1plain "$P21N/plain-wt/zach-opus-e1plain" 2>/dev/null
+mk21 "$P21N/private-hq"
+L21N="$SANDBOX/state/priv21.jsonl"
+OUT="$(RICHOS_ESCALATION_LEDGER="$L21N" "$ESCALATE" raise --title "a record from a private worktree" \
+        --state proceeding --question "does a repository that is not publication-bound keep its record?" \
+        --worktree "$P21N/plain-wt/zach-opus-e1plain" --teammate zach-opus-e1plain 2>&1)"
+RC=$?
+say "21 not publication-bound" "$OUT"
+if [ "$RC" -eq 0 ] && find "$P21N/plain-wt/zach-opus-e1plain/docs/verification/escalations" -name '*zach-opus-e1plain*' 2>/dev/null | grep -q .; then
+    ok "21h a repository that is not publication-bound still gets its record in the worktree"
+else bad "21h not publication-bound: record in the worktree" "rc=$RC: $OUT"; fi
+if [ -d "$P21N/private-hq/docs/verification" ]; then
+    bad "21i nothing elsewhere" "a record went to $P21N/private-hq although the repository declares nothing"
+else ok "21i and nothing went anywhere else"; fi
 
 # ===========================================================================
 # 18. FREE TEXT FROM A FILE — ANY WORDING ARRIVES, AND NONE OF IT IS ON THE
