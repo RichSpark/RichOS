@@ -2171,12 +2171,7 @@ fn main() {
         // The second argument, the turn's question scope, names the conversation a save of the
         // user's instructions is shown in (`your_instructions.rs`); an older config without it
         // still saves, without the card.
-        let result = args.next().ok_or_else(|| "Missing onboarding scope".to_string())
-            .and_then(|scope| {
-                let cards = args.next().map(PathBuf::from);
-                richos_core::onboarding_tools::run_stdio_in(Path::new(&scope), cards.as_deref())
-                    .map_err(|e| e.to_string())
-            });
+        let result = onboarding_mcp(args.by_ref(), std::io::stdin().lock(), std::io::stdout().lock());
         if let Err(error) = result {
             // The second SHAPE 1 site. This one is a stdio tool server the RUNNING app spawns
             // as a child, so `activation`'s P condition (parent pid 1) is false by
@@ -9789,6 +9784,19 @@ fn instructions_file_open(name: String, reveal: bool) -> Result<(), String> {
     }
 }
 
+/// **`--onboarding-mcp <scope> [<question scope>]`**, the onboarding tool server the conversation
+/// lease starts (`native.rs` `mcp_config`). The second argument, the turn's question scope, names
+/// the conversation and turn a save of the user's instructions is shown under as its card
+/// (`your_instructions.rs`); without it the rules are still saved and no card is drawn. Review
+/// rv-20261025T004124Z-a023ffa7-554a#1: the entry read only the first, so no real save left a card.
+fn onboarding_mcp(mut args: impl Iterator<Item = std::ffi::OsString>, reader: impl std::io::BufRead,
+                  writer: impl std::io::Write) -> Result<(), String> {
+    let scope = args.next().ok_or_else(|| "Missing onboarding scope".to_string())?;
+    let cards = args.next().map(PathBuf::from);
+    richos_core::onboarding_tools::serve_in(Path::new(&scope), cards.as_deref(), reader, writer)
+        .map_err(|e| e.to_string())
+}
+
 /// **YOUR INSTRUCTIONS** (round 36 screen 1; build plan item 1b): the user's own instructions
 /// file, the one every session of Rich and Stu appends in full (`user_settings::standing_plugin`),
 /// for Settings → Working with Rich → Your instructions. `path` is where it is, `shown` the same
@@ -9811,6 +9819,54 @@ fn your_instructions_read() -> Result<serde_json::Value, String> {
 fn your_instructions_save(text: String) -> Result<(), String> {
     let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;
     richos_core::your_instructions::save(&folder, &text)
+}
+
+#[cfg(test)]
+mod onboarding_mcp_tests {
+    use richos_core::entity::EntityId;
+    use richos_core::onboarding_tools::{self, OnboardingToolScope};
+    use richos_core::question_tools::{self, Scope};
+    use richos_core::questions::AskScope;
+    use richos_core::your_instructions;
+    use serde_json::{json, Value};
+
+    /// **A save through the desktop entry point leaves its card** (review
+    /// rv-20261025T004124Z-a023ffa7-554a#1): the arguments the conversation lease gives
+    /// `--onboarding-mcp` (`native.rs` `mcp_config`: the onboarding scope, then the turn's
+    /// question scope), a visible turn's save of the user's instructions over stdio, and the
+    /// card recorded for that conversation's turn.
+    #[test]
+    fn a_save_through_the_desktop_entry_point_leaves_the_card_for_its_turn() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("richos-onboarding-mcp-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let (central, scope, questions, state) =
+            (root.join("central"), root.join("scope.json"), root.join("assignments.questions.json"), root.join("engine-state"));
+        let entity = EntityId::parse("alpha").unwrap();
+        onboarding_tools::write_scope(&scope, &OnboardingToolScope::new(&entity, &central, &root.join("onboarding.json"))).unwrap();
+        onboarding_tools::set_actions_allowed(&scope, true).unwrap();
+        question_tools::write_scope(&questions, &Scope {
+            context: AskScope { root: state.clone(), entity_id: "alpha".into(), thread_id: "onboarding".into(),
+                turn_id: "turn-7".into(), asker: "front_desk".into(), obligation_id: None, session_id: "s".into(),
+                engine: None, entity_root: None, app_run: None },
+            actions_allowed: true, answer_method: "typed".into(), surface: "mac".into(),
+        }).unwrap();
+        let input = [
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":your_instructions::TOOL,"arguments":{"rules":["Copy me on every invoice."]}}}),
+        ].iter().map(|v| v.to_string() + "\n").collect::<String>();
+        let mut out = Vec::new();
+        let args = vec![scope.into_os_string(), questions.into_os_string()];
+        super::onboarding_mcp(args.into_iter(), std::io::Cursor::new(input), &mut out).unwrap();
+        let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let cards = your_instructions::items(&state, "alpha", "onboarding");
+        let text = std::fs::read_to_string(central.join("instructions.md")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(replies[1]["result"]["isError"], false, "{}", replies[1]);
+        assert_eq!(text, "- Copy me on every invoice.\n");
+        assert_eq!(cards.len(), 1, "the save left no card for its turn");
+        assert_eq!(cards[0]["turnId"], "turn-7");
+    }
 }
 
 #[cfg(test)]
