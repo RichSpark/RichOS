@@ -248,7 +248,10 @@ class GarbageWalk(srw.StuReminderWalk):
                    # counts as open (a settled sweep runs only when none is: work_host.rs).
                    'cleanup_lines': {run: self.cleanup_lines(run) for run in ['first'] + list(self.facts.get('logs') or {})},
                    'open_assignments': json.loads(guest(self.vm, 'python3 -c %s %s' % (
-                       shlex.quote(ASSIGNMENTS), shlex.quote(self.data + '/engine-state/assignments')), 60) or '[]')}
+                       shlex.quote(ASSIGNMENTS), shlex.quote(self.data + '/engine-state/assignments')), 60) or '[]'),
+                   # The engine's own deletion log, the last lines: what every sweep so far did.
+                   'reaper_log_tail': guest(self.vm, 'tail -40 %s 2>/dev/null || true' % shlex.quote(
+                       self.home + '/.claude/state/scratch-reaper.log'), 60).splitlines()}
         (self.out / ('summary-%s.json' % name)).write_text(json.dumps(summary, indent=1) + '\n')
         before = BEFORE.get(name)
         if self.a.gone and before:
@@ -285,7 +288,8 @@ class GarbageWalk(srw.StuReminderWalk):
 
     def cleanup_lines(self, run):
         text = guest(self.vm, 'cat ' + shlex.quote(self.log_of(run)) + ' 2>/dev/null || true', 60)
-        return [line for line in text.splitlines() if line.startswith(CLEANUP)]
+        # From where the line's own words begin, whatever a log adds in front of them.
+        return [line[line.index(CLEANUP):] for line in text.splitlines() if CLEANUP in line]
 
     def owners(self):
         return json.loads(guest(self.vm, 'python3 -c %s %s' % (
