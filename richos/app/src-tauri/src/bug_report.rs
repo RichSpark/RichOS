@@ -1,18 +1,19 @@
 //! **BUST A BUG** — the shell's half (CEO §115, round 21). Everything that decides what reaches
 //! GitHub is `richos_core::bug_report` and is tested there; this file is the three things that
 //! need the Mac: running Rich (`claude`) to write the report, with a picture of the window
-//! (`window_picture.rs`) and the screen's words to check against, reading the reporting
-//! account's token from the login keychain, and the HTTPS request. Plus the ten commands the
-//! window calls, the loop that sends a waiting report by itself and the one that asks Rich again
-//! about a report he could not check yet.
+//! (`window_picture.rs`) and the screen's words to check against, and the HTTPS requests to
+//! RichOS's reporting relay. Plus the ten commands the window calls, the loop that sends a
+//! waiting report by itself and the one that asks Rich again about a report he could not check
+//! yet.
 //!
 //! # Which account, today
 //!
-//! RichOS has no GitHub sign-in yet (§20 is not built), so [`KeychainCredentials`] answers the
-//! RichOS reporting account, with the token at `KEYCHAIN_SERVICE` / `KEYCHAIN_ACCOUNT` in the
-//! login keychain, read at send time. The user's own account slots in there, as
-//! `Account::User`, when a sign-in exists; the window's From line and Rich's sentences already
-//! read the account off the context and the delivery rather than assume it.
+//! RichOS has no GitHub sign-in yet (§20 is not built), so every report and idea goes out as the
+//! RichOS reporting account: RichOS's own relay (`richos/mobile/service/RICHDOCTOR-RELAY.md`,
+//! the one RichDoctor files through), whose GitHub App files it ([`ReportingRelay`]). No token is
+//! on this Mac, in the source or in the bundle, so it works on any Mac. The user's own account
+//! slots in as `Account::User` when a sign-in exists; the window's From line and Rich's sentences
+//! already read the account off the context and the delivery rather than assume it.
 //!
 //! # Request a feature (round 24, CEO 2026-10-11)
 //!
@@ -20,14 +21,10 @@
 //! every command and loop here exactly as a bug report does, named by the window's `post`
 //! (`"idea"`; a call without it is a bug report). Its outbox is its own folder
 //! (`feature-requests/`), so a kept idea can only ever be posted as an idea, and the one
-//! difference is where it is posted: GraphQL's `createDiscussion` under Ideas ([`GitHub`]'s
-//! `graphql`, `richos_core::bug_report::post_discussion`), never the issues endpoint.
-//!
-//! # What is NOT here: a shipped token
-//!
-//! No token is in the source or the bundle. On a Mac where none has been put in the keychain the
-//! report waits, saved, with Rich saying the reporting account is not set up on this Mac.
+//! difference is where it is posted: a Discussion under Ideas (the relay's `richos-idea/1`),
+//! never an issue.
 
+use richdoctor_core::delivery::{self, Destination};
 use richos_core::bug_report as bug;
 use richos_core::read_view::SpineView;
 use std::io::{Read, Write};
@@ -44,9 +41,9 @@ pub const EVENT: &str = "rich://bug-report";
 const WRITE_DEADLINE: Duration = Duration::from_secs(90);
 /// How often the loop looks for a waiting report whose rest is over.
 const RETRY_EVERY: Duration = Duration::from_secs(15);
-/// A keychain read on an unlocked keychain answers in milliseconds; this bounds a dialog nobody
-/// answers (`phone/secrets.rs` measured that `security` can raise one).
-const KEYCHAIN_DEADLINE: Duration = Duration::from_secs(20);
+/// One relay request's bound: register and complete answer in seconds, and the relay's contract
+/// gives a client 30 (`RICHDOCTOR-RELAY.md`, "Requests").
+const RELAY_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The app's one Bust a bug state.
 pub struct BugReports {
@@ -67,6 +64,9 @@ pub struct BugReports {
     /// compares the card's against (`bug::at_send`). Kept here, never by the window, so nothing the
     /// window sends can stand in for his check. In memory only: a card does not outlive the app.
     checks: Mutex<std::collections::HashMap<String, bug::Check>>,
+    /// This install's random id for the relay: its per-install rate limit key, never
+    /// authentication (`RICHDOCTOR-RELAY.md`, "Register body"). Made once, in `bug-reports/`.
+    installation: String,
 }
 
 impl BugReports {
@@ -74,6 +74,7 @@ impl BugReports {
         let dir = data_dir.join("bug-reports");
         let quiet_dir = dir.join("writing");
         best_effort("the writing folder", std::fs::create_dir_all(&quiet_dir));
+        let installation = installation_id(&dir);
         Arc::new(BugReports {
             outbox: bug::Outbox::open(&dir),
             ideas: bug::Outbox::open_for(&data_dir.join("feature-requests"), bug::Post::Idea),
@@ -83,7 +84,14 @@ impl BugReports {
             version: bug::version_line(app_version, macos_version().as_deref(), std::env::consts::ARCH),
             look: Mutex::new(None),
             checks: Mutex::new(std::collections::HashMap::new()),
+            installation,
         })
+    }
+
+    /// Where its reports and ideas go: the RichOS reporting relay, or the test pair named by
+    /// `RICHDOCTOR_REPORT_RELAY` and `RICHDOCTOR_REPORT_REPOSITORY`, read at each send.
+    fn relay(&self) -> ReportingRelay {
+        ReportingRelay { destination: Destination::from_env(|k| std::env::var(k).ok()), installation: self.installation.clone() }
     }
 
     /// The outbox of bug reports, or of feature ideas.
@@ -123,175 +131,156 @@ fn now_ms() -> u64 {
 }
 
 // ---------------------------------------------------------------------------------------
-// WHO IT GOES OUT AS
+// WHO IT GOES OUT AS, AND THE REQUEST
 // ---------------------------------------------------------------------------------------
 
-/// The RichOS reporting account's token, read from the login keychain at send time.
-pub struct KeychainCredentials;
-
-impl bug::Credentials for KeychainCredentials {
-    fn credential(&self) -> Option<bug::Credential> {
-        let token = read_keychain(bug::KEYCHAIN_SERVICE, bug::KEYCHAIN_ACCOUNT)?;
-        Some(bug::Credential { account: bug::Account::Reporting, token })
-    }
-}
-
-fn read_keychain(service: &str, account: &str) -> Option<String> {
-    let mut child = std::process::Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", service, "-a", account, "-w"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    return None;
-                }
-                let mut out = String::new();
-                child.stdout.take()?.read_to_string(&mut out).ok()?;
-                let token = out.trim().to_string();
-                return (!token.is_empty()).then_some(token);
-            }
-            Ok(None) if started.elapsed() < KEYCHAIN_DEADLINE => std::thread::sleep(Duration::from_millis(25)),
-            _ => {
-                best_effort("stopping it", child.kill());
-                best_effort("reaping it", child.wait());
-                eprintln!("[richos] bug report: the keychain did not answer; the report waits");
-                return None;
-            }
+/// This install's relay id, kept in `dir/installation-id`: the one there, or a new random one
+/// written there. One that cannot be written is still used, for this run.
+fn installation_id(dir: &Path) -> String {
+    let path = dir.join("installation-id");
+    if let Ok(kept) = std::fs::read_to_string(&path) {
+        if uuid_shaped(kept.trim()) {
+            return kept.trim().to_string();
         }
     }
+    let id = bug::report_id();
+    best_effort("the installation id", std::fs::write(&path, &id));
+    id
 }
 
-// ---------------------------------------------------------------------------------------
-// THE REQUEST
-// ---------------------------------------------------------------------------------------
-
-/// `POST /repos/WebDevBooster/richos/issues` for a bug report, and `POST /graphql` for a feature
-/// idea, to GitHub or to the stand-in named by `RICHOS_BUG_REPORT_API`.
-pub struct GitHub {
-    base: String,
+fn uuid_shaped(s: &str) -> bool {
+    let groups: Vec<&str> = s.split('-').collect();
+    groups.iter().map(|g| g.len()).eq([8, 4, 4, 4, 12]) && groups.iter().all(|g| g.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-impl GitHub {
-    pub fn from_env() -> Self {
-        let base = std::env::var(bug::API_OVERRIDE_ENV).ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| bug::API_BASE.to_string());
-        GitHub { base: base.trim_end_matches('/').to_string() }
+/// **THE RICHOS REPORTING ACCOUNT**: RichOS's reporting relay, the one RichDoctor files through.
+/// Its GitHub App files the issue (or, for an idea, posts the Discussion under Ideas); this Mac
+/// holds no token, so the credential it answers carries none. Each send goes through RichDoctor's
+/// own delivery client (`richdoctor_core::delivery::send`): register, then complete, text only.
+pub struct ReportingRelay {
+    destination: Result<Destination, String>,
+    installation: String,
+}
+
+impl bug::Credentials for ReportingRelay {
+    fn credential(&self) -> Option<bug::Credential> {
+        Some(bug::Credential { account: bug::Account::Reporting, token: String::new() })
     }
 }
 
-impl bug::Transport for GitHub {
-    fn create_issue(&self, credential: &bug::Credential, path: &str, request: &serde_json::Value) -> bug::Outcome {
-        crate::voice_provision::ensure_crypto_provider();
-        let url = format!("{}{}", self.base, path);
-        let body = request.to_string();
-        let token = credential.token.clone();
-        // ITS OWN THREAD AND ITS OWN RUNTIME, because of where it is called from: a
-        // `#[tauri::command(async)]` runs on one of the async runtime's worker threads, and
-        // blocking on a runtime there panics ("Cannot start a runtime from within a runtime"),
-        // which left the card on Sending… for good in walk-aba5c01c19ce. A plain thread has no
-        // runtime around it, so the request runs the same from a command, the retry loop or a test.
-        let request = std::thread::spawn(move || -> bug::Outcome {
-            let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-                Ok(r) => r,
-                Err(_) => return bug::Outcome::Unreachable,
-            };
-            runtime.block_on(Self::post(url, token, body))
+impl bug::Transport for ReportingRelay {
+    fn create_issue(&self, _: &bug::Credential, _: &str, request: &serde_json::Value) -> bug::Outcome {
+        self.file(false, request["title"].as_str().unwrap_or(""), request["body"].as_str().unwrap_or(""))
+    }
+
+    fn post_idea(&self, _: &bug::Credential, title: &str, body: &str) -> bug::Outcome {
+        self.file(true, title, body)
+    }
+
+    /// Never asked: an idea is posted in one step through the relay (`post_idea`).
+    fn graphql(&self, _: &bug::Credential, _: &serde_json::Value) -> bug::Reply {
+        bug::Reply::Answered { status: 404, body: serde_json::Value::Null }
+    }
+}
+
+impl ReportingRelay {
+    /// One send through the relay, under a new report ID, with the relay's footer line (its
+    /// report ID, which the relay requires as the body's last line) after the approved words.
+    /// What came back, as GitHub's answer would have been, so the outbox keeps and retries it
+    /// exactly as before.
+    fn file(&self, idea: bool, title: &str, body: &str) -> bug::Outcome {
+        let destination = match &self.destination {
+            Ok(d) => d.clone(),
+            Err(why) => {
+                eprintln!("[richos] bug report: the reporting relay is not set right ({why}); it waits");
+                return bug::Outcome::Status { code: 400 };
+            }
+        };
+        let Ok(id) = delivery::new_report_id() else { return bug::Outcome::Status { code: 503 } };
+        let body = format!("{}\n\n{}", body.trim_end(), richdoctor_core::report::ending(&destination.relay, &id, 0));
+        let mut approved = match delivery::approve(&id, title, &body, vec![], &destination.relay, now_ms(), &self.installation) {
+            Ok(a) => a,
+            Err(problems) => {
+                eprintln!("[richos] bug report: not a report the relay takes ({problems:?}); it waits");
+                return bug::Outcome::Status { code: 400 };
+            }
+        };
+        approved.idea = idea;
+        // ITS OWN THREAD AND ITS OWN RUNTIME: a `#[tauri::command(async)]` runs on an async
+        // runtime's worker thread, and blocking on a runtime there panics ("Cannot start a runtime
+        // from within a runtime", walk-aba5c01c19ce). A plain thread has none around it.
+        let sent = std::thread::spawn(move || match Https::new() {
+            Some(https) => delivery::send(&approved, &|_| None, &destination, &https, now_ms()),
+            None => delivery::State::NotSent { why: delivery::NotSent::Unreachable, at: now_ms() },
         });
-        request.join().unwrap_or(bug::Outcome::Unreachable)
-    }
-
-    /// One GraphQL request, `POST {base}/graphql`: a feature idea's lookup and its
-    /// `createDiscussion` (`bug::post_discussion`). Its own thread and runtime, as `create_issue`.
-    fn graphql(&self, credential: &bug::Credential, request: &serde_json::Value) -> bug::Reply {
-        crate::voice_provision::ensure_crypto_provider();
-        let url = format!("{}/graphql", self.base);
-        let body = request.to_string();
-        let token = credential.token.clone();
-        let request = std::thread::spawn(move || -> bug::Reply {
-            let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-                Ok(r) => r,
-                Err(_) => return bug::Reply::Unreachable,
-            };
-            runtime.block_on(Self::graphql_post(url, token, body))
-        });
-        request.join().unwrap_or(bug::Reply::Unreachable)
+        outcome_of(sent.join().unwrap_or(delivery::State::NotSent { why: delivery::NotSent::NoAnswer, at: now_ms() }))
     }
 }
 
-impl GitHub {
-    async fn graphql_post(url: String, token: String, body: String) -> bug::Reply {
-        let client = match reqwest::Client::builder()
-            .timeout(Duration::from_secs(25))
+/// The relay's answer as the outbox reads GitHub's: the post, or why it waits.
+fn outcome_of(state: delivery::State) -> bug::Outcome {
+    use delivery::NotSent;
+    let why = match state {
+        delivery::State::Submitted { issue_url, issue_number, .. } => return bug::Outcome::Created { number: issue_number, url: issue_url },
+        delivery::State::Sending => return bug::Outcome::TimedOut,
+        delivery::State::NotSent { why, .. } => why,
+    };
+    eprintln!("[richos] bug report: not sent: {}", why.reason());
+    match why {
+        NotSent::Offline | NotSent::Unreachable => bug::Outcome::Unreachable,
+        NotSent::NoAnswer => bug::Outcome::TimedOut,
+        // Closed for now, or busy: it is tried again in a few minutes.
+        NotSent::Refused { until: Some(_), .. } => bug::Outcome::Status { code: 429 },
+        NotSent::Refused { until: None, .. } | NotSent::Screenshot { .. } => bug::Outcome::Status { code: 422 },
+    }
+}
+
+/// The relay's HTTPS requests (`richdoctor_core::delivery::Relay`), on the thread that owns this
+/// runtime. A connection never made is "not connected"; a timeout or a connection lost after the
+/// request went is unclear (it may have been filed).
+struct Https {
+    client: reqwest::Client,
+    runtime: tokio::runtime::Runtime,
+}
+
+impl Https {
+    fn new() -> Option<Https> {
+        crate::voice_provision::ensure_crypto_provider();
+        let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(8))
+            .user_agent("RichOS")
             .redirect(reqwest::redirect::Policy::none())
             .build()
-        {
-            Ok(c) => c,
-            Err(_) => return bug::Reply::Unreachable,
-        };
-        let sent = client
-            .post(&url)
-            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
-            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-            .header(reqwest::header::USER_AGENT, "RichOS")
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body)
-            .send()
-            .await;
-        let response = match sent {
-            Ok(r) => r,
-            Err(e) if e.is_timeout() => return bug::Reply::TimedOut,
-            Err(_) => return bug::Reply::Unreachable,
-        };
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
-        bug::Reply::Answered { status, body: serde_json::from_str(&text).unwrap_or(serde_json::Value::Null) }
+            .ok()?;
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+        Some(Https { client, runtime })
     }
 
-    async fn post(url: String, token: String, body: String) -> bug::Outcome {
-        {
-            let client = match reqwest::Client::builder()
-                .timeout(Duration::from_secs(25))
-                .connect_timeout(Duration::from_secs(8))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-            {
-                Ok(c) => c,
-                Err(_) => return bug::Outcome::Unreachable,
-            };
-            let sent = client
-                .post(&url)
-                .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
-                .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .header(reqwest::header::USER_AGENT, "RichOS")
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body)
-                .send()
-                .await;
-            let response = match sent {
+    fn answer(&self, request: reqwest::RequestBuilder) -> delivery::Transport {
+        self.runtime.block_on(async move {
+            let response = match request.timeout(RELAY_DEADLINE).send().await {
                 Ok(r) => r,
-                Err(e) if e.is_timeout() => return bug::Outcome::TimedOut,
-                Err(_) => return bug::Outcome::Unreachable,
+                Err(e) if e.is_connect() => return delivery::Transport::NotConnected { offline: false },
+                Err(_) => return delivery::Transport::Unclear,
             };
-            let code = response.status().as_u16();
-            if code != 201 {
-                return bug::Outcome::Status { code };
+            let status = response.status().as_u16();
+            let retry_after = response.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|s| s.trim().parse::<u64>().ok());
+            match response.bytes().await {
+                Ok(bytes) => delivery::Transport::Answer { status, body: serde_json::from_slice(&bytes).ok(), retry_after },
+                Err(_) => delivery::Transport::Unclear,
             }
-            let text = response.text().await.unwrap_or_default();
-            let value: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-            match value["number"].as_u64() {
-                Some(number) => bug::Outcome::Created { number, url: value["html_url"].as_str().map(str::to_string).unwrap_or_else(|| bug::issue_page(number)) },
-                // A 201 with no issue number is not an issue we can point at: treat it as GitHub
-                // not answering properly, so the report waits rather than claiming it was filed.
-                None => bug::Outcome::Status { code: 502 },
-            }
-        }
+        })
+    }
+}
+
+impl delivery::Relay for Https {
+    fn post(&self, url: &str, body: &serde_json::Value) -> delivery::Transport {
+        self.answer(self.client.post(url).header(reqwest::header::CONTENT_TYPE, "application/json").body(body.to_string()))
+    }
+
+    /// Never asked: a report or an idea from here carries no screenshot.
+    fn put(&self, _: &str, _: &[(String, String)], _: Vec<u8>) -> delivery::Transport {
+        delivery::Transport::NotConnected { offline: false }
     }
 }
 
@@ -597,8 +586,8 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
         let last = |prompt: &str| ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
         match bug::at_send_for(post, &sheet, check.as_ref(), &app_terms, last) {
             bug::AtSend::Send(public) => {
-                let github = GitHub::from_env();
-                let delivery = deliver(&bugs, post, |o| o.send(&public, &KeychainCredentials, &github, now_ms()).map(Some))?.ok_or_else(|| "nothing was sent".to_string())?;
+                let relay = bugs.relay();
+                let delivery = deliver(&bugs, post, |o| o.send(&public, &relay, &relay, now_ms()).map(Some))?.ok_or_else(|| "nothing was sent".to_string())?;
                 if matches!(delivery, bug::Delivery::Sent(_)) {
                     bugs.checks().remove(&report);
                 }
@@ -626,8 +615,8 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
 pub async fn bug_report_try_now(app: AppHandle, id: String, post: Option<bug::Post>) -> Result<Option<bug::Delivery>, String> {
     let bugs = app.state::<Arc<BugReports>>().inner().clone();
     off_the_ipc_threads(move || {
-        let github = GitHub::from_env();
-        deliver(&bugs, post.unwrap_or_default(), |o| o.try_now(&id, &KeychainCredentials, &github, now_ms()))
+        let relay = bugs.relay();
+        deliver(&bugs, post.unwrap_or_default(), |o| o.try_now(&id, &relay, &relay, now_ms()))
     })
     .await
 }
@@ -684,12 +673,12 @@ pub fn spawn_retry(app: AppHandle) {
             std::thread::sleep(RETRY_EVERY);
             let Some(bugs) = app.try_state::<Arc<BugReports>>() else { continue };
             let bugs = bugs.inner().clone();
-            let github = GitHub::from_env();
+            let relay = bugs.relay();
             // Bug reports and feature ideas alike: a waiting idea is posted by itself as a waiting
             // report is sent (round 24: "it posts by itself when back online").
             for post in [bug::Post::Bug, bug::Post::Idea] {
                 let guard = one_at_a_time(&bugs);
-                let due = bugs.outbox(post).send_due(&KeychainCredentials, &github, now_ms());
+                let due = bugs.outbox(post).send_due(&relay, &relay, now_ms());
                 drop(guard);
                 match due {
                     Ok(deliveries) => {
@@ -778,100 +767,15 @@ fn check_once(app: &AppHandle, bugs: &Arc<BugReports>, post: bug::Post) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bug::Transport;
     use std::io::{BufRead, BufReader};
     use std::net::TcpListener;
 
-    /// A stand-in for GitHub's issues endpoint on this machine: answers one request with
-    /// `status` and `body`, and hands back what it was sent (the request line, the headers and
-    /// the body) so the test can read exactly what would have gone to GitHub.
-    fn stand_in(status: &'static str, body: &'static str) -> (String, std::thread::JoinHandle<(String, Vec<String>, String)>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let handle = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            let mut headers = Vec::new();
-            let mut length = 0usize;
-            loop {
-                let mut h = String::new();
-                reader.read_line(&mut h).unwrap();
-                let h = h.trim_end().to_string();
-                if h.is_empty() {
-                    break;
-                }
-                if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
-                    length = v.trim().parse().unwrap();
-                }
-                headers.push(h);
-            }
-            let mut buf = vec![0u8; length];
-            reader.read_exact(&mut buf).unwrap();
-            let reply = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
-            stream.write_all(reply.as_bytes()).unwrap();
-            (line.trim_end().to_string(), headers, String::from_utf8(buf).unwrap())
-        });
-        (base, handle)
-    }
-
-    fn credential() -> bug::Credential {
-        bug::Credential { account: bug::Account::Reporting, token: "stand-in-token".into() }
-    }
-
-    #[test]
-    fn the_request_is_one_post_to_the_issues_endpoint_with_the_token_and_the_sheet() {
-        let (base, server) = stand_in("201 Created", r#"{"number": 412, "html_url": "https://github.com/WebDevBooster/richos/issues/412"}"#);
-        let plain = |t: &str| vec![bug::Segment { text: t.into(), was: None, kind: None }];
-        let draft = bug::Draft {
-            title: plain("Names are cut off"),
-            sections: vec![bug::DraftSection { heading: "What happened".into(), paragraphs: vec![plain("It broke.")], steps: vec![] }],
-            private: vec![],
-        };
-        let bug::AtSend::Send(public) = bug::at_send(&bug::sheet_of(&draft), Some(&bug::Check::of(&draft)), &[], |_| panic!("Rich was asked about words he gave")) else { panic!("not sendable") };
-        let (path, request) = bug::issue_request(&public);
-        let outcome = GitHub { base }.create_issue(&credential(), &path, &request);
-        assert_eq!(outcome, bug::Outcome::Created { number: 412, url: "https://github.com/WebDevBooster/richos/issues/412".into() });
-        let (line, headers, body) = server.join().unwrap();
-        assert_eq!(line, "POST /repos/WebDevBooster/richos/issues HTTP/1.1");
-        assert!(headers.iter().any(|h| h.eq_ignore_ascii_case("authorization: Bearer stand-in-token")), "{headers:?}");
-        assert!(headers.iter().any(|h| h.eq_ignore_ascii_case("accept: application/vnd.github+json")), "{headers:?}");
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap(), request, "the body is the sheet's request, nothing added");
-    }
-
-    /// WHERE A COMMAND RUNS IT FROM: inside a runtime. A `#[tauri::command(async)]` runs on an
-    /// async runtime's worker thread, and the first build blocked on a runtime there, which
-    /// panicked and left the card on Sending… (walk-aba5c01c19ce's app log: "Cannot start a
-    /// runtime from within a runtime"). Red on that build, green on its own thread.
-    #[test]
-    fn the_request_completes_when_it_is_made_from_inside_a_runtime_as_a_command_makes_it() {
-        let (base, server) = stand_in("201 Created", r#"{"number": 7}"#);
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let outcome = runtime.block_on(async move {
-            GitHub { base }.create_issue(&credential(), "/repos/WebDevBooster/richos/issues", &serde_json::json!({"title": "t", "body": "b"}))
-        });
-        assert_eq!(outcome, bug::Outcome::Created { number: 7, url: bug::issue_page(7) });
-        server.join().unwrap();
-    }
-
-    #[test]
-    fn a_github_that_answers_503_is_a_status_and_a_closed_port_is_unreachable() {
-        let (base, server) = stand_in("503 Service Unavailable", "{}");
-        let outcome = GitHub { base }.create_issue(&credential(), "/repos/WebDevBooster/richos/issues", &serde_json::json!({"title": "t", "body": "b"}));
-        assert_eq!(outcome, bug::Outcome::Status { code: 503 });
-        server.join().unwrap();
-        // A port nothing listens on: bind one, learn it, close it.
-        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let outcome = GitHub { base: format!("http://127.0.0.1:{port}") }.create_issue(&credential(), "/x", &serde_json::json!({}));
-        assert_eq!(outcome, bug::Outcome::Unreachable);
-    }
-
-    /// A stand-in GitHub that answers `replies.len()` requests in turn, each with its status and
-    /// body, and hands back every request it was sent (the request line, the headers, the body).
     /// One request as the stand-in read it: its request line, its headers and its body.
     type Seen = (String, Vec<String>, String);
 
+    /// A stand-in for RichOS's reporting relay on this machine that answers `replies.len()`
+    /// requests in turn, each with its status and body, and hands back every request it was sent,
+    /// so a test reads exactly what would have gone to the relay.
     fn stand_in_answering(replies: Vec<(&'static str, &'static str)>) -> (String, std::thread::JoinHandle<Vec<Seen>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -907,50 +811,147 @@ mod tests {
         (base, handle)
     }
 
-    /// **REQUEST A FEATURE GOES TO GRAPHQL, NEVER TO ISSUES** (CEO 2026-10-11): an idea, posted
-    /// through the shell's own transport against a stand-in GitHub, is two `POST /graphql`
-    /// requests (the lookup, then `createDiscussion` in the Ideas category) with the token.
-    #[test]
-    fn an_idea_is_two_graphql_requests_and_never_the_issues_endpoint() {
-        let (base, server) = stand_in_answering(vec![
-            ("200 OK", r#"{"data": {"repository": {"id": "R_1", "discussionCategory": {"id": "DIC_ideas"}}}}"#),
-            ("200 OK", r#"{"data": {"createDiscussion": {"discussion": {"number": 413, "url": "https://github.com/WebDevBooster/richos/discussions/413"}}}}"#),
-        ]);
-        let outcome = bug::post_discussion(&GitHub { base }, &credential(), "An idea", "### The idea\n\nIt.\n");
-        assert_eq!(outcome, bug::Outcome::Created { number: 413, url: "https://github.com/WebDevBooster/richos/discussions/413".into() });
-        let seen = server.join().unwrap();
-        assert_eq!(seen.len(), 2);
-        for (line, headers, _) in &seen {
-            assert_eq!(line, "POST /graphql HTTP/1.1");
-            assert!(headers.iter().any(|h| h.eq_ignore_ascii_case("authorization: Bearer stand-in-token")), "{headers:?}");
+    const TEST_REPOSITORY: &str = "richos-test/report-relay-local";
+
+    fn relay_at(base: &str) -> ReportingRelay {
+        ReportingRelay {
+            destination: Ok(Destination { relay: base.to_string(), repository: TEST_REPOSITORY.into() }),
+            installation: "0b6f3c2e-5d41-4a8e-9f27-3c1d2e4f5a6b".into(),
         }
-        let create: serde_json::Value = serde_json::from_str(&seen[1].2).unwrap();
-        assert!(create["query"].as_str().unwrap().contains("createDiscussion"), "{create}");
-        assert_eq!(create["variables"]["categoryId"], "DIC_ideas");
-        assert_eq!(create["variables"]["repositoryId"], "R_1");
     }
 
-    /// GitHub's GraphQL answer to a token that may not post in Discussions is HTTP 200 with a
-    /// FORBIDDEN error: the shell hands it back as it came, and the idea is refused, not posted.
+    /// An outbox of its own, in a folder of its own, removed when the test ends.
+    struct Folder(PathBuf);
+    impl Drop for Folder {
+        fn drop(&mut self) {
+            best_effort("the test folder", std::fs::remove_dir_all(&self.0));
+        }
+    }
+    fn folder() -> Folder {
+        let dir = std::env::temp_dir().join(format!("richos-bug-relay-{}", bug::report_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Folder(dir)
+    }
+
+    /// Words the user approved on a card, as `at_send` lets them leave.
+    fn approved(title: &str, text: &str) -> bug::Public {
+        let plain = |t: &str| vec![bug::Segment { text: t.into(), was: None, kind: None }];
+        let draft = bug::Draft {
+            title: plain(title),
+            sections: vec![bug::DraftSection { heading: "What happened".into(), paragraphs: vec![plain(text)], steps: vec![] }],
+            private: vec![],
+        };
+        let bug::AtSend::Send(public) = bug::at_send(&bug::sheet_of(&draft), Some(&bug::Check::of(&draft)), &[], |_| panic!("Rich was asked about words he gave")) else {
+            panic!("not sendable")
+        };
+        public
+    }
+
+    fn footer_id(body: &str) -> String {
+        let last = body.lines().last().unwrap();
+        let id = last.rsplit(' ').next().unwrap().to_string();
+        assert_eq!(last, richdoctor_core::report::footer(&id), "the body ends with the relay's footer line");
+        assert!(delivery::is_report_id(&id), "{id}");
+        id
+    }
+
+    /// **BUST A BUG WORKS ON ANY MAC** (CEO 2026-10-25, "Is Bust a bug working or is it not
+    /// working???"): an approved report goes through RichOS's reporting relay, with no token on
+    /// this Mac and none in the request, and comes back as its issue's number and link. Red on the
+    /// build that sent only with a keychain token, which no Mac but one set up by hand had.
     #[test]
-    fn a_forbidden_graphql_answer_is_refused() {
-        let (base, server) = stand_in_answering(vec![(
-            "200 OK",
-            r#"{"data": {"repository": null}, "errors": [{"type": "FORBIDDEN", "message": "Resource not accessible by personal access token"}]}"#,
-        )]);
-        let outcome = bug::post_discussion(&GitHub { base }, &credential(), "t", "b");
-        assert_eq!(bug::classify(&outcome), Err(bug::Reason::Refused), "{outcome:?}");
-        server.join().unwrap();
+    fn an_approved_report_goes_through_the_relay_and_comes_back_as_its_issue_with_no_token_on_this_mac() {
+        let link = "https://github.com/richos-test/report-relay-local/issues/7";
+        let (base, server) = stand_in_answering(vec![
+            ("200 OK", r#"{"state": "ready", "stage": "ready", "stored": [], "missing": []}"#),
+            ("201 Created", r#"{"state": "delivered", "stage": "delivered", "issue_url": "https://github.com/richos-test/report-relay-local/issues/7", "issue_number": 7, "images_expected": 0, "images_confirmed": 0}"#),
+        ]);
+        let dir = folder();
+        let outbox = bug::Outbox::open(&dir.0);
+        let public = approved("Names are cut off", "It broke.");
+        let relay = relay_at(&base);
+        let delivery = outbox.send(&public, &relay, &relay, 1).unwrap();
+        let bug::Delivery::Sent(sent) = &delivery else { panic!("not sent: {delivery:?}") };
+        assert_eq!((sent.number, sent.url.as_str(), &sent.account), (7, link, &bug::Account::Reporting));
+        assert!(outbox.pending().unwrap().is_empty(), "nothing left waiting");
+        let seen = server.join().unwrap();
+        let register: serde_json::Value = serde_json::from_str(&seen[0].2).unwrap();
+        let id = footer_id(register["body"].as_str().unwrap());
+        assert_eq!(seen[0].0, "POST /v1/reports HTTP/1.1");
+        assert_eq!(seen[1].0, format!("POST /v1/reports/{id}/complete HTTP/1.1"));
+        for (_, headers, _) in &seen {
+            assert!(!headers.iter().any(|h| h.to_ascii_lowercase().starts_with("authorization:")), "no token goes: {headers:?}");
+        }
+        assert_eq!(register["schema"], "richdoctor-report/2");
+        assert_eq!(register["title"], public.title());
+        assert_eq!(register["body"].as_str().unwrap(), format!("{}\n\n{}", public.body().trim_end(), richdoctor_core::report::footer(&id)), "the approved words, then the footer");
+        assert_eq!(register["manifest"], serde_json::json!([]), "no screenshot");
+    }
+
+    /// **REQUEST A FEATURE WORKS ON ANY MAC TOO** (CEO 2026-10-25, "So, if Bust a Bug was broken,
+    /// then the feature suggestion is also broken"): an idea goes through the same relay as
+    /// `richos-idea/1`, never GitHub's GraphQL from this Mac, and comes back as its discussion.
+    #[test]
+    fn an_approved_idea_goes_through_the_relay_and_comes_back_as_its_discussion() {
+        let (base, server) = stand_in_answering(vec![
+            ("200 OK", r#"{"state": "ready", "stored": [], "missing": []}"#),
+            ("201 Created", r#"{"state": "delivered", "issue_url": "https://github.com/richos-test/report-relay-local/discussions/8", "issue_number": 8}"#),
+        ]);
+        let dir = folder();
+        let outbox = bug::Outbox::open_for(&dir.0, bug::Post::Idea);
+        let relay = relay_at(&base);
+        let delivery = outbox.send(&approved("Pin a conversation", "Keep one on top."), &relay, &relay, 1).unwrap();
+        let bug::Delivery::Sent(sent) = &delivery else { panic!("not posted: {delivery:?}") };
+        assert_eq!((sent.number, sent.url.as_str(), sent.post), (8, "https://github.com/richos-test/report-relay-local/discussions/8", bug::Post::Idea));
+        let seen = server.join().unwrap();
+        assert_eq!(seen.len(), 2);
+        let register: serde_json::Value = serde_json::from_str(&seen[0].2).unwrap();
+        assert_eq!(register["schema"], delivery::IDEA_SCHEMA);
+        footer_id(register["body"].as_str().unwrap());
+        assert!(seen.iter().all(|(line, _, _)| line.starts_with("POST /v1/reports")), "{seen:?}");
+    }
+
+    /// What does not reach the relay waits, saved, with the reason the card already says: a relay
+    /// nothing answers is this Mac offline; one that refuses the words is a refusal; one closed
+    /// for now is busy, tried again in a few minutes.
+    #[test]
+    fn a_report_the_relay_does_not_file_waits_with_its_reason() {
+        let dir = folder();
+        let outbox = bug::Outbox::open(&dir.0);
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        assert_eq!(GitHub { base: format!("http://127.0.0.1:{port}") }.graphql(&credential(), &serde_json::json!({})), bug::Reply::Unreachable);
+        let down = relay_at(&format!("http://127.0.0.1:{port}"));
+        let waiting = outbox.send(&approved("t", "b"), &down, &down, 1).unwrap();
+        assert!(matches!(waiting, bug::Delivery::Waiting { reason: bug::Reason::Offline, .. }), "{waiting:?}");
+        for (reply, reason) in [
+            (("422 Unprocessable Entity", r#"{"state": "rejected", "reason": "content", "detail": "It contains an @ mention."}"#), bug::Reason::Refused),
+            (("503 Service Unavailable", r#"{"state": "closed", "reason": "daily_cap", "retry_after_seconds": 3600}"#), bug::Reason::GithubDown),
+        ] {
+            let (base, server) = stand_in_answering(vec![reply]);
+            let relay = relay_at(&base);
+            let d = outbox.send(&approved("t", "b"), &relay, &relay, 1).unwrap();
+            assert!(matches!(d, bug::Delivery::Waiting { reason: r, .. } if r == reason), "{d:?}");
+            server.join().unwrap();
+        }
+        assert_eq!(outbox.pending().unwrap().len(), 3, "every one is kept on this Mac");
+        let unset = ReportingRelay { destination: Destination::from_env(|k| (k == delivery::RELAY_ENV).then(|| "http://127.0.0.1:9".to_string())), installation: String::new() };
+        assert!(matches!(outbox.send(&approved("t", "b"), &unset, &unset, 1).unwrap(), bug::Delivery::Waiting { reason: bug::Reason::Refused, .. }), "half a test override sends nothing");
+    }
+
+    #[test]
+    fn the_installation_id_is_made_once_and_kept() {
+        let dir = folder();
+        let first = installation_id(&dir.0);
+        assert!(uuid_shaped(&first), "{first}");
+        assert_eq!(installation_id(&dir.0), first);
     }
 
     #[test]
     fn no_token_is_in_the_source() {
-        // The reporting account's token is read from the keychain at send time, never shipped.
+        // No token is on this Mac at all: the relay's GitHub App files the report.
         let src = include_str!("bug_report.rs");
         for prefix in [concat!("gh", "p_"), concat!("github", "_pat_"), concat!("gh", "o_")] {
             assert!(!src.contains(prefix), "a GitHub token prefix is in the source: {prefix}");
         }
+        assert!(!src.contains(concat!("find-generic", "-password")), "nothing reads a token from the keychain");
     }
 }

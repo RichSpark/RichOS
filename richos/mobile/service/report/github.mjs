@@ -1,6 +1,6 @@
-// The relay's only GitHub access: a GitHub App installation token limited to Issues write on the
-// one fixed repository, minted per attempt from the server-held App private key. Nothing here is
-// ever logged or returned to a client.
+// The relay's only GitHub access: a GitHub App installation token limited to Issues write (or, for
+// a RichOS feature idea, Discussions write) on the one fixed repository, minted per attempt from
+// the server-held App private key. Nothing here is ever logged or returned to a client.
 export const API = 'https://api.github.com';
 const VERSION = '2022-11-28';
 const utf8 = new TextEncoder();
@@ -20,6 +20,9 @@ function pkcs8(pem) {
 }
 
 export function issueUrl(repository, number) { return `https://github.com/${repository}/issues/${number}`; }
+export function discussionUrl(repository, number) { return `https://github.com/${repository}/discussions/${number}`; }
+// The Ideas category a RichOS feature idea is posted in, as the app posted it before the relay.
+export const IDEAS_CATEGORY = 'ideas';
 function issueOf(repository, data) {
   if (!data || !Number.isSafeInteger(data.number) || data.number < 1) return null;
   const url = issueUrl(repository, data.number);
@@ -50,12 +53,13 @@ export class GitHub {
       + b64url(utf8.encode(JSON.stringify({ iat, exp: iat + 540, iss: String(this.env.GITHUB_APP_ID) })));
     return input + '.' + b64url(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, utf8.encode(input)));
   }
-  // An installation token for this repository and Issues write only. Throws before anything is sent.
+  // An installation token for this repository and Issues write only (Discussions write only, for an
+  // idea). Throws before anything is sent.
   // `scoped: false` is only for the operator's check of what the installation itself can reach.
-  async authorize({ scoped = true } = {}) {
+  async authorize({ scoped = true, permission = 'issues' } = {}) {
     const response = await this.fetch(`${API}/app/installations/${this.env.GITHUB_INSTALLATION_ID}/access_tokens`, {
       method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(10000), headers: this.headers(await this.jwt()),
-      body: JSON.stringify(scoped ? { repositories: [this.repository.split('/')[1]], permissions: { issues: 'write' } } : {}),
+      body: JSON.stringify(scoped ? { repositories: [this.repository.split('/')[1]], permissions: { [permission]: 'write' } } : {}),
     });
     const data = response.status === 201 ? await response.json().catch(() => null) : null;
     if (typeof data?.token !== 'string' || !data.token) throw Object.assign(Error('token_unavailable'), { retryAfter: retryAfter(response, this.now()) });
@@ -75,6 +79,37 @@ export class GitHub {
     if (response.status !== 201) { await response.body?.cancel(); return { kind: 'unknown' }; }
     const issue = issueOf(this.repository, await response.json().catch(() => null));
     return issue ? { kind: 'created', issue } : { kind: 'unknown' };
+  }
+  // A RichOS feature idea, as a Discussion under Ideas: GraphQL's lookup of the repository's and the
+  // category's ids, then createDiscussion. The same answers as create(): a failed lookup sent
+  // nothing, so it is a refusal; only a lost or malformed createDiscussion answer is unknown.
+  async discuss(token, title, body) {
+    const [owner, name] = this.repository.split('/');
+    const graphql = async (query, variables) => {
+      const response = await this.fetch(`${API}/graphql`, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(20000), headers: this.headers(token),
+        body: JSON.stringify({ query, variables }) });
+      const data = response.status === 200 ? await response.json().catch(() => null) : (await response.body?.cancel(), null);
+      return { response, data };
+    };
+    let lookup;
+    try {
+      lookup = await graphql('query($owner: String!, $name: String!, $slug: String!) { repository(owner: $owner, name: $name) { id discussionCategory(slug: $slug) { id } } }',
+        { owner, name, slug: IDEAS_CATEGORY });
+    } catch { return { kind: 'refused', retryAfter: 60 }; }
+    const repositoryId = lookup.data?.data?.repository?.id, categoryId = lookup.data?.data?.repository?.discussionCategory?.id;
+    if (typeof repositoryId !== 'string' || typeof categoryId !== 'string') return { kind: 'refused', retryAfter: retryAfter(lookup.response, this.now()) };
+    let created;
+    try {
+      created = await graphql('mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) { createDiscussion(input: {repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body}) { discussion { number url } } }',
+        { repositoryId, categoryId, title, body });
+    } catch { return { kind: 'unknown' }; }
+    const { response, data } = created, discussion = data?.data?.createDiscussion?.discussion;
+    if (response.status >= 400 && response.status < 500) return { kind: 'refused', retryAfter: retryAfter(response, this.now()) };
+    if (Number.isSafeInteger(discussion?.number) && discussion.number > 0 && discussion.url === discussionUrl(this.repository, discussion.number))
+      return { kind: 'created', issue: { number: discussion.number, url: discussion.url } };
+    // GitHub answers a refused GraphQL request with 200, errors and no discussion: nothing was posted.
+    if (response.status === 200 && Array.isArray(data?.errors) && !discussion) return { kind: 'refused', retryAfter: retryAfter(response, this.now()) };
+    return { kind: 'unknown' };
   }
   // Reconciliation (PRD §7): page through the fixed repository's issues created by the reporting
   // identity, newest first, back to `since` (the attempt-time look-back), and match the exact

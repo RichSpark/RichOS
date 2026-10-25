@@ -51,7 +51,19 @@ with open(os.path.join(HERE, "writer-prompts.log"), "a") as log:
     log.write(json.dumps({"argv": args, "prompt": prompt, "pictures": pictures}) + "\n")
 
 
+# The app's prompts are one JSON event each (`writer_prompt_for`, `change_prompt_for`,
+# `finish_prompt`: "event" names which); an older build's were prose, still read below.
+try:
+    event = json.loads(prompt)
+except ValueError:
+    event = None
+if not isinstance(event, dict):
+    event = {}
+
+
 def users_words(text):
+    if event.get("user_message"):
+        return event["user_message"].strip()
     start = text.find("What the user said, in their own words:\n<<<\n")
     if start < 0:
         return ""
@@ -68,15 +80,20 @@ def between(text, head):
     return text[start:text.find("\n>>>", start)]
 
 
-if "Answer with ONLY a JSON object, no other text: {\"section\"" in prompt:
-    first = "The idea" if "feature idea" in prompt else "What happened"
+idea = event.get("kind") == "feature idea" or "pressed \"Request a feature\"" in prompt
+if event.get("event") == "user_requested_draft_change" or "Answer with ONLY a JSON object, no other text: {\"section\"" in prompt:
+    first = "The idea" if idea or "feature idea" in prompt else "What happened"
     report = {"section": first, "add": "It happens in the light theme too.", "private": []}
+elif event.get("event") == "public_draft_privacy_check":
+    # Rich's last pass (`finish_prompt`): the draft as the scanner left it, kept as it is.
+    report = dict(event["draft"])
+    report["private"] = []
 elif ", after the automatic check:" in prompt:
     # Rich's last pass (`finish_prompt`): the report or post as the scanner left it, kept as it is.
     head = "The post, after the automatic check:" if "The post, after the automatic check:" in prompt else "The report, after the automatic check:"
     report = json.loads(between(prompt, head))
     report["private"] = []
-elif "pressed \"Request a feature\"" in prompt:
+elif idea:
     # Request a feature (round 24): the idea as Rich writes it up, naming the walk's company and a
     # person so the walk can see both replaced on the card and absent from what is posted.
     report = {

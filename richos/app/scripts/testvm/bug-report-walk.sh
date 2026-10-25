@@ -1,6 +1,6 @@
 #!/bin/bash
 # bug-report-walk.sh — Bust a bug on the real app, in one guest run, against a local stand-in
-# for GitHub's issues endpoint.
+# for RichOS's reporting relay.
 #
 #   run-walk.py --bundle <RichOS.app.zip> --home <empty dir> --engine <engine.tar.gz> \
 #     --report <json> -- bug-report-walk.sh <out-dir>
@@ -9,9 +9,9 @@
 # up, the user reads the whole report and sends it, and it is filed as a GitHub issue; a failed
 # send is kept on the Mac and sent once the connection is back. This walk drives exactly that,
 # with the guest's own `claude` replaced by fake-claude-bug-report.py (Rich's write-up names
-# the walk's company and a person) and RICHOS_BUG_REPORT_API pointed at github-stand-in.py on
-# 127.0.0.1:8765. The reporting account's token is a throwaway put into the GUEST's login
-# keychain under the app's own name (com.richos.app.bug-reports / github-reporting-token).
+# the walk's company and a person) and the relay's test override (RICHDOCTOR_REPORT_RELAY and
+# RICHDOCTOR_REPORT_REPOSITORY) pointed at report-relay-stand-in.py on 127.0.0.1:8765, whose test
+# repository is richos-test/report-relay-local. No token is anywhere: the relay files the report.
 #
 # PASS when:
 #   1  Bust a bug (Settings) starts the exchange in the Rich panel (`#bugdock`, where every press
@@ -27,9 +27,10 @@
 #   3  Send with the endpoint down leaves the card "Waiting to send · saved on this Mac", with
 #      Rich's offline line, and the report on disk under bug-reports/waiting;
 #   4  once the endpoint is up, the report goes out BY ITSELF: the card says "Sent · #412",
-#      Rich says "You're back online, so I sent your bug report.", the endpoint received one
-#      POST to /repos/WebDevBooster/richos/issues with "Bearer <the keychain token>", and its
-#      body carries neither the company nor the person;
+#      Rich says "You're back online, so I sent your bug report.", the relay received one
+#      registration and one completion, with no Authorization header, the real relay's own
+#      checks (checks.mjs, on the host) take what was registered, and its body carries neither
+#      the company nor the person; the issue is richos-test/report-relay-local/issues/412;
 #   5  CANCEL WHILE A SEND IS IN FLIGHT (the same review, finding 2): a second report waits
 #      (endpoint down), the endpoint comes back holding its answer 15 s, and Cancel report is
 #      pressed while the retry's request is in flight. The card says "Canceling…", then
@@ -47,7 +48,6 @@ S="${2:?usage: bug-report-walk.sh <vm> <out-dir>}"
 T="$(cd "$(dirname "$0")" && pwd)"
 G=/Users/admin/fill-first
 PORT=8765
-TOKEN="walk-stand-in-token-$RANDOM$RANDOM"
 COMPANY='Northwind Traders'
 PERSON='Dana Whitfield'
 # A path as a Mac writes it: a folder macOS names with a space, then one the user named.
@@ -99,27 +99,23 @@ both() { # $1 name: one capture in each theme, dark first, and back to dark
   theme dark
 }
 
-# ---- the fixture: the fake claude, the stand-in, the token in the guest's keychain ----
+# ---- the fixture: the fake claude and the relay stand-in ----
 "$T/guest.sh" "$VM" "mkdir -p $G" || setup_failed "the fixture folder"
 "$T/guest.sh" "$VM" --push "$T/fake-claude-fill-first.pl" $G/claude-fill-first || setup_failed "pushing the fill-first fake"
 "$T/guest.sh" "$VM" --push "$T/fake-claude-bug-report.py" $G/claude || setup_failed "pushing the bug report fake"
-"$T/guest.sh" "$VM" --push "$T/github-stand-in.py" $G/github-stand-in.py || setup_failed "pushing the stand-in"
+"$T/guest.sh" "$VM" --push "$T/report-relay-stand-in.py" $G/relay-stand-in.py || setup_failed "pushing the stand-in"
 "$T/guest.sh" "$VM" "chmod 755 $G/claude $G/claude-fill-first; printf '{\"five\":10,\"weekly\":20}' > $G/usage-1.json; printf 'Noted.' > $G/reply.txt" \
   || setup_failed "the fixture files"
 PAYLOAD=$(cat "${TESTVM_ROOT:-$HOME/.richos-testvm}/run/$VM/payload")
 # run.sh's payload is /Users/admin/testvm/<vm> (measured on walk-85648710ca8f).
 case "$PAYLOAD" in /Users/admin/testvm/*) ;; *) setup_failed "the guest payload ($PAYLOAD)" ;; esac
-GHOME="$PAYLOAD/home"
-# The token goes into the keychain the app reads: the GUI session's default keychain for this
-# fixture HOME, which keychain.sh made at boot.
-"$T/guest.sh" "$VM" "sudo launchctl asuser \$(id -u admin) sudo -u admin env HOME='$GHOME' security add-generic-password -s com.richos.app.bug-reports -a github-reporting-token -w '$TOKEN' -U" \
-  || setup_failed "the reporting token in the guest's keychain"
 python3 - "$VM" "$T" "$PORT" <<'PY' || setup_failed "relaunching the app with the fake claude and the stand-in endpoint"
 import sys
 sys.path.insert(0, sys.argv[2])
 from relaunch import relaunch
 print(relaunch(sys.argv[1], environment={'RICHOS_CLAUDE_BIN': '/Users/admin/fill-first/claude',
-                                         'RICHOS_BUG_REPORT_API': 'http://127.0.0.1:' + sys.argv[3]}))
+                                         'RICHDOCTOR_REPORT_RELAY': 'http://127.0.0.1:' + sys.argv[3],
+                                         'RICHDOCTOR_REPORT_REPOSITORY': 'richos-test/report-relay-local'}))
 PY
 
 # ---- a company and a conversation, as a first run makes them ----
@@ -156,6 +152,26 @@ check() { local ok="$1" bad="$2"; shift 2; if "$@"; then note "ok: $ok"; else fa
 refuse() { local bad="$1"; shift; if "$@"; then fail "$bad"; fi; }
 # shellcheck disable=SC2329  # called through check and refuse, which shellcheck cannot follow
 has() { grep -q -- "$1" "$2"; }
+# What the app registered, through the REAL relay's own checks (richos/mobile/service/report/
+# checks.mjs: the schema, the fingerprint and the content rules, with the footer), on this host.
+# shellcheck disable=SC2329  # called through check, which shellcheck cannot follow
+real_relay_takes() { # $1 the stand-in's request log, $2 the schema expected
+  node --input-type=module - "$1" "$2" "$T/../../../mobile/service/report/checks.mjs" <<'JS'
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const [log, schema, checks] = process.argv.slice(2);
+const { checkCreate, contentProblem } = await import(pathToFileURL(checks).href);
+const sent = readFileSync(log, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.path === '/v1/reports');
+if (!sent.length) { console.error('nothing was registered'); process.exit(1); }
+for (const r of sent) {
+  const data = JSON.parse(r.body), checked = await checkCreate(data, Date.now());
+  if (checked.error) { console.error('refused:', JSON.stringify(checked.error)); process.exit(1); }
+  if (data.schema !== schema) { console.error('schema', data.schema); process.exit(1); }
+  const problem = contentProblem({ ...checked.value, origin: 'http://127.0.0.1:8765', count: 0 });
+  if (problem) { console.error('content refused:', JSON.stringify(problem)); process.exit(1); }
+}
+JS
+}
 
 # ---- 1. Bust a bug starts the exchange ----
 "$T/ax.sh" "$VM" click --title 'Settings' --first || fail "the Settings button"
@@ -204,22 +220,23 @@ check "on disk, waiting, offline ($DATA/waiting)" "the waiting report is not on 
 both 3-waiting
 
 # ---- 4. the endpoint comes up: it goes out by itself ----
-"$T/guest.sh" "$VM" "nohup python3 $G/github-stand-in.py $PORT $G/stand-in.log >/dev/null 2>&1 & echo \$! > $G/stand-in.pid; echo started" || fail "starting the stand-in"
+"$T/guest.sh" "$VM" "nohup python3 $G/relay-stand-in.py $PORT $G/relay-1.json $G/stand-in.log 0 412 >/dev/null 2>&1 & echo \$! > $G/stand-in.pid; echo started" || fail "starting the stand-in"
 note "the stand-in endpoint is up; waiting for the report to go out by itself"
 check "Sent · #412, by itself" "the card never said Sent · #412" wait_text 'Sent · #412' 16
 check "Rich says it went out" "Rich did not say it went out" wait_text "You're back online, so I sent your bug report" 5
 "$T/guest.sh" "$VM" "cat $G/stand-in.log" > "$S/stand-in.log" 2>&1 || true
-posts=$(grep -c '"path": "/repos/WebDevBooster/richos/issues"' "$S/stand-in.log" || true)
-check "one POST to /repos/WebDevBooster/richos/issues" "$posts POSTs to the issues endpoint, not 1" test "$posts" = 1
-# HTTP header names are case-insensitive and the app's client sends them lower-case
-# (walk-8ee6e1037b37 logged `"authorization": "Bearer walk-…"`), so the name is matched in any case.
-check "the keychain's token, read at send time" "the request did not carry the keychain's token" grep -qiF "\"authorization\": \"Bearer $TOKEN\"" "$S/stand-in.log"
+posts=$(grep -c '"path": "/v1/reports/RD-[^"]*/complete"' "$S/stand-in.log" || true)
+check "one completion at the relay" "$posts completions at the relay, not 1" test "$posts" = 1
+# Header names are matched in any case: the app's client sends them lower-case.
+refuse "a token went to the relay" grep -qi '"authorization"' "$S/stand-in.log"
+check "the real relay's checks take what the app sent" "the real relay's checks refuse what the app sent" real_relay_takes "$S/stand-in.log" richdoctor-report/2
 refuse "a private name reached the endpoint" grep -q -e "$COMPANY" -e "$PERSON" -e Northwind -e Dana "$S/stand-in.log"
 refuse "the path with spaces reached the endpoint" grep -q -e 'Client Plans' -e 'budget.xlsx' -e 'Application Support' "$S/stand-in.log"
 check "the issue says a file was left out" "no file stand-in in the issue" grep -qF 'a file on this Mac' "$S/stand-in.log"
 check "the title Rich wrote" "the title is not Rich's" has 'Conversation names in the sidebar are cut off' "$S/stand-in.log"
 "$T/guest.sh" "$VM" "ls '$DATA/waiting' | wc -l; cat '$DATA/sent.jsonl'" > "$S/4-store.txt" 2>&1 || true
 check "recorded as sent" "not recorded as sent" has '"number":412' "$S/4-store.txt"
+check "the issue in the test repository" "no richos-test/report-relay-local issue 412 recorded" has 'github.com/richos-test/report-relay-local/issues/412' "$S/4-store.txt"
 both 4-sent
 
 # ---- 5. Cancel while a send is in flight: it went out, and Rich says so ----
@@ -260,9 +277,9 @@ cancel_at=$("$T/ax.sh" "$VM" find --title 'Cancel report' --first 2>/dev/null | 
 # shellcheck disable=SC2086  # four numbers, split on purpose
 cancel_at=$([ -n "$cancel_at" ] && python3 -c 'import sys; x,y,w,h=map(float,sys.argv[1:]); print("%d,%d" % (x+w/2, y+h/2))' $cancel_at)
 note "Cancel report is at ${cancel_at:-an unknown place}"
-# Back up, holding each answer 22 s (under the app's 25 s request timeout): the retry loop's
+# Back up, holding each completion 22 s (under the app's 30 s request bound): the retry loop's
 # request arrives and is IN FLIGHT, holding the one-send-at-a-time lock, while Cancel is pressed.
-"$T/guest.sh" "$VM" "nohup python3 $G/github-stand-in.py $PORT $G/stand-in-2.log 22 413 >/dev/null 2>&1 & echo \$! > $G/stand-in.pid; echo started" || fail "starting the holding stand-in"
+"$T/guest.sh" "$VM" "nohup python3 $G/relay-stand-in.py $PORT $G/relay-2.json $G/stand-in-2.log 22 413 >/dev/null 2>&1 & echo \$! > $G/stand-in.pid; echo started" || fail "starting the holding stand-in"
 arrived=no
 for _ in $(seq 1 45); do
   if "$T/guest.sh" "$VM" "test -s $G/stand-in-2.log" >/dev/null 2>&1; then arrived=yes; break; fi
@@ -282,7 +299,7 @@ if [ "$arrived" = yes ]; then
   refuse "the card says canceled although it went out" wait_text 'Canceled · nothing sent' 1
   refuse "Rich says nothing was sent although it went out" wait_text 'Nothing was sent' 1
   "$T/guest.sh" "$VM" "cat $G/stand-in-2.log" > "$S/stand-in-2.log" 2>&1 || true
-  posts=$(grep -c '"path": "/repos/WebDevBooster/richos/issues"' "$S/stand-in-2.log" || true)
+  posts=$(grep -c '"path": "/v1/reports/RD-[^"]*/complete"' "$S/stand-in-2.log" || true)
   check "the second report was filed once" "$posts POSTs for the second report, not 1" test "$posts" = 1
   "$T/guest.sh" "$VM" "ls '$DATA/waiting' | wc -l; cat '$DATA/sent.jsonl'" > "$S/5-store.txt" 2>&1 || true
   check "nothing left waiting" "a report is still waiting on disk" grep -qx -e ' *0' "$S/5-store.txt"

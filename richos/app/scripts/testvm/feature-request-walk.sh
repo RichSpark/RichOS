@@ -1,6 +1,6 @@
 #!/bin/bash
 # feature-request-walk.sh — Request a feature on the real app, in one guest run, against a local
-# stand-in for GitHub's GraphQL endpoint.
+# stand-in for RichOS's reporting relay.
 #
 #   run-walk.py --bundle <RichOS.app.zip> --home <empty dir> --engine <engine.tar.gz> \
 #     --report <json> -- feature-request-walk.sh <out-dir>
@@ -10,8 +10,8 @@
 # feature requests to be submitted or branded as "issues" on GitHub." The same exchange as Bust a
 # bug (bug-report-walk.sh, whose fixture this copies): the guest's `claude` is
 # fake-claude-bug-report.py (Rich's write-up of the idea names the walk's company and a person),
-# RICHOS_BUG_REPORT_API points at github-stand-in.py on 127.0.0.1:8765, and the reporting
-# account's token is a throwaway in the GUEST's login keychain under the app's own name.
+# the relay's test override (RICHDOCTOR_REPORT_RELAY and RICHDOCTOR_REPORT_REPOSITORY) points at
+# report-relay-stand-in.py on 127.0.0.1:8765. No token is anywhere: the relay posts the idea.
 #
 # PASS when:
 #   1  Request a feature, directly under Bust a bug in Settings, starts the exchange: Rich asks
@@ -20,9 +20,10 @@
 #      under Ideas, with the company and the person replaced by stand-ins, nothing has reached
 #      the stand-in, and no word on screen says issue;
 #   3  Post idea posts it: the card says "Posted · in Ideas", Rich says it is in RichOS's
-#      Discussions under Ideas; the stand-in received exactly two POSTs to /graphql (the lookup,
-#      then createDiscussion in the Ideas category) with "Bearer <the keychain token>", none to
-#      an issues path, and neither the company nor the person;
+#      Discussions under Ideas; the relay received one registration as richos-idea/1 and one
+#      completion, with no Authorization header, nothing went to GitHub's GraphQL or an issues
+#      path, the real relay's own checks (checks.mjs, on the host) take what was registered, and
+#      neither the company nor the person is in it;
 #   4  screenshots of the card and the posted card in the dark theme and the light theme, for
 #      comparison with round 24.
 #
@@ -35,7 +36,6 @@ S="${2:?usage: feature-request-walk.sh <vm> <out-dir>}"
 T="$(cd "$(dirname "$0")" && pwd)"
 G=/Users/admin/fill-first
 PORT=8765
-TOKEN="walk-stand-in-token-$RANDOM$RANDOM"
 COMPANY='Northwind Traders'
 PERSON='Dana Whitfield'
 mkdir -p "$S"
@@ -86,6 +86,26 @@ check() { local ok="$1" bad="$2"; shift 2; if "$@"; then note "ok: $ok"; else fa
 refuse() { local bad="$1"; shift; if "$@"; then fail "$bad"; fi; }
 # shellcheck disable=SC2329  # called through check and refuse, which shellcheck cannot follow
 has() { grep -q -- "$1" "$2"; }
+# What the app registered, through the REAL relay's own checks (richos/mobile/service/report/
+# checks.mjs: the schema, the fingerprint and the content rules, with the footer), on this host.
+# shellcheck disable=SC2329  # called through check, which shellcheck cannot follow
+real_relay_takes() { # $1 the stand-in's request log, $2 the schema expected
+  node --input-type=module - "$1" "$2" "$T/../../../mobile/service/report/checks.mjs" <<'JS'
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const [log, schema, checks] = process.argv.slice(2);
+const { checkCreate, contentProblem } = await import(pathToFileURL(checks).href);
+const sent = readFileSync(log, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.path === '/v1/reports');
+if (!sent.length) { console.error('nothing was registered'); process.exit(1); }
+for (const r of sent) {
+  const data = JSON.parse(r.body), checked = await checkCreate(data, Date.now());
+  if (checked.error) { console.error('refused:', JSON.stringify(checked.error)); process.exit(1); }
+  if (data.schema !== schema) { console.error('schema', data.schema); process.exit(1); }
+  const problem = contentProblem({ ...checked.value, origin: 'http://127.0.0.1:8765', count: 0 });
+  if (problem) { console.error('content refused:', JSON.stringify(problem)); process.exit(1); }
+}
+JS
+}
 # Press a button by its title: the first match, up to three tries, then the pointer at its center.
 # A press that searches the whole tree, or by a partial title, can outlast ax.sh's 20 s deadline on
 # a busy host: the first run of this walk (walk-aa3d555a63df) found "Request a feature" on screen
@@ -101,26 +121,24 @@ click_first() {
   "$T/ax.sh" "$VM" click --at "$(python3 -c 'import sys; x,y,w,h=map(float,sys.argv[1:]); print("%d,%d" % (x+w/2, y+h/2))' "$1" "$2" "$3" "$4")"
 }
 
-# ---- the fixture: the fake claude, the stand-in, the token in the guest's keychain ----
+# ---- the fixture: the fake claude and the relay stand-in ----
 "$T/guest.sh" "$VM" "mkdir -p $G" || setup_failed "the fixture folder"
 "$T/guest.sh" "$VM" --push "$T/fake-claude-fill-first.pl" $G/claude-fill-first || setup_failed "pushing the fill-first fake"
 "$T/guest.sh" "$VM" --push "$T/fake-claude-bug-report.py" $G/claude || setup_failed "pushing the write-up fake"
-"$T/guest.sh" "$VM" --push "$T/github-stand-in.py" $G/github-stand-in.py || setup_failed "pushing the stand-in"
+"$T/guest.sh" "$VM" --push "$T/report-relay-stand-in.py" $G/relay-stand-in.py || setup_failed "pushing the stand-in"
 "$T/guest.sh" "$VM" "chmod 755 $G/claude $G/claude-fill-first; printf '{\"five\":10,\"weekly\":20}' > $G/usage-1.json; printf 'Noted.' > $G/reply.txt" \
   || setup_failed "the fixture files"
 PAYLOAD=$(cat "${TESTVM_ROOT:-$HOME/.richos-testvm}/run/$VM/payload")
 case "$PAYLOAD" in /Users/admin/testvm/*) ;; *) setup_failed "the guest payload ($PAYLOAD)" ;; esac
-GHOME="$PAYLOAD/home"
-"$T/guest.sh" "$VM" "sudo launchctl asuser \$(id -u admin) sudo -u admin env HOME='$GHOME' security add-generic-password -s com.richos.app.bug-reports -a github-reporting-token -w '$TOKEN' -U" \
-  || setup_failed "the reporting token in the guest's keychain"
-"$T/guest.sh" "$VM" "nohup python3 $G/github-stand-in.py $PORT $G/stand-in.log 0 413 >/dev/null 2>&1 & echo \$! > $G/stand-in.pid; echo started" \
+"$T/guest.sh" "$VM" "nohup python3 $G/relay-stand-in.py $PORT $G/relay.json $G/stand-in.log 0 413 >/dev/null 2>&1 & echo \$! > $G/stand-in.pid; echo started" \
   || setup_failed "starting the stand-in"
 python3 - "$VM" "$T" "$PORT" <<'PY' || setup_failed "relaunching the app with the fake claude and the stand-in endpoint"
 import sys
 sys.path.insert(0, sys.argv[2])
 from relaunch import relaunch
 print(relaunch(sys.argv[1], environment={'RICHOS_CLAUDE_BIN': '/Users/admin/fill-first/claude',
-                                         'RICHOS_BUG_REPORT_API': 'http://127.0.0.1:' + sys.argv[3]}))
+                                         'RICHDOCTOR_REPORT_RELAY': 'http://127.0.0.1:' + sys.argv[3],
+                                         'RICHDOCTOR_REPORT_REPOSITORY': 'richos-test/report-relay-local'}))
 PY
 
 # ---- a company and a conversation, as a first run makes them (bug-report-walk.sh's steps) ----
@@ -184,11 +202,12 @@ check "Posted · in Ideas" "the card never said Posted · in Ideas" wait_text 'P
 check "Rich says where it went" "Rich did not say where it went" wait_text "in RichOS's Discussions on GitHub, under Ideas" 5
 refuse "a word on screen says issue" wait_text 'issue' 1
 "$T/guest.sh" "$VM" "cat $G/stand-in.log" > "$S/stand-in.log" 2>&1 || true
-graphql=$(grep -c '"path": "/graphql"' "$S/stand-in.log" || true)
-check "two POSTs to /graphql" "$graphql POSTs to /graphql, not 2" test "$graphql" = 2
-refuse "a request went to an issues path" grep -q '/issues' "$S/stand-in.log"
-check "createDiscussion in the Ideas category" "no createDiscussion with the Ideas category" grep -q 'DIC_stand_in_ideas' "$S/stand-in.log"
-check "the keychain's token, read at send time" "the request did not carry the keychain's token" grep -qiF "\"authorization\": \"Bearer $TOKEN\"" "$S/stand-in.log"
+posts=$(grep -c '"path": "/v1/reports/RD-[^"]*/complete"' "$S/stand-in.log" || true)
+check "one completion at the relay" "$posts completions at the relay, not 1" test "$posts" = 1
+check "registered as an idea" "not registered as richos-idea/1" grep -q 'richos-idea/1' "$S/stand-in.log"
+refuse "a request went to GitHub's GraphQL or an issues path" grep -q -e '"path": "/graphql"' -e '"path": "/repos/' "$S/stand-in.log"
+refuse "a token went to the relay" grep -qi '"authorization"' "$S/stand-in.log"
+check "the real relay's checks take what the app sent" "the real relay's checks refuse what the app sent" real_relay_takes "$S/stand-in.log" richos-idea/1
 refuse "a private name reached the stand-in" grep -q -e "$COMPANY" -e "$PERSON" -e Northwind -e Dana "$S/stand-in.log"
 check "the title Rich wrote" "the title is not Rich's" has 'A short weekly summary of each conversation' "$S/stand-in.log"
 sleep 2

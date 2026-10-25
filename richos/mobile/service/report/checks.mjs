@@ -5,6 +5,10 @@ import { MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES, MAX_PIXELS } from './imag
 
 export const SCHEMA = 'richdoctor-report/1';
 export const SCHEMA_2 = 'richdoctor-report/2';
+// A RichOS feature idea (Request a feature): protocol 2's fields with no screenshots, posted as a
+// Discussion under Ideas rather than an issue. Recorded as protocol IDEA.
+export const IDEA_SCHEMA = 'richos-idea/1';
+export const IDEA = 3;
 export const MAX_TITLE_CHARS = 200;
 export const MAX_BODY_BYTES = 60000;
 // Alphabet 23456789ABCDEFGHJKMNPQRSTVWXYZ: no 0, 1, I, L, O or U.
@@ -63,10 +67,10 @@ function checkManifest(manifest) {
 // Returns { value } or { error }. Never echoes a submitted value back.
 export async function checkCreate(data, now) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return { error: schemaError('The report is not in the expected format.') };
-  const fields = data.schema === SCHEMA_2 ? [...FIELDS, 'manifest'] : FIELDS, keys = Object.keys(data);
+  const fields = data.schema === SCHEMA_2 || data.schema === IDEA_SCHEMA ? [...FIELDS, 'manifest'] : FIELDS, keys = Object.keys(data);
   if (keys.length !== fields.length || fields.some(k => !keys.includes(k))) return { error: schemaError('The report has missing or unexpected fields.') };
   const { schema, report_id, receipt_secret, content_sha256, installation_id, app_version, approved_at, title, body } = data;
-  if (schema !== SCHEMA && schema !== SCHEMA_2) return { error: schemaError('This report format version is not supported.') };
+  if (schema !== SCHEMA && schema !== SCHEMA_2 && schema !== IDEA_SCHEMA) return { error: schemaError('This report format version is not supported.') };
   if (typeof report_id !== 'string' || !REPORT_ID.test(report_id)) return { error: schemaError('The report ID is not valid.') };
   if (typeof receipt_secret !== 'string' || !SECRET.test(receipt_secret)) return { error: schemaError('The report receipt is not valid.') };
   if (typeof content_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(content_sha256)) return { error: schemaError('The report fingerprint is not valid.') };
@@ -77,10 +81,11 @@ export async function checkCreate(data, now) {
   if (!title.trim()) return { error: schemaError('The title is empty.') };
   if ([...title].length > MAX_TITLE_CHARS) return { error: sizeError(`The title is longer than ${MAX_TITLE_CHARS} characters.`) };
   if (utf8.encode(body).byteLength > MAX_BODY_BYTES) return { error: sizeError('The report is longer than GitHub allows.') };
-  const manifest = schema === SCHEMA_2 ? data.manifest : null;
+  const manifest = schema === SCHEMA ? null : data.manifest;
   if (manifest) { const problem = checkManifest(manifest); if (problem) return { error: problem }; }
+  if (schema === IDEA_SCHEMA && manifest.length) return { error: schemaError('An idea carries no screenshots.') };
   if (await contentHash(title, body, manifest) !== content_sha256) return { error: schemaError('The report fingerprint does not match its words.') };
-  return { value: { schema: manifest ? 2 : 1, reportId: report_id, secret: receipt_secret, contentHash: content_sha256,
+  return { value: { schema: schema === IDEA_SCHEMA ? IDEA : manifest ? 2 : 1, reportId: report_id, secret: receipt_secret, contentHash: content_sha256,
     installationId: installation_id.toLowerCase(), appVersion: app_version, approvedAt: approved_at, title, body, manifest: manifest || [] } };
 }
 

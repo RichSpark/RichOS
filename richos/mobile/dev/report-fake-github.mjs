@@ -1,5 +1,6 @@
 // A stand-in for the parts of GitHub's REST API the report relay uses: App installation tokens,
-// issue creation and the creator-filtered, paginated issue listing. It checks the App JWT's RS256
+// issue creation and the creator-filtered, paginated issue listing, and the two GraphQL requests
+// that post a RichOS feature idea as a Discussion under Ideas. It checks the App JWT's RS256
 // signature and the token on every call, and injects one-shot faults for failure tests. It is a
 // test double: it proves the relay's logic, never real delivery.
 const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
@@ -8,7 +9,7 @@ const fromB64url = text => Uint8Array.from(atob(text.replace(/-/g, '+').replace(
 export class FakeGitHub {
   constructor({ repository, bot, appId, installationId, publicKey, pageSize = 100, now = Date.now }) {
     Object.assign(this, { repository, bot, appId: String(appId), installationId: String(installationId), publicKey, pageSize, now });
-    this.issues = []; this.tokens = new Set(); this.scopes = new Map(); this.faults = []; this.calls = []; this.held = [];
+    this.issues = []; this.discussions = []; this.tokens = new Set(); this.scopes = new Map(); this.granted = new Map(); this.faults = []; this.calls = []; this.held = [];
   }
   fault(name) { this.faults.push(name); }
   take(prefix) { const i = this.faults.findIndex(f => f.startsWith(prefix)); return i < 0 ? null : this.faults.splice(i, 1)[0]; }
@@ -39,17 +40,19 @@ export class FakeGitHub {
       if (this.take('token:500')) return json(500, { message: 'error' });
       if (!await this.verifyJwt(auth)) return json(401, { message: 'Bad credentials' });
       const body = await request.json();
-      const scoped = JSON.stringify(body) === JSON.stringify({ repositories: [this.repository.split('/')[1]], permissions: { issues: 'write' } });
+      const scope = permission => JSON.stringify({ repositories: [this.repository.split('/')[1]], permissions: { [permission]: 'write' } });
+      const scoped = JSON.stringify(body) === scope('issues') || JSON.stringify(body) === scope('discussions');
       if (!scoped && JSON.stringify(body) !== '{}') return json(422, { message: 'scope' });
       // As on GitHub, a token restricted to one repository sees only that repository.
       const token = 'ghs_' + crypto.randomUUID().replace(/-/g, ''); this.tokens.add(token); this.scopes.set(token, scoped ? [this.repository] : (this.reach || [this.repository]));
+      this.granted.set(token, scoped ? body.permissions : null);
       return json(201, { token, expires_at: new Date(this.now() + 3600_000).toISOString() });
     }
     // The App's own identity and its installation, read with the App JWT.
     if (request.method === 'GET' && (url.pathname === '/app' || url.pathname === `/repos/${this.repository}/installation`)) {
       if (!await this.verifyJwt(auth)) return json(401, { message: 'Bad credentials' });
       if (url.pathname === '/app') return json(200, { id: Number(this.appId), slug: this.bot.replace(/\[bot\]$/, '') });
-      return json(200, { id: Number(this.installationId), repository_selection: this.selection || 'selected', permissions: this.permissions || { issues: 'write', metadata: 'read' } });
+      return json(200, { id: Number(this.installationId), repository_selection: this.selection || 'selected', permissions: this.permissions || { discussions: 'write', issues: 'write', metadata: 'read' } });
     }
     if (request.method === 'GET' && url.pathname === '/installation/repositories') { // ?per_page is ignored
       if (!this.tokens.has((auth || '').replace(/^Bearer /, ''))) return json(401, { message: 'Bad credentials' });
@@ -58,6 +61,27 @@ export class FakeGitHub {
     }
     // Reads of a public repository need no token, as on GitHub; a token that is sent must be valid.
     if ((auth || request.method !== 'GET') && !this.tokens.has((auth || '').replace(/^Bearer /, ''))) return json(401, { message: 'Bad credentials' });
+    if (request.method === 'POST' && url.pathname === '/graphql') {
+      const { query, variables } = await request.json(), fault = this.take('graphql:');
+      // As on GitHub, a token minted for Issues write alone may not post a Discussion.
+      if (this.granted.get(auth.replace(/^Bearer /, ''))?.discussions !== 'write') return json(200, { data: null, errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible by integration' }] });
+      if (fault === 'graphql:forbidden') return json(200, { data: null, errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible by integration' }] });
+      if (query.includes('discussionCategory')) {
+        if (fault === 'graphql:lookup-500') return json(500, { message: 'error' });
+        if (fault) this.faults.unshift(fault); // a create fault waits for the create
+        const mine = variables.owner + '/' + variables.name === this.repository;
+        return json(200, { data: { repository: mine ? { id: 'R_fake', discussionCategory: variables.slug === 'ideas' ? { id: 'DIC_fake_ideas' } : null } : null } });
+      }
+      if (query.includes('createDiscussion')) {
+        if (variables.repositoryId !== 'R_fake' || variables.categoryId !== 'DIC_fake_ideas') return json(200, { data: { createDiscussion: null }, errors: [{ type: 'NOT_FOUND' }] });
+        const number = this.issues.length + this.discussions.length + 1;
+        const discussion = { number, url: `https://github.com/${this.repository}/discussions/${number}`, title: variables.title, body: variables.body, category: 'ideas' };
+        this.discussions.push(discussion);
+        if (fault === 'graphql:lost') throw new TypeError('network connection lost');
+        return json(200, { data: { createDiscussion: { discussion: { number, url: discussion.url } } } });
+      }
+      return json(200, { errors: [{ message: 'unknown query' }] });
+    }
     const single = new RegExp(`^/repos/${this.repository}/issues/(\\d+)$`).exec(url.pathname);
     if (request.method === 'GET' && single) { const issue = this.issues[Number(single[1]) - 1]; return issue ? json(200, issue) : json(404, { message: 'Not Found' }); }
     if (request.method === 'POST' && url.pathname === `/repos/${this.repository}/issues`) {
