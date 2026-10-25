@@ -169,7 +169,7 @@ T="scripts/unstarted-rows-lint.sh"
 
 # --- 1. THE NOTICE ITSELF --------------------------------------------------
 mutant no-notice "1a " "$H" \
-    'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \
+    'stop_notice_abnormal "unstarted:$SET_KEY" \' \
     'stop_notice_normal "" \' \
     "the whole point: an unstarted row must end the turn with something on screen."
 
@@ -179,13 +179,18 @@ mutant unnamed-rows "1b " "$H" \
     "a count is a number to get used to; a name is a thing to go and start."
 
 mutant vague-notice "1c " "$H" \
-    'UNSTARTED WORK, NOTHING RUNNING FOR IT' \
+    'OPEN ROWS WITH NO RUNNING WORK RECORDED' \
     'FYI' \
-    "the notice has to say what is wrong, not merely that something is."
+    "the notice has to say what it knows, not merely that something is."
+
+mutant overclaims "1e " "$H" \
+    'OPEN ROWS WITH NO RUNNING WORK RECORDED —' \
+    'OPEN ROWS WITH NO RUNNING WORK RECORDED, NOTHING RUNNING FOR THEM — Start one.' \
+    "missing branch metadata proves neither that nothing runs nor that a row may start now."
 
 mutant blocking "1d " "$H" \
-    'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \
-    'exit 2; stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \
+    'stop_notice_abnormal "unstarted:$SET_KEY" \' \
+    'exit 2; stop_notice_abnormal "unstarted:$SET_KEY" \' \
     "a Stop hook that refuses turns on a judgment it does not have gets switched off."
 
 # --- 2. CLAIMS -------------------------------------------------------------
@@ -289,8 +294,8 @@ mutant section-missing-ok "4c " "$P" \
 
 # --- 6. DE-DUPLICATION -----------------------------------------------------
 mutant constant-state-key "5b " "$H" \
-    'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \
-    'stop_notice_abnormal_recurring "unstarted" \' \
+    'stop_notice_abnormal "unstarted:$SET_KEY" \' \
+    'stop_notice_abnormal "unstarted" \' \
     "if the key never changes, the notice never speaks again — including when a row is created."
 
 # --- 7. THE LINT'S THREE ANSWERS -------------------------------------------
@@ -342,9 +347,19 @@ mutant broken-reads-clear "4b " "$H" \
     "a failure that reads like a clean sweep is the whole failure class, restated."
 
 mutant announces-every-turn "5a " "$H" \
-    'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \' \
-    'stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED:$RANDOM" \' \
+    'stop_notice_abnormal "unstarted:$SET_KEY" \' \
+    'stop_notice_abnormal "unstarted:$SET_KEY:$RANDOM" \' \
     "a line under every turn is a line the eye is trained to skip, and then muted."
+
+mutant thirty-minute-rung "5c " "$H" \
+    'stop_notice_abnormal "unstarted:$SET_KEY" \' \
+    '_rung() { stop_notice_abnormal_recurring "$1" "$2" 1800; }; _rung "unstarted:$SET_KEY" \' \
+    "an unchanged set repeated on a timer is the administrative noise removed on 2026-10-24."
+
+mutant record-order-key "5d " "$H" \
+    '| LC_ALL=C sort -u |' \
+    '| cat |' \
+    "the same rows in a new order are the same set; keying on record order tells it again."
 
 mutant lint-never-clean "7b " "$T" \
     '\nfi\nexit 0' \

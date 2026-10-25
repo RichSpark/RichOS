@@ -1,11 +1,13 @@
 # `.unstarted-rows` — writing the work down is not starting it
 
-A Stop hook that will not let a turn end quietly while an unblocked row has
-nothing running for it.
+A Stop hook that names the open rows with no running work recorded, once per
+change of that set, so none is silently forgotten. It states only that: a
+missing branch, row directory or claim is missing evidence, not proof that
+nothing is running or that the row may start now.
 
 ## The defect
 
-A lead finds work, writes it down as a row, and stops — because writing the row
+A lead finds work, writes it down as a row and stops — because writing the row
 satisfies the same urge as doing the work. On 2026-08-31 that happened three
 times in one day in this project: an emptied table announced as an empty
 backlog while a section titled *"Buildable now — nobody blocked"* still held
@@ -19,11 +21,11 @@ third happened the same afternoon.
 
 > A RULE ENFORCED BY ATTENTION LASTS EXACTLY AS LONG AS THE ATTENTION.
 
-## Why the turn end, and not the land
+## Why the turn end and not the land
 
 There was already a rule on the land: start the top unblocked item before
-reporting. It caught none of the three, and the reason is structural. **Work is
-created when something is NOTICED, and noticing happens while writing a
+reporting. It caught none of the three and the reason is structural. **Work is
+created when something is NOTICED and noticing happens while writing a
 report.** By the time a land ends, the noticing turn is over — and the third
 failure involved no land at all.
 
@@ -73,7 +75,7 @@ names — derived, never typed:
 * or the id on its own line in `<worktree>/.claude/row-claims.txt`.
 
 An unclaimed row is reported. That direction is deliberate: a fuzzy match would
-fail toward silence, and silence is the failure this exists to prevent.
+fail toward silence and silence is the failure this exists to prevent.
 
 ## Loud, never green over an empty set
 

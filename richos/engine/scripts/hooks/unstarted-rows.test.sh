@@ -8,8 +8,8 @@
 # is the one thing a test must not share with the live session.
 #
 # THE FOUR TRANSCRIPTS THE BRIEF ASKS FOR, and where each is asserted:
-#   1. an unblocked row with nothing running for it  -> NOTICE, NAMING IT
-#        cases 1a-1d
+#   1. an unblocked row with no running work recorded -> NOTICE, NAMING IT
+#        cases 1a-1e
 #   2. the same row with a live worktree for it      -> SILENT
 #        cases 2a-2e
 #   3. a row declared as waiting on the CEO          -> SILENT, and the silence
@@ -20,7 +20,7 @@
 #        cases 4a-4p
 #
 # Plus the two properties that keep the notice worth reading:
-#   5. state-change de-duplication  (a stable set is announced once)
+#   5. state-change de-duplication  (a stable set is announced once, never again)
 #   6. a claim token stands alone in BOTH directions, each with a control
 #   8. the strike-through closes a row; the cell may name who owns the residual
 #
@@ -193,24 +193,31 @@ names() { printf '%s' "$HOUT" | grep -q "$1"; }
 echo "=== unstarted rows: the notice, the silences, and the loud failures ==="
 
 # ===========================================================================
-# 1. AN UNBLOCKED ROW WITH NOTHING RUNNING FOR IT -> NOTICE, NAMING IT
+# 1. AN UNBLOCKED ROW WITH NO RUNNING WORK RECORDED -> NOTICE, NAMING IT
 # ===========================================================================
 if selected_group 1; then
 run_hook
-if spoke; then ok "1a  an unblocked row with nothing running ends the turn with a notice"
-else bad "1a  an unblocked row with nothing running ends the turn with a notice" "the hook said nothing: $HOUT"; fi
+if spoke; then ok "1a  an unblocked row with no running work recorded ends the turn with a notice"
+else bad "1a  an unblocked row with no running work recorded ends the turn with a notice" "the hook said nothing: $HOUT"; fi
 say "1a" "$HOUT"
 
 if names '1, 11, 12, 3.1'; then
     ok "1b  the notice NAMES the rows rather than counting them"
 else bad "1b  the notice NAMES the rows rather than counting them" "$HOUT"; fi
 
-if names 'NOTHING RUNNING FOR IT'; then
-    ok "1c  the notice says what is wrong: nothing is running for them"
-else bad "1c  the notice says what is wrong: nothing is running for them" "$HOUT"; fi
+if names 'NO RUNNING WORK RECORDED' && names 'scripts/unstarted-rows-lint.sh'; then
+    ok "1c  the notice says what it knows: no running work recorded, and the lint for detail"
+else bad "1c  the notice says what it knows: no running work recorded, and the lint for detail" "$HOUT"; fi
 
 if [ "$HRC" -eq 0 ]; then ok "1d  it NOTICES, it does not block — exit 0"
 else bad "1d  it NOTICES, it does not block — exit 0" "rc=$HRC"; fi
+
+# Missing branch metadata is missing evidence (2026-10-24): it proves neither
+# that nothing is running nor that the row may start now, so the notice claims
+# neither.
+if ! printf '%s' "$HOUT" | grep -qi 'nothing running' && ! printf '%s' "$HOUT" | grep -qi 'start one'; then
+    ok "1e  the notice claims neither \"nothing running\" nor \"Start one\""
+else bad "1e  the notice claims neither \"nothing running\" nor \"Start one\"" "$HOUT"; fi
 
 fi
 
@@ -369,6 +376,37 @@ run_hook --remember
 if printf '%s' "$FIRST" | grep -q systemMessage && ! spoke; then
     ok "5a  an unchanged set of unstarted rows is announced ONCE, not every turn"
 else bad "5a  an unchanged set is announced once" "first=$FIRST second=$HOUT"; fi
+
+# ...and not again later either. Until 2026-10-24 an unchanged set was repeated
+# every 1800 s; the ledger's last-told time is back-dated two hours so a repeat
+# rule of any interval up to that would speak here.
+LEDGER="$REPO/.claude/state/stop-hook-notices/deadbeef.notice-unstarted-rows.state"
+if [ -s "$LEDGER" ]; then
+    printf '%s\t%s\n' "$(cut -f1 "$LEDGER" | head -1)" "$(( $(date +%s) - 7200 ))" > "$LEDGER"
+    run_hook --remember
+    if ! spoke; then ok "5c  an unchanged set is told once and then not again, two hours later"
+    else bad "5c  an unchanged set is told once and then not again" "$HOUT"; fi
+else bad "5c  an unchanged set is told once and then not again" "no notice ledger at $LEDGER"; fi
+
+# The same rows in a new order are the same set (review rv-20261025T005854Z-
+# f70d92b5-9138 #1). The lint is the control that the order really changed.
+python3 - "$REPO/RICH-TODOs.md" <<'PY'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").read().split("\n")
+a = next(i for i, l in enumerate(lines) if l.startswith("| 11 |"))
+b = next(i for i, l in enumerate(lines) if l.startswith("| 12 |"))
+lines[a], lines[b] = lines[b], lines[a]
+open(p, "w", encoding="utf-8").write("\n".join(lines))
+PY
+bash "$LINT" "$REPO" > "$SANDBOX/lint5d.txt" 2>&1
+L11="$(grep -nE '^  UNSTARTED  11 ' "$SANDBOX/lint5d.txt" | cut -d: -f1)"
+L12="$(grep -nE '^  UNSTARTED  12 ' "$SANDBOX/lint5d.txt" | cut -d: -f1)"
+run_hook --remember
+if [ -n "$L11" ] && [ -n "$L12" ] && [ "$L12" -lt "$L11" ] && ! spoke; then
+    ok "5d  the same set in a new record order is not told again"
+else bad "5d  the same set reordered is not told again" "11@${L11:-?} 12@${L12:-?} $HOUT"; fi
+write_queue
 
 write_queue '**CEO — his account**'
 run_hook --remember
@@ -532,7 +570,7 @@ STUB
 chmod +x "$SANDBOX/fakegit/git"
 forget
 HOUT="$(stop_payload | PATH="$SANDBOX/fakegit:$PATH" bash "$HOOK" 2>&1)"; HRC=$?
-if spoke && names "could not be read" && ! printf '%s' "$HOUT" | grep -qi 'nothing running'; then
+if spoke && names "could not be read" && ! printf '%s' "$HOUT" | grep -qi 'no running work recorded'; then
     ok "4q  a worktree list that fails -> LOUD (\"could not be read\"), never rows called unstarted over an empty inventory"
 else bad "4q  a failed worktree list is an unknown inventory, not an empty one" "$HOUT"; fi
 forget
@@ -591,6 +629,19 @@ bash "$LINT" "$REPO" >/dev/null 2>&1
 if [ "$?" -eq 2 ]; then ok "7c  the lint exits 2 when it could not read — never the same code as clean"
 else bad "7c  the lint exits 2 when it could not read"; fi
 mv "$SANDBOX/rec.hidden" "$REPO/wiki/open-items.md"
+
+# The lint is the full inventory the notice points to: every row of both files
+# is listed with its classification, the quiet ones included.
+write_queue
+write_record
+bash "$LINT" "$REPO" > "$SANDBOX/lint7d.txt" 2>&1
+MISSING=""
+for id in 0 9 1 11 12 13 3.1 3.2; do
+    grep -qE "^  [A-Z-]+ +${id//./\\.} " "$SANDBOX/lint7d.txt" || MISSING="$MISSING $id"
+done
+if [ -z "$MISSING" ] && grep -q 'swept 8 row(s)' "$SANDBOX/lint7d.txt"; then
+    ok "7d  the lint lists every row of both files, the quiet ones included"
+else bad "7d  the lint lists every row" "missing:${MISSING:- none} $(cat "$SANDBOX/lint7d.txt")"; fi
 
 fi
 
