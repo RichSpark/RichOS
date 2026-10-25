@@ -16,7 +16,8 @@ This is that walk's a6-app-walk.py, committed here so no nightly walk writes it 
 
 WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65). stu-reminder-walk.py's steps,
 unchanged: identity, first-run, job (stu-reminder-walk.py's JOB, which needs an engineer, so Stu has to
-save one; it must be SETTLED with no human message after the request), idle. Then:
+save one; it must be SETTLED with no human message after the request; the Git name card the team's
+first save asks is answered once with "Use RichOS", a press, never a message), idle. Then:
   monitor   the Work lease's monitor (`stall_watch.py --monitor --jsonl`, native.rs StallWatch) is
             running for the Stu session that ran the job: pid, parent, start time, RICHOS_SESSION_ID;
             the probe leaves out its own process and its shell, whose command lines name those words
@@ -63,6 +64,8 @@ STEPS = ['identity', 'first-run', 'job', 'idle', 'reload', 'monitor', 'fail', 'a
 # An ordinary request after the monitor was killed, worded as srw.JOB is.
 AFTER_JOB = ('Please add a file named more.md whose whole content is the line "More notes for the walk test." '
              'to the Acme repository and commit it, and land it.')
+# The Git name card's answer that keeps the stand-in name (ui/git-name.js, `#git-name-skip`).
+GIT_NAME_ANSWER = 'Use “RichOS” instead'
 
 
 def kept_paths(home, data):
@@ -101,6 +104,19 @@ ROWS = ('import glob,json,sys\n'
 
 
 class WorkLeaseWalk(srw.StuReminderWalk):
+    def approve_if_asked(self, title):
+        """A person's answers while the job runs: the Git name card once, then the assignment's Approve.
+
+        The team's first save in a folder with no Git name waits for the user's answer to that card
+        (ui/git-name.js, git_name.rs, nightly 75). Nightly 75's first run of this walk left it
+        unanswered: Norm's commit waited 11 minutes and the job was still running at 1200 s. The walk
+        answers it as a user may, with the card's own "Use RichOS" button, once."""
+        if 'git_name_answered_ms' not in self.facts and self.present(GIT_NAME_ANSWER):
+            self.press(GIT_NAME_ANSWER)
+            self.facts['git_name_answered_ms'] = round(self.clock())
+            self.save()
+        return super().approve_if_asked(title)
+
     def inbox(self, sender):
         return json.loads(guest(self.vm, 'python3 -c %s %s %s %s' % (
             shlex.quote(ROWS), shlex.quote(self.data), shlex.quote(self.facts['thread']), shlex.quote(sender)), 120) or '[]')

@@ -91,6 +91,32 @@ class KeepCarriesTheStatedActionLog(unittest.TestCase):
         self.assertEqual(ev['bytes'], 3)
 
 
+class AnswersTheGitNameCardOnce(unittest.TestCase):
+    """Nightly 75: the team's first save waited for the Git name card and the job never settled."""
+
+    def walk(self, on_screen):
+        w = object.__new__(Walk)
+        w.facts, w.pressed = {}, []
+        w.present = lambda title, role='AXButton', app=None: title in on_screen
+        w.press = lambda title, role='AXButton', app=None, contains=True: w.pressed.append(title)
+        w.clock = lambda: 1234.4
+        w.save = lambda: None
+        return w
+
+    def test_the_card_is_answered_once_and_the_approve_still_pressed(self):
+        w = self.walk({wlw.GIT_NAME_ANSWER, 'Approve Add notes.md'})
+        self.assertTrue(w.approve_if_asked('Add notes.md'))
+        self.assertTrue(w.approve_if_asked('Add notes.md'))
+        self.assertEqual(w.pressed, [wlw.GIT_NAME_ANSWER, 'Approve Add notes.md', 'Approve Add notes.md'])
+        self.assertEqual(w.facts['git_name_answered_ms'], 1234)
+
+    def test_no_card_no_answer(self):
+        w = self.walk(set())
+        self.assertFalse(w.approve_if_asked('Add notes.md'))
+        self.assertNotIn(wlw.GIT_NAME_ANSWER, w.pressed)
+        self.assertNotIn('git_name_answered_ms', w.facts)
+
+
 class After(unittest.TestCase):
     """One settled request after the kill, its session's turn ended, and no new failure row."""
 
