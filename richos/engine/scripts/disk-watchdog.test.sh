@@ -884,6 +884,36 @@ else
     printf '%s' "$OUT" | grep -A2 'CLASSIFICATION' | sed 's/^/        /'
 fi
 
+# W13c — NO SHORTFALL, NO LOW-DISK DEFECT (2026-10-24). The shortfall was clamped
+# to one byte, so with 74 GB free any RichOS scratch at all read "RichOS garbage
+# (DEFECT)" beside an alert that was about something else. Here the disk is far
+# above its floor, a device row raises the alert and RichOS scratch exists.
+world classify-noshort
+write_cfg 1 999999 1 1
+touch "$W_LA/com.richos.disk-watchdog.plist"
+mkdir -p "$W_DIR/claude-$(id -u)/left"
+head -c 1048576 /dev/zero >"$W_DIR/claude-$(id -u)/left/blob"
+printf '%s\n' '{"ios:X": {"kind": "ios", "id": "X", "name": "Test iPhone", "verdict": "would not close", "why": "simctl delete refused", "command": "xcrun simctl delete X", "first": "2026-10-24T18:00:00Z", "attempts": 1}}' >"$W_DIR/test-device-failures.json"
+OUT="$(run_wd --check)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'TEST DEVICE CLEANUP NEEDS ATTENTION' \
+   && ! printf '%s' "$OUT" | grep -q 'DEFECT' && ! printf '%s' "$OUT" | grep -q 'DISK SPACE'; then
+    ok "W13c with no space shortfall RichOS scratch is not called a low-disk DEFECT; the real alarm stays"
+else
+    bad "W13c no shortfall, yet the alert called RichOS scratch a DEFECT or lost its real alarm (rc=$RC)"
+    printf '%s' "$OUT" | grep -E 'MASSIVE|CLASSIFICATION|DEFECT' | sed 's/^/        /'
+fi
+rm -f "$W_DIR/test-device-failures.json"
+# W13d CONTROL — REAL LOW SPACE IS STILL TOLD, AND CLASSIFIED, with the same scratch.
+write_cfg 999999 999999 0 0
+OUT="$(run_wd --check)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'MASSIVE ALERT — DISK SPACE' \
+   && printf '%s' "$OUT" | grep -q 'CLASSIFICATION:'; then
+    ok "W13d CONTROL: below the floor the disk alarm and its classification are still told"
+else
+    bad "W13d real low space lost its alarm or classification (rc=$RC)"
+    printf '%s' "$OUT" | grep -E 'MASSIVE|CLASSIFICATION' | sed 's/^/        /'
+fi
+
 # ===========================================================================
 # W14 — --alert MUST NOT MOVE THE BASELINE
 # ===========================================================================

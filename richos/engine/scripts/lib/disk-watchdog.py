@@ -905,20 +905,26 @@ def main():
     # Attribution walks the disk, so only the conditions it explains pay for it;
     # a cleanup result alone does not (its detail is the reaper's own record).
     disk_condition = bool(alerting) or n_fail > 0 or n_inst > 0 or n_dev > 0
+    # THE SHORTFALL IS SPACE ACTUALLY MISSING below a volume's own declared floor.
+    # With none, there is no low-disk cause to classify and no classification is
+    # printed: on 2026-10-24 a clamp of 1 byte here made any scratch at all read
+    # "RichOS garbage (DEFECT)" with 74 GB free. A failed cleanup or a device left
+    # behind still alarms under its own heading above.
+    shortfall = max((v["rich_alert_gb"] * GB - v["free_bytes"] for v in volumes), default=0)
     if disk_condition and mode in ("check", "status"):
         consumers = [{"path": p, "bytes": b, "human": human(b)}
                      for b, p in top_consumers(candidates)]
         garbage = richos_garbage_bytes()
-        worst = min((v["free_bytes"] for v in volumes), default=0)
         # "RichOS garbage (DEFECT)" when our own scratch is a material part of
         # what is missing. The comparison is against the SHORTFALL rather than
         # against the disk: 5 GB of our scratch on a disk 200 GB short is not
         # our defect, and the same 5 GB on a disk 6 GB short is.
-        shortfall = max(rich_gb * GB - worst, 1)
-        classification = ("RichOS garbage (DEFECT)"
-                          if garbage >= 0.25 * shortfall else "other")
+        if shortfall > 0:
+            classification = ("RichOS garbage (DEFECT)"
+                              if garbage >= 0.25 * shortfall else "other")
     elif disk_condition:
-        classification = prev.get("classification") or "other"
+        if shortfall > 0:
+            classification = prev.get("classification") or "other"
         garbage = prev.get("richos_garbage_bytes") or 0
         consumers = prev.get("top_consumers") or []
 
