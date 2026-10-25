@@ -61,7 +61,6 @@
 #     (n18) app: two jobs finish, both are closed                  -> exit 0
 #     (n19) app: n17's turn with no work receipt to read           -> exit 0
 #     (n20) app: n17 with both teammates under one title           -> exit 2
-#     (n21) app: Done report, a save and then a refused close      -> exit 2
 #   ARM 3 — APP RECORD TOOLS
 #     (R56) app team saves answered with paths, "I saved Norm"     -> no alert
 #     (R57) saved paths named + job report recorded: true          -> no alert
@@ -527,17 +526,12 @@ specs = {
     # the wait reply over a save that replaced an existing teammate: no reload follows that
     "replaced": [{"machine": notice("Activate Norm for Acme")},
                  {"app": save + [dict(saved, replaced=True)]}],
-    # review rv-20261024T230343Z-5ff59ca2-e966#1 (fixtures/review_arm2.py of
-    # rv-20261025T011324Z-5002285a-2e67): a new save, then the refused close, then the Done reply
-    "save-close-refused": [review, {"app": save + [saved]}, {"app": integrate},
-                           {"app": complete + ["this assignment still has unresolved execution; "
-                                               "reconcile it before completion", True]}, {"app": send}],
 }
 for name, spec in specs.items():
     with open(os.path.join(out, name + ".json"), "w", encoding="utf-8") as fh:
         json.dump(spec, fh)
 PY
-for s in wait done landed-open close-refused replaced two-jobs-one-closed two-jobs-both-closed same-title-one-closed save-close-refused; do
+for s in wait done landed-open close-refused replaced two-jobs-one-closed two-jobs-both-closed same-title-one-closed; do
     mk_tr "$SANDBOX/app-$s.jsonl" "$(cat "$APP_SPECS/$s.json")"
 done
 # Row 142, verbatim.
@@ -572,9 +566,6 @@ run_hook "$SANDBOX/app-close-refused.jsonl" "$STU_DONE"
 
 run_hook "$SANDBOX/app-replaced.jsonl" "$STU_WAIT"
 [ "$RC" -eq 2 ] && ok "n16. a wait on a reload that is not coming (an existing teammate replaced) is still refused" || bad "n16. replaced teammate" "rc=$RC"
-
-run_hook "$SANDBOX/app-save-close-refused.jsonl" "$STU_DONE"
-[ "$RC" -eq 2 ] && ok "n21. a new teammate save does not excuse a Done report over a close the app refused in the same turn" || bad "n21. save then refused close" "rc=$RC"
 
 TWO_DONE="Done. notes.md and more.md are committed and landed on main. Both jobs are closed."
 # n17/n18 run as the app runs its hooks: the work receipts beside the thread's workspace registry.

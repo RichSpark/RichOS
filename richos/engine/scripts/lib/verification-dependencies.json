@@ -16411,7 +16411,7 @@
     },
     "ass-kicker/ass-kicker.py": {
       "source": "ass-kicker/ass-kicker.py",
-      "sha256": "4742b7d2fef6f35f2c3f604ec6abca985e7ff0bfd0977535794dccdbbc6eed8a",
+      "sha256": "1f866789c96ccffdb8d216cbe90cb3b17d405fe0b483ffa0dd7a51a8b07bbe61",
       "evidence": "AST I/O/import boundaries: parses payload/transcript data, lists role names, reads team JSON and appends a verdict ledger. The only dynamic imports are the fixed turn-manifest and idle-land analyzers. Neither transcript commands nor role Markdown are executed. Ambient roster inputs require separate execution-reuse qualification. ARM 3 (record claims) additionally reads the turn's tool inputs and results from the transcript, checks each write target's ancestors for a .git entry, and runs a read-only git check-ignore there; it writes nothing beyond the same verdict ledger and, on stdout, one RICHOS_RECORD_ALERT line the wrapper turns into lead-only context (read-only, no new file or key). ARM 2, after an app close in the turn, reads RICHOS_APP_STATE and lists and reads the app's work receipts in <RICHOS_APP_STATE>/work-receipts/<the RICHOS_WORKSPACES_DIR partition name>, read-only, for the turn's finished agents only.",
       "keys": [],
       "edges": [
@@ -16451,7 +16451,7 @@
     },
     "ass-kicker/tests/ass-kicker.test.sh": {
       "source": "ass-kicker/tests/ass-kicker.test.sh",
-      "sha256": "e50fc2a7fd8afbb2946a26b881376ea1603037faa88115f326c4918889e496c2",
+      "sha256": "8364852cb79bb35d5ade109514fdedf8206855f143c5c079048ba7cbec3e9509",
       "evidence": "All hook invocations use the explicit private entity or private unadopted repository. Entity configs are empty or contain literal flag overrides; transcripts and role Markdown are generated as data. Mirror fixtures exercise missing helpers; the real analyzer is otherwise invoked. No mutation harness is called here. Case R29 runs the corpus replay tool on a generated one-session fixture directory with a sandbox --out path.",
       "keys": [],
       "edges": [
@@ -17221,8 +17221,8 @@
         "ass-kicker/tests/record-claims.replay.py": "4f3825c0c465b209a9a32296bd4768c0cc3e911368248bf7822f980ac6acff4d",
         "scripts/hooks/guard-no-shell-c.sh": "dbd0dfb97e292c47b04cfce97b09e3fb18c642b7fd88de21850a4d255069094e",
         "scripts/lib/host_child.py": "59fdb01f44f03ef847210ea9e55aa6b2adc226827c10f11805a2bc2335210b4a",
-        "ass-kicker/ass-kicker.py": "4742b7d2fef6f35f2c3f604ec6abca985e7ff0bfd0977535794dccdbbc6eed8a",
-        "ass-kicker/tests/ass-kicker.test.sh": "e50fc2a7fd8afbb2946a26b881376ea1603037faa88115f326c4918889e496c2",
+        "ass-kicker/ass-kicker.py": "1f866789c96ccffdb8d216cbe90cb3b17d405fe0b483ffa0dd7a51a8b07bbe61",
+        "ass-kicker/tests/ass-kicker.test.sh": "8364852cb79bb35d5ade109514fdedf8206855f143c5c079048ba7cbec3e9509",
         "scripts/hooks/ass-kicker.sh": "67958c5559f0271a699ee95462636009f5547ad1212124139137827b0a6006c1"
       }
     },
@@ -17899,7 +17899,7 @@
         "scripts/lib/shared_scratchpad.py": "3f246169938d8471e79b09b272118401d836fcd55f485397c8ba142bdd23adf3",
         "scripts/hooks/guard-no-shell-c.sh": "dbd0dfb97e292c47b04cfce97b09e3fb18c642b7fd88de21850a4d255069094e",
         "scripts/hooks/ass-kicker.sh": "67958c5559f0271a699ee95462636009f5547ad1212124139137827b0a6006c1",
-        "ass-kicker/ass-kicker.py": "4742b7d2fef6f35f2c3f604ec6abca985e7ff0bfd0977535794dccdbbc6eed8a"
+        "ass-kicker/ass-kicker.py": "1f866789c96ccffdb8d216cbe90cb3b17d405fe0b483ffa0dd7a51a8b07bbe61"
       },
       "evidence": "Enumerates PreToolUse/Stop registrations and matcher payloads; boundary assertion classifies every event. Full dynamic helper inventory is source-bound."
     },

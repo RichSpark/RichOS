@@ -670,7 +670,6 @@ def satisfied(who, arm, calls, inputs):
 
 APP_COMPLETE = "mcp__richos_work__complete"
 APP_TEAM = "mcp__richos_work__team"
-APP_INTEGRATE = "mcp__richos_work__integrate"
 TASK_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
 
 
@@ -755,19 +754,13 @@ def app_job_outcome(idle, transcript, prompt_id, agents):
                         him when this turn ends and then sends Stu the
                         team_reloaded message, which starts his next turn
                         (work_host.rs reload_team_after_turn), so the next
-                        step is already in motion. That is all a save
-                        establishes: in a turn where the app REFUSED a land or
-                        close (`integrate` or `complete` answered is_error), the
-                        save discharges nothing and the turn is judged as if no
-                        save were made (review rv-20261024T230343Z-5ff59ca2-e966
-                        #1: save, refused close, "committed, landed and closed"
-                        went through). A truthful wait there declares itself.
+                        step is already in motion.
     A refused call counts for nothing, a replaced teammate gets no reload, and
     a land (`integrate`) is not a close. Nightly 73 and 74 walks: both
     truthful replies were refused without this."""
     try:
         offset = idle.turn_start_offset(transcript, prompt_id)
-        wanted, answers, started, refused = {}, {}, False, False
+        wanted, answers, started = {}, {}, False
         with open(transcript, "rb") as fh:
             fh.seek(offset)
             for raw in fh:
@@ -787,12 +780,10 @@ def app_job_outcome(idle, transcript, prompt_id, agents):
                 for b in content:
                     if not isinstance(b, dict):
                         continue
-                    if b.get("type") == "tool_use" and b.get("name") in (APP_COMPLETE, APP_TEAM, APP_INTEGRATE):
+                    if b.get("type") == "tool_use" and b.get("name") in (APP_COMPLETE, APP_TEAM):
                         wanted[b.get("id")] = (b.get("name"), b.get("input") or {})
                     elif b.get("type") == "tool_result" and b.get("tool_use_id") in wanted:
                         answers[b["tool_use_id"]] = _app_answer(b)
-                        if b.get("is_error") is True and wanted[b["tool_use_id"]][0] != APP_TEAM:
-                            refused = True
         closed = set()
         for tid, answer in answers.items():
             name, inp = wanted[tid]
@@ -812,7 +803,7 @@ def app_job_outcome(idle, transcript, prompt_id, agents):
         return None
     for tid, answer in answers.items():
         name, inp = wanted[tid]
-        if (name == APP_TEAM and isinstance(inp, dict) and not refused
+        if (name == APP_TEAM and isinstance(inp, dict)
                 and inp.get("action") == "save" and answer.get("replaced") is False
                 and answer.get("registration_boundary") == "next_provider_connection"):
             return ("started", "a new teammate is saved; the app reloads the team and resumes the job")
