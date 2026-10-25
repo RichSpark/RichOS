@@ -210,6 +210,10 @@ class GarbageWalk(srw.StuReminderWalk):
         # HOME is not one of them, so an unreadable directory there still breaks the search.
         for r in g['roots'][1:]:
             argv += ['--tolerate-unreadable', r]
+        # And the one folder plant made unreadable on purpose, inside the HOME; `reported` judges it.
+        locked = (self.facts.get('planted') or {}).get('locked')
+        if locked:
+            argv += ['--tolerate-unreadable', locked]
         raw = guest(self.vm, shlex.join(argv) + '; echo "exit=$?" >&2', 600)
         guest(self.vm, 'rm -f ' + shlex.quote(control), 30)
         out = json.loads(raw)
@@ -485,7 +489,8 @@ class GarbageWalk(srw.StuReminderWalk):
             'chmod 000 %s' % shlex.quote(stuck + '/agents/locked')]), 30)
         self.facts['planted'] = {'split_standing': root + '/' + base + '-standing', 'split_base_removed': root + '/' + base,
                                  'standing_owner_record': standing_owner, 'undeletable_base': stuck,
-                                 'undeletable_standing': stuck + '-standing', 'owner_record': owners[base]}
+                                 'undeletable_standing': stuck + '-standing', 'locked': stuck + '/agents/locked',
+                                 'owner_record': owners[base]}
         self.save()
         return self.facts['planted']
 
