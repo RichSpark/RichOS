@@ -103,12 +103,19 @@ def record_running(command):
     is left exactly as it is: it stays a failure until a collection succeeds."""
     path = _path()
     rows, note = _load(path)
+    if note:
+        rows[KEY] = _row(rows, "cleanup started but has not completed; " + note,
+                         command, "collection incomplete")
+        _store(path, rows)
+        return rows
+    # The same rule the readers use: an earlier mark whose process died, was
+    # replaced or ran past the bound is a failure, and it stays one, written
+    # down with its verdict, until a collection succeeds (record_failures).
     previous = rows.get(KEY)
-    if note or (previous is not None and not (isinstance(previous, dict)
-                                              and previous.get("verdict") == RUNNING)):
-        if note:
-            rows[KEY] = _row(rows, "cleanup started but has not completed; " + note,
-                             command, "collection incomplete")
+    judged = standing({KEY: previous}).get(KEY) if previous is not None else None
+    if judged is not None:
+        if judged is not previous:
+            rows[KEY] = judged
             _store(path, rows)
         return rows
     row = _row(rows, "cleanup started but has not completed", command, RUNNING)

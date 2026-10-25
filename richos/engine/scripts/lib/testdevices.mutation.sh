@@ -98,9 +98,14 @@ mutant overdue-collection-hidden "test_T32c" "scripts/lib/testdevice_alerts.py" 
     "a collection hung for hours would read as running for ever."
 
 mutant new-run-masks-standing-failure "test_T32d" "scripts/lib/testdevice_alerts.py" \
-    '    if note or (previous is not None and not (isinstance(previous, dict)' \
-    '    if note or (False and not (isinstance(previous, dict)' \
+    '    judged = standing({KEY: previous}).get(KEY) if previous is not None else None' \
+    '    judged = None' \
     "a standing collector failure would vanish while the next pass runs."
+
+mutant new-run-masks-abandoned-mark "test_T32e" "scripts/lib/testdevice_alerts.py" \
+    '    judged = standing({KEY: previous}).get(KEY) if previous is not None else None' \
+    '    judged = standing({KEY: previous}).get(KEY) if isinstance(previous, dict) and previous.get("verdict") != RUNNING else None' \
+    "a killed or hung collector's mark would read as recovered the moment the next pass started (2026-10-25)."
 
 mutant owned-run-not-renewed "test_T44" "$D" \
     '        lease["last_use"] = time.time(){NL}        lease["activity"] = {"pid": child.pid, "renewer": os.getpid(), "renewed": lease["last_use"]}' \

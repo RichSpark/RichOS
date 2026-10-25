@@ -710,6 +710,27 @@ class Collector(Base):
             T.collect(apply=True)
         self.assertIn("corrupt registry", seen["standing"]["collector:incomplete"]["why"])
 
+    def test_T32e_an_abandoned_or_overdue_mark_is_not_recovered_by_the_next_start(self):
+        A = self.alerts()
+        for case in ("abandoned", "timed out"):
+            A.record_running("collect")
+            row = self.rows()["collector:incomplete"]
+            if case == "abandoned":
+                row["pid"] = self.dead_pid()
+            else:
+                row["started"] -= A.RUNNING_ALERT_SECONDS
+            T._write_json(T.failures_path(), {"collector:incomplete": row})
+            seen = {}
+
+            def running(*_args):
+                seen["standing"] = A.standing(self.rows())
+                return {k: [] for k in ("collected", "survivors", "left", "undecided", "deferred")}
+            with patch.object(T, "_collect", side_effect=running):
+                T.collect(apply=True)
+            self.assertEqual(seen["standing"]["collector:incomplete"]["verdict"], "collection " + case)
+            T.collect(apply=True)                                   # a real pass succeeds
+            self.assertEqual(self.rows(), {})
+
     def test_T33_identity_read_failure_after_signal_preserves_avd(self):
         cache = os.path.join(self.android, "unreadable-after-signal")
         os.makedirs(os.path.join(cache, "avd"))
