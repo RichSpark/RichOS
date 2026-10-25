@@ -27,7 +27,7 @@
 //!   one paragraph of missed fixes, which is the safe direction. Single quotes are not tracked,
 //!   because apostrophes make them undecidable.
 //! - its token (the run of letters, digits and `_ $ . / : \ -` around it, the same token
-//!   `guard-dialect.sh` uses) does not look like a path, URL, identifier or dotted name: no
+//!   `dialect-guard.sh` uses) does not look like a path, URL, identifier or dotted name: no
 //!   `/`, `\`, `_`, `$`, `::`, `--`, and no `.` followed by a letter. A bare single-hyphen
 //!   compound in prose is still fixed, which the plan check accepts inside the 99%.
 //! - it is a whole word: no digit, underscore or other letter (accented ones included)
@@ -154,7 +154,7 @@ pub fn fix_with_changes(text: &str) -> (String, Vec<Change>) {
     (out, speller.changes.take().unwrap_or_default())
 }
 
-/// The characters of a token: the same set `guard-dialect.sh` calls `TOKEN_CHARS`.
+/// The characters of a token: the same set `dialect-guard.sh` calls `TOKEN_CHARS`.
 fn is_token_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '.' | '/' | ':' | '\\' | '-')
 }

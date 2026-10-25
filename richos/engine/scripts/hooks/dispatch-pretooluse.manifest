@@ -12,9 +12,13 @@
 # A module stays independently runnable — `bash scripts/hooks/<module> < payload`
 # still works and is what each module's own test suite does.
 #
-# TWO SCRIPTS THAT BELONG TO THESE EVENTS ARE DELIBERATELY NOT HERE:
+# THREE SCRIPTS THAT BELONG TO THESE EVENTS ARE DELIBERATELY NOT HERE:
 #   shell-evidence.sh      an input transformer (returns updatedInput), not a
 #                          rule; still registered on PreToolUse[Bash] directly.
+#   dialect-guard.sh       the same reason on the Write chain: it returns
+#                          updatedInput (American spelling fixed in the write)
+#                          as well as refusing, so it is registered on
+#                          PreToolUse[Write|Edit|MultiEdit|NotebookEdit] directly.
 #   guard-sealed-worktree.sh  registered on the EMPTY matcher, so it governs
 #                          every tool. Listing it under Bash-or-Write would
 #                          narrow what it protects.
@@ -49,7 +53,6 @@ Write|guard-main-checkout-writes.sh
 Write|scan-secrets.sh
 Write|guard-publication-writes.sh
 Write|guard-named-persons-writes.sh
-Write|guard-dialect.sh
 Write|guard-no-home-network-phone.sh
 Write|guard-host-display-power.sh
 Write|guard-operator-claim.sh

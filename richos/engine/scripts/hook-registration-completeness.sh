@@ -406,9 +406,21 @@ def read_file(rel):
     return t
 
 
+# A DATED RECORD IS NEVER AN INVENTORY. A file under a docs/ directory whose
+# name carries a YYYY-MM-DD date (an audit, a verification record, a review)
+# describes the hooks that existed on that day, and it keeps their names
+# (the 2026-10-24 lead's order for the dialect-guard.sh rename). Read as an
+# inventory, one such file named every hook and so demanded every new or
+# renamed hook be written into a frozen record, or a hook-inventory-ack at
+# every registration change. Derived, like everything else here: no list of
+# exempt files to keep, and the four real inventories carry no date.
+DATED_RECORD = re.compile(r"(^|/)docs/(.+/)?[^/]*\d{4}-\d{2}-\d{2}[^/]*$")
+
 INVENTORIES = []
 for rel in candidates:
     if rel in subject_files:
+        continue
+    if DATED_RECORD.search(rel):
         continue
     if rel == HJ_REL:          # place #1: the registration itself is the trigger
         continue

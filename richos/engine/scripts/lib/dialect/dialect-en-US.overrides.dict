@@ -6,10 +6,10 @@
 #     <non-target form><TAB><target form>[<TAB>ext-exempt=css,...]
 #
 # WHY A SECOND HAND-KEPT FILE AND NOT MORE LINES IN ../dialect-en-US.dict.
-# That file is read by guard-dialect.sh today, so every line added there also
-# changes what today's guard refuses, and the code-check ratchet counts it.
-# Step 0 of the auto-fix changes data, not enforcement. When stream B moves the
-# guard onto the generated table, the two hand-kept files can be merged.
+# That file is still read by the app's lint rule, whose count ceiling the
+# code-check ratchet holds, so every line added there would raise the count.
+# The guard reads the generated table since stream B; when stream C moves the
+# lint onto it too, the two hand-kept files can be merged.
 #
 # WHAT BELONGS HERE. A British form that was measured in our own text or in the
 # keyed British sample, that the generated table misses, and whose American

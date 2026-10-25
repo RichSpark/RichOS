@@ -66,7 +66,7 @@ done
 # and a literal of it would read as one to the engine's phone-surface guard.
 PHONE_SURFACE_HARNESS="home-net""work-phone"
 CUSTOM=(
-    guard-dialect guard-resume-isolation "$PHONE_SURFACE_HARNESS" host-display-power
+    dialect-guard guard-resume-isolation "$PHONE_SURFACE_HARNESS" host-display-power
     inflight-notify interactive-prompt public-record-repo reference-ledger
     ceo-asks ceo-ruled claim-capability-delivery claim-roles idle-land
     mechanical-findings turn-manifest unasked-deferral waiver-repetition

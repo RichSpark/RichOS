@@ -308,7 +308,7 @@ expect_fraction "1a  baseline: banner reports ${EXPECT_N}/${EXPECT_N}, matching 
 # alternative was to type 39, be green in isolation, and hand the lander a
 # tripwire that fires on a correct merge — which is the tripwire lying, and the
 # one thing a tripwire may never do. Ninth firing.
-# 40 -> 41 on 2026-08-31: guard-dialect.sh was wired — the guard that refuses a
+# 40 -> 41 on 2026-08-31: dialect-guard.sh was wired — the guard that refuses a
 # write introducing a word outside the repository's declared dialect. Ninth
 # firing, and one guard this time, but the reason it exists is the reason this
 # tripwire exists: the rule it enforces was written down, swept across 654
@@ -324,7 +324,7 @@ expect_fraction "1a  baseline: banner reports ${EXPECT_N}/${EXPECT_N}, matching 
 # to look is the whole point of it.
 # SET AGAINST MAIN, NOT AGAINST THIS BRANCH'S BASE, ON THE LANDER'S INSTRUCTION
 # (2026-08-31). This branch was cut at 38 registered scripts. TWO other guard
-# branches landed while it ran — 38 -> 39 -> 40 — and guard-dialect.sh makes it
+# branches landed while it ran — 38 -> 39 -> 40 — and dialect-guard.sh makes it
 # 41. Verified against `git show fb4a5628:engine/hooks/hooks.json`, not taken on
 # trust from the notice. So THIS LINE IS RED IN ISOLATION on this branch and
 # green only at main + this branch. Deliberate: the alternative, 39, was green
@@ -958,7 +958,7 @@ guard-ceo-todos-commits.sh
 guard-ci-red-lands.sh
 guard-completeness-commits.sh
 guard-definition-drift.sh
-guard-dialect.sh
+dialect-guard.sh
 guard-idle-land.sh
 guard-inflight-notify.sh
 guard-interactive-prompt.sh

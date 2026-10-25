@@ -42,7 +42,7 @@ ENGINE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 
 # Declare the governed SEAT rather than inheriting the launching session's —
-# same reasoning as scan-secrets.test.sh and guard-dialect.test.sh: run from a
+# same reasoning as scan-secrets.test.sh and dialect-guard.test.sh: run from a
 # session seated elsewhere, the guard would resolve THAT repository, find no
 # adoption marker, stand down, and every case below would pass by never running.
 RICHOS_ENTITY_ROOT="$ENGINE_ROOT"

@@ -162,7 +162,7 @@ scripts/hooks/guard-bash-main-writes.test.sh	2.1	linux-run-34945072758
 scripts/hooks/guard-ci-red-lands.test.sh	19.3	linux-run-34945072758
 scripts/hooks/guard-ci-turn-gate.test.sh	4.8	linux-run-34945072758
 scripts/hooks/guard-definition-drift.test.sh	4.5	linux-run-34945072758
-scripts/hooks/guard-dialect.test.sh	116.1	linux-run-34945072758
+scripts/hooks/dialect-guard.test.sh	116.1	linux-run-34945072758
 scripts/hooks/guard-idle-land.test.sh	9.9	linux-run-34945072758
 scripts/hooks/guard-interactive-prompt.test.sh	13.2	linux-run-34945072758
 scripts/hooks/guard-main-checkout-writes.test.sh	1.8	linux-run-34945072758

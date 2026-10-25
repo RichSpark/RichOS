@@ -35,7 +35,7 @@ EXPANSION = (r'(?:(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?'
              r'|\$\([^()]*(?:\([^()]*\)[^()]*)*\))/)+')
 # `manifest` joined this list on 2026-09-15 for the same reason `dict` is on it:
 # scripts/hooks/dispatch-pretooluse.manifest is DATA a registered hook reaches
-# for and cannot run without, exactly as guard-dialect.sh cannot run without
+# for and cannot run without, exactly as dialect-guard.sh cannot run without
 # dialect-en-US.dict. Left off, every sandbox this engine builds carried a
 # dispatcher with no manifest — which fails LOUD (the dispatcher refuses) rather
 # than quietly, but fails in ten suites at once for a reason none of them names.

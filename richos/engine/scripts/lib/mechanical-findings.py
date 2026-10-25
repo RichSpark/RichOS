@@ -174,7 +174,7 @@ SKIP_WORD_RE = re.compile(r"\bskip", re.I)
 IGNORE_RE = re.compile(r"(^|/)(node_modules|\.worktrees|\.claude/worktrees|vendor|target|dist|build)(/|$)")
 
 # A DECLARED exemption, in the source, where a reviewer sees it — the same
-# discipline guard-dialect.sh uses (`dialect-exempt: <reason>`). A finding a
+# discipline dialect-guard.sh uses (`dialect-exempt: <reason>`). A finding a
 # person has judged deliberate would otherwise return as a fresh row every time
 # its closed row left the page. A BARE marker exempts nothing: the reason is
 # the declaration, and every exemption is reported, never silent.

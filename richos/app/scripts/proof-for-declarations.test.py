@@ -290,7 +290,7 @@ class Declarations(unittest.TestCase):
             for path in ("richos/app/scripts/lint/test_wiring.py",
                          "richos/app/scripts/nightly-local.py",
                          "richos/app/scripts/bin/cargo",
-                         "richos/engine/scripts/hooks/guard-dialect.sh"):
+                         "richos/engine/scripts/lib/dialect/dialect-fix.py"):
                 with self.subTest(path=path, gate=gate):
                     result = self.select(path, gate=gate)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

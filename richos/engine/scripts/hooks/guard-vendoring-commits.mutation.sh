@@ -132,7 +132,7 @@ mutant field-count-unchecked "C1. " "$L" \
 mutant unknown-origin-allowed "C2. " "$L" \
     '        if [ "$known" -ne 1 ]; then' \
     '        if false; then' \
-    "an entry whose origin nothing recognizes would be honored, and guard-dialect.sh would then ask that entry a question it cannot answer."
+    "an entry whose origin nothing recognizes would be honored, and dialect-guard.sh would then ask that entry a question it cannot answer."
 
 mutant no-governed-paths-ok "C3. " "$L" \
     '    if [ -z "${VM_REDISTRIBUTABLE_PATHS//[[:space:]]/}" ]; then' \
