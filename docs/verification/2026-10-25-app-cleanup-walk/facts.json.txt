@@ -1,0 +1,61 @@
+{
+  "built_from": "8cde5bd71c611e4d6a41e20e81d9009e71bff89e",
+  "garbage": {
+    "mark": "/Users/admin/testvm/walk-83322aca7700/garbage-walk/mark",
+    "app_started": 1792931344.0,
+    "app_pid": 1086,
+    "uid": "501",
+    "roots": [
+      "/Users/admin/testvm/walk-83322aca7700/home",
+      "/private/tmp",
+      "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn",
+      "/Users/admin/Library",
+      "/Users/Shared"
+    ],
+    "harness": [
+      "/Users/admin/testvm/walk-83322aca7700/garbage-walk",
+      "/Users/admin/testvm/walk-83322aca7700/home/Library/Keychains"
+    ]
+  },
+  "thread": "thr_70da0e5398cf4cc585c24c5acdf99002",
+  "thread_title": "Onboarding",
+  "live_recording": {
+    "path": "/Users/admin/testvm/walk-83322aca7700/home/Library/Application Support/com.richos.app/voice-scratch/utt-1086.wav",
+    "pid": 1086,
+    "bytes": 32044,
+    "settled_lines_before": 0
+  },
+  "sent_ms": [
+    1792931385718.105,
+    1792931389004.082
+  ],
+  "job_settled_s": 1792931884.8001962,
+  "job": {
+    "id": "8264170d-7033-4a57-9c65-445d4cad2a25",
+    "state": "settled",
+    "title": "Please add a file named notes.md whose whole content is the line \"Notes for the walk test.\" to the Acme repository and commit it, and land it",
+    "work_session": "a43e054f-3526-4f3e-937e-1b0e285d5e82"
+  },
+  "stu_session": "a43e054f-3526-4f3e-937e-1b0e285d5e82",
+  "logs": {
+    "restart": "/Users/admin/testvm/walk-83322aca7700/relaunch-1792931908390274000.log",
+    "restart-after-kill": "/Users/admin/testvm/walk-83322aca7700/relaunch-1792932074445093000.log"
+  },
+  "killed_pid": 17872,
+  "abandoned_recording": "/Users/admin/testvm/walk-83322aca7700/home/Library/Application Support/com.richos.app/voice-scratch/utt-17872.wav",
+  "planted": {
+    "split_standing": "/Users/admin/testvm/walk-83322aca7700/home/Library/Application Support/com.richos.app/engine-profiles/1a016d66-bdfd-46d9-8267-7119d6340f20-standing",
+    "split_base_removed": "/Users/admin/testvm/walk-83322aca7700/home/Library/Application Support/com.richos.app/engine-profiles/1a016d66-bdfd-46d9-8267-7119d6340f20",
+    "standing_owner_record": {
+      "pid": 17872,
+      "procStart": "Sun Oct 25 12:38:28 2026"
+    },
+    "undeletable_base": "/Users/admin/testvm/walk-83322aca7700/home/Library/Application Support/com.richos.app/engine-profiles/3b718f82-49b4-4b90-91a8-a845c3779a87",
+    "undeletable_standing": "/Users/admin/testvm/walk-83322aca7700/home/Library/Application Support/com.richos.app/engine-profiles/3b718f82-49b4-4b90-91a8-a845c3779a87-standing",
+    "locked": "/Users/admin/testvm/walk-83322aca7700/home/Library/Application Support/com.richos.app/engine-profiles/3b718f82-49b4-4b90-91a8-a845c3779a87/agents/locked",
+    "owner_record": {
+      "pid": 17872,
+      "procStart": "Sun Oct 25 12:38:28 2026"
+    }
+  }
+}
