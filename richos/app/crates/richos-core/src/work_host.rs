@@ -1172,6 +1172,19 @@ impl WorkHost {
         assignment::open(&self.state).map_err(|e| e.to_string())
     }
 
+    /// At the end of a turn of Stu's, a message's or an automatic one: when nothing is open his
+    /// jobs have settled, and what the app left behind goes now (§54 addendum 2), on its own
+    /// thread, so the next input never waits for it. True when nothing is open.
+    fn sweep_if_settled(&self) -> bool {
+        if !self.open_assignments().is_ok_and(|open| open.is_empty()) {
+            return false;
+        }
+        if let Some(cleanup) = self.cleanup.lock().unwrap().clone() {
+            cleanup(crate::app_cleanup::Moment::Settled);
+        }
+        true
+    }
+
     pub fn peer_work_pending(&self) -> bool {
         let backends: Vec<_> = self.backends.lock().unwrap().values().cloned().collect();
         backends.into_iter().any(|backend| {
@@ -1294,6 +1307,10 @@ impl WorkHost {
                                 eprintln!("[richos] the team could not be reloaded after an automatic turn: {error}");
                             }
                         }
+                        drop(lease);
+                        // A job's last steps run as automatic turns (a teammate's hand-back), so
+                        // its end is where his jobs settle too (the 2026-10-25 garbage walk).
+                        self.sweep_if_settled();
                     }
                     let mut inner = backend.inner.lock().unwrap();
                     inner.processing = false;
@@ -1354,12 +1371,7 @@ impl WorkHost {
                 drop(backend.wake.wait(inner).unwrap());
             } else {
                 drop(inner);
-                if self.open_assignments().is_ok_and(|open| open.is_empty()) {
-                    // His jobs have settled: what the app left behind goes now (§54 addendum 2),
-                    // on its own thread, so the next input never waits for it.
-                    if let Some(cleanup) = self.cleanup.lock().unwrap().clone() {
-                        cleanup(crate::app_cleanup::Moment::Settled);
-                    }
+                if self.sweep_if_settled() {
                     self.notifier.nothing_left_to_do();
                 }
             }
@@ -2540,6 +2552,24 @@ mod tests {
     /// ended, and nothing reloaded the team or told him; only an unrelated stall reminder moved
     /// the job on). No input of ours and no reminder here: the turn's end alone does it, on the
     /// same session, and an automatic turn that changes nothing adds nothing.
+    /// **His jobs settle in automatic turns too, and the app's sweep runs there** (CEO §54
+    /// addendum 2; the 2026-10-25 garbage walk, walk-d04d9bdd7d53: the job settled, its one
+    /// assignment record said `settled`, and the app logged no "cleanup at settled" at all). A
+    /// job's last steps run as automatic turns (a teammate's hand-back, a task notification), and
+    /// only a turn the app sent him reached the settled check.
+    #[test]
+    fn an_automatic_turn_that_leaves_nothing_open_runs_the_settled_sweep() {
+        let m=stu_on_account_one();
+        settled(&m);
+        let moments=Arc::new(Mutex::new(Vec::new()));
+        let seen=moments.clone();
+        m.host.set_cleanup(Arc::new(move |moment| seen.lock().unwrap().push(moment)));
+        automatic_turn(&m);
+        until("the sweep at the end of an automatic turn with nothing open",
+              ||moments.lock().unwrap().contains(&crate::app_cleanup::Moment::Settled));
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
+    }
+
     #[test]
     fn a_teammate_saved_in_an_automatic_turn_is_reloaded_when_it_ends_and_stu_carries_on() {
         let m=stu_on_account_one_with_team(Some("stock"));
