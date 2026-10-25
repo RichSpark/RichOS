@@ -26,6 +26,10 @@
 #      (GAVE UP in the job's log, the give-up file), the run is not touched,
 #      the old plist stays, and the disk watchdog's cleanup_health reports it
 #   H  ...and the next install that succeeds clears it from the health check
+#   K  the health check: a missing give-up file is nothing, an unreadable one
+#      is reported as unknown
+#   D  the health check: a pending change whose waiter has ended (crashed or
+#      killed before it could give up), or whose pid is now another process
 #   S  an unchanged job that is running is left alone, exit 0
 #   L  CONTROL: a job that is not loaded is bootstrapped
 set -uo pipefail
@@ -259,6 +263,35 @@ for job in scratch-reaper disk-watchdog; do
         ok "H  $job: the next successful install clears the give-up from the health check"
     else bad "H  $job: rc=$RC, health: $HEALTH $OUT"; fi
 done
+
+# K and D — the health check's own reads of the two pending-change files, once
+# (the label makes no difference to them).
+label=com.richos.scratch-reaper
+reset
+gu="$STATE/launchd-pending-$label.gave-up"; pf="$STATE/launchd-pending-$label.pid"
+
+# K — a missing give-up file is nothing to report; one that cannot be read is.
+H0="$(health)"
+: >"$gu"; chmod 000 "$gu"
+H1="$(health)"
+chmod 600 "$gu"; rm -f "$gu"
+if grep -q '^HEALTH-CHECK-RAN$' <<<"$H0" && ! grep -q "^$label: " <<<"$H0" \
+    && grep -q "^$label: a give-up record exists but cannot be read" <<<"$H1"; then
+    ok "K  a missing give-up file reports nothing; an unreadable one reports unknown"
+else bad "K  missing: $H0 | unreadable: $H1"; fi
+
+# D — a pending change whose waiter has ended, or whose pid is now another
+# process (this test's own shell), is reported; neither ever reached give_up().
+true & dead=$!; wait "$dead"
+echo "$dead" >"$pf"
+H2="$(health)"
+echo "$$" >"$pf"
+H3="$(health)"
+rm -f "$pf"
+if grep -q "^$label: a changed job is still pending, but its waiter (pid $dead) has ended" <<<"$H2" \
+    && grep -q "^$label: a changed job is still pending, but its waiter's pid $$ is now another process" <<<"$H3"; then
+    ok "D  a pending change whose waiter ended, or whose pid was reused, is reported"
+else bad "D  ended: $H2 | reused: $H3"; fi
 
 printf '\n  %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
