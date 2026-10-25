@@ -375,6 +375,17 @@ class SettingsButtonToggles(unittest.TestCase):
         self.assertFalse(walk.panel_shown(None))
         self.assertTrue(walk.panel_shown(self.PANEL))
 
+    def test_the_heading_merged_with_the_other_column_headings_is_the_open_panel(self):
+        # Nightly 75's rerun (2026-10-25, update-before.txt): Settings plainly open, its node
+        # 1070x764, and OCR read the three column headings as one line, so a heading that had to
+        # stand alone on its line called the open panel shut.
+        merged = ('+ New chat or company #N\n'
+                  'HOW IT LOOKS WORKING WITH RICH YOUR COMPANY AND TEAM\n'
+                  'Corrections ; , ——\n'
+                  'Theme *@e Your instructions 5 Company { First Run Workshc - |\n')
+        self.assertTrue(walk.settings_open(merged))
+        self.assertFalse(walk.settings_open('how it looks to me, working with Rich'))
+
 
 class UpdateVerdict(unittest.TestCase):
     FAILED = 'RichOS could not prepare this update.'

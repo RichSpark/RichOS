@@ -210,8 +210,14 @@ def update_row(text):
 def settings_open(text):
     """Whether a frame's OCR TEXT shows the Settings panel (its first column's heading). Any case:
     the heading is 14px caps drawn by CSS, and OCR read it as "HOW IT Looks" on nightly 75's walk
-    (2026-10-25) with the panel plainly open, so a case-sensitive match called an open panel shut."""
-    return bool(re.search(r'^\s*HOW IT LOOKS\s*$', text or '', re.M | re.I))
+    (2026-10-25) with the panel plainly open, so a case-sensitive match called an open panel shut.
+    The heading stands alone on its line, or starts the line with the next column's heading after
+    it (ui/settings-button.js `addColumn`): the rerun of that walk read all three as one line,
+    "HOW IT LOOKS WORKING WITH RICH YOUR COMPANY AND TEAM". A chat line that merely says "how it
+    looks" never counts, because closing Settings is judged by the frame alone once its node is
+    gone."""
+    return bool(re.search(r'^\s*HOW IT LOOKS(?:\s+(?:WORKING WITH RICH|YOUR COMPANY AND TEAM)\b.*)?\s*$',
+                          text or '', re.M | re.I))
 
 
 # The open panel measured 1070x764 in the guest (nightly 75, 2026-10-25). After six presses in a
