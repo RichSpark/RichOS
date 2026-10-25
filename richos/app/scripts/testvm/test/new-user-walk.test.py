@@ -247,10 +247,11 @@ class AccountsVerdict(unittest.TestCase):
 
     def test_settings_is_read_after_activating_the_owned_app(self):
         events = []
-        stub = types.SimpleNamespace(vm='guest', frame=lambda _: events.append('frame') or 'closed')
+        stub = types.SimpleNamespace(vm='guest', frame=lambda _: events.append('frame') or 'closed',
+                                     by_id=lambda _: events.append('read') or None)
         with mock.patch.object(walk, 'guest', side_effect=lambda *args: events.append('activate')):
             walk.NewUserWalk.settings(stub, False, 'closed')
-        self.assertEqual(events, ['activate', 'frame'])
+        self.assertEqual(events, ['activate', 'read', 'frame'])
 
     def test_his_card_fails(self):
         self.assertIn('account state unknown', walk.accounts_verdict(
@@ -310,6 +311,69 @@ class ReadsTheScreenAsAPersonDoes(unittest.TestCase):
     def test_whether_settings_is_open_is_read_off_the_frame(self):
         self.assertTrue(walk.settings_open(self.FRAME))
         self.assertFalse(walk.settings_open('RV Park / Onboarding\nTalk to Rich...\nhow it looks to me'))
+
+
+class SettingsButtonToggles(unittest.TestCase):
+    """Nightly 75's new-user walk (2026-10-25), "Settings did not open" on `accounts` and `update`.
+    The probe walk of that bundle showed each press of #set-btn toggling the panel (in the
+    accessibility tree at 1070x764 after one press, gone after the next) and the frame of the open
+    panel reading its heading as "HOW IT Looks". The walk pressed again on that reading and closed
+    the panel it had opened. This app stands in for the guest: the button toggles, and the open
+    panel's frame reads as nightly 75's did."""
+    PANEL = {'role': 'AXGroup', 'title': 'Settings', 'x': 455, 'y': 159, 'w': 1070, 'h': 764}
+    OPEN = 'Settings\n\nHOW IT Looks\n\nTheme\n\nText size\n'  # accounts-settings-p0-8s.txt
+    SHUT = 'First Run Workshop / Onboarding\nTalk to Rich...\n'
+
+    def app(self, panel=None):
+        state = {'open': False, 'presses': 0}
+
+        def ax(mode, *args, **kwargs):
+            self.assertEqual((mode,) + args, ('click', '--id', 'set-btn', '--first'))
+            state['presses'] += 1
+            state['open'] = not state['open']
+            return []
+
+        stub = types.SimpleNamespace(
+            vm='guest', ax=ax,
+            by_id=lambda name: (panel or self.PANEL) if name == 'set-menu' and state['open'] else None,
+            frame=lambda _: self.OPEN if state['open'] else self.SHUT)
+        return stub, state
+
+    def walked(self, stub, want):
+        import itertools
+        with mock.patch.object(walk, 'guest', return_value=''), mock.patch.object(walk.time, 'sleep'), \
+             mock.patch.object(walk.time, 'monotonic', side_effect=itertools.count(0, 1)):
+            return walk.NewUserWalk.settings(stub, want, 'frame')
+
+    def test_one_press_opens_it_and_a_misread_heading_never_presses_again(self):
+        stub, state = self.app()
+        self.assertEqual(self.walked(stub, True), self.OPEN)
+        self.assertEqual(state, {'open': True, 'presses': 1})
+
+    def test_one_press_closes_it(self):
+        stub, state = self.app()
+        state['open'] = True
+        self.assertEqual(self.walked(stub, False), self.SHUT)
+        self.assertEqual(state, {'open': False, 'presses': 1})
+
+    def test_a_panel_already_in_the_state_asked_for_is_not_pressed(self):
+        stub, state = self.app()
+        self.walked(stub, False)
+        state['open'] = True
+        self.walked(stub, True)
+        self.assertEqual(state['presses'], 0)
+
+    def test_a_panel_too_small_to_read_is_not_open_and_is_never_pressed_twice(self):
+        stub, state = self.app(panel=dict(self.PANEL, x=1485, y=111, w=40, h=10))
+        with self.assertRaisesRegex(walk.StepFailed, r"did not open within 10 s of one press.*'w': 40"):
+            self.walked(stub, True)
+        self.assertEqual(state['presses'], 1)
+
+    def test_the_heading_is_read_in_any_case(self):
+        self.assertTrue(walk.settings_open(self.OPEN))
+        self.assertFalse(walk.settings_open(self.SHUT))
+        self.assertFalse(walk.panel_shown(None))
+        self.assertTrue(walk.panel_shown(self.PANEL))
 
 
 class UpdateVerdict(unittest.TestCase):
