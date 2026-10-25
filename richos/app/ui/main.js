@@ -7459,10 +7459,12 @@ el("first-run-start").addEventListener("click", startFirstRunInterview);
 /// **"HAVE RICH ASK ME"** on the user's instructions sheet (round 36 screen 1): it goes to the
 /// Onboarding conversation (the company on screen's, else the first there is, else the
 /// conversation on screen) and asks Rich, as a pressed button the way Start the questions does.
+/// The company on screen is `companyOnScreen()`'s: a company's heading or New chat shows that
+/// company while `activeContext` still holds the conversation he came from.
 /// What he then asks is in his instruction files (the interview skill and `rich.md`), never here.
 const HAVE_RICH_ASK_MESSAGE = "Ask me how I want you to work and write my answers down as my instructions.";
 window.RichHaveRichAsk = async function (label) {
-  const onScreen = activeContext && activeContext.entity_id;
+  const onScreen = companyOnScreen();
   const named = allRows().filter((t) => t.title === "Onboarding" && t.entity_id);
   const row = named.find((t) => t.entity_id === onScreen) || named[0] || null;
   if (row) await openThread(row.id);

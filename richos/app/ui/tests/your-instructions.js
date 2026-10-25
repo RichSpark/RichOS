@@ -372,6 +372,31 @@ async function main() {
     return "sent: " + sent[0].text;
   });
 
+  // Review rv-20261025T015241Z-b4dae6d4-fbf3#1: a company's heading (or New chat in it) shows that
+  // company while the conversation he came from keeps its scope underneath, so the button reads
+  // the company on screen, never the conversation behind it.
+  await run.check("Have Rich ask me goes to the Onboarding of the company on screen, not the conversation he came from", async () => {
+    const page = await openApp(browser, { preset: { yourInstructions: "", onboardingConversation: true, secondOnboarding: "lumen" } });
+    const pressFrom = async (where) => {
+      await openThread(page, "partner");
+      if (where) {
+        await page.click(where);
+        await page.waitForFunction(() => document.getElementById("entity-view-name").textContent === "Northwind Traders");
+      }
+      await page.evaluate(() => { window.__asked.length = 0; });
+      await openSheet(page);
+      await page.click("#yi-ask-rich");
+      await page.waitForFunction(() => window.__asked.some((a) => a.cmd === "send_message"));
+      const sent = await page.evaluate(() => window.__asked.filter((a) => a.cmd === "send_message").map((a) => a.args));
+      assertEqual(sent.length, 1, "one message to Rich");
+      return sent[0].threadId ?? sent[0].thread_id;
+    };
+    assertEqual(await pressFrom("#nav-label-northwind"), "onboarding", "from Northwind's heading, after a Lumen conversation");
+    assertEqual(await pressFrom(null), "onboarding-lumen", "from the Lumen conversation itself");
+    assertEqual(page.__errors, [], "the page reported errors");
+    await page.context().close();
+  });
+
   await run.check("Rich's card: Your instructions · Saved, his rules, and See your instructions lights them in the sheet", async () => {
     const page = await openApp(browser, { preset: { instructionsCard: "round-36" } });
     await openThread(page, "onboarding");

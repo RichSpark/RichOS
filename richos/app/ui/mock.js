@@ -896,7 +896,9 @@
   // `{ yourInstructions: "" }` is a new user with an empty file. `{ instructionsCard: "round-36" }`
   // adds the round's Onboarding conversation, where Rich asked how the user wants him to work and
   // saved four rules (`mcp__richos_onboarding__save_your_instructions`), with its card;
-  // `{ onboardingConversation: true }` adds that conversation empty, where "Have Rich ask me" goes.
+  // `{ onboardingConversation: true }` adds that conversation empty, where "Have Rich ask me" goes;
+  // `{ secondOnboarding: "lumen" }` adds another company's empty Onboarding conversation beside it,
+  // `onboarding-lumen`, so a check can tell which company's the button went to.
   const ROUND_36_RULES = [
     "- Ask me before spending more than $500 on anything.",
     "- Never email a customer without showing me the draft first.",
@@ -929,6 +931,12 @@
     threads.push({ id: "onboarding", title: "Onboarding", entity_id: "northwind", created_at: now() - 1000 * 60 * 60, message_count: 0,
       last_activity: now() - 1000 * 60 * 60, last_turn_state: null, has_pending_turn: false });
     messagesByThread.onboarding = [];
+  }
+  if (typeof preset.secondOnboarding === "string") {
+    const id = "onboarding-" + preset.secondOnboarding;
+    threads.push({ id, title: "Onboarding", entity_id: preset.secondOnboarding, created_at: now() - 1000 * 60 * 90, message_count: 0,
+      last_activity: now() - 1000 * 60 * 90, last_turn_state: null, has_pending_turn: false });
+    messagesByThread[id] = [];
   }
   if (preset.instructionsCard === "round-36") {
     const at = now() - 1000 * 60 * 4;
