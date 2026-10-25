@@ -214,6 +214,42 @@ fn run_delivery(delivery: &mut Delivery, on_item: &mut dyn FnMut(&mut Delivery, 
     response.wait(&mut |item| on_item(delivery, item))
 }
 
+/// **One conversation's inputs reach its provider in the order they were accepted.**
+///
+/// The desktop calls [`drive_shared_turns`] from every entrance at once (the typed send, the
+/// voice callback, the phone drain, the question host, front-desk priming), so two drivers can
+/// each take one of a conversation's inputs off the queue. Taking it is ordered by the spine's
+/// lock; writing it to the provider happens later, outside that lock. A place is handed out with
+/// each input as it is taken, and the write waits for the places before it in the same
+/// conversation. Other conversations keep their own order and never wait for this one.
+#[derive(Default)]
+struct SubmissionOrder {
+    /// (places handed out, places whose input has been written)
+    places: std::sync::Mutex<(u64, u64)>,
+    next: std::sync::Condvar,
+}
+struct SubmissionPlace {
+    order: std::sync::Arc<SubmissionOrder>,
+    number: u64,
+}
+struct SubmissionTurn(std::sync::Arc<SubmissionOrder>);
+impl SubmissionPlace {
+    fn wait_for_its_turn(self) -> SubmissionTurn {
+        let mut places = self.order.places.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        while places.1 != self.number {
+            places = self.order.next.wait(places).unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        drop(places);
+        SubmissionTurn(self.order)
+    }
+}
+impl Drop for SubmissionTurn {
+    fn drop(&mut self) {
+        self.0.places.lock().unwrap_or_else(std::sync::PoisonError::into_inner).1 += 1;
+        self.0.next.notify_all();
+    }
+}
+
 /// Submit every available input before waiting. Claude Code owns its scheduling.
 pub fn drive_shared_turns(spine: &std::sync::Mutex<Spine>) -> Result<(), SpineError> {
     let mut failure = None;
@@ -221,9 +257,11 @@ pub fn drive_shared_turns(spine: &std::sync::Mutex<Spine>) -> Result<(), SpineEr
         let ran = std::thread::scope(|workers| {
             let mut submitted = Vec::new();
             loop {
-                let Some(mut delivery) = spine.lock().unwrap().pending_delivery.pop_front() else { break };
+                let Some((mut delivery, place)) = spine.lock().unwrap().take_pending_delivery() else { break };
                 // Preserve stdin submission order. Each reply then waits independently.
+                let turn = place.wait_for_its_turn();
                 prepare_delivery_io(&mut &*spine, &mut delivery);
+                drop(turn);
                 let queued = enqueue_delivery(&mut delivery);
                 submitted.push(workers.spawn(move || {
                     let binding = delivery.binding.clone();
@@ -504,6 +542,8 @@ pub struct Spine {
     turn_in_progress: bool,
     detached_delivery: bool,
     pending_delivery: VecDeque<Delivery>,
+    /// Per conversation: the order its taken inputs are written in ([`SubmissionOrder`]).
+    submission_order: std::collections::HashMap<String, std::sync::Arc<SubmissionOrder>>,
     rotation_count: u64,
     last_rotation_reason: Option<String>,
     /// **The conversations whose turns have ENDED since the shell last asked** — one binding
@@ -706,6 +746,7 @@ impl Spine {
             turn_in_progress: false,
             detached_delivery: false,
             pending_delivery: VecDeque::new(),
+            submission_order: std::collections::HashMap::new(),
             rotation_count: 0,
             last_rotation_reason: None,
             control: TurnControl::detached().for_thread(""),
@@ -2137,6 +2178,19 @@ impl Spine {
 
     /// Shared desktop callers drive prepared visible replies after releasing their lock.
     pub fn detach_conversation_io(&mut self) {self.detached_delivery=true;}
+
+    /// The next queued input and its place in its conversation's write order, taken together
+    /// under the spine's lock so the places follow the queue ([`SubmissionOrder`]).
+    fn take_pending_delivery(&mut self) -> Option<(Delivery, SubmissionPlace)> {
+        let delivery = self.pending_delivery.pop_front()?;
+        let order = self.submission_order.entry(delivery.binding.thread_id().to_string()).or_default().clone();
+        let number = {
+            let mut places = order.places.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            places.0 += 1;
+            places.0 - 1
+        };
+        Some((delivery, SubmissionPlace { order, number }))
+    }
 
     fn prepare_delivery(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<Delivery,SpineError> {
         // The scope is re-verified at delivery, not merely at acceptance: a queued turn
