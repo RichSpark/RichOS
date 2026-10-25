@@ -481,6 +481,70 @@ fn an_overload_waits_out_his_schedule_on_the_same_session_and_a_success_resets_i
     let _ = std::fs::remove_file(&path);
 }
 
+/// **A conversation's inputs reach its provider in the order they were accepted, whichever
+/// driver takes them off the queue** (nightly 75, 2026-10-25: the provider received "Pressed
+/// follow-up" before "Spoken follow-up").
+///
+/// The desktop runs `drive_shared_turns` from every entrance at once: the typed send, the
+/// voice callback, the phone drain, the question host and front-desk priming
+/// (`src-tauri/src/main.rs`). Here driver A holds an overload retry in its wait, which is a
+/// point between taking an input off the queue and writing it to the provider, and driver B
+/// takes the follow-up he sent during that wait. RED before the fix: B wrote the follow-up
+/// first, so the provider saw his follow-up before the question it follows.
+#[test]
+fn a_follow_up_sent_during_a_retry_wait_reaches_the_provider_after_the_retry() {
+    use std::sync::mpsc;
+    struct HeldClock {
+        entered: Mutex<mpsc::Sender<()>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl RetryClock for HeldClock {
+        fn wait(&self, _wait: Duration, _stop_asked: &dyn Fn() -> bool) -> bool {
+            self.entered.lock().unwrap().send(()).unwrap();
+            // Hang guard only: the test releases the wait.
+            self.release.lock().unwrap().recv_timeout(Duration::from_secs(30)).expect("hang guard: wait never released");
+            true
+        }
+    }
+    let (path, ledger) = tmp_ledger("order-across-drivers");
+    let mut spine = support::spine(ledger);
+    let (entered_tx, entered) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    spine.set_retry_clock(Arc::new(HeldClock { entered: Mutex::new(entered_tx), release: Mutex::new(held) }));
+    let thread = spine.create_thread("General", &femcboost()).unwrap();
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    spine.attach_lease(Box::new(ScriptedCognition {
+        session_id: "sess-0".into(),
+        script: Arc::new(Mutex::new(VecDeque::from([true]))),
+        prompts: prompts.clone(),
+    }));
+    spine.detach_conversation_io();
+    spine.submit_prompt_to(&thread, "how is the release going?", Source::Text).unwrap();
+    let shared = Arc::new(Mutex::new(spine));
+    let a = { let shared = shared.clone(); std::thread::spawn(move || richos_core::spine::drive_shared_turns(&shared)) };
+    entered.recv_timeout(Duration::from_secs(30)).expect("hang guard: the overload never reached its retry wait");
+    shared.lock().unwrap().submit_prompt_to(&thread, "and the budget?", Source::Text).unwrap();
+    let (b_done, b_finished) = mpsc::channel();
+    let b = {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            let driven = richos_core::spine::drive_shared_turns(&shared);
+            b_done.send(()).expect("the test waits for this driver");
+            driven
+        })
+    };
+    // On the red, B writes and finishes within microseconds while A is held. With the fix B
+    // cannot write before A's retry at any timing, so this bound never decides the fix's verdict.
+    let b_ran_ahead = b_finished.recv_timeout(Duration::from_secs(1)).is_ok(); // load-bound: a slow host can only hide the pre-fix red, never fail the fix
+    release.send(()).unwrap();
+    a.join().unwrap().unwrap();
+    b.join().unwrap().unwrap();
+    let sent: Vec<String> = prompts.lock().unwrap().iter().map(|(_, text)| text.clone()).collect();
+    assert_eq!(sent, ["how is the release going?", "how is the release going?", "and the budget?"],
+        "the retried question must reach the provider before the follow-up accepted after it (driver B finished while A was held: {b_ran_ahead})");
+    std::fs::remove_file(&path).unwrap();
+}
+
 /// The way out of the wait: his Stop during it ends it at once, and his turn is not sent again.
 #[test]
 fn his_stop_during_the_wait_ends_it_and_nothing_is_sent_again() {
