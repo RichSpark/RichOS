@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""screen-wait-walk.py — CEO §56 on the real app, fake Claude, in one guest run.
+"""screen-wait-walk.py — CEO §56 on the real app, with the guest's own Claude, in one guest run.
 
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the
 clone (CEO §54):
@@ -8,33 +8,35 @@ clone (CEO §54):
       screen-wait-walk.py --out DIR --expect-sha SHA
 
 THE QUESTION. His ruling §56: the app waits for the Mac's screen to unlock "for automatic use when
-Rich needs it", and nothing asks him to unlock. The front desk (fake-claude-fill-first.pl) writes
-one job down marked needs_screen (its `register` and `needs-screen` files) and, once the GUEST's
-screen is locked, hands it to Stu (`delegate`, released by `delegate-go`).
+Rich needs it", and nothing asks him to unlock. A job that needs the screen is asked for; the
+GUEST's screen is locked straight after Send, while Rich is still writing it down and handing it
+to Stu; the job must wait, say so, and go to Stu by itself at the unlock.
+
+Real Rich, not a fake: fake-claude-fill-first.pl no longer matches the app's front desk (it takes
+the desk for a back end because both carry richos_work now, and its register call is refused), so
+this walk uses the guest's own signed-in claude, as command-walk.py does. Whether Rich marks the
+job needs_screen is his judgment; the walk says so plainly when he does not.
 
 THE STEPS, in the guest, never on the host's screen (CEO §65: only the guest's screen is locked
 and unlocked, by Control-Command-Q and its own password typed into its own lock screen):
-  setup       the fake claude and the status read pushed, the app relaunched on the fake
   identity    the running app says it was built from --expect-sha (adopt-walk.py)
   first-run   the first-run sheets declined and a company added (adopt-walk.py)
-  ask         the job typed and sent; the front desk writes it down marked needs_screen
-  lock        the guest's screen locked, then the handoff released: the work host meets it locked
-  locked      Rich's own status read (the app's --status-mcp server, run in the guest) reads the
-              screen as locked and lists the job under waiting_for_the_screen with the plain line;
-              the record says waiting-for-screen with no notice; the window shows "waiting for the
-              screen"; no back-end turn ran, and none runs while the lock is held 20 s more
-  unlock      the guest's screen unlocked; the status read says unlocked, and Stu's back end gets
-              the job by itself (calls.log "work-turn answered ... Handoff:"), exactly once
-  after       the record no longer says it is waiting
-Evidence in --out: report.json, look-locked.json, look-unlocked.json, records-*.txt, calls.log,
-window-locked.json, 1-locked.png (the guest's lock screen), 2-unlocked.png. Exit 0 only when every
-step passes.
+  ask         the job typed and sent, and the guest's screen locked at once; Rich writes it down
+              marked needs_screen and hands it to Stu
+  locked      the record says waiting-for-screen with the one plain line and no notice; the status
+              read (the app's own --status-mcp server, scoped to this conversation) lists it under
+              waiting_for_the_screen; Stu's inbox cursor shows the handoff NOT given to him; still
+              so 20 s later
+  unlock      the guest's screen unlocked; Stu's inbox cursor shows the handoff given to a session
+              by itself, and the record no longer says it is waiting
+Evidence in --out: report.json, facts.json, look-*.json, records-*.txt, delivery-*.json,
+window-*.json, 1-locked.png (the guest's lock screen), 2-unlocked.png. Exit 0 only when every step
+passes.
 """
 import argparse
 import importlib.util
 import json
 from pathlib import Path
-import re
 import shlex
 import subprocess
 import sys
@@ -43,30 +45,63 @@ import time
 sys.dont_write_bytecode = True  # the modules loaded below would otherwise leave __pycache__ in the checkout
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from relaunch import guest, relaunch  # noqa: E402
+from relaunch import guest  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('adopt_walk', HERE / 'adopt-walk.py')
 adopt = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(adopt)
 StepFailed = adopt.StepFailed
 
-G = '/Users/admin/fill-first'  # the fake's folder in the guest (fake-claude-fill-first.pl)
-JOB = 'Take a screenshot of the Northwind dashboard.'
+JOB = ('Walk the RichOS app on this Mac\'s screen for me: open its Settings, take a screenshot of '
+       'each pane and put them in a folder called Settings walk on my Desktop.')
 LINE = 'The screen is locked, so this is waiting for it to unlock. It will carry on by itself.'
-STEPS = ['setup', 'identity', 'first-run', 'ask', 'lock', 'locked', 'unlock', 'after']
-# Rich's status read: the status server the front desk was given, asked the one question he asks.
-LOOK = '''import json, subprocess
-server = json.load(open("%s/status-server.json"))
+STEPS = ['identity', 'first-run', 'ask', 'locked', 'unlock']
+
+# The status read Rich makes: the app's own --status-mcp server on a scope for this conversation,
+# started in the guest's GUI session when it can be (launchctl asuser), where the window server
+# answers the screen reading; the session it ran in is part of the answer.
+LOOK = r'''import json, os, subprocess, sys
+app, scope, state, entity, thread = sys.argv[1:6]
+json.dump({"version": 1, "state_root": state, "entity_id": entity, "thread_id": thread}, open(scope, "w"))
 frames = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
            "capabilities": {}, "clientInfo": {"name": "screen-wait-walk", "version": "1"}}},
           {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "background_work", "arguments": {}}}]
-out = subprocess.run([server["command"], *server.get("args", [])], capture_output=True, text=True, timeout=60,
-                     input="".join(json.dumps(f) + "\\n" for f in frames)).stdout
-for line in out.splitlines():
-    reply = json.loads(line)
-    if reply.get("id") == 2:
-        print(reply["result"]["content"][0]["text"])
-''' % G
+feed = "".join(json.dumps(f) + "\n" for f in frames)
+for session, argv in (("gui", ["sudo", "-n", "launchctl", "asuser", str(os.getuid()), app, "--status-mcp", scope]),
+                      ("ssh", [app, "--status-mcp", scope])):
+    out = subprocess.run(argv, input=feed, capture_output=True, text=True, timeout=60).stdout
+    for line in out.splitlines():
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            continue
+        if reply.get("id") == 2 and "result" in reply:
+            print(json.dumps({"session": session, "answer": json.loads(reply["result"]["content"][0]["text"])}))
+            sys.exit(0)
+sys.exit("the status server gave no answer in either session")
+'''
+
+# Was the job's handoff given to Stu? Read off Stu's own inbox and its cursor (session_tools.rs):
+# the handoff's input is `peer:<end offset of its line>`; it was given to him when the cursor holds
+# that input with a session, or has accepted it.
+DELIVERY = r'''import json, sys
+inbox, assignment = sys.argv[1:3]
+offset, end = None, 0
+for raw in open(inbox, "rb"):
+    end += len(raw)
+    row = json.loads(raw)
+    if row.get("handoff") and (row.get("work") or {}).get("assignment_id") == assignment:
+        offset = end
+try:
+    cursor = json.load(open(inbox[:-len(".jsonl")] + ".cursor"))
+except (OSError, ValueError):
+    cursor = {}
+active = (cursor.get("active") or {}).get("peer:%s" % offset) if offset else None
+given = bool(offset) and (bool(active and active.get("session_id")) or offset <= (cursor.get("through") or 0)
+                          or str(offset) in (cursor.get("accepted") or {}))
+print(json.dumps({"handoff_offset": offset, "given_to_stu": given, "cursor_entry": active,
+                  "cursor_through": cursor.get("through")}))
+'''
 
 
 class ScreenWalk(adopt.Walk):
@@ -77,16 +112,11 @@ class ScreenWalk(adopt.Walk):
             raise StepFailed(what)
         return what
 
-    def calls(self):
-        return guest(self.vm, 'cat %s/calls.log 2>/dev/null || true' % G)
-
-    def wait_calls(self, pattern, seconds):
-        end = time.monotonic() + seconds
-        while time.monotonic() < end:
-            if re.search(pattern, self.calls()):
-                return True
-            time.sleep(3)
-        return False
+    def push(self, name, text):
+        local = self.out / name
+        local.write_text(text)
+        adopt.command([HERE / 'guest.sh', self.vm, '--push', local, self.payload + '/' + name], 60)
+        return self.payload + '/' + name
 
     def records(self, name):
         # One record per line: the app writes each as one compact JSON value with no newline.
@@ -96,95 +126,81 @@ class ScreenWalk(adopt.Walk):
         return [json.loads(row) for row in text.splitlines() if row.startswith('{')]
 
     def job(self, name):
-        rows = [r for r in self.records(name) if r.get('title') == JOB.rstrip('.')]
-        return rows[0] if len(rows) == 1 else None
+        sent = self.facts.get('sent_at_ms', 0)
+        rows = [r for r in self.records(name) if r.get('registered_at_ms', 0) >= sent]
+        return max(rows, key=lambda r: r['registered_at_ms']) if rows else None
 
-    def look(self, name):
-        text = guest(self.vm, 'python3 %s/look.py' % G, 90)
+    def look(self, name, record):
+        text = guest(self.vm, shlex.join(['python3', self.look_py, self.payload + '/RichOS.app/Contents/MacOS/richos-tauri',
+                                          self.payload + '/walk-status-scope.json', self.data + '/engine-state',
+                                          record['entity_id'], record['thread_id']]), 90)
         (self.out / name).write_text(text + '\n')
         return json.loads(text)
+
+    def delivery(self, name, record):
+        inbox = '%s/engine-state/messages/%s/%s/stu.jsonl' % (self.data, record['entity_id'], record['thread_id'])
+        text = guest(self.vm, shlex.join(['python3', self.delivery_py, inbox, record['id']]), 60)
+        (self.out / name).write_text(text + '\n')
+        return json.loads(text)
+
+    def window(self, name):
+        found = subprocess.run([str(HERE / 'ax.sh'), self.vm, 'find', '--title', 'waiting for the screen', '--contains', '--json'],
+                               capture_output=True, text=True, timeout=60)
+        (self.out / name).write_text(found.stdout + found.stderr)
+        return found.stdout
 
     def keys(self, *lines):
         guest(self.vm, shlex.join(['osascript', *sum((['-e', line] for line in lines), [])]), 60)
 
+    def lock_guest(self):
+        self.keys('tell application "System Events" to keystroke "q" using {control down, command down}')
+
     # --- steps --------------------------------------------------------------------------------
-    def setup(self):
-        guest(self.vm, 'mkdir -p ' + G)
-        adopt.command([HERE / 'guest.sh', self.vm, '--push', HERE / 'fake-claude-fill-first.pl', G + '/claude'], 60)
-        look = self.out / 'look.py'
-        look.write_text(LOOK)
-        adopt.command([HERE / 'guest.sh', self.vm, '--push', look, G + '/look.py'], 60)
-        guest(self.vm, 'chmod 755 {g}/claude && printf \'{{"five":10,"weekly":20}}\' > {g}/usage-1.json && '
-                       'touch {g}/log-work-turns {g}/needs-screen {g}/delegate && printf "%s\\n" {job} > {g}/register'
-              .format(g=G, job=shlex.quote(JOB)))
-        launched = relaunch(self.vm, environment={'RICHOS_CLAUDE_BIN': G + '/claude'})
-        return {'relaunched': launched, 'home': self.enter_home()}
-
-    def enter_home(self, seconds=90):
-        """A relaunch opens on the home screen, whose live canvas outlasts accessibility reads: as
-        stu-reminder-walk.py does, it is recognized by OCR on a frame and Enter, its own key for
-        Talk to Rich, goes in."""
-        began = time.monotonic()
-        while time.monotonic() - began < seconds:
-            self.shot('home.png')
-            found = subprocess.run([str(HERE.parent / 'qa' / 'ocr-find.sh'), 'Talk to Rich', str(self.out / 'home.png'),
-                                    '--first', '--quiet'], capture_output=True, text=True, timeout=60)
-            if found.returncode not in (0, 1):
-                raise StepFailed('ocr-find could not read the frame: ' + found.stderr)
-            if found.returncode == 0:
-                adopt.command([HERE / 'ax.sh', self.vm, '--key', '36'])
-                time.sleep(3)
-                return {'home_on_screen_after_s': round(time.monotonic() - began, 1)}
-            time.sleep(2)
-        raise StepFailed('the home screen never came up after the relaunch')
-
     def ask(self):
+        self.look_py = self.push('look.py', LOOK)
+        self.delivery_py = self.push('delivery.py', DELIVERY)
+        self.facts['sent_at_ms'] = self.clock()
         self.type_into(JOB, '--role', 'AXTextArea', '--title', 'Message to Rich')
         self.press('Send')
-        registered = self.wait_calls(r'register ok', 120)
-        (self.out / 'calls-asked.log').write_text(self.calls() + '\n')
-        self.shot('asked.png')
-        self.check(registered, 'the front desk wrote the job down')
-        record = self.job('records-asked.txt')
-        self.check(bool(record and record.get('needs_screen') is True), 'the job is recorded with needs_screen true')
-        return {'state': record['state']}
-
-    def lock(self):
-        self.keys('tell application "System Events" to keystroke "q" using {control down, command down}')
-        time.sleep(5)
-        guest(self.vm, 'touch %s/delegate-go' % G)
-        self.check(self.wait_calls(r'delegate ok', 120), "Rich's handoff to Stu was saved")
-        end = time.monotonic() + 60
+        self.lock_guest()
+        self.facts['locked_at_ms'] = self.clock()
+        self.save()
+        end = time.monotonic() + 240
+        record = None
         while time.monotonic() < end:
-            record = self.job('records-locked.txt')
-            if record and record['state'] == 'waiting-for-screen':
+            record = self.job('records-asked.txt')
+            if record and record['state'] != 'registered':
                 break
-            time.sleep(2)
-        self.facts['locked_at'] = time.time()
-        return {'state': record and record['state']}
+            time.sleep(3)
+        self.facts['asked'] = {k: record.get(k) for k in ('id', 'kind', 'state', 'needs_screen', 'detail')} if record else None
+        self.save()
+        self.check(record is not None, 'Rich wrote the job down')
+        self.check(record['needs_screen'] is True, 'Rich marked the job needs_screen (his judgment, from the record tool)')
+        self.check(record['state'] == 'waiting-for-screen', 'the job went to waiting-for-screen on the locked screen')
+        return self.facts['asked']
 
     def locked(self):
-        look = self.look('look-locked.json')
         record = self.job('records-locked.txt')
-        window = subprocess.run([str(HERE / 'ax.sh'), self.vm, 'find', '--title', 'waiting for the screen', '--contains', '--json'],
-                                capture_output=True, text=True, timeout=60)
-        (self.out / 'window-locked.json').write_text(window.stdout + window.stderr)
+        look = self.look('look-locked.json', record)
+        given = self.delivery('delivery-locked.json', record)
+        window = self.window('window-locked.json')
         subprocess.run([str(HERE / 'shot.sh'), self.vm, str(self.out / '1-locked.png')], capture_output=True, timeout=90)
-        calls = self.calls()
-        (self.out / 'calls-locked.log').write_text(calls + '\n')
-        evidence = {'screen': look['screen'], 'waiting_for_the_screen': look['waiting_for_the_screen'],
-                    'record': {k: record.get(k) for k in ('state', 'detail', 'needs_screen', 'notices')} if record else None}
+        answer = look['answer']
+        evidence = {'status_read_session': look['session'], 'screen': answer['screen'],
+                    'waiting_for_the_screen': answer['waiting_for_the_screen'], 'delivery': given,
+                    'record': {k: record.get(k) for k in ('state', 'detail', 'notices')}}
         self.facts['locked'] = evidence
-        self.check(look['screen']['state'] == 'locked', "the app reads the guest's screen as locked")
-        self.check(bool(record) and record['state'] == 'waiting-for-screen', 'the record says waiting-for-screen')
-        self.check(record['detail'] == LINE, 'the record carries the one plain line')
+        self.save()
+        self.check(record['state'] == 'waiting-for-screen' and record['detail'] == LINE, 'the record carries the one plain line')
         self.check(record['notices'] == [], 'no notice was raised: nothing asks him to unlock')
-        rows = look['waiting_for_the_screen']
+        rows = answer['waiting_for_the_screen']
         self.check(len(rows) == 1 and rows[0]['detail'] == LINE, 'the status read lists the job waiting for the screen, with the line')
-        self.check('waiting for the screen' in window.stdout, 'the window shows the job waiting for the screen')
-        self.check('work-turn answered' not in calls, 'Stu got nothing while the screen was locked')
+        self.check(given['handoff_offset'] is not None and not given['given_to_stu'], 'Stu was not given the job while the screen was locked')
+        self.facts['window_shows_waiting'] = 'waiting for the screen' in window
         time.sleep(20)
-        self.check('work-turn answered' not in self.calls(), 'still waiting, and Stu still has nothing, 20 s later')
+        still = self.delivery('delivery-locked-20s.json', record)
+        self.check(not still['given_to_stu'] and self.job('records-locked-20s.txt')['state'] == 'waiting-for-screen',
+                   'still waiting, and Stu still has nothing, 20 s later')
         return evidence
 
     def unlock(self):
@@ -192,31 +208,27 @@ class ScreenWalk(adopt.Walk):
         time.sleep(2)
         self.keys('tell application "System Events" to keystroke "admin"', 'delay 0.5',
                   'tell application "System Events" to key code 36')
-        self.facts['unlocked_at'] = time.time()
-        end = time.monotonic() + 30
-        look = None
+        self.facts['unlocked_at_ms'] = self.clock()
+        record = self.job('records-unlocked.txt')
+        end = time.monotonic() + 120
+        given = None
         while time.monotonic() < end:
-            look = self.look('look-unlocked.json')
-            if look['screen']['state'] == 'unlocked':
+            given = self.delivery('delivery-unlocked.json', record)
+            if given['given_to_stu']:
                 break
             time.sleep(2)
-        self.check(bool(look) and look['screen']['state'] == 'unlocked', "the app reads the guest's screen as unlocked")
-        self.check(self.wait_calls(r'work-turn answered .*Handoff:', 120), 'Stu got the job by itself once the screen was back')
-        return {'screen': look['screen']}
-
-    def after(self):
-        time.sleep(5)
+        self.facts['given_after_unlock_s'] = round((self.clock() - self.facts['unlocked_at_ms']) / 1000, 1)
+        look = self.look('look-unlocked.json', record)
+        window = self.window('window-unlocked.json')
+        time.sleep(3)
         subprocess.run([str(HERE / 'shot.sh'), self.vm, str(self.out / '2-unlocked.png')], capture_output=True, timeout=90)
-        calls = self.calls()
-        (self.out / 'calls.log').write_text(calls + '\n')
-        record = self.job('records-after.txt')
-        turns = [line for line in calls.splitlines() if ' work-turn answered ' in line]
-        started = float(turns[0].split()[0]) if turns else None
-        evidence = {'record': {k: record.get(k) for k in ('state', 'detail')} if record else None, 'work_turns': len(turns),
-                    'stu_turn_after_unlock_s': round(started - self.facts['unlocked_at'], 1) if started else None}
-        self.facts['after'] = evidence
-        self.check(len(turns) == 1, 'the job went to Stu exactly once')
-        self.check(bool(record) and record['state'] != 'waiting-for-screen', 'the record no longer says it is waiting')
+        after = self.job('records-after.txt')
+        evidence = {'delivery': given, 'screen': look['answer']['screen'], 'status_read_session': look['session'],
+                    'record': {k: after.get(k) for k in ('state', 'detail')}, 'window_still_waiting': 'waiting for the screen' in window}
+        self.facts['unlocked'] = evidence
+        self.save()
+        self.check(bool(given and given['given_to_stu']), 'Stu was given the job by itself once the screen was back')
+        self.check(after['state'] != 'waiting-for-screen', 'the record no longer says it is waiting')
         return evidence
 
 

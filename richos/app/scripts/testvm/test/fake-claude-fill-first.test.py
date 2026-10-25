@@ -257,54 +257,5 @@ with tempfile.TemporaryDirectory() as root:
         run.stdin.close()
         run.wait()
 
-    # 8: CEO §56 (screen-wait-walk.sh). With needs-screen the job is recorded needs_screen true;
-    # with delegate the same turn hands it to Stu through the status server's `delegate`, only
-    # once delegate-go exists; the front desk writes down its status server's command line.
-    server = root / 'tool-server.py'
-    server.write_text(
-        'import json, sys\n'
-        'log = open(sys.argv[1], "a")\n'
-        'for line in sys.stdin:\n'
-        '    m = json.loads(line)\n'
-        '    if m.get("method") == "initialize":\n'
-        '        print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {}}), flush=True)\n'
-        '    elif m.get("method") == "tools/call":\n'
-        '        log.write(json.dumps(m["params"]) + "\\n"); log.flush()\n'
-        '        text = json.dumps({"recorded": True, "saved": True})\n'
-        '        print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {"content": [{"type": "text", "text": text}], "isError": False}}), flush=True)\n')
-    tool_calls = root / 'tool-calls.jsonl'
-    status_server = {'type': 'stdio', 'command': sys.executable, 'args': [str(server), str(tool_calls)]}
-    screen_config = json.dumps({'mcpServers': {'richos_assignments': status_server, 'richos_status': status_server}})
-    (walk / 'calls.log').unlink(missing_ok=True)
-    job = 'Take a screenshot of the dashboard.'
-    (walk / 'register').write_text(job + '\n')
-    (walk / 'needs-screen').touch()
-    (walk / 'delegate').touch()
-
-    def logged():
-        return (walk / 'calls.log').read_text() if (walk / 'calls.log').exists() else ''
-
-    def tools_called():
-        return [json.loads(line) for line in tool_calls.read_text().splitlines()] if tool_calls.exists() else []
-    desk, _ = lease('screen-desk', screen_config)
-    desk.stdin.write(user(job))
-    desk.stdin.flush()
-    while 'register ok' not in logged():  # waits for the fact; a hang is the runner's to catch
-        time.sleep(0.05)
-    time.sleep(1)
-    called = tools_called()
-    check([c['name'] for c in called] == ['record'] and called[0]['arguments'].get('needs_screen') is True,
-          'the job is recorded with needs_screen true, and not handed over before delegate-go', called)
-    (walk / 'delegate-go').touch()
-    answers(desk)
-    called = tools_called()
-    check([c['name'] for c in called] == ['record', 'delegate'] and called[1]['arguments'] == {'text': 'Handoff: ' + job},
-          'once delegate-go exists, the same turn hands the job to Stu through delegate', called)
-    check('delegate ok' in logged(), 'the handoff is a "delegate ok" line in calls.log', logged())
-    check(json.loads((walk / 'status-server.json').read_text()) == status_server,
-          'the front desk writes down its status server, as --mcp-config named it')
-    desk.stdin.close()
-    desk.wait()
-
 print('fake-claude-fill-first:', 'FAILED' if failed else 'all passed')
 sys.exit(1 if failed else 0)
