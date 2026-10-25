@@ -308,6 +308,136 @@ class ReadsTheScreenAsAPersonDoes(unittest.TestCase):
                          ('RichOS 1.2.2-nightly.20261023.71 is up to date.', 'Checked just now.'))
         self.assertIsNone(walk.update_verdict(*walk.update_row(frame), []))
 
+    # Nightly 75's rerun 4 of 2026-10-25, update-reason.txt verbatim. The frame shows the row
+    # whole, but OCR ordered the text across Settings' columns: "Updates" is line 44, lines 46-47
+    # are the first column's "Keep the stored output" / "O For two weeks", and the row itself is
+    # lines 73-76. The walk read the two lines after the heading and failed with "the update check
+    # never reached a verdict: Keep the stored output / O For two weeks".
+    COLUMNS = """@ = RichOs Edit View Window
+
+claude.ai Login Item Added
+
+*RichDoctor” will open automat
+you log in. You can manage this in
+Items & Extensions.
+
+Richos
+
+RichOS © First Run Workshop / Onboarding ws UUTpUt y
+Search BK Settings
++ New chat or company #N
+HOW IT LOOKS WORKING WITH RICH YOUR COMPANY AND TEAM
+Corrections ; , ——
+Theme *@e Your instructions 5 Company { First Run Workshc - |
+Feedback Not written yet —
+dieocioncnicesites a Text size - 100% + Home screen _{ Company buttons... |
+: Rich's model
+, Token spend $0.00 this month >
+© First Run Workshop 1 eee When he talks with you default Pr
+; ~— Claude accounts 5
+Onboarding 4 Oxford comma AKA serial comma is (opus) rasta Not signed in on this Mac
+
+Set your name
+
+9BOe®2#tO"a
+
+what some style guides place before
+"and" and "or". RichOS recommends to
+keep that nuisance off.
+
+When he directs your team default
+
+Connected folders (repositories) >
+
+Your name in Git
+
+Not set yet
+Technical view ) Opus is the default for both. Fable is Memory folder 5
+more capable than Opus and uses up
+3@T asks where to show it.
+your Claude limits faster.
+Updates
+
+Keep the stored output
+O For two weeks
+
+O For three months
+@ Forever
+
+Nothing is ever removed. Using 20 KB
+now.
+
+Your name
+
+Shown at the foot of the rail, with your
+initials.
+
+How much should Rich interrupt you?
+@ Quiet
+
+O Balanced
+
+O Only when it's urgent
+
+RichScribe
+Off
+
+Splash screen
+Show it when RichOS starts
+
+RichOS 1.2.3-nightly.20261025.75 is up to
+date.
+
+Checked just now.
+Check for updates
+
+See what's new 7
+
+2% Bust a bug!
+
+2 Request a feature
+
+Be0~« 78
+
+"""
+
+    def test_the_row_is_found_by_its_own_words_when_ocr_orders_the_columns_across(self):
+        self.assertEqual(walk.update_row(self.COLUMNS),
+                         ('RichOS 1.2.3-nightly.20261025.75 is up to date.', 'Checked just now.'))
+        self.assertIsNone(walk.update_verdict(*walk.update_row(self.COLUMNS), []))
+
+    def test_every_headline_the_row_can_show_is_its_headline(self):
+        # ui/updates.js `sentences` and the failure headlines of src-tauri/src/updates.rs, each with
+        # another column's line between the heading and the row.
+        for headline, sub in (
+                ('RichOS 1.2.3', 'Checking for updates…'),
+                ('RichOS 1.2.3', 'RichOS has not checked for updates yet.'),
+                ('RichOS 1.2.3 is up to date.', 'Checked just now.'),
+                ('RichOS 1.2.4 is available.', 'You are running 1.2.3.'),
+                ('Downloading RichOS 1.2.4…', '3 MB so far'),
+                ('Checking and preparing the update…', 'RichOS is confirming this update was signed by us.'),
+                ('Checking and preparing RichOS 1.2.2…', 'RichOS is confirming this earlier version was signed by us.'),
+                ('RichOS 1.2.4 is ready.', 'Nothing is running, so RichOS will restart into it in a moment.'),
+                ('RichOS 1.2.4 is ready for the next launch.', 'It will activate automatically next time RichOS opens.'),
+                ('RichOS will go back to 1.2.2 when you next open it.', 'It will go back automatically next time RichOS opens.'),
+                ('Restarting into RichOS 1.2.4…', 'Nothing is running, so RichOS is restarting to finish the update.'),
+                ('This download was not signed by RichOS, so it was not installed.', 'You are still running RichOS 1.2.3.'),
+                ('RichOS could not reach the update server. Check your internet connection.', 'You are still running RichOS 1.2.3.'),
+                ('The download did not finish. Nothing was installed.', 'You are still running RichOS 1.2.3.'),
+                ('The update server answered, but not with something RichOS understands.', 'You are still running RichOS 1.2.3.'),
+                ('The update downloaded and verified, but could not be put in place.', 'You are still running RichOS 1.2.3.'),
+                ('This build of RichOS has no usable update server configured.', 'You are still running RichOS 1.2.3.'),
+                ('The update did not complete.', 'You are still running RichOS 1.2.3.'),
+                ('RichOS is busy with another update task. Try again in a minute.', 'You are still running RichOS 1.2.3.'),
+                ('RichOS could not prepare this update.', 'You are still running RichOS 1.2.3.'),
+                ('There is no update to install.', 'You are still running RichOS 1.2.3.'),
+                ('RichOS has no earlier version on this Mac to go back to.', 'You are still running RichOS 1.2.3.'),
+                ('This build of RichOS cannot find where earlier versions are kept.', 'You are still running RichOS 1.2.3.'),
+                ('The update server does not have that earlier version.', 'You are still running RichOS 1.2.3.')):
+            frame = 'Updates\nKeep the stored output\nO For two weeks\n%s\n%s\nCheck for updates\n' % (headline, sub)
+            self.assertEqual(walk.update_row(frame), (headline, sub))
+        self.assertEqual(walk.update_row('Updates\nKeep the stored output\nO For two weeks\n'), (None, None))
+
     def test_whether_settings_is_open_is_read_off_the_frame(self):
         self.assertTrue(walk.settings_open(self.FRAME))
         self.assertFalse(walk.settings_open('RV Park / Onboarding\nTalk to Rich...\nhow it looks to me'))
