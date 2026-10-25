@@ -4,10 +4,13 @@
 (1) A listing groups what is left by place, with sizes, and leaves out the control and the walk's
 own files. (2) A listing whose control the search did not find fails: its silence proves nothing.
 (3) The last listing fails naming every leftover a --gone pattern matches, and passes without one.
-(4) `reported`: a failed start sweep must be said as FAILED, with every leftover in the deletion log."""
+(4) `reported`: a failed start sweep must be said as FAILED, with every leftover in the deletion log.
+(5) The watcher kills on a running decoder only. (6) Only a finished sweep proves a live file was kept."""
 import importlib.util
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -133,6 +136,88 @@ class Reported(unittest.TestCase):
             with self.assertRaises(gw.StepFailed) as failed:
                 self.walk(out).reported()
         self.assertIn('utt-1103.wav', str(failed.exception))
+
+
+class Watcher(unittest.TestCase):
+    """(5) The force-quit watcher kills on a running decoder only, never on its own command line,
+    which carries both "whisper-cli" and the recording (review rv-20261025T113728Z-dc044d1c-e6d4 #1)."""
+    def setUp(self):
+        # The recording is named "60", relative to the folder the watcher runs in: the decoder's
+        # stand-in is /bin/sleep under the name whisper-cli, and its one argument must be both the
+        # recording's path and a number sleep accepts.
+        self.dir = Path(tempfile.mkdtemp())
+        self.wav = self.dir / '60'
+        self.wav.write_bytes(b'RIFF')
+        self.seen = self.dir / 'seen.json'
+        self.app = subprocess.Popen(['/bin/sleep', '60'])
+        self.others = []
+
+    def tearDown(self):
+        for p in [self.app] + self.others:
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def watch(self, seconds):
+        # load-bound: a short deadline only ends the watcher; its verdict is what it wrote.
+        subprocess.run([sys.executable, '-c', gw.WATCH, str(self.app.pid), self.wav.name, str(self.seen),
+                        str(seconds)], check=True, timeout=60, cwd=self.dir)
+        return json.loads(self.seen.read_text())
+
+    def test_its_own_command_line_is_not_a_decoder(self):
+        self.assertEqual(self.watch(1), {'timeout': True})
+        self.assertIsNone(self.app.poll(), 'the watcher killed the app on its own command line')
+
+    def test_a_decoder_on_the_recording_gets_the_app_killed(self):
+        (self.dir / 'bin').mkdir()
+        (self.dir / 'bin/whisper-cli').symlink_to('/bin/sleep')
+        decoder = subprocess.Popen([str(self.dir / 'bin/whisper-cli'), self.wav.name])
+        self.others.append(decoder)
+        seen = self.watch(30)
+        self.assertIn('/bin/whisper-cli', seen.get('decoder', ''), seen)
+        self.assertEqual(self.app.wait(timeout=30), -9)
+
+
+class KeptWhileRunning(unittest.TestCase):
+    """(6) Only a sweep that ran to its end counts as having kept the live recording (review
+    rv-20261025T113728Z-dc044d1c-e6d4 #2)."""
+    LIVE = HOME + '/Library/Application Support/com.richos.app/voice-scratch/utt-1103.wav'
+
+    def walk(self, out):
+        w = gw.GarbageWalk.__new__(gw.GarbageWalk)
+        w.vm, w.out, w.home, w.payload = 'walk-x', Path(out), HOME, '/Users/admin/testvm/walk-x'
+        w.data = HOME + '/Library/Application Support/com.richos.app'
+        w.facts = {'live_recording': {'path': self.LIVE, 'pid': 1103, 'bytes': 32044, 'settled_lines_before': 0}}
+        w.recorded_pid = lambda: 1103
+        return w
+
+    def answer(self, settled):
+        def guest(vm, command, timeout=30):
+            if 'app.log' in command:
+                return settled + '\n'
+            if command.startswith('test -f'):
+                return '32044'
+            if 'richos-owner' in command:
+                return json.dumps({'a': {'pid': 1103, 'procStart': 'x'}, 'a-standing': {'pid': 1103, 'procStart': 'x'}})
+            return ''
+        return mock.patch.object(gw, 'guest', guest)
+
+    def test_a_failed_sweep_is_not_proof_the_recording_was_kept(self):
+        for line in ['[richos] cleanup at settled: FAILED, not done (the engine\'s reaper failed (exit 1): x); '
+                     'the next sweep tries again',
+                     '[richos] cleanup at settled: deleted 0, undecidable 0, failures 0 (verdict: decided deletable=0 '
+                     'scope=app deferred=2; applied: deleted=0)']:
+            with tempfile.TemporaryDirectory() as out, self.answer(line):
+                with self.assertRaises(gw.StepFailed, msg=line):
+                    self.walk(out).kept_while_running()
+
+    def test_a_finished_sweep_that_left_it_is_proof(self):
+        line = ('[richos] cleanup at settled: deleted 2, undecidable 0, failures 0 (verdict: decided deletable=2 '
+                'scope=app; applied: deleted=2)')
+        with tempfile.TemporaryDirectory() as out, self.answer(line):
+            got = self.walk(out).kept_while_running()
+        self.assertEqual(got['profiles_of_the_running_app'], ['a', 'a-standing'])
 
 
 if __name__ == '__main__':

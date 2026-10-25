@@ -101,14 +101,18 @@ WAV = ('import os,sys,wave\n'
        'w.writeframes(b"\\0\\0"*16000);w.close()\n'
        'print(os.stat(sys.argv[1]).st_size)\n')
 # The force-quit during a spoken turn, run in the guest: SIGKILL to the recorded app pid the moment
-# a decoder runs on that app's recording. Polls every 10 ms, and reads the process table only once
-# the recording exists. Writes what it saw to argv[3].
+# a decoder runs on that app's recording: a process, not this one, whose executable is whisper-cli
+# and whose arguments name the recording (this script's own command line carries both words).
+# Polls every 10 ms, and reads the process table only once the recording exists. Writes what it
+# saw to argv[3].
 WATCH = ('import json,os,subprocess,sys,time\n'
          'pid=int(sys.argv[1]);wav=sys.argv[2];out=sys.argv[3];end=time.time()+float(sys.argv[4])\n'
          'while time.time()<end:\n'
          '    if os.path.exists(wav):\n'
          '        ps=subprocess.run(["ps","-axo","pid=,command="],capture_output=True,text=True).stdout\n'
-         '        dec=[l.strip() for l in ps.splitlines() if "whisper-cli" in l and wav in l]\n'
+         '        rows=[l.strip().split(None,1) for l in ps.splitlines() if l.strip()]\n'
+         '        dec=[c for p,c in (r for r in rows if len(r)==2) if int(p)!=os.getpid()\n'
+         '             and c.split(" ")[0].endswith("/whisper-cli") and wav in c]\n'
          '        if dec:\n'
          '            st=os.stat(wav)\n'
          '            os.kill(pid,9)\n'
@@ -290,10 +294,15 @@ class GarbageWalk(srw.StuReminderWalk):
         if not live:
             raise StepFailed('plant-live must have run (no live recording on record)')
         settled = [l for l in self.cleanup_lines('first') if l.startswith(CLEANUP + 'settled:')]
-        swept = settled[live['settled_lines_before']:]
+        # Only a sweep that ran to its end and weighed every candidate looked at the recording: one
+        # that FAILED (a crash, the bound) or deferred candidates to the next sweep may have stopped
+        # before it, and a file surviving it proves nothing about being kept.
+        swept = [l for l in settled[live['settled_lines_before']:]
+                 if not l.startswith(CLEANUP + 'settled: FAILED') and '(verdict: ' in l
+                 and not re.search(r' deferred=[1-9]', l)]
         if not swept:
-            raise StepFailed('no sweep ran while the app was running after the plant, so nothing was shown '
-                             'kept (settled lines: %s)' % settled)
+            raise StepFailed('no complete sweep ran while the app was running after the plant, so nothing was '
+                             'shown kept (settled lines: %s)' % settled)
         there = guest(self.vm, 'test -f %s && stat -f %%z %s || true' % ((shlex.quote(live['path']),) * 2), 30)
         if there != str(live['bytes']):
             raise StepFailed('the running app\'s recording %s did not survive its own sweeps (%r)' % (live['path'], there))
