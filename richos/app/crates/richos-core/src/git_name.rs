@@ -14,11 +14,11 @@
 //! - `<engine-state>/git-name/asked.json`: where and when it was asked, written once by the first
 //!   save that waits. The window draws the card from it.
 //!
-//! THE WAIT is a `PreToolUse[Bash]` hook ([`wait_cli`], run as `<app> --git-name-wait`, registered
-//! by `EngineProfile::install_git_name_wait`): a shell command that commits, in a connected folder,
-//! where the name or email Git would use is the stand-in, is held until the answer is saved. A
-//! held hook makes no model call (measured with a 700 s hold, `agent_hold.py`), the rest of the
-//! team keeps working, and the commit then runs under the saved name.
+//! THE WAIT is Git's own hook ([`wait_cli`], `<app> --git-name-wait`, in the lease's Git layer as
+//! [`hook_section`], added by `EngineProfile::install_git_name_wait`): Git runs it at every commit
+//! the lease's Git makes, however the command was written, and it holds the commit when Git would
+//! sign it with the stand-in (`git var`), in a connected folder, until the answer is saved. The
+//! rest of the team keeps working, and the commit then goes ahead under the saved name.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -117,7 +117,7 @@ pub fn check(name: &str, email: &str) -> Result<(), Problem> {
 }
 
 /// A Git config value in quotes, its quotes and backslashes escaped.
-fn quoted(value: &str) -> String {
+pub(crate) fn quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
@@ -195,71 +195,20 @@ pub fn account_name() -> Option<String> {
 // THE WAIT
 // ---------------------------------------------------------------------------------------------
 
-/// Split a shell command into its simple commands' words: quotes kept together, `;`, `&`, `|`,
-/// newlines and parentheses ending a command. Lexical only, like every reader of a command line
-/// the engine has: it finds `git commit` where a person would see it.
-fn commands(line: &str) -> Vec<Vec<String>> {
-    let mut out = vec![Vec::new()];
-    let mut word: Option<String> = None;
-    let mut chars = line.chars().peekable();
-    let end_word = |word: &mut Option<String>, out: &mut Vec<Vec<String>>| {
-        if let Some(w) = word.take() { out.last_mut().unwrap().push(w); }
-    };
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' => {
-                let w = word.get_or_insert_with(String::new);
-                for c in chars.by_ref() { if c == '\'' { break; } w.push(c); }
-            }
-            '"' => {
-                let w = word.get_or_insert_with(String::new);
-                while let Some(c) = chars.next() {
-                    match c {
-                        '"' => break,
-                        '\\' => { if let Some(n) = chars.next() { w.push(n); } }
-                        c => w.push(c),
-                    }
-                }
-            }
-            '\\' => { if let Some(n) = chars.next() { if n != '\n' { word.get_or_insert_with(String::new).push(n); } } }
-            ';' | '&' | '|' | '\n' | '(' | ')' => {
-                end_word(&mut word, &mut out);
-                if !out.last().unwrap().is_empty() { out.push(Vec::new()); }
-            }
-            c if c.is_whitespace() => end_word(&mut word, &mut out),
-            c => word.get_or_insert_with(String::new).push(c),
-        }
-    }
-    end_word(&mut word, &mut out);
-    out.retain(|c| !c.is_empty());
-    out
-}
+/// The Git hook event the wait runs at. Git runs `prepare-commit-msg` for every commit it makes
+/// (`commit`, `merge`, `cherry-pick`, `revert`), however the command that started it was written,
+/// and `--no-verify` does not skip it (it skips `pre-commit` and `commit-msg` only).
+pub const HOOK_EVENT: &str = "prepare-commit-msg";
 
-/// **The folders `line` commits in**, run from `cwd`: each `git … commit`, in the folder its
-/// `-C` options and any `cd` before it name.
-pub fn commit_folders(line: &str, cwd: &Path) -> Vec<PathBuf> {
-    let mut here = cwd.to_path_buf();
-    let mut out = Vec::new();
-    for words in commands(line) {
-        let mut words = words.iter().map(String::as_str).skip_while(|w| w.contains('=') && !w.starts_with('-')).peekable();
-        let Some(first) = words.next() else { continue };
-        if first == "cd" {
-            if let Some(to) = words.next() { here = here.join(to); }
-            continue;
-        }
-        if Path::new(first).file_name().and_then(|n| n.to_str()) != Some("git") { continue; }
-        let mut folder = here.clone();
-        while let Some(word) = words.next() {
-            match word {
-                "-C" => { if let Some(to) = words.next() { folder = folder.join(to); } }
-                "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path" | "--config-env" => { words.next(); }
-                w if w.starts_with('-') => {}
-                "commit" => { out.push(folder); break; }
-                _ => break,
-            }
-        }
-    }
-    out
+/// **The lease's Git runs the wait at every commit**: a `[hook]` section for the lease's lowest
+/// layer (`user_git::system_layer`), whose command is the app's own `--git-name-wait`. Git reads
+/// config hooks from 2.54 on and runs them beside a repository's own hook, also when the
+/// repository moves its hooks with `core.hooksPath` (measured 2026-10-25 with the runtime's Git
+/// 2.55.0: both ran; with this Mac's Git 2.52.0 the config hook did not run, which is why the hook
+/// is in the layer of the Git the lease runs first, the runtime's).
+pub fn hook_section(executable: &Path) -> String {
+    let shell = format!("'{}' --git-name-wait", executable.to_string_lossy().replace('\'', "'\\''"));
+    format!("[hook \"richos-git-name\"]\n\tevent = {HOOK_EVENT}\n\tcommand = {}\n", quoted(&shell))
 }
 
 /// One answer to `git -C folder …`, run as the lease runs Git (its environment, with `env` added),
@@ -270,11 +219,19 @@ fn git(folder: &Path, env: &[(&str, &Path)], args: &[&str]) -> Option<String> {
     output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// **Should a commit in `folder` wait for the answer?** When it is a connected folder (not one of
-/// the app's own, under `app_data`, other than a worker's workspace) and the name or email Git
-/// would put on it comes from the stand-in, which is the `layer` file itself. Returns the
-/// connected folder's name.
-fn waits(folder: &Path, app_data: &Path, workspaces: &Path, layer: &Path, env: &[(&str, &Path)]) -> Option<Option<String>> {
+/// **Would the stand-in sign this commit?** Git's own answer for the folder: the author and the
+/// committer it would write (`git var`), which take in everything that decides them, the user's
+/// files, the repository's, `-c` and the `GIT_AUTHOR_*` / `GIT_COMMITTER_*` variables.
+fn stand_in_signs(folder: &Path, env: &[(&str, &Path)]) -> bool {
+    let stand_in = format!("{} <{}>", crate::user_git::STAND_IN_NAME, crate::user_git::STAND_IN_EMAIL);
+    ["GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"].iter()
+        .any(|v| git(folder, env, &["var", v]).is_some_and(|ident| ident.starts_with(&stand_in)))
+}
+
+/// **Should this commit wait for the answer?** When it is in a connected folder (not one of the
+/// app's own, under `app_data`, other than a worker's workspace) and the stand-in would sign it.
+/// Returns the connected folder's name.
+fn waits(folder: &Path, app_data: &Path, workspaces: &Path, env: &[(&str, &Path)]) -> Option<Option<String>> {
     let common = PathBuf::from(git(folder, env, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?);
     let top = PathBuf::from(git(folder, env, &["rev-parse", "--path-format=absolute", "--show-toplevel"]).unwrap_or_default());
     // Git answers with real paths (`/private/var/...` for `/var/...`), so the two folders are compared as real paths too.
@@ -282,48 +239,31 @@ fn waits(folder: &Path, app_data: &Path, workspaces: &Path, layer: &Path, env: &
     let (app_data, workspaces) = (real(app_data), real(workspaces));
     let app_own = |p: &Path| p.starts_with(&app_data) && !p.starts_with(&workspaces);
     if app_own(&common) && app_own(&top) { return None; }
-    let layer = std::fs::canonicalize(layer).unwrap_or_else(|_| layer.to_path_buf());
-    let from_stand_in = |key: &str| {
-        // A lookup Git cannot answer holds nothing: the stand-in always answers when it is there.
-        git(folder, env, &["config", "--show-origin", "--get", key]).is_some_and(|line| {
-            line.split_once('\t').and_then(|(origin, _)| origin.strip_prefix("file:"))
-                .map(|file| std::fs::canonicalize(file).unwrap_or_else(|_| PathBuf::from(file)) == layer)
-                .unwrap_or(false)
-        })
-    };
-    if !from_stand_in("user.name") && !from_stand_in("user.email") { return None; }
+    if !stand_in_signs(folder, env) { return None; }
     // The connected folder's own name: a workspace's shared `.git` is in the folder it was made from.
     let named = if common.file_name().is_some_and(|n| n == ".git") { common.parent().map(Path::to_path_buf) } else { Some(common.clone()) };
     Some(named.and_then(|p| p.file_name().map(|n| n.to_string_lossy().trim_end_matches(".git").to_string())))
 }
 
-/// **The hook**: reads Claude Code's `PreToolUse` payload on stdin and, for a commit that waits,
-/// asks once and holds until the answer is saved. Always exits 0 with nothing on stdout: it
-/// never refuses a command, it only makes the first save wait. It lets go on its own when the
-/// session that called it is gone, so no wait outlives its lease.
+/// **The hook**, run by Git at [`HOOK_EVENT`] in the folder being committed in: when the answer is
+/// not saved yet and the stand-in would sign this commit, ask once and hold the commit until the
+/// answer is saved. Always exits 0 with nothing on stdout, so it never stops a commit; it only
+/// makes it wait. It lets go on its own when the Git that called it is gone, so no wait outlives
+/// its commit. Nothing outside a lease runs it: without the lease's state and scope it returns.
 pub fn wait_cli() -> i32 {
-    use std::io::Read;
-    let mut raw = Vec::new();
-    if std::io::stdin().take(1 << 20).read_to_end(&mut raw).is_err() { return 0; }
-    let Ok(payload) = serde_json::from_slice::<Value>(&raw) else { return 0 };
-    if payload["tool_name"] != "Bash" { return 0; }
-    let Some(line) = payload["tool_input"]["command"].as_str() else { return 0 };
-    let cwd = payload["cwd"].as_str().map(PathBuf::from).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
-    let folders = commit_folders(line, &cwd);
-    if folders.is_empty() { return 0; }
-    let (Some(state), Some(layer)) = (std::env::var_os("RICHOS_APP_STATE").map(PathBuf::from), std::env::var_os("GIT_CONFIG_SYSTEM").map(PathBuf::from)) else { return 0 };
+    let Some(state) = std::env::var_os("RICHOS_APP_STATE").map(PathBuf::from) else { return 0 };
     if !state.is_absolute() || choice(&state).is_some() { return 0; }
+    let Ok(folder) = std::env::current_dir() else { return 0 };
     let app_data = state.parent().map(Path::to_path_buf).unwrap_or_default();
-    let workspaces = state.join("target-worktrees");
-    let Some(folder) = folders.iter().find_map(|f| waits(f, &app_data, &workspaces, &layer, &[])) else { return 0 };
+    let Some(folder_name) = waits(&folder, &app_data, &state.join("target-worktrees"), &[]) else { return 0 };
     // Where to ask: the conversation this lease works for. Without one there is nowhere to
-    // answer, so the save is not held.
+    // answer, so the commit is not held.
     let scope = std::env::var_os("RICHOS_APP_SCOPE").and_then(|p| std::fs::read(p).ok())
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or_default();
     let (Some(entity_id), Some(thread_id)) = (scope["binding"]["entity_id"].as_str(), scope["binding"]["thread_id"].as_str()) else { return 0 };
-    let asked = Asked { entity_id: entity_id.into(), thread_id: thread_id.into(), folder, at_ms: crate::util::now_millis() };
+    let asked = Asked { entity_id: entity_id.into(), thread_id: thread_id.into(), folder: folder_name, at_ms: crate::util::now_millis() };
     if let Err(why) = ask(&state, &asked) {
-        eprintln!("[richos] the Git name could not be asked ({why}); this save goes ahead with the name RichOS");
+        eprintln!("[richos] the Git name could not be asked ({why}); this commit goes ahead with the name RichOS");
         return 0;
     }
     hold(&state, std::time::Duration::from_millis(500), || std::os::unix::process::parent_id() == 1);
@@ -346,17 +286,6 @@ mod tests {
         drop(std::fs::remove_dir_all(&dir));
         std::fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    #[test]
-    fn a_commit_is_found_with_its_folder_however_the_command_is_written() {
-        let cwd = Path::new("/work/site");
-        assert_eq!(commit_folders("git commit -m 'Update prices'", cwd), [PathBuf::from("/work/site")]);
-        assert_eq!(commit_folders("git add -A && git commit -qm \"a; b\"", cwd), [PathBuf::from("/work/site")]);
-        assert_eq!(commit_folders("cd ../shop && GIT_EDITOR=true git -C sub -c core.x=1 --no-pager commit", cwd), [PathBuf::from("/work/site/../shop/sub")]);
-        assert_eq!(commit_folders("/usr/bin/git -C /elsewhere commit --amend", cwd), [PathBuf::from("/elsewhere")]);
-        assert_eq!(commit_folders("git log --grep commit; echo git commit; git status", cwd), Vec::<PathBuf>::new());
-        assert_eq!(commit_folders("git commit-tree HEAD^{tree}", cwd), Vec::<PathBuf>::new());
     }
 
     #[test]
@@ -418,8 +347,69 @@ mod tests {
         std::fs::remove_dir_all(&state).unwrap();
     }
 
-    /// A commit waits only in a connected folder whose name and email Git would take from the
-    /// stand-in; the app's own folders and a folder whose own Git names the user never wait.
+    /// Git reads the hook back as the shell command it runs, whatever the app's path holds.
+    #[test]
+    fn the_wait_is_a_git_hook_on_every_commit_with_the_apps_own_executable() {
+        let dir = scratch("hook");
+        let layer = dir.join("layer");
+        let exe = Path::new("/Applications/RichOS Test.app/Contents/MacOS/rich'os");
+        std::fs::write(&layer, hook_section(exe)).unwrap();
+        let get = |key: &str| {
+            let out = std::process::Command::new("git").args(["config", "--file"]).arg(&layer).args(["--get", key]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!(get("hook.richos-git-name.event"), "prepare-commit-msg");
+        assert_eq!(get("hook.richos-git-name.command"), "'/Applications/RichOS Test.app/Contents/MacOS/rich'\\''os' --git-name-wait");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// **Review rv-20261025T011529Z-041708c7-5916, finding 1**: `repo="/folder"; git -C "$repo"
+    /// commit` and `env GIT_EDITOR=true git -C /folder commit` went through unasked, because the
+    /// command line was read. Now nothing reads it: Git runs its `prepare-commit-msg` hook for the
+    /// commit itself, and what the hook sees there is Git's own answer, the stand-in. Run here as
+    /// a real `git commit` through the shell in each form, with the hook in the repository's own
+    /// hooks folder so any Git runs it; the lease's Git (2.55) runs the same hook from its layer
+    /// (`hook_section`).
+    #[test]
+    fn however_a_commit_is_written_git_runs_the_hook_and_the_stand_in_is_what_it_would_sign() {
+        let root = scratch("forms");
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let layer = root.join("layer");
+        std::fs::write(&layer, crate::user_git::system_layer(&Default::default(), None)).unwrap();
+        let repo = root.join("northwind-site");
+        std::fs::create_dir_all(&repo).unwrap();
+        let sh = |line: &str, cwd: &Path| {
+            std::process::Command::new("/bin/sh").arg("-c").arg(line).current_dir(cwd)
+                .env("HOME", &home).env("GIT_CONFIG_SYSTEM", &layer).env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
+                .env_remove("GIT_AUTHOR_NAME").env_remove("GIT_COMMITTER_NAME").env_remove("GIT_AUTHOR_EMAIL").env_remove("GIT_COMMITTER_EMAIL")
+                .status().unwrap()
+        };
+        assert!(sh("git init -q", &repo).success());
+        let seen = root.join("seen");
+        let hook = repo.join(".git/hooks/prepare-commit-msg");
+        std::fs::write(&hook, format!("#!/bin/sh\ngit var GIT_COMMITTER_IDENT >> '{}'\n", seen.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let folder = repo.display().to_string();
+        for line in [
+            format!("repo=\"{folder}\"; git -C \"$repo\" commit -q --allow-empty -m one"),
+            format!("env GIT_EDITOR=true git -C {folder} commit -q --allow-empty -m two"),
+            "git commit -q --no-verify --allow-empty -m three".to_string(),
+        ] {
+            assert!(sh(&line, &root.join(if line.starts_with("git commit") { "northwind-site" } else { "" })).success(), "{line}");
+        }
+        let seen = std::fs::read_to_string(&seen).unwrap();
+        let lines: Vec<_> = seen.lines().collect();
+        assert_eq!(lines.len(), 3, "the hook ran at every commit: {seen}");
+        assert!(lines.iter().all(|l| l.starts_with("RichOS <richos@localhost>")), "{seen}");
+        // What the hook decides with: the same Git answer, from the folder itself.
+        assert!(stand_in_signs(&repo, &[("GIT_CONFIG_SYSTEM", &layer), ("GIT_CONFIG_GLOBAL", &home.join(".gitconfig"))]));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A commit waits only in a connected folder the stand-in would sign: never in the app's own
+    /// folders, and never where the user's Git, the repository or the commit itself names someone.
     #[test]
     fn a_commit_waits_only_where_the_stand_in_would_sign_it() {
         let root = scratch("waits");
@@ -435,16 +425,22 @@ mod tests {
         let env: &[(&str, &Path)] = &[("GIT_CONFIG_SYSTEM", &layer), ("GIT_CONFIG_GLOBAL", &global)];
         let repo = |path: &Path| {
             std::fs::create_dir_all(path).unwrap();
-            assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(path).status().unwrap().success());
+            assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(path).envs(env.iter().copied()).status().unwrap().success());
         };
+        let workspaces = state.join("target-worktrees");
         let site = root.join("northwind-site");
         repo(&site);
-        assert_eq!(waits(&site, &app_data, &state.join("target-worktrees"), &layer, env), Some(Some("northwind-site".into())));
+        assert_eq!(waits(&site, &app_data, &workspaces, env), Some(Some("northwind-site".into())));
         let own = app_data.join("coordination");
         repo(&own);
-        assert_eq!(waits(&own, &app_data, &state.join("target-worktrees"), &layer, env), None, "the app's own folder");
+        assert_eq!(waits(&own, &app_data, &workspaces, env), None, "the app's own folder");
+        let named = std::path::PathBuf::from("Fixture Name");
+        assert_eq!(waits(&site, &app_data, &workspaces, &[env[0], env[1], ("GIT_COMMITTER_NAME", &named), ("GIT_AUTHOR_NAME", &named)]), None,
+                   "the commit itself names someone");
+        let params = std::path::PathBuf::from("'user.name=Fixture' 'user.email=fixture@example.invalid'");
+        assert_eq!(waits(&site, &app_data, &workspaces, &[env[0], env[1], ("GIT_CONFIG_PARAMETERS", &params)]), None, "git -c names someone");
         std::fs::write(&global, "[user]\n\tname = Dana\n\temail = dana@northwind.com\n").unwrap();
-        assert_eq!(waits(&site, &app_data, &state.join("target-worktrees"), &layer, env), None, "the user's own Git names them");
+        assert_eq!(waits(&site, &app_data, &workspaces, env), None, "the user's own Git names them");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

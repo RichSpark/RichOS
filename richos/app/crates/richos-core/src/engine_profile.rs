@@ -525,19 +525,15 @@ impl EngineProfile {
         write(&path, &manifest.to_string())
     }
     /// **Make the team's first save in a connected folder wait for the user's Git name**
-    /// (round 41 piece 2): `<executable> --git-name-wait` beside the shell hooks, bounded like
-    /// the shell evidence hook (a day), because the answer is the user's and takes as long as it
-    /// takes. It holds only a commit the stand-in would sign (`git_name::wait_cli`).
+    /// (round 41 piece 2): Git's own hook, `<executable> --git-name-wait`, added to this lease's
+    /// lowest Git layer (`git_name::hook_section`), so Git runs it at every commit the lease's Git
+    /// makes, however the command was written. It holds only a commit the stand-in would sign
+    /// (`git_name::wait_cli`).
     pub fn install_git_name_wait(&self, executable: &Path) -> Result<(), RuntimeError> {
-        let path = self.plugin.join("hooks/hooks.json");
-        let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path)
-            .map_err(|e| RuntimeError(e.to_string()))?).map_err(|e| RuntimeError(e.to_string()))?;
-        let command = format!("{} --git-name-wait", quote(executable));
-        let bash = manifest["hooks"]["PreToolUse"].as_array_mut().and_then(|entries| entries.iter_mut()
-            .find(|entry| entry["matcher"] == "Bash")).and_then(|entry| entry["hooks"].as_array_mut())
-            .ok_or_else(|| RuntimeError("the lease has no shell hooks to add the Git name wait to".into()))?;
-        bash.push(json!({"type":"command", "command":command, "timeout":86400}));
-        write(&path, &manifest.to_string())
+        let path = self.plugin.join("gitconfig");
+        let mut layer = std::fs::read_to_string(&path).map_err(|e| RuntimeError(e.to_string()))?;
+        layer.push_str(&crate::git_name::hook_section(executable));
+        write(&path, &layer)
     }
     /// **The files the CEO attached in THIS conversation**, from his phone or his Mac:
     /// `<app data>/attachments/<conversation>`, the folder the attachment desk writes to

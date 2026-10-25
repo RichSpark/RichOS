@@ -63,6 +63,10 @@ pub fn discover(path: &str, home: Option<&Path>, runtime_root: &Path) -> UserGit
     UserGit { system_configs, exec_path }
 }
 
+/// The app's stand-in identity, used only when nothing names the user (`git_name.rs`).
+pub const STAND_IN_NAME: &str = "RichOS";
+pub const STAND_IN_EMAIL: &str = "richos@localhost";
+
 /// **The lowest Git settings layer a lease reads** (its `GIT_CONFIG_SYSTEM`): the app's own
 /// identity, used only when no other layer names one, then the name and email the user gave the
 /// app (`identity`, the file `git_name::save` writes: Git reads an include that is not there as
@@ -71,7 +75,7 @@ pub fn discover(path: &str, home: Option<&Path>, runtime_root: &Path) -> UserGit
 /// and each repository's own settings are read as Git always reads them, above this, so the
 /// user's name, email and helpers win.
 pub fn system_layer(git: &UserGit, identity: Option<&Path>) -> String {
-    let mut layer = String::from("[user]\n\tname = RichOS\n\temail = richos@localhost\n");
+    let mut layer = format!("[user]\n\tname = {STAND_IN_NAME}\n\temail = {STAND_IN_EMAIL}\n");
     let files = identity.into_iter().map(Path::to_path_buf).chain(git.system_configs.iter().cloned());
     for file in files.map(|f| f.display().to_string()).filter(|f| !f.contains(['"', '\\', '\n'])) {
         layer.push_str(&format!("[include]\n\tpath = \"{file}\"\n"));

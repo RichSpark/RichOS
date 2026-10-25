@@ -304,25 +304,22 @@ fn the_git_name_the_user_saves_reaches_a_running_lease_and_their_own_git_setup_s
     assert_eq!(ask("user.name"), "RichOS", "Use RichOS keeps the stand-in");
 }
 
-/// The Git name wait sits with the shell hooks, as the app's own executable, bounded at a day.
+/// The Git name wait is Git's own hook in the lease's Git layer, as the app's own executable, and
+/// no Claude Code hook changes.
 #[test]
-fn the_git_name_wait_is_one_more_shell_hook_and_changes_nothing_else() {
+fn the_git_name_wait_is_a_git_hook_in_the_leases_layer_and_changes_no_claude_hook() {
     let f = Scratch::new();
     let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
-    let read = || -> serde_json::Value { serde_json::from_slice(&std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap()).unwrap() };
-    let before = read();
-    profile.install_git_name_wait(Path::new("/Applications/RichOS Test.app/Contents/MacOS/richos")).unwrap();
-    let after = read();
-    let shell = |m: &serde_json::Value| m["hooks"]["PreToolUse"].as_array().unwrap().iter().find(|e| e["matcher"] == "Bash").unwrap()["hooks"].as_array().unwrap().clone();
-    let (was, now) = (shell(&before), shell(&after));
-    assert_eq!(now.len(), was.len() + 1);
-    assert_eq!(&now[..was.len()], &was[..], "the shell hooks before it are unchanged");
-    assert_eq!(now[was.len()], serde_json::json!({"type": "command", "command": "'/Applications/RichOS Test.app/Contents/MacOS/richos' --git-name-wait", "timeout": 86400}));
-    let mut other = after.clone();
-    let mut was_other = before.clone();
-    other["hooks"]["PreToolUse"] = serde_json::Value::Null;
-    was_other["hooks"]["PreToolUse"] = serde_json::Value::Null;
-    assert_eq!(other, was_other, "no other hook moved");
+    let hooks = || std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap();
+    let (before, layer_before) = (hooks(), std::fs::read_to_string(profile.plugin.join("gitconfig")).unwrap());
+    let exe = Path::new("/Applications/RichOS Test.app/Contents/MacOS/richos");
+    profile.install_git_name_wait(exe).unwrap();
+    assert_eq!(hooks(), before, "no Claude Code hook moved");
+    let layer = std::fs::read_to_string(profile.plugin.join("gitconfig")).unwrap();
+    assert_eq!(layer, layer_before + &richos_core::git_name::hook_section(exe));
+    let event = std::process::Command::new("/usr/bin/git").args(["config", "--file"]).arg(profile.plugin.join("gitconfig"))
+        .args(["--get", "hook.richos-git-name.event"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&event.stdout).trim(), "prepare-commit-msg");
 }
 
 #[test]

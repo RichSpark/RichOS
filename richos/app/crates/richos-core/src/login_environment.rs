@@ -240,7 +240,7 @@ pub struct Setup {
 pub struct Change {
     /// `new`, `gone` or `changed`.
     pub kind: &'static str,
-    /// `folder` or `setting`.
+    /// `folder` or `setting`, or `order`: the folders both reads have, in a new order.
     pub of: &'static str,
     pub name: String,
 }
@@ -287,6 +287,14 @@ pub fn changes(before: &BTreeMap<String, String>, after: &BTreeMap<String, Strin
     let mut out = Vec::new();
     out.extend(now.iter().filter(|f| !was.contains(f)).map(|f| Change { kind: "new", of: "folder", name: f.clone() }));
     out.extend(was.iter().filter(|f| !now.contains(f)).map(|f| Change { kind: "gone", of: "folder", name: f.clone() }));
+    // The folders both reads have, in a new order: the first one that has a tool wins, so a tool
+    // can now come from another folder (review rv-20261025T011529Z-041708c7-5916, finding 2).
+    // Named by the folder that now comes first among the ones that moved.
+    let kept_was: Vec<&String> = was.iter().filter(|f| now.contains(f)).collect();
+    let kept_now: Vec<&String> = now.iter().filter(|f| was.contains(f)).collect();
+    if let Some(first) = kept_now.iter().zip(&kept_was).find(|(a, b)| a != b).map(|(a, _)| (*a).clone()) {
+        out.push(Change { kind: "changed", of: "order", name: first });
+    }
     out.extend(after.keys().filter(|n| !before.contains_key(*n)).map(|n| Change { kind: "new", of: "setting", name: n.clone() }));
     out.extend(after.iter().filter(|(n, v)| n.as_str() != "PATH" && before.get(*n).is_some_and(|old| old != *v))
         .map(|(n, _)| Change { kind: "changed", of: "setting", name: n.clone() }));
@@ -383,6 +391,9 @@ mod tests {
         assert_eq!(found, ["new folder /opt/homebrew/opt/openjdk/bin", "gone folder ~/.nvm/v20/bin",
             "new setting JAVA_HOME", "changed setting ANDROID_HOME", "gone setting NVM_DIR"]);
         assert_eq!(changes(&after, &after), Vec::<Change>::new());
+        // Review rv-20261025T011529Z-041708c7-5916, finding 2: the same folders in a new order.
+        let reordered = changes(&env(&[("PATH", "/opt/homebrew/bin:/usr/bin")]), &env(&[("PATH", "/usr/bin:/opt/homebrew/bin")]));
+        assert_eq!(reordered, [Change { kind: "changed", of: "order", name: "/usr/bin".into() }]);
         let shown = serde_json::to_string(&changes(&before, &after)).unwrap();
         for value in ["/old/sdk", "/new/sdk", "/opt/jdk", "vim"] { assert!(!shown.contains(value), "{value} in {shown}"); }
     }
