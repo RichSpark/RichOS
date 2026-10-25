@@ -60,8 +60,11 @@ launchd_install_gave_up_file() {
 #     running    different, but a run is in progress; NOT touched (return 3)
 #     failed     launchd refused; LAUNCHD_INSTALL_DETAIL says how (return 2)
 #   LAUNCHD_INSTALL_PID is the running pid for `running`.
-#   Every return 0 means the job now runs from this content, so an earlier
-#   give-up for this label is no longer true and its file is removed.
+#   Every return 0 means the job now runs from this content: the wanted job is
+#   applied. So both of this label's pending-change records are obsolete and
+#   go (launchd_install_applied): an earlier give-up, and the pid file of a
+#   waiter that is dead (it would otherwise be reported as an unapplied change
+#   forever) or alive (it finds its record gone and ends without applying).
 launchd_install() {
     _li_label="$1"; _li_plist="$2"; _li_new="$3"
     _li_domain="gui/$(id -u)"
@@ -70,7 +73,8 @@ launchd_install() {
 
     if _li_info="$(launchctl print "$_li_target" 2>/dev/null)"; then
         if [ -f "$_li_plist" ] && cmp -s "$_li_new" "$_li_plist"; then
-            rm -f "$_li_new" "$(launchd_install_gave_up_file "$_li_label")"
+            rm -f "$_li_new"
+            launchd_install_applied "$_li_label"
             LAUNCHD_INSTALL_RESULT=unchanged
             return 0
         fi
@@ -104,8 +108,15 @@ launchd_install() {
         LAUNCHD_INSTALL_DETAIL="launchctl does not list $_li_label after bootstrap"
         return 2
     fi
-    rm -f "$(launchd_install_gave_up_file "$_li_label")"
+    launchd_install_applied "$_li_label"
     return 0
+}
+
+# launchd_install_applied LABEL — called only when the job is now loaded from
+# the content this engine wants (launchd_install's return 0), never because an
+# old schedule looks healthy: no change is pending any more.
+launchd_install_applied() {
+    rm -f "$(launchd_install_gave_up_file "$1")" "$(launchd_install_pending_file "$1")"
 }
 
 # launchd_install_pending_pid LABEL
