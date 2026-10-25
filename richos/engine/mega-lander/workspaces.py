@@ -3370,9 +3370,32 @@ def due_set(me="", items=None, at=None, cache=None):
         out.append({"name": it["name"], "what": "the finished work of %s" % it["name"], "why": it["why"],
                     "since": float(since), "end": "", "state": "none", "detail": "finished, not landed or discarded",
                     "source": "finished", "key": it["key"], "review": "",
-                    "command": _stopped_command(it["name"]) if stopped else
-                               "land it (workspaces.sh land %s), discard it, or spawn its continuation" % it["name"]})
+                    "command": _stopped_command(it["name"]) if stopped else _finished_command(it["name"])})
     return out
+
+
+# THE APP NAMES ITS OWN TOOLS (CEO §138). A due notice is an instruction to act, so it
+# names only what the reader can run: in a terminal the workspaces.sh commands; in the app
+# (this_conversation()) the richos_work tools (mega-lander/app.py TOOLS), because the app's
+# lease PATH (engine_profile.rs lease_path) carries no workspaces.sh.
+APP_WORK = "mcp__richos_work__"
+
+
+def _finished_command(name):
+    if this_conversation():
+        return ("integrate it after a passing review (%sprepare a reviewer with review_of its worker receipt, "
+                "then %sintegrate) or continue it (%sprepare with continue_of that receipt); %sinspect lists "
+                "the receipt named %s. The app has no tool that discards it" % (APP_WORK, APP_WORK, APP_WORK,
+                                                                             APP_WORK, name))
+    return "land it (workspaces.sh land %s), discard it, or spawn its continuation" % name
+
+
+def due_list_pointer():
+    """Where the rest of a shortened due list is read. The app has no tool that prints it,
+    and there the notice is told again at each change, so the rest follow as these are handled."""
+    return "the rest are told as these are handled (the app has no tool that lists them all)" \
+        if this_conversation() else \
+        "the complete list: workspaces.sh holds"
 
 
 def due_lines(due, limit=8):
@@ -3381,7 +3404,7 @@ def due_lines(due, limit=8):
     lines = ["%s: %s (%s). Next: %s." % (d["name"], " ".join(str(d.get("why") or d["detail"]).split())[:900],
                                           d["detail"], d["command"]) for d in due[:limit]]
     if len(due) > limit:
-        lines.append("%d more due; the complete list: workspaces.sh holds" % (len(due) - limit))
+        lines.append("%d more due; %s" % (len(due) - limit, due_list_pointer()))
     return lines
 
 
@@ -3432,6 +3455,9 @@ def _stopped_record(key):
 
 def _stopped_command(name):
     """Stopped work is never revived (A4; CLAUDE.md §92): no land, no continuation."""
+    if this_conversation():
+        return ("never land or continue it; save its commits on shelved/%s with git in its repository. The app "
+                "has no tool that discards it, so saving them does not close it and it stays due" % name)
     return ("save its commits on shelved/%s and discard it with his words "
             "(workspaces.sh discard %s --ceo-word '<his words>'); never land or continue it" % (name, name))
 
@@ -3442,6 +3468,15 @@ def hold_command(h):
     and discard (rv-20261024T053817Z-c68788ad-bcc2; Codex 05:51Z: one choice for every caller)."""
     if _stopped_record(h.get("key") or "")[1]:
         return _stopped_command(h["name"])
+    if this_conversation():
+        if h["source"] == "pause":
+            return "%sresume_message to %s, then send its message_payload unchanged with SendMessage" % (
+                APP_WORK, h["name"])
+        if h["source"] == "hold":
+            return "prepare the teammate that does it (%sprepare), its brief carrying the line  continues: %s" % (
+                APP_WORK, h["name"])
+        return "prepare its continuation (%sprepare with continue_of its worker receipt; %sinspect lists " \
+               "the receipt named %s)" % (APP_WORK, APP_WORK, h["name"])
     if h["source"] == "pause":
         return "workspaces.sh resume %s" % h["name"]
     # Anything else, a pause whose session ended included: its run cannot resume.
@@ -3558,8 +3593,9 @@ def unreadable_line():
         return ""
     more = " and %d more" % (len(bad) - 1) if len(bad) > 1 else ""
     return ("UNREADABLE RECORD: %d workspace registry record(s) cannot be read (%s%s); the due work "
-            "told is from the readable records only. workspaces.sh status names it; repair or remove "
-            "it when convenient." % (len(bad), bad[0][0], more))
+            "told is from the readable records only.%s" % (len(bad), bad[0][0], more,
+            " The app has no tool that repairs or removes it." if this_conversation()
+            else " workspaces.sh status names it; repair or remove it when convenient."))
 
 
 def scan_unregistered(repos, record=True):
@@ -8071,7 +8107,8 @@ def fallback_notice(sid, items=None):
                                               for d in due), bad]).encode("utf-8")).hexdigest()
         if due is None:
             body = ("The due work could NOT be read (%s), so what is due is unknown; nothing here "
-                    "says nothing is due. workspaces.sh holds reads it again." % unread)
+                    "says nothing is due. %s" % (unread, "The next turn reads it again." if this_conversation()
+                                                 else "workspaces.sh holds reads it again."))
         elif due:
             body = "%d item(s) need action: " % len(due) + " | ".join(due_lines(due))
         else:
@@ -8187,8 +8224,10 @@ def lifecycle(payload, entity):
         bad = unreadable_line()
         if due:
             # Owned work to resume, not a gate: independent and authorized work goes on.
-            ctx = "\n".join(["DUE WORK (%d): handle it as you resume; the complete list: workspaces.sh holds"
-                             % len(due)] + due_lines(due) + ([bad] if bad else []))
+            head = "DUE WORK (%d): handle it as you resume" % len(due)
+            if not this_conversation():
+                head += "; " + due_list_pointer()
+            ctx = "\n".join([head] + due_lines(due) + ([bad] if bad else []))
             try:
                 # What this notice told goes into the watcher's own announce state, so
                 # its first look does not tell the same unchanged items again (R6).

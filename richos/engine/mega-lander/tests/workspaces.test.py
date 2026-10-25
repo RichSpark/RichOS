@@ -7761,6 +7761,99 @@ class OrchestrationR2Waits(Base):
         self.assertEqual(due_here(), ["zach-opus-k2"])                     # its claimant ended: ours again
 
 
+class AppDueNotice(Base):
+    """CEO §138: everything he uses in the terminal is a feature of the regular app. In the app,
+    Rich's turn opens with the due work (app-engine-hook.py held_work_context, fallback_notice),
+    and the notice gave him workspaces.sh commands the app's lease PATH does not carry
+    (engine_profile.rs lease_path). There it names the richos_work tools (mega-lander/app.py TOOLS);
+    in the terminal it is unchanged."""
+
+    APP = {"RICHOS_APP_ENTITY": "entity-fixture", "RICHOS_APP_THREAD": "thread-fixture"}
+
+    def _every_kind_due(self):
+        """One due item of each kind, more than the eight a notice shows, and a damaged record."""
+        self.spawn("zach-opus-ap")
+        ws.pause("zach-opus-ap", "Rich's resume", self.sid)                      # a pause
+        for n in ["zach-opus-af"] + ["zach-opus-a%d" % i for i in range(1, 6)]:
+            aid, npath = self.spawn(n)
+            self.commit(npath)
+            self.finish(aid)                                                      # finished, not landed
+        aid, npath = self.spawn("zach-opus-as")
+        self.commit(npath)
+        ws.stop("zach-opus-as", "he said stop", self.sid)                         # stopped
+        aid, npath = self.spawn("zach-opus-aw")
+        self.commit(npath)
+        self.finish(aid)
+        rec = self.rec("zach-opus-aw")
+        rec["waiting"] = {"kind": "started", "on": "the review", "at": ws.now(), "end": "at:2000-01-01T00:00:00Z"}
+        ws.save_agent(rec)                                                        # a wait whose end came
+        ws.hold("stream-a", "Stream A", "ceo:CEO-TODOs 9.1", "on hold", self.sid)  # held, no teammate
+        with open(ws.agent_path("damaged-fixture"), "w") as f:
+            f.write("{")
+        due = ws.due_set(self.sid, ws.pending(self.sid, self.entity, auto=False, dry=True))
+        self.assertEqual({d["source"] for d in due}, {"pause", "finished", "wait", "hold"}, due)
+        self.assertGreater(len(due), 8)
+        return {d["name"]: d["command"] for d in due}
+
+    def _notices(self):
+        start, _n = ws.lifecycle({"hook_event_name": "SessionStart", "source": "compact",
+                                  "session_id": self.sid, "cwd": self.entity}, self.entity)
+        return [ws.fallback_notice(self.sid), start, ws.unreadable_line()]
+
+    def test_app_due_notice_names_only_the_apps_own_tools(self):
+        import re
+        spec = importlib.util.spec_from_file_location("richos_app_for_notice", os.path.join(HERE, "..", "app.py"))
+        app = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(app)
+        tools = {t["name"] for t in app.TOOLS}
+        with patch.dict(os.environ, self.APP):
+            commands = self._every_kind_due()
+            notices = self._notices()
+            with patch.object(ws, "due_set", side_effect=OSError("registry unreadable")):
+                notices.append(ws.fallback_notice(self.sid))                     # an unread due set
+        self.assertTrue(all(notices), notices)
+        self.assertIn("could NOT be read", notices[-1])
+        for text in list(commands.values()) + notices:
+            self.assertNotRegex(text, r"[\w.-]+\.sh\b", text)                    # no terminal script
+            self.assertNotIn("--ceo-word", text)
+            for named in re.findall(r"mcp__richos_work__(\w+)", text):
+                self.assertIn(named, tools, text)                                 # a tool the app has
+        self.assertIn("mcp__richos_work__resume_message to zach-opus-ap", commands["zach-opus-ap"])
+        self.assertIn("mcp__richos_work__integrate", commands["zach-opus-af"])
+        self.assertIn("continue_of", commands["zach-opus-af"])
+        self.assertIn("continue_of", commands["zach-opus-aw"])
+        self.assertIn("continues: stream-a", commands["stream-a"])
+        self.assertIn("shelved/zach-opus-as", commands["zach-opus-as"])
+        self.assertNotIn("integrate", commands["zach-opus-as"])                 # stopped: never landed
+        self.assertNotIn("continu", commands["zach-opus-as"].replace("never land or continue it", ""))
+        # An action the app has no tool for is said, never dropped or shown as done: no discard,
+        # so saving a stopped worker's commits does not close it (Codex, 2026-10-24).
+        self.assertIn("The app has no tool that discards it", commands["zach-opus-af"])
+        self.assertIn("The app has no tool that discards it, so saving them does not close it",
+                      commands["zach-opus-as"])
+        self.assertIn("The app has no tool that repairs or removes it.", notices[2])
+
+    def test_terminal_due_notice_is_unchanged(self):
+        commands = self._every_kind_due()
+        self.assertEqual(commands["zach-opus-ap"], "workspaces.sh resume zach-opus-ap")
+        self.assertEqual(commands["zach-opus-af"],
+                         "land it (workspaces.sh land zach-opus-af), discard it, or spawn its continuation")
+        self.assertEqual(commands["zach-opus-aw"], "spawn the teammate that does it with the line  continues: zach-opus-aw")
+        self.assertEqual(commands["stream-a"], "spawn the teammate that does it with the line  continues: stream-a")
+        self.assertEqual(commands["zach-opus-as"],
+                         "save its commits on shelved/zach-opus-as and discard it with his words "
+                         "(workspaces.sh discard zach-opus-as --ceo-word '<his words>'); never land or continue it")
+        fallback, start, bad = self._notices()
+        self.assertIn("STALL WATCH NOT ACTIVE (stall-watch: NOT WATCHED: nothing looks for stalls in this session. "
+                      "Start as a background command (Bash with run_in_background: true): stall-watch.sh --watch)",
+                      fallback)
+        self.assertIn("more due; the complete list: workspaces.sh holds", fallback)
+        self.assertTrue(start.startswith("DUE WORK (%d): handle it as you resume; the complete list: "
+                                         "workspaces.sh holds\n" % len(commands)), start)
+        self.assertTrue(bad.endswith("the due work told is from the readable records only. workspaces.sh status "
+                                     "names it; repair or remove it when convenient."), bad)
+
+
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,
     # e.g. `workspaces.test.py Point05_Guarantee` -- one point's proof -- or a
