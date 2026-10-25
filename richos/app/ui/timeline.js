@@ -201,6 +201,14 @@
     // take two seconds and that is not what he needs to be looking at.
     const q = questionInFlight(t);
     if (q) return questionRow(q, nowMs);
+    // §56: a job this turn gave is waiting for the screen, or has just carried on after it.
+    if (t.screen === "waiting") {
+      return { label: "Waiting for the screen to unlock", duration: null, tone: "active",
+        note: "I'll carry on the moment it's back.", live: false };
+    }
+    if (t.screen === "back") {
+      return { label: "The screen is back, so this is carrying on", duration: null, tone: "active", note: "", live: false };
+    }
     switch (t.status) {
       case "queued":
       case "working":
@@ -674,6 +682,10 @@
       /// stamped only on a turn record would be wiped the next time he said anything, which
       /// is exactly the way a background result was being destroyed before 2026-09-17.
       questions: new Map(),
+      /// turnId -> "waiting" | "back" for a job that turn gave which waits for the screen, or
+      /// has just carried on after it (CEO ruling §56). Written only by `setScreenWaits`, from
+      /// the assignment register, and carried across `applySnapshot` for the reason above.
+      screenWaits: new Map(),
       pendingUser: [], // optimistic CEO bubbles awaiting a turn id
       /// TRUE when the snapshot in this model came from `get_machinery` — i.e. the CEO has
       /// techy mode on for this thread. Read in exactly one place, `isTurnExpanded`, and
@@ -844,6 +856,7 @@
     const settled = model.settled;
     const announced = model.announcedWorking;
     const questions = model.questions;
+    const screenWaits = model.screenWaits;
 
     model.items = new Map();
     model.turns = new Map();
@@ -853,6 +866,7 @@
     model.settled = settled;
     model.announcedWorking = announced;
     model.questions = questions;
+    model.screenWaits = screenWaits;
     model.pendingUser = [];
 
     if (!snapshot || !Array.isArray(snapshot.items)) return;
@@ -901,6 +915,33 @@
       const t = model.turns.get(turnId);
       if (t) t.question = q;
     }
+    for (const [, t] of model.turns) if (t.screen) t.screen = null;
+    for (const [turnId, s] of model.screenWaits || []) {
+      const t = model.turns.get(turnId);
+      if (t) t.screen = s;
+    }
+  }
+
+  /// **A JOB WAITING FOR THE SCREEN, ON THE TIMELINE** (CEO ruling §56). Each row that names a
+  /// turn in this thread and is `waiting-for-screen` puts "Waiting for the screen to unlock" on
+  /// that turn's line; once the screen is back the record says so (`screen::says::carrying_on`)
+  /// until Stu reports on the job, and the line says it is carrying on. Then the line goes back
+  /// to the turn's own duration. It asks nothing of him and has no timer.
+  const SCREEN_BACK_DETAIL = "The screen is back, so this is carrying on.";
+  function setScreenWaits(model, rows, threadId) {
+    const next = new Map();
+    const prefix = "ledger:" + threadId + ":";
+    for (const row of rows || []) {
+      if (typeof row.turnRef !== "string" || !row.turnRef.startsWith(prefix)) continue;
+      const turnId = row.turnRef.slice(prefix.length);
+      if (!turnId) continue;
+      if (row.state === "waiting-for-screen") next.set(turnId, "waiting");
+      else if (row.state === "registered" && row.detail === SCREEN_BACK_DETAIL && next.get(turnId) !== "waiting") {
+        next.set(turnId, "back");
+      }
+    }
+    model.screenWaits = next;
+    stampQuestions(model);
   }
 
   /// **THE QUESTIONS STILL BEING ANSWERED, from the assignment register** (CEO ruling §58).
@@ -3379,6 +3420,7 @@
     DURATION_MEANING,
     CHECK_BECOMES_INVESTIGATE_MS,
     setQuestionsInFlight,
+    setScreenWaits,
     hasLiveRow,
     createModel,
     bind,
