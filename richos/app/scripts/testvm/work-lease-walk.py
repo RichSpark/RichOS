@@ -16,7 +16,8 @@ This is that walk's a6-app-walk.py, committed here so no nightly walk writes it 
 
 WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65). stu-reminder-walk.py's steps,
 unchanged: identity, first-run, job (stu-reminder-walk.py's JOB, which needs an engineer, so Stu has to
-save one; it must be SETTLED with no human message after the request), idle. Then:
+save one; it must be SETTLED with no human message after the request; the Git name card the team's
+first save asks is answered once with "Use RichOS", a press, never a message), idle. Then:
   monitor   the Work lease's monitor (`stall_watch.py --monitor --jsonl`, native.rs StallWatch) is
             running for the Stu session that ran the job: pid, parent, start time, RICHOS_SESSION_ID;
             the probe leaves out its own process and its shell, whose command lines name those words
@@ -33,8 +34,10 @@ save one; it must be SETTLED with no human message after the request), idle. The
             this step reports only the turn end; a normal lease close is the a6-app-work-lease-eof
             walk's (richos-hq docs/verification/2026-10-24-orchestration-reliability-impl)
   keep      ALWAYS, pass or fail, before run-walk.py deletes the guest: every session transcript
-            (~/.claude/projects), the app's engine-state, the conversation ledger and the bundle's
-            Info.plist, as kept/kept.tgz on the host. The first such walk lost the rows.
+            (~/.claude/projects), the app's engine-state, the conversation ledger, the stated-action
+            check's own verdict log (coordination/.claude/state/stated-actions.jsonl: every ARM 2
+            refusal and ARM 3 record verdict, engine_profile.rs RICHOS_SA_ENTITY_ROOT) and the
+            bundle's Info.plist, as kept/kept.tgz on the host. The first such walk lost the rows.
 
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
 """
@@ -61,6 +64,17 @@ STEPS = ['identity', 'first-run', 'job', 'idle', 'reload', 'monitor', 'fail', 'a
 # An ordinary request after the monitor was killed, worded as srw.JOB is.
 AFTER_JOB = ('Please add a file named more.md whose whole content is the line "More notes for the walk test." '
              'to the Acme repository and commit it, and land it.')
+# The Git name card's answer that keeps the stand-in name (ui/git-name.js, `#git-name-skip`).
+GIT_NAME_ANSWER = 'Use “RichOS” instead'
+
+
+def kept_paths(home, data):
+    """What `keep` carries off the guest, each as (root, path under it); a missing one is skipped. The
+    stated-action check (ass-kicker) logs every ARM 2 refusal and ARM 3 record verdict under the app's
+    coordination root, which is not in engine-state: without it a walk cannot show that neither fired."""
+    return ((home + '/.claude', 'projects'), (data, 'engine-state'), (data, 'conversation-ledger.jsonl'),
+            (data, 'coordination/.claude/state'))
+
 
 # The Work-lease monitors running in the guest. This source names the three words it looks for, so it
 # leaves out its own process and the shell that ran it (nightly 74 walk: pid 24452 was this probe).
@@ -90,6 +104,19 @@ ROWS = ('import glob,json,sys\n'
 
 
 class WorkLeaseWalk(srw.StuReminderWalk):
+    def approve_if_asked(self, title):
+        """A person's answers while the job runs: the Git name card once, then the assignment's Approve.
+
+        The team's first save in a folder with no Git name waits for the user's answer to that card
+        (ui/git-name.js, git_name.rs, nightly 75). Nightly 75's first run of this walk left it
+        unanswered: Norm's commit waited 11 minutes and the job was still running at 1200 s. The walk
+        answers it as a user may, with the card's own "Use RichOS" button, once."""
+        if 'git_name_answered_ms' not in self.facts and self.present(GIT_NAME_ANSWER):
+            self.press(GIT_NAME_ANSWER)
+            self.facts['git_name_answered_ms'] = round(self.clock())
+            self.save()
+        return super().approve_if_asked(title)
+
     def inbox(self, sender):
         return json.loads(guest(self.vm, 'python3 -c %s %s %s %s' % (
             shlex.quote(ROWS), shlex.quote(self.data), shlex.quote(self.facts['thread']), shlex.quote(sender)), 120) or '[]')
@@ -209,8 +236,7 @@ class WorkLeaseWalk(srw.StuReminderWalk):
         dest.mkdir(parents=True, exist_ok=True)
         tgz = self.home + '/kept.tgz'
         parts = []
-        for root, rel in ((self.home + '/.claude', 'projects'), (self.data, 'engine-state'),
-                          (self.data, 'conversation-ledger.jsonl')):
+        for root, rel in kept_paths(self.home, self.data):
             parts.append('if [ -e %s ]; then echo %s; fi' % (shlex.quote(root + '/' + rel), shlex.quote(root + '\t' + rel)))
         listing = guest(self.vm, '; '.join(parts), 60)
         args = []
