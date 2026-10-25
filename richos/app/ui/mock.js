@@ -3918,8 +3918,6 @@
         // One file's preview (output side-panel PRD §5.4, §7, slice S5), by its output id.
         case "output_preview":
           return outputPreviewOf(args.outputId ?? args.output_id);
-        // The actions (S6): the shell's contract, nothing opened and nothing written.
-        case "output_file":
         // Terminal setup and your name in Git (round 41).
         case "terminal_setup":
           mockTerminal.calls.push(cmd);
@@ -3931,6 +3929,8 @@
         case "git_name_use_richos":
         case "git_name_open_file":
           return gitNameCommand(cmd, args);
+        // The actions (S6): the shell's contract, nothing opened and nothing written.
+        case "output_file":
         case "output_open":
         case "output_reveal":
         case "output_save_copy":
