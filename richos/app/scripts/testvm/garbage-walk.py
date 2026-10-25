@@ -165,6 +165,11 @@ def place(path, roots):
 
 
 class GarbageWalk(srw.StuReminderWalk):
+    # The home door's "Talk" in its gold ring was read as "taken»)" on the frame of a relaunch
+    # whose window was on screen (walk-90345680aef3, home-after-relaunch.png); "to Rich" is on
+    # the door and in the composer, either of which means the app is back.
+    HOME_TEXT = 'to Rich'
+
     def tool(self):
         return self.payload + '/garbage-walk/files-since.py'
 

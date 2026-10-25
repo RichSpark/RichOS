@@ -61,6 +61,9 @@ WAIT_MARK = 'waiting for its review'
 
 
 class StuReminderWalk(command_walk.CommandWalk):
+    # What after_relaunch reads on a frame to know the app is back (an extended regular expression).
+    HOME_TEXT = 'Talk to Rich'
+
     def decline_first_run_sheets(self, tries=5, seconds=150):
         """adopt-walk.py's, for a development bundle: it carries no engine to install (the guest's
         engine comes in through RICHOS_ENGINE_DIR), so its setup sheet says so and offers only
@@ -111,7 +114,7 @@ class StuReminderWalk(command_walk.CommandWalk):
         began = time.monotonic()
         while time.monotonic() - began < self.a.relaunch_within:
             self.shot('home-after-relaunch.png')
-            found = subprocess.run([str(HERE.parent / 'qa' / 'ocr-find.sh'), 'Talk to Rich',
+            found = subprocess.run([str(HERE.parent / 'qa' / 'ocr-find.sh'), self.HOME_TEXT,
                                     str(self.out / 'home-after-relaunch.png'), '--first', '--quiet'],
                                    capture_output=True, text=True, timeout=60)
             if found.returncode not in (0, 1):
