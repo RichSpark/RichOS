@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # notice-unstarted-rows.sh — NON-BLOCKING Stop hook. AN OPEN ROW WITH NO
-#                            RUNNING WORK RECORDED IS NAMED, SO IT IS NOT
-#                            SILENTLY FORGOTTEN.
+#                            RUNNING WORK RECORDED IS NAMED, ONCE PER CHANGE
+#                            OF THAT SET, SO IT IS NOT SILENTLY FORGOTTEN.
 #
 # The argument, the two failure directions it is designed against, and what it
 # cannot see are all in scripts/lib/unstarted-rows.sh. Read that first. This
@@ -31,10 +31,12 @@
 # systemMessage via scripts/lib/stop-hook-notice.sh, because that is the only
 # channel measured to reach the operator (see that file's table). The notice
 # speaks when the SET changes, which is exactly the moment a row is written
-# down with no work recorded for it, and the moment one is picked up, and AGAIN
-# EVERY 30 MINUTES while the set persists (2026-10-22, richos-hq docs/plans/
-# 2026-10-22-no-silent-holds.md). Only a blocker naming the CEO quiets a row
-# (unstarted-rows.py names_ceo).
+# down with no work recorded for it, and the moment one is picked up, and then
+# stays quiet while the set is unchanged (stop_notice_abnormal). From
+# 2026-10-22 it also repeated every 30 minutes; on 2026-10-24 that repeat was
+# removed as administrative noise: an unchanged set is the same news, and
+# scripts/unstarted-rows-lint.sh keeps the whole inventory one command away.
+# Only a blocker naming the CEO quiets a row (unstarted-rows.py names_ceo).
 #
 # UNEVALUATED-PAYLOAD-EXEMPT: payload-independent — the predicate is the row table in the record. Byte-identical
 # output on all four payload shapes.
@@ -212,6 +214,6 @@ MORE=""
 
 # ONLY WHAT IT KNOWS. The sweep sees branch names, row directories and claim
 # files; it cannot see whether work is running or whether a row may start now.
-stop_notice_abnormal_recurring "unstarted:$UR_UNSTARTED" \
-    "OPEN ROWS WITH NO RUNNING WORK RECORDED — ${UR_N_UNSTARTED} row(s): ${NAMES}${MORE}. Detail: scripts/unstarted-rows-lint.sh" 1800
+stop_notice_abnormal "unstarted:$UR_UNSTARTED" \
+    "OPEN ROWS WITH NO RUNNING WORK RECORDED — ${UR_N_UNSTARTED} row(s): ${NAMES}${MORE}. Detail: scripts/unstarted-rows-lint.sh"
 exit 0

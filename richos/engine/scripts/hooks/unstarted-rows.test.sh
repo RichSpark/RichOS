@@ -20,7 +20,7 @@
 #        cases 4a-4p
 #
 # Plus the two properties that keep the notice worth reading:
-#   5. state-change de-duplication  (a stable set is announced once)
+#   5. state-change de-duplication  (a stable set is announced once, never again)
 #   6. a claim token stands alone in BOTH directions, each with a control
 #   8. the strike-through closes a row; the cell may name who owns the residual
 #
@@ -376,6 +376,17 @@ run_hook --remember
 if printf '%s' "$FIRST" | grep -q systemMessage && ! spoke; then
     ok "5a  an unchanged set of unstarted rows is announced ONCE, not every turn"
 else bad "5a  an unchanged set is announced once" "first=$FIRST second=$HOUT"; fi
+
+# ...and not again later either. Until 2026-10-24 an unchanged set was repeated
+# every 1800 s; the ledger's last-told time is back-dated two hours so a repeat
+# rule of any interval up to that would speak here.
+LEDGER="$REPO/.claude/state/stop-hook-notices/deadbeef.notice-unstarted-rows.state"
+if [ -s "$LEDGER" ]; then
+    printf '%s\t%s\n' "$(cut -f1 "$LEDGER" | head -1)" "$(( $(date +%s) - 7200 ))" > "$LEDGER"
+    run_hook --remember
+    if ! spoke; then ok "5c  an unchanged set is told once and then not again, two hours later"
+    else bad "5c  an unchanged set is told once and then not again" "$HOUT"; fi
+else bad "5c  an unchanged set is told once and then not again" "no notice ledger at $LEDGER"; fi
 
 write_queue '**CEO — his account**'
 run_hook --remember
