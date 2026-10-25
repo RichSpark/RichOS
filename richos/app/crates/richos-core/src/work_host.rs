@@ -3143,9 +3143,13 @@ mod tests {
         assert!(left.exists(), "nothing is swept before his turn");
         h.host.wake_messages(&h.binding);
         assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)), "hang guard: the turn completes");
-        until("the ended session's scratch is swept once nothing is open", || !left.exists());
+        // The sweep runs on its own thread, and the reaper writes its log once, after every
+        // deletion (scratch-reaper.py `apply` -> `write_log`): wait for the recorded deletion,
+        // not only for the folder to be gone, or a busy host reads the log before it is written.
+        let deleted = format!("DELETED {}", left.display());
+        until("the ended session's scratch is swept, and recorded, once nothing is open",
+              || !left.exists() && s.log().contains(&deleted));
         assert!(running.exists(), "a live session's scratch is never touched");
-        assert!(s.log().contains(&format!("DELETED {}", left.display())), "{}", s.log());
         h.host.shutdown();
     }
 
