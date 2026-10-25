@@ -649,6 +649,9 @@ class GarbageWalk(srw.StuReminderWalk):
         muted = self.mute_guest_output()
         log = self.facts['logs']['restart-dictation']
         seen = self.payload + '/garbage-walk/kill-during-dictation.json'
+        # Made here too: `mark` makes it, and a run of only the dictation steps has no mark
+        # (walk-c96d72f9b94e: the watcher killed the tool, then could not write what it saw).
+        guest(self.vm, 'mkdir -p ' + shlex.quote(self.payload + '/garbage-walk'), 30)
         # WATCH as it is: its "recording" is the parent folder, so the decoder it waits for is one
         # whose arguments name a dictation's folder, and the pid it kills is the tool's.
         guest(self.vm, 'rm -f %s; nohup /usr/bin/python3 -c %s %d %s %s %d >/dev/null 2>&1 &' % (
