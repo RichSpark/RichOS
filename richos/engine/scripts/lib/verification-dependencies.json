@@ -1984,7 +1984,7 @@
     },
     "scripts/hooks/dialect-guard.test.sh": {
       "source": "scripts/hooks/dialect-guard.test.sh",
-      "sha256": "f4ac9b198ddcf04529962dc40abd94ac4c466134747405f70765e256812614c5",
+      "sha256": "88deb5eca96b52088813ee2fd54a761f3a241fc5d3dbed4776758185f817f6a1",
       "evidence": "The default seat is the real engine, so its four downstream config reads remain dependencies. Later entity fixtures override dialect values without removing the default-seat coverage. Registration, installer and vocabulary inventory assertions read source/data. V8-V12 use the parent vendoring registry as data. The finite mutation driver executes the same suite in a copied engine. Added cases pass vocabulary paths as payload data and the source inventory excludes two exact generated fixture paths; no new executable reader. Renewed 2026-10-01: B35 (the malformed payload) is seated on a sandbox copy of the engine's orchestration.config instead of the engine, so its unevaluated-payload log line lands in the sandbox; the same guard and the same config bytes are read. Renewed 2026-10-24 (zach-opus-dialectb1, renamed from guard-dialect.test.sh): cases for fixes (updatedInput), refusals, Edit context, file bytes and the keyed sample; the keyed sample and the fixer are read as data (scripts/lib/dialect/fixtures/british-keyed.txt, scripts/lib/dialect/dialect-fix.py imported by path), and sandbox engine copies (D5b, D5c, D7) are built under its own temporary directory with a copy of the engine's orchestration.config. E8 runs the hook from the checkout root with no entity override and reads richos/engine/orchestration.config through the hook's own resolution, as before for every case. No new configuration key.",
       "keys": [],
       "edges": [
@@ -2001,7 +2001,7 @@
     },
     "scripts/hooks/dialect-guard.mutation.sh": {
       "source": "scripts/hooks/dialect-guard.mutation.sh",
-      "sha256": "cd38b712c9117561bee9a3c72eb549f6d9fd1b4205eb7537d9dd2a19e9ad314f",
+      "sha256": "f09af6f072d27d565c72701723537014c0fbb20d750baba69dde13f383ad4ada",
       "evidence": "The direct config copy supplies the nested suite, which consumes only its declared guard/helper keys. Twenty-one literal replacements alter verdicts, pattern predicates or dictionary entries, not config reads. The nested flag skips only shipped-parent ownership assertions and prevents recursive mutants. Renewed 2026-10-24 (zach-opus-dialectb1, renamed from guard-dialect.mutation.sh): mutants now target dialect-guard.sh, scripts/lib/dialect/dialect-fix.py and the generated table; each sandbox also carries dispatch-pretooluse.manifest, contract-integrity-probe.sh, registered-hooks.sh, unevaluated-notice.sh, the fixer, the table and the keyed fixture, copied as data. No config read beyond the copied orchestration.config the nested suite consumes.",
       "keys": [],
       "edges": [

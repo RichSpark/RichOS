@@ -36,8 +36,11 @@ except through a skip the old guard also had: fixing replaces the refusal, it ne
            can change behavior: a class name, a wire value, a key); in code, the code
            itself and single-token string literals; a double-quoted run (a quotation is
            somebody's words); a capital mid-sentence; a hyphenated token, markup or an
-           interpolation inside a code string; and the `CEO queue` collocation, which is
-           a rename, not a spelling.
+           interpolation inside a code string; in JS and TS, a regular-expression literal
+           and an attribute value (name="..." is a class list or a prop); in a MultiEdit,
+           an old_string quoting a word an earlier edit of the same call wrote (which
+           occurrence was meant cannot be known); and the `CEO queue` collocation, which
+           is a rename, not a spelling.
 
 EDIT, MULTIEDIT AND NOTEBOOKEDIT carry a fragment, not a file. A fragment in the middle of a
 fenced block or a code string reads as prose on its own, so the target file is read, the
@@ -232,6 +235,51 @@ for _spec in LANG_SPECS.values():
     if _spec["chars"]:
         _openers.append("'")
     _spec["finder"] = re.compile("|".join(re.escape(o) for o in sorted(set(_openers), key=len, reverse=True)))
+# JS also looks for a lone `/`: a regular-expression literal. Quote marks inside one are part
+# of the pattern, never the start of a string, and a word in one is never fixed.
+LANG_SPECS["js"]["finder"] = re.compile(r'//|/\*|`|"|\'|/')
+REGEX_KEYWORDS = frozenset(("return", "typeof", "case", "in", "of", "delete", "void", "throw",
+                            "new", "instanceof", "yield", "await", "do", "else"))
+
+
+def _attribute_value(text, rs):
+    """Is the string whose content starts at `rs` a markup attribute's value: name="..." or
+    name={"..."}, the `=` glued to the name? In JSX that is a class list or a prop, not UI copy."""
+    j = rs - 2
+    if j >= 0 and text[j] == "{":
+        j -= 1
+    return j >= 1 and text[j] == "=" and is_word_char(text[j - 1])
+
+
+def _regex_end(text, s):
+    """Index of the `/` that closes a JS regular-expression literal opening at `s`, or None
+    when the `/` is a division (or the literal does not close on its line)."""
+    j = s - 1
+    while j >= 0 and text[j] in " \t":
+        j -= 1
+    if j >= 0 and (text[j].isalnum() or text[j] in "_$)]"):
+        k = j
+        while k >= 0 and (text[k].isalnum() or text[k] in "_$"):
+            k -= 1
+        if text[k + 1:j + 1] not in REGEX_KEYWORDS:
+            return None
+    i, n, in_class = s + 1, len(text), False
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            return None
+        if c == "\\":
+            i += 2
+            continue
+        if in_class:
+            if c == "]":
+                in_class = False
+        elif c == "[":
+            in_class = True
+        elif c == "/":
+            return i if i > s + 1 else None
+        i += 1
+    return None
 
 
 def _close(text, at, delim, escapes, multiline):
@@ -286,6 +334,13 @@ def lex(text, lang):
                 i = s + 1
                 continue
             regions.append(("string", s + 1, e))
+            i = e + 1
+        elif tok == "/":  # JS only: a regular-expression literal, or a division
+            e = _regex_end(text, s)
+            if e is None:
+                i = s + 1
+                continue
+            regions.append(("regex", s + 1, e))
             i = e + 1
         else:  # a character literal or a lifetime
             cm = CHAR_LITERAL_RE.match(text, s)
@@ -475,8 +530,12 @@ def scan(text, kind, lang, ext, table, allowlist=(), region=None):
                 if _in_code_span(text, ctx_lo, s):
                     continue
                 content = text[rs:rend]
-                if rkind == "comment":
+                if rkind == "regex":
+                    action, why = "refuse", "a regular expression: a fix would change what it matches"
+                elif rkind == "comment":
                     action, why = _prose_decision(text, s, e, run, ctx_lo, rs)
+                elif lang == "js" and _attribute_value(text, rs):
+                    action, why = "refuse", "an attribute value (markup in a JS or TS file): a fix could change a class or an attribute"
                 elif not any(ch.isspace() for ch in content):
                     action, why = "refuse", "a single-token string literal: it may be a wire value or a key"
                 elif MARKUP_RE.search(content):
@@ -613,12 +672,6 @@ def _fragment(out, content, old, new, every, kind, lang, ext, table, allowlist):
     return fixed_new, after
 
 
-def _word_map_apply(text, changes):
-    for written, target in changes:
-        text = re.sub(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(written), target, text)
-    return text
-
-
 def _notebook_cell_kind(path, cell_id):
     data = _read(path)
     try:
@@ -701,11 +754,19 @@ def decide(tool_name, ti, table, allowlist=()):
                 return out.nothing_found()
             old, new, every = ed["old_string"], ed["new_string"], bool(ed.get("replace_all"))
             before = len(out.fixes)
+            quoted = [(w, t) for w, t in made
+                      if re.search(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(w), old)]
+            if quoted:
+                # This edit quotes a word that an earlier edit in the same call wrote and this
+                # hook changes. Which occurrence the model meant cannot be known (a remap by
+                # spelling once rewrote an unrelated line), so it is refused, never remapped.
+                for w, t in quoted:
+                    out.refusals.append(("%s -> %s" % (w, t),
+                                         "this edit's old_string quotes a word an earlier edit in the same "
+                                         "call wrote, which this hook changes; quote the American form, or "
+                                         "make the edits separately", old.strip()[:110]))
+                return out
             got = _fragment(out, content, old, new, every, kind, lang, ext, table, allowlist)
-            if got is None and made:
-                # This edit quotes an earlier edit's text, which this hook already changed.
-                old = _word_map_apply(old, made)
-                got = _fragment(out, content, old, new, every, kind, lang, ext, table, allowlist)
             if got is None:
                 return out.nothing_found()
             for written, target, _ in out.fixes[before:]:

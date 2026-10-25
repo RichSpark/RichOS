@@ -204,6 +204,12 @@ case_refused "R7. a capital mid-sentence is refused (a name)"   "capitalized mid
 case_refused "R8. a hyphenated token in a code string is refused" "hyphenated token inside a string" Write "$SANDBOX/a.js" 'el.className = "btn text-colour";'
 case_refused "R9. an interpolation in a code string is refused" "interpolation or a format field" Write "$SANDBOX/a.py" 'msg = f"the {colour} value"'
 case_refused "R10. markup inside a code string is refused"      "markup inside a string" Write "$SANDBOX/a.js" 'html = "<span>the colour</span>";'
+# R16-R17 — the review's first shape (finding 1): markup and patterns inside a JS or TS file.
+case_refused "R16. a JSX attribute value is refused, never fixed" "an attribute value" Write "$SANDBOX/Picker.tsx" 'export default () => <div className="colour selected">Color picker</div>;'
+case_refused "R16b. ...in braces too" "an attribute value" Write "$SANDBOX/Picker2.tsx" 'export default () => <div className={"colour selected"}>x</div>;'
+case_refused "R17. a regular-expression literal is refused, quote marks and all" "a regular expression" Write "$SANDBOX/matcher.js" 'const match = /["'"'"']colour ["'"'"']/;'
+case_fixed "R17b. control: an ordinary JS sentence is still fixed"  "$C" 'const label = "Pick a nice color";' Write "$SANDBOX/b.js" 'const label = "Pick a nice colour";'
+case_fixed "R17c. control: a division is not a pattern"           "$C" 'const r = a / b; const s = "the color of it";' Write "$SANDBOX/c.js" 'const r = a / b; const s = "the colour of it";'
 case_msg  "R11. the refusal is re-cased: Colour -> Color"       "Colour -> Color" Write "$MD" "We met the Colour Party today."
 case_msg  "R12. the refusal names the file"                     "$MD" Write "$MD" "the CEO queue"
 case_msg  "R13. the refusal names the declared-exemption route" "dialect-exempt:" Write "$MD" "the CEO queue"
@@ -293,7 +299,27 @@ case_fixed "X8. old_string empty on a new file: judged as a Write" "$N" "the col
 printf 'A: TOKEN\n```\nTOKEN\n```\n' > "$SANDBOX/x9.md"
 case_refused "X9. replace_all landing in prose AND a fence is refused" "needs different treatment" Edit "$SANDBOX/x9.md" "TOKEN" "the colour" all
 printf 'one\ntwo\n' > "$SANDBOX/x10.md"
-case_fixed "X10. MultiEdit quoting an earlier edit's fixed text" 'o["updatedInput"]["edits"][1]["old_string"]' "the color" MultiEdit "$SANDBOX/x10.md" "one" "the colour" "the colour" "the colour, again"
+case_refused "X10. MultiEdit quoting an earlier edit's fixed word is refused, never remapped" "quotes a word an earlier edit" MultiEdit "$SANDBOX/x10.md" "one" "the colour" "the colour" "the colour, again"
+# X15/X16 — the review's two shapes (rv-20261025T010405Z-2ec06398-523a, finding 2). A
+# remap by spelling rewrote an unrelated line (overmatch) or missed the inserted text
+# (undermatch); both are refused now, and the file is never touched by a guess.
+multiedit_all() { # <file> -> payload: PLACEHOLDER -> the colour, then replace_all the colour -> a different shade
+    python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "MultiEdit", "tool_input": {"file_path": sys.argv[1], "edits": [
+    {"old_string": "PLACEHOLDER", "new_string": "the colour"},
+    {"old_string": "the colour", "new_string": "a different shade", "replace_all": True}]}}))' "$1"
+}
+printf 'Existing: the color\nNew: PLACEHOLDER\n' > "$SANDBOX/x15.md"
+multiedit_all "$SANDBOX/x15.md" | "$HOOK" >/dev/null 2>"$SANDBOX/x15.err"; X15_RC=$?
+[ "$X15_RC" -eq 2 ] && grep -qF "quotes a word an earlier edit" "$SANDBOX/x15.err" \
+    && ok "X15. MultiEdit overmatch (an existing American line) is refused, never remapped" \
+    || bad "X15. MultiEdit overmatch is refused, never remapped" "exit $X15_RC"
+printf 'Existing: the colour\nNew: PLACEHOLDER\n' > "$SANDBOX/x16.md"
+multiedit_all "$SANDBOX/x16.md" | "$HOOK" >/dev/null 2>"$SANDBOX/x16.err"; X16_RC=$?
+[ "$X16_RC" -eq 2 ] && grep -qF "quotes a word an earlier edit" "$SANDBOX/x16.err" \
+    && ok "X16. MultiEdit undermatch (an existing British line) is refused, never half-applied" \
+    || bad "X16. MultiEdit undermatch is refused, never half-applied" "exit $X16_RC"
 printf 'top\n```\nTOKEN\n```\n' > "$SANDBOX/x11.md"
 case_quiet "X11. MultiEdit inside a fence is left alone"       MultiEdit "$SANDBOX/x11.md" "TOKEN" "colour = 1"
 case_fixed "X12. NotebookEdit code cell: a comment is fixed"   'o["updatedInput"]["new_source"]' "# the color
@@ -338,7 +364,7 @@ bytes_case "F1. Write: the file on disk is American" "The color of the behavior.
 printf 'text\n```\nTOKEN\n```\nend\n' > "$SANDBOX/f2.md"
 bytes_case "F2. Edit inside a fence: the bytes are exactly as typed" "$(printf 'text\n```\ncolour = 1\n```\nend')" Edit "$SANDBOX/f2.md" "TOKEN" "colour = 1"
 printf 'one\ntwo\n' > "$SANDBOX/f3.md"
-bytes_case "F3. MultiEdit chain: every edit applies, the bytes are American" "$(printf 'the color, again\nthe behavior')" MultiEdit "$SANDBOX/f3.md" "one" "the colour" "the colour" "the colour, again" "two" "the behaviour"
+bytes_case "F3. MultiEdit: every edit applies, the bytes are American" "$(printf 'the color\nthe behavior')" MultiEdit "$SANDBOX/f3.md" "one" "the colour" "two" "the behaviour"
 
 echo
 echo "=== K. THE KEYED SAMPLE — never a wrong fix, never a silent pass ==="

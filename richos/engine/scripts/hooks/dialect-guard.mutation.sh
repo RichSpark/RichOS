@@ -247,10 +247,20 @@ mutant replace-all-mixed-fixed "X9. " "$F" \
     '        if "fix" in actions:' \
     "one replacement string landing in prose and in a fence would be fixed in both."
 
-mutant multiedit-chain-broken "X10. " "$F" \
-    '                old = _word_map_apply(old, made)' \
-    '                old = old' \
-    "a MultiEdit quoting its own earlier edit would fail outright once the hook fixed that edit."
+mutant multiedit-quote-guessed "X10. " "$F" \
+    '            if quoted:' \
+    '            if False:' \
+    "a MultiEdit quoting a word its own earlier edit wrote would be applied by guess: an unrelated line rewritten, or the inserted text missed."
+
+mutant regex-fixed "R17. " "$F" \
+    '                if rkind == "regex":' \
+    '                if False:' \
+    "a regular expression's pattern would be respelled and would stop matching what it matched."
+
+mutant jsx-attribute-fixed "R16. " "$F" \
+    '                elif lang == "js" and _attribute_value(text, rs):' \
+    '                elif False:' \
+    "a JSX class list would have one class renamed and its selector would stop matching."
 
 # --- 6. THE EXEMPTIONS ARE THE PRODUCT, NOT THE TRIMMINGS ------------------
 mutant bare-marker-exempts "B12. " "$F" \
