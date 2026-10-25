@@ -4559,12 +4559,21 @@
     },
     "scripts/escalate.sh": {
       "source": "scripts/escalate.sh",
-      "sha256": "9f9de4d2efea2703c9e6fd0ff7f9c3479c5cb15fc6e0df7ec58ae4a8339616f0",
-      "evidence": "Fixed escalations library/Python calls with argument values; an optional --fields file is validated by escalations.py and each value is assigned through a fixed case statement, never evaluated. Git reads derive record identity. Output markdown, actor strings and record paths are data. No orchestration config or manifest is read.",
+      "sha256": "b3c8b3e5207d14ea166e6b39cf9bddf81895bd95374c472ecc62d7c6dad54b4a",
+      "evidence": "Fixed escalations library/Python calls with argument values; an optional --fields file is validated by escalations.py and each value is assigned through a fixed case statement, never evaluated. Git reads derive record identity. Output markdown, actor strings and record paths are data. No orchestration config or manifest is read. Renewed 2026-10-24: raise sources resolve-main-checkout.sh and publication-boundary.sh to decide where the record goes (pb_repo_root, pb_load_declaration, pb_resolve_sources, pb_physical); a publication-bound worktree's record goes under the first PRIVATE_SOURCES entry that is its own git checkout with docs/ and no declaration. Declarations are parsed, never sourced. PUBLICATION_DECLARATION uses its unsourced environment/default value, not orchestration.config, which this script never reads.",
       "keys": [],
       "edges": [
         {
           "to": "scripts/lib/escalations.sh"
+        },
+        {
+          "to": "scripts/lib/publication-boundary.sh#declaration-and-sources",
+          "overrides": [
+            "PUBLICATION_DECLARATION"
+          ]
+        },
+        {
+          "to": "scripts/lib/resolve-main-checkout.sh"
         }
       ]
     },
@@ -4601,8 +4610,8 @@
     },
     "scripts/hooks/escalations.test.sh": {
       "source": "scripts/hooks/escalations.test.sh",
-      "sha256": "40350583e1db6908d183f9d523cfe6fb7d5e8a4a7f4d2f416d6dcf93c472dde0",
-      "evidence": "Builds a private engine with literal PROTECTED_PATHS config, fixed hooks/libraries and private ledgers. All commands target these copies. Finite inline Python mutations replace a predicate or age buckets and invoke the same hooks. The leak canary reads real Git/file metadata as data; neither real config contents nor hook manifest is read. Renewed 2026-10-01: the sandbox also copies audit-report-watch.py (the Stop hook runs it) and points it, through RICHOS_AUDIT_RECORD_REPO and RICHOS_AUDIT_WATCH_STATE, at a record repository that does not exist and a sandbox state directory, so it reads and raises nothing.",
+      "sha256": "5cb2eaebad8a2bdcc5dc76343ff50d0d5e9d95e71d0208ed0a43b0986049655a",
+      "evidence": "Builds a private engine with literal PROTECTED_PATHS config, fixed hooks/libraries and private ledgers. All commands target these copies. Finite inline Python mutations replace a predicate or age buckets and invoke the same hooks. The leak canary reads real Git/file metadata as data; neither real config contents nor hook manifest is read. Renewed 2026-10-01: the sandbox also copies audit-report-watch.py (the Stop hook runs it) and points it, through RICHOS_AUDIT_RECORD_REPO and RICHOS_AUDIT_WATCH_STATE, at a record repository that does not exist and a sandbox state directory, so it reads and raises nothing. Renewed 2026-10-24: case 21 builds sandbox repositories (one carrying a literal .richos/publication-boundary fixture, a linked worktree and a sibling private checkout) with core.hooksPath=/dev/null so fixture commits are made, and the sandbox engine also copies publication-boundary.sh and declaration-path.sh, which escalate.sh sources.",
       "keys": [],
       "edges": [
         {
@@ -17145,7 +17154,7 @@
         "owned-systems.declaration": "a5f48969f23adfc3fc8e289ed29a4911d24bdb7bb19a486fc8b276ff2172374c",
         "scripts/ci-status.sh": "cdc53d28b1814b1e53d6fe9debf95b4a72d361a34e650da60f53ac19462ff3b6",
         "scripts/lib/ci-surface.py": "1f9db70f27901ad81502a653ef2bcf9e1a37a6cfde96ba4d69fe451bc38f23f4",
-        "scripts/escalate.sh": "9f9de4d2efea2703c9e6fd0ff7f9c3479c5cb15fc6e0df7ec58ae4a8339616f0",
+        "scripts/escalate.sh": "b3c8b3e5207d14ea166e6b39cf9bddf81895bd95374c472ecc62d7c6dad54b4a",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
         "scripts/lib/escalations.py": "3e8ea177d23135dd2ebe4dd079bc09e82bc1a9610ad337e61b9ebe60882a4d28",
         "scripts/owned-state-checks/staging-current.sh": "f1de2edf6f6a329bbcf0a8684bf998cad00f26d6f09ff79edc0538957ba677e9",
@@ -17800,7 +17809,7 @@
         "owned-systems.declaration": "a5f48969f23adfc3fc8e289ed29a4911d24bdb7bb19a486fc8b276ff2172374c",
         "scripts/ci-status.sh": "cdc53d28b1814b1e53d6fe9debf95b4a72d361a34e650da60f53ac19462ff3b6",
         "scripts/lib/ci-surface.py": "1f9db70f27901ad81502a653ef2bcf9e1a37a6cfde96ba4d69fe451bc38f23f4",
-        "scripts/escalate.sh": "9f9de4d2efea2703c9e6fd0ff7f9c3479c5cb15fc6e0df7ec58ae4a8339616f0",
+        "scripts/escalate.sh": "b3c8b3e5207d14ea166e6b39cf9bddf81895bd95374c472ecc62d7c6dad54b4a",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
         "scripts/lib/escalations.py": "3e8ea177d23135dd2ebe4dd079bc09e82bc1a9610ad337e61b9ebe60882a4d28",
         "scripts/owned-state-checks/staging-current.sh": "f1de2edf6f6a329bbcf0a8684bf998cad00f26d6f09ff79edc0538957ba677e9",
@@ -18098,7 +18107,7 @@
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/hooks/owned-state.test.sh": "487d91383cd87f56a5e0b7c5a186aa4ba31a167a3e6559661b1df7f8a6562a5a",
         "scripts/lib/escalations.py": "3e8ea177d23135dd2ebe4dd079bc09e82bc1a9610ad337e61b9ebe60882a4d28",
-        "scripts/escalate.sh": "9f9de4d2efea2703c9e6fd0ff7f9c3479c5cb15fc6e0df7ec58ae4a8339616f0",
+        "scripts/escalate.sh": "b3c8b3e5207d14ea166e6b39cf9bddf81895bd95374c472ecc62d7c6dad54b4a",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/owned-state-checks/registered-executables.py": "cc79f6eed01ccc73a862f201bfae2257d7f36e305c183a6d3095a3a2b6202421",
