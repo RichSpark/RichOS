@@ -108,8 +108,8 @@ mutant claim-ignores-polarity "C06" "$C" \
 # this very failure constantly, and an unmasked matcher reads every quotation
 # as a fresh claim.
 mutant claim-reads-quotations "C07" "$C" \
-    '        probe = COMPLETE_QUOTED.sub(lambda m: " " * (m.end() - m.start()), s)' \
-    '        probe = s' \
+    '    masked = COMPLETE_QUOTED.sub(_blank, text)' \
+    '    masked = text' \
     "quoting the sentence that caused the incident would be treated as making the claim again, which is 13 points of precision and the whole reason this signal is worth reading."
 
 # --- 8. AN UNEVALUATED CHECK SAYS SO --------------------------------------
@@ -157,8 +157,22 @@ mutant claim-reads-conditions-as-claims "C09" "$C" \
 
 # --- 14. RETAINED STOPPED WORK IS NOT OWED WORK ----------------------------
 mutant stops-not-honored "U23" "$C" \
-    '            states = record_states(swept["findings"])' \
-    '            states = {"owed": swept["findings"], "retained": [], "unknown": []}' \
+    '            state = "retained"' \
+    '            state = "owed"' \
     "work the CEO stopped and ordered kept would be reported as owed by every completeness claim, as if the report had lied."
+
+# --- 15..17. THE SENTENCE'S OWN SCOPE (second review rv-...ee69ea88-3482) ---
+mutant leading-condition-ignored "C14" "$C" \
+    '    return bool(COMPLETE_LEADING_CONDITION.search(sentence[lead:pos]))' \
+    '    return False' \
+    "'If CI passes, all the work is done.' would be reported as a claim that the work is done."
+mutant repository-scope-ignored "C16" "$C" \
+    '    repos = {lab for lab in labels if lab and _names(sentence, lab)}' \
+    '    repos = set()' \
+    "a true claim about one repository would be blamed for another repository's owed branch."
+mutant named-branch-ignored "C18" "$C" \
+    '    if named:{NL}        return' \
+    '    if False:{NL}        return' \
+    "a branch the report names as landed would be let off whenever its owner record is missing or still running."
 
 mutation_end

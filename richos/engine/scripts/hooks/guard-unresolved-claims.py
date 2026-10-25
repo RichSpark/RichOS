@@ -1068,7 +1068,7 @@ def nameless_dispatch(message, prose):
 # a branch actually holding unlanded work with nothing live on it, so the
 # composite is far rarer -- and on the day it fires, it fires on the sentence
 # that was about to be sent.
-COMPLETE_QUOTED = re.compile(r"`[^`]*`|“[^”]*”|‘[^’\n]{0,300}’|\"[^\"]{0,300}\"")
+COMPLETE_QUOTED = re.compile(r"`[^`]*`|“[^”]*”|‘[^’\n]{0,300}’|\"[^\"\n]{0,300}\"")
 # A markdown blockquote is somebody else's words, whole lines of them, so it is
 # dropped before the sentences are split rather than masked inside one.
 COMPLETE_BLOCKQUOTE = re.compile(r"(?m)^[ \t]*>.*$")
@@ -1085,6 +1085,13 @@ COMPLETE_CONDITION = re.compile(
     r"|provided|will|shall|would|going\s+to|about\s+to)\b|[’']ll\b", re.I)
 # "once again", "at once": the adverb, not the conjunction.
 COMPLETE_NOT_CONDITION = re.compile(r"\bonce\s+(?:again|more)\b|\bat\s+once\b", re.I)
+# A LEADING CONDITION GOVERNS PAST ITS COMMA: "If CI passes, all the work is
+# done." The comma ends the condition's clause, not its reach, so these cues
+# are read back to the sentence's own start (a terminator, colon, semicolon or
+# dash). Only the unambiguous ones: "When I checked, everything had landed."
+# is a report, so `when`, `once` and the rest stay clause-scoped above.
+COMPLETE_LEADING_CONDITION = re.compile(r"\b(?:if|unless|provided|as\s+long\s+as)\b", re.I)
+COMPLETE_SENTENCE_START = re.compile(r"[.!?:;]|\s+--\s+|\s+—\s+")
 COMPLETE_SCOPE = re.compile(
     r"\b(?:"
     r"everything(?!\s+else)"
@@ -1119,7 +1126,18 @@ def conditional_completion(sentence, pos):
             end = m.start()
             break
     before = COMPLETE_NOT_CONDITION.sub(" ", sentence[start:min(pos, end)])
-    return bool(COMPLETE_CONDITION.search(before))
+    if COMPLETE_CONDITION.search(before):
+        return True
+    lead = 0
+    for m in COMPLETE_SENTENCE_START.finditer(sentence, 0, pos):
+        lead = m.end()
+    return bool(COMPLETE_LEADING_CONDITION.search(sentence[lead:pos]))
+
+
+def _blank(m):
+    """A quotation, blanked to spaces of the same length (newlines kept), so
+    offsets line up with the original text and its sentences still split."""
+    return "".join("\n" if c == "\n" else " " for c in m.group(0))
 
 
 def completeness_claims(text):
@@ -1136,11 +1154,18 @@ def completeness_claims(text):
     """
     out = []
     text = COMPLETE_BLOCKQUOTE.sub("", text)
-    for s in SENTENCE_SPLIT.split(text):
-        s = s.strip()
+    # Masked BEFORE the sentences are split: a quotation holding two sentences
+    # is still one quotation, and its own terminators must not cut it in half.
+    masked = COMPLETE_QUOTED.sub(_blank, text)
+    bounds, at = [], 0
+    for m in SENTENCE_SPLIT.finditer(masked):
+        bounds.append((at, m.start()))
+        at = m.end()
+    bounds.append((at, len(masked)))
+    for a, b in bounds:
+        s, probe = text[a:b].strip(), masked[a:b].strip()
         if not s or len(s) > 600:
             continue
-        probe = COMPLETE_QUOTED.sub(lambda m: " " * (m.end() - m.start()), s)
         ms = COMPLETE_SCOPE.search(probe)
         if not ms:
             continue
@@ -1266,6 +1291,43 @@ def record_states(findings):
             state = "owed"
         out[state].append(f)
     return out
+
+
+# For a branch the report named as landed whose work is recorded stopped or
+# held: a fact about Git, never a demand to merge, delete or resume it.
+RETAINED_NOTE = ("; recorded stopped or held, so nothing is owed: only the "
+                 "claim that it landed does not match Git")
+
+
+def _names(sentence, ident):
+    """The sentence names this exact identifier: a repository label or a
+    branch the sweep found, delimited, never a substring of a longer name."""
+    return bool(ident) and re.search(r"(?<![A-Za-z0-9_./-])%s(?![A-Za-z0-9_/-])"
+                                     % re.escape(ident), sentence) is not None
+
+
+def claim_scope(sentence, swept, state_of):
+    """(contradicted, unknown) -- the findings ONE completeness sentence is
+    about, by the identifiers it names, and which of them contradict it.
+
+      * it names branches the sweep found: every one of them contradicts it,
+        whatever its owner's state. A recorded stop or hold means nothing is
+        owed, not that "this branch landed" is true; such a finding carries
+        `retained` so the report says only that the claim does not match Git
+      * else it names repositories: the OWED findings in those only
+      * else it names nothing specific: every OWED finding of the sweep
+    UNKNOWN is the unnamed, unowned rest of that scope: listed, never counted.
+    Names are matched exactly against the sweep's own labels and branches."""
+    findings = swept.get("findings") or []
+    named = [f for f in findings if _names(sentence, f["branch"])]
+    if named:
+        return [dict(f, retained=True) if state_of.get(id(f)) == "retained" else f
+                for f in named], []
+    labels = {r.get("label") for r in swept.get("repos") or []} | {f["label"] for f in findings}
+    repos = {lab for lab in labels if lab and _names(sentence, lab)}
+    scope = [f for f in findings if not repos or f["label"] in repos]
+    return ([f for f in scope if state_of.get(id(f)) == "owed"],
+            [f for f in scope if state_of.get(id(f)) == "unknown"])
 
 
 # --------------------------------------------------------------------------
@@ -1433,12 +1495,22 @@ def main():
             # class exists to stop being invisible.
             complete_unevaluated = why
         elif swept.get("findings"):
-            states = record_states(swept["findings"])
-            complete_unknown = states["unknown"]
-            if states["owed"]:
-                complete_reports.append((cclaims[0][0],
-                                         dict(swept, findings=states["owed"],
-                                              n_findings=len(states["owed"]))))
+            state_of = {id(f): k for k, fs in record_states(swept["findings"]).items()
+                        for f in fs}
+            said, contradicted, seen = "", [], set()
+            for sentence, _pol in cclaims:
+                bad, unknown = claim_scope(sentence, swept, state_of)
+                for f in bad:
+                    if (f["repo"], f["branch"]) not in seen:
+                        seen.add((f["repo"], f["branch"]))
+                        contradicted.append(f)
+                        said = said or sentence
+                complete_unknown += [f for f in unknown if f not in complete_unknown]
+            complete_unknown = [f for f in complete_unknown
+                                if (f["repo"], f["branch"]) not in seen]
+            if contradicted:
+                complete_reports.append((said, dict(swept, findings=contradicted,
+                                                    n_findings=len(contradicted))))
 
     # --- observation record -------------------------------------------------
     # Written for EVERY turn, blocked or not, so the reporting layer is a record
@@ -1532,7 +1604,8 @@ def main():
                                  % (f["label"], f["branch"], f["commits"],
                                     f["trunk"], f["tip"],
                                     f["age_days"] if f["age_days"] is not None else "?",
-                                    (", " + f["teammate"]) if f["teammate"] else ""))
+                                    ((", " + f["teammate"]) if f["teammate"] else "")
+                                    + (RETAINED_NOTE if f.get("retained") else "")))
                 if sw["n_findings"] > 6:
                     lines.append("      (+%d more — scripts/unlanded-branches-lint.sh)"
                                  % (sw["n_findings"] - 6))
@@ -1559,9 +1632,10 @@ def main():
             # THE ONE LINE THAT LEAVES THE TRANSCRIPT. See operator_line().
             for sentence, sw in complete_reports:
                 named = "; ".join(
-                    "%s %s (%d commit%s)" % (f["label"], f["branch"],
-                                             f["commits"],
-                                             "" if f["commits"] == 1 else "s")
+                    "%s %s (%d commit%s%s)" % (f["label"], f["branch"],
+                                               f["commits"],
+                                               "" if f["commits"] == 1 else "s",
+                                               RETAINED_NOTE if f.get("retained") else "")
                     for f in sw["findings"][:4])
                 extra = ("" if sw["n_findings"] <= 4
                          else " (+%d more)" % (sw["n_findings"] - 4))

@@ -47,6 +47,15 @@
 #   U24       <-> the unknown branch is still listed in the detail
 #   U25       with the owed work landed, nothing is reported
 #   U26       the sweep's inventory still lists every one of them
+#   U27/U28   a branch the report NAMES as landed is checked whatever its
+#             owner's state: running is reported, and held is reported only as
+#             a mismatch with Git, nothing owed (U25: a generic claim still
+#             honors the hold)
+#   C14/C15   a leading condition across a comma, and a quotation of several
+#             sentences, raise nothing
+#   C16/C17   a claim naming one repository is checked there only <-> the
+#             same claim about the repository holding the owed branch fires
+#   C18       a named branch with no owner record is still checked
 #   C01       it reports and NEVER blocks — exit 0, always
 #   L01..L04  the lint script's three exit codes never collapse into each other
 #
@@ -669,6 +678,41 @@ else
     bad "C13 a markdown quotation is not the reply's own claim" "stdout: $RUN_OUT"
 fi
 
+# C14..C17 — the second review's fixtures (rv-20261025T025135Z-ee69ea88-3482),
+# each with owed work present, so silence is about the reading.
+drive "$CLAIMS" "If CI passes, all the work is done."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C14 a LEADING condition governs past its comma — 'If CI passes, all the work is done.' raises nothing"
+else
+    bad "C14 a condition before the comma still governs the claim after it" "stdout: $RUN_OUT"
+fi
+drive "$CLAIMS" "He wrote: “All the work has landed. Everything is merged.” I am checking that."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C15 a quotation of TWO sentences is masked whole — quoting a report is not making it"
+else
+    bad "C15 a multi-sentence quotation is not the speaker's claim" "stdout: $RUN_OUT"
+fi
+drive "$CLAIMS" "All the work in seat has landed."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C16 a claim about ONE repository is checked against that repository only — far's owed branch is not its business"
+else
+    bad "C16 a claim naming a repository is not blamed for another repository's work" "stdout: $RUN_OUT"
+fi
+drive "$CLAIMS" "All the work in far has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' && printf '%s' "$RUN_OUT" | grep -q 'teammate-work'; then
+    ok "C17 PAIRED TWIN: the same claim about the repository that holds the owed branch is reported"
+else
+    bad "C17 a claim naming the owed branch's repository is still caught" "stdout: ${RUN_OUT:-<empty>}"
+fi
+# The finding's own form, `<repo> <branch> (`, never the branch name alone:
+# the operator line also quotes the sentence, which names the branch too.
+drive "$CLAIMS" "All the work on stranded in seat has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' && printf '%s' "$RUN_OUT" | grep -q 'seat stranded ('; then
+    ok "C18 a branch the report NAMES as landed is checked even with no owner record — unknown is only for the unnamed"
+else
+    bad "C18 an explicitly named unlanded branch contradicts the report whatever its record" "stdout: ${RUN_OUT:-<empty>}"
+fi
+
 # ===========================================================================
 # 4b. RETAINED STOPPED WORK IS NOT REVIVED AS OWED WORK
 #
@@ -734,6 +778,20 @@ if [ "$S_FOUND" = "cc/dev-opus-held2 cc/dev-opus-run4 cc/dev-opus-stop3 shelved/
     ok "U26 the branch inventory is unchanged: the sweep still lists every branch outside main"
 else
     bad "U26 the sweep still lists every branch outside main" "findings: [$S_FOUND]"
+fi
+
+claims_at "$STOPREPO" "All the work on cc/dev-opus-run4 has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' && printf '%s' "$RUN_OUT" | grep -q 'stopped cc/dev-opus-run4 ('; then
+    ok "U27 a RUNNING branch the report names as landed is reported — it is not landed"
+else
+    bad "U27 an explicitly named running branch contradicts the report" "stdout: ${RUN_OUT:-<empty>}"
+fi
+claims_at "$STOPREPO" "All the work on cc/dev-opus-held2 has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'stopped cc/dev-opus-held2 (' \
+   && printf '%s' "$RUN_OUT" | grep -q 'nothing is owed: only the claim that it landed does not match Git'; then
+    ok "U28 a HELD branch the report names as landed is a mismatch with Git, said as one — never a demand to land it"
+else
+    bad "U28 a hold makes nothing owed, not 'it landed' true" "stdout: ${RUN_OUT:-<empty>}"
 fi
 
 # ===========================================================================
