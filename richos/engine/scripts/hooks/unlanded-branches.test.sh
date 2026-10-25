@@ -38,6 +38,26 @@
 #   C05       the SAME sentence with nothing stranded is silent
 #   C06       a NEGATED completeness claim is silent
 #   C07       a QUOTED completeness claim is silent (the 13-point precision fix)
+#   C09/C10   a CONDITIONAL sentence is extracted, read as a condition, silent
+#   C11       <-> the plain claim over the same stranded branch still fires
+#   C12/C13   a FORECAST and a BLOCKQUOTE are silent
+#   U23       the claim class reports only OWED work, resolved through the open
+#             record whose workspace is that branch; held and stopped are
+#             RETAINED, running is not owed, a branch no record owns is UNKNOWN
+#   U24       <-> the unknown branch is still listed in the detail
+#   U25       with the owed work landed, nothing is reported
+#   U26       the sweep's inventory still lists every one of them
+#   U27/U28   a branch the report NAMES as landed is checked whatever its
+#             owner's state: running is reported, and held is reported only as
+#             a mismatch with Git, nothing owed (U25: a generic claim still
+#             honors the hold)
+#   C14/C15   a leading condition across a comma, and a quotation of several
+#             sentences, raise nothing
+#   C16/C17   a claim naming one repository is checked there only <-> the
+#             same claim about the repository holding the owed branch fires
+#   C18       a named branch with no owner record is still checked
+#   C19       a future or conditional marker anywhere in the sentence makes it
+#             no completion claim (C11 still fires)
 #   C01       it reports and NEVER blocks — exit 0, always
 #   L01..L04  the lint script's three exit codes never collapse into each other
 #
@@ -204,6 +224,25 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 }
 write_ledger
+
+# dev-opus-a1's OPEN WORK RECORD: its workspace is `teammate-work`, it ended,
+# nothing landed, stopped or held it. That is what makes the branch OWED to
+# the claim class, which judges a branch only through the open record whose
+# workspace it is (record_states); `stranded` has no record at all and is
+# UNKNOWN there, while the sweep and the notice name both.
+mk_record() { # <name> <repo> <branch> <json fields> — one open registry record
+    python3 - "$RICHOS_WORKSPACES_DIR" "$SESSION--$1" "$1" "$2" "$3" "$4" <<'PY'
+import json, os, sys
+reg, key, name, repo, branch, extra = sys.argv[1:7]
+d = {"key": key, "name": name, "session_id": key.split("--")[0], "disposition": None,
+     "workspaces": [{"repo": repo, "branch": branch, "kind": "cc"}]}
+d.update(json.loads(extra))
+os.makedirs(os.path.join(reg, "agents"), exist_ok=True)
+with open(os.path.join(reg, "agents", key + ".json"), "w", encoding="utf-8") as f:
+    json.dump(d, f)
+PY
+}
+mk_record dev-opus-a1 "$FAR" teammate-work '{"end": {"signal": "SubagentStop"}}'
 
 # ===========================================================================
 # DRIVERS
@@ -588,6 +627,183 @@ if printf '%s' "$C7_OUT" | grep -q 'DID NOT RUN\|WENT OUT UNCHECKED'; then
     ok "C08 with the sweep missing, the claim is reported as UNCHECKED rather than passed"
 else
     bad "C08 an unevaluated check says so" "output: ${C7_OUT:-<empty>}"
+fi
+
+# C09..C13 — A CONDITION, A FORECAST OR A QUOTATION IS NOT A REPORT (2026-10-25).
+# "Nightly 75 builds once all the work you named has landed." was read as a
+# POSITIVE claim, exactly like "All the work has landed.", and the operator was
+# told YOU CALLED IT DONE every turn the sentence was repeated. The sentence
+# says what happens AFTER the work lands; it claims nothing has. C09 is the
+# positive control C06a taught this suite to carry: the sentence IS extracted,
+# so C10's silence is about the reading and not about a sentence nothing saw.
+# C11 is the regression control: the plain claim, same repository, still fires.
+CONDITIONAL="Nightly 75 builds once all the work you named has landed."
+COND_POL="$(python3 - "$SCRIPT_DIR/guard-unresolved-claims.py" "$CONDITIONAL" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("g", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+c = m.completeness_claims(sys.argv[2])
+print(c[0][1] if c else "no-claim-at-all")
+PY
+)"
+if [ "$COND_POL" = "conditional" ]; then
+    ok "C09 POSITIVE CONTROL: the conditional sentence IS extracted as a claim, and read as a condition"
+else
+    bad "C09 the conditional sentence is read as a condition" "polarity: '$COND_POL' (positive means it is reported as a claim that the work is in)"
+fi
+drive "$CLAIMS" "$CONDITIONAL"
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C10 a CONDITIONAL completeness sentence raises nothing, with stranded work present"
+else
+    bad "C10 a sentence about what happens once the work lands is not a claim that it has" "stdout: $RUN_OUT"
+fi
+drive "$CLAIMS" "All the work has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' \
+   && printf '%s' "$RUN_OUT" | grep -q 'teammate-work'; then
+    ok "C11 REGRESSION CONTROL: the plain claim over the same owed branch is still reported, branch named"
+else
+    bad "C11 a real completeness claim is still caught" "stdout: ${RUN_OUT:-<empty>}"
+fi
+drive "$CLAIMS" "All the work will have landed by the time the nightly starts."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C12 a FORECAST of completeness raises nothing"
+else
+    bad "C12 a sentence in the future tense is not a claim" "stdout: $RUN_OUT"
+fi
+drive "$CLAIMS" "His message, as he wrote it:
+> All the work has landed.
+I am checking that now."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C13 a BLOCKQUOTED completeness sentence raises nothing — quoting is not claiming"
+else
+    bad "C13 a markdown quotation is not the reply's own claim" "stdout: $RUN_OUT"
+fi
+
+# C14..C17 — the second review's fixtures (rv-20261025T025135Z-ee69ea88-3482),
+# each with owed work present, so silence is about the reading.
+drive "$CLAIMS" "If CI passes, all the work is done."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C14 a LEADING condition governs past its comma — 'If CI passes, all the work is done.' raises nothing"
+else
+    bad "C14 a condition before the comma still governs the claim after it" "stdout: $RUN_OUT"
+fi
+drive "$CLAIMS" "He wrote: “All the work has landed. Everything is merged.” I am checking that."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C15 a quotation of TWO sentences is masked whole — quoting a report is not making it"
+else
+    bad "C15 a multi-sentence quotation is not the speaker's claim" "stdout: $RUN_OUT"
+fi
+drive "$CLAIMS" "All the work in seat has landed."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C16 a claim about ONE repository is checked against that repository only — far's owed branch is not its business"
+else
+    bad "C16 a claim naming a repository is not blamed for another repository's work" "stdout: $RUN_OUT"
+fi
+drive "$CLAIMS" "All the work in far has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' && printf '%s' "$RUN_OUT" | grep -q 'teammate-work'; then
+    ok "C17 PAIRED TWIN: the same claim about the repository that holds the owed branch is reported"
+else
+    bad "C17 a claim naming the owed branch's repository is still caught" "stdout: ${RUN_OUT:-<empty>}"
+fi
+# C19 — the third review (rv-20261025T033755Z-5fbedc97-69a2): a forecast whose
+# marker sits before a coordinated verb. A future or conditional marker ANYWHERE
+# in the sentence makes it no completion claim; C11's plain claim still fires.
+drive "$CLAIMS" "All the work will be tested and merged."
+if ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "C19 'All the work will be tested and merged.' raises nothing — the marker governs the whole sentence"
+else
+    bad "C19 a future marker anywhere in the sentence means it is not a completion claim" "stdout: $RUN_OUT"
+fi
+
+# The finding's own form, `<repo> <branch> (`, never the branch name alone:
+# the operator line also quotes the sentence, which names the branch too.
+drive "$CLAIMS" "All the work on stranded in seat has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' && printf '%s' "$RUN_OUT" | grep -q 'seat stranded ('; then
+    ok "C18 a branch the report NAMES as landed is checked even with no owner record — unknown is only for the unnamed"
+else
+    bad "C18 an explicitly named unlanded branch contradicts the report whatever its record" "stdout: ${RUN_OUT:-<empty>}"
+fi
+
+# ===========================================================================
+# 4b. RETAINED STOPPED WORK IS NOT REVIVED AS OWED WORK
+#
+# The femcboost case of 2026-10-25: `wip/zach-opus-onepass1-held-guard` and a
+# shelved merge sat outside main because the CEO STOPPED that work and ordered
+# it kept (§92). A branch outside main proved only that it was outside main,
+# and every completeness claim was reported over them as if the report lied.
+#
+# The claim class judges a branch only through the open work record whose
+# workspace IS that repository and branch. One branch per state:
+#   cc/dev-opus-owed1    ended, nothing decided it  -> OWED, reported
+#   cc/dev-opus-held2    held                       -> RETAINED
+#   cc/dev-opus-stop3    end stopped                -> RETAINED
+#   cc/dev-opus-run4     no end yet                 -> RUNNING, not owed
+#   shelved/no-record    no open record             -> UNKNOWN, listed only
+# The sweep's inventory lists all five, always.
+# ===========================================================================
+STOPREPO="$SANDBOX/stopped"
+mk_repo "$STOPREPO"; adopt "$STOPREPO"; record_work "$STOPREPO"
+for b in cc/dev-opus-owed1 cc/dev-opus-held2 cc/dev-opus-stop3 cc/dev-opus-run4 shelved/no-record; do
+    mk_branch "$STOPREPO" "$b" "$(basename "$b").txt"
+done
+mk_record dev-opus-owed1 "$STOPREPO" cc/dev-opus-owed1 '{"end": {"signal": "SubagentStop"}}'
+mk_record dev-opus-held2 "$STOPREPO" cc/dev-opus-held2 '{"end": {"signal": "SubagentStop"}, "waiting": {"kind": "held", "on": "his decision"}}'
+mk_record dev-opus-stop3 "$STOPREPO" cc/dev-opus-stop3 '{"end": {"signal": "stopped", "detail": "the platform recorded stoppedByUser"}}'
+mk_record dev-opus-run4 "$STOPREPO" cc/dev-opus-run4 '{}'
+
+claims_at() { # <repo> <message> — sets RUN_OUT/RUN_ERR/RUN_RC
+    mk_payload "$2" control > "$SANDBOX/payload.json"
+    env RICHOS_ENTITY_ROOT="$1" CLAUDE_PROJECT_DIR="$1" \
+        CLAUDE_PLUGIN_ROOT="$ENGINE_ROOT" RICHOS_WORKTREE_LEDGER="$SANDBOX/no-such-ledger" \
+        /bin/bash "$CLAIMS" < "$SANDBOX/payload.json" > "$SANDBOX/out.txt" 2>"$SANDBOX/err.txt"
+    RUN_RC=$?
+    RUN_OUT="$(cat "$SANDBOX/out.txt")"
+    RUN_ERR="$(cat "$SANDBOX/err.txt")"
+}
+
+claims_at "$STOPREPO" "All the work has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'dev-opus-held2\|dev-opus-stop3\|dev-opus-run4\|shelved/no-record'; then
+    bad "U23 held, stopped, running and unrecorded work is not reported as owed" "stdout: $RUN_OUT"
+elif printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' \
+     && printf '%s' "$RUN_OUT" | grep -q 'cc/dev-opus-owed1'; then
+    ok "U23 only the OWED branch is reported; held and stopped are retained, running is in progress, unrecorded is unknown"
+else
+    bad "U23 the owed branch is still reported, by name" "stdout: ${RUN_OUT:-<empty>}"
+fi
+if printf '%s' "$RUN_ERR" | grep -q 'UNKNOWN' && printf '%s' "$RUN_ERR" | grep -q 'shelved/no-record'; then
+    ok "U24 the branch no record owns is LISTED as unknown in the detail, never counted against the report"
+else
+    bad "U24 an unknown branch stays visible in the detail" "stderr: ${RUN_ERR:-<empty>}"
+fi
+
+git -C "$STOPREPO" merge -q --no-edit cc/dev-opus-owed1 >/dev/null 2>&1
+claims_at "$STOPREPO" "All the work has landed."
+if [ "$RUN_RC" -eq 0 ] && ! printf '%s' "$RUN_OUT$RUN_ERR" | grep -q 'YOU CALLED IT DONE'; then
+    ok "U25 with the owed work landed, retained, running and unknown branches raise nothing"
+else
+    bad "U25 retained stopped work does not turn a completeness claim into a false one" "exit $RUN_RC stdout: ${RUN_OUT:-<empty>}"
+fi
+
+S_FOUND="$(names_of "$(sweep_at "$STOPREPO")" findings)"
+if [ "$S_FOUND" = "cc/dev-opus-held2 cc/dev-opus-run4 cc/dev-opus-stop3 shelved/no-record" ]; then
+    ok "U26 the branch inventory is unchanged: the sweep still lists every branch outside main"
+else
+    bad "U26 the sweep still lists every branch outside main" "findings: [$S_FOUND]"
+fi
+
+claims_at "$STOPREPO" "All the work on cc/dev-opus-run4 has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'YOU CALLED IT DONE' && printf '%s' "$RUN_OUT" | grep -q 'stopped cc/dev-opus-run4 ('; then
+    ok "U27 a RUNNING branch the report names as landed is reported — it is not landed"
+else
+    bad "U27 an explicitly named running branch contradicts the report" "stdout: ${RUN_OUT:-<empty>}"
+fi
+claims_at "$STOPREPO" "All the work on cc/dev-opus-held2 has landed."
+if printf '%s' "$RUN_OUT" | grep -q 'stopped cc/dev-opus-held2 (' \
+   && printf '%s' "$RUN_OUT" | grep -q 'nothing is owed: only the claim that it landed does not match Git'; then
+    ok "U28 a HELD branch the report names as landed is a mismatch with Git, said as one — never a demand to land it"
+else
+    bad "U28 a hold makes nothing owed, not 'it landed' true" "stdout: ${RUN_OUT:-<empty>}"
 fi
 
 # ===========================================================================

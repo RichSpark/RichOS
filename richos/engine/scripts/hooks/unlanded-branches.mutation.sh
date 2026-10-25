@@ -108,8 +108,8 @@ mutant claim-ignores-polarity "C06" "$C" \
 # this very failure constantly, and an unmasked matcher reads every quotation
 # as a fresh claim.
 mutant claim-reads-quotations "C07" "$C" \
-    '        probe = COMPLETE_QUOTED.sub(lambda m: " " * (m.end() - m.start()), s)' \
-    '        probe = s' \
+    '    masked = COMPLETE_QUOTED.sub(_blank, text)' \
+    '    masked = text' \
     "quoting the sentence that caused the incident would be treated as making the claim again, which is 13 points of precision and the whole reason this signal is worth reading."
 
 # --- 8. AN UNEVALUATED CHECK SAYS SO --------------------------------------
@@ -146,5 +146,30 @@ mutant lint-unread-exits-zero "L05" "$L" \
     '[ "${NOTEX:-0}" = "0" ] || exit 2' \
     ': # mutated' \
     "'nothing is unlanded' and 'nothing was read' would share exit 0 again -- the collapse this script's own exit-code table forbids, and the one it was shipping."
+
+# --- 13. A CONDITION IS NOT A REPORT ---------------------------------------
+# "Nightly 75 builds once all the work you named has landed." told the operator
+# YOU CALLED IT DONE every turn it was repeated (2026-10-25).
+mutant claim-reads-conditions-as-claims "C09" "$C" \
+    '                if pol == "positive" and conditional_completion(probe, mt.start()):' \
+    '                if False:' \
+    "a sentence about what happens once the work lands would be reported as a claim that it has, every turn it is repeated."
+
+# --- 14. RETAINED STOPPED WORK IS NOT OWED WORK ----------------------------
+mutant stops-not-honored "U23" "$C" \
+    '            state = "retained"' \
+    '            state = "owed"' \
+    "work the CEO stopped and ordered kept would be reported as owed by every completeness claim, as if the report had lied."
+
+# --- 15..16. THE SENTENCE'S OWN SCOPE (second review rv-...ee69ea88-3482) ---
+# (A condition anywhere in the sentence is mutant 13's property, C09..C19.)
+mutant repository-scope-ignored "C16" "$C" \
+    '    repos = {lab for lab in labels if lab and _names(sentence, lab)}' \
+    '    repos = set()' \
+    "a true claim about one repository would be blamed for another repository's owed branch."
+mutant named-branch-ignored "C18" "$C" \
+    '    if named:{NL}        return' \
+    '    if False:{NL}        return' \
+    "a branch the report names as landed would be let off whenever its owner record is missing or still running."
 
 mutation_end

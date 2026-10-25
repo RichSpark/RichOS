@@ -3054,14 +3054,17 @@
     },
     "scripts/hooks/guard-unresolved-claims.py": {
       "source": "scripts/hooks/guard-unresolved-claims.py",
-      "sha256": "ba32db57dc08fd887b4210ce09e3e7cfc2a94ef16f89bd5c09d19378fada881d",
-      "evidence": "Standard-library transcript/claim predicate invokes only Git queries plus two fixed imports: workspaces.integration_for and unlanded-branches.sweep. The latter extra-repository setting is an environment value inherited from the sourcing wrapper.",
+      "sha256": "5b482a224e00c2aa6010fbf2e29947e60277e2d74458fab7bb56117665abb2dc",
+      "evidence": "Standard-library transcript/claim predicate invokes only Git queries plus three fixed imports: workspaces.integration_for, workspaces.all_agents() and unlanded-branches.sweep. The latter extra-repository setting is an environment value inherited from the sourcing wrapper. Renewed 2026-10-25 (zach-opus-claims1): only after a positive completeness claim, record_states reads the registry's OPEN records (all_agents(), never the closed history) to resolve each unlanded branch through the record whose workspace it is; no other file, key or environment variable.",
       "keys": [
         "UNLANDED_BRANCHES_EXTRA_REPOS"
       ],
       "edges": [
         {
           "to": "mega-lander/workspaces.py#integration"
+        },
+        {
+          "to": "mega-lander/workspaces.py#left-off-registry"
         },
         {
           "to": "scripts/lib/unlanded-branches.py"
@@ -3213,7 +3216,7 @@
     },
     "scripts/hooks/unlanded-branches.test.sh": {
       "source": "scripts/hooks/unlanded-branches.test.sh",
-      "sha256": "fc3bf2cb39747ba2d947d59d5c30799304f4b6d77e83c15a35f150c1becd236d",
+      "sha256": "a5f015d9a91557df9ed0f15c8298898794bd669213e106886d35ee27a435c7cf",
       "evidence": "All adopted roots are private with empty/literal switched config, including the nested mutation suite. The lint does not source settings and uses only its fixture/environment arguments. The missing-sweep case copies the finite claim/recovery/integration helpers into its private engine, proves the positive control there then removes only the copied sweep. No assertion consumes transported real config values. The mutation allocator ledger uses a suite-private CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
@@ -3242,7 +3245,7 @@
     },
     "scripts/hooks/unlanded-branches.mutation.sh": {
       "source": "scripts/hooks/unlanded-branches.mutation.sh",
-      "sha256": "42e7e7cd92ee117d4d27295851655acd0661d4f4901f5e46c940492c8518e9de",
+      "sha256": "4429751b64a96b5472a3901597a53c694753e6fbd2917ffb37e26e5a6fe55c70",
       "evidence": "Twelve literal source substitutions use the shared harness and the same unlanded fixture constructor. Copied real settings are transport; all executed hooks resolve generated adopted entities.",
       "keys": [],
       "edges": [
@@ -17015,7 +17018,7 @@
         "scripts/hooks/guard-resume-isolation.test.sh": "2fc190fc539a183b423ac8ba7a22a23c56d6f8cd289aa341a67a7d6fd8f39a1d",
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
         "scripts/hooks/guard-unresolved-claims.mutation.sh": "6d4bf387038b7a414e1ddbb0f0866376e85be97fcd900d2722eb36bc6fc030c7",
-        "scripts/hooks/guard-unresolved-claims.py": "ba32db57dc08fd887b4210ce09e3e7cfc2a94ef16f89bd5c09d19378fada881d",
+        "scripts/hooks/guard-unresolved-claims.py": "5b482a224e00c2aa6010fbf2e29947e60277e2d74458fab7bb56117665abb2dc",
         "scripts/hooks/guard-unresolved-claims.sh": "ee955921f52cd49dcf9e2abb50b2cada51d5d2628bb9384baac7dada190633ba",
         "scripts/hooks/guard-unresolved-claims.test.sh": "58b9f2700b0be075e1ef95af1f4988e5a2989fdb3923144b105e6e23b3eceb81",
         "scripts/hooks/guard-workspace-gate.sh": "a4771af1be31ff8cb5d6ef3fe4e9e3b898154c30c269fa161aba320a229c18c8",
@@ -17829,7 +17832,7 @@
         "scripts/hooks/guard-stop-live-work.sh": "d4e441b03f147bef5f603f75f9d8d1e22f4129d9490aa1ae9389bed25f5893d5",
         "scripts/lib/stop-live-work.py": "d0f36a18367cdd8bf4b022e1325e8cdc1043e508c584359cff0980dbdadca8be",
         "scripts/hooks/guard-unresolved-claims.sh": "ee955921f52cd49dcf9e2abb50b2cada51d5d2628bb9384baac7dada190633ba",
-        "scripts/hooks/guard-unresolved-claims.py": "ba32db57dc08fd887b4210ce09e3e7cfc2a94ef16f89bd5c09d19378fada881d",
+        "scripts/hooks/guard-unresolved-claims.py": "5b482a224e00c2aa6010fbf2e29947e60277e2d74458fab7bb56117665abb2dc",
         "scripts/hooks/guard-workflow-ban.sh": "2b93395b9ef6e99b03221e0dcf7682b926f366dbb7884c3889c00384cf550ade",
         "scripts/hooks/guard-workspace-gate.sh": "a4771af1be31ff8cb5d6ef3fe4e9e3b898154c30c269fa161aba320a229c18c8",
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
@@ -18012,7 +18015,7 @@
         "mega-lander/workspaces.py": "ae047dec5765187e3aa42cbec11e3f9006d786ebe64df89201197237a6c8fb93",
         "mega-lander/workspaces.sh": "f3d8f6fd22b225d83efa1debf5336de5076c6531a48690802000e5f573f80744",
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
-        "scripts/hooks/guard-unresolved-claims.py": "ba32db57dc08fd887b4210ce09e3e7cfc2a94ef16f89bd5c09d19378fada881d",
+        "scripts/hooks/guard-unresolved-claims.py": "5b482a224e00c2aa6010fbf2e29947e60277e2d74458fab7bb56117665abb2dc",
         "scripts/hooks/guard-workspace-gate.sh": "a4771af1be31ff8cb5d6ef3fe4e9e3b898154c30c269fa161aba320a229c18c8",
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
