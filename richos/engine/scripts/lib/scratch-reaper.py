@@ -290,8 +290,11 @@ def lstart_epoch(text):
 class Liveness(object):
     """Who is running, and what that lets us say about who is not."""
 
-    def __init__(self, ws):
+    def __init__(self, ws, extra_session_dirs=()):
         self.ws = ws
+        # More session registries than this program's own: the RichOS app runs each added
+        # Claude account in its own configuration folder, whose sessions register there.
+        self.extra_session_dirs = list(extra_session_dirs)
         self.registered = {}     # pid -> sessionId, from the session files
         self.running = {}        # sessionId -> (pid, why)
         self.unattributed = []   # [(pid, lstart, epoch)]
@@ -301,8 +304,10 @@ class Liveness(object):
         self._read()
 
     def _read(self):
-        sd = sessions_dir()
-        for path in sorted(glob.glob(os.path.join(sd, "*.json"))):
+        files = []
+        for sd in [sessions_dir()] + self.extra_session_dirs:
+            files += sorted(glob.glob(os.path.join(sd, "*.json")))
+        for path in files:
             try:
                 with open(path, encoding="utf-8") as fh:
                     rec = json.load(fh)
@@ -3027,6 +3032,24 @@ class Reaper(object):
                 found.add(name)
         return found
 
+    def app_account_session_dirs(self, data):
+        """<folder>/sessions for every added account: each folder <data>/claude-accounts.json
+        names (richos-core claude_accounts.rs LIST_FILE; Account 1 has none and uses the default
+        registry), and every <data>/claude-accounts/<id>, where the app makes them."""
+        out = sorted(glob.glob(os.path.join(data, "claude-accounts", "*", "sessions")))
+        try:
+            with open(os.path.join(data, "claude-accounts.json"), encoding="utf-8") as fh:
+                listed = json.load(fh)
+        except (OSError, ValueError):
+            listed = {}
+        for account in (listed.get("accounts") or []) if isinstance(listed, dict) else []:
+            folder = account.get("folder") if isinstance(account, dict) else None
+            if isinstance(folder, str) and os.path.isabs(folder):
+                sessions = os.path.join(folder, "sessions")
+                if sessions not in out:
+                    out.append(sessions)
+        return out
+
     def scan_app(self, scope):
         """THE APP'S SWEEP: ONLY WHAT THE RICHOS APP ITSELF LEFT BEHIND (CEO §54 addendum 2).
 
@@ -3085,6 +3108,12 @@ class Reaper(object):
                         "shown to be the app's" % (scope.get("data") or ""))
         state = os.path.join(data, "engine-state")
         hosted = self.app_sessions(state)
+        # EVERY ACCOUNT'S SESSION REGISTRY, not only this program's: an added Claude account
+        # runs in its own configuration folder (the app's claude-accounts.json names it), and a
+        # live session registered there would otherwise be an unattributed process, whose
+        # resumed session's older scratch the verdict would call ENDED (review
+        # rv-20261025T000521Z-2fe81615-e0f2).
+        self.live = Liveness(self.ws, self.app_account_session_dirs(data))
         claude_roots = [r for r in self.cfg["claude_roots"] if os.path.isdir(r)]
         walls = Walls(claude_roots)
 
@@ -3131,6 +3160,20 @@ class Reaper(object):
                     if verdict != ENDED:
                         self.add(path, "app-session", size,
                                  KEEP if verdict == RUNNING else INDETERMINATE, why)
+                        continue
+                    # AND NO RUNNING PROCESS NAMES IT: the app starts claude with
+                    # --session-id <id> or --resume <id>, so a live session is on a command
+                    # line whichever registry it signed into. Unreadable is undecidable.
+                    argv = self.command_lines()
+                    if argv is None:
+                        self.add(path, "app-session", size, INDETERMINATE,
+                                 "the process table could not be read, so it cannot be shown "
+                                 "that no running process carries this session")
+                        continue
+                    naming = [line for line in argv if name in line]
+                    if naming:
+                        self.add(path, "app-session", size, KEEP,
+                                 "a running process names this session: %s" % naming[0][:160])
                         continue
                     if held(path, size, "app-session", owner):
                         continue

@@ -77,14 +77,23 @@ class AppSweep(unittest.TestCase):
         assert out.strip() == self.name, "the session process is not running as %s: %r" % (self.name, out)
         return child
 
-    def live(self, session):
-        """A running session process, with the session file Claude Code writes for it."""
+    def live(self, session, registry=None):
+        """A running session process, with the session file Claude Code writes for it, in the
+        default registry or in an added account's (`registry`)."""
         child = self.session_process()
-        start =subprocess.run(["ps", "-o", "lstart=", "-p", str(child.pid)], capture_output=True, text=True,
+        start = subprocess.run(["ps", "-o", "lstart=", "-p", str(child.pid)], capture_output=True, text=True,
                                env=dict(os.environ, LC_ALL="C", LANG="C", TZ="UTC0")).stdout.strip()
-        (self.config_dir / "sessions" / ("%d.json" % child.pid)).write_text(
+        registry = registry or (self.config_dir / "sessions")
+        registry.mkdir(parents=True, exist_ok=True)
+        (registry / ("%d.json" % child.pid)).write_text(
             json.dumps({"pid": child.pid, "sessionId": session, "procStart": start}))
         return child
+
+    def resumed_earlier(self, scratch):
+        """The scratch was last written before the live process started: a resumed session's."""
+        old = time.time() - 3600
+        for p in [scratch] + list(scratch.rglob("*")):
+            os.utime(p, (old, old))
 
     def sweep(self):
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.home),
@@ -119,6 +128,35 @@ class AppSweep(unittest.TestCase):
         child.wait()
         rc, out, err = self.sweep()
         self.assertFalse(scratch.exists(), out + err)
+
+    # Review rv-20261025T000521Z-2fe81615-e0f2 #1, its fixture with real processes: an added
+    # Claude account runs in its own configuration folder, so its live, resumed session registers
+    # there; its scratch, older than the resumed process, was planned DELETE.
+    def test_a_live_session_in_an_added_accounts_registry_is_kept(self):
+        session, scratch = self.hosted()
+        self.live(session, self.data / "claude-accounts/2/sessions")
+        self.resumed_earlier(scratch)
+        rc, out, err = self.sweep()
+        self.assertTrue(scratch.exists(), "a live resumed session's scratch was deleted:\n" + out)
+
+    def test_a_live_session_in_a_listed_account_folder_is_kept(self):
+        session, scratch = self.hosted()
+        folder = self.home / "claude-accounts/3"
+        (self.data / "claude-accounts.json").write_text(json.dumps(
+            {"accounts": [{"id": "1", "label": "Home"}, {"id": "3", "label": "Work", "folder": str(folder)}]}))
+        self.live(session, folder / "sessions")
+        self.resumed_earlier(scratch)
+        rc, out, err = self.sweep()
+        self.assertTrue(scratch.exists(), "a live resumed session's scratch was deleted:\n" + out)
+
+    def test_a_session_a_running_command_line_carries_is_kept_with_no_registry(self):
+        session, scratch = self.hosted()
+        self.resumed_earlier(scratch)
+        resumed = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)", "--resume", session])
+        self.children.append(resumed)
+        rc, out, err = self.sweep()
+        self.assertTrue(scratch.exists(), "a session on a running command line was deleted:\n" + out)
+        self.assertIn("a running process names this session", out)
 
     def test_a_file_held_open_inside_an_ended_session_keeps_it(self):
         _session, scratch = self.hosted()
