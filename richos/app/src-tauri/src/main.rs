@@ -1042,7 +1042,9 @@ fn get_messages(state: State<AppState>, thread_id: String) -> Result<Vec<Message
 /// Fails closed on an unbound thread, exactly like `get_messages`.
 #[richos_command::command]
 fn get_timeline(app: AppHandle, state: State<AppState>, thread_id: String) -> Result<serde_json::Value, String> {
-    let payload = question_host::payload(&state, &thread_id);
+    let payload = question_host::payload(&state, &thread_id).map(|payload| {
+        rich_files_host::with_instruction_cards(&*state.reader.snapshot(), &rich_files_host::root(&state), &thread_id, payload)
+    });
     // **HIS FRONT DESK IS MADE READY HERE, AFTER THE SNAPSHOT AND NEVER BEFORE IT** — the CEO's
     // §55. See [`ready_the_front_desk`] for why this command is the hook.
     ready_the_front_desk(&app, &thread_id);
@@ -2166,9 +2168,10 @@ fn main() {
         return;
     }
     if first.as_deref() == Some(std::ffi::OsStr::new("--onboarding-mcp")) {
-        let result = args.next().ok_or_else(|| "Missing onboarding scope".to_string())
-            .and_then(|scope| richos_core::onboarding_tools::run_stdio(Path::new(&scope))
-                .map_err(|e| e.to_string()));
+        // The second argument, the turn's question scope, names the conversation a save of the
+        // user's instructions is shown in (`your_instructions.rs`); an older config without it
+        // still saves, without the card.
+        let result = onboarding_mcp(args.by_ref(), std::io::stdin().lock(), std::io::stdout().lock());
         if let Err(error) = result {
             // The second SHAPE 1 site. This one is a stdio tool server the RUNNING app spawns
             // as a child, so `activation`'s P condition (parent pid 1) is false by
@@ -3801,6 +3804,8 @@ fn main() {
             decline_instructions_update,
             update_instructions_file,
             instructions_file_open,
+            your_instructions_read,
+            your_instructions_save,
             // --- a file Rich puts in front of the user (§138, item 12) — appended ---
             rich_files_host::rich_file_open,
             rich_files_host::rich_file_reveal,
@@ -9779,7 +9784,9 @@ fn update_instructions_file(state: State<'_, AppState>, name: String) -> Result<
 /// a Finder window.
 #[richos_command::command]
 fn instructions_file_open(name: String, reveal: bool) -> Result<(), String> {
-    if ![richos_core::user_settings::RICH, richos_core::user_settings::STU].contains(&name.as_str()) {
+    // `instructions.md` too: the user's own instructions sheet (round 36 screen 1) has the same
+    // two controls under its editor.
+    if ![richos_core::user_settings::RICH, richos_core::user_settings::STU, richos_core::user_settings::INSTRUCTIONS].contains(&name.as_str()) {
         return Err(format!("{name} is not one of the instruction files"));
     }
     let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;
@@ -9789,6 +9796,91 @@ fn instructions_file_open(name: String, reveal: bool) -> Result<(), String> {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(format!("{name} could not be opened ({status})")),
         Err(e) => Err(format!("{name} could not be opened: {e}")),
+    }
+}
+
+/// **`--onboarding-mcp <scope> [<question scope>]`**, the onboarding tool server the conversation
+/// lease starts (`native.rs` `mcp_config`). The second argument, the turn's question scope, names
+/// the conversation and turn a save of the user's instructions is shown under as its card
+/// (`your_instructions.rs`); without it the rules are still saved and no card is drawn. Review
+/// rv-20261025T004124Z-a023ffa7-554a#1: the entry read only the first, so no real save left a card.
+fn onboarding_mcp(mut args: impl Iterator<Item = std::ffi::OsString>, reader: impl std::io::BufRead,
+                  writer: impl std::io::Write) -> Result<(), String> {
+    let scope = args.next().ok_or_else(|| "Missing onboarding scope".to_string())?;
+    let cards = args.next().map(PathBuf::from);
+    richos_core::onboarding_tools::serve_in(Path::new(&scope), cards.as_deref(), reader, writer)
+        .map_err(|e| e.to_string())
+}
+
+/// **YOUR INSTRUCTIONS** (round 36 screen 1; build plan item 1b): the user's own instructions
+/// file, the one every session of Rich and Stu appends in full (`user_settings::standing_plugin`),
+/// for Settings → Working with Rich → Your instructions. `path` is where it is, `shown` the same
+/// with the home folder written `~`, `exists` whether the file is there, and `text` what is in it
+/// now (empty when there is none yet).
+#[richos_command::command]
+fn your_instructions_read() -> Result<serde_json::Value, String> {
+    let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;
+    let path = richos_core::your_instructions::path(&folder);
+    let shown = std::env::var_os("HOME")
+        .and_then(|home| path.strip_prefix(&home).ok().map(|rest| format!("~/{}", rest.display())))
+        .unwrap_or_else(|| path.display().to_string());
+    Ok(serde_json::json!({"path": path, "shown": shown, "exists": path.exists(), "text": richos_core::your_instructions::read(&folder)?}))
+}
+
+/// The sheet saves the whole text as the user types. It applies from the user's next new
+/// conversation: an open one keeps the instructions it started with (the CEO's default,
+/// 2026-10-21).
+#[richos_command::command]
+fn your_instructions_save(text: String) -> Result<(), String> {
+    let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;
+    richos_core::your_instructions::save(&folder, &text)
+}
+
+#[cfg(test)]
+mod onboarding_mcp_tests {
+    use richos_core::entity::EntityId;
+    use richos_core::onboarding_tools::{self, OnboardingToolScope};
+    use richos_core::question_tools::{self, Scope};
+    use richos_core::questions::AskScope;
+    use richos_core::your_instructions;
+    use serde_json::{json, Value};
+
+    /// **A save through the desktop entry point leaves its card** (review
+    /// rv-20261025T004124Z-a023ffa7-554a#1): the arguments the conversation lease gives
+    /// `--onboarding-mcp` (`native.rs` `mcp_config`: the onboarding scope, then the turn's
+    /// question scope), a visible turn's save of the user's instructions over stdio, and the
+    /// card recorded for that conversation's turn.
+    #[test]
+    fn a_save_through_the_desktop_entry_point_leaves_the_card_for_its_turn() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("richos-onboarding-mcp-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let (central, scope, questions, state) =
+            (root.join("central"), root.join("scope.json"), root.join("assignments.questions.json"), root.join("engine-state"));
+        let entity = EntityId::parse("alpha").unwrap();
+        onboarding_tools::write_scope(&scope, &OnboardingToolScope::new(&entity, &central, &root.join("onboarding.json"))).unwrap();
+        onboarding_tools::set_actions_allowed(&scope, true).unwrap();
+        question_tools::write_scope(&questions, &Scope {
+            context: AskScope { root: state.clone(), entity_id: "alpha".into(), thread_id: "onboarding".into(),
+                turn_id: "turn-7".into(), asker: "front_desk".into(), obligation_id: None, session_id: "s".into(),
+                engine: None, entity_root: None, app_run: None },
+            actions_allowed: true, answer_method: "typed".into(), surface: "mac".into(),
+        }).unwrap();
+        let input = [
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":your_instructions::TOOL,"arguments":{"rules":["Copy me on every invoice."]}}}),
+        ].iter().map(|v| v.to_string() + "\n").collect::<String>();
+        let mut out = Vec::new();
+        let args = vec![scope.into_os_string(), questions.into_os_string()];
+        super::onboarding_mcp(args.into_iter(), std::io::Cursor::new(input), &mut out).unwrap();
+        let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let cards = your_instructions::items(&state, "alpha", "onboarding");
+        let text = std::fs::read_to_string(central.join("instructions.md")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(replies[1]["result"]["isError"], false, "{}", replies[1]);
+        assert_eq!(text, "- Copy me on every invoice.\n");
+        assert_eq!(cards.len(), 1, "the save left no card for its turn");
+        assert_eq!(cards[0]["turnId"], "turn-7");
     }
 }
 

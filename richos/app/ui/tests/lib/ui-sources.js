@@ -101,6 +101,7 @@ const ROLES = {
   "repositories.js": { role: "ui", why: "company repository connections and their status" },
   "questions.js": { role: "ui", why: "non-blocking question cards, explicit answers and delivery states" },
   "rich-files.js": { role: "ui", why: "the file cards Rich puts in front of the user: Open in …, Show in Finder, gone and Ask Rich again" },
+  "your-instructions.js": { role: "ui", why: "the user's own instructions: the Settings row's line, the sheet that edits instructions.md, its two ⓘ and Rich's Saved card" },
   "quit-question.js": { role: "ui", why: "the question he is asked before a quit stops running background work" },
   "timeline.js": { role: "ui", why: "the working timeline's model and render" },
   "instructions-update.js": { role: "ui", why: "the instructions update: its question, its progress and its before and after" },

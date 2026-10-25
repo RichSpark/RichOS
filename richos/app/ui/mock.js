@@ -891,9 +891,80 @@
     ];
   }
 
-  /// A snapshot with the conversation's file cards added, as each Rust snapshot path adds them.
+  // ROUND 36 SCREEN 1, "Your instructions": the user's own `instructions.md`, as
+  // `your_instructions_read` reads it. By default a returning user's, the round's six rules;
+  // `{ yourInstructions: "" }` is a new user with an empty file. `{ instructionsCard: "round-36" }`
+  // adds the round's Onboarding conversation, where Rich asked how the user wants him to work and
+  // saved four rules (`mcp__richos_onboarding__save_your_instructions`), with its card;
+  // `{ onboardingConversation: true }` adds that conversation empty, where "Have Rich ask me" goes;
+  // `{ secondOnboarding: "lumen" }` adds another company's empty Onboarding conversation beside it,
+  // `onboarding-lumen`, so a check can tell which company's the button went to.
+  const ROUND_36_RULES = [
+    "- Ask me before spending more than $500 on anything.",
+    "- Never email a customer without showing me the draft first.",
+    "- Write in plain English. No jargon in anything a customer reads.",
+    "- Keep anything non-urgent until after 1 pm. Mornings are for deep work.",
+    "- Every report starts with the answer, then the detail.",
+    "- When something breaks, tell me what broke, why, and what stops it happening again.",
+  ].join("\n") + "\n";
+  const INTERVIEW_RULES = [
+    "Ask me before spending more than $500 on anything.",
+    "Never email a customer without showing me the draft first.",
+    "Write in plain English. No jargon in anything a customer reads.",
+    "Keep anything non-urgent until after 1 pm. Mornings are for deep work.",
+  ];
+  const yourInstructions = {
+    text: typeof preset.yourInstructions === "string" ? preset.yourInstructions : ROUND_36_RULES,
+    exists: true,
+    saves: [],
+    opened: [],
+    failSave: null,
+  };
+  // thread_id -> the `instructions_saved` items `your_instructions::item` writes.
+  const instructionCardsByThread = {};
+  function instructionsCardItem(threadId, turnId, rules, at) {
+    const t = threads.find((x) => x.id === threadId);
+    return { kind: "instructions_saved", id: "yi_" + uid("c").replace(/[^0-9a-z]/gi, "").slice(-16), entityId: t ? t.entity_id : null,
+      threadId, turnId, visibility: "ceo", createdAt: at, sequence: at, rules: rules.slice() };
+  }
+  if (preset.onboardingConversation && preset.instructionsCard !== "round-36") {
+    threads.push({ id: "onboarding", title: "Onboarding", entity_id: "northwind", created_at: now() - 1000 * 60 * 60, message_count: 0,
+      last_activity: now() - 1000 * 60 * 60, last_turn_state: null, has_pending_turn: false });
+    messagesByThread.onboarding = [];
+  }
+  if (typeof preset.secondOnboarding === "string") {
+    const id = "onboarding-" + preset.secondOnboarding;
+    threads.push({ id, title: "Onboarding", entity_id: preset.secondOnboarding, created_at: now() - 1000 * 60 * 90, message_count: 0,
+      last_activity: now() - 1000 * 60 * 90, last_turn_state: null, has_pending_turn: false });
+    messagesByThread[id] = [];
+  }
+  if (preset.instructionsCard === "round-36") {
+    const at = now() - 1000 * 60 * 4;
+    threads.push({ id: "onboarding", title: "Onboarding", entity_id: "northwind", created_at: at - 1000 * 60 * 20, message_count: 3,
+      last_activity: at + 6000, last_turn_state: "completed", has_pending_turn: false });
+    messagesByThread.onboarding = [];
+    const ask = uid("t"), answer = uid("t");
+    const question = "That covers Northwind: what it is, who it serves, and the team you want around you. I saved all of it.\n\n" +
+      "One more, and this one is about you rather than the company: **how do you want me to work?** Anything I should always do or never do, wherever we are. Spending, emails, how you like reports, when not to disturb you.";
+    const you = "Ask me before anything over $500. Never email a customer without showing me first. Plain English, no jargon. And nothing non-urgent before 1 pm, mornings are for deep work.";
+    const reply = "Got it. I wrote those down as your instructions. I follow them in every company, starting with your next new conversation.";
+    // The question turn answered a pressed Start the questions, which has no bubble of his.
+    seedTurn("onboarding", ask, null, question, at - 1000 * 60, 9000);
+    seedTurn("onboarding", answer, you, reply, at, 6000);
+    messagesByThread.onboarding.push(
+      { role: "assistant", text: question, turn_id: ask, at: at - 1000 * 60 + 2000 },
+      { role: "user", text: you, turn_id: answer, at },
+      { role: "assistant", text: reply, turn_id: answer, at: at + 2000 }
+    );
+    instructionCardsByThread.onboarding = [instructionsCardItem("onboarding", answer, INTERVIEW_RULES, at + 1500)];
+    yourInstructions.text = INTERVIEW_RULES.map((r) => "- " + r).join("\n") + "\n";
+  }
+
+  /// A snapshot with the conversation's file cards added, as each Rust snapshot path adds them,
+  /// and the "Your instructions · Saved" cards `rich_files_host::with_instruction_cards` adds.
   function withRichFiles(payload, threadId) {
     for (const f of richFilesByThread[threadId] || []) payload.items.push(JSON.parse(JSON.stringify(f)));
+    for (const c of instructionCardsByThread[threadId] || []) payload.items.push(JSON.parse(JSON.stringify(c)));
     return payload;
   }
 
@@ -3775,6 +3846,21 @@
         case "rich_file_open":
         case "rich_file_reveal":
           return richFileAction(cmd, args);
+        // The user's own instructions (round 36 screen 1): `main.rs` `your_instructions_read`,
+        // `your_instructions_save` and `instructions_file_open`.
+        case "your_instructions_read":
+          return { path: "/Users/you/myrichos/instructions.md", shown: "~/myrichos/instructions.md",
+            exists: yourInstructions.exists, text: yourInstructions.text };
+        case "your_instructions_save":
+          if (yourInstructions.failSave) return Promise.reject(yourInstructions.failSave);
+          yourInstructions.text = String(args.text);
+          yourInstructions.exists = true;
+          yourInstructions.saves.push(String(args.text));
+          return null;
+        case "instructions_file_open":
+          if (!["rich.md", "stu.md", "instructions.md"].includes(args.name)) return Promise.reject(args.name + " is not one of the instruction files");
+          yourInstructions.opened.push({ name: args.name, reveal: !!args.reveal });
+          return null;
         case "nav_state":
           return JSON.parse(JSON.stringify(navPrefs));
         case "set_sidebar_width":
@@ -4963,6 +5049,21 @@
     richFileActions() { return richFileActions.slice(); },
     /// A file attached between turns (Stu's, say) arrives live on `rich://rich-file`, under the
     /// turn named, the way `rich_files_host::start` sends it.
+    /// The user's instructions file as the shell has it now, every save the sheet made, and what
+    /// Open the file / Show in Finder asked for (round 36 screen 1).
+    yourInstructions() { return JSON.parse(JSON.stringify({ text: yourInstructions.text, saves: yourInstructions.saves, opened: yourInstructions.opened })); },
+    /// The file edited outside the app (in TextEdit, say) while the app runs.
+    yourInstructionsEditedElsewhere(text) { yourInstructions.text = String(text); },
+    /// The next saves are refused with this sentence; `null` lets them through again.
+    yourInstructionsFailSave(why) { yourInstructions.failSave = why || null; },
+    /// Rich's save arrives live on `rich://rich-file`, under the turn named, the way
+    /// `rich_files_host::start` sends it.
+    instructionsCardArrive(threadId, turnId, rules) {
+      const item = instructionsCardItem(threadId, turnId, rules, now());
+      (instructionCardsByThread[threadId] = instructionCardsByThread[threadId] || []).push(item);
+      emit("rich://rich-file", JSON.parse(JSON.stringify(item)));
+      return item.id;
+    },
     richFileArrive(threadId, turnId, name) {
       const item = richFileItem(threadId, turnId, "rf_" + uid("x").replace(/[^0-9a-z]/gi, "").slice(-16),
         name, name.split(".").pop().toUpperCase(), "PDF · 12 KB · 1 page", "Preview", now(), true);
