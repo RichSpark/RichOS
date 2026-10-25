@@ -2047,6 +2047,10 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("--git-name-wait") {
         std::process::exit(richos_core::git_name::wait_cli());
     }
+    // ...and the commit that waited is made again under the saved name (round 41 review).
+    if std::env::args().nth(1).as_deref() == Some("--git-name-redo") {
+        std::process::exit(richos_core::git_name::redo_cli());
+    }
     if std::env::args().nth(1).as_deref() == Some("--richos-connect-guard") {
         std::process::exit(phone::connect::supervisor::guard_main());
     }

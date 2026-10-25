@@ -18,7 +18,9 @@
 //! [`hook_section`], added by `EngineProfile::install_git_name_wait`): Git runs it at every commit
 //! the lease's Git makes, however the command was written, and it holds the commit when Git would
 //! sign it with the stand-in (`git var`), in a connected folder, until the answer is saved. The
-//! rest of the team keeps working, and the commit then goes ahead under the saved name.
+//! rest of the team keeps working. Git read the name when that commit started, so once it is made
+//! the second hook, `<app> --git-name-redo` at `post-commit` / `post-merge` ([`redo_cli`]), makes
+//! it again under the saved name; every later commit reads the saved name from the layer.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -200,6 +202,16 @@ pub fn account_name() -> Option<String> {
 /// and `--no-verify` does not skip it (it skips `pre-commit` and `commit-msg` only).
 pub const HOOK_EVENT: &str = "prepare-commit-msg";
 
+/// **The events the waited commit is redone at.** Git reads the name and email once, when the
+/// commit starts, before any hook runs, so the commit that waited for the answer was already
+/// signed by the stand-in when the answer came (review rv-20261025T021627Z-c3e80047-cfea#1). Once
+/// it is made, it is made again under the saved name ([`redo`]): `post-commit` after `commit`,
+/// `cherry-pick` and `revert`, `post-merge` after a merge.
+pub const REDO_EVENTS: [&str; 2] = ["post-commit", "post-merge"];
+
+/// The set by the redo on the amend it runs, so the hooks of that amend do nothing.
+const REDOING: &str = "RICHOS_GIT_NAME_REDO";
+
 /// **The lease's Git runs the wait at every commit**: a `[hook]` section for the lease's lowest
 /// layer (`user_git::system_layer`), whose command is the app's own `--git-name-wait`. Git reads
 /// config hooks from 2.54 on and runs them beside a repository's own hook, also when the
@@ -207,8 +219,18 @@ pub const HOOK_EVENT: &str = "prepare-commit-msg";
 /// 2.55.0: both ran; with this Mac's Git 2.52.0 the config hook did not run, which is why the hook
 /// is in the layer of the Git the lease runs first, the runtime's).
 pub fn hook_section(executable: &Path) -> String {
-    let shell = format!("'{}' --git-name-wait", executable.to_string_lossy().replace('\'', "'\\''"));
-    format!("[hook \"richos-git-name\"]\n\tevent = {HOOK_EVENT}\n\tcommand = {}\n", quoted(&shell))
+    let exe = format!("'{}'", executable.to_string_lossy().replace('\'', "'\\''"));
+    let mut section = format!("[hook \"richos-git-name\"]\n\tevent = {HOOK_EVENT}\n\tcommand = {}\n", quoted(&format!("{exe} --git-name-wait")));
+    section.push_str("[hook \"richos-git-name-redo\"]\n");
+    for event in REDO_EVENTS { section.push_str(&format!("\tevent = {event}\n")); }
+    section.push_str(&format!("\tcommand = {}\n", quoted(&format!("{exe} --git-name-redo"))));
+    section
+}
+
+/// The mark the wait leaves for the commit it held: the Git process making that commit, which
+/// also runs its `post-commit` hook.
+fn waited(state: &Path, git_pid: u32) -> PathBuf {
+    dir(state).join(format!("waited-{git_pid}"))
 }
 
 /// One answer to `git -C folder …`, run as the lease runs Git (its environment, with `env` added),
@@ -251,6 +273,7 @@ fn waits(folder: &Path, app_data: &Path, workspaces: &Path, env: &[(&str, &Path)
 /// makes it wait. It lets go on its own when the Git that called it is gone, so no wait outlives
 /// its commit. Nothing outside a lease runs it: without the lease's state and scope it returns.
 pub fn wait_cli() -> i32 {
+    if std::env::var_os(REDOING).is_some() { return 0; }
     let Some(state) = std::env::var_os("RICHOS_APP_STATE").map(PathBuf::from) else { return 0 };
     if !state.is_absolute() || choice(&state).is_some() { return 0; }
     let Ok(folder) = std::env::current_dir() else { return 0 };
@@ -266,8 +289,42 @@ pub fn wait_cli() -> i32 {
         eprintln!("[richos] the Git name could not be asked ({why}); this commit goes ahead with the name RichOS");
         return 0;
     }
-    hold(&state, std::time::Duration::from_millis(500), || std::os::unix::process::parent_id() == 1);
+    let git_pid = std::os::unix::process::parent_id();
+    hold(&state, std::time::Duration::from_millis(500), || std::os::unix::process::parent_id() != git_pid);
+    // This commit was signed before the answer came: mark it, so it is made again under the
+    // saved name once it exists.
+    if std::os::unix::process::parent_id() == git_pid && matches!(choice(&state), Some(Choice::Own { .. })) {
+        if let Err(why) = std::fs::write(waited(&state, git_pid), b"") {
+            eprintln!("[richos] the commit that waited could not be marked ({why}); it keeps the name RichOS");
+        }
+    }
     0
+}
+
+/// **The redo hook**, run by Git after a commit or merge: when the wait held this commit, make it
+/// again under the saved name (`git commit --amend --reset-author`, the same tree, parents and
+/// message, its hooks quiet). Always exits 0.
+pub fn redo_cli() -> i32 {
+    if std::env::var_os(REDOING).is_some() { return 0; }
+    let Some(state) = std::env::var_os("RICHOS_APP_STATE").map(PathBuf::from) else { return 0 };
+    let Ok(folder) = std::env::current_dir() else { return 0 };
+    if let Err(why) = redo(&state, &folder, std::os::unix::process::parent_id(), &[]) {
+        eprintln!("[richos] the commit that waited keeps the name RichOS: {why}");
+    }
+    0
+}
+
+/// Redo the commit `git_pid` made in `folder` when the wait marked it; `Ok(false)` when it did not.
+pub(crate) fn redo(state: &Path, folder: &Path, git_pid: u32, env: &[(&str, &Path)]) -> Result<bool, String> {
+    if std::fs::remove_file(waited(state, git_pid)).is_err() { return Ok(false); }
+    let Some(Choice::Own { name, email }) = choice(state) else { return Ok(false) };
+    let output = std::process::Command::new("git").arg("-C").arg(folder)
+        .args(["-c", &format!("user.name={name}"), "-c", &format!("user.email={email}")])
+        .args(["commit", "--amend", "--reset-author", "--no-edit", "--no-verify", "--allow-empty", "--quiet"])
+        .envs(env.iter().copied()).env(REDOING, "1")
+        .env_remove("GIT_AUTHOR_NAME").env_remove("GIT_AUTHOR_EMAIL").env_remove("GIT_COMMITTER_NAME").env_remove("GIT_COMMITTER_EMAIL")
+        .stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
+    if output.status.success() { Ok(true) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
 }
 
 /// Wait until the answer is saved, or until `orphaned` says the caller is gone.
@@ -360,6 +417,10 @@ mod tests {
         };
         assert_eq!(get("hook.richos-git-name.event"), "prepare-commit-msg");
         assert_eq!(get("hook.richos-git-name.command"), "'/Applications/RichOS Test.app/Contents/MacOS/rich'\\''os' --git-name-wait");
+        let events = std::process::Command::new("git").args(["config", "--file"]).arg(&layer)
+            .args(["--get-all", "hook.richos-git-name-redo.event"]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&events.stdout), "post-commit\npost-merge\n");
+        assert_eq!(get("hook.richos-git-name-redo.command"), "'/Applications/RichOS Test.app/Contents/MacOS/rich'\\''os' --git-name-redo");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -441,6 +502,64 @@ mod tests {
         assert_eq!(waits(&site, &app_data, &workspaces, &[env[0], env[1], ("GIT_CONFIG_PARAMETERS", &params)]), None, "git -c names someone");
         std::fs::write(&global, "[user]\n\tname = Dana\n\temail = dana@northwind.com\n").unwrap();
         assert_eq!(waits(&site, &app_data, &workspaces, env), None, "the user's own Git names them");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// **Review rv-20261025T021627Z-c3e80047-cfea#1**: Git signs a commit with the name it read
+    /// when the commit started, so the commit that waited for the card was made by the stand-in
+    /// even though the user had saved their name. The waited commit is made again: its own author
+    /// and committer are the saved name, with the same tree, parent and message; a commit the wait
+    /// did not hold, and an answer of "use RichOS", are left as they are.
+    #[test]
+    fn the_commit_that_waited_is_signed_with_the_saved_name_author_and_committer() {
+        let root = scratch("redo");
+        let (home, state) = (root.join("home"), root.join("data/engine-state"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        let layer = root.join("layer");
+        std::fs::write(&layer, crate::user_git::system_layer(&Default::default(), Some(&identity_file(&state)))).unwrap();
+        let global = home.join(".gitconfig");
+        let env: &[(&str, &Path)] = &[("GIT_CONFIG_SYSTEM", &layer), ("GIT_CONFIG_GLOBAL", &global), ("HOME", &home)];
+        let repo = root.join("northwind-site");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git").arg("-C").arg(&repo).args(args).envs(env.iter().copied())
+                .env_remove("GIT_AUTHOR_NAME").env_remove("GIT_COMMITTER_NAME").env_remove("GIT_AUTHOR_EMAIL").env_remove("GIT_COMMITTER_EMAIL")
+                .output().unwrap();
+            assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        run(&["init", "-q"]);
+        run(&["commit", "-q", "--allow-empty", "-m", "Before"]);
+        std::fs::write(repo.join("prices.html"), "<p>New prices</p>\n").unwrap();
+        run(&["add", "prices.html"]);
+        // The commit that waited: started under the stand-in, as on the current tip.
+        run(&["commit", "-q", "-m", "Update prices"]);
+        let signed = || run(&["log", "-1", "--format=%an <%ae>|%cn <%ce>"]);
+        let shape = || run(&["log", "-1", "--format=%T %P %s"]);
+        assert_eq!(signed(), "RichOS <richos@localhost>|RichOS <richos@localhost>");
+        let before = shape();
+        // No mark, no redo.
+        save(&state, "Dana Whitfield", "dana@northwind.com").unwrap();
+        assert_eq!(redo(&state, &repo, 4242, env), Ok(false));
+        assert_eq!(signed(), "RichOS <richos@localhost>|RichOS <richos@localhost>", "a commit the wait did not hold is left alone");
+        // The wait held it and marked it; its post-commit hook redoes it.
+        std::fs::write(waited(&state, 4242), b"").unwrap();
+        // Git hands its hooks the commit's author in GIT_AUTHOR_NAME/EMAIL (measured with Git 2.55,
+        // docs/verification/2026-10-25-terminal-and-git-walk/redo-measurement.sh); the redo drops them.
+        let (stand_in, stand_in_email) = (Path::new("RichOS"), Path::new("richos@localhost"));
+        let in_hook: &[(&str, &Path)] = &[env[0], env[1], env[2], ("GIT_AUTHOR_NAME", stand_in), ("GIT_AUTHOR_EMAIL", stand_in_email)];
+        assert_eq!(redo(&state, &repo, 4242, in_hook), Ok(true));
+        assert_eq!(signed(), "Dana Whitfield <dana@northwind.com>|Dana Whitfield <dana@northwind.com>", "the waiting commit's own author and committer");
+        assert_eq!(shape(), before, "the same tree, parent and message");
+        assert!(!waited(&state, 4242).exists(), "redone once");
+        assert_eq!(redo(&state, &repo, 4242, env), Ok(false));
+        // "Use RichOS": the mark is cleared and the commit keeps the stand-in.
+        use_richos(&state).unwrap();
+        run(&["commit", "-q", "--allow-empty", "-m", "Later"]);
+        std::fs::write(waited(&state, 4243), b"").unwrap();
+        assert_eq!(redo(&state, &repo, 4243, env), Ok(false));
+        assert_eq!(signed(), "RichOS <richos@localhost>|RichOS <richos@localhost>");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
