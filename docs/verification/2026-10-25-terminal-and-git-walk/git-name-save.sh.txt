@@ -1,0 +1,38 @@
+#!/bin/bash
+# In the test VM guest only, fixture data only: the team's first save in a connected folder, as a
+# worker makes it. A real `git commit`, written in one of the forms review
+# rv-20261025T011529Z-041708c7-5916 found the old command reader missed
+# (`repo=...; git -C "$repo" commit`), run with the runtime's Git and the newest lease's own Git
+# layer, in the lease's environment names. Git itself runs the hook the lease registered there;
+# nothing reads the command. The commit is left running (its pid in ~/git-name-commit.pid): it must
+# wait for the card and end by itself once the card is answered in the window.
+set -euo pipefail
+home=$(ls -d /Users/admin/testvm/walk-*/home | head -1)
+data="$home/Library/Application Support/com.richos.app"
+layer=$(ls -t "$data"/engine-profiles/*/gitconfig | head -1)
+echo "the lease's Git layer: $layer"
+grep -A2 'hook "richos-git-name"' "$layer" || { echo "the lease registered no Git name hook"; exit 1; }
+# The Git the lease runs first: the runtime's, beside the python3 its hooks.json names.
+py=$(grep -o "'[^']*/bin/python3'" "$(dirname "$layer")/hooks/hooks.json" | head -1 | tr -d "'")
+git="$(dirname "$py")/git"
+[ -x "$git" ] || { echo "no runtime git beside $py"; exit 1; }
+echo "$git" > "$home/runtime-git.path"
+"$git" --version
+# The conversation the window shows: the newest thread with a company.
+line=$(grep '"event":"ThreadCreated"' "$data/conversation-ledger.jsonl" | grep -v '"entity_id":null' | tail -1)
+thread=$(printf '%s' "$line" | sed 's/.*"thread_id":"\([^"]*\)".*/\1/')
+entity=$(printf '%s' "$line" | sed 's/.*"entity_id":"\([^"]*\)".*/\1/')
+echo "conversation: $thread (company $entity)"
+scope="$home/git-name-scope.json"
+printf '{"version":1,"binding":{"entity_id":"%s","thread_id":"%s","session_id":"walk"}}\n' "$entity" "$thread" > "$scope"
+repo="$home/northwind-site"
+rm -rf "$repo"
+export HOME="$home" PATH="$(dirname "$git"):/usr/bin:/bin" GIT_CONFIG_SYSTEM="$layer" \
+  RICHOS_APP_STATE="$data/engine-state" RICHOS_APP_SCOPE="$scope"
+"$git" init -q "$repo"
+echo "would sign: $("$git" -C "$repo" var GIT_COMMITTER_IDENT | cut -d'>' -f1)>"
+( cd "$home"
+  /bin/sh -c 'repo="$HOME/northwind-site"; git -C "$repo" commit --allow-empty -m "Update prices"' > "$home/git-name-commit.out" 2>&1
+  echo "exit $?" >> "$home/git-name-commit.out" ) < /dev/null > /dev/null 2>&1 &
+echo $! > "$home/git-name-commit.pid"
+echo "the first save started: pid $(cat "$home/git-name-commit.pid")"

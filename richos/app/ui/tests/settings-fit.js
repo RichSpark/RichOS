@@ -359,7 +359,8 @@ async function main() {
     const disclosures = panel.rows.filter((r) => r.disclosure);
     assertEqual(
       disclosures.map((r) => r.id).sort(),
-      ["set-accounts-open", "set-instructions-open", "set-memory-open", "set-phone-open", "set-quota-open", "set-repositories-open"],
+      // Round 41 added two: Your name in Git (set-git-open) and Terminal setup (set-terminal-open).
+      ["set-accounts-open", "set-git-open", "set-instructions-open", "set-memory-open", "set-phone-open", "set-quota-open", "set-repositories-open", "set-terminal-open"],
       "THE DEFECT: the rows that open a sheet are not marked as disclosures"
     );
     for (const r of disclosures) {

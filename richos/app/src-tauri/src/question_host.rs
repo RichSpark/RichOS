@@ -302,6 +302,8 @@ pub fn open_question_counts(state: tauri::State<AppState>) -> Result<Value, Stri
                 .count()),
         );
     }
+    // The Git name card is an open question like any other (round 41 piece 2).
+    crate::git_name_host::count_open(&state, &mut counts);
     Ok(Value::Object(counts))
 }
 

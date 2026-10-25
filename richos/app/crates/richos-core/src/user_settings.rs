@@ -245,6 +245,13 @@ pub fn digest(folder: &Path) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// **The digest a lease is renewed by**: the user's files' [`digest`] and the login environment
+/// it got (`login_environment::fingerprint`), so a Terminal setup read again that found something
+/// different renews it at its next boundary, as an edited file does.
+pub fn with_login(digest: String, login: &BTreeMap<String, String>) -> String {
+    format!("{digest}:{}", crate::login_environment::fingerprint(login))
+}
+
 /// **What a lease takes from the user's own files**, read once when its profile is prepared.
 /// `Default` is a lease with no user folder: tests, and an install with no home directory.
 #[derive(Clone, Debug, Default)]

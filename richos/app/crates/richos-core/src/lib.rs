@@ -204,6 +204,7 @@ pub mod your_instructions;
 pub mod instructions_update;
 pub mod login_environment;
 pub mod user_git;
+pub mod git_name;
 
 pub mod repositories;
 pub mod work_status;

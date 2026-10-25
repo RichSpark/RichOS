@@ -4222,6 +4222,14 @@ Bridge.listen("rich://rich-file", ({ payload }) => {
   scheduleRender();
 });
 
+// The Git name card (round 41 piece 2): asked by the team's first save, or answered, now.
+Bridge.listen("rich://git-name", ({ payload }) => {
+  updateCachedThread("onActivityUpserted", payload);
+  const result = window.RichTimeline.onActivityUpserted(timelineModel, payload);
+  if (!result.rejected) scheduleRender();
+  document.dispatchEvent(new Event("richos-questions-changed"));
+});
+
 Bridge.listen("rich://activity-upserted", ({ payload }) => {
   updateCachedThread("onActivityUpserted", payload);
   const r = window.RichTimeline.onActivityUpserted(timelineModel, payload);
