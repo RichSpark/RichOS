@@ -696,7 +696,7 @@ class Collector(Base):
         dead = self.dead_pid()
         abandoned = A.standing({"collector:incomplete": dict(row, pid=dead)})
         self.assertEqual(abandoned["collector:incomplete"]["verdict"], "collection abandoned")
-        overdue = A.standing({"collector:incomplete": row}, now=row["started"] + A.RUNNING_ALERT_SECONDS)
+        overdue = A.standing({"collector:incomplete": row}, now=row["due"] + A.GRACE_SECONDS)
         self.assertEqual(overdue["collector:incomplete"]["verdict"], "collection timed out")
 
     def test_T32d_a_new_run_does_not_mask_a_standing_collector_failure(self):
@@ -718,7 +718,7 @@ class Collector(Base):
             if case == "abandoned":
                 row["pid"] = self.dead_pid()
             else:
-                row["started"] -= A.RUNNING_ALERT_SECONDS
+                row["due"] -= A.GRACE_SECONDS
             T._write_json(T.failures_path(), {"collector:incomplete": row})
             seen = {}
 
@@ -730,6 +730,28 @@ class Collector(Base):
             self.assertEqual(seen["standing"]["collector:incomplete"]["verdict"], "collection " + case)
             T.collect(apply=True)                                   # a real pass succeeds
             self.assertEqual(self.rows(), {})
+
+    def test_T32f_a_long_collection_whose_operations_progress_is_not_timed_out(self):
+        # Review rv-20261025T010507Z-164da3c3-7552#1: a pass with no total deadline ran six
+        # simctl operations of 31 s each, read "collection timed out" at 186 s, then finished
+        # clean. The bound is each operation's own, not a total.
+        clock = [time.time()]
+        seen = {}
+
+        def progressing(*_args):
+            A = T._MARK.get()
+            for _ in range(6):
+                T._timeout(120)                 # a simctl operation starts, bounded at 120 s
+                clock[0] += 31                  # ...and succeeds 31 s later
+            seen["progressing"] = A.standing(self.rows(), now=clock[0])
+            T._timeout(120)                     # one more starts, and then nothing more happens
+            seen["hung"] = A.standing(self.rows(), now=clock[0] + 120 + A.GRACE_SECONDS)
+            return {k: [] for k in ("collected", "survivors", "left", "undecided", "deferred")}
+        with patch.object(time, "time", lambda: clock[0]), \
+                patch.object(T, "_collect", side_effect=progressing):
+            T.collect(apply=True)
+        self.assertEqual(seen["progressing"], {})
+        self.assertEqual(seen["hung"]["collector:incomplete"]["verdict"], "collection timed out")
 
     def test_T33_identity_read_failure_after_signal_preserves_avd(self):
         cache = os.path.join(self.android, "unreadable-after-signal")

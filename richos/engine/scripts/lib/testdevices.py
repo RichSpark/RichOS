@@ -78,6 +78,9 @@ UNDECIDED = "UNDECIDED"
 
 _LOCKED = contextvars.ContextVar("device_registry_locked", default=False)
 _DEADLINE = contextvars.ContextVar("device_collection_deadline", default=None)
+# The alert writer of a collection that has marked itself running, so each bounded
+# operation can move the mark's `due` (testdevice_alerts.note_operation).
+_MARK = contextvars.ContextVar("device_collection_mark", default=None)
 
 
 class BudgetExpired(TimeoutError):
@@ -109,6 +112,12 @@ def _timeout(maximum):
     remaining = maximum if deadline is None else min(maximum, deadline - time.time())
     if remaining <= 0:
         raise BudgetExpired("test-device collection deadline reached")
+    writer = _MARK.get()
+    if writer is not None:
+        try:
+            writer.note_operation(remaining)
+        except (OSError, ValueError):
+            pass                 # a missed move only makes the alert come sooner
     return remaining
 
 
@@ -1123,13 +1132,16 @@ def record_collector_failure(message):
 
 def collect(apply=False, departing=(), deadline=None):
     token = _DEADLINE.set(deadline)
+    mark = _MARK.set(None)
     try:
         with registry_lock():
             if apply:
                 # A killed collector leaves an alert instead of a false clean bill. The mark
                 # names this process, so while it still runs the mark reads "running", not
                 # failed (testdevice_alerts.standing); a standing failure is left as it is.
-                _alert_writer().record_running(_collect_command())
+                writer = _alert_writer()
+                writer.record_running(_collect_command())
+                _MARK.set(writer)
             return _collect(apply, departing, deadline)
     except Exception as exc:
         res = {k: [] for k in ("collected", "survivors", "left", "undecided", "deferred")}
@@ -1143,6 +1155,7 @@ def collect(apply=False, departing=(), deadline=None):
             record_collector_failure("cleanup started but has not completed")
         raise
     finally:
+        _MARK.reset(mark)
         _DEADLINE.reset(token)
 
 

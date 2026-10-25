@@ -8,11 +8,19 @@ import time
 KEY = "collector:incomplete"
 # A COLLECTION STILL RUNNING IS NOT A FAILURE. The collector marks its start so a
 # collector that is killed leaves an alert behind, but while its own process is
-# alive and inside this bound the mark only says "running". The bound is the
-# collector's longest legitimate registry hold (testdevices.COLLECTOR_BUSY_ALERT_SECONDS);
-# past it, or once its process is gone, the same mark is a failure again.
+# alive and inside its operations' own bounds the mark only says "running".
+# A collection has no total bound (the reaper sets no deadline, and one pass runs
+# many simctl operations, each bounded by its own timeout), so the mark carries
+# `due`: the latest moment the operation now in progress may still be running,
+# moved forward by every bounded operation as it starts (note_operation). Past
+# `due` plus GRACE_SECONDS, or once its process is gone, the mark is a failure.
 RUNNING = "collection running"
-RUNNING_ALERT_SECONDS = 180
+# Unbounded work allowed between two bounded operations: bookkeeping and small
+# file reads, never a hang (2026-10-07: an open() blocked for 35 minutes).
+GRACE_SECONDS = 60
+# A loop of short operations moves `due` in small steps; it is written again only
+# when it moves by more than this, so a polling loop does not rewrite the file.
+DUE_STEP_SECONDS = 5
 
 
 def _path():
@@ -119,26 +127,49 @@ def record_running(command):
             _store(path, rows)
         return rows
     row = _row(rows, "cleanup started but has not completed", command, RUNNING)
+    now = time.time()
     row.update({"pid": os.getpid(), "pid_start": process_start(os.getpid()) or "",
-                "started": time.time()})
+                "started": now, "due": now})
     rows[KEY] = row
     _store(path, rows)
+    _DUE[path] = now
     return rows
+
+
+_DUE = {}
+
+
+def note_operation(seconds):
+    """A bounded operation of at most `seconds` starts now in this process's
+    collection: move its mark's `due` forward. Only this process's own running
+    mark is touched; anything else is left exactly as it is."""
+    path = _path()
+    due = time.time() + max(0.0, float(seconds))
+    if path not in _DUE or due <= _DUE[path] + DUE_STEP_SECONDS:
+        return
+    rows, note = _load(path)
+    row = rows.get(KEY)
+    if note or not isinstance(row, dict) or row.get("verdict") != RUNNING or row.get("pid") != os.getpid():
+        _DUE.pop(path, None)
+        return
+    row["due"] = due
+    _store(path, rows)
+    _DUE[path] = due
 
 
 def standing(rows, now=None):
     """The rows that are failures. A collection whose process is still running,
-    inside RUNNING_ALERT_SECONDS, is left out; one whose process is gone, or
-    replaced, or cannot be checked, or that has run past the bound, is in, with
-    its verdict saying which."""
+    inside its current operation's bound (`due` plus GRACE_SECONDS), is left out;
+    one whose process is gone, or replaced, or cannot be checked, or that has
+    run past that bound, is in, with its verdict saying which."""
     now = time.time() if now is None else now
     out = {}
     for key, row in (rows or {}).items():
         if key != KEY or not isinstance(row, dict) or row.get("verdict") != RUNNING:
             out[key] = row
             continue
-        started = row.get("started")
-        if not isinstance(started, (int, float)) or now - started >= RUNNING_ALERT_SECONDS:
+        due = row.get("due", row.get("started"))
+        if not isinstance(due, (int, float)) or now >= due + GRACE_SECONDS:
             verdict = "collection timed out"
         else:
             current = process_start(row.get("pid"))

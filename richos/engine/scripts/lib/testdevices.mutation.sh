@@ -78,7 +78,7 @@ mutant interrupted-collector-silent "test_T32" "$D" \
     "an interrupted cleanup pass would leave no alert."
 
 mutant killed-collector-silent "test_T32b" "$D" \
-    '                _alert_writer().record_running(_collect_command())' \
+    '                writer.record_running(_collect_command())' \
     '                pass' \
     "a killed cleanup pass would leave no alert."
 
@@ -93,9 +93,14 @@ mutant abandoned-collection-hidden "test_T32c" "scripts/lib/testdevice_alerts.py
     "a killed collector's mark would never alert again."
 
 mutant overdue-collection-hidden "test_T32c" "scripts/lib/testdevice_alerts.py" \
-    '        if not isinstance(started, (int, float)) or now - started >= RUNNING_ALERT_SECONDS:' \
-    '        if not isinstance(started, (int, float)):' \
+    '        if not isinstance(due, (int, float)) or now >= due + GRACE_SECONDS:' \
+    '        if not isinstance(due, (int, float)):' \
     "a collection hung for hours would read as running for ever."
+
+mutant progress-not-recorded "test_T32f" "scripts/lib/testdevices.py" \
+    '            writer.note_operation(remaining)' \
+    '            pass' \
+    "a long collection whose every operation succeeds would read as timed out (rv-20261025T010507Z-164da3c3-7552)."
 
 mutant new-run-masks-standing-failure "test_T32d" "scripts/lib/testdevice_alerts.py" \
     '    judged = standing({KEY: previous}).get(KEY) if previous is not None else None' \
