@@ -3301,9 +3301,8 @@ class Reaper(object):
         with no owner record, from an app before this one, goes once it is older than the
         declared age floor. The open-file check and the walls apply to every one."""
         root = os.path.join(data, "engine-profiles")
-        try:
-            names = sorted(os.listdir(root))
-        except OSError:
+        names = self.app_listing(root, "app-profile")
+        if names is None:
             return
         self.roots.append(root)
         walls = Walls([root])

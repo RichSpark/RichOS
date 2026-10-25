@@ -446,6 +446,19 @@ class AppSweep(unittest.TestCase):
         self.assertTrue(wav.exists(), out)
         self.assertIn("could not be read", out)
 
+    def test_an_unreadable_engine_profiles_folder_is_undecidable_never_clean(self):
+        pid, start = self.ended_app()
+        base, _standing = self.profile((pid, start))
+        root = base.parent
+        root.chmod(0)
+        try:
+            rc, out, err = self.sweep()
+        finally:
+            root.chmod(0o755)
+        self.assertEqual(rc, 3, out + err)
+        self.assertTrue(base.exists(), out)
+        self.assertIn("could not be read", out)
+
     # --- app-mcp-log: Claude Code's MCP logs for the app's coordination folder ---------------------
     def mcp_log(self, folder, name="2026-10-25T00-00-00-000Z.txt"):
         slug = "".join(c if c.isalnum() else "-" for c in str(folder))
