@@ -744,7 +744,7 @@ SKIP_DIRS = {".git", ".worktrees", "node_modules", "target", "dist", "build",
 
 # The marker, in this engine's usual shape: at least one alphanumeric after the
 # colon, so a BARE `instance-mechanism:` is not an off switch anybody can type
-# into a file. guard-dialect.sh's DECLARED_EXEMPT_RE is the same regex for the
+# into a file. dialect-guard.sh's DECLARED_EXEMPT_RE is the same regex for the
 # same reason, and its mutation suite proves that the one-character difference
 # between these two patterns is what stands between an escape hatch and an
 # amnesty.

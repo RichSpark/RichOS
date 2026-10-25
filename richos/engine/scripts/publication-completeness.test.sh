@@ -582,7 +582,7 @@ assert_finding "an unexcused private mechanism is MISPLACED, and the refusal nam
     "$T" MISPLACED "instance-mechanism: <reason>"
 
 # A BARE marker is not an off switch anybody can type into a file — the same
-# one-character property guard-dialect.sh's mutation suite pins for
+# one-character property dialect-guard.sh's mutation suite pins for
 # `dialect-exempt:`.
 printf '# instance-mechanism:\n' >> "$P4/scripts/one-off.sh"
 assert_finding "a BARE 'instance-mechanism:' with no reason exempts nothing" \

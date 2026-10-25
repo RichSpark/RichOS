@@ -3,7 +3,7 @@
 # The presence of this file is the declaration. It switches on the RichOS
 # engine's guard-vendoring-commits.sh, which refuses a commit that adds files
 # under a redistributable path with no entry here; and it is read by
-# guard-dialect.sh, which leaves third-party bytes alone because of it. Delete
+# dialect-guard.sh, which leaves third-party bytes alone because of it. Delete
 # it and both stand down — which is a visible, reviewable diff, and is meant
 # to be.
 #
@@ -25,7 +25,7 @@
 # Americanized FOURTEEN lines across TWO vendored, MIT-licensed skills — four in
 # `richos/engine/skills/copywriting/references/natural-transitions.md` (Corey Haines's
 # prose) and ten in `richos/engine/skills/landing-page-taste/SKILL.md`. Neither is ours
-# to edit. guard-dialect.sh was working exactly as designed; it simply had no way
+# to edit. dialect-guard.sh was working exactly as designed; it simply had no way
 # to know those files were somebody else's, because nothing in this repository
 # knew.
 #

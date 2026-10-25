@@ -10,7 +10,7 @@
 //! or a sentence RichOS itself writes, wrapped in the `CognitionError` `Display` that
 //! `spine.rs` passes to the ledger.
 //!
-//! **There is no American-English test here and that is deliberate**: `guard-dialect.sh`
+//! **There is no American-English test here and that is deliberate**: `dialect-guard.sh`
 //! refuses the WRITE of a non-American word anywhere in this repository, which is a stronger
 //! guarantee than a test that has to be remembered, and a test enumerating the words it
 //! looks for would itself be refused by that guard.

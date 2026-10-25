@@ -550,7 +550,7 @@ class Closure(unittest.TestCase):
     def test_dialect_source_scan_keeps_unqualified_registration_selection(self):
         from affected_units import Selection
         document = json.loads((HERE / 'lib/verification-dependencies.json').read_text())
-        unit = 'scripts/hooks/guard-dialect.test.sh'
+        unit = 'scripts/hooks/dialect-guard.test.sh'
         read = lambda path: (HERE.parent / path).read_text()
         selection = Selection(HERE.parent, [unit], read, document)
         selection.ordinary('.claude/settings.local.json', '{"hooks":{}}', '{"hooks":{},"extra":true}')
@@ -2456,7 +2456,7 @@ class Closure(unittest.TestCase):
     def test_dialect_copy_preserves_readers_and_ledger_copy_uses_fixture_values(self):
         document = json.loads((HERE / 'lib/verification-dependencies.json').read_text())
         graph = inputs.Dependencies(HERE.parent, document)
-        dialect = 'scripts/hooks/guard-dialect.test.sh'
+        dialect = 'scripts/hooks/dialect-guard.test.sh'
         ledger = 'scripts/hooks/guard-reference-ledger.test.sh'
         expected = {'DIALECT_TARGET', 'DIALECT_SCAN_ALLOWLIST', 'DIALECT_EXEMPT_PATHS',
                     'VENDORING_DECLARATION'}

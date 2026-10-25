@@ -37,7 +37,7 @@ only to top-level `*.test.sh` files discovered by the app script runner.
 | `timeout-success` | Blocking count ceiling | Named timeout comparison followed immediately by literal `exit 0` in its `then` branch |
 | `timeout-indirect` | Advisory | Such a branch delegates to a function or other control flow |
 | `suite-inputs` | Blocking count ceiling | A discovered suite lacks a nonempty input declaration |
-| `dialect` | Blocking count ceiling | Existing dialect hook's Write-payload verdict, preserving locale, quotation and ownership exemptions |
+| `dialect` | Blocking count ceiling | Every word the engine's dialect hook would fix or refuse in a Write of the file, through the hook's own fixer module, preserving locale, file-class and ownership exemptions |
 | `test-positive-control` | Advisory | A refusal assertion without an acceptance assertion recognized in that file |
 | `test-retry` | Advisory | Retry or sleep syntax in a test; product retries can look identical |
 | `ui-absence` | Advisory, JavaScript report only | A string that may assert an absence |
@@ -50,11 +50,14 @@ are not name selection. Positive controls can live in other files; a matching
 assertion in the same file does not establish semantic adequacy. Advisory counts
 never block. Public incident references live beside each project rule.
 
-The dialect adapter invokes the existing hook rather than maintaining a second
-dictionary or scanner. It observes the scanner-result assignment through shell
-trace because the hook has silent stand-down and parse-failure paths. An
-unevaluated scan fails. Trace stays in memory; normal output reports only the
-result. Explicit exemptions in the hook remain valid.
+The dialect adapter imports the engine's fixer
+(`richos/engine/scripts/lib/dialect/dialect-fix.py`, the module
+`dialect-guard.sh` runs) rather than maintaining a second scanner. It reads the
+locale from the entity's `orchestration.config` the way the hook does; a locale
+other than `en-US` refuses, because an unevaluated scan is never clean. Its
+word list stays `richos/engine/scripts/lib/dialect-en-US.dict` until the
+ceiling is re-derived for the generated table (stream C). Explicit exemptions in
+the hook remain valid.
 
 ## Load-sensitive test code
 
@@ -66,7 +69,7 @@ other JavaScript rules), Rust files under `tests/` and `#[cfg(test)]` items.
 
 | ID | Refuses |
 | --- | --- |
-| `wall-clock-verdict` | an assertion comparing a measured duration (`Date.now()`/`performance.now()` difference, `Instant::elapsed`, `time.monotonic()` difference, `$SECONDS`, or a name assigned from one) against an upper literal |
+| `wall-clock-verdict` | an assertion comparing a measured duration (`Date.now()`/`performance.now()` difference, `Instant::elapsed`, `time.monotonic()` difference, `$SECONDS` or a name assigned from one) against an upper literal |
 | `short-deadline` | a literal deadline under 30 s: `timeout=` in a call, Playwright `timeout:`, `waitForFact(..., N)`, `recv_timeout`, `Instant::now() + Duration` |
 | `sleep-then-assert` | `waitForTimeout(N)`, `time.sleep(N)`, `sleep N`, `thread::sleep` followed, before any condition wait, by an assertion; a sleep inside a loop is a poll interval and is not a site |
 | `host-sample` | `/usr/bin/top`, `os.loadavg`/`getloadavg`, `vm_stat`, `memory_pressure`, `uptime` executed (a line naming a mock, fake, stub or fixture is not) |
@@ -74,7 +77,7 @@ other JavaScript rules), Rust files under `tests/` and `#[cfg(test)]` items.
 
 A site is exempt only with `load-bound: <why this cannot depend on host load>` on the line or
 the line above, where a reviewer sees it (for example `load-bound: virtual clock, page.clock
-installed at :40`). A bare marker, or a reason under ten characters, exempts nothing.
+installed at :40`). A bare marker or a reason under ten characters, exempts nothing.
 
 These rules are baselined by SITE, not count: `baselines/load.json` holds each existing site
 (file, rule, hash of the whitespace-normalized line). Any site not in it refuses, even while
@@ -100,13 +103,13 @@ same ceilings as `--static`/`--fast` at a fraction of the cost:
   `richos/app` outside `src-tauri`, Tauri Clippy for `src-tauri`.
 - A change to the lint itself or its baselines runs the full static pass and the fast set.
 
-It checks the working tree, including unstaged edits. The land check (`lint.sh --all`, or
+It checks the working tree, including unstaged edits. The land check (`lint.sh --all` or
 `lint.test.sh` when `proof-for.sh` selects it) sees exactly the merged tree.
 
 `--changed --strict` is what a commit runs. A ceiling that nobody lowered leaves room: on
 2026-09-29 `let_underscore_must_use` stood at 747 under a ceiling of 777, so thirty new
 discarded results would each have passed. Under `--strict` a commit may not grow any count,
-whatever room the ceiling has: a static count that grows over the changed files refuses, and
+whatever room the ceiling has: a static count that grows over the changed files refuses and
 each Clippy set's counts are compared with the counts recorded for HEAD's Rust. Every Clippy
 run records its counts under a digest of what the set reads (every Rust input's blob, the
 commands and the tool versions) in `<git-common-dir>/richos-lint-cache/`, shared by every
@@ -133,9 +136,9 @@ raised ceiling, removed rule, weakened classification or smaller inventory.
 must exist. Changing a tool version requires an explicit integration migration;
 a normal baseline update cannot silently waive it. A scanned file that is gone
 from the tree (nothing exists at its path) leaves the inventory without one: the
-normal check passes, `--lower` records the removal, and the comparison with
+normal check passes, `--lower` records the removal and the comparison with
 integration accepts a baseline that lost only such paths. A file that still
-exists but is no longer scanned, or whose role changed, is still refused. A
+exists but is no longer scanned or whose role changed, is still refused. A
 rename is a removal plus a new file. New files are scanned immediately, even
 before their inventory is added with `--lower`. A new diagnostic ID starts at
 zero.
@@ -167,7 +170,7 @@ Scheduling standalone measurements is an operator responsibility.
 
 The Tauri deadline is 180 seconds of Clippy's own work. Waiting for Cargo's lock
 (from Cargo's "Blocking waiting for file lock" line to its next line) is queueing,
-not work: it is reported and not counted, and a wait past 1800 seconds is refused
+not work: it is reported and not counted and a wait past 1800 seconds is refused
 as a hang (`rust.py` `LOCK_WAIT_GUARD`). Every Clippy run goes through `run_cargo`.
 Timeout cleanup terminates the process group created for the command, escalating
 to a kill if needed. It never selects processes by name. Descendants that

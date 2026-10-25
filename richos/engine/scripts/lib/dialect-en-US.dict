@@ -1,7 +1,11 @@
 # dialect-en-US.dict — THE VOCABULARY, AS DATA, IN ONE PLACE.
 #
-# Read by scripts/hooks/guard-dialect.sh. Nothing else in this engine carries a
-# dialect word list; a second copy is how the last one drifted.
+# Read by scripts/lib/dialect/dialect-table.py, which carries every line of it
+# into the generated table (scripts/lib/dialect/dialect-en-US.generated.dict)
+# that dialect-guard.sh reads, and by the app's lint rule
+# (richos/app/scripts/lint/dialect.py) until stream C moves it onto the table.
+# It is an input, not a second vocabulary: dialect-table.test.py fails the
+# moment the table stops containing it.
 #
 # FORMAT — one rule per line, TAB-separated:
 #

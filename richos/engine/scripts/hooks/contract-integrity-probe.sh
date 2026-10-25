@@ -1226,7 +1226,7 @@ guard-main-checkout-writes.sh|PreToolUse
 scan-secrets.sh|PreToolUse
 guard-publication-writes.sh|PreToolUse
 guard-named-persons-writes.sh|PreToolUse
-guard-dialect.sh|PreToolUse
+dialect-guard.sh|PreToolUse
 guard-no-home-network-phone.sh|PreToolUse
 guard-no-home-network-phone.sh|PreToolUse
 guard-host-display-power.sh|PreToolUse
@@ -1632,7 +1632,7 @@ BR_EOF3
     fi
     if [ -n "$BR4_UNHASHED" ]; then
         # NOT a green tick with a parenthesis. The sidecars are gitignored,
-        # generated artefacts, and the two-root contract makes the engine root
+        # generated artifacts, and the two-root contract makes the engine root
         # read-only to an adopter — so an adopter CANNOT mint them and must not
         # be failed for it. What they get instead is the truth about what is
         # therefore unverified.
@@ -2323,8 +2323,9 @@ done < <(printf '%s\n' "$WIRED" | awk -F'\t' '$1=="<event:Stop>" {print $2}')
 
 CANONICAL_GUARD_HOOK="$REPO_ROOT/scripts/hooks/guard-main-checkout-writes.sh"
 CANONICAL_SECRETS_HOOK="$REPO_ROOT/scripts/hooks/scan-secrets.sh"
-CANONICAL_DIALECT_HOOK="$REPO_ROOT/scripts/hooks/guard-dialect.sh"
-CANONICAL_DIALECT_DICT="$REPO_ROOT/scripts/lib/dialect-en-US.dict"
+CANONICAL_DIALECT_HOOK="$REPO_ROOT/scripts/hooks/dialect-guard.sh"
+CANONICAL_DIALECT_DICT="$REPO_ROOT/scripts/lib/dialect/dialect-en-US.generated.dict"
+CANONICAL_DIALECT_FIXER="$REPO_ROOT/scripts/lib/dialect/dialect-fix.py"
 CANONICAL_BASHGUARD_HOOK="$REPO_ROOT/scripts/hooks/guard-bash-main-writes.sh"
 CANONICAL_INTERACTIVE_HOOK="$REPO_ROOT/scripts/hooks/guard-interactive-prompt.sh"
 CANONICAL_IDLELAND_HOOK="$REPO_ROOT/scripts/hooks/guard-idle-land.sh"
@@ -2334,7 +2335,7 @@ CANONICAL_IDLELAND_HOOK="$REPO_ROOT/scripts/hooks/guard-idle-land.sh"
 CANONICAL_IDLELAND_PY="$REPO_ROOT/scripts/hooks/guard-idle-land.py"
 # NOT under scripts/hooks/ — the guard above decides nothing itself; every
 # shape it refuses and every fix it names comes out of this file, which is
-# why Layer IP hashes it the way Layer T hashes the dialect vocabulary.
+# why Layer IP hashes it the way Layer T hashes the dialect table and fixer.
 CANONICAL_INTERACTIVE_LIB="$REPO_ROOT/scripts/lib/interactive-prompt.py"
 CANONICAL_DRIFTGUARD_HOOK="$REPO_ROOT/scripts/hooks/guard-definition-drift.sh"
 CANONICAL_DEFSNAPSHOT_HOOK="$REPO_ROOT/scripts/hooks/snapshot-agent-definitions.sh"
@@ -2833,21 +2834,35 @@ else
     fi
 fi
 
-# --- Layer T: dialect guard wired + path-confined + manifest-matched +
-# functionally rejects a British spelling, AND its vocabulary is hashed
-# (HARD gate) ---
+# --- Layer T: dialect hook wired + path-confined + manifest-matched +
+# functionally FIXES a British spelling, passes clean text untouched and
+# REFUSES `CEO queue`, AND its table and fixer are hashed (HARD gate) ---
 #
 # A HARD gate for Layer K's reason, plus one of its own. The CEO ruled on
 # 2026-08-29 that American English is the language of this record; a sweep on
 # 2026-08-30 fixed 654 sites and, having no chokepoint behind it, was undone in
 # part WITHIN HOURS. This layer is the check that the chokepoint is on.
 #
-# THE DICTIONARY IS CHECKED TOO, and that half is the point: the guard decides
-# nothing itself — every refusal it issues comes out of
-# scripts/lib/dialect-en-US.dict. A hash-matched guard over an emptied
-# vocabulary is a green tick over an enforcement outage, which is the exact
+# THE TABLE AND THE FIXER ARE CHECKED TOO, and that half is the point: the
+# hook decides nothing itself — every fix and every refusal it makes comes out
+# of scripts/lib/dialect/dialect-fix.py reading
+# scripts/lib/dialect/dialect-en-US.generated.dict. A hash-matched hook over an
+# emptied table is a green tick over an enforcement outage, which is the exact
 # "check the lock, ignore the key" failure install.sh's own hashed-file list is
 # written about.
+#
+# THREE CANARIES, BECAUSE SINCE 2026-10-24 THE HOOK MOSTLY FIXES. A British
+# word in prose no longer exits 2: the hook rewrites it through updatedInput
+# and exits 0. So exit 0 alone proves nothing (a dead-but-quiet hook exits 0
+# too), and exit 2 alone proves nothing (every guard in this family refuses to
+# START by exiting 2). The layer therefore asks for all three behaviors at once:
+#   1. British prose  -> exit 0 AND an envelope whose updatedInput carries the
+#                        American text, with no permissionDecision (the hook
+#                        must never approve a write, only change it);
+#   2. clean prose    -> exit 0 and nothing on stdout;
+#   3. `CEO queue`    -> exit 2 (a rename, which it must refuse, not fix).
+# A hook that fails to start fails 1 and 2; one that stopped fixing fails 1;
+# one that stopped refusing fails 3.
 DIALECT_WIRED_CMD=""
 for c in "${WRITE_CMDS[@]}"; do
     RESOLVED_C="${c//\$CLAUDE_PROJECT_DIR/$REPO_ROOT}"
@@ -2860,7 +2875,7 @@ for c in "${WRITE_CMDS[@]}"; do
 done
 
 if [ -z "$DIALECT_WIRED_CMD" ]; then
-    emit_fail "T. PreToolUse[Write|Edit|MultiEdit|NotebookEdit] dialect guard (guard-dialect.sh) NOT wired in settings.json — run scripts/hooks/install.sh"
+    emit_fail "T. PreToolUse[Write|Edit|MultiEdit|NotebookEdit] dialect hook (dialect-guard.sh) NOT wired in settings.json — run scripts/hooks/install.sh"
 else
     DIALECT_HOOK_EXE="${DIALECT_WIRED_CMD%% *}"
     DIALECT_REAL="$(realpath_of "$DIALECT_HOOK_EXE")"
@@ -2868,54 +2883,65 @@ else
     DIALECT_MANIFEST="$(manifest_hash_of "$CANONICAL_DIALECT_HOOK")"
     DICT_HASH="$(sha256_of "$CANONICAL_DIALECT_DICT" 2>/dev/null || true)"
     DICT_MANIFEST="$(manifest_hash_of "$CANONICAL_DIALECT_DICT" 2>/dev/null || true)"
+    FIXER_HASH="$(sha256_of "$CANONICAL_DIALECT_FIXER" 2>/dev/null || true)"
+    FIXER_MANIFEST="$(manifest_hash_of "$CANONICAL_DIALECT_FIXER" 2>/dev/null || true)"
     if [ ! -x "$DIALECT_HOOK_EXE" ]; then
-        emit_fail "T. wired dialect-guard script not found / not executable: $DIALECT_HOOK_EXE"
+        emit_fail "T. wired dialect-hook script not found / not executable: $DIALECT_HOOK_EXE"
     elif [ -z "$DIALECT_HASH" ]; then
-        emit_fail "T. dialect-guard content hash could not be computed"
+        emit_fail "T. dialect-hook content hash could not be computed"
     elif [ -z "$DIALECT_MANIFEST" ]; then
-        emit_fail "T. dialect-guard manifest missing or unreadable: $CANONICAL_DIALECT_HOOK.sha256 — run scripts/hooks/install.sh to regenerate, then commit."
+        emit_fail "T. dialect-hook manifest missing or unreadable: $CANONICAL_DIALECT_HOOK.sha256 — run scripts/hooks/install.sh to regenerate, then commit."
     elif [ "$DIALECT_HASH" != "$DIALECT_MANIFEST" ]; then
-        emit_fail "T. dialect-guard content hash mismatch — live hook differs from manifest (tamper or stale manifest). Run scripts/hooks/install.sh and review the diff."
+        emit_fail "T. dialect-hook content hash mismatch — live hook differs from manifest (tamper or stale manifest). Run scripts/hooks/install.sh and review the diff."
     elif [ ! -f "$CANONICAL_DIALECT_DICT" ]; then
-        emit_fail "T. the dialect vocabulary is MISSING: $CANONICAL_DIALECT_DICT. The guard decides nothing without it."
+        emit_fail "T. the American spelling table is MISSING: $CANONICAL_DIALECT_DICT. The hook decides nothing without it."
     elif [ -z "$DICT_MANIFEST" ]; then
-        emit_fail "T. dialect vocabulary unhashed: $CANONICAL_DIALECT_DICT.sha256 missing — run scripts/hooks/install.sh to regenerate, then commit."
+        emit_fail "T. American spelling table unhashed: $CANONICAL_DIALECT_DICT.sha256 missing — run scripts/hooks/install.sh to regenerate, then commit."
     elif [ -n "$DICT_HASH" ] && [ "$DICT_HASH" != "$DICT_MANIFEST" ]; then
-        emit_fail "T. dialect vocabulary MODIFIED since install: $CANONICAL_DIALECT_DICT (sha256 $DICT_HASH != manifest $DICT_MANIFEST). Every refusal this guard issues comes out of this file — review the change, then re-run scripts/hooks/install.sh."
+        emit_fail "T. American spelling table MODIFIED since install: $CANONICAL_DIALECT_DICT (sha256 $DICT_HASH != manifest $DICT_MANIFEST). Every fix and refusal this hook makes comes out of this file — review the change, then re-run scripts/hooks/install.sh."
+    elif [ ! -f "$CANONICAL_DIALECT_FIXER" ]; then
+        emit_fail "T. the dialect fixer is MISSING: $CANONICAL_DIALECT_FIXER. The hook decides nothing without it."
+    elif [ -z "$FIXER_MANIFEST" ]; then
+        emit_fail "T. dialect fixer unhashed: $CANONICAL_DIALECT_FIXER.sha256 missing — run scripts/hooks/install.sh to regenerate, then commit."
+    elif [ -n "$FIXER_HASH" ] && [ "$FIXER_HASH" != "$FIXER_MANIFEST" ]; then
+        emit_fail "T. dialect fixer MODIFIED since install: $CANONICAL_DIALECT_FIXER (sha256 $FIXER_HASH != manifest $FIXER_MANIFEST). Review the change, then re-run scripts/hooks/install.sh."
     else
-        # Functional canary: a Write introducing an unambiguous British
-        # spelling into a prose file. The wired guard must return exit 2.
-        # DIALECT_TARGET is forced for the canary so the layer proves the
-        # MECHANISM, not this repository's current configuration — and it is
-        # forced through the entity root, exactly as a real session would.
+        # The canaries write to a prose path at the repository root, through the
+        # entity root, exactly as a real session would. The British text is
+        # this probe's own test input, declared exempt on its line so the hook
+        # never rewrites the probe itself.
         CANARY_DIALECT_PATH="$REPO_ROOT/__dialect_canary__.md"
-        CANARY_DIALECT_PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Write","tool_input":{"file_path":sys.argv[1],"content":"the colour of it is a matter of judgement"}}))' "$CANARY_DIALECT_PATH" 2>/dev/null || true)"
-        # AND A SECOND CANARY, CLEAN, BECAUSE exit 2 IS AMBIGUOUS. Every guard
-        # in this family refuses to START — missing resolve-roots.sh, missing
-        # seat-jurisdiction.sh, no python3 — by exiting 2. A one-sided canary
-        # that only asserts "British content -> 2" is therefore satisfied by a
-        # hook that is completely dead, and that is not a hypothetical: Layer
-        # K's one-sided canary was green in scripts/demo.sh's sandbox over a
-        # secrets scanner whose seat-jurisdiction.sh had never been copied
-        # there. So clean American content must return 0 in the same breath.
-        # Together the pair proves the guard is READING, not merely failing.
+        CANARY_DIALECT_PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Write","tool_input":{"file_path":sys.argv[1],"content":"the colour of it is a matter of judgement"}}))' "$CANARY_DIALECT_PATH" 2>/dev/null || true)" # dialect-exempt: Layer T's British canary, written on purpose
         CANARY_CLEAN_PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Write","tool_input":{"file_path":sys.argv[1],"content":"the color of it is a matter of judgment"}}))' "$CANARY_DIALECT_PATH" 2>/dev/null || true)"
+        CANARY_QUEUE_PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Write","tool_input":{"file_path":sys.argv[1],"content":"13 items are in the CEO queue"}}))' "$CANARY_DIALECT_PATH" 2>/dev/null || true)" # dialect-exempt: Layer T's refusal canary, written on purpose
         set +e
-        printf '%s' "$CANARY_DIALECT_PAYLOAD" | "$DIALECT_HOOK_EXE" >/dev/null 2>&1
+        dialect_fix_out="$(printf '%s' "$CANARY_DIALECT_PAYLOAD" | "$DIALECT_HOOK_EXE" 2>/dev/null)"
         dialect_rc=$?
-        printf '%s' "$CANARY_CLEAN_PAYLOAD" | "$DIALECT_HOOK_EXE" >/dev/null 2>&1
+        dialect_clean_out="$(printf '%s' "$CANARY_CLEAN_PAYLOAD" | "$DIALECT_HOOK_EXE" 2>/dev/null)"
         dialect_clean_rc=$?
+        printf '%s' "$CANARY_QUEUE_PAYLOAD" | "$DIALECT_HOOK_EXE" >/dev/null 2>&1
+        dialect_queue_rc=$?
         set -e
-        if [ "$dialect_rc" -eq 2 ] && [ "$dialect_clean_rc" -ne 0 ]; then
-            emit_fail "T. the dialect guard refused BOTH a British spelling and clean American prose (exit=$dialect_clean_rc on clean content). It is not enforcing, it is failing to start — check scripts/lib/seat-jurisdiction.sh, scripts/lib/resolve-roots.sh and python3."
-        elif [ "$dialect_rc" -ne 2 ]; then
-            if [ -z "${DIALECT_TARGET:-}" ]; then
-                emit_warn "T. dialect guard wired + manifest-matched + vocabulary hashed, but DIALECT_TARGET is blank in orchestration.config so nothing is enforced here (exit=$dialect_rc). That is a valid configuration — set DIALECT_TARGET=\"en-US\" to turn it on."
-            else
-                emit_fail "T. wired dialect guard did NOT block a British spelling (exit=$dialect_rc, expected 2) with DIALECT_TARGET=\"$DIALECT_TARGET\""
-            fi
+        dialect_fixed="$(printf '%s' "$dialect_fix_out" | python3 -c 'import json,sys
+try:
+    o = json.load(sys.stdin)["hookSpecificOutput"]
+except Exception:
+    print("no-envelope"); raise SystemExit
+if "permissionDecision" in o:
+    print("approves"); raise SystemExit
+print("fixed" if (o.get("updatedInput") or {}).get("content") == "the color of it is a matter of judgment" else "not-fixed")' 2>/dev/null || printf 'no-envelope')"
+        if [ "$dialect_queue_rc" -eq 2 ] && [ "$dialect_clean_rc" -ne 0 ]; then
+            emit_fail "T. the dialect hook refused BOTH \`CEO queue\` and clean American prose (exit=$dialect_clean_rc on clean content). It is not enforcing, it is failing to start — check scripts/lib/seat-jurisdiction.sh, scripts/lib/resolve-roots.sh, scripts/lib/dialect/dialect-fix.py and python3."
+        elif [ "$dialect_rc" -eq 0 ] && [ "$dialect_clean_rc" -eq 0 ] && [ -z "$dialect_fix_out" ] && [ "$dialect_queue_rc" -ne 2 ] && [ -z "${DIALECT_TARGET:-}" ]; then
+            emit_warn "T. dialect hook wired + manifest-matched + table and fixer hashed, but DIALECT_TARGET is blank in orchestration.config so nothing is enforced here. That is a valid configuration — set DIALECT_TARGET=\"en-US\" to turn it on."
+        elif [ "$dialect_rc" -ne 0 ] || [ "$dialect_fixed" != "fixed" ]; then
+            emit_fail "T. wired dialect hook did NOT fix a British spelling (exit=$dialect_rc, envelope: $dialect_fixed; expected exit 0 with updatedInput carrying the American text and no permissionDecision) with DIALECT_TARGET=\"${DIALECT_TARGET:-}\""
+        elif [ "$dialect_clean_rc" -ne 0 ] || [ -n "$dialect_clean_out" ]; then
+            emit_fail "T. wired dialect hook did not pass clean American prose untouched (exit=$dialect_clean_rc, stdout: ${dialect_clean_out:0:120})"
+        elif [ "$dialect_queue_rc" -ne 2 ]; then
+            emit_fail "T. wired dialect hook did NOT refuse \`CEO queue\` (exit=$dialect_queue_rc, expected 2): the CEO's list is CEO-TODOs, a rename the hook must refuse rather than fix"
         else
-            emit_pass "T. dialect guard wired + REJECTS a British spelling and PASSES clean American prose + vocabulary hashed (path-confined, manifest-matched, two-sided canary)"
+            emit_pass "T. dialect hook wired + FIXES a British spelling (updatedInput, no permissionDecision), PASSES clean prose untouched and REFUSES \`CEO queue\` + table and fixer hashed (path-confined, manifest-matched, three-sided canary)"
         fi
     fi
 fi
@@ -3150,7 +3176,7 @@ CANON = [
     # same dialect refusal twice, which reads as two separate wrong words in one
     # sentence — and would double the cost of the only guard here that runs a
     # word list over every byte of every write.
-    "guard-dialect.sh",
+    "dialect-guard.sh",
     # A BLOCKING Bash-matcher guard: registered twice it would run the CEO-TODOs
     # predicate twice per commit and print its refusal twice, which reads as two
     # separate defects in one record.

@@ -90,8 +90,8 @@ else bad "8  registered-hooks-gaps.test.py fails"; fi
 # The dispatcher half of hook_enforced_on_surface used to be
 # `_rh_dispatch_modules | grep -qxF`. grep -q exits at its first match; when the
 # writer still had output to send it died of SIGPIPE (141), and under the
-# caller's pipefail (this suite's, guard-dialect.test.sh's) an enforced guard
-# read as NOT enforced. guard-dialect.test.sh E2 failed that way about one run in
+# caller's pipefail (this suite's, dialect-guard.test.sh's) an enforced guard
+# read as NOT enforced. dialect-guard.test.sh E2 failed that way about one run in
 # thirty on a loaded host. A writer that pauses after the match makes the race
 # certain rather than occasional.
 if (

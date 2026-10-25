@@ -1,7 +1,7 @@
 # British test inputs for the American spelling auto-fix
 
 Test inputs written in British spelling on purpose. The `fixtures/` path
-segment is exempt from `guard-dialect.sh`, and any fixer built on the generated
+segment is exempt from `dialect-guard.sh`, and any fixer built on the generated
 table must keep it exempt, or these inputs would be rewritten and every test
 reading them would pass vacuously (plan check catch C8).
 

@@ -1,9 +1,9 @@
 # Third-party notices
 
 RichOS bundles work by other authors. Each piece stays under the license it
-arrived with, and none of it becomes AGPL by sitting in this repository. This
+arrived with and none of it becomes AGPL by sitting in this repository. This
 file is the inventory: what is bundled, where it came from, which revision or
-version, who holds the copyright, and where the full terms live.
+version, who holds the copyright and where the full terms live.
 
 **Last verified 2026-09-04.** Every provenance claim below was checked against
 the named upstream on that date rather than carried forward from a previous
@@ -13,7 +13,7 @@ rounding up.
 **Nine skills were added to this table on 2026-09-04**, on the CEO's express
 exception to his own standing rule that a skill carrying no license gets none
 added. They are third-party, they were established as such by
-`docs/legal/SKILL-PROVENANCE-2026-09-04.md`, and until that day they carried no
+`docs/legal/SKILL-PROVENANCE-2026-09-04.md` and until that day they carried no
 license file at all. Each now carries one, taken from its upstream rather than
 from a template. The other twelve skills in `richos/engine/skills/` are RichOS-authored
 and stay bare, which is correct and deliberate.
@@ -26,7 +26,7 @@ see `docs/legal/BRAND-ASSETS.md`.
 
 - **byte-identical** — every bundled file was fetched from the named upstream
   revision and compared byte for byte on the date above.
-- **modified** — the bundled copy differs from upstream, and the difference is
+- **modified** — the bundled copy differs from upstream and the difference is
   written down in the directory alongside the work.
 - **by version** — the upstream project publishes versioned skills rather than
   a stable path history, so the bundled copy is identified by the version it
@@ -88,40 +88,40 @@ Compared against the upstream revision that also declared 3.5.0
 line — the HTTP 429 row of the error table, where the bundled copy carries the
 *newer* rate-limit wording — and in the frontmatter `metadata` block, which
 upstream has since extended. The bundled copy is therefore a 3.5.0-era release
-taken through a distribution channel other than that commit, and is recorded by
+taken through a distribution channel other than that commit and is recorded by
 version. The directory carried no MIT notice before 2026-09-04.
 
 **`copywriting`.** Three of the four bundled files are byte-identical to the
 pinned revision. The fourth, `references/natural-transitions.md`, differs in four
-lines, and in nothing but spelling: two headings carry the British `-ising` form
+lines and in nothing but spelling: two headings carry the British `-ising` form
 upstream and the American `-izing` form here, each appearing twice. The cause is
 in this repository's own history — commit
 `06f4a8221a61500b90790383c8359d931391fe4f` (2026-08-30), "docs(prose): US
 spelling in richos/engine/scripts, richos/engine/skills and root repo comments". **The
 spellings were left as they are.** MIT does not require a modified copy to
-disclose the change, and reverting an edit to make a table say "byte-identical"
+disclose the change and reverting an edit to make a table say "byte-identical"
 would be the tail wagging the dog. The row says "modified" because it is.
 
 **`customer-research`.** Word for word identical to the pinned revision; nothing
 a reader would call a difference is a word. `SKILL.md` has eight lines whose
-leading indentation is four spaces here and three upstream, and
+leading indentation is four spaces here and three upstream and
 `evals/evals.json` is one byte shorter because the bundled copy has no trailing
 newline. `references/source-guides.md` is byte-identical. It is pinned to a
 different revision from its three siblings because it did not exist upstream at
 theirs: it was created upstream on 2026-03-28 at 06:32 UTC and reached this
 project's source repository at 10:53 UTC the same morning.
 
-**`playwright-cli`.** The Apache-2.0 one, and the only one of the nine where the
+**`playwright-cli`.** The Apache-2.0 one and the only one of the nine where the
 license imposes conditions beyond carrying the notice. All three that apply are
 answered: the license travels (`LICENSE.txt`), the modified file carries a
-notice (`MODIFICATIONS.md`, per section 4(b)), and section 4(d) — carry forward
+notice (`MODIFICATIONS.md`, per section 4(b)) and section 4(d) — carry forward
 an upstream `NOTICE` — is answered by the fact that upstream publishes none, at
 the pinned revision or on `main` today, both listed and checked. The single
 modification is an inserted eighteen-line "Headed browser requirement" section
 that is RichOS doctrine rather than Playwright's; all seven files under
 `references/` are byte-identical. The revision was pinned by fetching all
 twenty-six upstream revisions and comparing: at `4fafccc` the references match
-and `SKILL.md` differs only by the insertion, and one revision later 57 lines
+and `SKILL.md` differs only by the insertion and one revision later 57 lines
 differ. Upstream's `LICENSE` is CRLF throughout and this repository stores LF,
 so the bundled text is the LF form; no character of the license differs and both
 hashes are recorded at the top of the file.
@@ -137,11 +137,11 @@ independent statement of the same grant; it is not bundled.
 to `0e55ee7` — all ten files of one, the single file of the other. The thing
 worth knowing is about the license rather than the code: **at that revision
 `sveltejs/ai-tools` published no license file at all**, at its root or in the
-plugin directory, and its root `package.json` is private with no license field.
+plugin directory and its root `package.json` is private with no license field.
 The `LICENSE` granting MIT was added upstream seven weeks later, on 2026-04-28,
 in `1ce957ac72c9b6d1d6086cc2f38254d802caebf7`. That file is what both
-directories reproduce, and each says so in its own header. It is upstream's only
-statement of its own terms, and it is not a license this project picked on
+directories reproduce and each says so in its own header. It is upstream's only
+statement of its own terms and it is not a license this project picked on
 upstream's behalf. Upstream's copyright line is a Markdown link and is
 reproduced as written.
 
@@ -153,21 +153,21 @@ claim smaller and truer than the provenance document's, which read the skill as
 substantially extended in-house on the strength of a commit message and a diff
 against today's `main`. Against its actual base it is upstream's file with four
 small edits — three punctuation swaps, one added CLI line, one "must" changed to
-"should", and one dropped routing step with the renumbering it forced. All four
+"should" and one dropped routing step with the renumbering it forced. All four
 are enumerated in that directory's `LICENSE`.
 
 **`gpt-exporter`.** Its `LICENSE` reads "Copyright (c) 2026 Alex Booster". It is
 the repository owner's own separately published MIT project, vendored here — not
 third-party code in the usual sense. It is listed anyway, because a reader
-deciding what they may reuse needs the same answer either way, and because
+deciding what they may reuse needs the same answer either way and because
 `richos/engine/LICENSING.md` used to describe it as the *only* exception when there are
 seven.
 
 ### The reason two rows say "modified" that should not have to
 
-`copywriting` is not byte-identical because **this project edited it**, and not
+`copywriting` is not byte-identical because **this project edited it** and not
 on purpose. The dialect guard enforces American spelling on every file written
-in this tree, and it cannot tell a vendored third-party file from one we wrote.
+in this tree and it cannot tell a vendored third-party file from one we wrote.
 On 2026-08-30 a sweep under that rule
 (`06f4a8221a61500b90790383c8359d931391fe4f`) changed four lines in
 `richos/engine/skills/copywriting/references/natural-transitions.md`.
@@ -175,30 +175,30 @@ On 2026-08-30 a sweep under that rule
 **The same sweep changed ten lines in `richos/engine/skills/landing-page-taste/SKILL.md`,
 which is also third-party** (MIT, Leonxlnx) and already in the table above. Its
 row does not claim byte-identity, so nothing in this file is false — but the row
-is quieter than the fact deserves, and a reader comparing that directory against
+is quieter than the fact deserves and a reader comparing that directory against
 `72e2995` will find ten differences with nothing here to explain them. Both are
 American spelling substitutions of the same kind.
 
 Nothing hazardous follows from either. MIT requires only that the notice travel
-with the copy, and it does. What follows is narrower and worth naming, in two
+with the copy and it does. What follows is narrower and worth naming, in two
 parts.
 
 **The sweep manufactures "modified" rows.** It will keep doing so, one pass at a
 time, for as long as vendored paths are in its scope — and each pass costs
 somebody the work of establishing that the difference is only spelling.
 
-**The guard now makes the correct repair impossible.** `guard-dialect.sh`
+**The guard now makes the correct repair impossible.** `dialect-guard.sh`
 refuses a write whose new content carries a non-American word. It does not know
 a vendored path either, so **re-vendoring `natural-transitions.md` from upstream
 today would be blocked** — and so is writing upstream's spelling into a notice
 that explains the difference. That is not hypothetical: while this section was
-being written, an attempt to quote the two upstream words was refused, and the
+being written, an attempt to quote the two upstream words was refused and the
 sentence above is phrased around the block rather than through it. A guard that
 forbids restoring a file to its upstream state has turned a cosmetic drift into
 a one-way door.
 
 The remedy is the same for both and it is small: exempt vendored third-party
-paths. It belongs to whoever owns the guard, and it is recorded here rather than
+paths. It belongs to whoever owns the guard and it is recorded here rather than
 fixed here.
 
 Until it is fixed, the rule is the one this file already follows: **do not revert
@@ -208,10 +208,10 @@ the edits to make a row read better.** Record what the tree actually contains.
 
 All four families are under the **SIL Open Font License 1.1**, whose only
 material conditions are that the fonts are not sold on their own, that the
-copyright and license notice travel with them, and that a derived font is not
+copyright and license notice travel with them and that a derived font is not
 released under the reserved font name. RichOS satisfies all three: the fonts
 ship as part of the application, the notices below are in the tree beside the
-files, and nothing is renamed or re-released.
+files and nothing is renamed or re-released.
 
 | Family | Files | Copyright | Full terms |
 |---|---|---|---|
@@ -231,15 +231,15 @@ names and are not redistributed as a separate font product.
 | `richos/engine/scripts/lib/dialect/third_party/varcon/` (`varcon.txt`, `README`) | VarCon, part of SCOWL (<http://wordlist.aspell.net/>), as vendored by crate-ci/typos at `crates/varcon/assets` | VarCon 2020.12.07; typos commit `dd3e1018f8a825a98be71048c21a9b0495aff703`; `varcon.txt` sha256 `c1e234817b526a809fa745d742fec84db88b65c429e22faf8a556b3d5a224085` | notice-only permissive terms (three notices, below) | 2000-2020 Kevin Atkinson; 2016 Benjamin Titze; 1993 Geoff Kuenning | `richos/engine/scripts/lib/dialect/third_party/varcon/README`, section "Copyright" | byte-identical (both files, 2026-09-27) |
 | `richos/engine/scripts/lib/dialect/dialect-en-US.generated.dict` | generated from the row above by `richos/engine/scripts/lib/dialect/dialect-table.py` | same input, pinned by sha256 inside the generator | same three notices | same holders | this section | **modified version** — see below |
 
-**What ships, and where.** The engine asset carries all three files, because it
+**What ships and where.** The engine asset carries all three files, because it
 ships every tracked engine file. The generated table is also compiled into the
 RichOS application's executable (`richos/app/crates/richos-core/src/american_spelling.rs`,
 by `include_str!`), so the application bundle carries this page with it:
 `richos/app/src-tauri/tauri.conf.json`'s `bundle.resources` copies it to
-`RichOS.app/Contents/Resources/THIRD-PARTY-NOTICES.md`, and
+`RichOS.app/Contents/Resources/THIRD-PARTY-NOTICES.md` and
 `richos/app/scripts/package-app.sh` refuses a bundle that lacks it or whose copy
 lacks this section. The updater archive and the first-install zip are archives
-of that bundle, so they carry it too. Nothing else from VarCon is used, and no
+of that bundle, so they carry it too. Nothing else from VarCon is used and no
 VarCon script is bundled. `varcon.txt` itself is unmodified.
 
 **The generated table is a modified version of VarCon, marked as such**, as the
@@ -248,12 +248,12 @@ modified source. It is a subset: only VarCon's verified clusters at SCOWL level
 70 or below, only British forms with exactly one preferred American form and
 no preferred-American use in any sense, reformatted to one pair per line, with
 RichOS additions and removals merged in (`dialect-en-US.overrides.dict` and
-`dialect-en-US.leave.tsv` beside it, and `richos/engine/scripts/lib/dialect-en-US.dict`).
+`dialect-en-US.leave.tsv` beside it and `richos/engine/scripts/lib/dialect-en-US.dict`).
 The table's own header says so in every copy and carries the three notices.
 
 **No endorsement.** The names of Kevin Atkinson, Benjamin Titze and Geoff
 Kuenning appear here only to give the attribution their notices require. None
-of them endorses or promotes RichOS, and nothing in RichOS may say or imply
+of them endorses or promotes RichOS and nothing in RichOS may say or imply
 otherwise.
 
 **The three notices, verbatim from the bundled `README`:**
@@ -329,12 +329,12 @@ claim worth being able to check.
 | Apple `iconutil` | Apple system tool | `.icns` assembly, same script |
 | Playwright | Apache-2.0 | `richos/app/ui/tests` — a devDependency of the browser acceptance harness. Not part of any bundle; excluded from the shipped frontend by `richos/app/src-tauri/build.rs` and gated by `richos/app/scripts/frontend-payload.test.sh`. |
 
-## Compiled dependency inventory — GENERATED, and where it lives
+## Compiled dependency inventory — GENERATED and where it lives
 
 `docs/legal/THIRD-PARTY-RUST-DEPENDENCIES.md` is the per-package inventory of
 every Rust dependency that resolves in this repository: 498 distinct
 third-party packages across the three workspaces, each with its version, the
-license its publisher declares, and whether it reaches a macOS binary at all.
+license its publisher declares and whether it reaches a macOS binary at all.
 
 **Every one of them may be distributed as part of an AGPL-3.0-only combined
 work.** Nothing in the tree is proprietary and nothing carries terms that
@@ -344,18 +344,18 @@ The two things the pre-publication audit told us not to round up are answered
 there in full rather than summarized here, because a second copy of a legal
 finding is a second thing that can go stale:
 
-- **MPL-2.0** — five packages. Reciprocal per file, and section 3.3 expressly
+- **MPL-2.0** — five packages. Reciprocal per file and section 3.3 expressly
   permits distributing the Larger Work under the GNU AGPL v3 provided no
   covered file carries the Exhibit B notice. None does.
 - **`r-efi`** — offered as "MIT OR Apache-2.0 OR LGPL-2.1-or-later". RichOS
-  takes the MIT branch, and the package is a UEFI binding that is never
+  takes the MIT branch and the package is a UEFI binding that is never
   compiled for either Darwin target. Its two coexisting versions are explained
   there too: the Tauri workspace is deliberately detached and resolves
-  independently, and inside it two semver-major lines of `getrandom` coexist.
+  independently and inside it two semver-major lines of `getrandom` coexist.
 
 ### Why it can be trusted, which is the part that took the work
 
-Until 2026-09-04 this section said the inventory did **not** exist, and gave a
+Until 2026-09-04 this section said the inventory did **not** exist and gave a
 structural reason: `richos/app/.gitignore` ignored both `Cargo.lock` files, so an
 inventory generated on any given morning would have been keyed to whatever
 versions resolved that morning on one machine. A license list keyed to versions
@@ -370,10 +370,10 @@ Both lockfiles are now tracked. The inventory is generated from them by
   run at all if a lockfile would have to change;
 - records the sha256 of each lockfile it read, so the document's identity is
   the lockfile rather than a date;
-- **refuses to produce a document** if any package declares no license, or
+- **refuses to produce a document** if any package declares no license or
   declares one that has never been reviewed against AGPL-3.0-only. A new
   dependency arriving under unreviewed terms is the event this inventory exists
-  to catch, and rendering it as a row saying "unknown" would convert the
+  to catch and rendering it as a row saying "unknown" would convert the
   finding into a line of text.
 
 `richos/app/scripts/dependency-license-inventory.sh --check` fails if the committed
@@ -382,8 +382,8 @@ dependency change; it is the only way this document can lie.
 
 ### What is still open before a binary ships
 
-The audit's wording was "for the actual release bundle", and there is still no
-release, tag or signed artifact. Two things therefore remain, and they belong
+The audit's wording was "for the actual release bundle" and there is still no
+release, tag or signed artifact. Two things therefore remain and they belong
 to the release work rather than to this file:
 
 - **Build the release with `--locked`.** `richos/app/scripts/package-app.sh` invokes
@@ -393,26 +393,26 @@ to the release work rather than to this file:
 - **Carry these notices inside the artifact.** The engine asset does this and
   has a packaging test that opens the archive and refuses it when license
   material is missing. Since 2026-09-27 the application bundle carries this
-  page at `Contents/Resources/THIRD-PARTY-NOTICES.md`, and `package-app.sh`
+  page at `Contents/Resources/THIRD-PARTY-NOTICES.md` and `package-app.sh`
   refuses a bundle without it (see "Bundled data compiled into the
   application" above). The per-package Rust inventory
   (`docs/legal/THIRD-PARTY-RUST-DEPENDENCIES.md`) is not yet copied in beside it.
 
 Nothing above blocks publishing the **source**. The AGPL obligations attach to
-what this repository contains, and every bundled work in it is named here with
+what this repository contains and every bundled work in it is named here with
 its terms.
 
 ## Designs adopted from third-party source — no code bundled
 
 Nothing in this section is redistributed. It is recorded because a design read
-off somebody else's source and built to deliberately is a provenance fact, and
+off somebody else's source and built to deliberately is a provenance fact and
 a reader of ours should be able to find the original rather than assume the
 reasoning was ours.
 
 | What we took | Upstream | Revision | License | Copyright | Where it landed |
 |---|---|---|---|---|---|
-| The phone outbox's retry policy and its compare-and-set write revisions, and the rule that the send path owns its own retry clock rather than borrowing the transport's | `pingdotgg/t3code` | `8ebb6112377a110afb956ac01fb44fee68f5709c` | MIT | T3 Tools Inc. | `richos/web/web-app/lib/queue.js`, `richos/web/web-app/app.js` |
-| Dictation's paste: save every clipboard item, write the words, post Command-V with V's key code found by `UCKeyTranslate` over key codes 0 to 127 on the current layout, and put the clipboard back after 1.0 s only if its change count is still the one the write produced | `human37/open-wispr`, `Sources/OpenWisprLib/TextInserter.swift` | `7ab4e62e8f182f3ecc2116e1094a1eb4416a248f` (v0.43.0) | MIT | human37 | `richos/app/src-tauri/src/dictation/insert.rs`, `richos/app/crates/richos-voice/src/dictation.rs` |
+| The phone outbox's retry policy and its compare-and-set write revisions and the rule that the send path owns its own retry clock rather than borrowing the transport's | `pingdotgg/t3code` | `8ebb6112377a110afb956ac01fb44fee68f5709c` | MIT | T3 Tools Inc. | `richos/web/web-app/lib/queue.js`, `richos/web/web-app/app.js` |
+| Dictation's paste: save every clipboard item, write the words, post Command-V with V's key code found by `UCKeyTranslate` over key codes 0 to 127 on the current layout and put the clipboard back after 1.0 s only if its change count is still the one the write produced | `human37/open-wispr`, `Sources/OpenWisprLib/TextInserter.swift` | `7ab4e62e8f182f3ecc2116e1094a1eb4416a248f` (v0.43.0) | MIT | human37 | `richos/app/src-tauri/src/dictation/insert.rs`, `richos/app/crates/richos-voice/src/dictation.rs` |
 
 **What was and was not taken, precisely.** The two numbers — double from one
 second, cap at sixteen — and the reasoning, from
@@ -420,18 +420,18 @@ second, cap at sixteen — and the reasoning, from
 `apps/mobile/src/state/thread-outbox-manager.ts:51-57, 164-177` and
 `docs/internals/connection-runtime.md:5-22`. **No file, function or line of
 theirs is copied**: our outbox is plain ES5-era JavaScript with a storage port,
-theirs is React with Jotai atoms and Effect schemas, and the two share no
+theirs is React with Jotai atoms and Effect schemas and the two share no
 shape. Each adopting site names the upstream file it was read from, in the
 comment beside the code. MIT would permit copying with attribution; we did not
 need to.
 
 **open-wispr's paste, translated rather than copied.** Its `TextInserter` is Swift; dictation's
 is Rust, reaching the same AppKit, CoreGraphics and Carbon calls through FFI, so no line of theirs
-is in this repository. The logic is theirs, translated, and its MIT notice is: *Copyright (c) 2026
+is in this repository. The logic is theirs, translated and its MIT notice is: *Copyright (c) 2026
 human37. Permission is hereby granted, free of charge, to any person obtaining a copy of this
 software and associated documentation files (the "Software"), to deal in the Software without
 restriction, including without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+distribute, sublicense and/or sell copies of the Software and to permit persons to whom the
 Software is furnished to do so, subject to the following conditions: The above copyright notice
 and this permission notice shall be included in all copies or substantial portions of the
 Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
@@ -439,7 +439,7 @@ INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PA
 AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.* Added around
-it, and ours: the no-text-box check, the spacing rule and the `org.nspasteboard.TransientType`
+it and ours: the no-text-box check, the spacing rule and the `org.nspasteboard.TransientType`
 marker (dictation plan, `richos-hq/docs/plans/2026-10-08-dictation-anywhere.md`, section 5 and
 section 7). The file at that commit was compared with the audited checkout on 2026-10-08 and is
 the same.
@@ -453,9 +453,9 @@ and `richos-hq/docs/research/t3code-tooling-what-to-adopt-2026-09-19.md` §2.6.
 Vendoring anything means three things in the same commit:
 
 1. the upstream license file next to the work,
-2. a row in this table with a pinned revision or a declared version, and
+2. a row in this table with a pinned revision or a declared version and
 3. if the bundled copy differs from upstream at all, a notice in that directory
-   saying how — required by Apache-2.0 section 4(b), and good manners
+   saying how — required by Apache-2.0 section 4(b) and good manners
    everywhere else.
 
 A dependency whose own license forbids combination with the AGPL cannot be
@@ -509,9 +509,9 @@ SHA-256 pins are in `richos/app/scripts/runtime-sources.json`. The delivered
 | Git | 2.55.0 | `runtime/sources/GIT-COPYING` and exact corresponding source `git-2.55.0.tar.xz` |
 | GNU libiconv, statically linked into Git | 1.18 | `runtime/sources/ICONV-COPYING.LIB` and exact corresponding source `libiconv-1.18.tar.gz` |
 | whisper.cpp (`whisper-cli`, with the ggml it vendors statically linked), MIT | 1.9.1 | `runtime/sources/WHISPER-CPP-LICENSE`; built from the pinned upstream source archive |
-| FFmpeg (`ffmpeg`, `ffprobe`), static macOS arm64 build by Martin Riedl, GPL-3.0-or-later | 9.0.2 | `runtime/sources/FFMPEG-COPYING.GPLv3`; directions to the exact corresponding source in `runtime/sources/FFMPEG-SOURCE.txt`, and a copy of every archive attached to the RichOS release |
+| FFmpeg (`ffmpeg`, `ffprobe`), static macOS arm64 build by Martin Riedl, GPL-3.0-or-later | 9.0.2 | `runtime/sources/FFMPEG-COPYING.GPLv3`; directions to the exact corresponding source in `runtime/sources/FFMPEG-SOURCE.txt` and a copy of every archive attached to the RichOS release |
 
-### FFmpeg: a third party's static build, and where its source is
+### FFmpeg: a third party's static build and where its source is
 
 `ffmpeg` and `ffprobe` are not built here. They are the unmodified static
 macOS arm64 build of FFmpeg 9.0.2 that Martin Riedl publishes at
@@ -527,7 +527,7 @@ It is 34 archives totaling 304,272,357 bytes (measured 2026-10-07), more than
 twice the size of the whole engine asset today. Instead, under GPLv3 section
 6(d), the runtime carries clear directions beside the programs:
 `runtime/sources/FFMPEG-SOURCE.txt` lists FFmpeg 9.0.2, every library at the
-version the build used, and the build script
+version the build used and the build script
 (`git.martin-riedl.de/ffmpeg/build-script`, Apache-2.0) at commit
 `6a611e19870e197bc37c6e4c7fccddebd3715466`, each with its download URL and
 SHA-256. The same list is the `corresponding_source` entry in

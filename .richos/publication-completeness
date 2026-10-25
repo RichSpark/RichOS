@@ -107,7 +107,16 @@
 # reasoning as the second group: they were true on the day, rewriting them would
 # falsify the only thing they are for, and restoring the code to satisfy them
 # would be worse. Exact files.
-CITATION_EXEMPT="richos/engine/reference/ richos/engine/skills/ richos/engine/.claude/agents/ richos/engine/qa-audits/ richos/app/ORCHESTRATION-REVIEW.md richos/app/URBAN-P5-RESPONSE.md docs/reviews/sage-fable-r4-owned-outcome-2026-09-09.md docs/reviews/sage-fable-r6-owned-outcome-2026-09-09.md docs/verification/owned-outcome/RESULTS-7.md docs/verification/owned-outcome/REVIEW.md docs/verification/owned-outcome/REVISION-3.md docs/verification/owned-outcome/evidence-r7/review-r6.md docs/verification/ui-ux-signoffs/URBAN_SIGNOFF_2026-09-05_21.40.md docs/verification/ui-ux-signoffs/URBAN_SIGNOFF_2026-09-06_02.05.md docs/verification/ui-ux-signoffs/URBAN_SIGNOFF_2026-09-06_03.00.md docs/plans/worktree-spec-2026-09-11.md docs/verification/certification-frank-2026-09-10.md docs/verification/certification-sage-round2-2026-09-10.md docs/verification/reclaim-round-13-zach-fable-fix2-2026-09-10.md richos/engine/docs/worktree-reclaim-round-10-2026-09-10.md richos/engine/docs/worktree-reclaim-round-11-2026-09-10.md"
+# ---------------------------------------------------------------------------
+# CITATION_EXEMPT, fifth group — A DATED AUDIT THAT KEEPS THE NAMES OF ITS DAY.
+#
+# Added 2026-10-24 with the dialect hook's rename (guard-dialect.sh ->
+# dialect-guard.sh, the CEO's naming rule). richos/engine/docs/audits/
+# ceo-words-hook-audit-2026-09-20.md records which hooks read his words as they
+# were on the day; dated records keep the names that existed when they were
+# written (the lead's order for this rename), so its row still cites
+# scripts/hooks/guard-dialect.sh. Same reasoning as the second group. Exact file.
+CITATION_EXEMPT="richos/engine/reference/ richos/engine/skills/ richos/engine/.claude/agents/ richos/engine/qa-audits/ richos/app/ORCHESTRATION-REVIEW.md richos/app/URBAN-P5-RESPONSE.md docs/reviews/sage-fable-r4-owned-outcome-2026-09-09.md docs/reviews/sage-fable-r6-owned-outcome-2026-09-09.md docs/verification/owned-outcome/RESULTS-7.md docs/verification/owned-outcome/REVIEW.md docs/verification/owned-outcome/REVISION-3.md docs/verification/owned-outcome/evidence-r7/review-r6.md docs/verification/ui-ux-signoffs/URBAN_SIGNOFF_2026-09-05_21.40.md docs/verification/ui-ux-signoffs/URBAN_SIGNOFF_2026-09-06_02.05.md docs/verification/ui-ux-signoffs/URBAN_SIGNOFF_2026-09-06_03.00.md docs/plans/worktree-spec-2026-09-11.md docs/verification/certification-frank-2026-09-10.md docs/verification/certification-sage-round2-2026-09-10.md docs/verification/reclaim-round-13-zach-fable-fix2-2026-09-10.md richos/engine/docs/worktree-reclaim-round-10-2026-09-10.md richos/engine/docs/worktree-reclaim-round-11-2026-09-10.md richos/engine/docs/audits/ceo-words-hook-audit-2026-09-20.md"
 # ---------------------------------------------------------------------------
 # A FIFTH GROUP CAME AND WENT (2026-09-12). The round-6 measurement record
 # (docs/verification/round6-measurement-2026-09-12.md) cited the private

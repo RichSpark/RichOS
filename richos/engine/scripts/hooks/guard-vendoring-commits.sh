@@ -20,7 +20,7 @@
 # the moment of vendoring, by the person doing it.
 #
 # The same missing fact produced a second, unrelated failure the same day.
-# guard-dialect.sh Americanized four British spellings inside
+# dialect-guard.sh Americanized four British spellings inside
 # `engine/skills/copywriting/references/natural-transitions.md` — Corey
 # Haines's MIT-licensed prose. That guard was working exactly as designed. It
 # simply had no way to tell a vendored file from one we wrote, because nothing
@@ -646,7 +646,7 @@ N="$(printf '%s' "$UNRECORDED" | grep -c . || true)"
     echo "  origin is 'third-party' or 'richos' — RECORD YOUR OWN WORK TOO. That"
     echo "  is not bookkeeping: it is what lets this guard tell 'we wrote it and"
     echo "  said so' from 'nobody wrote anything down', and it is what stops"
-    echo "  guard-dialect.sh editing somebody else's prose."
+    echo "  dialect-guard.sh editing somebody else's prose."
     echo ""
     echo "  This guard never guesses provenance and is not claiming your entry is"
     echo "  right. It is claiming somebody looked, at the one moment the answer"
