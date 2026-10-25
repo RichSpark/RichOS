@@ -1,0 +1,308 @@
+[
+ {
+  "op": "guest",
+  "command": "mkdir -p /Users/admin/fill-first"
+ },
+ {
+  "op": "push",
+  "src": "richos/app/scripts/testvm/fake-claude-fill-first.pl",
+  "dest": "/Users/admin/fill-first/claude-fill-first"
+ },
+ {
+  "op": "push",
+  "src": "richos/app/scripts/testvm/fake-claude-bug-report.py",
+  "dest": "/Users/admin/fill-first/claude"
+ },
+ {
+  "op": "push",
+  "src": "richos/app/scripts/testvm/report-relay-stand-in.py",
+  "dest": "/Users/admin/fill-first/relay-stand-in.py"
+ },
+ {
+  "op": "guest",
+  "command": "chmod 755 /Users/admin/fill-first/claude /Users/admin/fill-first/claude-fill-first; printf '{\"five\":10,\"weekly\":20}' > /Users/admin/fill-first/usage-1.json; printf 'Noted.' > /Users/admin/fill-first/reply.txt"
+ },
+ {
+  "op": "guest",
+  "command": "cd /Users/admin/fill-first && (nohup python3 relay-stand-in.py 8765 /Users/admin/fill-first/relay.json /Users/admin/fill-first/stand-in.log 0 412 > /Users/admin/fill-first/relay.out 2>&1 & echo $! > /Users/admin/fill-first/stand-in.pid); sleep 2; cat /Users/admin/fill-first/relay.out"
+ },
+ {
+  "op": "relaunch",
+  "env": [
+   "RICHOS_CLAUDE_BIN=/Users/admin/fill-first/claude",
+   "RICHDOCTOR_REPORT_RELAY=http://127.0.0.1:8765",
+   "RICHDOCTOR_REPORT_REPOSITORY=richos-test/report-relay-local"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Settings",
+   "--first"
+  ],
+  "contains": "matches=1",
+  "seconds": 120
+ },
+ {
+  "op": "wait",
+  "seconds": 5
+ },
+ {
+  "op": "shot",
+  "name": "1-home"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Settings",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Bust a bug!",
+   "--contains",
+   "--first"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "What went wrong? Tell me in your own words",
+   "--contains",
+   "--first"
+  ],
+  "contains": "matches=1",
+  "seconds": 30
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "The names of my conversations on the left get cut off when I make the text bigger.",
+   "--role",
+   "AXTextArea",
+   "--id",
+   "bugdock-input",
+   "--replace"
+  ]
+ },
+ {
+  "op": "ax",
+  "args": [
+   "--key",
+   "36"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "Not sent yet",
+   "--contains",
+   "--first"
+  ],
+  "contains": "matches=1",
+  "seconds": 120,
+  "allow_fail": true
+ },
+ {
+  "op": "shot",
+  "name": "2-after-answer"
+ },
+ {
+  "op": "tree",
+  "name": "2-after-answer"
+ },
+ {
+  "op": "guest",
+  "command": "grep -h -i 'bug report\\|claude\\|panicked' /Users/admin/testvm/*/relaunch-*.log | tail -40",
+  "allow_fail": true
+ },
+ {
+  "op": "guest",
+  "command": "head -c 1500 /Users/admin/fill-first/writer-prompts.log; echo; ls -la /Users/admin/fill-first",
+  "allow_fail": true
+ },
+ {
+  "op": "wait",
+  "seconds": 4
+ },
+ {
+  "op": "shot",
+  "name": "2-report-card"
+ },
+ {
+  "op": "guest",
+  "command": "test ! -s /Users/admin/fill-first/stand-in.log && echo 'nothing reached the relay before Send'"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Send report",
+   "--first"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "Sent \u00b7 #412",
+   "--contains",
+   "--first"
+  ],
+  "contains": "matches=1",
+  "seconds": 60
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "3-report-sent"
+ },
+ {
+  "op": "guest",
+  "command": "d=\"$(find /Users/admin -type d -name bug-reports -path '*com.richos.app*' 2>/dev/null | head -1)\"; echo \"$d\"; cat \"$d/sent.jsonl\"; ls \"$d/waiting\" 2>/dev/null | wc -l"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Settings",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Request a feature",
+   "--first"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "What would you like RichOS to do?",
+   "--contains",
+   "--first"
+  ],
+  "contains": "matches=1",
+  "seconds": 30
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "It would be great if Rich sent me a short summary of each conversation every Friday afternoon.",
+   "--role",
+   "AXTextArea",
+   "--id",
+   "bugdock-input",
+   "--replace"
+  ]
+ },
+ {
+  "op": "ax",
+  "args": [
+   "--key",
+   "36"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "Not posted yet",
+   "--contains",
+   "--first"
+  ],
+  "contains": "matches=1",
+  "seconds": 120
+ },
+ {
+  "op": "wait",
+  "seconds": 4
+ },
+ {
+  "op": "shot",
+  "name": "4-idea-card"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--role",
+   "AXButton",
+   "--id",
+   "bug-send",
+   "--first"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--value",
+   "Posted \u00b7 in Ideas",
+   "--contains",
+   "--first"
+  ],
+  "contains": "matches=1",
+  "seconds": 60
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "5-idea-posted"
+ },
+ {
+  "op": "guest",
+  "command": "d=\"$(find /Users/admin -type d -name feature-requests -path '*com.richos.app*' 2>/dev/null | head -1)\"; echo \"$d\"; cat \"$d/sent.jsonl\""
+ },
+ {
+  "op": "pull",
+  "src": "/Users/admin/fill-first/stand-in.log",
+  "dest": "stand-in.log"
+ },
+ {
+  "op": "pull",
+  "src": "/Users/admin/fill-first/relay.json",
+  "dest": "relay.json"
+ },
+ {
+  "op": "guest",
+  "command": "kill $(cat /Users/admin/fill-first/stand-in.pid) && echo 'stand-in stopped'"
+ }
+]
