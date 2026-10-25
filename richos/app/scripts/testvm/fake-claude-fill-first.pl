@@ -45,6 +45,13 @@
 #                 "register ok <text>" or "register error <text>". A file of several lines
 #                 writes one job per line, in order, in that one turn (the turn's text carries
 #                 the first line); a one-line file is exactly the single job above.
+#   needs-screen  while it exists, each job is recorded with needs_screen true (CEO §56).
+#   delegate      while it exists, the same turn then hands each job to Stu through the
+#                 status server's `delegate` tool, as Rich does, once delegate-go exists (at
+#                 most 10 minutes), so a walk can set the scene between the two. calls.log:
+#                 "delegate ok <text>" or "delegate error <text>".
+#   status-server.json  written by every front-desk lease: the status server's command and
+#                 args from --mcp-config, so a walk can run the same status read Rich runs.
 #
 # NOBODY SIGNED IN (the held queue, richos-hq plan 2026-10-09 §4 row 5). While
 # /Users/admin/fill-first/signed-out exists, `auth status --json` answers loggedIn false with exit # machine-path-exempt: isolated guest fixture documentation; no customer default
@@ -181,6 +188,9 @@ sub helper_steps {  # one step of every listed helper that has not ended
 # register (richos_assignments), the back end carries the work tools (richos_work).
 my $servers = eval { $json->decode(arg_after('--mcp-config') // '{}')->{mcpServers} } || {};
 my $backend = exists $servers->{richos_work};
+if (!$backend && $servers->{richos_status} && open(my $ss, '>', "$dir/status-server.json")) {
+  print $ss $json->encode($servers->{richos_status}); close $ss;
+}
 sub calls_line { if (open(my $l, '>>', "$dir/calls.log")) { print $l join(' ', time(), ($folder || 'account-1'), @_), "\n"; close $l; } }
 sub register_job {  # the front desk writes the job down through the app's own register; its words, or undef
   my ($sent) = @_;
@@ -201,7 +211,8 @@ sub register_job {  # the front desk writes the job down through the app's own r
     { jsonrpc => '2.0', id => 1, method => 'initialize',
       params => { protocolVersion => '2025-06-18', capabilities => {}, clientInfo => { name => 'fake-claude', version => '1' } } },
     { jsonrpc => '2.0', method => 'notifications/initialized' },
-    map { $n++; { jsonrpc => '2.0', id => $n, method => 'tools/call', params => { name => 'record', arguments => { assignment => $_ } } } } @jobs;
+    map { $n++; { jsonrpc => '2.0', id => $n, method => 'tools/call', params => { name => 'record',
+      arguments => { assignment => $_, (-e "$dir/needs-screen" ? (needs_screen => JSON::PP::true) : ()) } } } } @jobs;
   close $to;
   my ($answered, @words) = (0);
   while (my $line = <$from>) {
@@ -217,7 +228,32 @@ sub register_job {  # the front desk writes the job down through the app's own r
     last if ++$answered == @jobs;
   }
   close $from; waitpid($pid, 0);
+  delegate_jobs(@jobs) if -e "$dir/delegate";
   return @words ? join(' ', @words) : undef;
+}
+sub delegate_jobs {  # Rich's handoff of each job to Stu, through the status server's `delegate`
+  my @jobs = @_;
+  my $server = $servers->{richos_status} or return calls_line('delegate', 'error', 'no status server');
+  for (1 .. 600) { last if -e "$dir/delegate-go"; sleep 1; }
+  my ($from, $to);
+  my $pid = eval { open2($from, $to, $server->{command}, @{ $server->{args} || [] }) };
+  return calls_line('delegate', 'error', 'the status server could not be started') unless $pid;
+  my $n = 1;
+  print $to $json->encode($_), "\n" for
+    { jsonrpc => '2.0', id => 1, method => 'initialize',
+      params => { protocolVersion => '2025-06-18', capabilities => {}, clientInfo => { name => 'fake-claude', version => '1' } } },
+    map { $n++; { jsonrpc => '2.0', id => $n, method => 'tools/call', params => { name => 'delegate', arguments => { text => "Handoff: $_" } } } } @jobs;
+  close $to;
+  my $answered = 0;
+  while (my $line = <$from>) {
+    my $reply = eval { $json->decode($line) } or next;
+    my $rid = $reply->{id} // ''; next unless $rid =~ /\A\d+\z/ && $rid >= 2;
+    my $result = $reply->{result} || {};
+    my $said = $result->{content} && $result->{content}[0] ? $result->{content}[0]{text} // '' : ($reply->{error}{message} // '');
+    calls_line('delegate', ($result->{content} && !$result->{isError}) ? 'ok' : 'error', ($said =~ s/\s+/ /gr));
+    last if ++$answered == @jobs;
+  }
+  close $from; waitpid($pid, 0);
 }
 my $stepper;  # the pid of this lease's background stepper, while it runs
 sub step_in_background {  # the work-agents keep running after the back end's turn ends
