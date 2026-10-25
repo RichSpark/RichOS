@@ -200,6 +200,7 @@ pub mod lease_commands;
 pub mod provider_auth;
 pub mod engine_profile;
 pub mod user_settings;
+pub mod your_instructions;
 pub mod instructions_update;
 pub mod login_environment;
 pub mod user_git;

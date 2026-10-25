@@ -68,7 +68,7 @@ pub fn handled_in_turn(records: Vec<crate::machinery::MachineryRecord>, turn_id:
                         None
                     }
                 });
-            if ![Some(QUALIFIED_SAVE_TOOL), Some(QUALIFIED_DECLINE_TOOL)].contains(&name) {
+            if ![Some(QUALIFIED_SAVE_TOOL), Some(QUALIFIED_DECLINE_TOOL), Some(crate::your_instructions::QUALIFIED_TOOL)].contains(&name) {
                 return None;
             }
             Some((r.session_id.as_str(), r.tool_call_id.as_deref()?))
@@ -186,15 +186,47 @@ pub fn tools() -> Value {
         {"name":DECLINE_TOOL_NAME,
          "description":"Record an explicit Not now answer to the company interview or resume offer. Only call when the CEO declines that specific offer in the current conversation. Never infer an interview decline from unrelated chat. Existing notes are preserved and other companies are unaffected.",
          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
-         "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}
+         "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
+        crate::your_instructions::tool()
     ]})
 }
 
 /// Application validation is shared by the protocol adapter and tests. Tool arguments cannot
 /// redirect persistence, including by sneaking a path or entity beside otherwise valid notes.
 pub fn call(scope_path: &Path, name: &str, arguments: Value) -> Result<Value, String> {
+    call_in(scope_path, None, name, arguments)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InstructionsArguments {
+    rules: Vec<String>,
+}
+
+/// [`call`], with the turn's question scope (`question_tools.rs`) when the server was given one:
+/// it names the conversation and the turn a save of the user's instructions is shown under, as
+/// the "Your instructions · Saved" card (`your_instructions.rs`). Without one the rules are still
+/// saved; only the card is not drawn.
+pub fn call_in(scope_path: &Path, cards: Option<&Path>, name: &str, arguments: Value) -> Result<Value, String> {
     // Validate arguments before touching the scope or disk.
     match name {
+        crate::your_instructions::TOOL => {
+            let args: InstructionsArguments = serde_json::from_value(arguments).map_err(|_| {
+                "Use only rules: the new rules, one per item, in the user's words. Nothing was saved.".to_string()
+            })?;
+            let (scope, entity) = read_scope(scope_path)?;
+            require_action_grant(&scope)?;
+            let rules = crate::your_instructions::add_rules(&scope.central_root, &args.rules)?;
+            let card = cards
+                .and_then(|path| crate::question_tools::read_scope(path).ok())
+                .map(|q| q.context)
+                .filter(|c| c.entity_id == entity.as_str())
+                .and_then(|c| crate::your_instructions::record(&c.root, &c.entity_id, &c.thread_id, &c.turn_id, &rules).ok());
+            Ok(json!({"status":"saved","rules":rules,
+                "path":crate::your_instructions::path(&scope.central_root),
+                "shown": if card.is_some() { "The user sees these rules as a card under your reply, with a button that opens their instructions." } else { "Saved. No card could be shown in this conversation." },
+                "appliesFrom":"the user's next new conversation"}))
+        }
         SAVE_TOOL_NAME => {
             let args: SaveArguments = serde_json::from_value(arguments).map_err(|_| {
                 "Use only notes and progress (partial or complete). Nothing was saved.".to_string()
@@ -245,7 +277,7 @@ fn error(id: Value, code: i64, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
 }
 
-fn response(scope: &Path, request: Value, initialized: &mut bool) -> Option<Value> {
+fn response(scope: &Path, cards: Option<&Path>, request: Value, initialized: &mut bool) -> Option<Value> {
     let id = request.get("id").cloned();
     let method = request.get("method").and_then(Value::as_str);
     if request.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || method.is_none() {
@@ -290,7 +322,7 @@ fn response(scope: &Path, request: Value, initialized: &mut bool) -> Option<Valu
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            match call(scope, name, args) {
+            match call_in(scope, cards, name, args) {
                 Ok(value) => {
                     json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})
                 }
@@ -304,8 +336,14 @@ fn response(scope: &Path, request: Value, initialized: &mut bool) -> Option<Valu
 
 /// Read newline-delimited JSON-RPC with bounded allocation. Oversized messages are drained
 /// through their newline, rejected and cannot be interpreted as a following command.
-pub fn serve(
+pub fn serve(scope_path: &Path, reader: impl BufRead, writer: impl Write) -> io::Result<()> {
+    serve_in(scope_path, None, reader, writer)
+}
+
+/// [`serve`], with the turn's question scope for the instructions card ([`call_in`]).
+pub fn serve_in(
     scope_path: &Path,
+    cards: Option<&Path>,
     mut reader: impl BufRead,
     mut writer: impl Write,
 ) -> io::Result<()> {
@@ -341,7 +379,7 @@ pub fn serve(
             Some(error(Value::Null, -32600, "Message too large"))
         } else {
             match serde_json::from_slice::<Value>(&frame) {
-                Ok(value) => response(scope_path, value, &mut initialized),
+                Ok(value) => response(scope_path, cards, value, &mut initialized),
                 Err(_) => Some(error(Value::Null, -32700, "Invalid JSON")),
             }
         };
@@ -357,4 +395,9 @@ pub fn serve(
 /// Entry point used before the desktop shell initializes. Stdout is exclusively MCP frames.
 pub fn run_stdio(scope_path: &Path) -> io::Result<()> {
     serve(scope_path, io::stdin().lock(), io::stdout().lock())
+}
+
+/// [`run_stdio`], with the turn's question scope (`--onboarding-mcp <scope> <question scope>`).
+pub fn run_stdio_in(scope_path: &Path, cards: Option<&Path>) -> io::Result<()> {
+    serve_in(scope_path, cards, io::stdin().lock(), io::stdout().lock())
 }
