@@ -73,9 +73,34 @@ mutant shared-owner-discarded "test_T19" "$D" \
     "a second user's completion would delete a simulator still owned by the first."
 
 mutant interrupted-collector-silent "test_T32" "$D" \
-    '                record_collector_failure("cleanup started but has not completed")' \
+    '            record_collector_failure("cleanup started but has not completed")' \
+    '            pass' \
+    "an interrupted cleanup pass would leave no alert."
+
+mutant killed-collector-silent "test_T32b" "$D" \
+    '                _alert_writer().record_running(_collect_command())' \
     '                pass' \
     "a killed cleanup pass would leave no alert."
+
+mutant running-collection-alerted "test_T32b" "scripts/lib/testdevice_alerts.py" \
+    '            if row.get("pid_start") and current == row["pid_start"]:' \
+    '            if False:' \
+    "a collection that is simply still running would be published as a cleanup failure (2026-10-24)."
+
+mutant abandoned-collection-hidden "test_T32c" "scripts/lib/testdevice_alerts.py" \
+    '            if row.get("pid_start") and current == row["pid_start"]:' \
+    '            if True:' \
+    "a killed collector's mark would never alert again."
+
+mutant overdue-collection-hidden "test_T32c" "scripts/lib/testdevice_alerts.py" \
+    '        if not isinstance(started, (int, float)) or now - started >= RUNNING_ALERT_SECONDS:' \
+    '        if not isinstance(started, (int, float)):' \
+    "a collection hung for hours would read as running for ever."
+
+mutant new-run-masks-standing-failure "test_T32d" "scripts/lib/testdevice_alerts.py" \
+    '    if note or (previous is not None and not (isinstance(previous, dict)' \
+    '    if note or (False and not (isinstance(previous, dict)' \
+    "a standing collector failure would vanish while the next pass runs."
 
 mutant owned-run-not-renewed "test_T44" "$D" \
     '        lease["last_use"] = time.time(){NL}        lease["activity"] = {"pid": child.pid, "renewer": os.getpid(), "renewed": lease["last_use"]}' \

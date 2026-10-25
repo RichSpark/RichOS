@@ -807,6 +807,57 @@ else
     sed 's/^/        /' "$W_DIR/out.txt" | head -8
 fi
 
+# W12i — A COLLECTION STILL RUNNING IS NOT A CLEANUP FAILURE (2026-10-24).
+# The collector marks its start so a killed pass leaves an alert. At 23:50:16Z
+# that mark, from a pass that was simply still running, published
+# test_device_failures 1 with nothing wrong. The mark names its process: while
+# that process runs, inside the bound, it is not counted; once the process is
+# gone, or past the bound, it is a failure again (W12j, W12k).
+device_mark() {            # <pid> <seconds-ago>
+    python3 - "$W_DIR/test-device-failures.json" "$1" "$2" <<'PY2'
+import json, os, subprocess, sys, time
+pid, ago = int(sys.argv[2]), float(sys.argv[3])
+out = subprocess.run(["ps", "-o", "stat=,lstart=", "-p", str(pid)], capture_output=True, text=True,
+                     env=dict(os.environ, LC_ALL="C", LANG="C", TZ="UTC0")).stdout.strip()
+start = " ".join(out.partition(" ")[2].split())
+json.dump({"collector:incomplete": {
+    "kind": "collector", "id": "incomplete", "name": "test-device collector",
+    "verdict": "collection running", "why": "cleanup started but has not completed",
+    "command": "python3 testdevices.py collect --apply", "first": "2026-10-24T23:50:00Z",
+    "last": "2026-10-24T23:50:00Z", "attempts": 1,
+    "pid": pid, "pid_start": start, "started": time.time() - ago}}, open(sys.argv[1], "w"))
+PY2
+}
+world device-running
+write_cfg 1 999999 1 1
+touch "$W_LA/com.richos.disk-watchdog.plist"
+# load-bound: the sleep is only a live process for the mark to name; no verdict waits on it
+sleep 600 & W12I_PID=$!
+device_mark "$W12I_PID" 5
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "0" ] && ! printf '%s' "$OUT" | grep -q 'TEST DEVICE'; then
+    ok "W12i a device collection still running is not published as a cleanup failure"
+else
+    bad "W12i a running device collection was published as a failure (rc=$RC)"
+    printf '%s\n' "$OUT" | sed 's/^/        /' | head -8
+fi
+device_mark "$W12I_PID" 100000
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'TEST DEVICE CLEANUP NEEDS ATTENTION'; then
+    ok "W12k CONTROL: a collection running past its bound is still a failure"
+else
+    bad "W12k an overdue device collection was hidden (rc=$RC)"
+fi
+kill "$W12I_PID" 2>/dev/null; wait "$W12I_PID" 2>/dev/null
+device_mark "$W12I_PID" 5
+OUT="$(run_wd --alert)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'TEST DEVICE CLEANUP NEEDS ATTENTION'; then
+    ok "W12j CONTROL: a collection whose process is gone is still a failure"
+else
+    bad "W12j an abandoned device collection was hidden (rc=$RC)"
+fi
+rm -f "$W_DIR/test-device-failures.json"
+
 # ===========================================================================
 # W13 — the classification (CEO addendum 2)
 # ===========================================================================

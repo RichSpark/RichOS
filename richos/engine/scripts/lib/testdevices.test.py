@@ -668,6 +668,48 @@ class Collector(Base):
         T.collect(apply=True)
         self.assertEqual(self.rows(), {})
 
+    def alerts(self):
+        spec = importlib.util.spec_from_file_location("device_alerts_reader", os.path.join(HERE, "testdevice_alerts.py"))
+        A = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(A)
+        return A
+
+    def test_T32b_a_collection_still_running_is_not_a_failure(self):
+        # 2026-10-24 23:50Z the watchdog published `test_device_failures 1` from the
+        # start mark of a collection that was simply still running.
+        seen = {}
+
+        def running(*_args):
+            seen["raw"] = self.rows()
+            seen["standing"] = self.alerts().standing(seen["raw"])
+            return {k: [] for k in ("collected", "survivors", "left", "undecided", "deferred")}
+        with patch.object(T, "_collect", side_effect=running):
+            T.collect(apply=True)
+        self.assertIn("collector:incomplete", seen["raw"])        # the mark is still written
+        self.assertEqual(seen["standing"], {})
+
+    def test_T32c_an_abandoned_or_overdue_collection_is_still_a_failure(self):
+        A = self.alerts()
+        A.record_running("collect")
+        row = self.rows()["collector:incomplete"]
+        self.assertEqual(A.standing(self.rows()), {})
+        dead = self.dead_pid()
+        abandoned = A.standing({"collector:incomplete": dict(row, pid=dead)})
+        self.assertEqual(abandoned["collector:incomplete"]["verdict"], "collection abandoned")
+        overdue = A.standing({"collector:incomplete": row}, now=row["started"] + A.RUNNING_ALERT_SECONDS)
+        self.assertEqual(overdue["collector:incomplete"]["verdict"], "collection timed out")
+
+    def test_T32d_a_new_run_does_not_mask_a_standing_collector_failure(self):
+        T.record_collector_failure("corrupt registry")
+        seen = {}
+
+        def running(*_args):
+            seen["standing"] = self.alerts().standing(self.rows())
+            raise RuntimeError("still broken")
+        with patch.object(T, "_collect", side_effect=running):
+            T.collect(apply=True)
+        self.assertIn("corrupt registry", seen["standing"]["collector:incomplete"]["why"])
+
     def test_T33_identity_read_failure_after_signal_preserves_avd(self):
         cache = os.path.join(self.android, "unreadable-after-signal")
         os.makedirs(os.path.join(cache, "avd"))

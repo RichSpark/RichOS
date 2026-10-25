@@ -877,6 +877,14 @@ def main():
     dev_failures = read_state(dev_path)
     if not isinstance(dev_failures, dict):
         dev_failures = {}
+    # A collection whose own process is still running is not a failure; one that
+    # was killed, interrupted or ran past its bound still is (testdevice_alerts).
+    # If that reader cannot load, every row is counted, never fewer.
+    try:
+        from testdevice_alerts import standing as device_standing
+        dev_failures = device_standing(dev_failures)
+    except Exception:
+        pass
     n_dev = len(dev_failures)
 
     alerting = [v for v in volumes if v["below_rich"] or v["drop_alert"]]

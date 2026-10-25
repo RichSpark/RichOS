@@ -8,6 +8,8 @@
 # allocates the sandbox with the engine's own allocator, so a cleanup suite is
 # never the thing that leaves garbage, and releases it however the run ends.
 # Simulators here are rows in a fake simctl; the machine's own are never read.
+# The cases also cover testdevice_alerts.py, the collector's failure writer and
+# the standing() rule the disk watchdog counts with (T32-T32d).
 #
 # Exit 0 = every case passed; exit 1 = at least one failed.
 
