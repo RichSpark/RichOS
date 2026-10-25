@@ -227,10 +227,25 @@ pub fn hook_section(executable: &Path) -> String {
     section
 }
 
-/// The mark the wait leaves for the commit it held: the Git process making that commit, which
-/// also runs its `post-commit` hook.
-fn waited(state: &Path, git_pid: u32) -> PathBuf {
-    dir(state).join(format!("waited-{git_pid}"))
+/// The mark the wait leaves for the commit it held, by that commit's own Git folder
+/// (`git rev-parse --absolute-git-dir`, one per worktree): both hooks of one commit run in it, and
+/// Git may run each through its own shell, so no process id is shared between them.
+fn waited(state: &Path, folder: &Path, env: &[(&str, &Path)]) -> Option<PathBuf> {
+    use sha2::Digest;
+    let git_dir = git(folder, env, &["rev-parse", "--absolute-git-dir"])?;
+    Some(dir(state).join(format!("waited-{:x}", sha2::Sha256::digest(git_dir.as_bytes()))))
+}
+
+/// Is process `pid` still there?
+fn alive(pid: u32) -> bool {
+    // SAFETY: signal 0 sends nothing; it only asks whether the process exists.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+/// The parent of process `pid`, as `ps` reports it.
+fn parent_of(pid: u32) -> Option<u32> {
+    let out = std::process::Command::new("/bin/ps").args(["-o", "ppid=", "-p", &pid.to_string()]).output().ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
 /// One answer to `git -C folder …`, run as the lease runs Git (its environment, with `env` added),
@@ -289,12 +304,18 @@ pub fn wait_cli() -> i32 {
         eprintln!("[richos] the Git name could not be asked ({why}); this commit goes ahead with the name RichOS");
         return 0;
     }
-    let git_pid = std::os::unix::process::parent_id();
-    hold(&state, std::time::Duration::from_millis(500), || std::os::unix::process::parent_id() != git_pid);
+    // The Git making the commit is the parent, or the grandparent when Git ran the hook through a
+    // shell; when either is gone, the commit is gone and the hold lets go.
+    let parent = std::os::unix::process::parent_id();
+    let grandparent = parent_of(parent).filter(|&p| p > 1);
+    let gone = || std::os::unix::process::parent_id() != parent || grandparent.is_some_and(|g| !alive(g));
+    hold(&state, std::time::Duration::from_millis(500), gone);
     // This commit was signed before the answer came: mark it, so it is made again under the
     // saved name once it exists.
-    if std::os::unix::process::parent_id() == git_pid && matches!(choice(&state), Some(Choice::Own { .. })) {
-        if let Err(why) = std::fs::write(waited(&state, git_pid), b"") {
+    if !gone() && matches!(choice(&state), Some(Choice::Own { .. })) {
+        let marked = waited(&state, &folder, &[]).ok_or_else(|| "its Git folder could not be told".to_string())
+            .and_then(|mark| std::fs::write(mark, b"").map_err(|e| e.to_string()));
+        if let Err(why) = marked {
             eprintln!("[richos] the commit that waited could not be marked ({why}); it keeps the name RichOS");
         }
     }
@@ -302,27 +323,27 @@ pub fn wait_cli() -> i32 {
 }
 
 /// **The redo hook**, run by Git after a commit or merge: when the wait held this commit, make it
-/// again under the saved name (`git commit --amend --reset-author`, the same tree, parents and
-/// message, its hooks quiet). Always exits 0.
+/// again under the saved name ([`redo`]). Always exits 0.
 pub fn redo_cli() -> i32 {
     if std::env::var_os(REDOING).is_some() { return 0; }
     let Some(state) = std::env::var_os("RICHOS_APP_STATE").map(PathBuf::from) else { return 0 };
     let Ok(folder) = std::env::current_dir() else { return 0 };
-    if let Err(why) = redo(&state, &folder, std::os::unix::process::parent_id(), &[]) {
+    if let Err(why) = redo(&state, &folder, &[]) {
         eprintln!("[richos] the commit that waited keeps the name RichOS: {why}");
     }
     0
 }
 
-/// Redo the commit `git_pid` made in `folder` when the wait marked it; `Ok(false)` when it did not.
+/// Redo the commit just made in `folder` when the wait marked it; `Ok(false)` when it did not.
 ///
 /// The commit is rebuilt from ITSELF, never from the index (review
 /// rv-20261025T031723Z-5154b8c7-2b36#1: `git commit -- a` with `b` also staged commits only `a`,
 /// and an amend took `b` too): `git commit-tree` with HEAD's own tree, parents, message and author
 /// date, signed with the saved name, then HEAD moved to it with `git update-ref`, only while it
 /// still points at the commit that waited. The index and the working folder are not touched.
-pub(crate) fn redo(state: &Path, folder: &Path, git_pid: u32, env: &[(&str, &Path)]) -> Result<bool, String> {
-    if std::fs::remove_file(waited(state, git_pid)).is_err() { return Ok(false); }
+pub(crate) fn redo(state: &Path, folder: &Path, env: &[(&str, &Path)]) -> Result<bool, String> {
+    let Some(mark) = waited(state, folder, env) else { return Ok(false) };
+    if std::fs::remove_file(mark).is_err() { return Ok(false); }
     let Some(Choice::Own { name, email }) = choice(state) else { return Ok(false) };
     let base: Vec<(String, String)> = env.iter().map(|(k, v)| (k.to_string(), v.to_string_lossy().into_owned())).collect();
     let head = git_io(folder, &["rev-parse", "--verify", "HEAD"], None, &base)?;
@@ -577,24 +598,24 @@ mod tests {
         let before = shape();
         // No mark, no redo.
         save(&state, "Dana Whitfield", "dana@northwind.com").unwrap();
-        assert_eq!(redo(&state, &repo, 4242, env), Ok(false));
+        assert_eq!(redo(&state, &repo, env), Ok(false));
         assert_eq!(signed(), "RichOS <richos@localhost>|RichOS <richos@localhost>", "a commit the wait did not hold is left alone");
         // The wait held it and marked it; its post-commit hook redoes it.
-        std::fs::write(waited(&state, 4242), b"").unwrap();
+        std::fs::write(waited(&state, &repo, env).unwrap(), b"").unwrap();
         // Git hands its hooks the commit's author in GIT_AUTHOR_NAME/EMAIL (measured with Git 2.55,
         // docs/verification/2026-10-25-terminal-and-git-walk/redo-measurement.sh); the redo drops them.
         let (stand_in, stand_in_email) = (Path::new("RichOS"), Path::new("richos@localhost"));
         let in_hook: &[(&str, &Path)] = &[env[0], env[1], env[2], ("GIT_AUTHOR_NAME", stand_in), ("GIT_AUTHOR_EMAIL", stand_in_email)];
-        assert_eq!(redo(&state, &repo, 4242, in_hook), Ok(true));
+        assert_eq!(redo(&state, &repo, in_hook), Ok(true));
         assert_eq!(signed(), "Dana Whitfield <dana@northwind.com>|Dana Whitfield <dana@northwind.com>", "the waiting commit's own author and committer");
         assert_eq!(shape(), before, "the same tree, parent and message");
-        assert!(!waited(&state, 4242).exists(), "redone once");
-        assert_eq!(redo(&state, &repo, 4242, env), Ok(false));
+        assert!(!waited(&state, &repo, env).unwrap().exists(), "redone once");
+        assert_eq!(redo(&state, &repo, env), Ok(false));
         // "Use RichOS": the mark is cleared and the commit keeps the stand-in.
         use_richos(&state).unwrap();
         run(&["commit", "-q", "--allow-empty", "-m", "Later"]);
-        std::fs::write(waited(&state, 4243), b"").unwrap();
-        assert_eq!(redo(&state, &repo, 4243, env), Ok(false));
+        std::fs::write(waited(&state, &repo, env).unwrap(), b"").unwrap();
+        assert_eq!(redo(&state, &repo, env), Ok(false));
         assert_eq!(signed(), "RichOS <richos@localhost>|RichOS <richos@localhost>");
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -633,8 +654,8 @@ mod tests {
         run(&["commit", "-q", "-m", "Update prices", "--", "a"]);
         let before = run(&["log", "-1", "--format=%T %P %s %ad"]);
         save(&state, "Dana Whitfield", "dana@northwind.com").unwrap();
-        std::fs::write(waited(&state, 4244), b"").unwrap();
-        assert_eq!(redo(&state, &repo, 4244, env), Ok(true));
+        std::fs::write(waited(&state, &repo, env).unwrap(), b"").unwrap();
+        assert_eq!(redo(&state, &repo, env), Ok(true));
         assert_eq!(run(&["log", "-1", "--format=%an <%ae>|%cn <%ce>"]), "Dana Whitfield <dana@northwind.com>|Dana Whitfield <dana@northwind.com>");
         assert_eq!(run(&["log", "-1", "--format=%T %P %s %ad"]), before, "the same tree, parent, message and author date");
         assert_eq!(run(&["show", "--name-only", "--format=", "HEAD"]), "a", "the commit holds only a");
