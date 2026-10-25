@@ -33,8 +33,10 @@ save one; it must be SETTLED with no human message after the request), idle. The
             this step reports only the turn end; a normal lease close is the a6-app-work-lease-eof
             walk's (richos-hq docs/verification/2026-10-24-orchestration-reliability-impl)
   keep      ALWAYS, pass or fail, before run-walk.py deletes the guest: every session transcript
-            (~/.claude/projects), the app's engine-state, the conversation ledger and the bundle's
-            Info.plist, as kept/kept.tgz on the host. The first such walk lost the rows.
+            (~/.claude/projects), the app's engine-state, the conversation ledger, the stated-action
+            check's own verdict log (coordination/.claude/state/stated-actions.jsonl: every ARM 2
+            refusal and ARM 3 record verdict, engine_profile.rs RICHOS_SA_ENTITY_ROOT) and the
+            bundle's Info.plist, as kept/kept.tgz on the host. The first such walk lost the rows.
 
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
 """
@@ -61,6 +63,15 @@ STEPS = ['identity', 'first-run', 'job', 'idle', 'reload', 'monitor', 'fail', 'a
 # An ordinary request after the monitor was killed, worded as srw.JOB is.
 AFTER_JOB = ('Please add a file named more.md whose whole content is the line "More notes for the walk test." '
              'to the Acme repository and commit it, and land it.')
+
+
+def kept_paths(home, data):
+    """What `keep` carries off the guest, each as (root, path under it); a missing one is skipped. The
+    stated-action check (ass-kicker) logs every ARM 2 refusal and ARM 3 record verdict under the app's
+    coordination root, which is not in engine-state: without it a walk cannot show that neither fired."""
+    return ((home + '/.claude', 'projects'), (data, 'engine-state'), (data, 'conversation-ledger.jsonl'),
+            (data, 'coordination/.claude/state'))
+
 
 # The Work-lease monitors running in the guest. This source names the three words it looks for, so it
 # leaves out its own process and the shell that ran it (nightly 74 walk: pid 24452 was this probe).
@@ -209,8 +220,7 @@ class WorkLeaseWalk(srw.StuReminderWalk):
         dest.mkdir(parents=True, exist_ok=True)
         tgz = self.home + '/kept.tgz'
         parts = []
-        for root, rel in ((self.home + '/.claude', 'projects'), (self.data, 'engine-state'),
-                          (self.data, 'conversation-ledger.jsonl')):
+        for root, rel in kept_paths(self.home, self.data):
             parts.append('if [ -e %s ]; then echo %s; fi' % (shlex.quote(root + '/' + rel), shlex.quote(root + '\t' + rel)))
         listing = guest(self.vm, '; '.join(parts), 60)
         args = []

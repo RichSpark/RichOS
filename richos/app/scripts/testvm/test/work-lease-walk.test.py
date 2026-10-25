@@ -54,6 +54,43 @@ class KeepIsPartOfTheVerdict(unittest.TestCase):
             self.assertEqual(run_main(out, 'identity', identity=lambda self: {}, keep=lambda self: {'kept': 'x'}), 0)
 
 
+class KeepCarriesTheStatedActionLog(unittest.TestCase):
+    """Codex's acceptance case for nightly 75 needs the ARM 2 / ARM 3 verdict rows. ass-kicker writes
+    them to RICHOS_SA_ENTITY_ROOT/.claude/state/stated-actions.jsonl, the app's coordination root."""
+
+    def keep(self, present):
+        w = object.__new__(Walk)
+        w.vm, w.home, w.data = 'walk-x', '/g/home', '/g/home/Library/Application Support/com.richos.app'
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        w.out = Path(tmp.name)
+        sent = []
+
+        def guest(vm, command, timeout):
+            sent.append(command)
+            if command.startswith('if [ -e'):
+                return '\n'.join(r + '\t' + p for r, p in wlw.kept_paths(w.home, w.data) if p in present)
+            return ''
+
+        def pull(argv, timeout):
+            Path(argv[-1]).write_bytes(b'tgz')
+        with mock.patch.object(wlw, 'guest', guest), mock.patch.object(wlw.srw.command_walk, 'command', pull):
+            return w.keep(), sent
+
+    def test_the_verdict_log_is_asked_for_and_archived(self):
+        _ev, sent = self.keep({'projects', 'coordination/.claude/state'})
+        self.assertIn('coordination/.claude/state', sent[0])
+        tar = [c for c in sent if c.startswith('tar -czf')]
+        self.assertEqual(len(tar), 1)
+        self.assertIn("'/g/home/Library/Application Support/com.richos.app' coordination/.claude/state", tar[0])
+
+    def test_a_guest_without_it_still_keeps_the_rest(self):
+        ev, sent = self.keep({'projects'})
+        tar = [c for c in sent if c.startswith('tar -czf')][0]
+        self.assertNotIn('coordination', tar)
+        self.assertEqual(ev['bytes'], 3)
+
+
 class After(unittest.TestCase):
     """One settled request after the kill, its session's turn ended, and no new failure row."""
 
