@@ -1176,6 +1176,78 @@ else
     bad "15g. the work's real end clears it" "$POUT"
 fi
 
+# ==========================================================================
+# 16. WHICH NOTICE, AND WHICH OF ITS COMMITS (review rv-20261025T012040Z#1, #2)
+#
+# A "main moved from BASE to A" notice names two commits; the teammate's head
+# already holds BASE, so only A can clear it. And a later notice about another
+# repository must not replace the outstanding one about this repository.
+# ==========================================================================
+MQ="$SANDBOX/multi-repo"
+MQ_TEAMS="$SANDBOX/multi-teams"
+MQ_WT="$SANDBOX/wt/mark-sonnet-multi1"
+mkdir -p "$MQ" "$MQ_TEAMS/session-deadbeef"
+printf 'PROTECTED_PATHS="src"\n' > "$MQ/orchestration.config"
+git -C "$MQ" init -q -b main
+git -C "$MQ" config user.email "$(git config user.email 2>/dev/null || echo tester@example.invalid)"
+git -C "$MQ" config user.name "$(git config user.name 2>/dev/null || echo tester)"
+mkdir -p "$MQ/src"
+echo "one" > "$MQ/src/a.txt"
+git -C "$MQ" add -A
+git -C "$MQ" commit -q -m "base"
+MQ_BASE="$(git -C "$MQ" rev-parse HEAD)"
+git -C "$MQ" worktree add -q -b worktree-multi "$MQ_WT" >/dev/null 2>&1
+echo "teammate work" > "$MQ_WT/src/b.txt"
+git -C "$MQ_WT" add -A
+git -C "$MQ_WT" commit -q -m "teammate commit"
+echo "two" >> "$MQ/src/a.txt"
+git -C "$MQ" add -A
+git -C "$MQ" commit -q -m "land A"
+# The witness records tokens SORTED. Make BASE sort first, as it does about half
+# the time, so the case that picked BASE and cleared the notice is always met.
+n=0
+while [ "$(git -C "$MQ" rev-parse HEAD)" \< "$MQ_BASE" ] && [ "$n" -lt 64 ]; do
+    n=$((n + 1))
+    git -C "$MQ" commit -q --amend -m "land A ($n)"
+done
+MQ_A="$(git -C "$MQ" rev-parse HEAD)"
+: > "$MQ_TEAMS/session-deadbeef/inflight-repos.txt"
+mq_env() { RICHOS_ENTITY_ROOT="$MQ" INFLIGHT_TEAMS_DIR="$MQ_TEAMS" RICHOS_INFLIGHT_ACK_LEDGER="$NO_ACK_LEDGER" "$@"; }
+mq_stop() { rm -rf "$MQ/.claude/state/stop-hook-notices"; stop_payload | mq_env bash "$STOPHOOK" 2>/dev/null; }
+mq_backdate() {
+    python3 - "$MQ_TEAMS/session-deadbeef/inflight-notices.jsonl" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+p = sys.argv[1]
+rows = [json.loads(l) for l in open(p) if l.strip()]
+now = datetime.now(timezone.utc)
+for i, r in enumerate(rows):
+    r["timestamp"] = (now - timedelta(hours=3) + timedelta(minutes=i)).isoformat()
+open(p, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+}
+printf '%s' "$(CWD="$MQ" send_payload "mark-sonnet-multi1" "Main moved from $MQ_BASE to $MQ_A. Ack with scripts/inflight-ack.sh.")" \
+    | mq_env bash "$WITNESS" >/dev/null 2>&1
+mq_backdate
+echo "three" >> "$MQ/src/a.txt"
+git -C "$MQ" add -A
+git -C "$MQ" commit -q -m "land B, an ordinary commit"
+MOUT="$(mq_stop)"
+say "16a two-commit notice at B" "$MOUT"
+[ "$MQ_BASE" \< "$MQ_A" ] || bad "16a. precondition: BASE sorts before A" "BASE=$MQ_BASE A=$MQ_A"
+notice_has "$MOUT" "mark-sonnet-multi1 (notice for ${MQ_A:0:12})" \
+    && ok "16a. a 'from BASE to A' notice stays told by A when the teammate already holds BASE" \
+    || bad "16a. a 'from BASE to A' notice stays told by A when the teammate already holds BASE" "$MOUT"
+
+printf '%s' "$(CWD="$MQ" send_payload "mark-sonnet-multi1" "Main moved to $PEND_A in the other repository.")" \
+    | mq_env bash "$WITNESS" >/dev/null 2>&1
+mq_backdate
+MOUT="$(mq_stop)"
+say "16b later notice about another repository" "$MOUT"
+notice_has "$MOUT" "mark-sonnet-multi1 (notice for ${MQ_A:0:12})" \
+    && ok "16b. a later notice about another repository does not hide the open one about this repository" \
+    || bad "16b. a later notice about another repository does not hide the open one about this repository" "$MOUT"
+
 echo ""
 if [ "$FAIL" -eq 0 ]; then
     printf '\033[32m✓ in-flight sweep: all %s checks passed.\033[0m\n' "$PASS"
