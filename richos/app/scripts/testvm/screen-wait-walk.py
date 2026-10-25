@@ -25,10 +25,12 @@ and unlocked, by Control-Command-Q and its own password typed into its own lock 
               marked needs_screen and hands it to Stu
   locked      the record says waiting-for-screen with the one plain line and no notice; the status
               read (the app's own --status-mcp server, scoped to this conversation) lists it under
-              waiting_for_the_screen; Stu's inbox cursor shows the handoff NOT given to him; still
-              so 20 s later
+              waiting_for_the_screen; the turn's timeline line reads "Waiting for the screen to
+              unlock" (an absent line fails the step); Stu's inbox cursor shows the handoff NOT
+              given to him; still so 20 s later
   unlock      the guest's screen unlocked; Stu's inbox cursor shows the handoff given to a session
-              by itself, and the record no longer says it is waiting
+              by itself, the record no longer says it is waiting, and the turn's timeline line
+              reads "The screen is back, so this is carrying on" in place of the waiting line
 Evidence in --out: report.json, facts.json, look-*.json, records-*.txt, delivery-*.json,
 window-*.json, 1-locked.png (the guest's lock screen), 2-unlocked.png. Exit 0 only when every step
 passes.
@@ -46,6 +48,7 @@ sys.dont_write_bytecode = True  # the modules loaded below would otherwise leave
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
+import axwait  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('adopt_walk', HERE / 'adopt-walk.py')
 adopt = importlib.util.module_from_spec(_spec)
@@ -55,6 +58,11 @@ StepFailed = adopt.StepFailed
 JOB = ('Walk the RichOS app on this Mac\'s screen for me: open its Settings, take a screenshot of '
        'each pane and put them in a folder called Settings walk on my Desktop.')
 LINE = 'The screen is locked, so this is waiting for it to unlock. It will carry on by itself.'
+# The turn's own line on the timeline (timeline.js durationRow, t.screen): its label span is an
+# AXStaticText whose value is exactly this, which no other surface (the record's detail sentence
+# in Under the hood, the status read) spells the same way.
+WAITING_LABEL = 'Waiting for the screen to unlock'
+BACK_LABEL = 'The screen is back, so this is carrying on'
 STEPS = ['identity', 'first-run', 'ask', 'locked', 'unlock']
 
 # The status read Rich makes: the app's own --status-mcp server on a scope for this conversation,
@@ -143,11 +151,26 @@ class ScreenWalk(adopt.Walk):
         (self.out / name).write_text(text + '\n')
         return json.loads(text)
 
-    def window(self, name):
-        found = subprocess.run([str(HERE / 'ax.sh'), self.vm, 'find', '--title', 'waiting for the screen', '--contains', '--json'],
-                               capture_output=True, text=True, timeout=60)
-        (self.out / name).write_text(found.stdout + found.stderr)
-        return found.stdout
+    def window(self, name, label, seconds):
+        """The timeline label nodes reading exactly `label`, asked until one is there or `seconds`
+        pass (the window refreshes the register every 3 s, main.js pollWorkerStatus). Every read's
+        answer goes into `name`; an absent node is [], never a pass."""
+        end = time.monotonic() + seconds
+        log = []
+        while True:
+            try:
+                hits = [n for n in self.ax('find', '--value', label, '--role', 'AXStaticText')
+                        if not n.get('meta') and n.get('value') == label]
+                log.append({'hits': hits})
+            except StepFailed as exc:
+                if not axwait.not_yet(exc, 'find'):
+                    raise
+                hits = []
+                log.append({'not_yet': str(exc).strip()[-300:]})
+            (self.out / name).write_text(json.dumps({'label': label, 'reads': log}, indent=2) + '\n')
+            if hits or time.monotonic() >= end:
+                return hits
+            time.sleep(2)
 
     def keys(self, *lines):
         guest(self.vm, shlex.join(['osascript', *sum((['-e', line] for line in lines), [])]), 60)
@@ -183,7 +206,7 @@ class ScreenWalk(adopt.Walk):
         record = self.job('records-locked.txt')
         look = self.look('look-locked.json', record)
         given = self.delivery('delivery-locked.json', record)
-        window = self.window('window-locked.json')
+        window = self.window('window-locked.json', WAITING_LABEL, 15)
         subprocess.run([str(HERE / 'shot.sh'), self.vm, str(self.out / '1-locked.png')], capture_output=True, timeout=90)
         answer = look['answer']
         evidence = {'status_read_session': look['session'], 'screen': answer['screen'],
@@ -196,7 +219,8 @@ class ScreenWalk(adopt.Walk):
         rows = answer['waiting_for_the_screen']
         self.check(len(rows) == 1 and rows[0]['detail'] == LINE, 'the status read lists the job waiting for the screen, with the line')
         self.check(given['handoff_offset'] is not None and not given['given_to_stu'], 'Stu was not given the job while the screen was locked')
-        self.facts['window_shows_waiting'] = 'waiting for the screen' in window
+        self.facts['window_shows_waiting'] = bool(window)
+        self.check(bool(window), 'the timeline shows "%s" on the turn that gave the job' % WAITING_LABEL)
         time.sleep(20)
         still = self.delivery('delivery-locked-20s.json', record)
         self.check(not still['given_to_stu'] and self.job('records-locked-20s.txt')['state'] == 'waiting-for-screen',
@@ -211,24 +235,32 @@ class ScreenWalk(adopt.Walk):
         self.facts['unlocked_at_ms'] = self.clock()
         record = self.job('records-unlocked.txt')
         end = time.monotonic() + 120
-        given = None
+        given, back, waiting = None, [], []
+        # The carrying-on line lasts only until Stu reports on the job, so it is asked for on
+        # every pass from the unlock on, beside the delivery, and kept once it is seen.
         while time.monotonic() < end:
+            if not back:
+                back = self.window('window-unlocked.json', BACK_LABEL, 0)
+                if back:
+                    self.facts['back_line_after_unlock_s'] = round((self.clock() - self.facts['unlocked_at_ms']) / 1000, 1)
+                    waiting = self.window('window-unlocked-waiting.json', WAITING_LABEL, 0)
             given = self.delivery('delivery-unlocked.json', record)
-            if given['given_to_stu']:
+            if given['given_to_stu'] and back:
                 break
             time.sleep(2)
         self.facts['given_after_unlock_s'] = round((self.clock() - self.facts['unlocked_at_ms']) / 1000, 1)
         look = self.look('look-unlocked.json', record)
-        window = self.window('window-unlocked.json')
         time.sleep(3)
         subprocess.run([str(HERE / 'shot.sh'), self.vm, str(self.out / '2-unlocked.png')], capture_output=True, timeout=90)
         after = self.job('records-after.txt')
         evidence = {'delivery': given, 'screen': look['answer']['screen'], 'status_read_session': look['session'],
-                    'record': {k: after.get(k) for k in ('state', 'detail')}, 'window_still_waiting': 'waiting for the screen' in window}
+                    'record': {k: after.get(k) for k in ('state', 'detail')},
+                    'window_carrying_on': bool(back), 'window_still_waiting': bool(waiting)}
         self.facts['unlocked'] = evidence
         self.save()
         self.check(bool(given and given['given_to_stu']), 'Stu was given the job by itself once the screen was back')
         self.check(after['state'] != 'waiting-for-screen', 'the record no longer says it is waiting')
+        self.check(bool(back) and not waiting, 'the timeline line now says "%s"' % BACK_LABEL)
         return evidence
 
 
