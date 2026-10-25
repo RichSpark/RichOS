@@ -158,7 +158,11 @@ if [ "$UNINSTALL" = "1" ]; then
     if command -v launchctl >/dev/null 2>&1 && [ -z "${RICHOS_LAUNCH_AGENTS_DIR:-}" ]; then
         launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
     fi
-    rm -f "$PLIST"
+    # A change still waiting for a run to end is withdrawn with the job: its
+    # waiter sees its pid file gone and ends without installing anything.
+    # shellcheck source=lib/launchd-install.sh
+    . "$SCRIPT_DIR/lib/launchd-install.sh"
+    rm -f "$PLIST" "$(launchd_install_pending_file "$LABEL")" "$(launchd_install_gave_up_file "$LABEL")"
     echo "✓ unscheduled $LABEL"
     exit 0
 fi
@@ -231,8 +235,9 @@ if [ "$INSTALL" = "1" ]; then
     # AN UNCHANGED JOB IS LEFT ALONE, AND A RUNNING CLEANUP IS NEVER KILLED.
     # install.sh calls this on every engine install. It used to bootout and
     # bootstrap every time, and on 2026-10-25 the land at 04:42:24 booted the
-    # job out two minutes after the 04:40 cleanup was due: no deletions, no log
-    # line, no state, and launchd's run history reset to zero.
+    # job out two minutes after the 04:40 cleanup was due; that this killed the
+    # 04:40 cleanup is inferred from the timing, not proven by any record.
+    # A changed job found running is applied when the run ends.
     # launchd-install.sh carries the rule and the evidence.
     if command -v launchctl >/dev/null 2>&1 && [ -z "${RICHOS_LAUNCH_AGENTS_DIR:-}" ]; then
         # shellcheck source=lib/launchd-install.sh
@@ -243,13 +248,22 @@ if [ "$INSTALL" = "1" ]; then
                 echo "✓ scheduled $LABEL (unchanged: already loaded from this plist, so it was not reloaded)"
                 exit 0 ;;
             running)
-                {
-                    echo "scratch-reaper: NOT REPLACED — a scheduled cleanup is running now (pid ${LAUNCHD_INSTALL_PID:-unknown})."
-                    echo "  The job changed, and replacing it would kill that cleanup. It keeps its"
-                    echo "  current schedule; run this again once the cleanup has finished:"
-                    echo "    $SCRIPT_DIR/scratch-reaper.sh --install"
-                } >&2
-                exit 3 ;;
+                # The change waits for the cleanup and then applies by itself
+                # (launchd-install.sh, launchd_install_after_run).
+                _JOB_LOG="$HOME/.claude/state/scratch-reaper-launchd.log"
+                if launchd_install_after_run "$LABEL" "$_JOB_LOG" \
+                        "${LAUNCHD_APPLY_WAIT_MAX_SECONDS:-}" "${LAUNCHD_APPLY_WAIT_POLL_SECONDS:-}" \
+                        /bin/bash "$SCRIPT_DIR/scratch-reaper.sh" --install; then
+                    {
+                        echo "scratch-reaper: CHANGE PENDING — a scheduled cleanup is running now (pid ${LAUNCHD_INSTALL_PID:-unknown}),"
+                        echo "  so the changed job was not loaded yet and the cleanup was not interrupted."
+                        echo "  It applies by itself when that cleanup ends (waiting up to $((LAUNCHD_APPLY_WAIT_MAX_SECONDS / 60)) min,"
+                        echo "  waiter pid $LAUNCHD_INSTALL_CONTINUATION_PID, logged in $_JOB_LOG)."
+                    } >&2
+                    exit 3
+                fi
+                echo "scratch-reaper: the job changed while a scheduled cleanup is running (pid ${LAUNCHD_INSTALL_PID:-unknown}), and the wait to apply it afterwards could not start: $LAUNCHD_INSTALL_DETAIL. The job keeps its previous schedule; the disk watchdog's health check reports it." >&2
+                exit 2 ;;
             failed)
                 echo "scratch-reaper: $LAUNCHD_INSTALL_DETAIL — the job is NOT scheduled." >&2
                 exit 2 ;;

@@ -429,7 +429,7 @@
       "review": "The full parser/dependency suite reads engine sources as data and creates private fixture repositories. The new spawn closure assertion also validates an optional fixed external scope guard by bytes. The private execution profile clears RICHOS_SPAWN_TEST_REAL_PROJECT so the bound literal default is the only external location. HOME-based optional dispatcher lookup is private; fixtures patch HOME for their own cases. External absence is part of identity, never an invented runtime pass. Renewed 2026-09-28 for verification_inputs.py's source_inventory, repository-rooted and default_engine external bindings: the suite's closures over the real dependency map compare the digests of three repository files outside richos/engine and richos/app/scripts (cpu_guard.py#policy-fixtures), so those files are now declared paths. The new affected_units.py cases run git and the selector on private fixture repositories; RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT is set and cleared by the suite itself. Renewed 2026-10-24: richos/engine/scripts/verification-inputs.test.py d443af3c to 725654c6. Renewed 2026-10-24 (zach-opus-dialectb1): guard-dialect.* renamed dialect-guard.* by the CEO's naming rule; the renamed text in these files is the only change, and nothing new is read.",
       "sources": {
         "richos/engine/scripts/verification-inputs.test.sh": "5c1044eb2b8c463aa4667b1f48c68e306157d3e72df91f700220498d97e4ba2e",
-        "richos/engine/scripts/verification-inputs.test.py": "725654c6bd7db21135a10500d5e4c5bc00bb9d10de7d74fe91544c8eca712877",
+        "richos/engine/scripts/verification-inputs.test.py": "c40ffa00cd1d01e3bf8d53cbb85ef4e81a2b86f0cb8a76c221ba65173e6d7dcb",
         "richos/engine/scripts/lib/verification_inputs.py": "9de2c79483d0ccca373b1489668b6e9f75fb1bf3876f406f5d9b5f4cc7c19544"
       },
       "requires": {
@@ -2037,7 +2037,7 @@
         "richos/engine/scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
-        "richos/engine/orchestration.config": "a29060ae74339e4e1ce64a78ed73af40ee9f1860dfbe3a5929e9fb0e1bfaaa7a"
+        "richos/engine/orchestration.config": "cb495b764bc5a947d0f529c5f08de4e25611d18dc1c1aed3379978c28bc47b16"
       },
       "requires": {
         "paths": [],

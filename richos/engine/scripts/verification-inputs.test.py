@@ -73,7 +73,9 @@ class Inputs(unittest.TestCase):
         # 114 since SECOND_REVIEW_REPOS (2026-10-09, the repositories review-watch reviews by itself).
         # 110 since SCRATCH_BULK_TMP_ROOTS and SCRATCH_FIXTURE_REPO_LABELS (2026-10-23, cleanup PRD).
         # 112 since SCRATCH_CODEX_HOME and SCRATCH_CODEX_WORKTREE_ROOTS (2026-10-23, cleanup PRD A6).
-        self.assertEqual(len(parsed), 112)
+        # 114 since LAUNCHD_APPLY_WAIT_MAX_SECONDS and _POLL_SECONDS (2026-10-25, a changed
+        # scheduled job found running is applied when the run ends).
+        self.assertEqual(len(parsed), 114)
         self.assertIsNone(inputs.config_change("", (HERE.parent / "orchestration.config").read_text())["fallback"])
 
     def test_semantic_values_ignore_comments_spacing_and_equivalent_quotes(self):
