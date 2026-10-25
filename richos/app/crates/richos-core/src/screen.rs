@@ -599,6 +599,9 @@ mod tests {
             says::waiting_for_the_screen(),
             "Waiting for the screen to unlock. I'll carry on the moment it's back."
         );
+        // `ui/timeline.js`'s SCREEN_BACK_DETAIL reads this exact record detail to put "carrying
+        // on" on the timeline: a change here must change that line with it.
+        assert_eq!(says::carrying_on(), "The screen is back, so this is carrying on.");
     }
 
     /// The measured arithmetic this module's poll interval rests on, recomputed here so a

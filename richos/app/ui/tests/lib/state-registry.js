@@ -89,6 +89,10 @@ module.exports = [
   // composer as "<file name>: <sentence>"; `tests/attachments.js` checks 3 and 5 render them.
   // Drop and paste are gestures, not buttons, so a sentence asking him to add a file again
   // names the composer field (`#input`), which is where both land.
+  {"s": "Waiting for the screen to unlock", "c": "INFORMATIONAL", "why": "CEO §56: the line under the turn that gave a job waiting for the Mac's screen (timeline.js durationRow). The wait resolves by itself at the unlock and nothing asks him to unlock, so there is no control that could exist for it. tests/screen-wait.js."},
+  {"s": "I'll carry on the moment it's back.", "c": "INFORMATIONAL", "why": "CEO §56: the accessible name's second half on the screen-wait line. A promise the app keeps by itself; it asks nothing."},
+  {"s": "The screen is back, so this is carrying on", "c": "INFORMATIONAL", "why": "CEO §56: the same line once the screen is back, until Stu reports on the job. States what is happening; asks nothing."},
+  {"s": "The screen is back, so this is carrying on.", "c": "INFORMATIONAL", "why": "The record's carrying-on detail (screen::says::carrying_on) that timeline.js reads to show the line above. Not drawn itself; the same fact, asking nothing."},
   {"s": "1 file attached", "c": "INFORMATIONAL", "why": "The accessible name of the tray's list (`#attach-list`), counting what is on the composer. It asks nothing."},
   {"s": "Attaching 1 file:", "c": "FRAGMENT", "why": "The head of the placeholder bubble a new thread's first message shows for the moment before the thread exists; the file names follow it, and the real bubble replaces it with the words Rich receives."},
   {"s": "Drop to attach to your message", "c": "ACTIONABLE", "control": "#input", "fixture": null, "why": "Shown only while a drag carrying files is over the window (`rich://file-drag`). The action is the drop he is already making; the composer it lands on is on screen. tests/attachments.js check 8 shows and hides it."},

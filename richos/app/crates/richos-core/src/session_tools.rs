@@ -341,6 +341,12 @@ fn input_at(path:&Path,through:u64)->Result<Message,String> {
     serde_json::from_slice(&bytes[from..end]).map_err(|e|e.to_string())
 }
 
+/// The saved input at `through`: a handoff whose screen wait has ended (`work_host.rs`,
+/// `held_for_screen`) is delivered from its own place in the inbox.
+pub(crate) fn saved_input(scope:&StatusToolScope,role:&str,through:u64)->Result<Message,String> {
+    input_at(&inbox(scope,role)?,through)
+}
+
 /// Only the matching Stu-authored terminal report or durable user Stop ends a handoff.
 fn handoff_finished(scope:&StatusToolScope,message:&Message)->Result<bool,String> {
     if !message.handoff{return Ok(true)}
