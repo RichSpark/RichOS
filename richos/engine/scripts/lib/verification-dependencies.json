@@ -4276,7 +4276,7 @@
     },
     "scripts/disk-watchdog.sh#alert": {
       "source": "scripts/disk-watchdog.sh",
-      "sha256": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
+      "sha256": "ce12aa5160011086da2224df19c6b363cbde57ee9e32c93363302da92d44d268",
       "evidence": "Caller supplies --alert. Wrapper sources selected engine config, computes state/log paths and exports finite DISK/SCRATCH/APP/TEST_DEVICE families to fixed Python. Install/uninstall and scheduling branches are unreachable; enable cannot disable alert. Actual value readers are the alert Python closure.",
       "keys": [
         "DISK_STATE_JSON",
@@ -4620,7 +4620,7 @@
     },
     "scripts/disk-watchdog.sh#check": {
       "source": "scripts/disk-watchdog.sh",
-      "sha256": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
+      "sha256": "ce12aa5160011086da2224df19c6b363cbde57ee9e32c93363302da92d44d268",
       "evidence": "Caller supplies --check. Wrapper sources the selected config and exports finite resource families to fixed Python. Install, uninstall and status are not invoked. The enable switch may return before Python.",
       "keys": [
         "DISK_STATE_JSON",
@@ -8224,7 +8224,7 @@
     },
     "scripts/disk-watchdog.sh#suite-fixtures": {
       "source": "scripts/disk-watchdog.sh",
-      "sha256": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
+      "sha256": "ce12aa5160011086da2224df19c6b363cbde57ee9e32c93363302da92d44d268",
       "evidence": "Full wrapper receives explicit private config and LaunchAgents directories. Normal alert/json/status/check calls execute the fixed Python library. The copied print-plist call renders data; the copied worktree install call refuses before scheduling. No live service is installed.",
       "keys": [
         "DISK_STATE_JSON",
@@ -16886,7 +16886,7 @@
         "scripts/hooks/session-start-ci-surface.sh": "a4f1b332f362a2374ae1dad83d44af14a977d8cfdb753154014bbcc7e74c05a5",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
-        "scripts/disk-watchdog.sh": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
+        "scripts/disk-watchdog.sh": "ce12aa5160011086da2224df19c6b363cbde57ee9e32c93363302da92d44d268",
         "scripts/lib/disk-watchdog.py": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
@@ -16963,7 +16963,7 @@
         "scripts/hooks/session-start-ci-surface.sh": "a4f1b332f362a2374ae1dad83d44af14a977d8cfdb753154014bbcc7e74c05a5",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
-        "scripts/disk-watchdog.sh": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
+        "scripts/disk-watchdog.sh": "ce12aa5160011086da2224df19c6b363cbde57ee9e32c93363302da92d44d268",
         "scripts/lib/disk-watchdog.py": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
@@ -17188,7 +17188,7 @@
         "scripts/hooks/notice-ceo-unasked.sh": "7cbc69c528ae9ed250da1758ca0e0f3708ec7e8e97a57e6ca1078edf436d5cfa",
         "scripts/hooks/notice-claim-capability.sh": "f918e14199d059e57f306ee1202fe0edb3ab27711deb0003358ad36bcae3a1c5",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
-        "scripts/disk-watchdog.sh": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
+        "scripts/disk-watchdog.sh": "ce12aa5160011086da2224df19c6b363cbde57ee9e32c93363302da92d44d268",
         "scripts/lib/disk-watchdog.py": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
@@ -17496,7 +17496,7 @@
         "scripts/hooks/notice-ceo-ruled-prose.sh": "b6aa4600524c27077232a5a83feab3cfe603436ae8dcaaaa0bcc9ed725c0c1b5",
         "scripts/hooks/notice-ceo-unasked.sh": "7cbc69c528ae9ed250da1758ca0e0f3708ec7e8e97a57e6ca1078edf436d5cfa",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
-        "scripts/disk-watchdog.sh": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
+        "scripts/disk-watchdog.sh": "ce12aa5160011086da2224df19c6b363cbde57ee9e32c93363302da92d44d268",
         "scripts/lib/disk-watchdog.py": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
@@ -17854,7 +17854,7 @@
         "scripts/hooks/notice-ceo-ruled-prose.sh": "b6aa4600524c27077232a5a83feab3cfe603436ae8dcaaaa0bcc9ed725c0c1b5",
         "scripts/hooks/notice-ceo-unasked.sh": "7cbc69c528ae9ed250da1758ca0e0f3708ec7e8e97a57e6ca1078edf436d5cfa",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
-        "scripts/disk-watchdog.sh": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
+        "scripts/disk-watchdog.sh": "ce12aa5160011086da2224df19c6b363cbde57ee9e32c93363302da92d44d268",
         "scripts/lib/disk-watchdog.py": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
