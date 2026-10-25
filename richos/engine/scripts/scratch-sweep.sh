@@ -67,8 +67,11 @@
 #   2  the engine or its declarations could not be found
 #   3  something was UNDECIDABLE
 #
-# WHEN THE APP CALLS IT: at boot, whenever an assignment settles, and on quit.
-# That wiring belongs to the app engineer; this file is the contract it wires to.
+# THE APP ITSELF DOES NOT CALL THIS FILE (2026-10-25). At start, when its jobs have
+# settled and at quit it runs scratch-reaper.sh --apply --app <its data folder>
+# (richos-core app_cleanup.rs): only what the app left behind, and an engine without
+# that scope refuses it, where this file ignores an unknown flag and would sweep the
+# whole machine. This entry point stays the land's (--agent) and the whole machine's.
 # Calling it every few seconds is harmless — the lock collapses concurrent calls
 # and a sweep with nothing to do is one directory listing.
 #
