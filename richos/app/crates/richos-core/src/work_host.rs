@@ -565,19 +565,25 @@ impl WorkHost {
             }
             let mut after = after;
             loop {
-            let (mut message, through) = loop {
-                // A handoff whose screen wait ended is the run loop's to deliver (§56).
-                let Some((message, through)) = self.next_for_stu(&backend, binding, after, &mut Vec::new())?
-                else {
+            // A handoff whose screen wait ended goes to Stu now, live, even when later input has
+            // already gone past it (§56; review rv-20261025T001333Z-ed81e5e8-29df, finding 1).
+            // Taken out of the back end for the selection and put back unless it was delivered.
+            let (mut message, through, released_now) = loop {
+                let mut released = std::mem::take(&mut backend.inner.lock().unwrap().screen_released);
+                let taken = released.clone();
+                let next = self.next_for_stu(&backend, binding, after, &mut released);
+                backend.inner.lock().unwrap().screen_released.extend(released);
+                let Some((message, through)) = next? else {
                     return Ok::<_, String>(());
                 };
                 if !self.handoff_stopped(binding, &message)? {
                     backend.inner.lock().unwrap().screen_released.retain(|offset| *offset != through);
-                    break (message, through);
+                    break (message, through, taken.contains(&through).then_some(through));
                 }
                 crate::session_tools::acknowledge(&scope, "stu", through)?;
-                after = through;
+                after = after.max(through);
             };
+            let delivered = (|| -> Result<bool, String> {
             if message.handoff {
                 message.work = crate::session_tools::work_reference(&scope, &message)?;
             }
@@ -598,22 +604,30 @@ impl WorkHost {
             }
             let completed = self.live_completion(&backend, binding, message.clone(),
                 (InputReceipt::Peer(through), session.clone()), text.clone());
-            let delivered = match input.send_input(&id, &text, completed) {
-                Ok(delivered)=>delivered,
+            match input.send_input(&id, &text, completed) {
+                Ok(delivered)=>Ok(delivered),
                 Err(error)=>{
                     self.observe_turn_result(binding,Some(&message),Some(&format!("peer:{through}")),
                         session.as_deref().unwrap_or(""),&Err(error.clone()))?;
-                    return Err(error);
+                    Err(error)
                 }
-            };
-            if !delivered { return Ok(()); }
-            if delivered {
+            }
+            })();
+            // Not taken live (no turn now, or the send failed): the run loop delivers it.
+            if !matches!(delivered, Ok(true)) {
+                if let Some(through) = released_now {
+                    backend.inner.lock().unwrap().screen_released.push(through);
+                }
+            }
+            if !delivered? { return Ok(()); }
+            {
                 let mut inner = backend.inner.lock().unwrap();
                 if inner.lease_session == session {
                     inner.peer_active_through=Some(inner.peer_active_through.unwrap_or(0).max(through));
                 }
             }
-            after = through;
+            // A released handoff sits behind input already delivered: never read back over that.
+            after = after.max(through);
             }
         })();
         if let Err(error) = result {
@@ -2125,6 +2139,54 @@ mod tests {
         assert!(h.host.wait_for_completed(3, std::time::Duration::from_secs(10)), "hang guard: the marked job never carried on");
         assert_eq!(handed_over(&h, "Handoff: walking"), 1);
         assert_eq!(h.work_prompts.lock().unwrap().len(), 3, "{:?}", h.work_prompts.lock().unwrap());
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **The unlock reaches Stu while his turn runs** (review rv-20261025T001333Z-ed81e5e8-29df,
+    /// finding 1). A marked job waits; an unmarked one goes past it to Stu's live input, so the
+    /// live frontier is beyond the marked handoff. At unlock the marked handoff must go to that
+    /// same live input at once, not wait for his turn to end.
+    #[test]
+    fn at_unlock_a_passed_handoff_goes_to_stus_live_turn_at_once() {
+        use crate::screen::{FakeScreen, ScreenReading};
+        struct LiveInput(Mutex<Vec<String>>);
+        impl TurnCancel for LiveInput {
+            fn cancel(&self) -> bool { true }
+            fn send_input(&self, _: &str, text: &str, _: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>) -> Result<bool, String> {
+                self.0.lock().unwrap().push(text.to_string());
+                Ok(true)
+            }
+        }
+        let h = harness(0);
+        let screen = FakeScreen::locked();
+        h.host.set_screen(screen.clone());
+        h.host.set_screen_poll(std::time::Duration::from_millis(2));
+        // Stu is in a turn: his live input is published, and no run loop is between turns.
+        let live = Arc::new(LiveInput(Mutex::new(Vec::new())));
+        let backend = Backend::new();
+        {
+            let mut inner = backend.inner.lock().unwrap();
+            inner.binding = Some(h.binding.clone());
+            inner.lease_session = Some("live-stu".into());
+            inner.peer_input = Some(live.clone());
+        }
+        h.host.backends.lock().unwrap().insert("thread-one".into(), backend.clone());
+        let given = |text: &str| live.0.lock().unwrap().iter().filter(|sent| sent.contains(text)).count();
+        let (marked, _) = screen_job(&h, "turn-8", "walking the build on screen", true);
+        h.host.wake_messages(&h.binding);
+        // load-bound: hang guards only; the verdicts are what reached the live input.
+        until("the marked job never waited", || job(&h, &marked.id).state == AssignmentState::WaitingForScreen);
+        screen_job(&h, "turn-9", "fixing the readme typo", false);
+        h.host.wake_messages(&h.binding);
+        assert_eq!(given("Handoff: fixing"), 1, "the unmarked job must go to the live turn");
+        assert_eq!(given("Handoff: walking"), 0, "a locked screen let the marked job through");
+        screen.set(ScreenReading::unlocked());
+        until("the released handoff waited behind the live turn", || given("Handoff: walking") == 1);
+        assert!(backend.inner.lock().unwrap().screen_released.is_empty(), "the handoff is still queued for later");
+        h.host.wake_messages(&h.binding);
+        assert_eq!(given("Handoff: walking"), 1, "the released handoff was given twice");
+        backend.inner.lock().unwrap().closing = true;
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
