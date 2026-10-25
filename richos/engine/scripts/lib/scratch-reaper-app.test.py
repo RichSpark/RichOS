@@ -268,6 +268,197 @@ class AppSweep(unittest.TestCase):
         self.assertEqual(rc, 0, out + err)
         self.assertFalse(base.exists() or standing.exists(), out)
 
+    def ended_app(self):
+        """An app process that has ended: its pid and start, as the owner record names them."""
+        app = subprocess.Popen(["/bin/sleep", "600"])
+        self.children.append(app)
+        start = self.started(app.pid)
+        app.kill()
+        app.wait()
+        return app.pid, start
+
+    # Review rv-20261025T021219Z-91f589b0-af71 #1: a sweep out of budget took a lease's base
+    # profile and left its -standing copy for the next one. The owner record was only in the
+    # base, so the copy then read as "no owner record" and waited for the 60-minute floor. The
+    # app now writes the record into both folders (engine_profile.rs), and each is decided on
+    # its own.
+    def test_a_standing_copy_whose_base_is_gone_goes_on_its_own_owner_record(self):
+        pid, start = self.ended_app()
+        base, standing = self.profile((pid, start))
+        (standing / ".richos-owner.json").write_text(json.dumps({"pid": pid, "procStart": start}))
+        shutil.rmtree(base)     # what the earlier, bounded sweep took
+        rc, out, err = self.sweep()
+        self.assertEqual(rc, 0, out + err)
+        self.assertFalse(standing.exists(), out)
+        self.assertIn("DELETED %s" % standing, self.log())
+
+    def test_a_backlog_that_splits_a_profile_pair_clears_it_across_sweeps(self):
+        """The review's fixture, its cost model unchanged: seven ended sessions, then one pair,
+        0.51 s per open-file query on a clock only those queries move."""
+        import importlib.util
+        from unittest import mock
+        sys.path.insert(0, str(HERE))
+        spec = importlib.util.spec_from_file_location("reaper_split_pair", HERE / "scratch-reaper.py")
+        reaper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reaper)
+
+        class Ended:
+            def process_start(self, pid):
+                return "gone", ""
+
+            def session_state(self, session):
+                return "ended", "no process"
+
+        for _ in range(7):
+            self.hosted()
+        lease = "11111111-1111-1111-1111-111111111111"
+        base = self.data / "engine-profiles" / lease
+        standing = base.with_name(lease + "-standing")
+        for folder in (base, standing):
+            (folder / "agents").mkdir(parents=True)
+            (folder / "agents/rich.md").write_text("agent\n")
+            (folder / reaper.OWNER_FILE).write_text(json.dumps({"pid": 999999, "procStart": "ended"}))
+        seen = []
+        env = {"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.config_dir), "TMPDIR": str(self.tmp)}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(reaper, "claude_processes", return_value=[]):
+            for _sweep in range(3):
+                clock = [1000.0]
+
+                def holder(path):
+                    clock[0] += 0.51
+                    return ""
+                r = reaper.Reaper({"age_floor_minutes": 60, "claude_roots": [str(self.claude_root)]}, Ended())
+                r.command_lines = lambda: []
+                r.holder = holder
+                r.collect_test_instances = lambda paths, stamp: []
+                r._record_failures = lambda failures, stamp: None
+                r.app_until = 1000.0 + reaper.APP_BUDGET_SECONDS / 2
+                r.app_apply_until = 1000.0 + reaper.APP_BUDGET_SECONDS
+                with mock.patch.object(reaper.time, "time", lambda: clock[0]):
+                    r.scan_app({"data": str(self.data)})
+                    r.apply(str(self.root / "deletions.log"))
+                seen.append((base.exists(), standing.exists(),
+                             [e.why for e in r.entries if e.path == str(standing)]))
+                if not base.exists() and not standing.exists():
+                    break
+        self.assertFalse(base.exists() or standing.exists(), "base, standing, why after each sweep: %s" % seen)
+
+    # --- app-voice: a spoken turn's recording a killed app left -----------------------------------
+    def recording(self, pid, folder=None):
+        """utt-<pid>.wav, one second of 16 kHz mono silence (32044 bytes, the size the review
+        measured), as stt.rs transcribe_inner writes it."""
+        import wave
+        folder = folder or (self.data / "voice-scratch")
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / ("utt-%d.wav" % pid)
+        with wave.open(str(path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(16000)
+            wav.writeframes(b"\0\0" * 16000)
+        return path
+
+    # Review rv-20261025T020709Z-8339d95d-d408 #1: a force-quit during a spoken turn leaves
+    # voice-scratch/utt-<pid>.wav, and no sweep visited voice-scratch.
+    def test_a_recording_whose_app_has_ended_goes(self):
+        pid, _start = self.ended_app()
+        wav = self.recording(pid)
+        self.assertEqual(wav.stat().st_size, 32044)
+        rc, out, err = self.sweep()
+        self.assertEqual(rc, 0, out + err)
+        self.assertFalse(wav.exists(), out)
+        self.assertIn("DELETED %s" % wav, self.log())
+        self.assertIn("class=app-voice", self.log())
+
+    def test_a_recording_whose_app_runs_is_kept_unless_that_app_is_quitting(self):
+        app = subprocess.Popen(["/bin/sleep", "600"])
+        self.children.append(app)
+        wav = self.recording(app.pid)
+        rc, out, err = self.sweep()
+        self.assertEqual(rc, 0, out + err)
+        self.assertTrue(wav.exists(), out)
+        self.assertIn("is running: it may be recording or decoding it now", out)
+        rc, out, err = self.sweep_with("--app-exiting", str(app.pid))
+        self.assertEqual(rc, 0, out + err)
+        self.assertFalse(wav.exists(), out)
+
+    def test_a_recording_older_than_the_process_now_on_its_pid_goes(self):
+        app = subprocess.Popen(["/bin/sleep", "600"])
+        self.children.append(app)
+        wav = self.recording(app.pid)
+        old = time.time() - 3600
+        os.utime(wav, (old, old))
+        rc, out, err = self.sweep()
+        self.assertEqual(rc, 0, out + err)
+        self.assertFalse(wav.exists(), out)
+        self.assertIn("started after it was written", self.log())
+
+    def test_a_recording_a_process_holds_open_is_kept(self):
+        pid, _start = self.ended_app()
+        wav = self.recording(pid)
+        with open(wav, "rb") as held:
+            reader = subprocess.Popen(["/bin/sleep", "600"], stdin=held)
+        self.children.append(reader)
+        rc, out, err = self.sweep()
+        self.assertTrue(wav.exists(), out)
+        self.assertIn("holds a file open inside it", out)
+
+    def test_other_files_in_voice_scratch_are_not_the_sweeps(self):
+        folder = self.data / "voice-scratch"
+        folder.mkdir(parents=True)
+        other = folder / "notes.wav"
+        other.write_bytes(b"RIFF")
+        rc, out, err = self.sweep()
+        self.assertEqual(rc, 0, out + err)
+        self.assertTrue(other.exists(), out)
+
+    def test_a_speech_warmup_folder_whose_app_has_ended_goes_and_a_live_ones_stays(self):
+        """stt.rs warm(): $TMPDIR/richos-speech-warm-<pid>-<nanos>/, holding utt-<pid>.wav and
+        the decoder's output, removed when the warm-up returns. A force-quit during it, at an
+        app start, leaves the folder."""
+        (self.data / "engine-state").mkdir(parents=True)
+        pid, _start = self.ended_app()
+        dead = self.tmp / ("richos-speech-warm-%d-1792908145000000000" % pid)
+        self.recording(pid, dead)
+        (dead / "decoder.stdout").write_text("")
+        app = subprocess.Popen(["/bin/sleep", "600"])
+        self.children.append(app)
+        live = self.tmp / ("richos-speech-warm-%d-1792908145000000001" % app.pid)
+        self.recording(app.pid, live)
+        theirs = self.tmp / "richos-speech-warm-notes"
+        theirs.mkdir()
+        rc, out, err = self.sweep()
+        self.assertEqual(rc, 0, out + err)
+        self.assertFalse(dead.exists(), out)
+        self.assertTrue(live.exists() and theirs.exists(), out)
+
+    def test_an_unreadable_voice_scratch_is_undecidable_never_clean(self):
+        pid, _start = self.ended_app()
+        wav = self.recording(pid)
+        folder = wav.parent
+        folder.chmod(0)
+        try:
+            rc, out, err = self.sweep()
+        finally:
+            folder.chmod(0o755)
+        self.assertEqual(rc, 3, out + err)
+        self.assertTrue(wav.exists(), out)
+        self.assertIn("could not be read", out)
+
+    def test_an_unreadable_engine_profiles_folder_is_undecidable_never_clean(self):
+        pid, start = self.ended_app()
+        base, _standing = self.profile((pid, start))
+        root = base.parent
+        root.chmod(0)
+        try:
+            rc, out, err = self.sweep()
+        finally:
+            root.chmod(0o755)
+        self.assertEqual(rc, 3, out + err)
+        self.assertTrue(base.exists(), out)
+        self.assertIn("could not be read", out)
+
     # --- app-mcp-log: Claude Code's MCP logs for the app's coordination folder ---------------------
     def mcp_log(self, folder, name="2026-10-25T00-00-00-000Z.txt"):
         slug = "".join(c if c.isalnum() else "-" for c in str(folder))
@@ -318,7 +509,7 @@ class AppSweep(unittest.TestCase):
 
         paths = [self.hosted()[1] for _ in range(24)]
         remaining = []
-        env = {"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.config_dir)}
+        env = {"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.config_dir), "TMPDIR": str(self.tmp)}
         with mock.patch.dict(os.environ, env), \
                 mock.patch.object(reaper, "claude_processes", return_value=[]):
             for _sweep in range(6):
