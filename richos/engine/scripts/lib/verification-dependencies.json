@@ -1455,14 +1455,14 @@
     },
     "scripts/lib/testdevice_alerts.py": {
       "source": "scripts/lib/testdevice_alerts.py",
-      "sha256": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
+      "sha256": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
       "evidence": "Failure records use environment and private HOME/config paths. No orchestration.config loader or repository helper runs.",
       "keys": [],
       "edges": []
     },
     "scripts/lib/testdevices.py#workspace-collection": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
+      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
       "evidence": "workspaces calls collect with private HOME/config and no fake device adapters. The collector, ownership queries and error writer read private device/workspace state; no orchestration.config values are loaded. Device admission/launch helpers are not called.",
       "keys": [],
       "edges": [
@@ -4295,7 +4295,7 @@
     },
     "scripts/lib/disk-watchdog.py#alert": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "3277223aad0711ba1df8ce9a86db384e6d1b6539091d673fcfc7905fa16f7aac",
+      "sha256": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
       "evidence": "Reviewed alert path through main and env/env_num/expand/state_base/read_volume/measurable/read_state/human/_age_of/_short_age. Reads live statvfs, saved JSON states, plist presence and the listed literal config variables. Alert does not invoke scheduled device collection, status-only reaper, du/consumer walks, notifications or writes. Fixed foreign_app_data import only classifies candidate paths. Renewed 2026-10-23 (cleanup PRD R4/R5): cleanup health is read from the same SCRATCH_REAPER_STATE file and the reaper's plist presence under the same LaunchAgents directory; no new config key.",
       "keys": [
         "APP_INSTANCE_FAILURES_STATE",
@@ -4630,7 +4630,7 @@
     },
     "scripts/lib/testdevices.py#scheduled-collection": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
+      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
       "evidence": "Same reviewed collect/classification/registry/workspace-barrier closure as workspace collection, reached by the scheduled watchdog. Also retains the exported TEST_DEVICE_FAILURES_STATE read used by machine admission and the failure writer. Device launch/admission helpers are not called.",
       "keys": [
         "TEST_DEVICE_FAILURES_STATE"
@@ -4643,7 +4643,7 @@
     },
     "scripts/lib/disk-watchdog.py#check": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "3277223aad0711ba1df8ce9a86db384e6d1b6539091d673fcfc7905fa16f7aac",
+      "sha256": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
       "evidence": "Reviewed check entry, complete main and all reached helpers. Adds scheduled device collection (run as the testdevices.py collect --apply CLI in a child process killed at a hard limit; RICHOS_DEVICE_COLLECT_SECONDS is a test-only environment override, not a config key) and condition-triggered du measurements, notification and state/log writes to the alert readers. Status-only run_reaper is unreachable. Fixed device collector reads registry ownership through the existing workspace-barrier closure; candidate paths and notification text are data. Renewed 2026-10-23 (cleanup PRD R5): the scheduled check (DISK_WATCHDOG_SCHEDULED=1, set by disk-watchdog.sh from launchd's XPC_SERVICE_NAME) reads the escalation ledger through escalations.py and raises or acknowledges ONE cleanup escalation through escalate.sh, keeping its id in this job's own state file. Renewed 2026-10-23 (review rv-20261023T222724Z-e6524552-e592 #2): the cleanup action keeps the union of every failed root across ticks and into a replacement; no new input.",
       "keys": [
         "SCRATCH_ROOT_NAME",
@@ -7826,7 +7826,7 @@
     },
     "scripts/lib/protected-ref-moves.py": {
       "source": "scripts/lib/protected-ref-moves.py",
-      "sha256": "d4b8e7c1cb3553a722541124159906f4f9d7284aa94d311c2d4c0b2c6974c95c",
+      "sha256": "e9eabe8c92572d0a08d03938b12d59cb407a6429cc41360b11fd3e70bf30975b",
       "evidence": "Full predicate reads the event store, invokes fixed read-only Git commands over named repos and writes explicit review rows through workspaces.event. Wall clock controls age wording/rungs. No config is read and no source text or command in a record is evaluated.",
       "keys": [],
       "edges": [
@@ -7857,7 +7857,7 @@
     },
     "scripts/hooks/protected-ref-moves.test.sh": {
       "source": "scripts/hooks/protected-ref-moves.test.sh",
-      "sha256": "fe6929dc70eeb05f5c17f6e2d7cba139e61b9e7f0f796f9fe2c0cc288daa45d2",
+      "sha256": "830d43434a876df2fed6f4f989b0f9dcb8e833aad5f6977e04a54d8e529f4de1",
       "evidence": "Full suite creates private adopted Git repositories, empty literal config, event store and finite notice mutants. Copies never transport real config. observe-created-refs is inspected as text only. Fixed predicate list/review and the normal notice are the only executed engine commands.",
       "keys": [],
       "edges": [
@@ -8282,7 +8282,7 @@
     },
     "scripts/lib/disk-watchdog.py#suite-fixtures": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "3277223aad0711ba1df8ce9a86db384e6d1b6539091d673fcfc7905fa16f7aac",
+      "sha256": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
       "evidence": "Adds json/status rendering and reviewed run_reaper to the existing check closure. Every status fixture sets SCRATCH_REAPER_CMD to a literal JSON stub or absent path, so no production reaper executes. Scheduled device collection and fixed foreign-data classifier remain bound. Real disk capacity/free space and time are runtime inputs.",
       "keys": [
         "SCRATCH_REAPER_CMD"
@@ -8315,7 +8315,7 @@
     },
     "scripts/disk-watchdog.test.sh": {
       "source": "scripts/disk-watchdog.test.sh",
-      "sha256": "31c7a248dc34ca94004058d3bf823c14eac1824222226c0371f4161b3d6669fe",
+      "sha256": "93c5e48217fc49ce8421fd23631168482a097389c136eb6a7192ca1d7a466ef9",
       "evidence": "Private settings control measured directories. W22 exercises foreign-app refusal through real component settings. W22d calls the production candidate function with defaults and a resolved empty snapshot. The retired consumer/volume lists are not read. Existing threshold config remains an input through the wrapper.",
       "keys": [],
       "edges": [
@@ -13246,7 +13246,7 @@
     },
     "scripts/lib/testdevices.py#device-fixtures": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
+      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
       "evidence": "Suite-bound API path: real workspace liveness and cpu_guard APIs before HostMemory plus failure writer. In-process boot has _device_admission replaced; T60 exercises admission with literal worker/simulator modules. Separate CLI calls are register/run-active/acquire-ios, never boot, so app-side simulator_budget/reserve does not execute. Native commands and all run-active child programs are separately bound fixture strings, not config-provided code.",
       "keys": [],
       "edges": [
@@ -13263,7 +13263,7 @@
     },
     "scripts/lib/testdevices.test.py": {
       "source": "scripts/lib/testdevices.test.py",
-      "sha256": "37a6657f69e0de5993b620008ebe80f861c821b7d625990240a9976507c9b5cd",
+      "sha256": "1d9808997f85026732ee9a7bf8b4f71ef2feba9a6a3ee94fca4a5f7708be27aa",
       "evidence": "Private state and literal fake simctl/process programs drive real device APIs. Every subprocess target is this module register/run-active/acquire-ios or literal standard-library code. setUp substitutes admission; T60 restores only admission with explicit fake worker/simulator modules. No live config is loaded. Finalizer regressions add an owned flock holder and controlled clock advance across command lock admission; the bounded lock and foreign-owner controls retain these same reader edges and no new config keys.",
       "keys": [],
       "edges": [
@@ -13277,7 +13277,7 @@
     },
     "scripts/lib/testdevices.mutation.sh": {
       "source": "scripts/lib/testdevices.mutation.sh",
-      "sha256": "1de0cb4446e8edda30fea7cf52ac053135700c430dd95f35b7db31ce21d7fa6f",
+      "sha256": "1e86d26a25edc14701c6068514beb8417dc1428041c44cfc1f3cd63c9a962e45",
       "evidence": "Mutates only the device module and calls the same suite through the shared mutation transport; retain transport presence and all actual nested readers.",
       "keys": [],
       "edges": [
@@ -13291,7 +13291,7 @@
     },
     "scripts/lib/testdevices.test.sh": {
       "source": "scripts/lib/testdevices.test.sh",
-      "sha256": "dd9b90d8c92f46e4b9ab6a46da7bbde351df74887e60917c6863d3ddf9f6efdb",
+      "sha256": "f0a6d3a8737916a5e3c2a8a81fc31ce82b2563aa056ff4c85680df0a273c3bcf",
       "evidence": "Scratch allocator wrapper runs its Python fixture and shared mutation driver. Full fixture entrypoint and transitive readers are bound; no device command is taken from real config.",
       "keys": [],
       "edges": [
@@ -14932,7 +14932,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/testdevices.py",
-          "sha256": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
+          "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -14986,7 +14986,7 @@
     },
     "scripts/lib/testdevices.py#cpu-fixtures": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
+      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
       "keys": [],
       "edges": [
         {
@@ -15606,14 +15606,6 @@
           "root": "environment",
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
-          "path": "scripts/lib/testdevice_alerts.py",
-          "sha256": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
-          "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
-        },
-        {
-          "root": "environment",
-          "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
-          "default_engine": true,
           "path": "scripts/lib/unevaluated-notice.sh",
           "sha256": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
@@ -15678,16 +15670,16 @@
           "root": "environment",
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
-          "path": "scripts/lib/testdevices.py",
-          "sha256": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
+          "path": "scripts/lib/testdevice_alerts.py",
+          "sha256": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         },
         {
           "root": "environment",
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
-          "path": "mega-lander/workspaces.py",
-          "sha256": "ae047dec5765187e3aa42cbec11e3f9006d786ebe64df89201197237a6c8fb93",
+          "path": "scripts/lib/testdevices.py",
+          "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         }
       ]
@@ -16870,8 +16862,8 @@
         "scripts/hooks/workspace-lifecycle.sh": "e8a6bd193fe910eb22f76da44c81b04feaa04e2a7429b055823ea8efc8df72e8",
         "mega-lander/workspaces.py": "ae047dec5765187e3aa42cbec11e3f9006d786ebe64df89201197237a6c8fb93",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "scripts/hooks/session-start-escalations.sh": "25af57857b1dc4a1e4a61c6848753ede1d217f3a1037379e30cee4e64b206a5f",
@@ -16882,7 +16874,7 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
-        "scripts/lib/disk-watchdog.py": "3277223aad0711ba1df8ce9a86db384e6d1b6539091d673fcfc7905fa16f7aac",
+        "scripts/lib/disk-watchdog.py": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
@@ -16928,8 +16920,8 @@
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "mega-lander/workspaces.py": "ae047dec5765187e3aa42cbec11e3f9006d786ebe64df89201197237a6c8fb93",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-definition-drift.sh": "6abe090d1a5eae1c726799e7c6e9bdaad2da332635fec5737ce9ce31f4f05007",
         "scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
@@ -16959,7 +16951,7 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
-        "scripts/lib/disk-watchdog.py": "3277223aad0711ba1df8ce9a86db384e6d1b6539091d673fcfc7905fa16f7aac",
+        "scripts/lib/disk-watchdog.py": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
@@ -17093,8 +17085,8 @@
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
         "scripts/lib/tree-witness.sh": "ce0b40484c82bb421e5b4fef7a20276f606cc3df2c19fc6466700fd9ddaf1304",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/unlanded-branches.py": "2aa9d32b80809d78c10c9571a91c4bdbb58c7cf22197b6398fd1239b481b1810",
@@ -17185,13 +17177,13 @@
         "scripts/hooks/notice-claim-capability.sh": "f918e14199d059e57f306ee1202fe0edb3ab27711deb0003358ad36bcae3a1c5",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
-        "scripts/lib/disk-watchdog.py": "3277223aad0711ba1df8ce9a86db384e6d1b6539091d673fcfc7905fa16f7aac",
+        "scripts/lib/disk-watchdog.py": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
         "scripts/hooks/notice-protected-ref-moves.sh": "15ea383b87181c6924a00f8b5f656f72f2319e9680947674f68972fbcd6c2c43",
-        "scripts/lib/protected-ref-moves.py": "d4b8e7c1cb3553a722541124159906f4f9d7284aa94d311c2d4c0b2c6974c95c",
-        "scripts/hooks/protected-ref-moves.test.sh": "fe6929dc70eeb05f5c17f6e2d7cba139e61b9e7f0f796f9fe2c0cc288daa45d2",
+        "scripts/lib/protected-ref-moves.py": "e9eabe8c92572d0a08d03938b12d59cb407a6429cc41360b11fd3e70bf30975b",
+        "scripts/hooks/protected-ref-moves.test.sh": "830d43434a876df2fed6f4f989b0f9dcb8e833aad5f6977e04a54d8e529f4de1",
         "scripts/hooks/notice-unasked-deferral.sh": "4468742f723b5f5b6fb6dc87cb47fdf168bf9f3faf4f4a6d246b34c2d161af98",
         "scripts/hooks/guard-unasked-deferral.py": "864b1c4366b8c20fbfb1a8ccba015bd884046de4260ae8d3143f7c7abba6a8c7",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
@@ -17492,7 +17484,7 @@
         "scripts/hooks/notice-ceo-unasked.sh": "7cbc69c528ae9ed250da1758ca0e0f3708ec7e8e97a57e6ca1078edf436d5cfa",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
-        "scripts/lib/disk-watchdog.py": "3277223aad0711ba1df8ce9a86db384e6d1b6539091d673fcfc7905fa16f7aac",
+        "scripts/lib/disk-watchdog.py": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
@@ -17827,8 +17819,8 @@
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
         "scripts/lib/pause_protocol.py": "d302f0866df40d27cdb224b8c55974a9c22cf7a1a540c37cf440df881c4cb27e",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
@@ -17850,7 +17842,7 @@
         "scripts/hooks/notice-ceo-unasked.sh": "7cbc69c528ae9ed250da1758ca0e0f3708ec7e8e97a57e6ca1078edf436d5cfa",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "48638dabe3f946dddc67a7c382f134c72d34fcae6d4e121c96f53426d4ec316f",
-        "scripts/lib/disk-watchdog.py": "3277223aad0711ba1df8ce9a86db384e6d1b6539091d673fcfc7905fa16f7aac",
+        "scripts/lib/disk-watchdog.py": "90dd0202157b01775018f19ffb8c03e3e19855b5b0e92a86e4fed8a8d3ff5ea4",
         "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
@@ -17863,8 +17855,8 @@
         "scripts/lib/row-currency.py": "484404c6143d1a5b94182321e6fa0f6250b298b27a7d3b59ba26d5ed648db677",
         "scripts/lib/mechanical-findings.py": "0942c108c40a62c831eaee4d569f8def0178903e17a289e221cc93ed7f51db78",
         "scripts/hooks/notice-protected-ref-moves.sh": "15ea383b87181c6924a00f8b5f656f72f2319e9680947674f68972fbcd6c2c43",
-        "scripts/lib/protected-ref-moves.py": "d4b8e7c1cb3553a722541124159906f4f9d7284aa94d311c2d4c0b2c6974c95c",
-        "scripts/hooks/protected-ref-moves.test.sh": "fe6929dc70eeb05f5c17f6e2d7cba139e61b9e7f0f796f9fe2c0cc288daa45d2",
+        "scripts/lib/protected-ref-moves.py": "e9eabe8c92572d0a08d03938b12d59cb407a6429cc41360b11fd3e70bf30975b",
+        "scripts/hooks/protected-ref-moves.test.sh": "830d43434a876df2fed6f4f989b0f9dcb8e833aad5f6977e04a54d8e529f4de1",
         "scripts/hooks/notice-unasked-deferral.sh": "4468742f723b5f5b6fb6dc87cb47fdf168bf9f3faf4f4a6d246b34c2d161af98",
         "scripts/hooks/guard-unasked-deferral.py": "864b1c4366b8c20fbfb1a8ccba015bd884046de4260ae8d3143f7c7abba6a8c7",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
@@ -17935,8 +17927,8 @@
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "6e82fa3b4ada059d40200b56549e249d1048eb88b68a97d2961065a0504ededa",
         "scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
@@ -18000,8 +17992,8 @@
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/spawn-guard-audience.py": "0f29e5f4d8b857670e6566646e5ba1691b8b49e55b599b7e2d9d8a4782ccc0f9",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/prepare-agent-spawn.py": "8e47126285a2f30a8a598b63d696c4ff27cc162d09e14680c074e067cd310a10",
         "scripts/spawn.sh": "c1965676afbb3cca7b2659304bc23574cc738dedd84c1410841b11498ba26bc9",
@@ -18049,8 +18041,8 @@
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/unlanded-branches.py": "2aa9d32b80809d78c10c9571a91c4bdbb58c7cf22197b6398fd1239b481b1810",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
@@ -18085,8 +18077,8 @@
         "scripts/lib/scratch-reaper.py": "02571bac228a5053108d46be93c67efbf92e0b802d6e1e40e1582ff239a4b538",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/scratch-reaper.sh": "155a892f1deec6463f6f316adcc3ce46cc1958c7871d7160c00c5b9a0d2a0712",
         "scripts/scratch-sweep.sh": "3f6dd28f4e86d24e3fca7fe1f8f7cb68a63e604b05e1ad2ad918b5a7eee6f241"
@@ -18182,8 +18174,8 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39"
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8"
       },
       "evidence": "settings.local.json is named only in the duplicate-delivery explanatory comment. The suite invokes the actual guard directly with literal payloads, private team/registry facts and the already qualified helper closure. No reader consumes a registration surface. This does not qualify or alter WAIT/pause behavior.",
       "seated_reads_nothing": true
@@ -18218,8 +18210,8 @@
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "6e82fa3b4ada059d40200b56549e249d1048eb88b68a97d2961065a0504ededa",
         "scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
@@ -18276,8 +18268,8 @@
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "6e82fa3b4ada059d40200b56549e249d1048eb88b68a97d2961065a0504ededa",
         "scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
@@ -18334,8 +18326,8 @@
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "b8ca620b17a24c7a307eaa8409941495278c4ae63b87084fbd79da30f2719f39",
-        "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
+        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "6e82fa3b4ada059d40200b56549e249d1048eb88b68a97d2961065a0504ededa",
         "scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
