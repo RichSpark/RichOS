@@ -4213,8 +4213,12 @@ Bridge.listen("rich://rich-file", ({ payload }) => {
   updateCachedThread("onActivityUpserted", payload);
   const result = window.RichTimeline.onActivityUpserted(timelineModel, payload);
   if (result.rejected) return;
-  // It rises into place once, as it arrives (`rich-files.js`); a reload draws it still.
-  if (window.RichFiles && payload) window.RichFiles.arrived(payload.file && payload.file.id ? payload.file.id : payload.id);
+  // It rises into place once, as it arrives (`rich-files.js`); a reload draws it still. Rich's
+  // save of the user's instructions comes the same way, its rules arriving one by one
+  // (`your-instructions.js`).
+  if (payload && payload.kind === "instructions_saved") {
+    if (window.RichYourInstructions) window.RichYourInstructions.arrived(payload.id);
+  } else if (window.RichFiles && payload) window.RichFiles.arrived(payload.file && payload.file.id ? payload.file.id : payload.id);
   scheduleRender();
 });
 
@@ -7451,6 +7455,19 @@ async function declineFirstRunInterview() {
 }
 
 el("first-run-start").addEventListener("click", startFirstRunInterview);
+
+/// **"HAVE RICH ASK ME"** on the user's instructions sheet (round 36 screen 1): it goes to the
+/// Onboarding conversation (the company on screen's, else the first there is, else the
+/// conversation on screen) and asks Rich, as a pressed button the way Start the questions does.
+/// What he then asks is in his instruction files (the interview skill and `rich.md`), never here.
+const HAVE_RICH_ASK_MESSAGE = "Ask me how I want you to work and write my answers down as my instructions.";
+window.RichHaveRichAsk = async function (label) {
+  const onScreen = activeContext && activeContext.entity_id;
+  const named = allRows().filter((t) => t.title === "Onboarding" && t.entity_id);
+  const row = named.find((t) => t.entity_id === onScreen) || named[0] || null;
+  if (row) await openThread(row.id);
+  return send(HAVE_RICH_ASK_MESSAGE, { pressed: label || "Have Rich ask me" });
+};
 el("first-run-later").addEventListener("click", declineFirstRunInterview);
 
 /// RE-READ WHERE ONBOARDING STANDS. Same contract as `__RICHOS_HISTORY_NOTICE__`: no

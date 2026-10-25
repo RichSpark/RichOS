@@ -12100,3 +12100,126 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
 .repository-shared-title svg { width: 20px; height: 20px; color: var(--gold-text); flex-shrink: 0; }
 .repository-shared p { margin: 0; font-size: 1rem; line-height: 1.45; color: var(--ink); }
 .repository-shared p + p { margin-top: 6px; color: var(--ink-soft); }
+
+/* YOUR INSTRUCTIONS (round 36 screen 1, CEO 2026-10-21; `your-instructions.js`): the Settings row's
+   line, the sheet and Rich's "Your instructions · Saved" card, as the round draws them. Every text
+   pair is --ink / --ink-soft on the panel, on --surface-sunk or on --tint-gold-weak, and every
+   link is --accent-text; the round's README measures each, and ui/tests/your-instructions.js
+   re-measures them in both themes. Nothing here is declared exempt. The sheet sits on the
+   instructions-update layer (240): above the home screen and the held opening screen, below the
+   Bust a bug panel (298) and Settings (300). */
+#set-instructions-open .set-row-state { display: block; }
+.yi-overlay { z-index: 240; padding-top: 7vh; }
+.yi-sheet {
+  width: min(780px, 92vw); padding: 26px 32px 22px; max-height: calc(93vh - 24px);
+  display: flex; flex-direction: column;
+}
+.yi-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.yi-title { font-family: var(--font-serif); font-weight: 400; font-size: 1.75rem; line-height: 1.15; color: var(--ink); margin: 0; }
+.yi-everywhere {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  font-size: 1rem; color: var(--ink-soft);
+}
+.yi-everywhere svg { width: 18px; height: 18px; color: var(--gold-text); }
+.yi-lede { margin: 0 0 16px; font-size: 1rem; line-height: 1.5; color: var(--ink-soft); max-width: 640px; }
+.yi-lede b { color: var(--ink); font-weight: 600; }
+/* The CEO's two ⓘ (2026-10-21, docs/ceo-input/2026-10-21_1): Settings' own `cx-info` and `cx-tip`.
+   The asterisk's line sits right under the line it explains; the file line's tooltip opens
+   upward and to the left, so it stays inside the sheet, which scrolls rather than overflows. */
+.yi-lede { margin-bottom: 4px; }
+.yi-note { margin: 0 0 14px; font-size: 1rem; line-height: 1.5; color: var(--ink-soft); }
+.yi-file-place { display: inline-flex; align-items: center; gap: 0 4px; flex-wrap: wrap; }
+.yi-sheet .cx-tip { width: 440px; max-width: calc(92vw - 80px); }
+.yi-sheet .cx-tip .cx-p + .cx-p { margin-top: 8px; }
+.yi-sheet .cx-tip strong { font-weight: 600; color: var(--ink); }
+.yi-tip-head { color: var(--ink); font-weight: 600; }
+.yi-tip-list { margin: 8px 0 0; padding-left: 20px; font-size: 1rem; line-height: 1.5; color: var(--ink-soft); }
+.yi-tip-list li + li { margin-top: 6px; }
+.yi-sheet .cx-tip code { font-family: var(--mono); font-size: 1rem; color: var(--ink); }
+.yi-sheet .cx-tip.yi-tip-up { top: auto; bottom: calc(100% + 12px); left: auto; right: -6px; transform: translateY(4px); }
+.yi-sheet .cx-tip.yi-tip-up.is-shown { transform: none; }
+.yi-sheet .cx-tip.yi-tip-up::before { top: auto; bottom: -7px; transform: rotate(225deg); }
+.yi-sheet .cx-tip.yi-tip-up::after { top: auto; bottom: -14px; }
+.yi-editor-wrap { position: relative; background: var(--surface-sunk); border-radius: var(--radius); }
+.yi-editor {
+  display: block; width: 100%; box-sizing: border-box; height: 340px; resize: none;
+  padding: 16px 18px; border: 1px solid var(--line-control); border-radius: var(--radius);
+  background: transparent; color: var(--ink); position: relative; z-index: 1;
+  font: 400 1.0625rem/1.65 var(--font); tab-size: 2; outline: none;
+}
+.yi-editor::placeholder { color: var(--ink-soft); opacity: 1; }
+.yi-editor:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+/* The lines Rich just saved glow once, behind the text, when the sheet opens from his card. */
+.yi-glow {
+  position: absolute; inset: 1px; z-index: 0; pointer-events: none; border-radius: var(--radius); overflow: hidden;
+  padding: 16px 18px; font: 400 1.0625rem/1.65 var(--font); color: transparent; white-space: pre-wrap;
+  overflow-wrap: break-word; tab-size: 2;
+}
+.yi-glow mark {
+  color: transparent; background: transparent; border-radius: 4px;
+  animation: yi-mark 3.2s var(--out-quint, ease-out) 1 forwards;
+}
+@keyframes yi-mark {
+  0% { background: transparent; box-shadow: none; }
+  12% { background: var(--tint-gold-strong); box-shadow: -6px 0 0 var(--tint-gold-strong), 6px 0 0 var(--tint-gold-strong); }
+  100% { background: transparent; box-shadow: none; }
+}
+.yi-file {
+  margin: 10px 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  font-size: 1rem; color: var(--ink-soft);
+}
+.yi-file code { font-family: var(--mono); font-size: 1rem; color: var(--ink); }
+.yi-link {
+  font: inherit; font-size: 1rem; font-weight: 500; color: var(--accent-text); background: none; border: 0; padding: 2px 2px;
+  border-radius: 4px; cursor: pointer; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px;
+}
+.yi-link:hover { text-decoration-thickness: 2px; background: var(--tint-soft); }
+.yi-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.yi-foot { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+.yi-save { display: inline-flex; align-items: center; gap: 8px; font-size: 1rem; color: var(--ink-soft); min-height: 24px; }
+.yi-save svg { width: 18px; height: 18px; color: var(--success); flex-shrink: 0; }
+.yi-save[data-s="saving"] svg { color: var(--gold-text); animation: yi-spin 1s linear infinite; }
+@keyframes yi-spin { to { transform: rotate(360deg); } }
+.yi-foot .desk-btn { margin-left: auto; }
+/* A new user: the offer to have Rich ask. */
+.yi-ask {
+  display: none; margin-top: 14px; padding: 14px 16px; border-radius: var(--radius);
+  background: var(--tint-gold-weak); border: 1px solid var(--line);
+  align-items: center; gap: 16px;
+}
+.yi-sheet[data-empty="1"] .yi-ask { display: flex; }
+.yi-ask p { margin: 0; font-size: 1rem; line-height: 1.45; color: var(--ink); }
+.yi-ask .desk-btn { flex-shrink: 0; margin-left: auto; }
+
+/* Rich's card, under his words in his reply. */
+.yi-card {
+  margin-top: 14px; max-width: 620px; border: 1px solid var(--line-control); border-radius: 12px;
+  background: var(--surface); overflow: hidden;
+  box-shadow: 0 10px 30px var(--shadow-weak);
+}
+.yi-card-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px 10px; }
+.yi-card-head svg { width: 20px; height: 20px; color: var(--gold-text); flex-shrink: 0; }
+.yi-card-title { font-size: 1rem; font-weight: 600; color: var(--ink); }
+.yi-card-saved { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 1rem; color: var(--ink-soft); }
+.yi-card-saved svg { width: 16px; height: 16px; color: var(--success); }
+.yi-card-rules { list-style: none; margin: 0; padding: 0 18px 6px; }
+.yi-card-rules li {
+  position: relative; padding: 7px 0 7px 22px; font-size: 1rem; line-height: 1.45; color: var(--ink);
+  border-top: 1px solid var(--line-soft);
+}
+.yi-card-rules li::before {
+  content: ""; position: absolute; left: 4px; top: 16px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--gold);
+}
+/* Arriving: each rule after the one before (`your-instructions.js` keeps each start across rebuilds). */
+.yi-card-rules li.is-arriving { animation: yi-rule-in 0.45s var(--out-quint, ease-out) var(--rule-delay, 0ms) 1 both; }
+@keyframes yi-rule-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .yi-card-rules li.is-arriving, .yi-glow mark, .yi-save[data-s="saving"] svg { animation: none; }
+}
+.yi-card-foot {
+  display: flex; align-items: center; gap: 12px; padding: 12px 18px 14px; border-top: 1px solid var(--line-soft);
+  background: var(--tint-weakest);
+}
+.yi-card-foot p { margin: 0; font-size: 1rem; color: var(--ink-soft); }
+.yi-card-foot .desk-btn { margin-left: auto; white-space: nowrap; }

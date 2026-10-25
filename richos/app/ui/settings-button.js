@@ -39,6 +39,7 @@ window.RichSettings = (function () {
   var account = null; // { open() }, the first account's sign-in, reached from its card (round 18)
   var accounts = null; // { open(), paint() }, "Claude accounts" for everyone (round 18, accounts.js)
   var dictation = null; // { open(), paint() }, "Dictation" for everyone once it is there (round 19, dictation.js)
+  var instructions = null; // { open(), paint(), onOpen() }, "Your instructions" (round 36 screen 1, your-instructions.js)
   var quota = null; // { open() }, desktop technical settings only
   var memory = null; // { open() } — where his memory is kept (audit-7 row 13)
   var phonePairing = null; // { open() } — "Use Rich from your phone" (plan §4.1)
@@ -532,8 +533,18 @@ window.RichSettings = (function () {
 
     // ---- COLUMN 2: working with Rich ------------------------------------------------------
     var rich = [];
+    // YOUR INSTRUCTIONS (round 36 screen 1; build plan item 1b): first in the column, with its one
+    // plain line ("6 rules, followed in every company", "Not written yet"), then a rule.
+    if (instructions) {
+      rich.push(buildDisclosureRow("set-instructions-open", "Your instructions", function () {
+        instructions.open();
+      }, "set-instructions-state"));
+    }
     var model = part("model");
-    if (model) rich.push(model);
+    if (model) {
+      if (rich.length) rich.push(divider());
+      rich.push(model);
+    }
     var interrupt = part("interrupt");
     if (interrupt) {
       if (rich.length) rich.push(divider());
@@ -728,6 +739,7 @@ window.RichSettings = (function () {
     if (quotaRow) { quotaRow.hidden = !(techy && techy.read()); if (quota.paint) quota.paint(); }
     if (accounts && accounts.paint && menuEl.querySelector("#set-accounts-open")) accounts.paint();
     if (dictation && dictation.paint && menuEl.querySelector("#set-dictation-open")) dictation.paint();
+    if (instructions && instructions.paint && menuEl.querySelector("#set-instructions-open")) instructions.paint();
     // The updates row is painted by its owner, because this file does not know what is in
     // it. Called on every paint so a rebuild (a forced-dark flip) never leaves an empty row.
     // The company row is REBUILT rather than repainted when its shape can change (chosen
@@ -798,6 +810,9 @@ window.RichSettings = (function () {
     // AND THE SPEND ROW'S FIGURE, taken when the menu opens, so the menu holds no ticking number
     // either (round 22.1): one `spend_view` for this month.
     if (spend && spend.onOpen) spend.onOpen();
+    // AND THE INSTRUCTIONS ROW'S LINE: the file may have been edited in another app while the menu
+    // was shut, so it is read again as the menu opens (one `your_instructions_read`, a local file).
+    if (instructions && instructions.onOpen) instructions.onOpen();
     if (opts.focus) focusInside(opts.focus, opts.call);
   }
 
@@ -1112,6 +1127,10 @@ window.RichSettings = (function () {
      *  writes the row's plain line. `dictation.js` registers it only once the app says
      *  dictation is there, so a build without it carries no row. */
     registerDictation: function (host) { dictation = host || null; rebuild(); },
+    /** "Your instructions" (round 36 screen 1): `host.open()` opens the sheet, `host.paint()` writes
+     *  the row's plain line, `host.onOpen()` re-reads the file as the menu opens.
+     *  `your-instructions.js` registers it when the shell is there. */
+    registerInstructions: function (host) { instructions = host || null; rebuild(); },
     /** "Let Codex review your team's work" (round 20.2): `host.render(container)` fills the row's
      *  slot below Technical view, `host.onOpen()` reads Codex's state when the menu opens.
      *  `codex-reviews.js` registers it once the app answers `codex_reviews_status`, so a page with

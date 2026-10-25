@@ -171,6 +171,7 @@ phone.js                @shell @phone richos/app/ui/mock.js richos/app/src-tauri
 quit-question.js        @shell richos/app/ui/quit-question.js
 instructions-update.js  @shell richos/app/ui/instructions-update.js richos/app/ui/instructions-update.css
 rich-files.js           @shell richos/app/ui/rich-files.js richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/src-tauri/src/rich_files_host.rs richos/app/src-tauri/src/opener.rs
+your-instructions.js    @shell richos/app/ui/your-instructions.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/src-tauri/src/rich_files_host.rs
 repositories.js         @shell richos/app/ui/repositories.js
 updates.js              @shell richos/app/ui/updates.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/src-tauri/src/updates.rs
 work-summary.js         @shell richos/app/ui/work-summary.js
