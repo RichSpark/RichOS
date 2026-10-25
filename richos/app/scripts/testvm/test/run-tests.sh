@@ -1822,6 +1822,10 @@ t "command-walk: a settled task carrying the command's result passes; the 2026-0
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/command-walk.test.py" >"$TMP/command-walk.log" 2>&1; ok $? "$(cat "$TMP/command-walk.log")"
 t_done
 
+t "screen-wait-walk: the locked step fails without the turn's 'Waiting for the screen to unlock' line, and the unlock step without 'The screen is back' in its place"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/screen-wait-walk.test.py" >"$TMP/screen-wait-walk.log" 2>&1; ok $? "$(cat "$TMP/screen-wait-walk.log")"
+t_done
+
 t "skills-walk: a settled job whose worker's Skill call and page open completed and got the page back passes; the second review's hollow record fails"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/skills-walk.test.py" >"$TMP/skills-walk.log" 2>&1; ok $? "$(cat "$TMP/skills-walk.log")"
 t_done

@@ -4363,6 +4363,8 @@ async function pollWorkerStatus() {
       // thing that knows, and this read already runs every three seconds — so the timer
       // appears and disappears with the record rather than with anything this file guesses.
       window.RichTimeline.setQuestionsInFlight(timelineModel, assignments.rows, thread);
+      // §56: a job waiting for the screen says so on the line of the turn that gave it.
+      window.RichTimeline.setScreenWaits(timelineModel, assignments.rows, thread);
       startOrStopTimer();
       scheduleRender();
     } catch (error) {
