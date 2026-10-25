@@ -433,6 +433,12 @@ declare_rules() {
   # stay unaccounted so that boot is SEEN rather than filed as routine.
   routine '^\[richos\] recovery: 0 orphan grant\(s\) closed; 0 grant\(s\) could NOT be closed$' \
     'the boot sweep ran and had nothing to re-witness; every other shape of this line stays unaccounted'
+  # THE APP'S OWN CLEANUP AT START (app_cleanup.rs `run`, 2e3338b89): one line per boot. Only a
+  # sweep that finished with nothing undecidable and nothing failed is routine, whatever it
+  # deleted: the app removing what it left behind is its job. An undecidable or failed item,
+  # "not done", and "no verified engine yet" (a boot with no engine, B5) stay unaccounted.
+  routine '^\[richos\] cleanup at start: deleted [0-9]+, undecidable 0, failures 0 \(verdict: .*\)$' \
+    'the app swept its own leftovers at start and every item was decided and done; every other shape stays unaccounted'
   routine '^\[richos\] memory: this folder has no company partitions;' \
     'an unpartitioned corpus, which is a shape rather than a missing setting'
   routine '^\[richos\] loro corpus: in-repo layout at .+ - this is .+ own' \
