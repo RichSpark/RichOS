@@ -49,11 +49,10 @@
   let opened = false;
 
   // ---- the sheet ---------------------------------------------------------------------------
-  const sheet = el("div", "tg-overlay");
+  const sheet = el("div", "overlay tg-overlay");
   sheet.id = "terminal-setup";
   sheet.hidden = true;
   sheet.setAttribute("role", "dialog");
-  sheet.setAttribute("aria-modal", "true");
   sheet.setAttribute("aria-labelledby", "ts-title");
   sheet.setAttribute("data-dismiss", "control:#ts-done");
   sheet.innerHTML =

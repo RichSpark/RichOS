@@ -254,11 +254,10 @@
   let status = null;
   let returnFocus = null;
   let opened = false;
-  const sheet = el("div", "tg-overlay");
+  const sheet = el("div", "overlay tg-overlay");
   sheet.id = "git-name-sheet";
   sheet.hidden = true;
   sheet.setAttribute("role", "dialog");
-  sheet.setAttribute("aria-modal", "true");
   sheet.setAttribute("aria-labelledby", "gn-title");
   sheet.setAttribute("data-dismiss", "control:#gn-cancel,#gn-done");
   const panel = el("div", "tg-sheet tg-sheet--narrow");

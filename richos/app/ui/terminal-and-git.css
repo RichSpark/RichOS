@@ -4,8 +4,11 @@
    skippable. The ratios, per theme, are in the round's README and are measured again by
    ui/tests/terminal-and-git.js. */
 
-/* ---- the sheets: the app's scrim, a card panel --------------------------------------------- */
-.tg-overlay { position: fixed; inset: 0; z-index: 320; background: var(--scrim); display: flex; justify-content: center; align-items: flex-start; padding-top: 5vh; }
+/* ---- the sheets: the app's own `.overlay` (style.css), a card panel ------------------------ */
+/* Each sheet is an ordinary `.overlay`, as every sheet the Settings menu opens is: under Settings
+   (z-index 300) and never aria-modal, so text size and Bust a bug stay reachable over it
+   (`ui/tests/appearance.js` check 7c). Only where the panel starts differs from the default. */
+.tg-overlay { padding-top: 5vh; }
 .tg-overlay[hidden] { display: none; }
 .tg-sheet {
   position: relative; width: min(840px, 92vw); max-height: calc(95vh - 24px); overflow-y: auto; box-sizing: border-box;
