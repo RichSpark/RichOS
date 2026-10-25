@@ -6,9 +6,17 @@ The contract is the relay's (`richos/mobile/service/RICHDOCTOR-RELAY.md`, protoc
 `richos/mobile/dev/report-relay-local.mjs` and is what a host-side check uses. This stand-in keeps
 only what a walk in the guest needs: register with the manifest, per-image upload with the
 receipt secret in a header, complete (which creates one issue only when every image is stored),
-status, retire, the same-id replay rule and three injectable faults.
+status, retire, the same-id replay rule, the footer rule and three injectable faults. RichOS's
+Bust a bug and Request a feature send through it too: a feature idea (`richos-idea/1`, no
+screenshots) is completed as a discussion, never an issue.
 
-    report-relay-stand-in.py <port> <state.json>
+    report-relay-stand-in.py <port> <state.json> [<request log> [<hold s> [<first number>]]]
+
+With a request log, every request (its method, path, headers and body) is written there, one JSON
+line each, THE MOMENT IT ARRIVES, before it is answered. With a hold, each complete is answered
+that many seconds later, so a walk can see a send in flight (bug-report-walk.sh step 5); keep it
+under the app's 30-second request bound. Issues and discussions are numbered from the first
+number (default 1).
 
     POST /v1/reports                               register (the contract's body)
     PUT  /v1/reports/<id>/uploads/<n>              one image, X-Receipt-Secret, X-Content-SHA256
@@ -26,11 +34,16 @@ import hashlib
 import json
 import re
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PORT = int(sys.argv[1])
 STATE = sys.argv[2]
+LOG = sys.argv[3] if len(sys.argv) > 3 else None
+HOLD = float(sys.argv[4]) if len(sys.argv) > 4 else 0.0
+FIRST = int(sys.argv[5]) if len(sys.argv) > 5 else 1
 REPO = "richos-test/report-relay-local"
+SCHEMAS = ("richdoctor-report/2", "richos-idea/1")
 
 try:
     S = json.load(open(STATE))
@@ -75,7 +88,12 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def raw(self):
-        return self.rfile.read(int(self.headers.get("content-length", "0")))
+        data = self.rfile.read(int(self.headers.get("content-length", "0")))
+        if LOG:
+            with open(LOG, "a") as log:
+                log.write(json.dumps({"method": self.command, "path": self.path, "headers": dict(self.headers),
+                                      "body": data.decode("utf-8", "replace")}) + "\n")
+        return data
 
     def body(self):
         try:
@@ -126,12 +144,17 @@ class H(BaseHTTPRequestHandler):
             return self.reply(200, {"ok": True})
         if self.path == "/v1/reports":
             b = self.body()
-            if b is None or b.get("schema") != "richdoctor-report/2":
+            if b is None or b.get("schema") not in SCHEMAS:
                 return self.reply(422, {"state": "rejected", "reason": "schema", "detail": "not a protocol 2 report"})
+            if b["schema"] == "richos-idea/1" and b.get("manifest"):
+                return self.reply(400, {"state": "rejected", "reason": "schema", "detail": "An idea carries no screenshots."})
             # The relay's own rule (checks.mjs UUID): the installation ID is a random UUID.
             if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", str(b.get("installation_id", ""))):
                 return self.reply(400, {"state": "rejected", "reason": "schema", "detail": "The installation ID is not valid."})
             rid = b.get("report_id", "")
+            # The relay's footer rule (checks.mjs footerMatches): the body's last line names this ID.
+            if not re.fullmatch(r"Sent with RichDoctor \d{1,4}\.\d{1,4}(\.\d{1,4})? · Report ID " + re.escape(rid), str(b.get("body", "")).split("\n")[-1]):
+                return self.reply(422, {"state": "rejected", "reason": "content", "item": "footer", "detail": "Its last line is not the RichDoctor footer with this report ID."})
             r = S["reports"].get(rid)
             if r:
                 if r["secret"] != sha(b.get("receipt_secret", "")):
@@ -140,7 +163,7 @@ class H(BaseHTTPRequestHandler):
                     return self.reply(409, {"state": "conflict"})
                 return self.reply(200, view(rid))
             S["reports"][rid] = {"secret": sha(b.get("receipt_secret", "")), "hash": b.get("content_sha256"), "manifest": b.get("manifest", []),
-                                 "title": b.get("title"), "body": b.get("body"), "state": {"state": "receiving"}}
+                                 "title": b.get("title"), "body": b.get("body"), "idea": b["schema"] == "richos-idea/1", "state": {"state": "receiving"}}
             save()
             return self.reply(200, view(rid))
         parts = self.path.split("/")
@@ -181,9 +204,10 @@ class H(BaseHTTPRequestHandler):
             r["state"] = {"state": "rejected", "reason": "content", "detail": "in the startup log excerpt, one line looks like it contains a password.", "item": "line 12"}
             save()
             return self.reply(422, view(rid))
-        n = len(S["issues"]) + 1
-        url = f"https://github.com/{REPO}/issues/{n}"
-        S["issues"].append({"number": n, "title": r["title"], "body": r["body"], "report_id": rid})
+        time.sleep(HOLD)
+        n = len(S["issues"]) + FIRST
+        url = f"https://github.com/{REPO}/{'discussions' if r.get('idea') else 'issues'}/{n}"
+        S["issues"].append({"number": n, "title": r["title"], "body": r["body"], "report_id": rid, "url": url})
         k = len(r["manifest"])
         r["state"] = {"state": "delivered", "issue_url": url, "issue_number": n, "images_confirmed": k, "images_expected": k}
         save()
