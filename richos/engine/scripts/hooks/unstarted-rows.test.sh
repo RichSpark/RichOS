@@ -388,6 +388,26 @@ if [ -s "$LEDGER" ]; then
     else bad "5c  an unchanged set is told once and then not again" "$HOUT"; fi
 else bad "5c  an unchanged set is told once and then not again" "no notice ledger at $LEDGER"; fi
 
+# The same rows in a new order are the same set (review rv-20261025T005854Z-
+# f70d92b5-9138 #1). The lint is the control that the order really changed.
+python3 - "$REPO/RICH-TODOs.md" <<'PY'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").read().split("\n")
+a = next(i for i, l in enumerate(lines) if l.startswith("| 11 |"))
+b = next(i for i, l in enumerate(lines) if l.startswith("| 12 |"))
+lines[a], lines[b] = lines[b], lines[a]
+open(p, "w", encoding="utf-8").write("\n".join(lines))
+PY
+bash "$LINT" "$REPO" > "$SANDBOX/lint5d.txt" 2>&1
+L11="$(grep -nE '^  UNSTARTED  11 ' "$SANDBOX/lint5d.txt" | cut -d: -f1)"
+L12="$(grep -nE '^  UNSTARTED  12 ' "$SANDBOX/lint5d.txt" | cut -d: -f1)"
+run_hook --remember
+if [ -n "$L11" ] && [ -n "$L12" ] && [ "$L12" -lt "$L11" ] && ! spoke; then
+    ok "5d  the same set in a new record order is not told again"
+else bad "5d  the same set reordered is not told again" "11@${L11:-?} 12@${L12:-?} $HOUT"; fi
+write_queue
+
 write_queue '**CEO — his account**'
 run_hook --remember
 if spoke; then ok "5b  the set CHANGING speaks again — the moment a row is created or picked up"

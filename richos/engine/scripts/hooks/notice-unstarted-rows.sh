@@ -214,6 +214,9 @@ MORE=""
 
 # ONLY WHAT IT KNOWS. The sweep sees branch names, row directories and claim
 # files; it cannot see whether work is running or whether a row may start now.
-stop_notice_abnormal "unstarted:$UR_UNSTARTED" \
+# The key is the SET (sorted ids), so reordering the record is not news; the
+# line keeps the record's order.
+SET_KEY="$(printf '%s' "$UR_UNSTARTED" | tr ' ' '\n' | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ $//')"
+stop_notice_abnormal "unstarted:$SET_KEY" \
     "OPEN ROWS WITH NO RUNNING WORK RECORDED — ${UR_N_UNSTARTED} row(s): ${NAMES}${MORE}. Detail: scripts/unstarted-rows-lint.sh"
 exit 0
