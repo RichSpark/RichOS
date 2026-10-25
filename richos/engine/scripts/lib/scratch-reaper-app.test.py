@@ -493,6 +493,42 @@ class AppSweep(unittest.TestCase):
         self.assertTrue(held_folder.exists(), out)
         self.assertIn("holds a file open inside it", out)
 
+    def aged(self, folder):
+        old = time.time() - 2 * 3600
+        for p in [folder] + list(folder.rglob("*")):
+            os.utime(p, (old, old))
+
+    def test_an_old_dictation_folder_with_no_owner_record_goes_after_the_floor(self):
+        folder = self.dictation_scratch(self.ended_app())
+        (folder / ".richos-owner.json").unlink()
+        rc, out, err = self.sweep()
+        self.assertTrue(folder.exists(), out)
+        self.aged(folder)
+        rc, out, err = self.sweep()
+        self.assertEqual(rc, 0, out + err)
+        self.assertFalse(folder.exists(), out)
+        self.assertIn("carries no owner record", self.log())
+
+    # A failed ownership check is never permission to remove (Codex's read of 0dac9ba80).
+    def test_an_old_dictation_folder_whose_owner_record_cannot_be_read_is_undecidable(self):
+        malformed = self.dictation_scratch(self.ended_app())
+        (malformed / ".richos-owner.json").write_text("{not json")
+        not_object = self.dictation_scratch(self.ended_app())
+        (not_object / ".richos-owner.json").write_text("[1, 2]")
+        unreadable = self.dictation_scratch(self.ended_app())
+        (unreadable / ".richos-owner.json").chmod(0)
+        for folder in (malformed, not_object, unreadable):
+            self.aged(folder)
+        try:
+            rc, out, err = self.sweep()
+        finally:
+            (unreadable / ".richos-owner.json").chmod(0o600)
+        self.assertEqual(rc, 3, out + err)
+        for folder in (malformed, not_object, unreadable):
+            self.assertTrue(folder.exists(), out)
+        self.assertEqual(out.count("owner record is there but could not be read"), 3, out)
+        self.assertNotIn("DELETED", self.log())
+
     # --- app-mcp-log: Claude Code's MCP logs for the app's coordination folder ---------------------
     def mcp_log(self, folder, name="2026-10-25T00-00-00-000Z.txt"):
         slug = "".join(c if c.isalnum() else "-" for c in str(folder))

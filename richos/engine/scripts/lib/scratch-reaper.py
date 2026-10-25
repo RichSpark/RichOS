@@ -3490,7 +3490,8 @@ class Reaper(object):
         quitting pid (`exiting`) does not apply: the writer is the tool, not the app, and an
         installed copy's tool outlives the app. A folder with no owner record (a tool before
         this one, or the moment between making the folder and writing the record) goes once it
-        is older than the declared age floor. The open-file check (the decoder an ended tool
+        is older than the declared age floor; one whose record is there and cannot be read or
+        parsed is UNDECIDABLE, never treated as having none. The open-file check (the decoder an ended tool
         left still writing into it) and the walls apply to every one; nothing else there is
         taken."""
         root = os.path.join(data, "dictation-scratch")
@@ -3508,11 +3509,21 @@ class Reaper(object):
             if self.app_spent(self.app_until):
                 continue
             size, newest, has_git = measure(path)
+            # ONLY A MISSING RECORD is an earlier tool's folder. One that is there and cannot be
+            # read or parsed is a failed ownership check, never permission to remove.
             try:
                 with open(os.path.join(path, OWNER_FILE), encoding="utf-8") as fh:
                     owner = json.load(fh)
-            except (OSError, ValueError):
+            except FileNotFoundError:
                 owner = None
+            except (OSError, ValueError) as exc:
+                owner = exc
+            if owner is not None and not isinstance(owner, dict):
+                self.add(path, "app-dictation", size, INDETERMINATE,
+                         "its owner record is there but could not be read as one (%s), so whose "
+                         "it is cannot be told" % (owner if isinstance(owner, Exception)
+                                                  else "not a JSON object"))
+                continue
             if isinstance(owner, dict):
                 pid = owner.get("pid")
                 state, text = self.ws.process_start(pid)
