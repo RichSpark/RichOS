@@ -433,14 +433,13 @@ fn choose_model(bin: &Path) -> crate::hardware::Resolution {
     // The probe utterance, synthesized once for this whole walk and only if something is actually
     // unmeasured. `say -o` writes a file and plays nothing, so this is silent even mid-call.
     let probe_dir = std::env::temp_dir().join("richos-voice-calibration");
-    // The probe and whether this walk rendered it.
-    let mut probe_wav: Option<Option<(PathBuf, bool)>> = None;
+    let mut probe_wav: Option<Option<PathBuf>> = None;
 
     let resolution = hardware::resolve_live(&costs, &machine, |id| {
         if let Some(secs) = cached.get(id) {
             return Some(*secs);
         }
-        let (wav, _) = probe_wav
+        let wav = probe_wav
             .get_or_insert_with(|| synthesize_probe(&costs.probe_text, &probe_dir))
             .clone()?;
         let model = resolve_model(id).ok()?;
@@ -452,12 +451,11 @@ fn choose_model(bin: &Path) -> crate::hardware::Resolution {
         Some(secs)
     });
 
-    // The probe this walk rendered is garbage once the walk is done (CEO §54 addendum 2); still
-    // under the measuring turn, so no other walk is reading it. One that was already there is
-    // left as it was found.
-    if let Some(Some((wav, true))) = &probe_wav {
-        std::fs::remove_file(wav).ok();
-    }
+    // The probe is garbage once the walk is done (CEO §54 addendum 2): the one this walk
+    // rendered, one an earlier run left, and one left there while every speed was cached. Still
+    // under the measuring turn, a machine-wide lock, so no other walk is reading it.
+    std::fs::remove_file(probe_dir.join("probe.wav")).ok();
+    std::fs::remove_dir(&probe_dir).ok();
 
     // Said out loud on stderr as well as carried in provenance — the same channel the toolchain
     // warnings use, and the one a headless voice loop shares with whoever started it.
@@ -496,15 +494,14 @@ fn chosen(model_id: String, machine: crate::hardware::Machine) -> crate::hardwar
 /// `say` output drifts between renders and voices differ per machine. It does not need to be: the
 /// gate is "under 1.000 s", and the ladder's rungs differ by 2.5x, so a few percent of drift in
 /// the probe cannot move a verdict.
-/// The probe utterance, and `true` when this call rendered it (`false`: it was already there).
-fn synthesize_probe(text: &str, dir: &Path) -> Option<(PathBuf, bool)> {
+fn synthesize_probe(text: &str, dir: &Path) -> Option<PathBuf> {
     if text.trim().is_empty() {
         return None;
     }
     std::fs::create_dir_all(dir).ok()?;
     let out = dir.join("probe.wav");
     if out.exists() {
-        return Some((out, false));
+        return Some(out);
     }
     let status = Command::new("say")
         .arg("-o")
@@ -514,7 +511,7 @@ fn synthesize_probe(text: &str, dir: &Path) -> Option<(PathBuf, bool)> {
         .status()
         .ok()?;
     if status.success() && out.exists() {
-        Some((out, true))
+        Some(out)
     } else {
         None
     }
@@ -1694,15 +1691,16 @@ mod launch_tests {
         assert_eq!(runs, 1, "the second launch measured again ({} runs in all) instead of reusing the saved measurement", runs);
     }
 
-    /// CEO §54 addendum 2: the probe utterance a measurement renders is garbage once the
-    /// measurement is done, and is removed; one that was already there is left as it was found.
+    /// CEO §54 addendum 2: the probe utterance is garbage once a walk is done, whoever made it:
+    /// the one this measurement rendered, one an earlier run left (nightly 74 left 103,146 bytes),
+    /// and one left there when every speed is already cached and no measurement runs at all.
     /// `say` here is a stand-in that writes its `-o` file and plays nothing.
     #[test]
-    fn the_probe_a_measurement_renders_is_removed_and_one_already_there_is_kept() {
+    fn a_probe_is_removed_after_every_walk_rendered_left_or_cached() {
         if std::env::var(ROLE).as_deref() == Ok("launch") {
             return act_as_a_launch(1);
         }
-        let name = "stt::launch_tests::the_probe_a_measurement_renders_is_removed_and_one_already_there_is_kept";
+        let name = "stt::launch_tests::a_probe_is_removed_after_every_walk_rendered_left_or_cached";
         let probe = |m: &Machine| m.root.join("tmp/richos-voice-calibration/probe.wav");
         let rendering = Machine::new("probe-rendered");
         std::fs::remove_file(probe(&rendering)).unwrap();
@@ -1716,11 +1714,19 @@ mod launch_tests {
         assert_eq!(rendering.decodes().len(), 1, "the measurement ran on the rendered probe");
         assert!(!probe(&rendering).exists(), "the probe this measurement rendered was left behind");
 
-        let seeded = Machine::new("probe-seeded");
-        let launch = seeded.launch(name, "launch", "0.1").output().unwrap();
+        let left = Machine::new("probe-left");
+        let launch = left.launch(name, "launch", "0.1").output().unwrap();
         assert!(launch.status.success(), "launch: {}", String::from_utf8_lossy(&launch.stdout));
-        assert_eq!(seeded.decodes().len(), 1, "the measurement ran on the probe already there");
-        assert!(probe(&seeded).exists(), "a probe this measurement did not render was removed");
+        assert_eq!(left.decodes().len(), 1, "the measurement ran on the probe an earlier run left");
+        assert!(!probe(&left).exists(), "the probe an earlier run left survived the measurement");
+
+        // Every speed is cached now; an abandoned probe still goes.
+        std::fs::create_dir_all(probe(&left).parent().unwrap()).unwrap();
+        std::fs::write(probe(&left), vec![0u8; 103_146]).unwrap();
+        let launch = left.launch(name, "launch", "0.1").output().unwrap();
+        assert!(launch.status.success(), "launch: {}", String::from_utf8_lossy(&launch.stdout));
+        assert_eq!(left.decodes().len(), 1, "a cached speed was measured again");
+        assert!(!probe(&left).exists(), "an abandoned probe survived a launch whose speeds were all cached");
     }
 
     /// INVARIANT: a launch quit in the middle of a measurement does not cost the next launch the
