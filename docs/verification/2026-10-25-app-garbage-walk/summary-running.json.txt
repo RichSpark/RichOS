@@ -1,0 +1,4373 @@
+{
+ "entries": 4425,
+ "bytes": 2067454811,
+ "places": {
+  "/Users/admin/Library/AppleMediaServices/Engagement/NotificationSettings": {
+   "files": 3,
+   "dirs": 1,
+   "bytes": 3112
+  },
+  "/Users/admin/Library/AppleMediaServices/Engagement/analytics": {
+   "files": 4,
+   "dirs": 1,
+   "bytes": 1382521
+  },
+  "/Users/admin/Library/AppleMediaServices/Engagement/internal": {
+   "files": 3,
+   "dirs": 4,
+   "bytes": 122880
+  },
+  "/Users/admin/Library/AppleMediaServices/Engagement/journeys": {
+   "files": 3,
+   "dirs": 4,
+   "bytes": 3391488
+  },
+  "/Users/admin/Library/AppleMediaServices/Engagement/recommendations": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/AppleMediaServices/Engagement/treatments": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/AppleMediaServices/Engagement/treatments-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/AppleMediaServices/Engagement/treatments-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/140D892B-0451-4A0F-A177-3575EA06E5AF": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/C4A5BBC2-36E7-467C-AD11-488563E8815F": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/D284F2AB-85E0-4387-BCD2-2CD9E2C9FED3": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.BKAgentService": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.CloudDocsDaemon.StorageManagement": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.CloudPhotosConfiguration": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.DataDetectorsLocalSources": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.DifferentialPrivacy.TelemetryAggregator": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.LighthouseBitacoraFramework.BitacoraWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.MediaMLPluginApp.MediaMLExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.MessagesLegacyTransferArchive": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.Music.MusicStorageExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.Photos.StorageManagementExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.STMExtension.AppleInternal": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.STMExtension.Applications": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.STMExtension.Developer": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.STMExtension.GarageBand": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.STMExtension.Mail": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.STMExtension.OtherUsers": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.STMExtension.Trash": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.STMExtension.iOSFiles": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.SiriMetrics.SiriTurnRestatementExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.StorageManagement.CloudStorageHelper": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.StorageManagement.MessagesHelper": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.TV.TVStorageExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.aiml.RepackagingWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.iBooksX.DiskSpaceEfficiency": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.lighthouse.BiomeLibraryEventUploader": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.lighthouse.PnROnDeviceWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.messages.StorageManagementExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.mlhost.CloudWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.mlhost.TelemetryWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.parsec.SafariAssistantWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.podcasts.MacPodcastsStorageExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.poirot.MessagesAnalyticsWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.siri.SiriPrivateLearningAnalytics.SiriUserSegmentation": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.siri.SiriSuggestionsLightHousePlugin": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/com.apple.siri.media-indexer": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/group.com.apple.mail": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/group.com.apple.poirot.MessagesAnalyticsWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Scripts/group.com.apple.swtransparency": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/AddressBook/.AddressBook-v22_SUPPORT": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 789838
+  },
+  "/Users/admin/Library/Application Support/AddressBook/AddressBook-v22.abcddb-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Application Support/AddressBook/AddressBook-v22.abcddb-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 922912
+  },
+  "/Users/admin/Library/Application Support/AddressBook/Metadata": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 1435
+  },
+  "/Users/admin/Library/Application Support/Animoji/CoreDataBackend": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 556040
+  },
+  "/Users/admin/Library/Application Support/DifferentialPrivacy": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/DifferentialPrivacy/DifferentialPrivacyClassC.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 241664
+  },
+  "/Users/admin/Library/Application Support/DifferentialPrivacy/DifferentialPrivacyClassC.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Application Support/DifferentialPrivacy/DifferentialPrivacyClassC.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 416152
+  },
+  "/Users/admin/Library/Application Support/DifferentialPrivacy/Reports": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/Knowledge/knowledgeC.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Application Support/Knowledge/knowledgeC.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1561512
+  },
+  "/Users/admin/Library/Application Support/com.apple.ProtectedCloudStorage": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/com.apple.ProtectedCloudStorage/KeysSyncingVersion3-(null)-ProtectedCloudStorage.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 53248
+  },
+  "/Users/admin/Library/Application Support/com.apple.ProtectedCloudStorage/KeysSyncingVersion3-(null)-ProtectedCloudStorage.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Application Support/com.apple.ProtectedCloudStorage/KeysSyncingVersion3-(null)-ProtectedCloudStorage.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/com.apple.ProtectedCloudStorage/PCSAnalytics.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 61440
+  },
+  "/Users/admin/Library/Application Support/com.apple.ProtectedCloudStorage/PCSAnalytics.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Application Support/com.apple.ProtectedCloudStorage/PCSAnalytics.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 24752
+  },
+  "/Users/admin/Library/Application Support/com.apple.RemoteManagementAgent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/com.apple.RemoteManagementAgent/Database": {
+   "files": 3,
+   "dirs": 1,
+   "bytes": 426040
+  },
+  "/Users/admin/Library/Application Support/com.apple.RemoteManagementAgent/MigrationStatus.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1137
+  },
+  "/Users/admin/Library/Application Support/com.apple.RemoteManagementAgent/Status": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/com.apple.TCC/TCC.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 73728
+  },
+  "/Users/admin/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments": {
+   "files": 4,
+   "dirs": 0,
+   "bytes": 2544
+  },
+  "/Users/admin/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.RecentApplications.sfl3": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3034
+  },
+  "/Users/admin/Library/Application Support/com.apple.spotlight/SubmittedReports": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/com.richos.app/claude-reset-offers.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 364
+  },
+  "/Users/admin/Library/Application Support/com.richos.app/claude-reset-offers.lock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/locationaccessstored": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/locationaccessstored/ZFQYR4XYHG": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Application Support/networkserviceproxy/NSPCoreDataModel.sqlite-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 527392
+  },
+  "/Users/admin/Library/Assistant/SiriAnalytics.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Assistant/SiriVocabulary/Modules": {
+   "files": 5,
+   "dirs": 0,
+   "bytes": 4250
+  },
+  "/Users/admin/Library/Biome/compute/sessions": {
+   "files": 14,
+   "dirs": 4,
+   "bytes": 4710
+  },
+  "/Users/admin/Library/Biome/databases/IntelligencePlatform.Entity": {
+   "files": 6,
+   "dirs": 0,
+   "bytes": 487424
+  },
+  "/Users/admin/Library/Biome/sets/Default": {
+   "files": 15,
+   "dirs": 0,
+   "bytes": 512000
+  },
+  "/Users/admin/Library/Biome/streams/restricted": {
+   "files": 46,
+   "dirs": 94,
+   "bytes": 29229056
+  },
+  "/Users/admin/Library/Biome/sync/sync.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Biome/sync/sync.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 444992
+  },
+  "/Users/admin/Library/Caches/CloudKit/CloudKitMetadata-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3918152
+  },
+  "/Users/admin/Library/Caches/CloudKit/cloudd_db": {
+   "files": 3,
+   "dirs": 0,
+   "bytes": 266240
+  },
+  "/Users/admin/Library/Caches/CloudKit/com.apple.CloudTelemetryService.xpc": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 36864
+  },
+  "/Users/admin/Library/Caches/CloudKit/com.apple.mlhost.CloudWorker": {
+   "files": 0,
+   "dirs": 6,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/CloudKit/com.apple.protectedcloudstorage.protectedcloudkeysyncing": {
+   "files": 0,
+   "dirs": 6,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/askpermissiond/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.AMPLibraryAgent/Cache.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 49152
+  },
+  "/Users/admin/Library/Caches/com.apple.AMPLibraryAgent/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.AMPLibraryAgent/Cache.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 107152
+  },
+  "/Users/admin/Library/Caches/com.apple.AMPLibraryAgent/HSTS.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 206
+  },
+  "/Users/admin/Library/Caches/com.apple.AMPLibraryAgent/fsCachedData": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 185445
+  },
+  "/Users/admin/Library/Caches/com.apple.AppleMediaServices/DynamicUI": {
+   "files": 3,
+   "dirs": 0,
+   "bytes": 395157
+  },
+  "/Users/admin/Library/Caches/com.apple.AppleMediaServices/Engagement": {
+   "files": 64,
+   "dirs": 3,
+   "bytes": 2056304
+  },
+  "/Users/admin/Library/Caches/com.apple.AppleMediaServices/Metrics": {
+   "files": 6,
+   "dirs": 0,
+   "bytes": 147456
+  },
+  "/Users/admin/Library/Caches/com.apple.AuthenticationServicesCore.AuthenticationServicesAgent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.apple.AuthenticationServicesCore.AuthenticationServicesAgent/Cache.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 49152
+  },
+  "/Users/admin/Library/Caches/com.apple.AuthenticationServicesCore.AuthenticationServicesAgent/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.AuthenticationServicesCore.AuthenticationServicesAgent/Cache.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 41232
+  },
+  "/Users/admin/Library/Caches/com.apple.CloudTelemetry/XPCService": {
+   "files": 8,
+   "dirs": 10,
+   "bytes": 465032
+  },
+  "/Users/admin/Library/Caches/com.apple.Safari.SafeBrowsing": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.apple.Safari.SafeBrowsing/Cache.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 49152
+  },
+  "/Users/admin/Library/Caches/com.apple.Safari.SafeBrowsing/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.Safari.SafeBrowsing/Cache.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 41232
+  },
+  "/Users/admin/Library/Caches/com.apple.amsengagementd/Cache.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1105920
+  },
+  "/Users/admin/Library/Caches/com.apple.amsengagementd/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.amsengagementd/Cache.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1240152
+  },
+  "/Users/admin/Library/Caches/com.apple.amsengagementd/fsCachedData": {
+   "files": 8,
+   "dirs": 0,
+   "bytes": 856998
+  },
+  "/Users/admin/Library/Caches/com.apple.amsondevicestoraged/Cache.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 49152
+  },
+  "/Users/admin/Library/Caches/com.apple.amsondevicestoraged/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.amsondevicestoraged/Cache.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 53592
+  },
+  "/Users/admin/Library/Caches/com.apple.amsondevicestoraged/fsCachedData": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.apple.ap.adprivacyd/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.appstoreagent/storeSystem.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 296672
+  },
+  "/Users/admin/Library/Caches/com.apple.businessservicesd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.apple.businessservicesd/temp": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.apple.cache_delete/CDPurgeStats": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 237
+  },
+  "/Users/admin/Library/Caches/com.apple.cache_delete/CacheDeleteDaemonRecentInfo_v2": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 13628
+  },
+  "/Users/admin/Library/Caches/com.apple.dataaccess.dataaccessd/Cache.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/Caches/com.apple.dataaccess.dataaccessd/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.dataaccess.dataaccessd/Cache.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 107152
+  },
+  "/Users/admin/Library/Caches/com.apple.feedbacklogger/com.apple.proactive.eventtracker": {
+   "files": 3,
+   "dirs": 1,
+   "bytes": 94576
+  },
+  "/Users/admin/Library/Caches/com.apple.feedbacklogger/com.apple.siri.telemetry": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 98720
+  },
+  "/Users/admin/Library/Caches/com.apple.geoanalyticsd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.apple.geoanalyticsd/AP.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/Caches/com.apple.geoanalyticsd/AP.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 82432
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/CSHelpIndex.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 23954
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/Cache.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 733184
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/Cache.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3328992
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/Generated": {
+   "files": 86,
+   "dirs": 86,
+   "bytes": 18596590
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/HSTS.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 252
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/HelpCache.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 30898
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/NSFileProtectionCompleteUntilFirstUserAuthentication": {
+   "files": 81,
+   "dirs": 2,
+   "bytes": 842876
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/fsCachedData": {
+   "files": 156,
+   "dirs": 0,
+   "bytes": 13768006
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/heartbeat.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1962
+  },
+  "/Users/admin/Library/Caches/com.apple.helpd/indexOpenRecord.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 717
+  },
+  "/Users/admin/Library/Caches/com.apple.nbagent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.apple.nbagent/Cache.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 49152
+  },
+  "/Users/admin/Library/Caches/com.apple.nbagent/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.nbagent/Cache.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 107152
+  },
+  "/Users/admin/Library/Caches/com.apple.nbagent/fsCachedData": {
+   "files": 3,
+   "dirs": 1,
+   "bytes": 31161
+  },
+  "/Users/admin/Library/Caches/com.apple.nsservicescache.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 12569
+  },
+  "/Users/admin/Library/Caches/com.apple.nsurlsessiond/Downloads": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.apple.parsecd/Cohorts": {
+   "files": 3,
+   "dirs": 0,
+   "bytes": 81920
+  },
+  "/Users/admin/Library/Caches/com.apple.proactive.eventtracker/aggr_state": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/Caches/com.apple.proactive.eventtracker/device_id.501.uuid": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 16
+  },
+  "/Users/admin/Library/Caches/com.apple.proactive.eventtracker/log_stores": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32784
+  },
+  "/Users/admin/Library/Caches/com.apple.remindd/Cache.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/Caches/com.apple.remindd/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.remindd/Cache.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 148352
+  },
+  "/Users/admin/Library/Caches/com.apple.remindd/RemoteConfiguration.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3267
+  },
+  "/Users/admin/Library/Caches/com.apple.sirittsd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.apple.sirittsd/SynthesisCache": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.apple.tipsd/Cache.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 49152
+  },
+  "/Users/admin/Library/Caches/com.apple.tipsd/Cache.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Caches/com.apple.tipsd/Cache.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3518512
+  },
+  "/Users/admin/Library/Caches/com.apple.tipsd/fsCachedData": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 211861
+  },
+  "/Users/admin/Library/Caches/com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Caches/com.richos.app/WebKit": {
+   "files": 2,
+   "dirs": 7,
+   "bytes": 16
+  },
+  "/Users/admin/Library/Containers/com.apple.AMPArtworkAgent/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 33607
+  },
+  "/Users/admin/Library/Containers/com.apple.AMPArtworkAgent/Data": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 90480
+  },
+  "/Users/admin/Library/Containers/com.apple.BKAgentService": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.BKAgentService/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 30336
+  },
+  "/Users/admin/Library/Containers/com.apple.BKAgentService/Data": {
+   "files": 36,
+   "dirs": 18,
+   "bytes": 202
+  },
+  "/Users/admin/Library/Containers/com.apple.CloudDocsDaemon.StorageManagement": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.CloudDocsDaemon.StorageManagement/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 31179
+  },
+  "/Users/admin/Library/Containers/com.apple.CloudDocsDaemon.StorageManagement/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.CloudPhotosConfiguration": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.CloudPhotosConfiguration/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 31968
+  },
+  "/Users/admin/Library/Containers/com.apple.CloudPhotosConfiguration/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.DataDetectorsLocalSources": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.DataDetectorsLocalSources/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32055
+  },
+  "/Users/admin/Library/Containers/com.apple.DataDetectorsLocalSources/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.DifferentialPrivacy.TelemetryAggregator": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.DifferentialPrivacy.TelemetryAggregator/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 30673
+  },
+  "/Users/admin/Library/Containers/com.apple.DifferentialPrivacy.TelemetryAggregator/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.LighthouseBitacoraFramework.BitacoraWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.LighthouseBitacoraFramework.BitacoraWorker/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 33251
+  },
+  "/Users/admin/Library/Containers/com.apple.LighthouseBitacoraFramework.BitacoraWorker/Data": {
+   "files": 35,
+   "dirs": 12,
+   "bytes": 84
+  },
+  "/Users/admin/Library/Containers/com.apple.MailCacheDelete/Data": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.Maps/Data": {
+   "files": 5,
+   "dirs": 0,
+   "bytes": 1517360
+  },
+  "/Users/admin/Library/Containers/com.apple.MediaMLPluginApp.MediaMLExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.MediaMLPluginApp.MediaMLExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32273
+  },
+  "/Users/admin/Library/Containers/com.apple.MediaMLPluginApp.MediaMLExtension/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.Music.MusicStorageExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.Music.MusicStorageExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 31439
+  },
+  "/Users/admin/Library/Containers/com.apple.Music.MusicStorageExtension/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.Photos.StorageManagementExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.Photos.StorageManagementExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 29841
+  },
+  "/Users/admin/Library/Containers/com.apple.Photos.StorageManagementExtension/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.AppleInternal": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.AppleInternal/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 615
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.AppleInternal/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Applications": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Applications/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 28933
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Applications/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Developer": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Developer/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 29577
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Developer/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.GarageBand": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.GarageBand/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 25977
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.GarageBand/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Mail": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Mail/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 33294
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Mail/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.OtherUsers": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.OtherUsers/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 29267
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.OtherUsers/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Trash": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Trash/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 29484
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.Trash/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.iOSFiles": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.iOSFiles/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 31074
+  },
+  "/Users/admin/Library/Containers/com.apple.STMExtension.iOSFiles/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.Safari/Data": {
+   "files": 4,
+   "dirs": 0,
+   "bytes": 282624
+  },
+  "/Users/admin/Library/Containers/com.apple.ScreenTimeAgent/Data": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 869
+  },
+  "/Users/admin/Library/Containers/com.apple.SiriMetrics.SiriTurnRestatementExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.SiriMetrics.SiriTurnRestatementExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 35459
+  },
+  "/Users/admin/Library/Containers/com.apple.SiriMetrics.SiriTurnRestatementExtension/Data": {
+   "files": 35,
+   "dirs": 12,
+   "bytes": 616
+  },
+  "/Users/admin/Library/Containers/com.apple.StorageManagement.CloudStorageHelper": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.StorageManagement.CloudStorageHelper/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 36123
+  },
+  "/Users/admin/Library/Containers/com.apple.StorageManagement.CloudStorageHelper/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.StorageManagement.MessagesHelper": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.StorageManagement.MessagesHelper/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 33279
+  },
+  "/Users/admin/Library/Containers/com.apple.StorageManagement.MessagesHelper/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.TV.TVStorageExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.TV.TVStorageExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 30565
+  },
+  "/Users/admin/Library/Containers/com.apple.TV.TVStorageExtension/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.UsageTrackingAgent/Data": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 33538
+  },
+  "/Users/admin/Library/Containers/com.apple.aiml.RepackagingWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.aiml.RepackagingWorker/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 30335
+  },
+  "/Users/admin/Library/Containers/com.apple.aiml.RepackagingWorker/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.contacts.donation-agent/Data": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 86
+  },
+  "/Users/admin/Library/Containers/com.apple.geod/Data": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 268081
+  },
+  "/Users/admin/Library/Containers/com.apple.iBooksX.DiskSpaceEfficiency": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.iBooksX.DiskSpaceEfficiency/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 29986
+  },
+  "/Users/admin/Library/Containers/com.apple.iBooksX.DiskSpaceEfficiency/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.iCal.CalendarWidgetExtension/Data": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 38888
+  },
+  "/Users/admin/Library/Containers/com.apple.lighthouse.BiomeLibraryEventUploader": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.lighthouse.BiomeLibraryEventUploader/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 31008
+  },
+  "/Users/admin/Library/Containers/com.apple.lighthouse.BiomeLibraryEventUploader/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.lighthouse.PnROnDeviceWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.lighthouse.PnROnDeviceWorker/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 31585
+  },
+  "/Users/admin/Library/Containers/com.apple.lighthouse.PnROnDeviceWorker/Data": {
+   "files": 36,
+   "dirs": 12,
+   "bytes": 226
+  },
+  "/Users/admin/Library/Containers/com.apple.mediaanalysisd/Data": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.messages.StorageManagementExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.messages.StorageManagementExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 33713
+  },
+  "/Users/admin/Library/Containers/com.apple.messages.StorageManagementExtension/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.mlhost.CloudWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.mlhost.CloudWorker/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 30503
+  },
+  "/Users/admin/Library/Containers/com.apple.mlhost.CloudWorker/Data": {
+   "files": 35,
+   "dirs": 12,
+   "bytes": 113
+  },
+  "/Users/admin/Library/Containers/com.apple.mlhost.TelemetryWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.mlhost.TelemetryWorker/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 29895
+  },
+  "/Users/admin/Library/Containers/com.apple.mlhost.TelemetryWorker/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.parsec.SafariAssistantWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.parsec.SafariAssistantWorker/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 29936
+  },
+  "/Users/admin/Library/Containers/com.apple.parsec.SafariAssistantWorker/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.photoanalysisd/Data": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.photolibraryd/Data": {
+   "files": 1,
+   "dirs": 2,
+   "bytes": 3523
+  },
+  "/Users/admin/Library/Containers/com.apple.podcasts.MacPodcastsStorageExtension": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.podcasts.MacPodcastsStorageExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 34893
+  },
+  "/Users/admin/Library/Containers/com.apple.podcasts.MacPodcastsStorageExtension/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.poirot.MessagesAnalyticsWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.poirot.MessagesAnalyticsWorker/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 33759
+  },
+  "/Users/admin/Library/Containers/com.apple.poirot.MessagesAnalyticsWorker/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.routined/Data": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 3797
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.ODDIMetricsExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 35287
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.ODDIPoirotMetricsExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 37339
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.SiriPrivateLearningAnalytics.SiriUserSegmentation": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.SiriPrivateLearningAnalytics.SiriUserSegmentation/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 33872
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.SiriPrivateLearningAnalytics.SiriUserSegmentation/Data": {
+   "files": 35,
+   "dirs": 13,
+   "bytes": 42
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.SiriSuggestionsLightHousePlugin": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.SiriSuggestionsLightHousePlugin/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 37655
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.SiriSuggestionsLightHousePlugin/Data": {
+   "files": 34,
+   "dirs": 12,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.media-indexer": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.media-indexer/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 30483
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.media-indexer/Data": {
+   "files": 59,
+   "dirs": 12,
+   "bytes": 51366
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.metrics.AssetMetricsExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 36462
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.metrics.DevicePropertiesExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 35995
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.metrics.ExperimentationExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 36213
+  },
+  "/Users/admin/Library/Containers/com.apple.siri.metrics.MetricsExtension/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 35631
+  },
+  "/Users/admin/Library/Containers/com.apple.voicebankingd/Data": {
+   "files": 1,
+   "dirs": 1,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Containers/com.apple.weather.widget/Data": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 68056
+  },
+  "/Users/admin/Library/Daemon Containers/140D892B-0451-4A0F-A177-3575EA06E5AF": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Daemon Containers/140D892B-0451-4A0F-A177-3575EA06E5AF/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 581
+  },
+  "/Users/admin/Library/Daemon Containers/140D892B-0451-4A0F-A177-3575EA06E5AF/Data": {
+   "files": 38,
+   "dirs": 14,
+   "bytes": 124599
+  },
+  "/Users/admin/Library/Daemon Containers/2B144B9D-8E5E-4C4B-BB5A-37706932F08C/Data": {
+   "files": 3,
+   "dirs": 1,
+   "bytes": 8426
+  },
+  "/Users/admin/Library/Daemon Containers/6493606D-D4CF-4CF2-9A7F-84F80C56E302/Data": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 168952
+  },
+  "/Users/admin/Library/Daemon Containers/B1160A00-CB28-48FD-A5E7-711D17C43EC3/Data": {
+   "files": 4,
+   "dirs": 0,
+   "bytes": 131072
+  },
+  "/Users/admin/Library/Daemon Containers/BA78FBED-3B16-499F-AD9D-A698FDBCD0D3/Data": {
+   "files": 6,
+   "dirs": 7,
+   "bytes": 4521984
+  },
+  "/Users/admin/Library/Daemon Containers/C4A5BBC2-36E7-467C-AD11-488563E8815F": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Daemon Containers/C4A5BBC2-36E7-467C-AD11-488563E8815F/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 570
+  },
+  "/Users/admin/Library/Daemon Containers/C4A5BBC2-36E7-467C-AD11-488563E8815F/Data": {
+   "files": 43,
+   "dirs": 14,
+   "bytes": 204800
+  },
+  "/Users/admin/Library/Daemon Containers/D284F2AB-85E0-4387-BCD2-2CD9E2C9FED3": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Daemon Containers/D284F2AB-85E0-4387-BCD2-2CD9E2C9FED3/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 578
+  },
+  "/Users/admin/Library/Daemon Containers/D284F2AB-85E0-4387-BCD2-2CD9E2C9FED3/Data": {
+   "files": 38,
+   "dirs": 13,
+   "bytes": 40960
+  },
+  "/Users/admin/Library/Daemon Containers/FAC41B54-AF36-442A-A1EC-2B83AC3D3227/Data": {
+   "files": 4,
+   "dirs": 0,
+   "bytes": 199223
+  },
+  "/Users/admin/Library/DataDeliveryServices/ddsassertiondata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4121
+  },
+  "/Users/admin/Library/DoNotDisturb/DB/Settings.sqlite-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/DuetExpertCenter/ATXAppDirectoryCache": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3178
+  },
+  "/Users/admin/Library/DuetExpertCenter/ATXAppDirectoryRecentsCache": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 285
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/activitySuggestionsFeedbackPublisherBookmarkFile": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 699
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/digestOnboardingAppSelectionBookmark": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 672
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/digestOnboardingBookmark": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 660
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/digestOnboardingSuggestionBookmark": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 670
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/kModeTransitionMetricsBookmarkFile": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 2025
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/modeConfigurationUIFlowBookmark": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 667
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/poiCategoryPublisherBookmarkURL": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 667
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/proactiveSuggestionUIFeedbackResultStreamWriterBookmarkURL-ActionLockScreen": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3141
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/proactiveSuggestionUIFeedbackResultStreamWriterBookmarkURL-ActionSptltUnknown": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 35274
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/proactiveSuggestionUIFeedbackResultStreamWriterBookmarkURL-AppDirectory": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 55654
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/proactiveSuggestionUIFeedbackResultStreamWriterBookmarkURL-HomeScreen": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 93656
+  },
+  "/Users/admin/Library/DuetExpertCenter/Bookmarks/proactiveSuggestionUIFeedbackResultStreamWriterBookmarkURL-SpotlightUnknown": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 45528
+  },
+  "/Users/admin/Library/DuetExpertCenter/ClientModelCaches/atx_action_fallbacks_homescreen": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 19253
+  },
+  "/Users/admin/Library/DuetExpertCenter/ClientModelCaches/atx_app_predictions_app_library": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 10372
+  },
+  "/Users/admin/Library/DuetExpertCenter/ClientModelCaches/atx_app_predictions_homescreen": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 10331
+  },
+  "/Users/admin/Library/DuetExpertCenter/ClientModelCaches/atx_app_predictions_spotlight": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 10290
+  },
+  "/Users/admin/Library/DuetExpertCenter/DNDModeConfigurationsCache": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 2852
+  },
+  "/Users/admin/Library/DuetExpertCenter/ScoreNormalizationModel/ATXScoreNormalizationArtifacts.archive": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 2011
+  },
+  "/Users/admin/Library/DuetExpertCenter/ScoreNormalizationModel/clientModelStreamBookmark": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 877
+  },
+  "/Users/admin/Library/DuetExpertCenter/UICaches/ActionSptltUnknown": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 38
+  },
+  "/Users/admin/Library/DuetExpertCenter/UICaches/AppDirectory": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 10160
+  },
+  "/Users/admin/Library/DuetExpertCenter/UICaches/HomeScreen": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 63644
+  },
+  "/Users/admin/Library/DuetExpertCenter/UICaches/SiriDiscoverability": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 5189
+  },
+  "/Users/admin/Library/DuetExpertCenter/UICaches/SpotlightUnknown": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 5169
+  },
+  "/Users/admin/Library/DuetExpertCenter/WebsiteSuggestionsVerticalModelCache": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 237
+  },
+  "/Users/admin/Library/DuetExpertCenter/WebsiteTitlesAndSubtitlesCache": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 237
+  },
+  "/Users/admin/Library/DuetExpertCenter/_ATXDataStore.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/DuetExpertCenter/_ATXDataStore.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 2607992
+  },
+  "/Users/admin/Library/DuetExpertCenter/_ATXInfoSuggestionStore.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/DuetExpertCenter/caches/ATXCacheFile-_ATXActionValuation-TotalScore": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 256
+  },
+  "/Users/admin/Library/DuetExpertCenter/caches/ATXCacheFile-_ATXAppPredictor-TotalScore": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4657
+  },
+  "/Users/admin/Library/DuetExpertCenter/caches/ATXExecutableReferenceCache.pb": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 20392
+  },
+  "/Users/admin/Library/DuetExpertCenter/caches/ATXStackStates": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1347
+  },
+  "/Users/admin/Library/DuetExpertCenter/feedback/blendingFeedback-ATXConsumerSubTypeActionLockScreen": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 5695
+  },
+  "/Users/admin/Library/DuetExpertCenter/feedback/blendingFeedback-ATXConsumerSubTypeActionSpotlightUnknown": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 54275
+  },
+  "/Users/admin/Library/DuetExpertCenter/feedback/blendingFeedback-ATXConsumerSubTypeAppDirectory": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 84768
+  },
+  "/Users/admin/Library/DuetExpertCenter/feedback/blendingFeedback-ATXConsumerSubTypeSpotlightUnknown": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 68829
+  },
+  "/Users/admin/Library/DuetExpertCenter/feedback/blendingFeedback-ATXConsumerSubTypeSuggestionHomeScreen": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 148797
+  },
+  "/Users/admin/Library/DuetExpertCenter/metrics/ATXHomeScreenFocusSuggestionLogger": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 683
+  },
+  "/Users/admin/Library/DuetExpertCenter/metrics/ATXModeSetupExperienceMetricsLogger": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 741
+  },
+  "/Users/admin/Library/DuetExpertCenter/metrics/ATXProactiveSuggestionFeedbackMetricsLogger-ActionLockScreen": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3124
+  },
+  "/Users/admin/Library/DuetExpertCenter/metrics/ATXProactiveSuggestionFeedbackMetricsLogger-ActionSptltUnknown": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 35257
+  },
+  "/Users/admin/Library/DuetExpertCenter/metrics/ATXProactiveSuggestionFeedbackMetricsLogger-AppDirectory": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 55637
+  },
+  "/Users/admin/Library/DuetExpertCenter/metrics/ATXProactiveSuggestionFeedbackMetricsLogger-HomeScreen": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 93639
+  },
+  "/Users/admin/Library/DuetExpertCenter/metrics/ATXProactiveSuggestionFeedbackMetricsLogger-SpotlightUnknown": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 45511
+  },
+  "/Users/admin/Library/DuetExpertCenter/metrics/biomeStreamMetricsLogger": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 72202
+  },
+  "/Users/admin/Library/DuetExpertCenter/metrics/mnrLoggingBookmark": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1118
+  },
+  "/Users/admin/Library/DuetExpertCenter/notificationAndSuggestionDB.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/DuetExpertCenter/notificationAndSuggestionDB.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 412032
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/ATXBiomeSuggestedHomePageStream": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/ActivitySuggestionFeedback": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/ERM": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/appLaunchInferredMode": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blending": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingActionLockScreen": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingActionSptltUnknown": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingAppDirectory": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingAppSwitcher": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingFaceTimeZKW": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingHomeScreen": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingMediaControls": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingMegadomeIntent": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingSettings": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingShortcutsEditor": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingSiriDiscoverability": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingSpotlightUnknown": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingUIActionLockScreen": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingUIAppDirectory": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingUIHomeScreen": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingUIShortcutsEditor": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingUISpotlightUnknown": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/blendingWatchSmartStacks": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/clientModel": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/contextHeuristics": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/digestOnboardingAppSelectionLoggingEvent": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/digestOnboardingLoggingEvent": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/digestOnboardingSuggestionLoggingEvent": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/faceGallery": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/homeScreen": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/lightweightClientModelCacheUpdates": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/location": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/missedNotificationRankingLoggingEvent": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/modeConfigurationUIFlowLoggingEvent": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/notificationDigestLoggingEvents": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/notificationGroupEvent": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/notificationSuggestion": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/notificationSuggestionDelivery": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/notificationSuggestionInteraction": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/predictionContext": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 9437184
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/proactiveSuggestionUIFeedbackResultStreamWriterBookmarkURL": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/spotlightUI": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/DuetExpertCenter/streams/userNotificationEvents": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Finance/finance_cloud.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1553272
+  },
+  "/Users/admin/Library/Finance/finance_local.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4152
+  },
+  "/Users/admin/Library/Group Containers/243LU875E5.groups.com.apple.podcasts/PodcastContentService": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/com.apple.MessagesLegacyTransferArchive": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/com.apple.MessagesLegacyTransferArchive/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 640
+  },
+  "/Users/admin/Library/Group Containers/com.apple.MessagesLegacyTransferArchive/Library": {
+   "files": 1,
+   "dirs": 5,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1052672
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.calendar/Extras.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.calendar/Extras.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.calendar/Extras.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.feedbacklogger/com.apple.siriknowledged": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 115200
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.mail": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.mail/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 594
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.mail/Library": {
+   "files": 1,
+   "dirs": 5,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.poirot.MessagesAnalyticsWorker": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.poirot.MessagesAnalyticsWorker/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 642
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.poirot.MessagesAnalyticsWorker/Library": {
+   "files": 1,
+   "dirs": 5,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.reminders/Container_v1": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 65536
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.siri.userfeedbacklearning/Segment": {
+   "files": 1,
+   "dirs": 1,
+   "bytes": 173
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.swtransparency": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.swtransparency/.com.apple.containermanagerd.metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 611
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.swtransparency/KTConfig.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 7270
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.swtransparency/Library": {
+   "files": 1,
+   "dirs": 5,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.swtransparency/SWTPublicKeyBag.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 10784
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.swtransparency/swt.sqlite": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.swtransparency/swt.sqlite-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.swtransparency/swt.sqlite-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 74192
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.swtransparency/swtransparency.txt": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 280
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.tips/Library": {
+   "files": 4,
+   "dirs": 1,
+   "bytes": 717888
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.tipsnext/com.apple.Home": {
+   "files": 3,
+   "dirs": 0,
+   "bytes": 221184
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.tipsnext/com.apple.Spotlight": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1178352
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.tipsnext/com.apple.safari": {
+   "files": 3,
+   "dirs": 0,
+   "bytes": 221184
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.tipsnext/tips-device-profile.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 250
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.transparency/StaticKey": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1503832
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.transparency/eligibility.sqlite-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 70072
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.transparency/transparency_start.log": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 292
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.usernoted/db2": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 57712
+  },
+  "/Users/admin/Library/Group Containers/group.com.apple.weather/Library": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3544
+  },
+  "/Users/admin/Library/HTTPStorages/askpermissiond/httpstorages.sqlite-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.AMPLibraryAgent/httpstorages.sqlite": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.AMPLibraryAgent/httpstorages.sqlite-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.AMPLibraryAgent/httpstorages.sqlite-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 37112
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.amsondevicestoraged/httpstorages.sqlite": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.amsondevicestoraged/httpstorages.sqlite-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.amsondevicestoraged/httpstorages.sqlite-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 28872
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.helpd/httpstorages.sqlite": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.helpd/httpstorages.sqlite-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.helpd/httpstorages.sqlite-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 61832
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.nbagent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.nbagent/httpstorages.sqlite": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.nbagent/httpstorages.sqlite-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.nbagent/httpstorages.sqlite-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 24752
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.tipsd/httpstorages.sqlite": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.tipsd/httpstorages.sqlite-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/HTTPStorages/com.apple.tipsd/httpstorages.sqlite-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 65952
+  },
+  "/Users/admin/Library/HomeKit/chip-vendor-metadata.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 490593
+  },
+  "/Users/admin/Library/HomeKit/eventcounters-groupstore": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 563
+  },
+  "/Users/admin/Library/IdentityServices/Persistence/com.apple.identityservices.dailyDeviceAddedNotificationData": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 608
+  },
+  "/Users/admin/Library/IdentityServices/ids-query.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 180224
+  },
+  "/Users/admin/Library/IdentityServices/ids-query.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/IdentityServices/ids-query.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/Library/IdentityServices/ids.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 49152
+  },
+  "/Users/admin/Library/IdentityServices/ids.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/appleMusicEvent": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 65536
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/confidenceService": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 65536
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/donation": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 65536
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/ecr": {
+   "files": 7,
+   "dirs": 0,
+   "bytes": 229584
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/entityRelevance": {
+   "files": 8,
+   "dirs": 0,
+   "bytes": 270832
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/entityTagging": {
+   "files": 6,
+   "dirs": 0,
+   "bytes": 155648
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/feature": {
+   "files": 3,
+   "dirs": 0,
+   "bytes": 82048
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/firstPartyTopics": {
+   "files": 4,
+   "dirs": 0,
+   "bytes": 131072
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/futureLifeEvent": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 65536
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/internal": {
+   "files": 8,
+   "dirs": 0,
+   "bytes": 3211544
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/lifeEvent": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 65536
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/people": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 65536
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/photosAutonaming": {
+   "files": 6,
+   "dirs": 0,
+   "bytes": 266240
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/siri": {
+   "files": 3,
+   "dirs": 0,
+   "bytes": 152088
+  },
+  "/Users/admin/Library/IntelligencePlatform/Artifacts/visualIdentifier": {
+   "files": 6,
+   "dirs": 0,
+   "bytes": 258048
+  },
+  "/Users/admin/Library/IntelligencePlatform/eventLog.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/IntelligencePlatform/eventLog.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4152
+  },
+  "/Users/admin/Library/IntelligencePlatform/feedbackLog.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/IntelligencePlatform/globalKnowledge.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/IntelligencePlatform/graph.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/IntelligencePlatform/keyvalue.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/IntelligencePlatform/keyvalue.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 135992
+  },
+  "/Users/admin/Library/IntelligencePlatform/ontology.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/IntelligencePlatform/ontology.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 24752
+  },
+  "/Users/admin/Library/IntelligencePlatform/state.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/IntelligencePlatform/views.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 282624
+  },
+  "/Users/admin/Library/IntelligencePlatform/views.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/IntelligencePlatform/views.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 230752
+  },
+  "/Users/admin/Library/KeyboardServices/TextReplacements.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/Keychains/50DCC3EF-6AD8-5EAA-AC56-451AD340113C/keychain-2.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1450272
+  },
+  "/Users/admin/Library/Keychains/login.keychain-db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 111480
+  },
+  "/Users/admin/Library/Logs/DiagnosticReports/Retired": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Logs/DiagnosticReports/SFA-CloudServices.json_2026-10-25-060639_Manageds-Virtual-Machine.diag": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 390
+  },
+  "/Users/admin/Library/Logs/DiagnosticReports/SFA-ckks.json_2026-10-25-060640_Manageds-Virtual-Machine.diag": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 620
+  },
+  "/Users/admin/Library/Logs/DiagnosticReports/SFA-local.json_2026-10-25-060642_Manageds-Virtual-Machine.diag": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 375
+  },
+  "/Users/admin/Library/Logs/DiagnosticReports/SFA-networking.json_2026-10-25-060631_Manageds-Virtual-Machine.diag": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 419
+  },
+  "/Users/admin/Library/Logs/DiagnosticReports/SFA-pcs.json_2026-10-25-060641_Manageds-Virtual-Machine.diag": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 373
+  },
+  "/Users/admin/Library/Logs/DiagnosticReports/SFA-rootNetworking.json_2026-10-25-060632_Manageds-Virtual-Machine.diag": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 423
+  },
+  "/Users/admin/Library/Logs/DiagnosticReports/SFA-sos.json_2026-10-25-060641_Manageds-Virtual-Machine.diag": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 373
+  },
+  "/Users/admin/Library/Logs/DiagnosticReports/proactive_event_tracker-com_apple_Trial-com_apple_triald_2026-10-25-061029_Manageds-Virtual-Machine.diag": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 202527
+  },
+  "/Users/admin/Library/Logs/PrivacyPreservingMeasurement": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Logs/SiriTTSService": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Logs/com.apple.CloudTelemetry/XPCService": {
+   "files": 3,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Messages/chat.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 331776
+  },
+  "/Users/admin/Library/Messages/chat.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 778712
+  },
+  "/Users/admin/Library/Metadata/Assets/assetBundleCache.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 884
+  },
+  "/Users/admin/Library/Metadata/CoreSpotlight/NSFileProtectionCompleteUntilFirstUserAuthentication": {
+   "files": 55,
+   "dirs": 0,
+   "bytes": 89550852
+  },
+  "/Users/admin/Library/Metadata/CoreSpotlight/SpotlightKnowledge": {
+   "files": 5,
+   "dirs": 8,
+   "bytes": 176345
+  },
+  "/Users/admin/Library/Metadata/CoreSpotlight/SpotlightKnowledgeEvents": {
+   "files": 37,
+   "dirs": 0,
+   "bytes": 229947210
+  },
+  "/Users/admin/Library/Metadata/CoreSpotlight/heartbeat.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1834
+  },
+  "/Users/admin/Library/PPM": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/PPM/PAT": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/PPM/PAT/Tokens_25_10_2026_06_09_22.pat": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 2878
+  },
+  "/Users/admin/Library/PersonalizationPortrait/PPSQLDatabase.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/PersonalizationPortrait/PPSQLDatabase.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1590352
+  },
+  "/Users/admin/Library/PersonalizationPortrait/Topics/ScoreCache": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 24
+  },
+  "/Users/admin/Library/PersonalizationPortrait/streams/portraitFeedback": {
+   "files": 0,
+   "dirs": 3,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Photos/Libraries/Syndication.photoslibrary": {
+   "files": 6,
+   "dirs": 0,
+   "bytes": 95178
+  },
+  "/Users/admin/Library/Preferences/.GlobalPreferences.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1210
+  },
+  "/Users/admin/Library/Preferences/ByHost/com.apple.configurationprofiles.user.50DCC3EF-6AD8-5EAA-AC56-451AD340113C.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 121
+  },
+  "/Users/admin/Library/Preferences/ByHost/com.apple.loginwindow.50DCC3EF-6AD8-5EAA-AC56-451AD340113C.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 275
+  },
+  "/Users/admin/Library/Preferences/ByHost/com.apple.settings.storage.50DCC3EF-6AD8-5EAA-AC56-451AD340113C.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 158
+  },
+  "/Users/admin/Library/Preferences/ContextStoreAgent.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 322
+  },
+  "/Users/admin/Library/Preferences/com.apple.Accessibility.Assets.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 2805
+  },
+  "/Users/admin/Library/Preferences/com.apple.Accessibility.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 2090
+  },
+  "/Users/admin/Library/Preferences/com.apple.AddressBook.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 153
+  },
+  "/Users/admin/Library/Preferences/com.apple.AppleMediaServices.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 464
+  },
+  "/Users/admin/Library/Preferences/com.apple.AuthenticationServicesCore.AuthenticationServicesAgent.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 91
+  },
+  "/Users/admin/Library/Preferences/com.apple.CloudKit.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 79
+  },
+  "/Users/admin/Library/Preferences/com.apple.CloudSubscriptionFeatures.diagnostic.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3554
+  },
+  "/Users/admin/Library/Preferences/com.apple.DPSubmissionService.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 68
+  },
+  "/Users/admin/Library/Preferences/com.apple.DataDeliveryServices.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 484
+  },
+  "/Users/admin/Library/Preferences/com.apple.DiagnosticExtensions.extensionTracker.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 97
+  },
+  "/Users/admin/Library/Preferences/com.apple.DuetExpertCenter.AppPredictionExpert.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1215
+  },
+  "/Users/admin/Library/Preferences/com.apple.ExtensionsPreferences.ShareMenu.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 690
+  },
+  "/Users/admin/Library/Preferences/com.apple.GenerativeFunctions.GenerativeFunctionsInstrumentation.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 190
+  },
+  "/Users/admin/Library/Preferences/com.apple.IMCoreSpotlight.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 124
+  },
+  "/Users/admin/Library/Preferences/com.apple.Maps.mapssyncd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.Safari.PasswordBreachAgent.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 101
+  },
+  "/Users/admin/Library/Preferences/com.apple.Safari.SafeBrowsing.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 149
+  },
+  "/Users/admin/Library/Preferences/com.apple.SafariBookmarksSyncAgent.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.SpeakSelection.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 292066
+  },
+  "/Users/admin/Library/Preferences/com.apple.Spotlight.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 425
+  },
+  "/Users/admin/Library/Preferences/com.apple.StatusKitAgent.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.StorageManagement.Service.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 73
+  },
+  "/Users/admin/Library/Preferences/com.apple.amsengagementd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1359
+  },
+  "/Users/admin/Library/Preferences/com.apple.animoji.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1309
+  },
+  "/Users/admin/Library/Preferences/com.apple.appleaccountd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.appstored.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 876
+  },
+  "/Users/admin/Library/Preferences/com.apple.assistantd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.biomesyncd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.businessservicesd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 113
+  },
+  "/Users/admin/Library/Preferences/com.apple.cloudphotod.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 113
+  },
+  "/Users/admin/Library/Preferences/com.apple.contextsync.subscriptions.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 169
+  },
+  "/Users/admin/Library/Preferences/com.apple.corespotlightui.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 521
+  },
+  "/Users/admin/Library/Preferences/com.apple.dataaccess.babysitter.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 142
+  },
+  "/Users/admin/Library/Preferences/com.apple.financed.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.helpd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 70
+  },
+  "/Users/admin/Library/Preferences/com.apple.homed.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 3148
+  },
+  "/Users/admin/Library/Preferences/com.apple.homeenergyd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 750
+  },
+  "/Users/admin/Library/Preferences/com.apple.icloud.searchpartyuseragent.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1642
+  },
+  "/Users/admin/Library/Preferences/com.apple.identityservicesd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1563
+  },
+  "/Users/admin/Library/Preferences/com.apple.imagent.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 790
+  },
+  "/Users/admin/Library/Preferences/com.apple.inputAnalytics.serverStats.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 125
+  },
+  "/Users/admin/Library/Preferences/com.apple.keyboardservicesd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.knowledge-agent.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1366
+  },
+  "/Users/admin/Library/Preferences/com.apple.locationaccessstored.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 122
+  },
+  "/Users/admin/Library/Preferences/com.apple.madrid.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1217
+  },
+  "/Users/admin/Library/Preferences/com.apple.mediaanalysisd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 237
+  },
+  "/Users/admin/Library/Preferences/com.apple.mlhost.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 84
+  },
+  "/Users/admin/Library/Preferences/com.apple.ncprefs.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 15178
+  },
+  "/Users/admin/Library/Preferences/com.apple.networkserviceproxy.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 138406
+  },
+  "/Users/admin/Library/Preferences/com.apple.proactive.PersonalizationPortrait.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 191
+  },
+  "/Users/admin/Library/Preferences/com.apple.protectedcloudstorage.protectedcloudkeysyncing.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 727
+  },
+  "/Users/admin/Library/Preferences/com.apple.remindd.babysitter.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 142
+  },
+  "/Users/admin/Library/Preferences/com.apple.remindd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1589
+  },
+  "/Users/admin/Library/Preferences/com.apple.seserviced.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 120
+  },
+  "/Users/admin/Library/Preferences/com.apple.siri.ODDI.MetricsWorker.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 618
+  },
+  "/Users/admin/Library/Preferences/com.apple.siri.ODDI.PoirotMetricsWorker.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 630
+  },
+  "/Users/admin/Library/Preferences/com.apple.siriactionsd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.siriknowledged.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.sociallayerd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.spaces.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 543
+  },
+  "/Users/admin/Library/Preferences/com.apple.spotlightknowledge.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 280
+  },
+  "/Users/admin/Library/Preferences/com.apple.talagent.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 69
+  },
+  "/Users/admin/Library/Preferences/com.apple.tipsd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 8179
+  },
+  "/Users/admin/Library/Preferences/com.apple.transparencyd.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 731
+  },
+  "/Users/admin/Library/Preferences/com.apple.triald.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 113
+  },
+  "/Users/admin/Library/Preferences/com.apple.xpc.activity2.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 20153
+  },
+  "/Users/admin/Library/Preferences/diagnostics_agent.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 84
+  },
+  "/Users/admin/Library/PrivateCloudCompute": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Safari/PasswordBreachStore.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 335
+  },
+  "/Users/admin/Library/SafariSafeBrowsing/SafeBrowsingRemoteConfiguration-1.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 831
+  },
+  "/Users/admin/Library/StatusKit/database/statuskit-cloud.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1985872
+  },
+  "/Users/admin/Library/Suggestions/Metrics/personalIntelligenceMetrics": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Suggestions/mifeaturestore.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 53248
+  },
+  "/Users/admin/Library/Suggestions/privacyAwareLogging.ser": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 292
+  },
+  "/Users/admin/Library/Suggestions/suggestions-device-day-group": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 9
+  },
+  "/Users/admin/Library/Suggestions/training.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 140112
+  },
+  "/Users/admin/Library/Trial/NamespaceDescriptors/system.data": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 830
+  },
+  "/Users/admin/Library/Trial/NamespaceDescriptors/v2": {
+   "files": 12,
+   "dirs": 14,
+   "bytes": 4272
+  },
+  "/Users/admin/Library/Trial/Treatments/406": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 213215
+  },
+  "/Users/admin/Library/Trial/Treatments/750": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Trial/Treatments/SIRI_EXPERIENCE_CAM": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/Library/Trial/Treatments/SIRI_TEXT_TO_SPEECH": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 213215
+  },
+  "/Users/admin/Library/Trial/v7/Database": {
+   "files": 3,
+   "dirs": 0,
+   "bytes": 1092808
+  },
+  "/Users/admin/Library/UnifiedAssetFramework/UAFAssetSubscriptions.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/UnifiedAssetFramework/history/com.apple.siri.uaf.platform-uafLockedLog.cur.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 716
+  },
+  "/Users/admin/Library/UnifiedAssetFramework/history/com.apple.siri.uaf.platform-uafLockedLog.prev.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 716
+  },
+  "/Users/admin/Library/Weather/weather-data.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1763392
+  },
+  "/Users/admin/Library/WebKit/com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/Library/WebKit/com.richos.app/WebsiteData": {
+   "files": 12,
+   "dirs": 12,
+   "bytes": 1206674
+  },
+  "/Users/admin/Library/com.apple.icloud.searchpartyd/CloudStorage.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4096
+  },
+  "/Users/admin/Library/com.apple.icloud.searchpartyd/CloudStorage.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/Library/com.apple.icloud.searchpartyd/CloudStorage.db-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 45352
+  },
+  "/Users/admin/Library/homeenergyd/com.apple.homeenergyd/LocalCache.store-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/.claude.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 67237
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/.last-cleanup": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 24
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/backups": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/backups/.claude.json.backup.1792908477734": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 67236
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/backups/.claude.json.backup.1792908586069": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 67236
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/backups/.claude.json.backup.1792908653825": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 67236
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/backups/.claude.json.backup.1792908714745": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 67236
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/backups/.claude.json.backup.1792908809125": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 67237
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/cache": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/cache/model-catalog": {
+   "files": 1,
+   "dirs": 1,
+   "bytes": 14385
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/plugins": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/plugins/data": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/projects": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/projects/-Users-admin-testvm-walk-0653463caba2-home-Library-Application-Support-com-richos-app-coordination": {
+   "files": 8,
+   "dirs": 3,
+   "bytes": 2553406
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/session-env": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/session-env/12024d74-00da-4552-8dd2-4d9a35683e25": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/session-env/98c6def2-fe29-4fe9-86d0-5081af610d3b": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/session-env/bd56ed10-3a3a-453a-bcbe-e1c85ea0b115": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1297.aad1e01787788e136b4241f920ba0fe3c336b76c105f838840fc2fd03e2a07ff.key": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 108
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1297.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 598
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1662.d81d6241e4005353b230e2b5ac224e226259d6ef39bbe41c189a087b96f5ffd8.key": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 108
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1662.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 626
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1693.dd4c0d0fdf18bfb1a5a0190061b573311816312e3592b79a8af2b80ffe74ba5b.key": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 108
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1693.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 636
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1796.5dd17e6881c9e735e77065f9f88e22a2ce03d730706cadbb0a9b2d7efdadaed5.key": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 108
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1796.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 626
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1807.4da7a4de9c1de971267d76248db259b616b8055eb61c3fdc0d21f806fdcdcb56.key": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 108
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1807.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 636
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1952.bea234d19884f39e0cfdb089a301817a1dc69838f7ae1add9fc35e069b51ef62.key": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 108
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/sessions/1952.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 635
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/shell-snapshots": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/shell-snapshots/snapshot-zsh-1792908246086-l1c1ok.sh": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4016
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/shell-snapshots/snapshot-zsh-1792908826415-1r9l45.sh": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 4016
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/state": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/state/land-locks": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 750
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/state/scratch-reaper.log": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 535
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.claude/state/test-devices": {
+   "files": 1,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.config": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.config/richos": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.config/richos/models": {
+   "files": 11,
+   "dirs": 2,
+   "bytes": 1227412264
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.config/richos/whisper-speed.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 288
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.config/richos/whisper-speed.lock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/.config/richos/whisper-toolchain.lock.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1065
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/COMMIT_EDITMSG": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 5
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/HEAD": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 21
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/ORIG_HEAD": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 41
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/config": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 137
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/description": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 73
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/hooks": {
+   "files": 13,
+   "dirs": 1,
+   "bytes": 23513
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/index": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 209
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/info": {
+   "files": 1,
+   "dirs": 1,
+   "bytes": 240
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/logs": {
+   "files": 2,
+   "dirs": 3,
+   "bytes": 706
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/objects": {
+   "files": 7,
+   "dirs": 10,
+   "bytes": 788
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/.git/refs": {
+   "files": 1,
+   "dirs": 3,
+   "bytes": 41
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/README.md": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 11
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Acme/notes.md": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 25
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Applications": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Applications/.richos-updater": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Applications/.richos-updater/lock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Applications/.richos-updater/session.lock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Library/Application Support": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/RichOS": {
+   "files": 4,
+   "dirs": 2,
+   "bytes": 3074475
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app": {
+   "files": 298,
+   "dirs": 124,
+   "bytes": 1789563
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Library/Caches": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/Library/Caches/claude-cli-nodejs": {
+   "files": 20,
+   "dirs": 10,
+   "bytes": 28920
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/myrichos": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/myrichos/.richos": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/myrichos/.richos/instructions-record.json": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 22922
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/myrichos/instructions.md": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/myrichos/rich.md": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 9243
+  },
+  "/Users/admin/testvm/walk-0653463caba2/home/myrichos/stu.md": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 13517
+  },
+  "/private/tmp/cc-socks": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/tmp/cc-socks/1297.sock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/private/tmp/cc-socks/1662.sock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/private/tmp/cc-socks/1693.sock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/private/tmp/cc-socks/1796.sock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/private/tmp/cc-socks/1807.sock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/private/tmp/cc-socks/1841.sock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/private/tmp/cc-socks/1952.sock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/private/tmp/claude-501": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/tmp/claude-501/-Users-admin-testvm-walk-0653463caba2-home-Library-Application-Support-com-richos-app-coordination": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/tmp/claude-501/-Users-admin-testvm-walk-0653463caba2-home-Library-Application-Support-com-richos-app-coordination/98c6def2-fe29-4fe9-86d0-5081af610d3b": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/private/tmp/claude-501/-Users-admin-testvm-walk-0653463caba2-home-Library-Application-Support-com-richos-app-coordination/bd56ed10-3a3a-453a-bcbe-e1c85ea0b115": {
+   "files": 15,
+   "dirs": 2,
+   "bytes": 6226
+  },
+  "/private/tmp/claude-501/bash-edit-diff": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/tmp/claude-501/bash-edit-diff/10103163040706844544-14039805146069282433-4174edf3d9408214": {
+   "files": 12,
+   "dirs": 10,
+   "bytes": 1239
+  },
+  "/private/tmp/claude-501/bash-edit-diff/15410278725009509095-14039805146069282433-5917dfc6e0f7db8d": {
+   "files": 12,
+   "dirs": 10,
+   "bytes": 1239
+  },
+  "/private/tmp/claude-501/bash-edit-diff/15410278725009509095-6563709332811358368-ca663c5de7299136": {
+   "files": 9,
+   "dirs": 7,
+   "bytes": 927
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.LaunchServices.dv/com.apple.LaunchServices-6291460-v2.csstore": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 9420800
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.SharedWebCredentials/AdditionalServiceDetails": {
+   "files": 102,
+   "dirs": 6,
+   "bytes": 247416
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.SharedWebCredentials/swc.db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 30731
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.ciphermld": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.icloud.searchpartyuseragent/StandaloneBeacon.db-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.nsurlsessiond/14CD4560F47E1B2A3AFB4C88D09A0C12F72C5027": {
+   "files": 12,
+   "dirs": 13,
+   "bytes": 27912
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.nsurlsessiond/bundles.plist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 431
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.nsurlsessiond/tasks.sqlite": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 733184
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.nsurlsessiond/tasks.sqlite-shm": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 32768
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.nsurlsessiond/tasks.sqlite-wal": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 2904632
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/0/com.apple.pluginkit/Annotations": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 2065
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.AuthenticationServices.ASConfigurationSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.MENotificationAgent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.MTLAssetUpgraderD/upgraderWork.db": {
+   "files": 2,
+   "dirs": 0,
+   "bytes": 57408
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.RemoteManagementAgent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.Safari.SafeBrowsing/Apple": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 1593203
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.Safari.SafeBrowsing/Google": {
+   "files": 3,
+   "dirs": 0,
+   "bytes": 17365757
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.SafariShared.SafariConfigurationSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.StorageManagement.Service": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebKit.GPU+com.apple.textkit.nsattributedstringagent/com.apple.WebKit.GPU": {
+   "files": 4,
+   "dirs": 3,
+   "bytes": 295672
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebKit.GPU+com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebKit.GPU+com.richos.app/com.apple.WebKit.GPU": {
+   "files": 5,
+   "dirs": 6,
+   "bytes": 1485736
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebKit.GPU.Sandbox/CompiledSandbox": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 75046
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebKit.Networking+com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebKit.Networking.Sandbox/CompiledSandbox": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 48893
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebKit.WebContent+com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebKit.WebContent.Sandbox/CompiledSandbox": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 106390
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebPrivacy/ALLOWED_QUERY_PARAM.wplist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 862
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebPrivacy/QUERY_PARAM.wplist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 471
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebPrivacy/RESTRICTED_OPENER_DOMAINS.wplist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 89
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebPrivacy/STORAGE_ACCESS_PROMPT_QUIRKS.wplist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 339
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.WebPrivacy/STORAGE_ACCESS_USER_AGENT_STRING_QUIRKS.wplist": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 204
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.businessservicesd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.ciphermld": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.devicecheckd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.gpuarchiver": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.mediaanalysisd/com.apple.mediaanalysisd": {
+   "files": 4,
+   "dirs": 0,
+   "bytes": 263072
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.metal": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.metal/16777239_11": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 149180
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.metal/32023": {
+   "files": 2,
+   "dirs": 1,
+   "bytes": 10453596
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.metalfe": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.metalfe/modules.timestamp": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.privatecloudcomputed": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.proactiveeventtrackerd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.remotemanagement.AccountSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.remotemanagement.InteractiveLegacyProfilesSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.remotemanagement.LegacyProfilesSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.remotemanagement.ManagedSettingsSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.remotemanagement.ManagementTestSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.remotemanagement.PasscodeSettingsSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.remotemanagement.ScreenSharingSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.remotemanagement.SecuritySubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.secureelementservice": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.apple.securityuploadd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/C/com.richos.app/com.apple.metalfe": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/.LINKS/76158786-1321-4FCF-B08F-D4F21A8F6A7D": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/CrashHandlerService": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/SandboxHelper": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/SpeechModelCache/4de5be48.bnnsir": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 688128
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/SpeechModelCache/7df79efb.bnnsir": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 180453376
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/betaenrollmentagent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.AuthenticationServices.ASConfigurationSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.DPSubmissionService": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.MENotificationAgent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.MTLCompilerService": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.Maps.mapssyncd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.Maps.mapssyncd/.LINKS": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.RemoteManagementAgent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.SafariShared.SafariConfigurationSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.ScopedBookmarkAgent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.SetStoreUpdateService": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.StorageManagement.Service": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.WebKit.GPU+com.apple.textkit.nsattributedstringagent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.WebKit.GPU+com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.WebKit.Networking+com.apple.textkit.nsattributedstringagent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.WebKit.Networking+com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.WebKit.Networking+com.richos.app/BlobRegistryFiles-pS7nEAuq": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.WebKit.WebContent+com.apple.textkit.nsattributedstringagent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.WebKit.WebContent+com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.accessibility.mediaaccessibilityd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.amsengagementd/internal": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.amsengagementd/journeys": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.amsondevicestoraged": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.analyticsagent": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.avatarsd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.avatarsd/.LINKS": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.businessservicesd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.ciphermld": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.ciphermld/.LINKS": {
+   "files": 0,
+   "dirs": 2,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.dataaccess": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.devicecheckd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.geoanalyticsd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.homeenergyd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.inputanalyticsd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.intelligenceplatform.IntelligencePlatformComputeService": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.intelligenceplatformd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.knowledgeconstructiond": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.naturallanguaged": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.privatecloudcomputed": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.proactiveeventtrackerd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.remindd/TemporaryItems": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.remotemanagement.AccountSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.remotemanagement.InteractiveLegacyProfilesSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.remotemanagement.LegacyProfilesSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.remotemanagement.ManagedSettingsSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.remotemanagement.ManagementTestSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.remotemanagement.PasscodeSettingsSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.remotemanagement.ScreenSharingSubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.remotemanagement.SecuritySubscriber": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.secureelementservice": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.securityuploadd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.securityuploadd/TemporaryItems": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.sirittsd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.tipsd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.tipsd/TemporaryItems": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.apple.transparencyd/TemporaryItems": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.richos.app": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/com.richos.app/WebKit": {
+   "files": 0,
+   "dirs": 4,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/duetexpertd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/duetexpertd/TemporaryItems": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/metrickitd": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/proactived": {
+   "files": 0,
+   "dirs": 1,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/richos-scratch-sweep.lock": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 0
+  },
+  "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn/T/xcrun_db": {
+   "files": 1,
+   "dirs": 0,
+   "bytes": 657
+  }
+ },
+ "processes": [
+  {
+   "pid": 1103,
+   "ppid": 1,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri"
+  },
+  {
+   "pid": 1279,
+   "ppid": 1103,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/scripts/lib/review_watch.py --monitor --engine-root /Users/admin/testvm/walk-0653463caba2/engine --app-state /Users/admin/testvm/walk-0653463caba2/home/Library/Application S"
+  },
+  {
+   "pid": 1297,
+   "ppid": 1103,
+   "command": "/Users/admin/.local/bin/claude --print --input-format=stream-json --output-format=stream-json --verbose --setting-sources  --no-session-persistence --tools  --strict-mcp-config --mcp-config {\"mcpServers\":{}}"
+  },
+  {
+   "pid": 1651,
+   "ppid": 1103,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/scripts/provider-supervisor.py --reap-descendants --reap-grace=0 --reap-state=/Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-st"
+  },
+  {
+   "pid": 1662,
+   "ppid": 1651,
+   "command": "/Users/admin/.local/bin/claude --add-dir /Users/admin/testvm/walk-0653463caba2/home/Acme /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/target-worktrees/5c6f7297b8793517daee3ff23d2225f6b13a2855718039358739efff41f48935 /Users/admin/testvm/walk-06534"
+  },
+  {
+   "pid": 1681,
+   "ppid": 1103,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/scripts/provider-supervisor.py --reap-descendants --reap-grace=0 --reap-state=/Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-st"
+  },
+  {
+   "pid": 1693,
+   "ppid": 1681,
+   "command": "/Users/admin/.local/bin/claude --add-dir /Users/admin/testvm/walk-0653463caba2/home/Acme /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/target-worktrees/5c6f7297b8793517daee3ff23d2225f6b13a2855718039358739efff41f48935 /Users/admin/testvm/walk-06534"
+  },
+  {
+   "pid": 1732,
+   "ppid": 1693,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --assignments-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/566716f5-5a75-49dc-8d1b-529ba516152d-assignments.json"
+  },
+  {
+   "pid": 1733,
+   "ppid": 1693,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/ecs/adapters/mcp.py /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/566716f5-5a75-49dc-8d1b-529ba516152d-continuity"
+  },
+  {
+   "pid": 1735,
+   "ppid": 1693,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --files-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/566716f5-5a75-49dc-8d1b-529ba516152d-assignments.questions.json"
+  },
+  {
+   "pid": 1743,
+   "ppid": 1693,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --onboarding-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/566716f5-5a75-49dc-8d1b-529ba516152d-onboarding.json"
+  },
+  {
+   "pid": 1745,
+   "ppid": 1693,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --questions-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/566716f5-5a75-49dc-8d1b-529ba516152d-assignments.questions.json"
+  },
+  {
+   "pid": 1746,
+   "ppid": 1693,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --status-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/566716f5-5a75-49dc-8d1b-529ba516152d-status.json"
+  },
+  {
+   "pid": 1747,
+   "ppid": 1693,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/mega-lander/app.py /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/566716f5-5a75-49dc-8d1b-529ba516152d-continuity."
+  },
+  {
+   "pid": 1795,
+   "ppid": 1103,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/scripts/provider-supervisor.py --reap-descendants --reap-grace=0 --reap-state=/Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-st"
+  },
+  {
+   "pid": 1796,
+   "ppid": 1795,
+   "command": "/Users/admin/.local/bin/claude --add-dir /Users/admin/testvm/walk-0653463caba2/home/Acme /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/target-worktrees/f8fb8d691fe66241400c0cf1995313a67d39251e4da68f2a6f244b440da03b3d /Users/admin/testvm/walk-06534"
+  },
+  {
+   "pid": 1801,
+   "ppid": 1103,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/scripts/provider-supervisor.py --reap-descendants --reap-grace=0 --reap-state=/Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-st"
+  },
+  {
+   "pid": 1807,
+   "ppid": 1801,
+   "command": "/Users/admin/.local/bin/claude --add-dir /Users/admin/testvm/walk-0653463caba2/home/Acme /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/target-worktrees/f8fb8d691fe66241400c0cf1995313a67d39251e4da68f2a6f244b440da03b3d /Users/admin/testvm/walk-06534"
+  },
+  {
+   "pid": 1879,
+   "ppid": 1807,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --assignments-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/b2e2cc7c-36c4-4f17-8c1b-c44ffd3d7af9-assignments.json"
+  },
+  {
+   "pid": 1880,
+   "ppid": 1807,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/ecs/adapters/mcp.py /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/b2e2cc7c-36c4-4f17-8c1b-c44ffd3d7af9-continuity"
+  },
+  {
+   "pid": 1881,
+   "ppid": 1807,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --files-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/b2e2cc7c-36c4-4f17-8c1b-c44ffd3d7af9-assignments.questions.json"
+  },
+  {
+   "pid": 1883,
+   "ppid": 1807,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --onboarding-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/b2e2cc7c-36c4-4f17-8c1b-c44ffd3d7af9-onboarding.json"
+  },
+  {
+   "pid": 1884,
+   "ppid": 1807,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --questions-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/b2e2cc7c-36c4-4f17-8c1b-c44ffd3d7af9-assignments.questions.json"
+  },
+  {
+   "pid": 1885,
+   "ppid": 1807,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --status-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/b2e2cc7c-36c4-4f17-8c1b-c44ffd3d7af9-status.json"
+  },
+  {
+   "pid": 1886,
+   "ppid": 1807,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/mega-lander/app.py /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/b2e2cc7c-36c4-4f17-8c1b-c44ffd3d7af9-continuity."
+  },
+  {
+   "pid": 1950,
+   "ppid": 1103,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/scripts/provider-supervisor.py --reap-descendants --reap-grace=0 --reap-state=/Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-st"
+  },
+  {
+   "pid": 1952,
+   "ppid": 1950,
+   "command": "/Users/admin/.local/bin/claude --add-dir /Users/admin/testvm/walk-0653463caba2/home/Acme /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/target-worktrees/5c6f7297b8793517daee3ff23d2225f6b13a2855718039358739efff41f48935 /Users/admin/testvm/walk-06534"
+  },
+  {
+   "pid": 1972,
+   "ppid": 1952,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/ecs/adapters/mcp.py /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/d1cfa981-3b81-4129-a622-a47a48e8334d-work.json"
+  },
+  {
+   "pid": 1974,
+   "ppid": 1952,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --files-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/d1cfa981-3b81-4129-a622-a47a48e8334d-assignments.questions.json"
+  },
+  {
+   "pid": 1976,
+   "ppid": 1952,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --questions-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/d1cfa981-3b81-4129-a622-a47a48e8334d-assignments.questions.json"
+  },
+  {
+   "pid": 1981,
+   "ppid": 1952,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --claude-reset-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/d1cfa981-3b81-4129-a622-a47a48e8334d-work.json /Users/admin/testvm/walk-0653463caba2/home/Library/"
+  },
+  {
+   "pid": 1984,
+   "ppid": 1952,
+   "command": "/Users/admin/testvm/walk-0653463caba2/RichOS.app/Contents/MacOS/richos-tauri --status-mcp /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/d1cfa981-3b81-4129-a622-a47a48e8334d-status.json"
+  },
+  {
+   "pid": 1987,
+   "ppid": 1952,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/mega-lander/app.py /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/engine-state/scopes/d1cfa981-3b81-4129-a622-a47a48e8334d-work.json"
+  },
+  {
+   "pid": 2059,
+   "ppid": 1103,
+   "command": "/Users/admin/testvm/walk-0653463caba2/engine/runtime/bin/../python/bin/python3 -B /Users/admin/testvm/walk-0653463caba2/engine/scripts/lib/stall_watch.py --monitor --jsonl --config /Users/admin/testvm/walk-0653463caba2/home/Library/Application Support/com.richos.app/coordination/orchestration.config"
+  }
+ ]
+}

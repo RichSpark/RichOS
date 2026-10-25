@@ -80,6 +80,9 @@ with tempfile.TemporaryDirectory() as t:
           and any(r.get('reason') == 'linked sign-in' for r in out['files']), out['files'])
     check('the walk\'s own files are "harness"', cls.get('walk/launcher.log') == 'harness', cls)
     check('a path that also changed in the baseline window is "baseline"', cls.get('Library/Preferences/noise.plist') == 'baseline', cls)
+    check('every file row carries its size in bytes, a directory 0',
+          all(r.get('bytes') == 1 for r in out['files'] if r['kind'] == 'file')
+          and all(r.get('bytes') == 0 for r in out['files'] if r['kind'] != 'file'), out['files'])
     check('anything else is "other", reported and never dropped', cls.get('Library/Logs/DiagnosticReports/unrelated.ips') == 'other', cls)
     check('the control is found, and would have been flagged named',
           cls.get('Library/Application Support/richos-positive-control.txt') == 'control'

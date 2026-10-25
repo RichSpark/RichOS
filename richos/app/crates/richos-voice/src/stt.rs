@@ -451,6 +451,12 @@ fn choose_model(bin: &Path) -> crate::hardware::Resolution {
         Some(secs)
     });
 
+    // The probe is garbage once the walk is done (CEO §54 addendum 2): the one this walk
+    // rendered, one an earlier run left, and one left there while every speed was cached. Still
+    // under the measuring turn, a machine-wide lock, so no other walk is reading it.
+    std::fs::remove_file(probe_dir.join("probe.wav")).ok();
+    std::fs::remove_dir(&probe_dir).ok();
+
     // Said out loud on stderr as well as carried in provenance — the same channel the toolchain
     // warnings use, and the one a headless voice loop shares with whoever started it.
     if resolution.basis != Basis::TopRung {
@@ -1683,6 +1689,44 @@ mod launch_tests {
         assert!(second.status.success(), "second launch: {}", String::from_utf8_lossy(&second.stdout));
         let runs = machine.decodes().len();
         assert_eq!(runs, 1, "the second launch measured again ({} runs in all) instead of reusing the saved measurement", runs);
+    }
+
+    /// CEO §54 addendum 2: the probe utterance is garbage once a walk is done, whoever made it:
+    /// the one this measurement rendered, one an earlier run left (nightly 74 left 103,146 bytes),
+    /// and one left there when every speed is already cached and no measurement runs at all.
+    /// `say` here is a stand-in that writes its `-o` file and plays nothing.
+    #[test]
+    fn a_probe_is_removed_after_every_walk_rendered_left_or_cached() {
+        if std::env::var(ROLE).as_deref() == Ok("launch") {
+            return act_as_a_launch(1);
+        }
+        let name = "stt::launch_tests::a_probe_is_removed_after_every_walk_rendered_left_or_cached";
+        let probe = |m: &Machine| m.root.join("tmp/richos-voice-calibration/probe.wav");
+        let rendering = Machine::new("probe-rendered");
+        std::fs::remove_file(probe(&rendering)).unwrap();
+        let bin = rendering.root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("say"), "#!/bin/sh\n[ \"$1\" = -o ] && printf RIFF > \"$2\"\nexit 0\n").unwrap();
+        std::fs::set_permissions(bin.join("say"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let launch = rendering.launch(name, "launch", "0.1")
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display())).output().unwrap();
+        assert!(launch.status.success(), "launch: {}", String::from_utf8_lossy(&launch.stdout));
+        assert_eq!(rendering.decodes().len(), 1, "the measurement ran on the rendered probe");
+        assert!(!probe(&rendering).exists(), "the probe this measurement rendered was left behind");
+
+        let left = Machine::new("probe-left");
+        let launch = left.launch(name, "launch", "0.1").output().unwrap();
+        assert!(launch.status.success(), "launch: {}", String::from_utf8_lossy(&launch.stdout));
+        assert_eq!(left.decodes().len(), 1, "the measurement ran on the probe an earlier run left");
+        assert!(!probe(&left).exists(), "the probe an earlier run left survived the measurement");
+
+        // Every speed is cached now; an abandoned probe still goes.
+        std::fs::create_dir_all(probe(&left).parent().unwrap()).unwrap();
+        std::fs::write(probe(&left), vec![0u8; 103_146]).unwrap();
+        let launch = left.launch(name, "launch", "0.1").output().unwrap();
+        assert!(launch.status.success(), "launch: {}", String::from_utf8_lossy(&launch.stdout));
+        assert_eq!(left.decodes().len(), 1, "a cached speed was measured again");
+        assert!(!probe(&left).exists(), "an abandoned probe survived a launch whose speeds were all cached");
     }
 
     /// INVARIANT: a launch quit in the middle of a measurement does not cost the next launch the

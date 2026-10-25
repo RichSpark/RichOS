@@ -1,0 +1,34 @@
+{
+  "built_from": "7f2ca066227ac47e4da491181da4d9ee91e25d11",
+  "garbage": {
+    "mark": "/Users/admin/testvm/walk-0653463caba2/garbage-walk/mark",
+    "app_started": 1792908145.0,
+    "app_pid": 1103,
+    "uid": "501",
+    "roots": [
+      "/Users/admin/testvm/walk-0653463caba2/home",
+      "/private/tmp",
+      "/private/var/folders/9m/b94f0mqn0d327g6_m6p0x0br0000gn",
+      "/Users/admin/Library",
+      "/Users/Shared"
+    ],
+    "harness": [
+      "/Users/admin/testvm/walk-0653463caba2/garbage-walk",
+      "/Users/admin/testvm/walk-0653463caba2/home/Library/Keychains"
+    ]
+  },
+  "thread": "thr_0d17802979574235866a9ae42487a340",
+  "thread_title": "Onboarding",
+  "sent_ms": [
+    1792908213190.54,
+    1792908218762.921
+  ],
+  "job_settled_s": 1792908814.873941,
+  "job": {
+    "id": "7d6dd541-f73b-4bf5-88dd-8881f2124faf",
+    "state": "settled",
+    "title": "Please add a file named notes.md whose whole content is the line \"Notes for the walk test.\" to the Acme repository and commit it, and land it",
+    "work_session": "bd56ed10-3a3a-453a-bcbe-e1c85ea0b115"
+  },
+  "stu_session": "bd56ed10-3a3a-453a-bcbe-e1c85ea0b115"
+}
