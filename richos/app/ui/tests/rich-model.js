@@ -247,7 +247,15 @@ async function main() {
     await rowsShow(page, { rich: "opus", stu: "fable" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
     await page.click('#md-rich .seg-opt[data-v="opus"]');
-    await page.mouse.click(1100, 880); // below the panel, which now spans the stage
+    // Below the panel, which now spans the stage. Measured, not typed: with round 36's Your
+    // instructions and round 41's Terminal setup both in the middle column the panel ends at
+    // y=887 in this 900px window, so the old fixed y=880 landed inside it.
+    const below = await page.evaluate(() => {
+      const r = document.getElementById("set-menu").getBoundingClientRect();
+      return { y: Math.round((r.bottom + window.innerHeight) / 2), room: window.innerHeight - r.bottom };
+    });
+    assert(below.room >= 4, "no room below the Settings panel to click outside it: " + below.room + "px");
+    await page.mouse.click(1100, below.y);
     // The save is sent synchronously inside the close (`commitModelChoice`), and a toast only
     // follows a sent save, so once the popover is hidden the negatives below are settled.
     await page.waitForSelector("#set-menu", { state: "hidden" }).catch(() => {});
