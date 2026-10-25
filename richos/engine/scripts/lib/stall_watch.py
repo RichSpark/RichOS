@@ -547,7 +547,8 @@ def _due(src, reg, now, session_id):
                          d["name"], d["since"], d["detail"], ["why: " + why], ["next: " + d["command"]]))
     if len(due) > DUE_SHOWN:
         out.append(Stall(more_key(due), "DUE", "%d more" % (len(due) - DUE_SHOWN), now, "more due work", [],
-                         ["the complete list: workspaces.sh holds"]))
+                         [src.ws.due_list_pointer() if hasattr(src.ws, "due_list_pointer")
+                          else "the complete list: workspaces.sh holds"]))
     # One damaged record never hides the readable due work above: it is one compact problem.
     bad = src.ws.unreadable_line() if hasattr(src.ws, "unreadable_line") else ""
     return out, bad
@@ -1852,6 +1853,11 @@ def run_host_loop(src):
     return 0
 
 
+def _in_app():
+    """Launched by the app for one conversation (engine_profile.rs configure sets both)."""
+    return bool((os.environ.get("RICHOS_APP_ENTITY") or "").strip() and (os.environ.get("RICHOS_APP_THREAD") or "").strip())
+
+
 def alive_status(sid, engine_root, command="stall-watch.sh"):
     """(code, line): is `sid` watched by a live monitor that evaluated the engine's
     current source? 0 yes; 1 no, with why; 2 no session. The one reading --alive and the
@@ -1862,7 +1868,7 @@ def alive_status(sid, engine_root, command="stall-watch.sh"):
     if not sid:
         return 2, "stall-watch: no session here; nothing to check"
     names = [sid]
-    if (os.environ.get("RICHOS_APP_ENTITY") or "").strip() and (os.environ.get("RICHOS_APP_THREAD") or "").strip():
+    if _in_app():
         try:
             names += sorted(n for n in os.listdir(state_root()) if n != sid)
         except OSError:
@@ -1885,6 +1891,11 @@ def _alive_one(name, sid, engine_root, command):
     sd = os.path.join(state_root(), name)
     beat = _read_json(os.path.join(sd, "monitor.json"))
     if not lock_held(os.path.join(sd, "monitor.lock")):
+        if _in_app():
+            # The app owns its monitor (native.rs StallWatch::start, with Stu's lease); the
+            # lease's PATH carries no stall-watch.sh, so there is no command to give (CEO §138).
+            return 1, ("stall-watch: NOT WATCHED: nothing looks for stalls in this conversation; "
+                       "RichOS starts its watcher with Stu's session")
         return 1, ("stall-watch: NOT WATCHED: nothing looks for stalls in this session. Start as a background "
                    "command (Bash with run_in_background: true): %s --watch" % command)
     poll = float(beat.get("poll") or POLL_SECONDS)

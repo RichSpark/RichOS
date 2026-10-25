@@ -37,7 +37,9 @@ THE EVIDENCE is this turn's own tool calls: Write / Edit / MultiEdit /
 NotebookEdit targets, and Bash write targets (redirects, tee, sed -i, python
 writes) resolved against the command's own `cd` and shell variables; commits;
 engine record commands (escalation ledger, acknowledgement logs, workspace
-registry) with the entry ids on their command lines; ECS checkpoints. Each
+registry) with the entry ids on their command lines; ECS checkpoints; in the
+app, a team save by the path it answers and a job report that answers
+recorded: true, with its obligation id as the entry (2026-10-24). Each
 target is classified: the memory directory and ECS are PRIVATE; scratch and
 temp are nothing; a git work tree file is a REPOSITORY record; anything else
 durable is a FILE record.
@@ -237,6 +239,14 @@ ARM 2 — THE TURN THAT STOPS, stated precisely
     Agent FINISHED (status completed), AND the turn started nothing (no Agent
     call, no backgrounded tool call), AND nothing is owed to the CEO (no
     AskUserQuestion), AND the reply carries no valid `stop-declared:` line.
+
+    IN THE APP, Stu's own work tools answer the "started nothing" term too
+    (2026-10-24, nightly 73 and 74 walks, where both of his truthful replies
+    were refused): a `complete` that closed the selected obligation means
+    nothing of that obligation is pending, which answers for every completion
+    except one whose work receipt names another, still open job, and a `team save` of a new teammate
+    means the app resumes the job with a team_reloaded message. Either discharges the arm, read from the
+    tool's answer, never from the reply. See app_job_outcome().
 
     THE TERM THAT USED TO SAY "no hold or end-of-day in his own words" IS GONE
     (2026-09-20, CEO ruling §68). No hook reads his sentences to decide
@@ -658,10 +668,154 @@ def satisfied(who, arm, calls, inputs):
 # ARM 2 — THE TURN THAT STOPS — every term is guard-idle-land.py's, by import
 # --------------------------------------------------------------------------
 
+APP_COMPLETE = "mcp__richos_work__complete"
+APP_TEAM = "mcp__richos_work__team"
+TASK_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
+
+
+def finished_agents(idle, notices):
+    """[(provider agent id, title)] for this turn's Agent completions, both
+    read from the host's own notice (its <task-id> is the agent id the app
+    records on the teammate's work receipt). One entry per agent id: titles are
+    the caller's own descriptions, need not be unique, and are for display only
+    (review rv-20261025T001232Z-00aed5ab-1fe4)."""
+    out, seen = [], set()
+    for text in notices or []:
+        for part in text.split("<task-notification>")[1:]:
+            part = "<task-notification>" + part
+            titles, m = idle.agent_finishes([part]), TASK_ID_RE.search(part)
+            if titles and m and m.group(1) not in seen:
+                seen.add(m.group(1))
+                out.append((m.group(1), titles[0]))
+    return out
+
+
+def receipt_obligations(agent_ids):
+    """{agent id: obligation id} from the app's own work receipts, for the given
+    agents only. The app keeps this conversation's receipts in
+    <RICHOS_APP_STATE>/work-receipts/sha256(entity, thread), and its workspace
+    registry, which it sets as RICHOS_WORKSPACES_DIR, in
+    <RICHOS_APP_STATE>/workspaces/<the same hash> (mega-lander/app.py folder()
+    and read_scope()). One folder is listed and its receipts read until every
+    agent is found; nothing else is opened. {} outside the app or when the
+    folder cannot be read; an agent no receipt names is simply absent."""
+    state = (os.environ.get("RICHOS_APP_STATE") or "").strip()
+    registry = (os.environ.get("RICHOS_WORKSPACES_DIR") or "").strip()
+    if not agent_ids or not state or os.path.dirname(registry) != os.path.join(state, "workspaces"):
+        return {}
+    root = os.path.join(state, "work-receipts", os.path.basename(registry))
+    try:
+        names = sorted(n for n in os.listdir(root) if n.endswith(".json"))
+    except OSError:
+        return {}
+    found = {}
+    for name in names:
+        path = os.path.join(root, name)
+        try:
+            if os.path.islink(path) or os.path.getsize(path) > 1024 * 1024:
+                continue
+            with open(path, encoding="utf-8") as fh:
+                rec = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict) and rec.get("agent_id") in agent_ids:
+            found[rec["agent_id"]] = (rec.get("request") or {}).get("obligation_id")
+            if len(found) == len(agent_ids):
+                break
+    return found
+
+
+def app_job_outcome(idle, transcript, prompt_id, agents):
+    """What the app's own work tools answered this turn about Stu's job, as
+    (verdict, detail), or None. Read from the tools' answers, never the reply:
+      ('closed', ...)   `complete` answered obligation_closed: true, and no
+                        completion that arrived this turn is of a teammate
+                        whose work receipt names an obligation still open
+                        (receipt_obligations: the notice's agent id, the
+                        receipt's obligation). The app closes an obligation
+                        only when none of its own receipts is still preparing,
+                        running or unknown and every final worker of it is
+                        landed (mega-lander/app.py completion_evidence), so
+                        nothing of THAT obligation is pending. It says nothing
+                        about the lease, which goes on to its next job, or
+                        about any other obligation: a completion whose
+                        receipt names another job keeps the check, and the
+                        refusal names only those (second review
+                        rv-20261024T230343Z-5ff59ca2-e966: notes.md's reviewer
+                        and more.md's worker finished, only notes.md was
+                        closed, and "both are landed and closed" went through).
+                        A completion whose receipt cannot be read (no receipt
+                        names the agent, or the hook runs outside the app) is
+                        not guessed at: it does not keep the check, and the
+                        kept stop record (stated-actions.jsonl) lists it as an
+                        owner not read. That records the unknown; it does not
+                        settle it.
+      ('started', ...)  `team save` added a NEW teammate. The app registers
+                        him when this turn ends and then sends Stu the
+                        team_reloaded message, which starts his next turn
+                        (work_host.rs reload_team_after_turn), so the next
+                        step is already in motion.
+    A refused call counts for nothing, a replaced teammate gets no reload, and
+    a land (`integrate`) is not a close. Nightly 73 and 74 walks: both
+    truthful replies were refused without this."""
+    try:
+        offset = idle.turn_start_offset(transcript, prompt_id)
+        wanted, answers, started = {}, {}, False
+        with open(transcript, "rb") as fh:
+            fh.seek(offset)
+            for raw in fh:
+                try:
+                    rec = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                if rec.get("promptId") == prompt_id:
+                    started = True
+                if not started:
+                    continue
+                content = (rec.get("message") or {}).get("content")
+                if not isinstance(content, list):
+                    continue
+                for b in content:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "tool_use" and b.get("name") in (APP_COMPLETE, APP_TEAM):
+                        wanted[b.get("id")] = (b.get("name"), b.get("input") or {})
+                    elif b.get("type") == "tool_result" and b.get("tool_use_id") in wanted:
+                        answers[b["tool_use_id"]] = _app_answer(b)
+        closed = set()
+        for tid, answer in answers.items():
+            name, inp = wanted[tid]
+            if name == APP_COMPLETE and answer.get("obligation_closed") is True:
+                # The answer's id only: the app selects the carried obligation
+                # before it looks at the argument (mega-lander/app.py complete).
+                closed.add(answer.get("obligation_id"))
+        if closed:
+            owners = receipt_obligations({a for a, _t in agents})
+            open_ = list(dict.fromkeys(t for a, t in agents if a in owners and owners[a] not in closed))
+            unread = list(dict.fromkeys(t for a, t in agents if a not in owners))
+            if not open_:
+                return ("closed", "the app closed obligation %s this turn%s"
+                        % (", ".join(sorted(str(o) for o in closed if o)),
+                           "; owner not read for: %s" % ", ".join(unread) if unread else ""))
+    except (OSError, AttributeError):
+        return None
+    for tid, answer in answers.items():
+        name, inp = wanted[tid]
+        if (name == APP_TEAM and isinstance(inp, dict)
+                and inp.get("action") == "save" and answer.get("replaced") is False
+                and answer.get("registration_boundary") == "next_provider_connection"):
+            return ("started", "a new teammate is saved; the app reloads the team and resumes the job")
+    if closed:
+        return ("open", open_)
+    return None
+
+
 def stop_after_completion(idle, transcript, prompt_id, message):
     """None when ARM 2 has nothing to say, else a dict:
          finishes   titles of the agents whose completion arrived this turn
-         verdict    'started' | 'ceo-owed' | 'declared' | 'undeclared-stop'
+         verdict    'started' | 'ceo-owed' | 'closed' | 'declared' | 'undeclared-stop'
          detail     what discharged it, or the declaration, or the problem
     """
     if idle is None:
@@ -679,6 +833,11 @@ def stop_after_completion(idle, transcript, prompt_id, message):
         return {"finishes": finishes, "verdict": "started", "detail": "backgrounded tool call"}
     if "AskUserQuestion" in turn["tools"]:
         return {"finishes": finishes, "verdict": "ceo-owed", "detail": "AskUserQuestion"}
+    job = app_job_outcome(idle, transcript, prompt_id, finished_agents(idle, turn.get("notices")))
+    if job and job[0] == "open":
+        finishes = job[1]
+    elif job:
+        return {"finishes": finishes, "verdict": job[0], "detail": job[1]}
     # NO HOLD TERM (2026-09-20, CEO ruling §68). This used to call
     # idle.hold_signal(turn["said"]) -- two regexes over the CEO's own typed
     # messages -- and excuse the turn on a match. Both the predicate and the
@@ -1129,6 +1288,24 @@ def classify_target(path):
         d = parent
 
 
+APP_REPORT = "mcp__richos_work__report"
+
+
+def _app_answer(block):
+    """An app tool's JSON answer from its tool_result block, or {} when the
+    call was refused or the answer is not a JSON object."""
+    if not isinstance(block, dict) or block.get("is_error") is True:
+        return {}
+    content = block.get("content")
+    if isinstance(content, list):
+        content = "".join(x.get("text", "") for x in content if isinstance(x, dict))
+    try:
+        answer = json.loads(content)
+    except (TypeError, ValueError):
+        return {}
+    return answer if isinstance(answer, dict) else {}
+
+
 def turn_writes(tm, transcript, prompt_id, cwd):
     """What this turn wrote, from its own calls. None plus a reason when the
     turn cannot be read. turn-manifest.py no longer caps the transcript size
@@ -1139,7 +1316,7 @@ def turn_writes(tm, transcript, prompt_id, cwd):
     calls, results, _examined, err = tm.read_turn(transcript, prompt_id)
     if err:
         return None, err
-    ids = {tid for tid, name in calls if name in WRITE_TOOLS or name == "Bash"}
+    ids = {tid for tid, name in calls if name in WRITE_TOOLS or name in ("Bash", APP_REPORT)}
     inputs = {}
     if ids:
         try:
@@ -1177,6 +1354,19 @@ def turn_writes(tm, transcript, prompt_id, cwd):
             w["record_script"] = w["record_script"] or b["record_script"]
             w["record_tokens"].extend(b["record_tokens"])
             w["ecs"] = w["ecs"] or b["ecs"]
+        elif name in (APP_TEAM, APP_REPORT):
+            # The app's own record tools, counted only by their confirmed
+            # answer (nightly 74 walk on f7db19c03, Stu rows 141-169): a team
+            # save writes team/<name>.md and answers with that path; a job
+            # report answers recorded: true. A refused or unreadable answer
+            # counts for nothing.
+            answer = _app_answer(results.get(tid))
+            if name == APP_TEAM and isinstance(answer.get("saved"), str):
+                w["targets"].append(answer["saved"])
+            elif name == APP_REPORT and answer.get("recorded") is True:
+                w["record_script"] = True
+                if isinstance(inp.get("obligation_id"), str):
+                    w["record_tokens"].append(inp["obligation_id"])
         res = results.get(tid)
         if res is not None:
             traffic.append(tm.flatten(res.get("content")))
@@ -1696,6 +1886,9 @@ def main():
     stop = stop_after_completion(idle, transcript, prompt_id, message)
     if stop is not None:
         record["stop"] = {"finishes": stop["finishes"], "verdict": stop["verdict"]}
+        if stop["verdict"] == "closed":
+            # what discharged it, including any completion whose owner was not read
+            record["stop"]["detail"] = str(stop["detail"])[:500]
         if stop["verdict"] == "declared":
             d = stop["detail"]
             record["stop"]["declared"] = d.get("case")

@@ -182,13 +182,21 @@ if [ "$RUN_RC" -ne 0 ]; then
     bad "P01 an OPEN finding is announced" "the hook exited $RUN_RC; a Stop notice must never refuse a turn"
 elif [ -z "$MSG" ]; then
     bad "P01 an OPEN finding is announced" "nothing on the operator channel. stdout=[$RUN_OUT] stderr=[$(printf '%s' "$RUN_ERR" | head -c 200)]"
-elif printf '%s' "$MSG" | grep -q "PROTECTED REF MOVED AND NOTHING WAS PUT BACK" \
-  && printf '%s' "$MSG" | grep -q "$TARGET" \
-  && printf '%s' "$MSG" | grep -q "${SNAP:0:12}" \
-  && printf '%s' "$MSG" | grep -q "1 commit is off the branch"; then
-    ok "P01 a protected branch missing a tip it held is announced to the OPERATOR, naming repo, branch, tip and what is off it"
+elif printf '%s' "$MSG" | grep -q "main in $TARGET no longer contains ${SNAP:0:12}" \
+  && printf '%s' "$MSG" | grep -q "1 commit is off the branch" \
+  && printf '%s' "$MSG" | grep -q "min ago"; then
+    ok "P01 a protected branch missing a tip it held is announced to the OPERATOR, naming repo, branch, tip, what is off it and since when"
 else
     bad "P01 an OPEN finding is announced" "message does not name the finding: $MSG"
+fi
+# P01b — THE NOTICE CLAIMS ONLY WHAT IS ESTABLISHED (2026-10-24). Off the branch
+# is a fact; lost, "nothing was put back" and "nobody has acted" are not: main's
+# 0899f054bf3d moved a ledger to the private record on purpose, kept byte for
+# byte there, and this notice called it lost and ignored for 35 days.
+if [ -n "$MSG" ] && ! printf '%s' "$MSG" | grep -qiE "nothing was put back|nobody has acted|put the commits back|\blost\b"; then
+    ok "P01b the notice makes no loss or inaction claim that non-ancestry does not establish"
+else
+    bad "P01b the notice asserts loss or inaction" "$MSG"
 fi
 
 # ===========================================================================
