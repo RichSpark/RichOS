@@ -448,8 +448,10 @@ impl EngineProfile {
         user.login = login;
         // A read again that found a different environment renews the lease at its next boundary,
         // as a changed settings file does, so the team's next job has it (round 41 piece 1).
-        if let (Some(digest), Some(login)) = (user.digest.take(), user.login.as_ref()) {
-            user.digest = Some(crate::user_settings::with_login(digest, login));
+        // With no login environment the files' digest stays as it is: taking it first would
+        // drop it, and an edited file would then never renew the lease.
+        if let Some(login) = user.login.as_ref() {
+            user.digest = user.digest.take().map(|digest| crate::user_settings::with_login(digest, login));
         }
         // The Git the user's terminal runs, found on the login PATH (build plan item 8).
         if let Some(path) = user.login.as_ref().and_then(|login| login.get("PATH")) {
