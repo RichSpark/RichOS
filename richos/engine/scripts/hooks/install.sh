@@ -1041,13 +1041,15 @@ if [ "$LAUNCHD_TOUCHABLE" -eq 1 ]; then
         _script="$REPO_ROOT/scripts/$_job.sh"
         [ -x "$_script" ] || continue
         # Each --install leaves an unchanged, loaded job alone (it used to reload
-        # it on every install, which killed a cleanup in progress) and refuses
-        # to replace a changed job while it is running, exit 3, saying why.
+        # it on every install, which could kill a cleanup in progress). A job
+        # that changed while it is running is not touched: exit 3, and a waiter
+        # it started applies the change by itself when the run ends.
         _rc=0; _out="$("$_script" --install 2>&1)" || _rc=$?
         if [ "$_rc" -eq 0 ]; then
-            echo "✓ scheduled com.richos.$_job"
+            # The job's own first line, so "unchanged" vs "replaced" is visible.
+            printf '%s\n' "$_out" | sed -n '1p'
         elif [ "$_rc" -eq 3 ]; then
-            echo "NOTE: com.richos.$_job changed but was NOT replaced, because it is running now:" >&2
+            echo "NOTE: com.richos.$_job changed while it is running; the change is pending and applies by itself when the run ends:" >&2
             printf '%s\n' "$_out" | sed 's/^/  /' >&2
         else
             echo "NOTE: could not schedule com.richos.$_job. Nothing is watching" >&2
