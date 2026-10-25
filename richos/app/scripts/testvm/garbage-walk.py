@@ -235,9 +235,18 @@ class GarbageWalk(srw.StuReminderWalk):
         return {'pid': pid, 'asked_to_stop_work': asked, 'gone_after_s': round(time.monotonic() - began, 1)}
 
     def restart(self):
-        evidence = self.relaunch()
+        """The app opened again, and seen on screen. Not CommandWalk.relaunch: it presses the
+        conversation by the title first-run recorded ("Onboarding"), which the app renames after
+        the job (walk-0bf5672df92a: back on screen, its conversation retitled, the press found
+        nothing). A walk about leftovers needs the app running, not a conversation open."""
+        from relaunch import relaunch
+        launched = relaunch(self.vm)
+        home = self.after_relaunch()
+        if home.get('home_on_screen_after_s') is None:
+            raise StepFailed('the app (pid %s) was not on screen within %.0f s of its relaunch; see '
+                             'home-after-relaunch.png' % (launched.get('pid'), self.a.relaunch_within))
         time.sleep(self.a.settle)
-        return dict(evidence, settled_s=self.a.settle)
+        return dict(launched, **home, settled_s=self.a.settle)
 
     def restart_after_kill(self):
         return self.restart()
