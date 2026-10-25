@@ -189,21 +189,41 @@ def update_settled(line, sub):
         and not re.search(r'checking|looking|downloading|preparing', (sub or '') + ' ' + line, re.I)
 
 
+# How every headline the Updates row can show begins, so the row is found by its own words.
+# ui/updates.js `sentences`: "RichOS <version>" alone (not checked yet, checking, no update server,
+# unknown state) or with "is up to date." / "is available." / "is ready…" after it; "Downloading
+# RichOS …", "Checking and preparing …", "RichOS will go back to …", "Restarting into RichOS …".
+# A failure shows `failure.headline`, written in src-tauri/src/updates.rs (`Failure::classify`,
+# BUSY_HEADLINE, INSTALL_HEADLINE, the rollback arms) or ui/updates.js's own "The update did not
+# complete.". Each prefix is short enough to sit whole on the first line of a wrapped headline.
+UPDATE_HEADLINE = re.compile(
+    r'^(?:RichOS \d|Downloading RichOS |Checking and preparing |RichOS will go back to |Restarting into RichOS '
+    r'|This download was not|RichOS could not |The download did not|The update server |The update downloaded'
+    r'|This build of RichOS|The update did not|RichOS is busy with|There is no update to|RichOS has no earlier)')
+
+
 def update_row(text):
-    """(headline, subtitle) of Settings' Updates row, read from a frame's OCR TEXT: the two lines
-    after the "Updates" heading. The accessibility tree's `value` of #update-line came back empty
-    on the guest walk of 2026-10-21 (WebKit keeps a paragraph's words in its child text) while
-    the frame said "RichOS 1.2.2 is up to date.", so the row is read the way a person reads it.
+    """(headline, subtitle) of Settings' Updates row, read from a frame's OCR TEXT: the first line
+    after the "Updates" heading that starts the way one of the row's headlines does
+    (UPDATE_HEADLINE), and the line after it. The accessibility tree's `value` of #update-line came
+    back empty on the guest walk of 2026-10-21 (WebKit keeps a paragraph's words in its child text)
+    while the frame said "RichOS 1.2.2 is up to date.", so the row is read the way a person reads it.
+    Never the lines right after the heading: on nightly 75's walk (2026-10-25) OCR ordered the text
+    across Settings' columns, so "Keep the stored output" / "O For two weeks" from the first column
+    came next and the row itself was 29 lines further down.
     A headline wrapped onto more lines ("... is up to" / "date.", nightly 71's walk of 2026-10-23)
     is one headline: a line starting in lower case continues the sentence above it."""
     lines = [l.strip() for l in (text or '').splitlines() if l.strip()]
-    for i, line in enumerate(lines):
-        if line == 'Updates':
-            rest = lines[i + 1:]
-            while len(rest) > 1 and rest[1][0].islower():
-                rest[0:2] = [rest[0] + ' ' + rest[1]]
-            rest = rest[:2] + [None, None]
-            return rest[0], rest[1]
+    if 'Updates' not in lines:
+        return None, None
+    rest = lines[lines.index('Updates') + 1:]
+    for i, line in enumerate(rest):
+        if UPDATE_HEADLINE.match(line):
+            row = rest[i:]
+            while len(row) > 1 and row[1][0].islower():
+                row[0:2] = [row[0] + ' ' + row[1]]
+            row = row[:2] + [None]
+            return row[0], row[1]
     return None, None
 
 
