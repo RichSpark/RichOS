@@ -2,6 +2,19 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.2.3-nightly.20261025.75
+
+[GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.3-nightly.20261025.75)
+
+- Added Your instructions in Settings: write the rules Rich follows in every company or press Have Rich ask me and he asks you a few questions and writes them down; they apply from your next new conversation and rules he saves show as a Saved card under his reply
+- Added Terminal setup in Settings: see the tool folders and settings RichOS read from your Terminal and press Read it again after you change them; it shows what changed and your team uses it from its next job
+- Added a question the first time your team saves work in one of your folders and your Git setup has no name for you: type the name and email to put on your team's work or choose Use "RichOS" instead; only that save waits and you can change it later in Settings, Your name in Git
+- Fixed Bust a bug and Request a feature never sending: an approved bug report now reaches RichOS on GitHub and an idea is posted under Ideas, with nothing to set up on your Mac
+- Fixed messages sent close together, such as one typed and one spoken or sent from your phone, sometimes reaching Rich out of order
+- [technical] Fixed RichOS leaving temporary files on your Mac after use, a Quit or a crash; it now removes them when it starts, when your team's jobs are done and when you quit
+- [technical] Fixed Rich and Stu being told to run commands the app does not have when work was waiting on them; they are now told the app's own steps to resume, merge or continue it
+- [technical] Fixed Stu being turned back at the end of a turn and writing extra replies after he had correctly closed a finished job, added a teammate or filed a job report
+
 ## 1.2.3-nightly.20261024.74
 
 [GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.3-nightly.20261024.74)
