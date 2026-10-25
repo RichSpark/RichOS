@@ -1919,7 +1919,9 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
     if role == LeaseRole::Conversation {
         config["mcpServers"]["richos_onboarding"] = json!({
             "type": "stdio", "command": executable,
-            "args": ["--onboarding-mcp", onboarding_scope]
+            // The turn's question scope as well: it names the conversation and turn a save of
+            // the user's instructions is shown under (`your_instructions.rs`).
+            "args": ["--onboarding-mcp", onboarding_scope, crate::question_tools::path(assignments_scope)]
         });
     }
     if role == LeaseRole::Conversation {

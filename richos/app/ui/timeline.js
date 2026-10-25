@@ -793,7 +793,8 @@
     if (!item.turnId) return;
     // A file Rich or Stu attached (`rich_files_host.rs`) is appended the same way a question
     // is, and a background job's file carries its job as `turnId` just as its question does.
-    if (item.kind !== "question" && item.kind !== "rich_file") {
+    // So is the "Your instructions · Saved" card (`your_instructions.rs`, round 36 screen 1).
+    if (item.kind !== "question" && item.kind !== "rich_file" && item.kind !== "instructions_saved") {
       turnRecord(model, item.turnId);
       return;
     }
@@ -1609,6 +1610,9 @@
           // own slot, like `user`, because they are drawn UNDER his words whenever in the
           // turn the tool was called — never between two runs of his prose.
           files: items.filter((i) => i.kind === "rich_file"),
+          // Rich's save of the user's instructions (round 36 screen 1): the "Your instructions ·
+          // Saved" card, drawn under his words like the files.
+          instructions: items.filter((i) => i.kind === "instructions_saved"),
           // The turn died to the model API (richos-core `upstream.rs`, open-items row
           // 3.30). Its own slot, like `user`, because it is drawn INSIDE the failure card
           // rather than in the stream — the card is where a reader already looks when a
@@ -1627,6 +1631,7 @@
               RENDERED_STREAM_KINDS.indexOf(i.kind) < 0 &&
               i.kind !== "user_message" &&
               i.kind !== "rich_file" &&
+              i.kind !== "instructions_saved" &&
               i.kind !== "work_duration" &&
               i.kind !== "upstream_outage" &&
               i.kind !== "turn_interruption"
@@ -2778,8 +2783,16 @@
   /// draws them. A turn with no words of his (a file Stu attached for a job) gets them in the
   /// lane on their own.
   function placeFiles(lane, turn, opts) {
-    if (!turn.files || !turn.files.length || !window.RichFiles) return;
-    const list = window.RichFiles.render(turn.files, opts);
+    const nodes = [];
+    if (turn.files && turn.files.length && window.RichFiles) nodes.push(window.RichFiles.render(turn.files, opts));
+    // The "Your instructions · Saved" card sits in the same place (round 36 screen 1).
+    if (turn.instructions && window.RichYourInstructions) {
+      for (const item of turn.instructions) nodes.push(window.RichYourInstructions.card(item));
+    }
+    for (const node of nodes) placeUnderWords(lane, node);
+  }
+
+  function placeUnderWords(lane, list) {
     let last = null;
     for (const child of lane.children) if (child.classList.contains("tl-rich")) last = child;
     if (!last) {
@@ -3230,6 +3243,8 @@
     // The files Rich attached are drawn from their own slot, not the stream, so each needs its
     // own term: a file attached after the turn is on screen must replace the cached node.
     for (const item of turn.files || []) parts.push("rf" + tokenOf(item));
+    // So does a "Your instructions · Saved" card that arrives after the turn is on screen.
+    for (const item of turn.instructions || []) parts.push("yi" + tokenOf(item));
     parts.push(opts.machineryRaw ? "m1" : "m0");
     // The Oxford comma setting changes how Claude's words are drawn without any item changing.
     parts.push(window.RichOxford && window.RichOxford.keeping() ? "k1" : "k0");

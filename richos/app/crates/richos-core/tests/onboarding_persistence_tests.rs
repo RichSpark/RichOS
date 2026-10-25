@@ -356,7 +356,8 @@ fn mcp_stdio_handshake_save_and_errors_share_the_real_persistence_path() {
     assert_eq!(out.len(), 6);
     assert_eq!(out[0]["error"]["code"], -32002);
     assert_eq!(out[1]["result"]["protocolVersion"], "2025-03-26");
-    assert_eq!(out[2]["result"]["tools"].as_array().unwrap().len(), 2);
+    // The company notes' two tools, and the user's instructions (`your_instructions.rs`).
+    assert_eq!(out[2]["result"]["tools"].as_array().unwrap().len(), 3);
     assert_eq!(out[3]["result"]["isError"], false);
     assert_eq!(out[4]["error"]["code"], -32601);
     assert_eq!(out[5]["result"]["isError"], true);
