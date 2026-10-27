@@ -3,5 +3,10 @@
     "tag": "v1.2.0-nightly.20261018.65",
     "decided_on": "2026-10-19",
     "words": "OK, I'm definitely seeing a few issues in the nightly 65 that need fixing, but overall, the first impression is: usable. So, go ahead and promote this nightly to v1.2.0 stable."
+  },
+  {
+    "tag": "v1.2.4-nightly.20261027.77",
+    "decided_on": "2026-10-27",
+    "words": "yes"
   }
 ]
