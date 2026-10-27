@@ -108,5 +108,16 @@
     "previous_tag": "v1.2.3-nightly.20261027.76",
     "previous_source": "28891a192a85034fa57937a4ba25d43a1fbc4039",
     "entry": "- Fixed the new GitHub address RichOS moves to: it is github.com/RichSpark/RichOS, not github.com/RichCore/RichOS as the previous nightly said, so updates, bug reports and ideas, including from RichDoctor, keep working through the move with nothing for you to do"
+  },
+  "v1.2.4": {
+    "schema": 1,
+    "tag": "v1.2.4",
+    "version": "1.2.4",
+    "channel": "stable",
+    "source_commit": "d9435c1dc96b91281dcfcd4de33c16abfe836540",
+    "build_commit": "dd52110f69e4306295b8e882476945ba1c3f0a03",
+    "previous_tag": "v1.2.3",
+    "previous_source": "28891a192a85034fa57937a4ba25d43a1fbc4039",
+    "entry": "- Fixed the new GitHub address RichOS moves to: it is github.com/RichSpark/RichOS, not github.com/RichCore/RichOS as version 1.2.3 said, so updates, bug reports and ideas, including from RichDoctor, keep working through the move with nothing for you to do"
   }
 }

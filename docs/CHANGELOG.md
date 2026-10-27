@@ -2,6 +2,12 @@
 
 What changed in each stable version of RichOS, newest first; nightly builds are in the [nightly changelog](CHANGELOG-NIGHTLY.md).
 
+## 1.2.4
+
+[GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.4)
+
+- Fixed the new GitHub address RichOS moves to: it is github.com/RichSpark/RichOS, not github.com/RichCore/RichOS as version 1.2.3 said, so updates, bug reports and ideas, including from RichDoctor, keep working through the move with nothing for you to do
+
 ## 1.2.3
 
 [GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.3)
