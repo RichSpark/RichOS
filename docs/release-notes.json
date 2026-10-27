@@ -75,5 +75,16 @@
     "previous_tag": "v1.2.3-nightly.20261024.74",
     "previous_source": "95b10c215ab41cb358979e536cb38a947c87293f",
     "entry": "- Added Your instructions in Settings: write the rules Rich follows in every company or press Have Rich ask me and he asks you a few questions and writes them down; they apply from your next new conversation and rules he saves show as a Saved card under his reply\n- Added Terminal setup in Settings: see the tool folders and settings RichOS read from your Terminal and press Read it again after you change them; it shows what changed and your team uses it from its next job\n- Added a question the first time your team saves work in one of your folders and your Git setup has no name for you: type the name and email to put on your team's work or choose Use \"RichOS\" instead; only that save waits and you can change it later in Settings, Your name in Git\n- Fixed Bust a bug and Request a feature never sending: an approved bug report now reaches RichOS on GitHub and an idea is posted under Ideas, with nothing to set up on your Mac\n- Fixed messages sent close together, such as one typed and one spoken or sent from your phone, sometimes reaching Rich out of order\n- [technical] Fixed RichOS leaving temporary files on your Mac after use, a Quit or a crash; it now removes them when it starts, when your team's jobs are done and when you quit\n- [technical] Fixed Rich and Stu being told to run commands the app does not have when work was waiting on them; they are now told the app's own steps to resume, merge or continue it\n- [technical] Fixed Stu being turned back at the end of a turn and writing extra replies after he had correctly closed a finished job, added a teammate or filed a job report"
+  },
+  "v1.2.3-nightly.20261027.76": {
+    "schema": 1,
+    "tag": "v1.2.3-nightly.20261027.76",
+    "version": "1.2.3-nightly.20261027.76",
+    "channel": "nightly",
+    "source_commit": "28891a192a85034fa57937a4ba25d43a1fbc4039",
+    "build_commit": "d0a7c07d698e35b6ee5040b99c9f9dbe4e4827e2",
+    "previous_tag": "v1.2.3-nightly.20261025.75",
+    "previous_source": "26febcf812bb5c94f4121834c4bf4fd695609afa",
+    "entry": "- Changed RichOS to keep finding its updates and sending your bug reports and ideas, including from RichDoctor, when it moves to its new GitHub address, github.com/RichCore/RichOS; there is nothing for you to do"
   }
 }
