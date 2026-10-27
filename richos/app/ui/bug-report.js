@@ -1353,7 +1353,7 @@ window.RichBug = (function () {
     richSays(f, [(again && (WAITING_AGAIN[d.reason] || "It still didn't go out. It stays saved here and I'll keep trying.")) || first]);
   }
 
-  /// THE ADDRESS AS RICH SAYS IT: the link the relay answered with, without `https://`. A report
+  /// THE ADDRESS AS RICH SAYS IT: the link the relay answered with, without its scheme. A report
   /// sent before the GitHub move names the old repository and one sent after names the new one
   /// (CEO, 2026-10-27), so the words always match the page the link opens.
   function shownAddress(url) {
