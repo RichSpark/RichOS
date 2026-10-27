@@ -4,7 +4,7 @@
 // App private key is a Worker secret only. Nothing here deploys, and no token reaches argv,
 // output or an error message.
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 
 export const COMPATIBILITY_DATE = '2026-09-21';
 export const MODULES = ['report-worker.mjs', 'report/checks.mjs', 'report/images.mjs', 'report/store.mjs', 'report/github.mjs', 'report/access.mjs'];
@@ -12,6 +12,10 @@ export const MODULES = ['report-worker.mjs', 'report/checks.mjs', 'report/images
 export const SCHEDULE = '17 * * * *';
 // The one production identity (PRD §7). A test profile may use none of these.
 export const PRODUCTION = { worker: 'richos-report', hostname: 'report.richos.ceo', repository: 'WebDevBooster/richos' };
+// THE GITHUB MOVE (CEO, 2026-10-27; richos-hq docs/operations/2026-10-27-github-richcore-move.md): the
+// production repository's address after it moves into the RichCore organization. A production
+// profile names exactly PRODUCTION.repository or this, and `move` is the one switch between them.
+export const PRODUCTION_MOVED = 'RichCore/RichOS';
 // Workers rate-limit namespaces are account-wide; Connect uses 18443.
 const LIMITS = { production: ['18501', '18502', '18503'], test: ['18511', '18512', '18513'] };
 
@@ -34,9 +38,12 @@ export function checkProfile(profile) {
   if (!!p.accessTeamDomain !== !!p.accessAud || (p.accessTeamDomain && (!/^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/.test(p.accessTeamDomain) || !/^[a-f0-9]{64}$/.test(p.accessAud))))
     throw Error('Invalid Cloudflare Access team domain or audience');
   const production = Object.entries({ ...PRODUCTION, bucket: 'richos-report' });
-  if (p.stage === 'production' && production.some(([k, v]) => p[k] !== v)) throw Error('A production profile names exactly the production Worker, hostname and repository');
-  // A test relay can never reach the production repository, name or Worker.
-  if (p.stage === 'test' && production.some(([k, v]) => p[k].toLowerCase() === v.toLowerCase())) throw Error('A test profile may not use the production Worker, hostname or repository');
+  const repositories = [PRODUCTION.repository, PRODUCTION_MOVED];
+  if (p.stage === 'production' && (production.some(([k, v]) => k !== 'repository' && p[k] !== v) || !repositories.includes(p.repository)))
+    throw Error('A production profile names exactly the production Worker, hostname and repository');
+  // A test relay can never reach the production repository (at either address), name or Worker.
+  if (p.stage === 'test' && ([...production, ['repository', PRODUCTION_MOVED]].some(([k, v]) => p[k].toLowerCase() === v.toLowerCase())))
+    throw Error('A test profile may not use the production Worker, hostname or repository');
   return p;
 }
 
@@ -269,6 +276,21 @@ export async function deploy(profile, { token, appKey, fetch: fetchImpl = fetch 
     modules: artifact.modules.map(m => ({ name: m.name, sha256: m.sha256 })), bindings, health };
 }
 
+// THE GITHUB MOVE'S ONE SWITCH: point the relay at the repository's new address. It reads the
+// App's installation on `repository` from GitHub with the App's own key (so the App must already
+// be installed there, on that one repository, with Issues and Discussions write only), writes the
+// new repository, installation ID and bot login into the profile, then deploys. The profile is
+// saved before the deploy, so a deploy that fails part way is finished by running the same
+// command again (or `deploy`). A production profile can only name the old or the new address.
+export async function move(profile, repository, { token, appKey, fetch: fetchImpl = fetch, save } = {}) {
+  const from = checkProfile(profile);
+  const identity = await appIdentity(String(from.appId), repository, appKey, { fetch: fetchImpl });
+  const next = checkProfile({ ...from, repository: identity.repository, installationId: identity.installationId, botLogin: identity.botLogin });
+  await save(next);
+  const deployed = await deploy(next, { token, appKey, fetch: fetchImpl });
+  return { from: from.repository, to: next.repository, installationId: next.installationId, botLogin: next.botLogin, deployed };
+}
+
 export async function command(action, file, rest = []) {
   if (action === 'artifact') {
     if (!file) throw Error('Provide the private relay profile JSON file');
@@ -286,6 +308,12 @@ export async function command(action, file, rest = []) {
   if (action === 'deploy') {
     return deploy(JSON.parse(readFileSync(process.env.RICHOS_REPORT_PROFILE || '', 'utf8')),
       { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE), appKey: appKey() });
+  }
+  if (action === 'move') {
+    const path = process.env.RICHOS_REPORT_PROFILE || '';
+    if (!/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(file || '')) throw Error('Expected: move <owner/repository>');
+    return move(JSON.parse(readFileSync(path, 'utf8')), file, { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE), appKey: appKey(),
+      save: next => writeFileSync(path, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 }) });
   }
   const profile = JSON.parse(readFileSync(process.env.RICHOS_REPORT_PROFILE || '', 'utf8'));
   return operate(action, profile, [file, ...rest].filter(v => v !== undefined), { token: readToken(process.env.RICHOS_REPORT_TOKEN_FILE) });

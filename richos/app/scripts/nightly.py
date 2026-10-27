@@ -50,6 +50,17 @@ ENDPOINT = f"https://github.com/{REPO}/releases/download/{CHANNEL_TAG}/latest.js
 # disagree, rather than letting a build compile in a URL nobody publishes to.
 STABLE_ENDPOINT = f"https://github.com/{REPO}/releases/latest/download/latest.json"
 CHANNEL_ENDPOINTS = {"nightly": ENDPOINT, "stable": STABLE_ENDPOINT}
+# THE GITHUB MOVE (CEO, 2026-10-27; richos-hq docs/operations/2026-10-27-github-richcore-move.md):
+# the repository moves from `WebDevBooster/richos` to `RichCore/RichOS`. `REPO` above is where a
+# release is PUBLISHED, and it changes to the new address after the move. What a build COMPILES
+# IN is both addresses of its channel, the new one first: `src-tauri/src/updates.rs` asks them
+# in that order, so an installed copy finds its updates before, during and after the move.
+HOME_REPO = "RichCore/RichOS"
+FORMER_REPO = "WebDevBooster/richos"
+COMPILED_ENDPOINTS = {
+    "nightly": [f"https://github.com/{r}/releases/download/{CHANNEL_TAG}/latest.json" for r in (HOME_REPO, FORMER_REPO)],
+    "stable": [f"https://github.com/{r}/releases/latest/download/latest.json" for r in (HOME_REPO, FORMER_REPO)],
+}
 RULESET = "main-only"
 # Exactly one branch may be exempt from the branch ruleset, and it is `main`.
 ALLOWED_RULESET_EXCLUSIONS = ["refs/heads/main"]
@@ -288,17 +299,22 @@ def release_files(info, manifest, lock, config_text):
     if "version" in config:
         raise ValueError("tauri.conf.json must inherit the Cargo version")
     endpoint = CHANNEL_ENDPOINTS[channel]
-    # THE CHECKED-IN CONFIG IS STABLE'S CONFIG, and `make-release.sh:187-192` refuses a
-    # build whose compiled endpoint is not the one its version publishes to. Asserting it
-    # here means a change to tauri.conf.json is caught by the smoke in milliseconds rather
-    # than by a stable release forty minutes in.
-    configured = config["plugins"]["updater"]["endpoints"]
-    if channel == "stable" and configured != [endpoint]:
+    compiled = COMPILED_ENDPOINTS[channel]
+    if endpoint not in compiled:
         raise ValueError(
-            f"tauri.conf.json's updater endpoint is\n    {configured}\n  and a stable "
-            f"release publishes its manifest to\n    {endpoint}\n  One of the two is "
+            f"a {channel} release publishes its manifest to\n    {endpoint}\n  and compiles in "
+            f"only\n    {compiled}\n  so an installed copy would never fetch it.")
+    # THE CHECKED-IN CONFIG IS STABLE'S CONFIG, and `make-release.sh` refuses a build whose
+    # compiled endpoints do not include the one its version publishes to. Asserting it here
+    # means a change to tauri.conf.json is caught by the smoke in milliseconds rather than by
+    # a stable release forty minutes in.
+    configured = config["plugins"]["updater"]["endpoints"]
+    if channel == "stable" and configured != compiled:
+        raise ValueError(
+            f"tauri.conf.json's updater endpoints are\n    {configured}\n  and a stable "
+            f"release compiles in\n    {compiled}\n  One of the two is "
             "wrong, and an installed copy would fetch the first.")
-    config["plugins"]["updater"]["endpoints"] = [endpoint]
+    config["plugins"]["updater"]["endpoints"] = compiled
     return {str(MANIFEST): manifest, str(LOCK): lock, str(CONFIG): json_text(config),
             str(PROVENANCE): json_text(info)}
 
@@ -1704,22 +1720,22 @@ def _release_smoke(work):
     if f'version = "{third}"' not in nightly_files[str(LOCK)]:
         raise ValueError("release-smoke: the nightly version did not reach Cargo.lock")
     compiled = json.loads(nightly_files[str(CONFIG)])["plugins"]["updater"]["endpoints"]
-    if compiled != [ENDPOINT]:
+    if compiled != COMPILED_ENDPOINTS["nightly"] or ENDPOINT not in compiled:
         raise ValueError(f"release-smoke: a nightly would compile in {compiled}")
 
     stable_files = release_files(stable_info, manifest_text, lock_text, config_text)
     if stable_files[str(MANIFEST)] != manifest_text or stable_files[str(LOCK)] != lock_text:
         raise ValueError("release-smoke: a stable release must carry the tree's own version")
     compiled = json.loads(stable_files[str(CONFIG)])["plugins"]["updater"]["endpoints"]
-    if compiled != [STABLE_ENDPOINT]:
+    if compiled != COMPILED_ENDPOINTS["stable"] or STABLE_ENDPOINT not in compiled:
         raise ValueError(f"release-smoke: a stable release would compile in {compiled}")
     # The three spellings of the stable endpoint agree: this constant, the file checked
     # into the tree, and `make-release.sh:156`. `release_files` refuses on the second;
     # this asserts the first has not drifted from the third.
-    if json.loads(config_text)["plugins"]["updater"]["endpoints"] != [STABLE_ENDPOINT]:
-        raise ValueError("release-smoke: tauri.conf.json's endpoint is not STABLE_ENDPOINT")
-    checked.append(f"compiled endpoints: nightly -> {ENDPOINT}")
-    checked.append(f"compiled endpoints: stable  -> {STABLE_ENDPOINT}")
+    if json.loads(config_text)["plugins"]["updater"]["endpoints"] != COMPILED_ENDPOINTS["stable"]:
+        raise ValueError("release-smoke: tauri.conf.json's endpoints are not the stable channel's")
+    checked.append(f"compiled endpoints: nightly -> {' then '.join(COMPILED_ENDPOINTS['nightly'])}")
+    checked.append(f"compiled endpoints: stable  -> {' then '.join(COMPILED_ENDPOINTS['stable'])}")
 
     refuses("a channel nobody defined",
             lambda: release_files({**nightly_info, "channel": "preview"},

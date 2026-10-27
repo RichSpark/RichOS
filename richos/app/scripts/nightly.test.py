@@ -264,7 +264,7 @@ class GitTests(GitFixture):
         self.assertEqual(lock[0]["version"], info["version"])
         self.assertEqual(lock[1]["version"], "1.0.0")
         conf = json.loads((self.repo / n.CONFIG).read_text())
-        self.assertEqual(conf["plugins"]["updater"]["endpoints"], [n.ENDPOINT])
+        self.assertEqual(conf["plugins"]["updater"]["endpoints"], n.COMPILED_ENDPOINTS["nightly"])
         self.assertEqual(json.loads((self.repo / n.PROVENANCE).read_text())["source_commit"], self.source)
         self.assertEqual(n.remote_tags(), set())
         self.assertEqual(n.candidate_refs(), {1: info["build_commit"]})
@@ -1067,7 +1067,7 @@ class ChangelogTests(GitFixture):
 
     def test_stable_publishes_approved_notes_and_completed_publish_is_retryable(self):
         (self.repo / n.CONFIG).write_text(n.json_text(
-            {"plugins": {"updater": {"endpoints": [n.STABLE_ENDPOINT]}}}))
+            {"plugins": {"updater": {"endpoints": n.COMPILED_ENDPOINTS["stable"]}}}))
         n.git("add", str(n.CONFIG))
         n.git("commit", "-qm", "stable-capable fixture endpoint")
         n.git("push", "-q", "origin", "main")
@@ -1396,7 +1396,7 @@ class StableChannelTests(GitFixture):
         # can assert it gets replaced. A STABLE release keeps the checked-in one, so for
         # these cases the fixture carries what the real tree carries.
         (self.repo / n.CONFIG).write_text(n.json_text(
-            {"plugins": {"updater": {"endpoints": [n.STABLE_ENDPOINT]}}}))
+            {"plugins": {"updater": {"endpoints": n.COMPILED_ENDPOINTS["stable"]}}}))
         n.git("add", ".")
         n.git("commit", "-qm", "stable endpoint")
         n.git("push", "-q", "origin", "main")
@@ -1435,7 +1435,7 @@ class StableChannelTests(GitFixture):
                                 (self.repo / n.LOCK).read_text(),
                                 (self.repo / n.CONFIG).read_text())
         compiled = json.loads(files[str(n.CONFIG)])["plugins"]["updater"]["endpoints"]
-        self.assertEqual(compiled, [n.STABLE_ENDPOINT])
+        self.assertEqual(compiled, n.COMPILED_ENDPOINTS["stable"])
         self.assertNotIn("nightly", compiled[0])
         self.assertIn('version = "5.1.0"\n', files[str(n.MANIFEST)])
         self.assertNotIn("-nightly.", files[str(n.MANIFEST)])
@@ -1890,7 +1890,7 @@ else:
         root = self.scripts.parents[2]
         (root / n.MANIFEST).write_text('[package]\nversion = "5.1.0"\n')
         self.config.write_text(n.json_text(
-            {'plugins': {'updater': {'endpoints': [n.STABLE_ENDPOINT]}}}))
+            {"plugins": {"updater": {"endpoints": n.COMPILED_ENDPOINTS["stable"]}}}))
         url = self.candidate_engine_pin()
         self.assertNotIn('/v5.1.0/', url)
 

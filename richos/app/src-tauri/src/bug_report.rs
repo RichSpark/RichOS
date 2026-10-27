@@ -646,13 +646,21 @@ pub fn bug_report_voice(bugs: State<Arc<BugReports>>, on: bool) -> bool {
     on
 }
 
-/// Open issue `number` of RichOS's repository in the browser, or, for a posted idea
-/// (`post: "idea"`), discussion `number`. A number, never an address.
+/// Open a sent report's issue in the browser, or, for a posted idea (`post: "idea"`), its
+/// discussion: `url` is the link the relay answered with, so a report sent before the GitHub move
+/// opens on the old address and one sent after on the new one. Only a post of that kind on the
+/// configured repository is opened (`bug::page_to_open`), never another address.
 #[richos_command::command]
-pub fn bug_report_open_issue(number: u64, post: Option<bug::Post>) -> Result<(), String> {
-    let (page, what) = match post.unwrap_or_default() {
-        bug::Post::Bug => (bug::issue_page(number), "the issue"),
-        bug::Post::Idea => (bug::discussion_page(number), "your idea"),
+pub fn bug_report_open_issue(url: String, post: Option<bug::Post>) -> Result<(), String> {
+    let post = post.unwrap_or_default();
+    let what = match post {
+        bug::Post::Bug => "the issue",
+        bug::Post::Idea => "your idea",
+    };
+    let repository = Destination::from_env(|k| std::env::var(k).ok()).map(|d| d.repository).unwrap_or_else(|_| delivery::REPOSITORY.to_string());
+    let Some(page) = bug::page_to_open(&url, post, &repository) else {
+        eprintln!("[richos] bug report: refusing to open a link that is not a post of {repository}: {url}");
+        return Err(format!("This Mac wouldn't open {what}. It's at {}.", url.trim_start_matches("https://")));
     };
     let status = std::process::Command::new("/usr/bin/open").arg(&page).status().map_err(|e| format!("this Mac would not open it: {e}"))?;
     if status.success() {

@@ -325,9 +325,10 @@ async function main() {
     for (const p of PRIVATE) assert(!words.includes(p), `"${p}" was sent: ${words}`);
     // Word for word what the card showed (the card's text is the title and sections in order).
     assertEqual(words.replace(/\s+/g, " ").trim(), shown.replace(/\s+/g, " ").trim(), "what was sent is not what was shown");
-    // The link opens the issue by its number, never by an address the page passes.
+    // The link opens the page the relay answered with; the shell opens it only when it is an
+    // issue of RichOS's repository (`bug::page_to_open`).
     await page.click(".bug-sentrow .bug-link");
-    assertEqual((await calls(page, "bug_report_open_issue"))[0].number, 412, "Open issue");
+    assertEqual((await calls(page, "bug_report_open_issue"))[0].url, "https://github.com/WebDevBooster/richos/issues/412", "Open issue");
     assertEqual(await page.getAttribute("#bugdock-input", "placeholder"), "Talk to Rich…", "the composer still belongs to the report");
     await shot(page, "sent-dark");
     await page.close();
@@ -2073,9 +2074,33 @@ async function main() {
     assert(!NEVER_AN_ISSUE.test(after), "a posted idea says issue or bug: " + after);
     await page.click(".bugcard .bug-link");
     const opened = await calls(page, "bug_report_open_issue");
-    assert(opened.length === 1 && opened[0].post === "idea" && opened[0].number === 413, "the link does not open the discussion: " + JSON.stringify(opened));
+    assert(opened.length === 1 && opened[0].post === "idea" && opened[0].url === "https://github.com/WebDevBooster/richos/discussions/413", "the link does not open the discussion: " + JSON.stringify(opened));
     await page.close();
     return said;
+  });
+
+  // THE GITHUB MOVE (CEO, 2026-10-27): once the relay files on `RichCore/RichOS`, Rich names that
+  // address and the card opens it; nothing in the window spells the repository itself.
+  await run.check("after the GitHub move, a report and an idea name and open RichCore/RichOS", async () => {
+    const page = await open("light", { bugRepository: "RichCore/RichOS" });
+    await bustABug(page);
+    await answer(page, ANSWER);
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-sent .bug-pill:has-text('Sent · #412')");
+    assert((await lastSaid(page)).includes("github.com/RichCore/RichOS/issues/412"), await lastSaid(page));
+    await page.click(".bug-sentrow .bug-link");
+    assertEqual((await calls(page, "bug_report_open_issue"))[0].url, "https://github.com/RichCore/RichOS/issues/412", "Open issue");
+    await page.close();
+    const idea = await open("light", { bugRepository: "RichCore/RichOS" });
+    await requestAFeature(idea);
+    await answerIdea(idea);
+    await idea.click("#bug-send");
+    await idea.waitForSelector(".bugcard.is-sent .bug-pill:has-text('Posted · in Ideas')");
+    assert((await lastSaid(idea)).endsWith("\ngithub.com/RichCore/RichOS/discussions/413"), await lastSaid(idea));
+    await idea.click(".bugcard .bug-link");
+    assertEqual((await calls(idea, "bug_report_open_issue"))[0].url, "https://github.com/RichCore/RichOS/discussions/413", "Open it");
+    await idea.close();
+    return "github.com/RichCore/RichOS/issues/412 and /discussions/413";
   });
 
   await run.check("an idea goes out from the user's own GitHub account when RichOS has one, and says so", async () => {

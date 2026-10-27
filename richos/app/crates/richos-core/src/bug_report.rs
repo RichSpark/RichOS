@@ -62,9 +62,11 @@ use std::path::{Path, PathBuf};
 use unicode_normalization::char::canonical_combining_class;
 use unicode_normalization::UnicodeNormalization;
 
-/// Where every report is filed: `github.com/WebDevBooster/richos` (round 21 "Premises checked",
-/// `git remote -v` in richos).
-pub const REPOSITORY: &str = "WebDevBooster/richos";
+/// RichOS's repository: `github.com/RichCore/RichOS` from the GitHub move on (CEO, 2026-10-27),
+/// `github.com/WebDevBooster/richos` before it ([`crate::github_home`]). The relay files reports and
+/// ideas wherever it is switched to, and the card shows the link the relay answered with, so a
+/// report sent before the move keeps its own link ([`page_to_open`]).
+pub const REPOSITORY: &str = crate::github_home::HOME;
 
 // ---------------------------------------------------------------------------------------
 // TWO KINDS OF POST: A BUG REPORT, AND A FEATURE IDEA
@@ -1905,6 +1907,19 @@ pub fn issue_page(number: u64) -> String {
 /// [`issue_page`] is, so the card's link can only ever open a discussion of this repository.
 pub fn discussion_page(number: u64) -> String {
     format!("https://github.com/{REPOSITORY}/discussions/{number}")
+}
+
+/// **THE PAGE A SENT CARD OPENS**: `url`, the link the relay answered with, when it is exactly a
+/// page of `post`'s kind (an issue, or an idea's discussion) on the configured repository
+/// (`configured`; RichOS's repository under either of its addresses, [`crate::github_home::accepted`]).
+/// Anything else the webview asks for is refused, so the card can only ever open a post of this
+/// repository.
+pub fn page_to_open(url: &str, post: Post, configured: &str) -> Option<String> {
+    let kind = match post {
+        Post::Bug => "issues",
+        Post::Idea => "discussions",
+    };
+    crate::github_home::page_number(url, &crate::github_home::accepted(configured), kind).map(|_| url.to_string())
 }
 
 /// The API path and JSON body that file `public` on [`REPOSITORY`]: its title and its body, and

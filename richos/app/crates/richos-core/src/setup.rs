@@ -1707,7 +1707,17 @@ pub fn install_engine(
     let staging = Staging::new(dest, "incoming")?;
     let archive = staging.path().join("engine.tar.gz");
 
-    let bytes = fetcher.fetch(&pin.url, &archive)?;
+    // THE GITHUB MOVE (CEO, 2026-10-27): a pin on RichOS's old GitHub address is fetched from its
+    // new address first, and from the pinned one when the new one has nothing (before the move),
+    // so a setup after the move does not depend on GitHub's redirect. The digest below is checked
+    // either way, so the address cannot change what is installed.
+    let (bytes, from) = match crate::github_home::at_home(&pin.url) {
+        Some(home) => match fetcher.fetch(&home, &archive) {
+            Ok(bytes) => (bytes, home),
+            Err(_) => (fetcher.fetch(&pin.url, &archive)?, pin.url.clone()),
+        },
+        None => (fetcher.fetch(&pin.url, &archive)?, pin.url.clone()),
+    };
 
     // 2. DIGEST FIRST.
     let got = sha256_file(&archive).map_err(|e| SetupError::InstallFailed {
@@ -1808,7 +1818,7 @@ pub fn install_engine(
         "engine {version}\nsha256 {sha}\nbytes {bytes}\nfrom {url}\n",
         version = pin.version,
         sha = pin.sha256,
-        url = pin.url
+        url = from
     );
     std::fs::write(root.join("INSTALLED-FROM"), &stamp).map_err(|e| SetupError::InstallFailed {
         what: "the RichOS engine".to_string(),
