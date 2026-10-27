@@ -62,7 +62,7 @@ use std::path::{Path, PathBuf};
 use unicode_normalization::char::canonical_combining_class;
 use unicode_normalization::UnicodeNormalization;
 
-/// RichOS's repository: `github.com/RichCore/RichOS` from the GitHub move on (CEO, 2026-10-27),
+/// RichOS's repository: `github.com/RichSpark/RichOS` from the GitHub move on (CEO, 2026-10-27),
 /// `github.com/WebDevBooster/richos` before it ([`crate::github_home`]). The relay files reports and
 /// ideas wherever it is switched to, and the card shows the link the relay answered with, so a
 /// report sent before the move keeps its own link ([`page_to_open`]).

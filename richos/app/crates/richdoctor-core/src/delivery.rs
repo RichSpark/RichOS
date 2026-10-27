@@ -441,7 +441,7 @@ mod tests {
     }
 
     /// THE GITHUB MOVE (CEO, 2026-10-27): the production relay files on `WebDevBooster/richos`
-    /// until it is switched, and on `RichCore/RichOS` after. A report or idea sent before, during
+    /// until it is switched, and on `RichSpark/RichOS` after. A report or idea sent before, during
     /// or after shows as submitted with whichever repository the relay names, and a link on any
     /// other repository is still not this report's post.
     #[test]
@@ -454,18 +454,19 @@ mod tests {
         let load = |e: &Entry| images.get(e.order as usize - 1).cloned();
         for (report, url, n) in [
             (&a, "https://github.com/WebDevBooster/richos/issues/412", 412),
-            (&a, "https://github.com/RichCore/RichOS/issues/413", 413),
+            (&a, "https://github.com/RichSpark/RichOS/issues/413", 413),
             (&idea, "https://github.com/WebDevBooster/richos/discussions/9", 9),
-            (&idea, "https://github.com/RichCore/RichOS/discussions/10", 10),
+            (&idea, "https://github.com/RichSpark/RichOS/discussions/10", 10),
         ] {
             assert_eq!(send(report, &load, &production, &delivered(url, n), 5), State::Submitted { issue_url: url.into(), issue_number: n, at: 5 }, "{url}");
             assert_eq!(issue_link_ok(url, Some(n), REPOSITORY).is_some(), url.contains("/issues/"), "{url}");
         }
         for url in [
-            "https://github.com/RichCore/RichOS-HQ/issues/1",
+            "https://github.com/RichSpark/RichOS-HQ/issues/1",
             "https://github.com/WebDevBooster/richos-hq/issues/1",
             "https://github.com/WebDevBooster/richos-report-test/issues/1",
-            "https://github.com/RichCore/richos/issues/1",
+            "https://github.com/RichSpark/richos/issues/1",
+            "https://github.com/RichCore/RichOS/issues/1",
             "https://github.com/someone/else/issues/1",
         ] {
             assert!(matches!(send(&a, &load, &production, &delivered(url, 1), 5), State::NotSent { .. }), "{url}");
@@ -473,7 +474,7 @@ mod tests {
         }
         // A test relay's repository stays one repository: it never accepts RichOS's.
         let test = dest();
-        assert!(matches!(send(&a, &load, &test, &delivered("https://github.com/RichCore/RichOS/issues/5", 5), 5), State::NotSent { .. }));
+        assert!(matches!(send(&a, &load, &test, &delivered("https://github.com/RichSpark/RichOS/issues/5", 5), 5), State::NotSent { .. }));
         assert!(matches!(send(&a, &load, &test, &delivered(LINK, 42), 5), State::Submitted { issue_number: 42, .. }));
     }
 

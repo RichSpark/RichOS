@@ -2933,7 +2933,7 @@
   // `preset.bugNet` "refused" is an account GitHub will not let post there.
   //
   // `preset.bugRepository` is the repository the (stand-in) relay files on: the old address by
-  // default, as the relay does until the GitHub move switches it, or `RichCore/RichOS` after it.
+  // default, as the relay does until the GitHub move switches it, or `RichSpark/RichOS` after it.
   const bugMock = {
     net: preset.bugNet || "online",
     account: preset.bugAccount || { kind: "reporting" },
@@ -4515,7 +4515,7 @@
         // ---- Bust a bug (round 21): the shapes `src-tauri/src/bug_report.rs` answers in ----
         case "bug_report_context":
           bugMock.calls.push({ cmd });
-          return { account: bugMock.account, repository: "RichCore/RichOS" };
+          return { account: bugMock.account, repository: "RichSpark/RichOS" };
         case "bug_report_private_in": {
           // The words named in the order they are written, each once: the shell's answer shape.
           bugMock.calls.push({ cmd, text: args.text, private: args.private });

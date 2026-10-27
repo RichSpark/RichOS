@@ -1666,7 +1666,7 @@ mod tests {
         }
     }
 
-    const NEW: &str = "https://github.com/RichCore/RichOS/releases/latest/download/latest.json";
+    const NEW: &str = "https://github.com/RichSpark/RichOS/releases/latest/download/latest.json";
     const OLD: &str = "https://github.com/WebDevBooster/richos/releases/latest/download/latest.json";
 
     /// THE GITHUB MOVE (CEO, 2026-10-27): the release that ships before the move must find its
@@ -1693,7 +1693,7 @@ mod tests {
         (got.map_err(|f| f.kind), asked.into_inner())
     }
 
-    /// Before the move `RichCore/RichOS` does not exist, so the new address answers 404 and the
+    /// Before the move `RichSpark/RichOS` does not exist, so the new address answers 404 and the
     /// old one answers: the update is found there.
     #[test]
     fn before_the_move_the_new_address_has_nothing_and_the_old_one_answers() {

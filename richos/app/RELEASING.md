@@ -63,7 +63,7 @@ fetches
 https://github.com/WebDevBooster/richos/releases/latest/download/latest.json
 ```
 
-(or the same path at `RichCore/RichOS`, which a copy carrying the GitHub move work asks first;
+(or the same path at `RichSpark/RichOS`, which a copy carrying the GitHub move work asks first;
 `UPDATES.md`) and GitHub resolves `latest` to whatever the newest release is. From the moment this release
 becomes the newest, that manifest is what everybody gets — so it must not exist before the
 archive it names does. A manifest naming a file that is not there yet is an update that fails

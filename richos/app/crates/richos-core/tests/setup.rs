@@ -1241,7 +1241,7 @@ fn a_pinned_engine_lands_where_the_resolver_looks_and_stamps_itself() {
     assert!(stamp.contains(&digest), "{stamp}");
     assert!(stamp.contains("engine 1.0.0"), "{stamp}");
     // The pin names the old GitHub address; where the new one answers, it is fetched from there.
-    assert!(stamp.contains("from https://github.com/RichCore/RichOS/releases/"), "{stamp}");
+    assert!(stamp.contains("from https://github.com/RichSpark/RichOS/releases/"), "{stamp}");
 
     // And detection now finds it, which is the whole point.
     let paths = SetupPaths { home: Some(home), ..Default::default() };
@@ -1260,7 +1260,7 @@ fn a_pinned_engine_is_fetched_from_the_new_address_first_and_the_old_one_when_it
     impl Fetcher for BeforeTheMove {
         fn fetch(&self, url: &str, dest: &Path) -> Result<u64, SetupError> {
             self.asked.lock().unwrap().push(url.to_string());
-            if url.starts_with("https://github.com/RichCore/RichOS/") {
+            if url.starts_with("https://github.com/RichSpark/RichOS/") {
                 return Err(SetupError::DownloadFailed { url: url.to_string(), status: "The requested URL returned error: 404".into() });
             }
             std::fs::write(dest, &self.body).unwrap();
@@ -1273,7 +1273,7 @@ fn a_pinned_engine_is_fetched_from_the_new_address_first_and_the_old_one_when_it
     let digest = body_and_digest(&root, body);
     let before = BeforeTheMove { body: body.to_vec(), asked: Mutex::new(Vec::new()) };
     install_engine(&before, &good_engine_plan("1.0.0"), &a_pin(&digest), &dest).unwrap();
-    let home = ASSET_URL.replace("WebDevBooster/richos", "RichCore/RichOS");
+    let home = ASSET_URL.replace("WebDevBooster/richos", "RichSpark/RichOS");
     assert_eq!(before.asked.lock().unwrap().as_slice(), [home.as_str(), ASSET_URL], "the new address first, then the pinned one");
     assert!(std::fs::read_to_string(dest.join("INSTALLED-FROM")).unwrap().contains(&format!("from {ASSET_URL}")));
 

@@ -1,8 +1,7 @@
 //! **WHERE RICHOS LIVES ON GITHUB, AND WHERE IT LIVED.** The CEO, 2026-10-27: *"I want to create
-//! a new GitHub organization and then move both repos into that organization. [...] the public
-//! GitHub repo link would become `https://github.com/RichCore/RichOS`."* And: *"let's pretend
-//! that there currently are active users. And then do this migration properly from that point of
-//! view."*
+//! a new GitHub organization and then move both repos into that organization."* Then: *"OK, I
+//! created https://github.com/RichSpark."* And: *"let's pretend that there currently are active
+//! users. And then do this migration properly from that point of view."*
 //!
 //! So a release built from this code works with the repository at either address, before the
 //! move, during it and after it, with nothing for the user to do:
@@ -19,7 +18,7 @@
 //! `richos-hq/docs/operations/2026-10-27-github-richcore-move.md`.
 
 /// The repository's address from the move on, exactly as the CEO capitalized it.
-pub const HOME: &str = "RichCore/RichOS";
+pub const HOME: &str = "RichSpark/RichOS";
 
 /// The repository's address before the move. GitHub sends its old pages, downloads and API calls
 /// to the new address for as long as nobody creates a repository at this one again.
@@ -82,28 +81,29 @@ mod tests {
         let both = accepted(HOME);
         assert_eq!(both, accepted(FORMER), "either address configured accepts both");
         assert_eq!(page_number("https://github.com/WebDevBooster/richos/issues/412", &both, "issues"), Some(412));
-        assert_eq!(page_number("https://github.com/RichCore/RichOS/issues/413", &both, "issues"), Some(413));
-        assert_eq!(page_number("https://github.com/RichCore/RichOS/discussions/9", &both, "discussions"), Some(9));
+        assert_eq!(page_number("https://github.com/RichSpark/RichOS/issues/413", &both, "issues"), Some(413));
+        assert_eq!(page_number("https://github.com/RichSpark/RichOS/discussions/9", &both, "discussions"), Some(9));
         assert_eq!(page_number("https://github.com/WebDevBooster/richos/discussions/9", &both, "discussions"), Some(9));
         for refused in [
-            "https://github.com/RichCore/RichOS-HQ/issues/1",
-            "https://github.com/RichCore/richos/issues/1",
+            "https://github.com/RichSpark/RichOS-HQ/issues/1",
+            "https://github.com/RichSpark/richos/issues/1",
+            "https://github.com/RichCore/RichOS/issues/1",
             "https://github.com/WebDevBooster/RichOS/issues/1",
             "https://github.com/WebDevBooster/richos-hq/issues/1",
             "https://github.com/WebDevBooster/richos-report-test/issues/1",
             "https://github.com/someone/else/issues/1",
-            "https://github.com/RichCore/RichOS/pull/1",
-            "https://github.com/RichCore/RichOS/issues/0",
-            "https://github.com/RichCore/RichOS/issues/+1",
-            "https://github.com/RichCore/RichOS/issues/1/",
-            "https://github.com/RichCore/RichOS/issues/1#x",
-            "https://github.com/RichCore/RichOS/issues/",
-            "http://github.com/RichCore/RichOS/issues/1",
-            "https://github.com.evil.example/RichCore/RichOS/issues/1",
+            "https://github.com/RichSpark/RichOS/pull/1",
+            "https://github.com/RichSpark/RichOS/issues/0",
+            "https://github.com/RichSpark/RichOS/issues/+1",
+            "https://github.com/RichSpark/RichOS/issues/1/",
+            "https://github.com/RichSpark/RichOS/issues/1#x",
+            "https://github.com/RichSpark/RichOS/issues/",
+            "http://github.com/RichSpark/RichOS/issues/1",
+            "https://github.com.evil.example/RichSpark/RichOS/issues/1",
         ] {
             assert_eq!(page_number(refused, &both, "issues"), None, "{refused}");
         }
-        assert_eq!(page_number("https://github.com/RichCore/RichOS/issues/1", &both, "discussions"), None, "an issue is not an idea's post");
+        assert_eq!(page_number("https://github.com/RichSpark/RichOS/issues/1", &both, "discussions"), None, "an issue is not an idea's post");
     }
 
     #[test]
@@ -111,7 +111,7 @@ mod tests {
         let one = accepted("WebDevBooster/richos-report-test");
         assert_eq!(one, vec!["WebDevBooster/richos-report-test"]);
         assert_eq!(page_number("https://github.com/WebDevBooster/richos-report-test/issues/3", &one, "issues"), Some(3));
-        assert_eq!(page_number("https://github.com/RichCore/RichOS/issues/3", &one, "issues"), None);
+        assert_eq!(page_number("https://github.com/RichSpark/RichOS/issues/3", &one, "issues"), None);
         assert_eq!(page_number("https://github.com/WebDevBooster/richos/issues/3", &one, "issues"), None);
     }
 
@@ -119,10 +119,10 @@ mod tests {
     fn only_an_address_on_the_old_repository_moves_home() {
         assert_eq!(
             at_home("https://github.com/WebDevBooster/richos/releases/download/v1.2.3/RichOS.app.tar.gz").as_deref(),
-            Some("https://github.com/RichCore/RichOS/releases/download/v1.2.3/RichOS.app.tar.gz")
+            Some("https://github.com/RichSpark/RichOS/releases/download/v1.2.3/RichOS.app.tar.gz")
         );
         for unchanged in [
-            "https://github.com/RichCore/RichOS/releases/download/v1.2.3/RichOS.app.tar.gz",
+            "https://github.com/RichSpark/RichOS/releases/download/v1.2.3/RichOS.app.tar.gz",
             "https://github.com/WebDevBooster/richos-hq/releases/download/v1/x",
             "https://objects.githubusercontent.com/WebDevBooster/richos/x",
             "http://127.0.0.1:8973/RichOS.app.tar.gz",
@@ -136,8 +136,8 @@ mod tests {
     #[test]
     fn a_download_moves_home_only_when_the_manifest_came_from_home() {
         let old = "https://github.com/WebDevBooster/richos/releases/download/v1.2.3/RichOS.app.tar.gz";
-        let new = "https://github.com/RichCore/RichOS/releases/download/v1.2.3/RichOS.app.tar.gz";
-        let home = "https://github.com/RichCore/RichOS/releases/latest/download/latest.json";
+        let new = "https://github.com/RichSpark/RichOS/releases/download/v1.2.3/RichOS.app.tar.gz";
+        let home = "https://github.com/RichSpark/RichOS/releases/latest/download/latest.json";
         let former = "https://github.com/WebDevBooster/richos/releases/latest/download/latest.json";
         assert_eq!(download_at(home, old).as_deref(), Some(new));
         assert_eq!(download_at(home, new), None, "already home");

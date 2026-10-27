@@ -107,7 +107,7 @@ D1 holds, per report: the ID, the receipt's hash, the content hash, the state, t
 
 ## Operating it
 
-The profile is private, identifiers only: `stage` (`production` or `test`), `accountId`, `databaseId`, `hostname`, `worker`, `repository`, `bucket`, `appId`, `installationId`, `botLogin`, `label` and for staff reads `accessTeamDomain` (`https://<team>.cloudflareaccess.com`) and `accessAud`. A production profile must name exactly `richos-report`, `report.richos.ceo`, the repository `WebDevBooster/richos` (or, once the repository has moved into the RichCore organization, `RichCore/RichOS`) and the bucket `richos-report`; a test profile may use none of them.
+The profile is private, identifiers only: `stage` (`production` or `test`), `accountId`, `databaseId`, `hostname`, `worker`, `repository`, `bucket`, `appId`, `installationId`, `botLogin`, `label` and for staff reads `accessTeamDomain` (`https://<team>.cloudflareaccess.com`) and `accessAud`. A production profile must name exactly `richos-report`, `report.richos.ceo`, the repository `WebDevBooster/richos` (or, once the repository has moved into the RichSpark organization, `RichSpark/RichOS`) and the bucket `richos-report`; a test profile may use none of them.
 
 ```sh
 node richos/mobile/cli/mobile.mjs report artifact <profile.json>     # exact upload: modules, hashes, bindings, schedule, schema
@@ -116,7 +116,7 @@ RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mobile.mjs report create-dat
 RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mobile.mjs report create-bucket <account ID> <bucket name>
 RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mobile.mjs report staff-access <account ID> <relay hostname> [staff email ...]
 RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… RICHOS_REPORT_APP_KEY_FILE=… node richos/mobile/cli/mobile.mjs report deploy
-RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… RICHOS_REPORT_APP_KEY_FILE=… node richos/mobile/cli/mobile.mjs report move RichCore/RichOS
+RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… RICHOS_REPORT_APP_KEY_FILE=… node richos/mobile/cli/mobile.mjs report move RichSpark/RichOS
 RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mobile.mjs report control on '<operator name>' <daily reports> <daily screenshot MB>
 RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mobile.mjs report control off
 RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mobile.mjs report pending
@@ -129,7 +129,7 @@ RICHOS_REPORT_PROFILE=… RICHOS_REPORT_TOKEN_FILE=… node richos/mobile/cli/mo
 - `deploy` applies the schema and uploads the exact `metadata` and `modules` (`keep_bindings: ["secret_text"]` keeps the key). It installs the key as the secret `GITHUB_APP_PRIVATE_KEY` (GitHub's PKCS#1 download is accepted as is), sets workers.dev (on only for a test relay named by its workers.dev host), sets the hourly schedule, reads back the bindings and logging settings and waits for health.
 - `staff-access` makes the one Access application for the screenshot links, whose one path is `<hostname>/v1/reports/*/attachments/*` (never the whole hostname: the app's register, upload, complete, status and retire requests carry no staff sign-in). It allows exactly the named staff emails (the token owner's own when none is named) and prints `accessTeamDomain` and `accessAud` for the profile. A rerun finds and checks the same application.
 - `deploy` attaches a relay that is not on workers.dev to its hostname as a Custom Domain before the health check.
-- `move <owner/repository>` is the one switch for the GitHub move: after the repository is transferred to `RichCore/RichOS` and the App is installed there (on that one repository), it runs the `app-identity` check against the new repository, writes the new repository, installation ID and bot login into the profile and deploys. A refused check changes nothing; a deploy that stops part way is finished by running the same command again. The relay keeps answering a report filed before the switch with its old link and the app accepts a link on either address.
+- `move <owner/repository>` is the one switch for the GitHub move: after the repository is transferred to `RichSpark/RichOS` and the App is installed there (on that one repository), it runs the `app-identity` check against the new repository, writes the new repository, installation ID and bot login into the profile and deploys. A refused check changes nothing; a deploy that stops part way is finished by running the same command again. The relay keeps answering a report filed before the switch with its old link and the app accepts a link on either address.
 - A new database starts switched off with caps of zero. Rich names the operator and the caps and `control on` records them.
 - `pending` is the operator's review list. `resolve` accepts only an issue the relay's bot made with that report's footer.
 - Account identifiers and deployment receipts belong in the private operations record.
