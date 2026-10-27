@@ -21,9 +21,11 @@ use std::time::Duration;
 /// The report ID's alphabet: no 0, 1, I, L, O or U, so it reads aloud and copies cleanly.
 pub const ID_ALPHABET: &[u8; 30] = b"23456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-/// The production relay and repository, compiled in.
+/// The production relay and repository, compiled in. The repository is RichOS's address from the
+/// GitHub move on; a link the relay answers on its address from before the move is the same
+/// repository and is accepted too ([`richos_core::github_home::accepted`]).
 pub const RELAY: &str = "https://report.richos.ceo";
-pub const REPOSITORY: &str = "WebDevBooster/richos";
+pub const REPOSITORY: &str = richos_core::github_home::HOME;
 /// The test override, both set together or neither (agreed with the relay owner).
 pub const RELAY_ENV: &str = "RICHDOCTOR_REPORT_RELAY";
 pub const REPOSITORY_ENV: &str = "RICHDOCTOR_REPORT_REPOSITORY";
@@ -215,11 +217,12 @@ pub fn issue_link_ok(url: &str, number: Option<u64>, repository: &str) -> Option
 }
 
 /// A link on the configured repository's `kind` page (`issues`, or `discussions` for an idea), as a
-/// plain number.
+/// plain number. RichOS's repository has two addresses across the GitHub move, its old one and its
+/// new one, and a link on either is accepted; any other repository's is not.
 fn link_ok(url: &str, number: Option<u64>, repository: &str, kind: &str) -> Option<u64> {
-    let rest = url.strip_prefix(&format!("https://github.com/{repository}/{kind}/"))?;
-    let n: u64 = rest.parse().ok()?;
-    (n > 0 && number.is_none_or(|k| k == n)).then_some(n)
+    use richos_core::github_home::{accepted, page_number};
+    let n = page_number(url, &accepted(repository), kind)?;
+    number.is_none_or(|k| k == n).then_some(n)
 }
 
 /// The approved image `n`'s bytes, from the draft (the caller's loader).
@@ -435,6 +438,43 @@ mod tests {
         assert_eq!(sent[0].1["manifest"], json!([]));
         let as_issue = script(vec![ok(json!({"state": "ready"})), ok(json!({"state": "delivered", "issue_url": LINK, "issue_number": 42}))]);
         assert!(matches!(send(&a, &|_: &Entry| None, &dest(), &as_issue, 5), State::NotSent { .. }), "an issue link is not an idea's discussion");
+    }
+
+    /// THE GITHUB MOVE (CEO, 2026-10-27): the production relay files on `WebDevBooster/richos`
+    /// until it is switched, and on `RichCore/RichOS` after. A report or idea sent before, during
+    /// or after shows as submitted with whichever repository the relay names, and a link on any
+    /// other repository is still not this report's post.
+    #[test]
+    fn the_production_link_check_accepts_the_old_and_the_new_repository_and_nothing_else() {
+        let production = Destination { relay: BASE.into(), repository: REPOSITORY.into() };
+        let (a, images) = approved_with(0);
+        let mut idea = a.clone();
+        idea.idea = true;
+        let delivered = |url: &str, n: u64| script(vec![ok(json!({"state": "ready"})), ok(json!({"state": "delivered", "issue_url": url, "issue_number": n}))]);
+        let load = |e: &Entry| images.get(e.order as usize - 1).cloned();
+        for (report, url, n) in [
+            (&a, "https://github.com/WebDevBooster/richos/issues/412", 412),
+            (&a, "https://github.com/RichCore/RichOS/issues/413", 413),
+            (&idea, "https://github.com/WebDevBooster/richos/discussions/9", 9),
+            (&idea, "https://github.com/RichCore/RichOS/discussions/10", 10),
+        ] {
+            assert_eq!(send(report, &load, &production, &delivered(url, n), 5), State::Submitted { issue_url: url.into(), issue_number: n, at: 5 }, "{url}");
+            assert_eq!(issue_link_ok(url, Some(n), REPOSITORY).is_some(), url.contains("/issues/"), "{url}");
+        }
+        for url in [
+            "https://github.com/RichCore/RichOS-HQ/issues/1",
+            "https://github.com/WebDevBooster/richos-hq/issues/1",
+            "https://github.com/WebDevBooster/richos-report-test/issues/1",
+            "https://github.com/RichCore/richos/issues/1",
+            "https://github.com/someone/else/issues/1",
+        ] {
+            assert!(matches!(send(&a, &load, &production, &delivered(url, 1), 5), State::NotSent { .. }), "{url}");
+            assert_eq!(issue_link_ok(url, None, REPOSITORY), None, "{url}");
+        }
+        // A test relay's repository stays one repository: it never accepts RichOS's.
+        let test = dest();
+        assert!(matches!(send(&a, &load, &test, &delivered("https://github.com/RichCore/RichOS/issues/5", 5), 5), State::NotSent { .. }));
+        assert!(matches!(send(&a, &load, &test, &delivered(LINK, 42), 5), State::Submitted { issue_number: 42, .. }));
     }
 
     #[test]

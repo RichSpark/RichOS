@@ -2931,9 +2931,13 @@
   // Version), and it is posted as a discussion: `filed()` entries carry `post`, `ideasPosted()` is
   // every idea that went to the (stand-in) Discussions, and an idea never reaches an issue.
   // `preset.bugNet` "refused" is an account GitHub will not let post there.
+  //
+  // `preset.bugRepository` is the repository the (stand-in) relay files on: the old address by
+  // default, as the relay does until the GitHub move switches it, or `RichCore/RichOS` after it.
   const bugMock = {
     net: preset.bugNet || "online",
     account: preset.bugAccount || { kind: "reporting" },
+    repository: preset.bugRepository || "WebDevBooster/richos",
     issue: 412,
     discussion: 413,
     waiting: [],
@@ -3071,10 +3075,10 @@
       if (post === "idea") {
         // A discussion in the Ideas category, never an issue (the shell's `post_discussion`).
         const number = bugMock.discussion++;
-        return { state: "sent", id, number, url: "https://github.com/WebDevBooster/richos/discussions/" + number, account: bugMock.account, title: sheet.title, sent_at_ms: now(), post: "idea" };
+        return { state: "sent", id, number, url: "https://github.com/" + bugMock.repository + "/discussions/" + number, account: bugMock.account, title: sheet.title, sent_at_ms: now(), post: "idea" };
       }
       const number = bugMock.issue++;
-      return { state: "sent", id, number, url: "https://github.com/WebDevBooster/richos/issues/" + number, account: bugMock.account, title: sheet.title, sent_at_ms: now(), post: "bug" };
+      return { state: "sent", id, number, url: "https://github.com/" + bugMock.repository + "/issues/" + number, account: bugMock.account, title: sheet.title, sent_at_ms: now(), post: "bug" };
     }
     if (!bugMock.waiting.some((w) => w.id === id)) bugMock.waiting.push({ id, sheet, post: post || "bug" });
     return { state: "waiting", id, reason };
@@ -3094,7 +3098,7 @@
       bugMock.waiting.splice(0).forEach((w) => {
         const idea = w.post === "idea";
         const number = idea ? bugMock.discussion++ : bugMock.issue++;
-        const d = { state: "sent", id: w.id, number, url: "https://github.com/WebDevBooster/richos/" + (idea ? "discussions/" : "issues/") + number, account: bugMock.account, title: w.sheet.title, sent_at_ms: now(), post: w.post || "bug" };
+        const d = { state: "sent", id: w.id, number, url: "https://github.com/" + bugMock.repository + "/" + (idea ? "discussions/" : "issues/") + number, account: bugMock.account, title: w.sheet.title, sent_at_ms: now(), post: w.post || "bug" };
         bugMock.sent.push(d);
         emit("rich://bug-report", { delivery: d });
       });
@@ -4511,7 +4515,7 @@
         // ---- Bust a bug (round 21): the shapes `src-tauri/src/bug_report.rs` answers in ----
         case "bug_report_context":
           bugMock.calls.push({ cmd });
-          return { account: bugMock.account, repository: "WebDevBooster/richos" };
+          return { account: bugMock.account, repository: "RichCore/RichOS" };
         case "bug_report_private_in": {
           // The words named in the order they are written, each once: the shell's answer shape.
           bugMock.calls.push({ cmd, text: args.text, private: args.private });
@@ -4626,7 +4630,7 @@
           if (cmd === "stop_voice_capture" && preset.bugStopHold) await bugHold("stop");
           return { started: cmd === "start_voice_capture" };
         case "bug_report_open_issue":
-          bugMock.calls.push({ cmd, number: args.number, post: args.post });
+          bugMock.calls.push({ cmd, url: args.url, post: args.post });
           return null;
 
         default:

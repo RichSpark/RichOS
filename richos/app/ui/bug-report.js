@@ -1199,7 +1199,7 @@ window.RichBug = (function () {
           pill.textContent = "Posted · in Ideas";
           var open = node("a", "bug-link", "Open it on GitHub");
           open.href = "#";
-          open.dataset.issue = String(f.issue.number);
+          open.dataset.url = f.issue.url;
           open.dataset.post = "idea";
           row.appendChild(open);
           row.appendChild(node("span", null, "posted from " + (f.issue.account && f.issue.account.kind === "user" ? "@" + f.issue.account.login : "the RichOS reporting account")));
@@ -1208,7 +1208,7 @@ window.RichBug = (function () {
         pill.textContent = "Sent · #" + f.issue.number;
         var a = node("a", "bug-link", "Open issue #" + f.issue.number + " on GitHub");
         a.href = "#";
-        a.dataset.issue = String(f.issue.number);
+        a.dataset.url = f.issue.url;
         row.appendChild(a);
         row.appendChild(node("span", null, "filed from " + (f.issue.account && f.issue.account.kind === "user" ? "@" + f.issue.account.login : "the RichOS reporting account")));
         break;
@@ -1353,11 +1353,18 @@ window.RichBug = (function () {
     richSays(f, [(again && (WAITING_AGAIN[d.reason] || "It still didn't go out. It stays saved here and I'll keep trying.")) || first]);
   }
 
+  /// THE ADDRESS AS RICH SAYS IT: the link the relay answered with, without `https://`. A report
+  /// sent before the GitHub move names the old repository and one sent after names the new one
+  /// (CEO, 2026-10-27), so the words always match the page the link opens.
+  function shownAddress(url) {
+    return String(url || "").replace(/^https:\/\//, "");
+  }
+
   /// `lead`, when given, is Rich's first sentence instead (a report that went out before it
   /// could be canceled or changed).
   function markSent(f, d, why, lead) {
     if (f.step === "sent") return; // already said: the event and a command's answer can both bring it
-    f.issue = { number: d.number, account: d.account };
+    f.issue = { number: d.number, account: d.account, url: d.url };
     f.pendingId = null;
     f.step = "sent";
     paintCard(f);
@@ -1372,9 +1379,9 @@ window.RichBug = (function () {
     var opening = lead ? lead + " It's issue #" + d.number + " on GitHub, "
       : why ? (CAME_BACK[why] || "I sent your bug report.") + " It's issue #" + d.number + " on GitHub, "
       : "Sent. It's issue #" + d.number + " on GitHub, ";
-    var link = node("a", "bug-link", "github.com/WebDevBooster/richos/issues/" + d.number);
+    var link = node("a", "bug-link", shownAddress(d.url));
     link.href = "#";
-    link.dataset.issue = String(d.number);
+    link.dataset.url = d.url;
     richSays(f, [opening + acct, link]);
     if (why && host) host.toast("Your bug report went out: issue #" + d.number + " on GitHub.");
   }
@@ -1391,9 +1398,9 @@ window.RichBug = (function () {
     var from = d.account && d.account.kind === "user" ? "posted from your GitHub account, @" + d.account.login + "."
       : "posted from the RichOS reporting account, because RichOS isn't signed in to a GitHub account of yours.";
     var opening = lead ? lead + " " : why ? (IDEA_CAME_BACK[why] || "I posted your idea.") + " " : "Posted. ";
-    var link = node("a", "bug-link", "github.com/WebDevBooster/richos/discussions/" + d.number);
+    var link = node("a", "bug-link", shownAddress(d.url));
     link.href = "#";
-    link.dataset.issue = String(d.number);
+    link.dataset.url = d.url;
     link.dataset.post = "idea";
     richSays(f, [opening + "It's in RichOS's Discussions on GitHub, under Ideas, " + from + " Anyone can read it and upvote it there.", link]);
     if (why && host) host.toast("Your idea is posted in Ideas, on GitHub.");
@@ -1651,10 +1658,10 @@ window.RichBug = (function () {
       if (!a) return;
       e.preventDefault();
       var idea = a.dataset.post === "idea";
-      bridge.invoke("bug_report_open_issue", { number: Number(a.dataset.issue), post: idea ? "idea" : "bug" }).catch(function (err) {
+      bridge.invoke("bug_report_open_issue", { url: a.dataset.url, post: idea ? "idea" : "bug" }).catch(function (err) {
         if (host) host.toast(typeof err === "string" && err ? err
-          : idea ? "This Mac wouldn't open your idea. It's at github.com/WebDevBooster/richos/discussions/" + a.dataset.issue + "."
-          : "This Mac wouldn't open the issue. It's at github.com/WebDevBooster/richos/issues/" + a.dataset.issue + ".");
+          : idea ? "This Mac wouldn't open your idea. It's at " + shownAddress(a.dataset.url) + "."
+          : "This Mac wouldn't open the issue. It's at " + shownAddress(a.dataset.url) + ".");
       });
     });
   }

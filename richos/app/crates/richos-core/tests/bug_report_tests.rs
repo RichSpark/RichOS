@@ -9,7 +9,7 @@
 //!      plain stand-in, and what it replaced is kept beside it for the user's eyes only.
 //!   2. **The draft is shown before anything is sent.** Writing a report sends nothing; the
 //!      issue is rendered from the sheet the user approved, word for word.
-//!   3. **Send.** One POST to `WebDevBooster/richos`'s issues, with the token read at send time.
+//!   3. **Send.** One POST to `RichCore/RichOS`'s issues, with the token read at send time.
 //!   4. **A failed send is kept and resent.** Offline, GitHub down, or no reporting account set
 //!      up: the report stays on the Mac exactly as approved, survives a relaunch, and goes out by
 //!      itself once it can.
@@ -262,10 +262,10 @@ fn the_issue_is_the_sheet_word_for_word() {
     );
     // The request is the title and that body, and nothing else.
     let (path, json) = issue_request(&public_of(&sheet));
-    assert_eq!(path, "/repos/WebDevBooster/richos/issues");
+    assert_eq!(path, "/repos/RichCore/RichOS/issues");
     assert_eq!(json, serde_json::json!({ "title": "Names are cut off at 135%", "body": body }));
     // The card's link is built from the number, never from a URL the page passes.
-    assert_eq!(issue_page(412), "https://github.com/WebDevBooster/richos/issues/412");
+    assert_eq!(issue_page(412), "https://github.com/RichCore/RichOS/issues/412");
 }
 
 #[test]
@@ -348,20 +348,20 @@ fn public_of(sheet: &Sheet) -> Public {
 fn send_files_one_issue_from_the_reporting_account_and_keeps_a_record_of_it() {
     let dir = scratch("send");
     let outbox = Outbox::open(&dir);
-    let github = FakeGitHub::answering(vec![Outcome::Created { number: 412, url: "https://github.com/WebDevBooster/richos/issues/412".into() }]);
+    let github = FakeGitHub::answering(vec![Outcome::Created { number: 412, url: "https://github.com/RichCore/RichOS/issues/412".into() }]);
     let delivery = outbox.send(&public_of(&sheet("Names are cut off")), &Token(Some("tok-1")), &github, 1_000).unwrap();
     match delivery {
         Delivery::Sent(sent) => {
             assert_eq!(sent.number, 412);
             assert_eq!(sent.account, Account::Reporting);
-            assert_eq!(sent.url, "https://github.com/WebDevBooster/richos/issues/412");
+            assert_eq!(sent.url, "https://github.com/RichCore/RichOS/issues/412");
         }
         other => panic!("not sent: {other:?}"),
     }
     let seen = github.seen.borrow();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].0, "tok-1", "the token read at send time is the one used");
-    assert_eq!(seen[0].1, "/repos/WebDevBooster/richos/issues");
+    assert_eq!(seen[0].1, "/repos/RichCore/RichOS/issues");
     assert_eq!(seen[0].2, "Names are cut off");
     assert_eq!(seen[0].3, issue_body(&sheet("Names are cut off")));
     assert!(outbox.pending().unwrap().is_empty(), "a sent report is not waiting");
@@ -1991,4 +1991,33 @@ fn a_stand_in_names_only_the_words_it_replaced_where_it_stands() {
     };
     let done = checked_edit(&edit("Bob saw it. Alex saw it too."), &alex, rich_hides_bob).unwrap();
     assert_eq!(receipts(&done.draft), [None, None]);
+}
+
+/// THE GITHUB MOVE (CEO, 2026-10-27): a sent card opens the link the relay answered with, so a
+/// report sent before the move opens its issue on the old address and one sent after opens it on
+/// the new one. The webview passes the link; only a post of the right kind on RichOS's repository,
+/// under either address, is opened, and on a test relay only that relay's own repository.
+#[test]
+fn a_sent_card_opens_the_relay_link_on_either_address_and_nothing_else() {
+    for (url, post) in [
+        ("https://github.com/WebDevBooster/richos/issues/412", Post::Bug),
+        ("https://github.com/RichCore/RichOS/issues/413", Post::Bug),
+        ("https://github.com/WebDevBooster/richos/discussions/9", Post::Idea),
+        ("https://github.com/RichCore/RichOS/discussions/10", Post::Idea),
+    ] {
+        assert_eq!(page_to_open(url, post, REPOSITORY).as_deref(), Some(url), "{url}");
+    }
+    for (url, post) in [
+        ("https://github.com/RichCore/RichOS/issues/413", Post::Idea),
+        ("https://github.com/RichCore/RichOS/discussions/10", Post::Bug),
+        ("https://github.com/RichCore/RichOS-HQ/issues/1", Post::Bug),
+        ("https://github.com/someone/else/issues/1", Post::Bug),
+        ("https://evil.example/RichCore/RichOS/issues/1", Post::Bug),
+        ("file:///etc/passwd", Post::Bug),
+    ] {
+        assert_eq!(page_to_open(url, post, REPOSITORY), None, "{url}");
+    }
+    let test = "WebDevBooster/richos-report-test";
+    assert!(page_to_open("https://github.com/WebDevBooster/richos-report-test/issues/3", Post::Bug, test).is_some());
+    assert_eq!(page_to_open("https://github.com/RichCore/RichOS/issues/3", Post::Bug, test), None);
 }

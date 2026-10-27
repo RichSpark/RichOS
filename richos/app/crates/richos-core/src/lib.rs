@@ -81,6 +81,7 @@ pub mod entity;
 pub mod ecs;
 pub mod evidence;
 pub mod feedback;
+pub mod github_home;
 pub mod home_field;
 pub mod journal;
 pub mod heard;
