@@ -1710,7 +1710,7 @@ explicit argv and owns the notary step itself.
 - **The auto-update channel is live, so this entry is a status and not a gap.**
   `tauri.conf.json` carries the
   endpoint `https://github.com/WebDevBooster/richos/releases/latest/download/latest.json`
-  (since the GitHub move work, after the same path at `RichCore/RichOS`, which is asked first;
+  (since the GitHub move work, after the same path at `RichSpark/RichOS`, which is asked first;
   `UPDATES.md`) and the minisign public key and v1.0.2 published `RichOS.app.tar.gz`, its `.sig` and
   `latest.json` beside the first-install zip. `richos/app/UPDATES.md` is the design and the
   end-to-end run — read it knowing it was written before the certificate existed and

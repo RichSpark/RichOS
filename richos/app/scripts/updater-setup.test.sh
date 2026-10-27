@@ -165,10 +165,10 @@ fi
 # pointer so the compiled-in URL never has to change. `app/RELEASING.md` carries the shape
 # and the evidence for it.
 #
-# THE GITHUB MOVE (CEO, 2026-10-27): the repository moves to RichCore/RichOS, so the config
+# THE GITHUB MOVE (CEO, 2026-10-27): the repository moves to RichSpark/RichOS, so the config
 # names that address first and the old one second, and `updates.rs` asks them in that order:
 # the old one answers until the move, the new one after it.
-WANT_ENDPOINTS="https://github.com/RichCore/RichOS/releases/latest/download/latest.json https://github.com/WebDevBooster/richos/releases/latest/download/latest.json"
+WANT_ENDPOINTS="https://github.com/RichSpark/RichOS/releases/latest/download/latest.json https://github.com/WebDevBooster/richos/releases/latest/download/latest.json"
 ENDPOINTS="$(python3 -c 'import json,sys;print(" ".join(json.load(open(sys.argv[1]))["plugins"]["updater"]["endpoints"]))' "$CONF" 2>/dev/null)"
 if [ "$ENDPOINTS" = "$WANT_ENDPOINTS" ]; then
   ok "B2 the endpoints are RichOS's GitHub Releases manifest URL at its new address, then its old one, over https"

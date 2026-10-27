@@ -69,7 +69,7 @@ fn found() -> Reply {
 
 /// GitHub's answer to `createDiscussion`: discussion `number`.
 fn created(number: u64) -> Reply {
-    ok(serde_json::json!({ "createDiscussion": { "discussion": { "number": number, "url": format!("https://github.com/RichCore/RichOS/discussions/{number}") } } }))
+    ok(serde_json::json!({ "createDiscussion": { "discussion": { "number": number, "url": format!("https://github.com/RichSpark/RichOS/discussions/{number}") } } }))
 }
 
 /// Who it goes out as: the user's own GitHub sign-in, the reporting account, or nobody.
@@ -138,7 +138,7 @@ fn an_idea_is_posted_with_create_discussion_in_the_ideas_category_and_never_to_i
     // The lookup: the repository and its Ideas category, by the category's slug.
     let lookup = &seen[0].1;
     assert!(lookup["query"].as_str().unwrap().contains("discussionCategory(slug: $slug)"), "{lookup}");
-    assert_eq!(lookup["variables"], serde_json::json!({ "owner": "RichCore", "name": "RichOS", "slug": "ideas" }));
+    assert_eq!(lookup["variables"], serde_json::json!({ "owner": "RichSpark", "name": "RichOS", "slug": "ideas" }));
     // The post: createDiscussion with those ids, and the card's words exactly.
     let create = &seen[1].1;
     assert!(create["query"].as_str().unwrap().contains("createDiscussion(input:"), "{create}");
@@ -151,7 +151,7 @@ fn an_idea_is_posted_with_create_discussion_in_the_ideas_category_and_never_to_i
     match delivery {
         Delivery::Sent(sent) => {
             assert_eq!(sent.number, 413);
-            assert_eq!(sent.url, "https://github.com/RichCore/RichOS/discussions/413");
+            assert_eq!(sent.url, "https://github.com/RichSpark/RichOS/discussions/413");
             assert_eq!(sent.post, Post::Idea);
         }
         other => panic!("not posted: {other:?}"),
@@ -167,7 +167,7 @@ fn what_the_user_pictured_is_written_as_bullets_and_a_bug_reports_steps_stay_num
     assert!(body.contains("### What the user pictured\n\n- A message every Friday afternoon.\n- One short part per conversation.\n"), "{body}");
     let bug = Sheet { title: "t".into(), sections: vec![SheetSection { heading: "Steps to see it".into(), paragraphs: vec![], steps: vec!["Open it".into(), "Look".into()] }] };
     assert!(issue_body(&bug).contains("1. Open it\n2. Look\n"), "{}", issue_body(&bug));
-    assert_eq!(discussion_page(413), "https://github.com/RichCore/RichOS/discussions/413");
+    assert_eq!(discussion_page(413), "https://github.com/RichSpark/RichOS/discussions/413");
 }
 
 // ---------------------------------------------------------------------------------------

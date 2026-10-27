@@ -4,7 +4,7 @@
 #   run-walk.py --bundle <zip> --home <empty dir> --engine <engine.tar.gz> --report <json> -- \
 #     github-move-walk.sh <out-dir> <relay URL> <relay repository>
 #
-# The CEO is moving RichOS from WebDevBooster/richos to RichCore/RichOS and wants it done as if
+# The CEO is moving RichOS from WebDevBooster/richos to RichSpark/RichOS and wants it done as if
 # RichOS had active users. A copy of RichOS asks the new update address first and the old one
 # second (src-tauri/src/updates.rs, first_answer), and shows a sent report with the link the
 # relay answered on whichever repository it filed it. This walk shows both on the real app.
@@ -12,7 +12,7 @@
 # THE BUNDLE is branch-bundle.sh's, built with the shipping order of the two addresses pointed at
 # a server this walk starts in the guest:
 #   TAURI_CONFIG='{"plugins":{"updater":{"endpoints":[
-#     "http://127.0.0.1:8974/RichCore/RichOS/releases/latest/download/latest.json",
+#     "http://127.0.0.1:8974/RichSpark/RichOS/releases/latest/download/latest.json",
 #     "http://127.0.0.1:8974/WebDevBooster/richos/releases/latest/download/latest.json"]}}}'
 # (a debug build: plain http to the guest's own loopback is allowed there and nowhere else).
 #
@@ -118,15 +118,15 @@ done
 selftest 1-before-the-move
 check "before the move: the update is found (98.0.0)" "before the move: no update found" has 'state=available .*available=98.0.0' "$S/1-before-the-move.txt"
 check "before the move: from the old address" "before the move: not from the old address" has "endpoint=http://127.0.0.1:$PORT/WebDevBooster/richos/" "$S/1-before-the-move.txt"
-check "before the move: the new address was asked first and had nothing" "the new address was not asked, or answered" has '"GET /RichCore/RichOS/releases/latest/download/latest.json HTTP/1.1" 404' "$S/1-before-the-move-server.log"
+check "before the move: the new address was asked first and had nothing" "the new address was not asked, or answered" has '"GET /RichSpark/RichOS/releases/latest/download/latest.json HTTP/1.1" 404' "$S/1-before-the-move-server.log"
 check "before the move: then the old one answered" "the old address was not asked" has '"GET /WebDevBooster/richos/releases/latest/download/latest.json HTTP/1.1" 200' "$S/1-before-the-move-server.log"
 
 # ---- 2. after the move: the new address answers, the old one is not asked ----
-manifest RichCore/RichOS 99.0.0 || fail "the new address's manifest"
+manifest RichSpark/RichOS 99.0.0 || fail "the new address's manifest"
 "$T/guest.sh" "$VM" ": > $G/server.log" || true
 selftest 2-after-the-move
 check "after the move: the new address's update is found (99.0.0)" "after the move: not the new address's update" has 'state=available .*available=99.0.0' "$S/2-after-the-move.txt"
-check "after the move: from the new address" "after the move: not from the new address" has "endpoint=http://127.0.0.1:$PORT/RichCore/RichOS/" "$S/2-after-the-move.txt"
+check "after the move: from the new address" "after the move: not from the new address" has "endpoint=http://127.0.0.1:$PORT/RichSpark/RichOS/" "$S/2-after-the-move.txt"
 check "after the move: the old address was not asked" "after the move: the old address was asked" lacks 'GET /WebDevBooster/' "$S/2-after-the-move-server.log"
 
 # ---- 3. one report through the relay ----

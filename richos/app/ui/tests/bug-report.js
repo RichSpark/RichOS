@@ -2079,28 +2079,28 @@ async function main() {
     return said;
   });
 
-  // THE GITHUB MOVE (CEO, 2026-10-27): once the relay files on `RichCore/RichOS`, Rich names that
+  // THE GITHUB MOVE (CEO, 2026-10-27): once the relay files on `RichSpark/RichOS`, Rich names that
   // address and the card opens it; nothing in the window spells the repository itself.
-  await run.check("after the GitHub move, a report and an idea name and open RichCore/RichOS", async () => {
-    const page = await open("light", { bugRepository: "RichCore/RichOS" });
+  await run.check("after the GitHub move, a report and an idea name and open RichSpark/RichOS", async () => {
+    const page = await open("light", { bugRepository: "RichSpark/RichOS" });
     await bustABug(page);
     await answer(page, ANSWER);
     await page.click("#bug-send");
     await page.waitForSelector(".bugcard.is-sent .bug-pill:has-text('Sent · #412')");
-    assert((await lastSaid(page)).includes("github.com/RichCore/RichOS/issues/412"), await lastSaid(page));
+    assert((await lastSaid(page)).includes("github.com/RichSpark/RichOS/issues/412"), await lastSaid(page));
     await page.click(".bug-sentrow .bug-link");
-    assertEqual((await calls(page, "bug_report_open_issue"))[0].url, "https://github.com/RichCore/RichOS/issues/412", "Open issue");
+    assertEqual((await calls(page, "bug_report_open_issue"))[0].url, "https://github.com/RichSpark/RichOS/issues/412", "Open issue");
     await page.close();
-    const idea = await open("light", { bugRepository: "RichCore/RichOS" });
+    const idea = await open("light", { bugRepository: "RichSpark/RichOS" });
     await requestAFeature(idea);
     await answerIdea(idea);
     await idea.click("#bug-send");
     await idea.waitForSelector(".bugcard.is-sent .bug-pill:has-text('Posted · in Ideas')");
-    assert((await lastSaid(idea)).endsWith("\ngithub.com/RichCore/RichOS/discussions/413"), await lastSaid(idea));
+    assert((await lastSaid(idea)).endsWith("\ngithub.com/RichSpark/RichOS/discussions/413"), await lastSaid(idea));
     await idea.click(".bugcard .bug-link");
-    assertEqual((await calls(idea, "bug_report_open_issue"))[0].url, "https://github.com/RichCore/RichOS/discussions/413", "Open it");
+    assertEqual((await calls(idea, "bug_report_open_issue"))[0].url, "https://github.com/RichSpark/RichOS/discussions/413", "Open it");
     await idea.close();
-    return "github.com/RichCore/RichOS/issues/412 and /discussions/413";
+    return "github.com/RichSpark/RichOS/issues/412 and /discussions/413";
   });
 
   await run.check("an idea goes out from the user's own GitHub account when RichOS has one, and says so", async () => {

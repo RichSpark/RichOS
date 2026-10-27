@@ -51,11 +51,11 @@ ENDPOINT = f"https://github.com/{REPO}/releases/download/{CHANNEL_TAG}/latest.js
 STABLE_ENDPOINT = f"https://github.com/{REPO}/releases/latest/download/latest.json"
 CHANNEL_ENDPOINTS = {"nightly": ENDPOINT, "stable": STABLE_ENDPOINT}
 # THE GITHUB MOVE (CEO, 2026-10-27; richos-hq docs/operations/2026-10-27-github-richcore-move.md):
-# the repository moves from `WebDevBooster/richos` to `RichCore/RichOS`. `REPO` above is where a
+# the repository moves from `WebDevBooster/richos` to `RichSpark/RichOS`. `REPO` above is where a
 # release is PUBLISHED, and it changes to the new address after the move. What a build COMPILES
 # IN is both addresses of its channel, the new one first: `src-tauri/src/updates.rs` asks them
 # in that order, so an installed copy finds its updates before, during and after the move.
-HOME_REPO = "RichCore/RichOS"
+HOME_REPO = "RichSpark/RichOS"
 FORMER_REPO = "WebDevBooster/richos"
 COMPILED_ENDPOINTS = {
     "nightly": [f"https://github.com/{r}/releases/download/{CHANNEL_TAG}/latest.json" for r in (HOME_REPO, FORMER_REPO)],

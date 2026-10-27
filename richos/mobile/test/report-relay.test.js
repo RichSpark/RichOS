@@ -421,15 +421,15 @@ test('a production deploy attaches report.richos.ceo as a Custom Domain before i
   assert(result.bindings.includes('ACCESS_AUD:plain_text') && result.bindings.includes('ACCESS_TEAM_DOMAIN:plain_text'));
 });
 
-// THE GITHUB MOVE (CEO, 2026-10-27): once the CEO has moved the repository to RichCore/RichOS and
+// THE GITHUB MOVE (CEO, 2026-10-27): once the CEO has moved the repository to RichSpark/RichOS and
 // installed the relay's App there, ONE command switches the production relay to it.
-test('move switches the production relay from WebDevBooster/richos to RichCore/RichOS, and to nothing else', async t => {
-  const f = await fixture(t, { repository: 'RichCore/RichOS', bot: 'richos-reports[bot]' });
+test('move switches the production relay from WebDevBooster/richos to RichSpark/RichOS, and to nothing else', async t => {
+  const f = await fixture(t, { repository: 'RichSpark/RichOS', bot: 'richos-reports[bot]' });
   const { move, checkProfile, reportArtifact, PRODUCTION, PRODUCTION_MOVED } = await import('../cli/report.mjs');
-  assert.equal(PRODUCTION.repository, 'WebDevBooster/richos'); assert.equal(PRODUCTION_MOVED, 'RichCore/RichOS');
+  assert.equal(PRODUCTION.repository, 'WebDevBooster/richos'); assert.equal(PRODUCTION_MOVED, 'RichSpark/RichOS');
   const before = { stage: 'production', ...PRODUCTION, bucket: 'richos-report', accountId: 'a'.repeat(32), databaseId: '11111111-2222-3333-4444-555555555555',
     appId: '123', installationId: '174', botLogin: 'richos-reports[bot]', label: 'richdoctor', accessTeamDomain: 'https://richos.cloudflareaccess.com', accessAud: 'b'.repeat(64) };
-  const after = { ...before, repository: 'RichCore/RichOS', installationId: '456' };
+  const after = { ...before, repository: 'RichSpark/RichOS', installationId: '456' };
   const expected = reportArtifact(after).metadata;
   let metadata = null, saved = null;
   const ok = result => new Response(JSON.stringify({ success: true, result }));
@@ -448,24 +448,25 @@ test('move switches the production relay from WebDevBooster/richos to RichCore/R
   };
   const appKey = f.env.GITHUB_APP_PRIVATE_KEY, save = profile => { saved = profile; };
 
-  const result = await move(before, 'RichCore/RichOS', { token: 't', appKey, fetch: fake, save });
-  assert.deepEqual([result.from, result.to, result.installationId, result.botLogin], ['WebDevBooster/richos', 'RichCore/RichOS', '456', 'richos-reports[bot]']);
+  const result = await move(before, 'RichSpark/RichOS', { token: 't', appKey, fetch: fake, save });
+  assert.deepEqual([result.from, result.to, result.installationId, result.botLogin], ['WebDevBooster/richos', 'RichSpark/RichOS', '456', 'richos-reports[bot]']);
   assert.deepEqual(saved, after, 'the profile names the new repository and its installation, and nothing else changed');
   const vars = Object.fromEntries(metadata.bindings.map(b => [b.name, b.text]));
-  assert.deepEqual([vars.GITHUB_REPOSITORY, vars.GITHUB_INSTALLATION_ID, vars.GITHUB_APP_ID], ['RichCore/RichOS', '456', '123'], 'the deployed relay files on the new address');
+  assert.deepEqual([vars.GITHUB_REPOSITORY, vars.GITHUB_INSTALLATION_ID, vars.GITHUB_APP_ID], ['RichSpark/RichOS', '456', '123'], 'the deployed relay files on the new address');
   assert.equal(result.deployed.health.accepting, true, 'the switch keeps the relay on');
 
   // Nothing else: not another repository (the App is not installed there), not the HQ repository,
   // and the profile is left as it was when the App check refuses.
   saved = null;
-  await assert.rejects(move(before, 'RichCore/RichOS-HQ', { token: 't', appKey, fetch: fake, save }), /GitHub/);
+  await assert.rejects(move(before, 'RichSpark/RichOS-HQ', { token: 't', appKey, fetch: fake, save }), /GitHub/);
   assert.equal(saved, null, 'a refused move leaves the profile alone');
-  assert.throws(() => checkProfile({ ...before, repository: 'RichCore/RichOS-HQ' }), /production/);
-  assert.throws(() => checkProfile({ ...before, repository: 'RichCore/richos' }), /production/, 'exactly the CEO\'s capitalization');
-  assert.equal(checkProfile(after).repository, 'RichCore/RichOS');
+  assert.throws(() => checkProfile({ ...before, repository: 'RichSpark/RichOS-HQ' }), /production/);
+  assert.throws(() => checkProfile({ ...before, repository: 'RichSpark/richos' }), /production/, 'exactly the CEO\'s capitalization');
+  assert.throws(() => checkProfile({ ...before, repository: 'RichCore/RichOS' }), /production/, 'GitHub refused that name; it is not ours');
+  assert.equal(checkProfile(after).repository, 'RichSpark/RichOS');
   // A test relay may use neither address.
   const test = { ...before, stage: 'test', worker: 'richos-report-test', hostname: 'report-test.richos.ceo', bucket: 'richos-report-test' };
-  for (const repository of ['RichCore/RichOS', 'richcore/richos', 'WebDevBooster/richos']) assert.throws(() => checkProfile({ ...test, repository }), /test profile/, repository);
+  for (const repository of ['RichSpark/RichOS', 'richspark/richos', 'WebDevBooster/richos']) assert.throws(() => checkProfile({ ...test, repository }), /test profile/, repository);
 });
 
 test('staff-access guards only the screenshot links, for exactly the named staff, and finds its application again', async () => {

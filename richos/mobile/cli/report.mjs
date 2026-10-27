@@ -13,9 +13,9 @@ export const SCHEDULE = '17 * * * *';
 // The one production identity (PRD §7). A test profile may use none of these.
 export const PRODUCTION = { worker: 'richos-report', hostname: 'report.richos.ceo', repository: 'WebDevBooster/richos' };
 // THE GITHUB MOVE (CEO, 2026-10-27; richos-hq docs/operations/2026-10-27-github-richcore-move.md): the
-// production repository's address after it moves into the RichCore organization. A production
+// production repository's address after it moves into the RichSpark organization. A production
 // profile names exactly PRODUCTION.repository or this, and `move` is the one switch between them.
-export const PRODUCTION_MOVED = 'RichCore/RichOS';
+export const PRODUCTION_MOVED = 'RichSpark/RichOS';
 // Workers rate-limit namespaces are account-wide; Connect uses 18443.
 const LIMITS = { production: ['18501', '18502', '18503'], test: ['18511', '18512', '18513'] };
 

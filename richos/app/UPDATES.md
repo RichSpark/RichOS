@@ -324,12 +324,12 @@ serves a file tree works without a server.
 The endpoints committed in `tauri.conf.json` are, in the order they are asked,
 
 ```
-https://github.com/RichCore/RichOS/releases/latest/download/latest.json
+https://github.com/RichSpark/RichOS/releases/latest/download/latest.json
 https://github.com/WebDevBooster/richos/releases/latest/download/latest.json
 ```
 
 **Two addresses, for the GitHub move (CEO, 2026-10-27).** The repository moves to
-`RichCore/RichOS`. `updates.rs` (`first_answer`) asks the new address first and the old one
+`RichSpark/RichOS`. `updates.rs` (`first_answer`) asks the new address first and the old one
 second and the first that answers with a manifest wins. Before the move the new address does
 not exist, so the old one answers. After the move the new one answers and the old one is not
 asked. A download that a manifest still names on the old address is fetched from the new one.
