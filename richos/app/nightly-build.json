@@ -1,0 +1,19 @@
+{
+  "build": true,
+  "version": "1.2.3",
+  "tag": "v1.2.3",
+  "source_commit": "28891a192a85034fa57937a4ba25d43a1fbc4039",
+  "created_at": "2026-10-27T13:30:21.141712+00:00",
+  "run_id": "20261027T133010Z-75a1449c",
+  "run_attempt": "1",
+  "channel": "stable",
+  "platform": "darwin-aarch64",
+  "endpoint": "https://github.com/WebDevBooster/richos/releases/latest/download/latest.json",
+  "promoted_from": "v1.2.3-nightly.20261027.76",
+  "promoted_from_version": "1.2.3-nightly.20261027.76",
+  "promotion_decided_on": "2026-10-27",
+  "promotion_words": "OK, promote the nightly to stable ASAP after the nightly is published.",
+  "reservation_ref": "refs/candidates/stable/v1.2.3",
+  "reservation_base": "",
+  "new_user_walk_required": true
+}
