@@ -2,6 +2,12 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.2.4-nightly.20261027.77
+
+[GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.4-nightly.20261027.77)
+
+- Fixed the new GitHub address RichOS moves to: it is github.com/RichSpark/RichOS, not github.com/RichCore/RichOS as the previous nightly said, so updates, bug reports and ideas, including from RichDoctor, keep working through the move with nothing for you to do
+
 ## 1.2.3-nightly.20261027.76
 
 [GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.3-nightly.20261027.76)
