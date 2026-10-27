@@ -361,33 +361,97 @@ impl Failure {
 // Wiring
 // ---------------------------------------------------------------------------------------
 
-/// The endpoint this process will use, and whether it is the committed placeholder.
+/// The endpoints this process will try, IN ORDER, and whether they are the committed
+/// placeholder.
+///
+/// THE GITHUB MOVE (CEO, 2026-10-27): the shipping config lists RichOS's new address first and
+/// its old one second (`richos_core::github_home`), and [`first_answer`] asks them in that order.
+/// Before the move the new address does not exist and the old one answers; after it the new one
+/// answers. The plugin is handed one address at a time so this file knows WHICH one answered:
+/// that is the endpoint the view reports, the one a rollback derives its tag manifest from, and
+/// the one that decides where the download is fetched ([`richos_core::github_home::download_at`]).
 ///
 /// Read once per call rather than cached, so `updater-e2e.sh` can start two processes from
 /// the same bundle with different endpoints.
-fn resolve_endpoint(app: &AppHandle) -> (String, bool) {
+fn resolve_endpoints(app: &AppHandle) -> (Vec<String>, bool) {
     if let Ok(env) = std::env::var(ENDPOINT_ENV) {
         let env = env.trim().to_string();
         if !env.is_empty() {
             let placeholder = env.contains(PLACEHOLDER_ENDPOINT_HOST);
-            return (env, placeholder);
+            return (vec![env], placeholder);
         }
     }
     // Fall back to what the config declares. `tauri::Config` does not expose plugin config
     // as a typed value, so this reads the same JSON the plugin reads.
-    let configured = app
+    let configured: Vec<String> = app
         .config()
         .plugins
         .0
         .get("updater")
         .and_then(|v| v.get("endpoints"))
         .and_then(|v| v.as_array())
-        .and_then(|a| a.first())
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let placeholder = configured.is_empty() || configured.contains(PLACEHOLDER_ENDPOINT_HOST);
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(str::to_string).collect())
+        .unwrap_or_default();
+    let placeholder = configured.is_empty() || configured.iter().any(|e| e.contains(PLACEHOLDER_ENDPOINT_HOST));
     (configured, placeholder)
+}
+
+/// The first endpoint, for the view before any check has answered.
+fn resolve_endpoint(app: &AppHandle) -> (String, bool) {
+    let (endpoints, placeholder) = resolve_endpoints(app);
+    (endpoints.into_iter().next().unwrap_or_default(), placeholder)
+}
+
+/// **ASK EACH ADDRESS IN TURN UNTIL ONE ANSWERS.** `ask` is one plugin check against one
+/// address. An answer is any manifest the plugin read, whether it offers an update or not
+/// (`Ok`): that address is where RichOS lives now, and the rest are not asked. An error (the
+/// address has no manifest, 404, which the plugin reports as `ReleaseNotFound`; no connection;
+/// a manifest it could not read) moves on to the next. When none answers, the LAST address's
+/// failure is the one reported: before the move the first address always fails for the same
+/// reason (it does not exist yet), so its failure says nothing about this Mac.
+///
+/// Returns the index of the address that answered, with its answer.
+async fn first_answer<T, F, Fut>(endpoints: &[String], mut ask: F) -> Result<(usize, T), Failure>
+where
+    F: FnMut(tauri::Url) -> Fut,
+    Fut: std::future::Future<Output = Result<T, tauri_plugin_updater::Error>>,
+{
+    let mut last = Failure {
+        kind: "configuration",
+        headline: "This build of RichOS has no usable update server configured.".to_string(),
+        detail: "no update endpoint is configured".to_string(),
+    };
+    for (i, endpoint) in endpoints.iter().enumerate() {
+        let url = match tauri::Url::parse(endpoint) {
+            Ok(url) => url,
+            Err(e) => {
+                // Not routed through `Failure::classify`: the endpoint never became a URL, so
+                // there is no plugin error to classify and inventing one would misreport where
+                // the fault is. This is a configuration fault and says so.
+                last = Failure {
+                    kind: "configuration",
+                    headline: "This build of RichOS has no usable update server configured.".to_string(),
+                    detail: format!("{endpoint}: {e}"),
+                };
+                continue;
+            }
+        };
+        match ask(url).await {
+            Ok(answer) => return Ok((i, answer)),
+            Err(e) => last = Failure::classify(&e),
+        }
+    }
+    Err(last)
+}
+
+/// Where the plugin fetches `update`'s archive: on RichOS's new address when the manifest came
+/// from there and still names the old one. The bytes are signature-checked either way.
+fn download_from_home(update: &mut tauri_plugin_updater::Update, answered: &str) {
+    if let Some(home) = richos_core::github_home::download_at(answered, update.download_url.as_str()) {
+        if let Ok(url) = tauri::Url::parse(&home) {
+            update.download_url = url;
+        }
+    }
 }
 
 /// Install the update state. Pure — no I/O, no network, nothing that can fail — so it is
@@ -458,7 +522,8 @@ pub async fn check(app: &AppHandle) -> UpdateView {
             Err(e) => return journal_failure(app, e),
         }
     }
-    let (endpoint, placeholder) = resolve_endpoint(app);
+    let (endpoints, placeholder) = resolve_endpoints(app);
+    let endpoint = endpoints.first().cloned().unwrap_or_default();
 
     if placeholder {
         return transition(app, |v| {
@@ -476,41 +541,24 @@ pub async fn check(app: &AppHandle) -> UpdateView {
         v.endpoint_is_placeholder = false;
     });
 
-    let parsed = match tauri::Url::parse(&endpoint) {
-        Ok(url) => url,
-        Err(e) => {
-            // Not routed through `Failure::classify`: the endpoint never became a URL, so
-            // there is no plugin error to classify and inventing one would misreport where
-            // the fault is. This is a configuration fault and says so.
-            let detail = format!("{endpoint}: {e}");
-            return transition(app, |v| {
-                v.state = "failed";
-                v.failure = Some(Failure {
-                    kind: "configuration",
-                    headline: "This build of RichOS has no usable update server configured."
-                        .to_string(),
-                    detail,
-                });
-            });
+    let answered = first_answer(&endpoints, |url| {
+        let app = app.clone();
+        async move { app.updater_builder().endpoints(vec![url])?.build()?.check().await }
+    })
+    .await;
+    let answered = match answered {
+        Ok((i, answer)) => {
+            let endpoint = endpoints[i].clone();
+            transition(app, |v| v.endpoint = endpoint.clone());
+            Ok(answer.map(|mut update| {
+                download_from_home(&mut update, &endpoint);
+                update
+            }))
         }
+        Err(failure) => Err(failure),
     };
 
-    let updater = match app
-        .updater_builder()
-        .endpoints(vec![parsed])
-        .and_then(|b| b.build())
-    {
-        Ok(u) => u,
-        Err(e) => {
-            let failure = Failure::classify(&e);
-            return transition(app, |v| {
-                v.state = "failed";
-                v.failure = Some(failure);
-            });
-        }
-    };
-
-    match updater.check().await {
+    match answered {
         Ok(Some(update)) => {
             let version = update.version.clone();
             let notes = update.body.clone();
@@ -544,14 +592,11 @@ pub async fn check(app: &AppHandle) -> UpdateView {
                 v.checked_at = Some(now_millis());
             })
         }
-        Err(e) => {
-            let failure = Failure::classify(&e);
-            transition(app, |v| {
-                v.state = "failed";
-                v.failure = Some(failure);
-                v.checked_at = Some(now_millis());
-            })
-        }
+        Err(failure) => transition(app, |v| {
+            v.state = "failed";
+            v.failure = Some(failure);
+            v.checked_at = Some(now_millis());
+        }),
     }
 }
 
@@ -796,7 +841,8 @@ pub async fn rollback(app: &AppHandle) -> UpdateView {
         });
     };
 
-    let (endpoint, placeholder) = resolve_endpoint(app);
+    let (endpoints, placeholder) = resolve_endpoints(app);
+    let endpoint = endpoints.first().cloned().unwrap_or_default();
     if placeholder {
         return transition(app, |v| {
             v.clear_attempt();
@@ -805,7 +851,11 @@ pub async fn rollback(app: &AppHandle) -> UpdateView {
             v.endpoint_is_placeholder = true;
         });
     }
-    let Some(manifest) = previous_manifest_url(&endpoint, &target) else {
+    // The tag's own manifest under each address, in the same order as a check asks them: before
+    // the GitHub move it is found under the old address, after it under the new one.
+    let channels: Vec<String> = endpoints.iter().filter(|e| previous_manifest_url(e, &target).is_some()).cloned().collect();
+    let manifests: Vec<String> = channels.iter().filter_map(|e| previous_manifest_url(e, &target)).map(|u| u.to_string()).collect();
+    if manifests.is_empty() {
         let detail = format!("{endpoint} is not a release-channel manifest URL");
         return transition(app, |v| {
             v.state = "failed";
@@ -834,26 +884,28 @@ pub async fn rollback(app: &AppHandle) -> UpdateView {
     // version — the one this installation's own history named — and nothing else, so a
     // manifest that answers with something other than the tag asked for is refused here
     // rather than downloaded and then argued with.
-    let wanted = target.clone();
-    let updater = match app
-        .updater_builder()
-        .version_comparator(move |_current, remote| remote.version.to_string() == wanted)
-        .endpoints(vec![manifest])
-        .and_then(|b| b.build())
-    {
-        Ok(u) => u,
-        Err(e) => {
-            let failure = Failure::classify(&e);
-            return transition(app, |v| {
-                v.state = "failed";
-                v.failure = Some(failure);
-            });
+    let answered = first_answer(&manifests, |url| {
+        let app = app.clone();
+        let wanted = target.clone();
+        async move {
+            app.updater_builder()
+                .version_comparator(move |_current, remote| remote.version.to_string() == wanted)
+                .endpoints(vec![url])?
+                .build()?
+                .check()
+                .await
         }
-    };
+    })
+    .await;
 
-    let update = match updater.check().await {
-        Ok(Some(update)) => update,
-        Ok(None) => {
+    let update = match answered {
+        Ok((i, Some(mut update))) => {
+            let channel = channels[i].clone();
+            download_from_home(&mut update, &channel);
+            transition(app, |v| v.endpoint = channel.clone());
+            update
+        }
+        Ok((_, None)) => {
             let detail = format!("the manifest for v{target} does not offer {target}");
             return transition(app, |v| {
                 v.state = "failed";
@@ -865,8 +917,7 @@ pub async fn rollback(app: &AppHandle) -> UpdateView {
                 });
             });
         }
-        Err(e) => {
-            let failure = Failure::classify(&e);
+        Err(failure) => {
             return transition(app, |v| {
                 v.state = "failed";
                 v.failure = Some(failure);
@@ -1321,13 +1372,15 @@ pub fn spawn_selftest(app: AppHandle, mode: String) {
     tauri::async_runtime::spawn(async move {
         let say = |v: &UpdateView| {
             println!(
-                "RICHOS-UPDATE-SELFTEST state={} current={} available={} percent={} back={} rollback={} failure={} detail={}",
+                "RICHOS-UPDATE-SELFTEST state={} current={} available={} percent={} back={} rollback={} endpoint={} failure={} detail={}",
                 v.state,
                 v.current_version,
                 v.available_version.clone().unwrap_or_else(|| "-".into()),
                 v.percent.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
                 v.rollback_version.clone().unwrap_or_else(|| "-".into()),
                 v.ready_is_rollback,
+                // The address that answered (the GitHub move: new first, old second).
+                if v.endpoint.is_empty() { "-" } else { v.endpoint.as_str() },
                 v.failure.as_ref().map(|f| f.kind).unwrap_or("-"),
                 v.failure
                     .as_ref()
@@ -1611,5 +1664,69 @@ mod tests {
                 "{endpoint} must not resolve to a guessed location"
             );
         }
+    }
+
+    const NEW: &str = "https://github.com/RichCore/RichOS/releases/latest/download/latest.json";
+    const OLD: &str = "https://github.com/WebDevBooster/richos/releases/latest/download/latest.json";
+
+    /// THE GITHUB MOVE (CEO, 2026-10-27): the release that ships before the move must find its
+    /// updates at the old address until the move and at the new one after it, so the shipping
+    /// config names both, the new one first. Only one address here and the updater would read
+    /// one place only.
+    #[test]
+    fn the_shipping_config_asks_the_new_address_first_and_the_old_one_second() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["plugins"]["updater"]["endpoints"], serde_json::json!([NEW, OLD]));
+    }
+
+    /// Asked in order through [`first_answer`]; `answers` is what each address says, `None` for
+    /// "no manifest here" (the plugin's `ReleaseNotFound`, a 404) and `Some(v)` for a manifest
+    /// offering `v`. Returns which answered and the addresses asked.
+    fn ask(answers: [Option<&'static str>; 2]) -> (Result<(usize, &'static str), &'static str>, Vec<String>) {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let endpoints = [NEW.to_string(), OLD.to_string()];
+        let got = tauri::async_runtime::block_on(first_answer(&endpoints, |url| {
+            asked.borrow_mut().push(url.to_string());
+            let answer = answers[asked.borrow().len() - 1];
+            async move { answer.ok_or(tauri_plugin_updater::Error::ReleaseNotFound) }
+        }));
+        (got.map_err(|f| f.kind), asked.into_inner())
+    }
+
+    /// Before the move `RichCore/RichOS` does not exist, so the new address answers 404 and the
+    /// old one answers: the update is found there.
+    #[test]
+    fn before_the_move_the_new_address_has_nothing_and_the_old_one_answers() {
+        let (got, asked) = ask([None, Some("1.3.0")]);
+        assert_eq!(got, Ok((1, "1.3.0")));
+        assert_eq!(asked, [NEW, OLD], "the new address first, then the old one");
+    }
+
+    /// After the move the new address answers and the old one is never asked, so nothing
+    /// depends on GitHub's redirect from it.
+    #[test]
+    fn after_the_move_the_new_address_answers_and_the_old_one_is_not_asked() {
+        let (got, asked) = ask([Some("1.3.0"), Some("1.2.0")]);
+        assert_eq!(got, Ok((0, "1.3.0")));
+        assert_eq!(asked, [NEW], "the old address is not asked once the new one answers");
+    }
+
+    /// Neither answers: the old address's failure is the one reported (before the move the new
+    /// one always fails for its own reason, which says nothing about this Mac).
+    #[test]
+    fn when_neither_address_answers_the_last_failure_is_reported() {
+        let endpoints = [NEW.to_string(), OLD.to_string()];
+        let mut n = 0;
+        let got = tauri::async_runtime::block_on(first_answer(&endpoints, |_url| {
+            n += 1;
+            let e = if n == 1 { tauri_plugin_updater::Error::ReleaseNotFound } else { tauri_plugin_updater::Error::TargetNotFound("darwin-aarch64".into()) };
+            async move { Err::<(), _>(e) }
+        }));
+        let failure = got.unwrap_err();
+        assert_eq!((failure.kind, n), ("manifest", 2));
+        assert!(failure.detail.contains("darwin-aarch64"), "{}", failure.detail);
+        // An address that is not a URL is skipped as a configuration fault, not a stop.
+        let got = tauri::async_runtime::block_on(first_answer(&["not a url".to_string(), OLD.to_string()], |_url| async { Ok::<_, tauri_plugin_updater::Error>(7) }));
+        assert_eq!(got.map_err(|f| f.kind), Ok((1, 7)));
     }
 }

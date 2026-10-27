@@ -164,20 +164,23 @@ fi
 # WebDevBooster/richos, one static `latest.json` per release, fetched through the `latest`
 # pointer so the compiled-in URL never has to change. `app/RELEASING.md` carries the shape
 # and the evidence for it.
-WANT_ENDPOINT="https://github.com/WebDevBooster/richos/releases/latest/download/latest.json"
-ENDPOINT_COUNT="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))["plugins"]["updater"]["endpoints"]))' "$CONF" 2>/dev/null)"
-ENDPOINT="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["plugins"]["updater"]["endpoints"][0])' "$CONF" 2>/dev/null)"
-if [ "$ENDPOINT" = "$WANT_ENDPOINT" ] && [ "$ENDPOINT_COUNT" = "1" ]; then
-  ok "B2 the endpoint is the one GitHub Releases manifest URL, over https"
+#
+# THE GITHUB MOVE (CEO, 2026-10-27): the repository moves to RichCore/RichOS, so the config
+# names that address first and the old one second, and `updates.rs` asks them in that order:
+# the old one answers until the move, the new one after it.
+WANT_ENDPOINTS="https://github.com/RichCore/RichOS/releases/latest/download/latest.json https://github.com/WebDevBooster/richos/releases/latest/download/latest.json"
+ENDPOINTS="$(python3 -c 'import json,sys;print(" ".join(json.load(open(sys.argv[1]))["plugins"]["updater"]["endpoints"]))' "$CONF" 2>/dev/null)"
+if [ "$ENDPOINTS" = "$WANT_ENDPOINTS" ]; then
+  ok "B2 the endpoints are RichOS's GitHub Releases manifest URL at its new address, then its old one, over https"
 else
-  bad "B2 the endpoint is the one GitHub Releases manifest URL, over https" \
-      "it is '$ENDPOINT' ($ENDPOINT_COUNT endpoint(s)); wanted exactly one: $WANT_ENDPOINT"
+  bad "B2 the endpoints are RichOS's GitHub Releases manifest URL at its new address, then its old one, over https" \
+      "they are '$ENDPOINTS'; wanted, in order: $WANT_ENDPOINTS"
 fi
 
-if printf '%s' "$ENDPOINT" | grep -q '\.invalid'; then
+if printf '%s' "$ENDPOINTS" | grep -q '\.invalid'; then
   bad "B2b the endpoint is not the .invalid placeholder any more" \
       "an installed build would report 'unconfigured' and never check for anything"
-elif printf '%s' "$ENDPOINT" | grep -q '{{'; then
+elif printf '%s' "$ENDPOINTS" | grep -q '{{'; then
   bad "B2b the endpoint carries no {{template}} placeholders" \
       "GitHub Releases is a static asset host and substitutes nothing; a templated path would 404"
 else

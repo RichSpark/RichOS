@@ -195,14 +195,16 @@ RECEIPT="$OUT/engine-published.ok"
 
 sha256_of() { /usr/bin/shasum -a 256 "$1" | awk '{print $1}'; }
 
-# The endpoint compiled into the app has to be the one this release publishes to. If those
-# two ever drift, every claim below is about a file nobody fetches.
-CONFIGURED_ENDPOINT="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["plugins"]["updater"]["endpoints"][0])' "$src_tauri/tauri.conf.json")"
-[ "$CONFIGURED_ENDPOINT" = "$ENDPOINT" ] || die "tauri.conf.json's updater endpoint is
-    $CONFIGURED_ENDPOINT
+# The endpoints compiled into the app have to include the one this release publishes to. If
+# those ever drift, every claim below is about a file nobody fetches. The app carries RichOS's
+# new GitHub address first and its old one second (the GitHub move, CEO 2026-10-27), and this
+# release publishes to whichever of the two `REPO` names.
+CONFIGURED_ENDPOINTS="$(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1]))["plugins"]["updater"]["endpoints"]))' "$src_tauri/tauri.conf.json")"
+printf '%s\n' "$CONFIGURED_ENDPOINTS" | grep -Fxq -- "$ENDPOINT" || die "tauri.conf.json's updater endpoints are
+    $CONFIGURED_ENDPOINTS
   and this release publishes its manifest to
     $ENDPOINT
-  One of the two is wrong, and an installed copy would fetch the first."
+  One of the two is wrong, and an installed copy would never fetch this release."
 
 # ---------------------------------------------------------------------------------------
 plan() {
