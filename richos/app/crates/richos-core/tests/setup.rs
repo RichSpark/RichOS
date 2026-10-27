@@ -1240,11 +1240,50 @@ fn a_pinned_engine_lands_where_the_resolver_looks_and_stamps_itself() {
     let stamp = std::fs::read_to_string(dest.join("INSTALLED-FROM")).unwrap();
     assert!(stamp.contains(&digest), "{stamp}");
     assert!(stamp.contains("engine 1.0.0"), "{stamp}");
-    assert!(stamp.contains("https://github.com/WebDevBooster/richos/releases/"), "{stamp}");
+    // The pin names the old GitHub address; where the new one answers, it is fetched from there.
+    assert!(stamp.contains("from https://github.com/RichCore/RichOS/releases/"), "{stamp}");
 
     // And detection now finds it, which is the whole point.
     let paths = SetupPaths { home: Some(home), ..Default::default() };
     assert!(find_engine(&paths, &[], &every_engine_is_usable).present);
+}
+
+/// THE GITHUB MOVE (CEO, 2026-10-27): a build pinned to the old address installs its engine
+/// before the move (the new address has nothing yet) and after it (fetched from the new address,
+/// never through GitHub's redirect). The digest is checked whichever address the bytes came from.
+#[test]
+fn a_pinned_engine_is_fetched_from_the_new_address_first_and_the_old_one_when_it_has_nothing() {
+    struct BeforeTheMove {
+        body: Vec<u8>,
+        asked: Mutex<Vec<String>>,
+    }
+    impl Fetcher for BeforeTheMove {
+        fn fetch(&self, url: &str, dest: &Path) -> Result<u64, SetupError> {
+            self.asked.lock().unwrap().push(url.to_string());
+            if url.starts_with("https://github.com/RichCore/RichOS/") {
+                return Err(SetupError::DownloadFailed { url: url.to_string(), status: "The requested URL returned error: 404".into() });
+            }
+            std::fs::write(dest, &self.body).unwrap();
+            Ok(self.body.len() as u64)
+        }
+    }
+    let root = scratch("engine-before-the-move");
+    let dest = engine_install_dir(&root.join("home"));
+    let body = b"the same bytes at either address";
+    let digest = body_and_digest(&root, body);
+    let before = BeforeTheMove { body: body.to_vec(), asked: Mutex::new(Vec::new()) };
+    install_engine(&before, &good_engine_plan("1.0.0"), &a_pin(&digest), &dest).unwrap();
+    let home = ASSET_URL.replace("WebDevBooster/richos", "RichCore/RichOS");
+    assert_eq!(before.asked.lock().unwrap().as_slice(), [home.as_str(), ASSET_URL], "the new address first, then the pinned one");
+    assert!(std::fs::read_to_string(dest.join("INSTALLED-FROM")).unwrap().contains(&format!("from {ASSET_URL}")));
+
+    let root = scratch("engine-after-the-move");
+    let dest = engine_install_dir(&root.join("home"));
+    let digest = body_and_digest(&root, body);
+    let after = FakeFetcher::new(body);
+    install_engine(&after, &good_engine_plan("1.0.0"), &a_pin(&digest), &dest).unwrap();
+    assert_eq!(after.asked.lock().unwrap().as_slice(), [home.as_str()], "the old address is not asked once the new one answers");
+    assert!(std::fs::read_to_string(dest.join("INSTALLED-FROM")).unwrap().contains(&format!("from {home}")));
 }
 
 /// **SETUP DONE ONCE IS DONE — the relaunch, end to end.**
