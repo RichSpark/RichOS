@@ -507,7 +507,6 @@ SHA-256 pins are in `richos/app/scripts/runtime-sources.json`. The delivered
 | Node.js | 24.21.0 | Upstream distribution retained, including `runtime/node/LICENSE` and its dependency notices |
 | jq | 1.8.2 | Upstream binary with `runtime/sources/JQ-COPYING` |
 | Git | 2.55.0 | `runtime/sources/GIT-COPYING` and exact corresponding source `git-2.55.0.tar.xz` |
-| GNU libiconv, statically linked into Git | 1.18 | `runtime/sources/ICONV-COPYING.LIB` and exact corresponding source `libiconv-1.18.tar.gz` |
 | whisper.cpp (`whisper-cli`, with the ggml it vendors statically linked), MIT | 1.9.1 | `runtime/sources/WHISPER-CPP-LICENSE`; built from the pinned upstream source archive |
 | FFmpeg (`ffmpeg`, `ffprobe`), static macOS arm64 build by Martin Riedl, GPL-3.0-or-later | 9.0.2 | `runtime/sources/FFMPEG-COPYING.GPLv3`; directions to the exact corresponding source in `runtime/sources/FFMPEG-SOURCE.txt` and a copy of every archive attached to the RichOS release |
 
@@ -560,9 +559,14 @@ function (`nightly.py attach-gpl-sources`) attached its copies on 2026-10-08.
 Its runtime's `FFMPEG-SOURCE.txt` predates the release names and lists the
 upstream URLs only; the copies on that release carry the same SHA-256s.
 
-The Git, libiconv and whisper.cpp build instructions are the public runtime build script.
-Git is built with a relocatable prefix and system libraries; libiconv is built
-from the included source. No macOS system binary is copied. macOS supplies
+The Git and whisper.cpp build instructions are the public runtime build script.
+Git is built with a relocatable prefix and macOS system libraries, including
+the system iconv (`/usr/lib/libiconv.2.dylib`), the only one with the
+`UTF-8-MAC` encoding Git needs in a repository with
+`core.precomposeunicode=true`. Runtimes built from the recipe before
+2026-10-28 linked GNU libiconv 1.18 statically instead and carry its
+`ICONV-COPYING.LIB` and exact corresponding source `libiconv-1.18.tar.gz` in
+their own `runtime/sources`. No macOS system binary is copied. macOS supplies
 Bash and the system libraries used by this delivery. The complete upstream
 license texts govern each runtime and its dependencies. The Claude provider
 is installed separately through its own installer and is not redistributed in

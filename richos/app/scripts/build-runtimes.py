@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import unicodedata
 import urllib.request
 import zipfile
 
@@ -23,6 +24,65 @@ import zipfile
 # lease's tool commands, and a runtime without them would silently stop reaping (reap gap C8).
 CLOSURE_CHECK = ("import sqlite3, fcntl, ssl, ctypes; ctypes.CDLL('/usr/lib/libproc.dylib'); "
                  "print('Python dependency closure OK')")
+
+
+# THE DELIVERED GIT MUST WORK IN AN ORDINARY MAC REPOSITORY. `git init` on macOS writes
+# core.precomposeunicode=true, and with it Git converts every non-ASCII name it reads from a
+# directory through iconv_open("UTF-8", "UTF-8-MAC") (compat/precompose_utf8.c). Only Apple's
+# system libiconv knows "UTF-8-MAC"; a Git linked against stock GNU libiconv dies with
+# "iconv_open(UTF-8,UTF-8-MAC) failed, but needed: precomposed unicode is not supported" the
+# first time `git status` meets such a name (measured 2026-10-28: richos-hq, and the runtime
+# the nightly built from runtime-sources.json eb026316eb08). An ASCII-only repository never
+# reaches that code, which is why the version check alone never saw it. build() runs this
+# against every fresh runtime and build-runtimes.test.sh runs it against RICHOS_RUNTIME_DIR.
+PRECOMPOSE_NAME = "café.txt"
+
+
+def check_git_precompose(git, env=None):
+    """`git status` in a fresh repository with core.precomposeunicode=true and a file whose
+    name is stored decomposed (NFD) must exit 0 and report the name precomposed (NFC).
+    Returns the porcelain record; raises RuntimeError quoting Git's own output otherwise.
+    Isolated from the caller's Git configuration and home."""
+    with tempfile.TemporaryDirectory(prefix="richos-git-precompose-") as temporary:
+        root = Path(temporary)
+        (root / "home").mkdir()
+        isolated = {**(env if env is not None else os.environ), "HOME": str(root / "home"),
+                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+                    "LC_ALL": "C", "LANG": "C"}
+        repo = root / "repo"
+
+        def git_run(*arguments):
+            return subprocess.run([str(git), *arguments], env=isolated, capture_output=True)
+
+        for arguments in (("init", "-q", str(repo)), ("-C", str(repo), "config", "core.precomposeunicode", "true")):
+            result = git_run(*arguments)
+            if result.returncode != 0:
+                raise RuntimeError(f"git {arguments[0]} failed ({result.returncode}): "
+                                   + result.stderr.decode(errors="replace").strip())
+        (repo / unicodedata.normalize("NFD", PRECOMPOSE_NAME)).write_text("fictional\n")
+        result = git_run("-C", str(repo), "status", "--porcelain", "-z")
+        if result.returncode != 0:
+            raise RuntimeError(f"git status in a core.precomposeunicode=true repository exited "
+                               f"{result.returncode}: " + result.stderr.decode(errors="replace").strip())
+        wanted = ("?? " + unicodedata.normalize("NFC", PRECOMPOSE_NAME) + "\0").encode()
+        if result.stdout != wanted:
+            raise RuntimeError(f"git status did not report the precomposed name: {result.stdout!r}, wanted {wanted!r}")
+        return result.stdout.decode().rstrip("\0")
+
+
+# HOW GIT GETS ITS ICONV: from macOS, /usr/lib/libiconv.2.dylib (the SDK's -liconv), the only
+# iconv that has "UTF-8-MAC" (check_git_precompose above), present on every Mac like libz and
+# libSystem, which the delivered git already links. Not GNU libiconv, which RichOS no longer
+# builds or ships. ICONVDIR empty: no -I/-L to any other iconv. NO_HOMEBREW, NO_FINK and
+# NO_DARWIN_PORTS: git's Makefile otherwise adds -L/opt/homebrew/..., /sw/lib and /opt/local/lib
+# when those directories exist on the build Mac, and a libiconv.dylib there would be linked
+# instead. NEEDS_GOOD_LIBICONV set on every build Mac, not only on a Darwin 24+ one as git's
+# config.mak.uname decides: with no "good" (Homebrew/Fink/MacPorts) iconv it compiles
+# ICONV_RESTART_RESET, git's own workaround for macOS 14+ system iconv's piecemeal-conversion
+# fault (utf8.c reencode_string_iconv), so the bytes do not depend on the build Mac's macOS.
+GIT_ICONV_FLAGS = ("ICONVDIR=", "USE_HOMEBREW_LIBICONV=", "NEEDS_GOOD_LIBICONV=UnfortunatelyYes",
+                   "NO_HOMEBREW=YesPlease", "NO_FINK=YesPlease", "NO_DARWIN_PORTS=YesPlease")
+SYSTEM_ICONV = "/usr/lib/libiconv.2.dylib"
 
 
 # Every download names itself. ffmpeg.martin-riedl.de answers Python's default User-Agent
@@ -222,29 +282,16 @@ def build(destination):
             if name == "whisper-cpp":
                 build_whisper_cli(entries[0], scratch, runtime)
                 continue
-            if name == "iconv":
-                iconv_source = entries[0]
-                iconv_prefix = scratch / "iconv-static"
-                clean_env = {**os.environ, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-                    "CFLAGS": "-O2 -mmacosx-version-min=13.0 -ffile-prefix-map=" + str(iconv_source) + "=iconv-source"}
-                with (scratch / "iconv-build.log").open("w") as log:
-                    subprocess.run([str(iconv_source / "configure"), "--prefix=" + str(iconv_prefix),
-                        "--disable-shared", "--enable-static", "--disable-nls"], cwd=iconv_source, env=clean_env, stdout=log, stderr=log, check=True)
-                    subprocess.run(["make", "-j4"], cwd=iconv_source, env=clean_env, stdout=log, stderr=log, check=True)
-                    subprocess.run(["make", "install"], cwd=iconv_source, env=clean_env, stdout=log, stderr=log, check=True)
-                shutil.copyfile(archive, runtime / "sources/libiconv-1.18.tar.gz")
-                shutil.copyfile(iconv_source / "COPYING.LIB", runtime / "sources/ICONV-COPYING.LIB")
-                continue
             # Retain the exact source archive with the GPL implementation. No
             # developer checkout, system Git binary or private configuration is copied.
             shutil.copyfile(archive, runtime / "sources/git-2.55.0.tar.xz")
             git_source = entries[0]
             flags = ["prefix=/", "RUNTIME_PREFIX=YesPlease", "NO_GETTEXT=YesPlease",
                      "NO_TCLTK=YesPlease", "NO_PERL=YesPlease", "NO_OPENSSL=YesPlease",
-                     "USE_HOMEBREW_LIBICONV=", "ICONVDIR=" + str(iconv_prefix),
                      "NO_PYTHON=YesPlease", "NO_RUST=YesPlease", "NO_INSTALL_HARDLINKS=YesPlease",
+                     *GIT_ICONV_FLAGS,
                      "CFLAGS=-O2 -mmacosx-version-min=13.0 -ffile-prefix-map=" + str(git_source) + "=git-source"]
-            # Static iconv needs -L at build time, not an installed build-directory rpath.
+            # No installed build-directory rpath.
             if manifest.get("portable_git_link_paths"):
                 flags.append("CC_LD_DYNPATH=")
             clean_env = {**os.environ, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "SDKROOT": subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()}
@@ -271,6 +318,9 @@ def build(destination):
         for name in ("ffmpeg", "ffprobe"):
             versions[name] = subprocess.check_output([str(runtime / "bin" / name), "-version"], text=True, env=env).splitlines()[0]
         subprocess.run([str(runtime / "bin/python3"), "-c", CLOSURE_CHECK], env=env, check=True)
+        if SYSTEM_ICONV not in subprocess.check_output(["otool", "-L", str(runtime / "git/bin/git")], text=True):
+            raise RuntimeError(f"git/bin/git does not link {SYSTEM_ICONV}, the iconv that has UTF-8-MAC")
+        print("git precomposed unicode OK: " + check_git_precompose(runtime / "bin/git", env), flush=True)
         # Reject any dynamic dependency on Homebrew or the developer's home.
         for path in runtime.rglob("*"):
             if path.is_file() and not path.is_symlink():
