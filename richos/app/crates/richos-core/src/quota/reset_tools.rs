@@ -36,10 +36,16 @@ pub(super) fn status(app: &Path, resets: &Service, now: u64, declared: Option<&s
     }
     let view: super::View = read_json(&state.join("claude-quota.json"))
         .map_err(|_| "The app has not published a usage reading yet. No reading is reported.".to_string())?;
-    let account = view.in_use.as_ref().map_or_else(
-        || json!({"id": crate::claude_accounts::ACCOUNT_ONE, "label": view.first_label.clone().unwrap_or_else(|| "Account 1".into())}),
-        |a| json!({"id": a.id, "label": a.label}),
-    );
+    // A file an older app wrote has no `inUse`: its `accounts[]` row marked in use names the
+    // account (two or more accounts); with none, there is one account, Account 1. Measured on the
+    // live file of 2026-10-28 17:14Z: defaulting to Account 1 named Home beside Work's figures.
+    let account = match (&view.in_use, view.accounts.iter().find(|a| a.in_use)) {
+        (Some(a), _) => json!({"id": a.id, "label": a.label}),
+        (None, Some(row)) => json!({"id": row.id, "label": row.label}),
+        (None, None) if view.accounts.is_empty() => json!({"id": crate::claude_accounts::ACCOUNT_ONE,
+            "label": view.first_label.clone().unwrap_or_else(|| "Account 1".into())}),
+        (None, None) => return Err("The app's reading does not say which account is in use. No reading is reported.".into()),
+    };
     let r = resets.view();
     Ok(json!({
         "account": account,

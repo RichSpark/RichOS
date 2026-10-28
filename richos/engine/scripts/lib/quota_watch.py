@@ -681,11 +681,15 @@ def read_app(state, now):
         r["state"], r["why"] = "malformed", "%s is not the app's usage reading" % path
         return r
     who = data.get("inUse") if isinstance(data.get("inUse"), dict) else None
-    if who is None:  # an app older than the field: its accounts row, or its one account's name
-        who = next((x for x in data.get("accounts") or [] if isinstance(x, dict) and x.get("inUse")), None)
-    label = (who or {}).get("label") or data.get("firstLabel") or "in use"
-    label = "".join(c for c in str(label)[:80] if c.isprintable())
-    r["account"] = {"id": str((who or {}).get("id") or "1"), "label": label}
+    listed = [x for x in data.get("accounts") or [] if isinstance(x, dict)]
+    if who is None:  # an app older than the field: its accounts row in use
+        who = next((x for x in listed if x.get("inUse")), None)
+    if who is None and not listed:  # one account: Account 1, by its name when it has one
+        who = {"id": "1", "label": data.get("firstLabel") or "Account 1"}
+    # A list with no row in use names nobody: never guessed as Account 1 (that named Home beside
+    # Work's figures in the live file of 2026-10-28 17:14Z).
+    label = "".join(c for c in str((who or {}).get("label") or "not named")[:80] if c.isprintable())
+    r["account"] = {"id": str(who["id"]) if who and who.get("id") else None, "label": label}
     r["source"] = "the app (account %s)" % label
     windows = []
     for w in data.get("windows") or []:

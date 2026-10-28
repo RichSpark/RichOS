@@ -3130,6 +3130,38 @@ for line in sys.stdin:
         assert!(held && reading.contains("account Home"), "{reading}");
     }
 
+    /// **A file an older app wrote names no account in use** (the live file of 2026-10-28 17:14Z,
+    /// written by the installed app before `inUse` existed). The quota tool then names the
+    /// `accounts[]` row marked in use, never Account 1 by default: that named Home beside Work's
+    /// figures. With no accounts list it is the one account; a list with no row in use is refused.
+    #[test]
+    fn the_quota_tool_names_the_account_in_use_from_a_file_an_older_app_wrote() {
+        let root = Scratch::new();
+        let service = Service::open(root.path()).unwrap();
+        service.accounts.rename("1", "Home").unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        service.accounts.use_first(&work.id).unwrap();
+        service.publish().unwrap();
+        let path = root.path().join("engine-state/claude-quota.json");
+        let older = |edit: &dyn Fn(&mut Value)| {
+            service.publish().unwrap(); // each case starts from the file the app writes
+            let mut file: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            file.as_object_mut().unwrap().remove("inUse");
+            edit(&mut file);
+            fs::write(&path, file.to_string()).unwrap();
+            reset_tools::status(root.path(), &resets::Service::new(root.path()), crate::util::now_millis(), None)
+        };
+        let reply = older(&|_| {}).unwrap();
+        assert_eq!((reply["account"]["id"].as_str(), reply["account"]["label"].as_str()), (Some("2"), Some("Work")), "{reply}");
+        let reply = older(&|file| { file["accounts"] = json!([]); file["firstLabel"] = json!("Home"); }).unwrap();
+        assert_eq!((reply["account"]["id"].as_str(), reply["account"]["label"].as_str()), (Some("1"), Some("Home")), "{reply}");
+        let refused = older(&|file| for row in file["accounts"].as_array_mut().into_iter().flatten() { row["inUse"] = json!(false); });
+        assert!(refused.is_err(), "{refused:?}");
+        service.publish().unwrap();
+        let reply = reset_tools::status(root.path(), &resets::Service::new(root.path()), crate::util::now_millis(), None).unwrap();
+        assert_eq!(reply["account"]["id"], "2", "{reply}");
+    }
+
     /// **Round 18: Rich suggests a second account, once** (the CEO 2026-10-06, feedback item 9:
     /// "Non-technical users should also be able to take advantage of the multi-account setup").
     /// One account at 85% of its week: nothing. At 86%: the line, with its kind, so the

@@ -1222,7 +1222,7 @@
     },
     "scripts/lib/quota_watch.py#weekly-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "223d65afda26a3fbd9ba1d0f32e7a97f91ebc3387b72f09aecb98c6ec034c1e0",
+      "sha256": "c674803e1cf225a47535244f31e30e8911b968225fe3ac6e6c88b953dec8bbbb",
       "evidence": "The weekly suite calls _parse_reset, and (renewed 2026-09-28) poll_loop directly with an in-memory Out writer and literal threshold/config arguments; it patches read_source, workers, time.time, weekly.reset_tick and time.sleep, whose first call ends the case. Each reading triggers the weekly event before any sleep or five-hour path. No CLI wrapper, real config, usage API or registry code executes. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added.",
       "keys": [],
       "edges": [
@@ -1239,7 +1239,7 @@
     },
     "scripts/quota-weekly.test.sh": {
       "source": "scripts/quota-weekly.test.sh",
-      "sha256": "16c71cd2bde4771690cb0bfa0057e5bfb6413adb17c92f2a42a2d93129bcedb6",
+      "sha256": "afa7f378692065e11cddcb6827959964f154d1a4ed736d8ebe724dd5290febdf",
       "evidence": "All settings and time originate in the inline Python fixture. Reviewed imports and mocked subprocess/registry boundaries are explicit helper edges.",
       "keys": [],
       "edges": [
@@ -1380,7 +1380,7 @@
     },
     "scripts/lib/quota_watch.py#message-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "223d65afda26a3fbd9ba1d0f32e7a97f91ebc3387b72f09aecb98c6ec034c1e0",
+      "sha256": "c674803e1cf225a47535244f31e30e8911b968225fe3ac6e6c88b953dec8bbbb",
       "evidence": "The fixture calls only pause_message, resume_message and release_message with literal reset timestamps. hhmm uses UTC conversion, pause text uses pause_protocol; no config/source/watch/reset operation runs. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). WAIT branch: resume and release text is pause_protocol.render_resume, also a string render. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added.",
       "keys": [],
       "edges": [
@@ -1775,7 +1775,7 @@
     },
     "scripts/lib/quota_watch.py#notice": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "223d65afda26a3fbd9ba1d0f32e7a97f91ebc3387b72f09aecb98c6ec034c1e0",
+      "sha256": "c674803e1cf225a47535244f31e30e8911b968225fe3ac6e6c88b953dec8bbbb",
       "evidence": "The main --notice path parses arguments and reads the explicitly supplied payload file and timestamp. It never invokes get_usage, reset_tick, workers or the watch loop. Module imports pause_protocol and quota_weekly, neither reading config. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added.",
       "keys": [],
       "edges": [
@@ -8050,7 +8050,7 @@
     },
     "scripts/lib/quota_watch.py#quota-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "223d65afda26a3fbd9ba1d0f32e7a97f91ebc3387b72f09aecb98c6ec034c1e0",
+      "sha256": "c674803e1cf225a47535244f31e30e8911b968225fe3ac6e6c88b953dec8bbbb",
       "evidence": "Reviewed CLI, all imports, file and subprocess operations, workers and watch loop. The suite supplies a missing or literal fake Claude transport and a false reset helper. It loads only fixed workspace, weekly, pause and login-alarm siblings. Payloads, messages and registry records are data. Real clocks and process identities remain runtime inputs. Renewed 2026-09-28 (ad9da4f8, 5d3621a3): --watch and --monitor now start a detached poller that is this same file (--poll) with its state, lock and event files under QUOTA_WATCH_STATE_DIR (private in the suite), read the session pid's start time with ps and poll until the session ends. The threshold still arrives as --threshold-raw from quota-watch.sh; no new engine program and no orchestration.config read. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added.",
       "keys": [],
       "edges": [
@@ -17093,7 +17093,7 @@
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
-        "scripts/lib/quota_watch.py": "223d65afda26a3fbd9ba1d0f32e7a97f91ebc3387b72f09aecb98c6ec034c1e0",
+        "scripts/lib/quota_watch.py": "c674803e1cf225a47535244f31e30e8911b968225fe3ac6e6c88b953dec8bbbb",
         "scripts/lib/pause_protocol.py": "d302f0866df40d27cdb224b8c55974a9c22cf7a1a540c37cf440df881c4cb27e",
         "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
@@ -17168,7 +17168,7 @@
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
-        "scripts/lib/quota_watch.py": "223d65afda26a3fbd9ba1d0f32e7a97f91ebc3387b72f09aecb98c6ec034c1e0",
+        "scripts/lib/quota_watch.py": "c674803e1cf225a47535244f31e30e8911b968225fe3ac6e6c88b953dec8bbbb",
         "scripts/lib/pause_protocol.py": "d302f0866df40d27cdb224b8c55974a9c22cf7a1a540c37cf440df881c4cb27e",
         "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
@@ -17398,7 +17398,7 @@
         "scripts/hooks/session-start-escalations.sh": "25af57857b1dc4a1e4a61c6848753ede1d217f3a1037379e30cee4e64b206a5f",
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
-        "scripts/lib/quota_watch.py": "223d65afda26a3fbd9ba1d0f32e7a97f91ebc3387b72f09aecb98c6ec034c1e0",
+        "scripts/lib/quota_watch.py": "c674803e1cf225a47535244f31e30e8911b968225fe3ac6e6c88b953dec8bbbb",
         "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
         "scripts/hooks/shell-evidence.sh": "01d511155b7df5a4be0ab6cb25aaac934a467e086d5c31f2afd6ee9c7bcc370a",

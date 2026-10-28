@@ -189,9 +189,17 @@ class AppReading(unittest.TestCase):
         self.assertEqual(weekly.weekly(r)['used'],3); self.assertEqual(r['age'],30)
         self.assertFalse(weekly.held(r,NOW))
         self.assertEqual(watcher.classify(r,93,300)[0],'below')
-    def test_an_old_app_file_names_its_accounts_row(self):
+    def test_an_old_app_file_names_its_accounts_row_never_account_1_by_default(self):
+        # The live file of 2026-10-28 17:14Z had no inUse; defaulting to Account 1 named Home.
         self.publish(NOW-30,in_use=None)
-        self.assertEqual(self.read()['source'],'the app (account in use)')
+        self.assertEqual(self.read()['source'],'the app (account not named)')
+        with open(self.state+'/claude-quota.json') as f: view=json.load(f)
+        view['accounts'].append({'id':'2','label':'Work','inUse':True,'windows':[]})
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        self.assertEqual((self.read()['source'],self.read()['account']['id']),('the app (account Work)','2'))
+        view['accounts']=[]; view['firstLabel']='Home'
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        self.assertEqual((self.read()['source'],self.read()['account']['id']),('the app (account Home)','1'))
     def test_stale_missing_or_unreadable_is_unknown_never_a_probe(self):
         self.publish(NOW-3600)
         self.assertEqual(watcher.classify(self.read(),93,300)[0],'unknown')
