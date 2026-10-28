@@ -2,35 +2,16 @@
 """Summarize Cargo output without counting doc tests as ordinary test passes.
 
 This inspects a captured log; it never claims the cargo process exited zero.
-Use with a successful, complete cargo invocation and retain its exit status.
-"""
+Use with a successful, complete cargo invocation and retain its exit status."""
 import argparse
 import json
-import re
 from pathlib import Path
-
-RESULT = re.compile(r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;", re.M)
-
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from devtools_bridge import request
 
 def summarize(text):
-    counts = {k: {"passed": 0, "failed": 0, "ignored": 0, "suites": 0} for k in ("ordinary", "documentation")}
-    kind = "ordinary"
-    for line in text.splitlines():
-        if re.match(r"\s*Doc-tests\s+", line):
-            kind = "documentation"
-        elif re.match(r"\s*(?:Running|Finished)\s+", line):
-            kind = "ordinary"
-        m = RESULT.match(line)
-        if m:
-            counts[kind]["suites"] += 1
-            for key, value in zip(("passed", "failed", "ignored"), m.groups()[1:]):
-                counts[kind][key] += int(value)
-    if not counts["ordinary"]["suites"]:
-        raise ValueError("no ordinary test result found; an empty or compiler-error log is not a passing run")
-    counts["ordinary"]["total"] = sum(counts["ordinary"][k] for k in ("passed", "failed", "ignored"))
-    counts["process_exit_verified"] = False
-    return counts
-
+    return request("cargo-summary", text)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)

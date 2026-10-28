@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 python3 - "$SCRIPT_DIR" <<'PY'
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,9 @@ source = Path(sys.argv[1]).resolve().parents[2]
 # inventory comparison reads it. A sandbox without it makes that comparison see
 # seventeen declared-but-unregistered guards and fail the baseline before a
 # single mutation has been applied.
-files = ['engine/hooks/hooks.json', 'app/scripts/rust-test-summary.py'] + [
+files = ['engine/hooks/hooks.json', 'app/scripts/rust-test-summary.py',
+         'app/scripts/lib/devtools_bridge.py', 'app/scripts/lib/cargo_identity.py',
+         'app/scripts/lib/machine_storage.py', 'engine/scripts/lib/machine_settings.py'] + [
     'engine/scripts/hooks/' + n for n in ('session-evidence.test.py', 'shell-evidence.py',
     'shell-evidence.sh', 'contract-integrity-probe.sh', 'commit-ceo-inputs.py', 'notice-ceo-inputs-unheld.sh', 'turn-manifest.py',
     'dispatch-pretooluse.manifest')]
@@ -43,17 +46,25 @@ mutations = [
   'if not ingress.is_handover_file(p):', 'if False:', 'test_historical_noise_is_retired_but_real_unheld_file_remains'),
  ('shell output called verified', 'engine/scripts/hooks/turn-manifest.py',
   'word = "RETURNED" if tool_name == "Bash" else "ok"', 'word = "ok"', 'test_manifest_does_not_call_unverified_bash_output_ok'),
- ('documentation counts mixed', 'app/scripts/rust-test-summary.py',
-  'kind = "documentation"', 'kind = "ordinary"', 'test_rust_doc_tests_are_counted_separately'),
+ ('documentation counts mixed', 'app/crates/richos-devtools/src/reports.rs',
+  'kind = 1;', 'kind = 0;', 'test_rust_doc_tests_are_counted_separately'),
 ]
 with tempfile.TemporaryDirectory(prefix='session-evidence-mutations-') as tmp:
     root = Path(tmp)
+    # Compile the source in this private copy. A prebuilt override would hide a
+    # mutation in the Rust implementation behind an unchanged Python adapter.
+    environment = dict(os.environ)
+    environment.pop('RICHOS_DEVTOOLS_BIN', None)
+    crate = 'app/crates/richos-devtools'
+    files += [str(path.relative_to(source)) for path in (source/crate).rglob('*')
+              if path.is_file() and (path.suffix == '.rs' or path.name in
+                                    ('Cargo.toml', 'Cargo.lock', 'varcon_notice.txt'))]
     for rel in files:
         target = root/rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source/rel, target)
     test = root/'engine/scripts/hooks/session-evidence.test.py'
-    baseline = subprocess.run([sys.executable, str(test)], capture_output=True, text=True)
+    baseline = subprocess.run([sys.executable, str(test)], env=environment, capture_output=True, text=True)
     if baseline.returncode:
         raise SystemExit('Baseline failed: '+baseline.stderr)
     for name, rel, old, new, method in mutations:
@@ -63,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='session-evidence-mutations-') as tmp:
         assert text.count(old) == 1, (name, 'mutation target must be unique')
         path.write_text(text.replace(old, new))
         try:
-            run = subprocess.run([sys.executable, str(test), 'SessionEvidence.'+method], capture_output=True, text=True)
+            run = subprocess.run([sys.executable, str(test), 'SessionEvidence.'+method], env=environment, capture_output=True, text=True)
             if run.returncode == 0 or 'FAIL' not in run.stderr:
                 raise SystemExit('Mutation was not caught by its regression: '+name+'\n'+run.stderr)
             print('PASS negative control:', name)

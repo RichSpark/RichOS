@@ -1,0 +1,3930 @@
+[
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nstop ΟΣ",
+      "txt": "ΟΣ ος and use uh and !!! cloud it’s we Café ΟΣ alpha 42 and _ Café alpha _ ος we stop cloud !!! cloud Claude use _ uh uh ος use ος uh Before",
+      "top": 2,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 2,
+      "transcript_words": 33,
+      "wer": 15.5,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 31,
+      "capitalization_differences": 1,
+      "capitalization_top": [
+        {
+          "captions": "ΟΣ",
+          "transcript": "ος",
+          "count": 1
+        }
+      ],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "ος ος",
+          "count": 1
+        },
+        "captions": {
+          "phrase": "stop ος",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "ΟΣ ος and use uh and cloud it’s we Café ΟΣ alpha 42 and _ Café alpha _ ος we"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "cloud cloud Claude use _ uh uh"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "use ος uh Before"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nit’s and ΟΣ ΟΣ stop",
+      "txt": "and Claude Claude Claude it’s use uh Claude _ ος we we Café uh",
+      "top": 6,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 5,
+      "transcript_words": 14,
+      "wer": 2.4,
+      "substitutions": 3,
+      "deletions": 0,
+      "insertions": 9,
+      "capitalization_differences": 1,
+      "capitalization_top": [
+        {
+          "captions": "ΟΣ",
+          "transcript": "ος",
+          "count": 1
+        }
+      ],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "claude claude",
+          "count": 2
+        },
+        "captions": {
+          "phrase": "it's and",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "and Claude Claude Claude"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "and",
+          "transcript": "use uh Claude _"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "ΟΣ stop",
+          "transcript": "we we Café uh"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\ncafé it’s we 42",
+      "txt": "and",
+      "top": 2,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 4,
+      "transcript_words": 1,
+      "wer": 1.0,
+      "substitutions": 1,
+      "deletions": 3,
+      "insertions": 0,
+      "capitalization_differences": 0,
+      "capitalization_top": [],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": null,
+        "captions": {
+          "phrase": "café it's",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "café it’s we 42",
+          "transcript": "and"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nBefore !!! stop use beta and !!! Café !!! ΟΣ cloud ος ΟΣ ος we and and _ beta Before beta",
+      "txt": "it’s alpha café it’s beta !!! beta ΟΣ 42 alpha 42 cloud beta 42 Claude Before ΟΣ we stop it’s !!! café and",
+      "top": 0,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 18,
+      "transcript_words": 21,
+      "wer": 1.7222,
+      "substitutions": 0,
+      "deletions": 14,
+      "insertions": 17,
+      "capitalization_differences": 1,
+      "capitalization_top": [],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "it's alpha",
+          "count": 1
+        },
+        "captions": {
+          "phrase": "ος ος",
+          "count": 2
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "it’s alpha café it’s beta beta ΟΣ 42 alpha 42 cloud beta 42 Claude"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "stop use beta and Café ΟΣ cloud ος ΟΣ",
+          "transcript": ""
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "stop it’s café"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "and _ beta Before beta",
+          "transcript": ""
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nbeta cloud alpha !!! Claude Café Claude it’s it’s cloud Claude beta _ and Before ΟΣ it’s _ _",
+      "txt": "Before we Café cloud uh it’s alpha ος 42 Before Before Claude uh Before café Before cloud ΟΣ ΟΣ we",
+      "top": 8,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 18,
+      "transcript_words": 20,
+      "wer": 1.2222,
+      "substitutions": 4,
+      "deletions": 8,
+      "insertions": 10,
+      "capitalization_differences": 1,
+      "capitalization_top": [
+        {
+          "captions": "Café",
+          "transcript": "café",
+          "count": 1
+        }
+      ],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "before we",
+          "count": 1
+        },
+        "captions": {
+          "phrase": "beta cloud",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "beta",
+          "transcript": "Before we Café"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "uh it’s"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "ος 42 Before Before"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "uh Before"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "Claude it’s it’s",
+          "transcript": "Before"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "Claude beta _ and Before",
+          "transcript": ""
+        },
+        {
+          "at": "00:00:00",
+          "captions": "it’s _ _",
+          "transcript": "ΟΣ we"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nit’s Before beta cloud !!! Café Claude stop ος cloud !!! it’s alpha it’s beta _ ος and _ _ !!! Before uh Claude we it’s cloud !!! use beta café Before cloud ΟΣ it’s",
+      "txt": "!!! stop use stop uh beta alpha Café it’s ος !!! uh Café ΟΣ Café 42 ος ος !!! alpha café !!! Claude alpha alpha uh Before Claude ΟΣ and beta",
+      "top": 6,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 31,
+      "transcript_words": 27,
+      "wer": 1.2258,
+      "substitutions": 6,
+      "deletions": 18,
+      "insertions": 14,
+      "capitalization_differences": 2,
+      "capitalization_top": [
+        {
+          "captions": "Café",
+          "transcript": "café",
+          "count": 1
+        },
+        {
+          "captions": "ος",
+          "transcript": "ΟΣ",
+          "count": 1
+        }
+      ],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "alpha café",
+          "count": 2
+        },
+        "captions": {
+          "phrase": "it's before",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "stop use stop uh beta alpha Café"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "Before beta cloud",
+          "transcript": "ος uh Café ΟΣ Café 42 ος ος alpha"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "stop ος cloud it’s",
+          "transcript": ""
+        },
+        {
+          "at": "00:00:00",
+          "captions": "it’s beta _",
+          "transcript": "alpha uh Before Claude"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "_ _ Before uh Claude we it’s cloud use",
+          "transcript": ""
+        },
+        {
+          "at": "00:00:00",
+          "captions": "café Before cloud ΟΣ it’s",
+          "transcript": ""
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\n!!! _ !!! café beta !!! uh and café Café beta it’s Café Claude café",
+      "txt": "and beta _ beta 42 use and Café alpha uh Claude Before 42 stop café use uh 42 beta cloud we stop stop use Claude café alpha !!! Café Before",
+      "top": 4,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 12,
+      "transcript_words": 29,
+      "wer": 1.8333,
+      "substitutions": 3,
+      "deletions": 1,
+      "insertions": 18,
+      "capitalization_differences": 2,
+      "capitalization_top": [
+        {
+          "captions": "café",
+          "transcript": "Café",
+          "count": 1
+        },
+        {
+          "captions": "Café",
+          "transcript": "café",
+          "count": 1
+        }
+      ],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "café alpha",
+          "count": 2
+        },
+        "captions": {
+          "phrase": "café beta",
+          "count": 2
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "and beta"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "café",
+          "transcript": ""
+        },
+        {
+          "at": "00:00:00",
+          "captions": "uh",
+          "transcript": "42 use"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "alpha uh Claude Before 42 stop"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "use uh 42"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "it’s Café",
+          "transcript": "cloud we stop stop use"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "alpha Café Before"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\n!!! it’s ΟΣ use beta ος Before beta and ΟΣ cloud alpha café 42 ΟΣ ος uh !!! uh ος alpha ος Claude",
+      "txt": "and _ beta _ Before beta stop Café café it’s use ΟΣ alpha ΟΣ and _ beta alpha alpha ος !!! café ΟΣ ος Claude it’s Claude we Claude",
+      "top": 0,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 21,
+      "transcript_words": 28,
+      "wer": 1.2381,
+      "substitutions": 7,
+      "deletions": 6,
+      "insertions": 13,
+      "capitalization_differences": 3,
+      "capitalization_top": [],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "and _",
+          "count": 2
+        },
+        "captions": {
+          "phrase": "it's ος",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "it’s ΟΣ use",
+          "transcript": "and _"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "ος",
+          "transcript": "_"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "and ΟΣ cloud alpha",
+          "transcript": "stop"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "42 ΟΣ ος uh uh",
+          "transcript": "café it’s use"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "and _ beta alpha alpha ος café ΟΣ ος"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "it’s Claude we Claude"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\ncloud we and stop uh ΟΣ Claude and Claude _ we cloud Before café 42 ΟΣ _ !!! it’s we use we _ and ΟΣ alpha beta",
+      "txt": "use Before café alpha alpha !!! cloud ΟΣ café stop and stop stop Before Café alpha Café Café it’s 42 Claude _",
+      "top": 5,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 26,
+      "transcript_words": 21,
+      "wer": 1.2308,
+      "substitutions": 5,
+      "deletions": 16,
+      "insertions": 11,
+      "capitalization_differences": 0,
+      "capitalization_top": [],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "before café",
+          "count": 2
+        },
+        "captions": {
+          "phrase": "cloud we",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "use Before café alpha alpha"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "we",
+          "transcript": "ΟΣ café stop"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "uh ΟΣ Claude and",
+          "transcript": "stop Before Café alpha Café Café it’s 42"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "we cloud Before café 42 ΟΣ _ it’s we use we _ and ΟΣ alpha beta",
+          "transcript": ""
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nit’s café",
+      "txt": "_ it’s ΟΣ 42 ΟΣ uh _ Café and stop and beta stop Claude use we !!! café",
+      "top": 4,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 2,
+      "transcript_words": 17,
+      "wer": 7.5,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 15,
+      "capitalization_differences": 1,
+      "capitalization_top": [
+        {
+          "captions": "café",
+          "transcript": "Café",
+          "count": 1
+        }
+      ],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "_ it's",
+          "count": 1
+        },
+        "captions": {
+          "phrase": "it's café",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "_"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "ΟΣ 42 ΟΣ uh _"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "and stop and beta stop Claude use we café"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\ncloud cloud alpha beta uh use Before stop Claude !!! 42 it’s we Café 42 and Café and",
+      "txt": "uh café ος it’s _ cloud",
+      "top": 2,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 17,
+      "transcript_words": 6,
+      "wer": 1.2353,
+      "substitutions": 0,
+      "deletions": 16,
+      "insertions": 5,
+      "capitalization_differences": 0,
+      "capitalization_top": [],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "uh café",
+          "count": 1
+        },
+        "captions": {
+          "phrase": "cloud cloud",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "uh café ος it’s _"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "cloud alpha beta uh use Before stop Claude 42 it’s we Café 42 and Café and",
+          "transcript": ""
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nος Claude beta use cloud Claude Claude use it’s ΟΣ we we it’s _",
+      "txt": "!!! _ we Café Café _ ΟΣ _ uh 42 Café stop beta use _ stop ος 42 ος ΟΣ we beta Before uh",
+      "top": 1,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 14,
+      "transcript_words": 23,
+      "wer": 1.2857,
+      "substitutions": 9,
+      "deletions": 0,
+      "insertions": 9,
+      "capitalization_differences": 1,
+      "capitalization_top": [
+        {
+          "captions": "ος",
+          "transcript": "ΟΣ",
+          "count": 1
+        }
+      ],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "_ we",
+          "count": 1
+        },
+        "captions": {
+          "phrase": "ος claude",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "_ we Café Café _"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "Claude",
+          "transcript": "_ uh 42 Café stop"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "cloud Claude Claude use it’s",
+          "transcript": "_ stop ος 42 ος"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "we it’s _",
+          "transcript": "beta Before uh"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\n42 uh cloud _ ος we cloud",
+      "txt": "use it’s 42 and use use 42 alpha ος café 42 we ος ος alpha Café _ ΟΣ café stop !!! Café stop _ ΟΣ beta beta it’s Claude Before café stop use",
+      "top": 6,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 7,
+      "transcript_words": 32,
+      "wer": 4.1429,
+      "substitutions": 4,
+      "deletions": 0,
+      "insertions": 25,
+      "capitalization_differences": 1,
+      "capitalization_top": [
+        {
+          "captions": "ος",
+          "transcript": "ΟΣ",
+          "count": 1
+        }
+      ],
+      "spelling_differences": 1,
+      "spelling_top": [
+        {
+          "captions": "cloud",
+          "transcript": "claude",
+          "count": 1
+        }
+      ],
+      "repeats": {
+        "transcript": {
+          "phrase": "café stop",
+          "count": 3
+        },
+        "captions": {
+          "phrase": "42 uh",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "use it’s"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "uh cloud",
+          "transcript": "and use use 42 alpha ος café 42 we ος ος alpha Café"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "we cloud",
+          "transcript": "café stop Café stop _ ΟΣ beta beta it’s Claude Before café stop use"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nBefore Café",
+      "txt": "it’s Café cloud café ος stop café we ος _ it’s use Café it’s use ΟΣ Café stop café alpha use",
+      "top": 3,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 2,
+      "transcript_words": 21,
+      "wer": 10.0,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 19,
+      "capitalization_differences": 0,
+      "capitalization_top": [],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "stop café",
+          "count": 2
+        },
+        "captions": {
+          "phrase": "before café",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "Before",
+          "transcript": "it’s"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "cloud café ος stop café we ος _ it’s use Café it’s use ΟΣ Café stop café alpha use"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nuh café Before alpha uh !!! use Café we Claude use stop _ café use Café !!! Claude 42 _ stop Café café cloud stop beta ος ος uh ος ΟΣ ος use beta",
+      "txt": "42 Before 42",
+      "top": 3,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 32,
+      "transcript_words": 3,
+      "wer": 0.9375,
+      "substitutions": 1,
+      "deletions": 29,
+      "insertions": 0,
+      "capitalization_differences": 0,
+      "capitalization_top": [],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "42 before",
+          "count": 1
+        },
+        "captions": {
+          "phrase": "ος ος",
+          "count": 3
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "uh café",
+          "transcript": "42"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "alpha uh use Café we Claude use stop _ café use Café Claude",
+          "transcript": ""
+        },
+        {
+          "at": "00:00:00",
+          "captions": "_ stop Café café cloud stop beta ος ος uh ος ΟΣ ος use beta",
+          "transcript": ""
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nwe _ ος and Claude alpha Claude cloud ος we we ΟΣ café stop cloud _ uh Before",
+      "txt": "uh café stop we Before and uh we and we Claude _ Claude cloud stop we café Before uh cloud café cloud beta café uh ΟΣ ΟΣ and !!! ος 42",
+      "top": 7,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 18,
+      "transcript_words": 30,
+      "wer": 2.0556,
+      "substitutions": 1,
+      "deletions": 12,
+      "insertions": 24,
+      "capitalization_differences": 1,
+      "capitalization_top": [
+        {
+          "captions": "ος",
+          "transcript": "ΟΣ",
+          "count": 1
+        }
+      ],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "stop we",
+          "count": 2
+        },
+        "captions": {
+          "phrase": "we _",
+          "count": 1
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "uh café stop"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "Before and uh we and we Claude"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "",
+          "transcript": "Claude cloud stop we café Before uh cloud café cloud beta café uh ΟΣ"
+        },
+        {
+          "at": "00:00:00",
+          "captions": "Claude alpha Claude cloud",
+          "transcript": ""
+        },
+        {
+          "at": "00:00:00",
+          "captions": "we we ΟΣ café stop cloud _ uh Before",
+          "transcript": "42"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\necho echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo",
+      "txt": "echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo echo tail",
+      "top": 5,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 420,
+      "transcript_words": 420,
+      "wer": 0.0024,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "capitalization_differences": 0,
+      "capitalization_top": [],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "echo echo",
+          "count": 418
+        },
+        "captions": {
+          "phrase": "echo echo",
+          "count": 419
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "echo",
+          "transcript": "tail"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nalpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha",
+      "txt": "beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta",
+      "top": 5,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 410,
+      "transcript_words": 410,
+      "wer": 1.0,
+      "substitutions": 410,
+      "deletions": 0,
+      "insertions": 0,
+      "capitalization_differences": 0,
+      "capitalization_top": [],
+      "spelling_differences": 0,
+      "spelling_top": [],
+      "repeats": {
+        "transcript": {
+          "phrase": "beta beta",
+          "count": 409
+        },
+        "captions": {
+          "phrase": "alpha alpha",
+          "count": 409
+        }
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha",
+          "transcript": "beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "caption-compare",
+    "input": {
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+      "txt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac",
+      "top": 5,
+      "disagreements": true
+    },
+    "expected": {
+      "caption_words": 1,
+      "transcript_words": 1,
+      "wer": 1.0,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "capitalization_differences": 0,
+      "capitalization_top": [],
+      "spelling_differences": 1,
+      "spelling_top": [
+        {
+          "captions": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+          "transcript": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac",
+          "count": 1
+        }
+      ],
+      "repeats": {
+        "transcript": null,
+        "captions": null
+      },
+      "disagreements": [
+        {
+          "at": "00:00:00",
+          "captions": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+          "transcript": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "cargo-summary",
+    "input": "Running cases\ntest result: ok. 12 passed; 8 failed; 15 ignored;\nDoc-tests module\ntest result: ok. 17 passed; 16 failed; 7 ignored;\n",
+    "expected": {
+      "ordinary": {
+        "passed": 12,
+        "failed": 8,
+        "ignored": 15,
+        "suites": 1,
+        "total": 35
+      },
+      "documentation": {
+        "passed": 17,
+        "failed": 16,
+        "ignored": 7,
+        "suites": 1
+      },
+      "process_exit_verified": false
+    }
+  },
+  {
+    "operation": "cargo-summary",
+    "input": "Running cases\ntest result: ok. 5 passed; 6 failed; 3 ignored;\nDoc-tests module\ntest result: ok. 2 passed; 14 failed; 4 ignored;\n",
+    "expected": {
+      "ordinary": {
+        "passed": 5,
+        "failed": 6,
+        "ignored": 3,
+        "suites": 1,
+        "total": 14
+      },
+      "documentation": {
+        "passed": 2,
+        "failed": 14,
+        "ignored": 4,
+        "suites": 1
+      },
+      "process_exit_verified": false
+    }
+  },
+  {
+    "operation": "cargo-summary",
+    "input": "Running cases\ntest result: ok. 16 passed; 9 failed; 3 ignored;\nDoc-tests module\ntest result: ok. 10 passed; 14 failed; 3 ignored;\n",
+    "expected": {
+      "ordinary": {
+        "passed": 16,
+        "failed": 9,
+        "ignored": 3,
+        "suites": 1,
+        "total": 28
+      },
+      "documentation": {
+        "passed": 10,
+        "failed": 14,
+        "ignored": 3,
+        "suites": 1
+      },
+      "process_exit_verified": false
+    }
+  },
+  {
+    "operation": "cargo-summary",
+    "input": "Running cases\ntest result: ok. 11 passed; 0 failed; 8 ignored;\nDoc-tests module\ntest result: ok. 6 passed; 3 failed; 11 ignored;\n",
+    "expected": {
+      "ordinary": {
+        "passed": 11,
+        "failed": 0,
+        "ignored": 8,
+        "suites": 1,
+        "total": 19
+      },
+      "documentation": {
+        "passed": 6,
+        "failed": 3,
+        "ignored": 11,
+        "suites": 1
+      },
+      "process_exit_verified": false
+    }
+  },
+  {
+    "operation": "cargo-summary",
+    "input": "Running cases\ntest result: ok. 8 passed; 0 failed; 1 ignored;\nDoc-tests module\ntest result: ok. 14 passed; 4 failed; 9 ignored;\n",
+    "expected": {
+      "ordinary": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 1,
+        "suites": 1,
+        "total": 9
+      },
+      "documentation": {
+        "passed": 14,
+        "failed": 4,
+        "ignored": 9,
+        "suites": 1
+      },
+      "process_exit_verified": false
+    }
+  },
+  {
+    "operation": "cargo-summary",
+    "input": "Running cases\ntest result: ok. 0 passed; 7 failed; 0 ignored;\nDoc-tests module\ntest result: ok. 1 passed; 1 failed; 14 ignored;\n",
+    "expected": {
+      "ordinary": {
+        "passed": 0,
+        "failed": 7,
+        "ignored": 0,
+        "suites": 1,
+        "total": 7
+      },
+      "documentation": {
+        "passed": 1,
+        "failed": 1,
+        "ignored": 14,
+        "suites": 1
+      },
+      "process_exit_verified": false
+    }
+  },
+  {
+    "operation": "cargo-summary",
+    "input": "Running cases\ntest result: ok. 14 passed; 7 failed; 3 ignored;\nDoc-tests module\ntest result: ok. 19 passed; 18 failed; 12 ignored;\n",
+    "expected": {
+      "ordinary": {
+        "passed": 14,
+        "failed": 7,
+        "ignored": 3,
+        "suites": 1,
+        "total": 24
+      },
+      "documentation": {
+        "passed": 19,
+        "failed": 18,
+        "ignored": 12,
+        "suites": 1
+      },
+      "process_exit_verified": false
+    }
+  },
+  {
+    "operation": "cargo-summary",
+    "input": "Running cases\ntest result: ok. 11 passed; 12 failed; 3 ignored;\nDoc-tests module\ntest result: ok. 0 passed; 2 failed; 0 ignored;\n",
+    "expected": {
+      "ordinary": {
+        "passed": 11,
+        "failed": 12,
+        "ignored": 3,
+        "suites": 1,
+        "total": 26
+      },
+      "documentation": {
+        "passed": 0,
+        "failed": 2,
+        "ignored": 0,
+        "suites": 1
+      },
+      "process_exit_verified": false
+    }
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 1000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "x\ny"
+        }
+      ],
+      "thread": null,
+      "full": false
+    },
+    "expected": [
+      "     0.0 REPLY - defghi x / yx / y",
+      "     1.0 TurnCompleted internal second é😀",
+      "     2.0 PromptReceived internal defghi é😀"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 1000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "x\ny"
+        }
+      ],
+      "thread": "one",
+      "full": false
+    },
+    "expected": [
+      "     0.0 REPLY - defghi x / yx / y",
+      "     2.0 PromptReceived internal defghi é😀"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 1000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "x\ny"
+        }
+      ],
+      "thread": "missing",
+      "full": false
+    },
+    "expected": [
+      "     0.0 REPLY - defghi x / yx / y",
+      "     2.0 PromptReceived internal defghi é😀"
+    ]
+  },
+  {
+    "operation": "ledger-turns",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 1000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "x\ny"
+        }
+      ],
+      "full": false
+    },
+    "expected": []
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 1000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "é😀"
+        },
+        {
+          "at": 5000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 7000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "x\ny"
+        },
+        {
+          "at": 9000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 10000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 11000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 12000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": null,
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnCompleted - second x / y",
+      "     1.0 PromptReceived proactive second hello",
+      "     2.0 REPLY - defghi hello",
+      "     3.0 TurnCompleted - defghi é😀",
+      "     4.0 PromptReceived - defghi é😀",
+      "     5.0 PromptReceived - defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     6.0 TurnStopped proactive defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     7.0 TurnCompleted - defghi hello",
+      "     8.0 TurnStopped internal second x / y",
+      "     9.0 TurnCompleted proactive second x / y",
+      "    10.0 TurnCompleted proactive second é😀",
+      "    11.0 PromptReceived - second hello",
+      "    12.0 PromptReceived internal defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ..."
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 1000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "é😀"
+        },
+        {
+          "at": 5000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 7000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "x\ny"
+        },
+        {
+          "at": 9000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 10000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 11000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 12000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": "one",
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnCompleted - second x / y",
+      "     3.0 TurnCompleted - defghi é😀",
+      "     4.0 PromptReceived - defghi é😀",
+      "     5.0 PromptReceived - defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     6.0 TurnStopped proactive defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     7.0 TurnCompleted - defghi hello",
+      "     9.0 TurnCompleted proactive second x / y",
+      "    10.0 TurnCompleted proactive second é😀",
+      "    11.0 PromptReceived - second hello",
+      "    12.0 PromptReceived internal defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ..."
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 1000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "é😀"
+        },
+        {
+          "at": 5000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 7000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "x\ny"
+        },
+        {
+          "at": 9000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 10000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 11000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 12000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": "missing",
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnCompleted - second x / y",
+      "    12.0 PromptReceived internal defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ..."
+    ]
+  },
+  {
+    "operation": "ledger-turns",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 1000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "é😀"
+        },
+        {
+          "at": 5000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 7000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "x\ny"
+        },
+        {
+          "at": 9000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 10000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 11000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 12000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "full": false
+    },
+    "expected": [
+      "sent 5000 first reply none end 2.0s TurnCompleted | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "sent 11000 first reply none end not completed | hello"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "internal",
+          "text": "hello"
+        },
+        {
+          "at": 5000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 6000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 7000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 9000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 10000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 11000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 12000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": null,
+      "full": false
+    },
+    "expected": [
+      "     0.0 REPLY - defghi é😀",
+      "     1.0 TurnStopped user defghi é😀",
+      "     2.0 TurnStopped user second é😀",
+      "     3.0 TurnCompleted internal defghi é😀",
+      "     4.0 TurnCompleted internal second hello",
+      "     5.0 TurnCompleted proactive defghi hello",
+      "     6.0 TurnCompleted proactive second é😀",
+      "     7.0 TurnStopped user defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     8.0 TurnStopped - second x / y",
+      "     9.0 TurnStopped proactive defghi hello",
+      "    10.0 TurnCompleted - second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "    11.0 TurnCompleted internal defghi é😀",
+      "    12.0 TurnStopped - second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ..."
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "internal",
+          "text": "hello"
+        },
+        {
+          "at": 5000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 6000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 7000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 9000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 10000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 11000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 12000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": "one",
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnStopped user defghi é😀",
+      "     2.0 TurnCompleted internal defghi é😀",
+      "     3.0 TurnCompleted internal second hello",
+      "     4.0 TurnCompleted proactive defghi hello",
+      "    11.0 TurnStopped - second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ..."
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "internal",
+          "text": "hello"
+        },
+        {
+          "at": 5000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 6000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 7000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 9000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 10000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 11000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 12000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": "missing",
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnCompleted internal second hello",
+      "     1.0 TurnCompleted proactive defghi hello"
+    ]
+  },
+  {
+    "operation": "ledger-turns",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "internal",
+          "text": "hello"
+        },
+        {
+          "at": 5000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 6000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 7000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 9000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 10000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 11000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 12000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "full": false
+    },
+    "expected": []
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 4000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 5000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "x\ny"
+        }
+      ],
+      "thread": null,
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnStopped - second hello",
+      "     1.0 TurnStopped internal defghi é😀",
+      "     2.0 PromptReceived - second hello",
+      "     3.0 REPLY - defghi hello",
+      "     4.0 TurnStopped proactive defghi x / y",
+      "     5.0 REPLY - second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     6.0 TurnStopped internal defghi x / y"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 4000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 5000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "x\ny"
+        }
+      ],
+      "thread": "one",
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnStopped - second hello",
+      "     1.0 TurnStopped internal defghi é😀",
+      "     2.0 PromptReceived - second hello",
+      "     4.0 TurnStopped proactive defghi x / y",
+      "     6.0 TurnStopped internal defghi x / y"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 4000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 5000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "x\ny"
+        }
+      ],
+      "thread": "missing",
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnStopped - second hello",
+      "     2.0 PromptReceived - second hello"
+    ]
+  },
+  {
+    "operation": "ledger-turns",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 4000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 5000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "x\ny"
+        }
+      ],
+      "full": false
+    },
+    "expected": [
+      "sent 2000 first reply 3.0s end not completed | hello"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 3000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 5000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 7000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 9000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 10000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 11000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 12000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "é😀"
+        }
+      ],
+      "thread": null,
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnCompleted internal defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     1.0 TurnCompleted - second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     2.0 PromptReceived user defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     3.0 TurnStopped internal defghi é😀",
+      "     4.0 TurnCompleted - defghi x / y",
+      "     5.0 PromptReceived proactive second x / y",
+      "     6.0 TurnStopped internal defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     7.0 TurnCompleted proactive defghi x / y",
+      "     8.0 TurnStopped - defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     9.0 REPLY - second helloé😀",
+      "    10.0 REPLY - defghi é😀",
+      "    12.0 TurnCompleted proactive second é😀"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 3000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 5000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 7000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 9000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 10000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 11000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 12000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "é😀"
+        }
+      ],
+      "thread": "one",
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnCompleted internal defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     1.0 TurnCompleted - second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     2.0 PromptReceived user defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     3.0 TurnStopped internal defghi é😀",
+      "     4.0 TurnCompleted - defghi x / y",
+      "     5.0 PromptReceived proactive second x / y",
+      "     6.0 TurnStopped internal defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     7.0 TurnCompleted proactive defghi x / y",
+      "     9.0 REPLY - second hello",
+      "    12.0 TurnCompleted proactive second é😀"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 3000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 5000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 7000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 9000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 10000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 11000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 12000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "é😀"
+        }
+      ],
+      "thread": "missing",
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnCompleted - second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     1.0 PromptReceived user defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     2.0 TurnStopped internal defghi é😀",
+      "     3.0 TurnCompleted - defghi x / y",
+      "     6.0 TurnCompleted proactive defghi x / y",
+      "     8.0 REPLY - second hello",
+      "    11.0 TurnCompleted proactive second é😀"
+    ]
+  },
+  {
+    "operation": "ledger-turns",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 3000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "é😀"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 5000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 7000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 8000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": null,
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 9000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 10000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 11000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 12000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "é😀"
+        }
+      ],
+      "full": false
+    },
+    "expected": [
+      "sent 2000 first reply 8.0s end 6.0s TurnStopped | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ..."
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 4000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 5000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 7000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 8000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 9000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "x\ny"
+        },
+        {
+          "at": 10000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 11000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "hello"
+        }
+      ],
+      "thread": null,
+      "full": false
+    },
+    "expected": [
+      "     0.0 REPLY - defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     2.0 REPLY - second hellox / yhello",
+      "     4.0 PromptReceived user second hello",
+      "     5.0 TurnCompleted user second é😀",
+      "     6.0 TurnStopped - second x / y",
+      "     8.0 PromptReceived user second é😀",
+      "     9.0 TurnCompleted user defghi x / y"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 4000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 5000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 7000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 8000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 9000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "x\ny"
+        },
+        {
+          "at": 10000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 11000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "hello"
+        }
+      ],
+      "thread": "one",
+      "full": false
+    },
+    "expected": [
+      "     0.0 REPLY - defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     5.0 TurnCompleted user second é😀",
+      "     7.0 REPLY - second x / yhello"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 4000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 5000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 7000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 8000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 9000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "x\ny"
+        },
+        {
+          "at": 10000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 11000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "hello"
+        }
+      ],
+      "thread": "missing",
+      "full": false
+    },
+    "expected": [
+      "     0.0 REPLY - defghi é😀hello",
+      "     4.0 TurnCompleted user second é😀",
+      "     9.0 REPLY - second hello"
+    ]
+  },
+  {
+    "operation": "ledger-turns",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "é😀"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 3000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 4000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 5000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 6000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": null,
+          "text": "x\ny"
+        },
+        {
+          "at": 7000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 8000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "é😀"
+        },
+        {
+          "at": 9000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "two",
+          "source": "user",
+          "text": "x\ny"
+        },
+        {
+          "at": 10000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": null,
+          "text": "hello"
+        },
+        {
+          "at": 11000,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": null,
+          "source": "internal",
+          "text": "hello"
+        }
+      ],
+      "full": false
+    },
+    "expected": [
+      "sent 8000 first reply -1.0s end -2.0s TurnStopped | é😀"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 3000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": null,
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnCompleted user second hello",
+      "     1.0 TurnStopped user second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     2.0 PromptReceived internal second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     3.0 PromptReceived proactive second hello",
+      "     4.0 TurnCompleted internal defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ..."
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 3000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": "one",
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnCompleted user second hello",
+      "     1.0 TurnStopped user second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     2.0 PromptReceived internal second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     3.0 PromptReceived proactive second hello",
+      "     4.0 TurnCompleted internal defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ..."
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 3000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": "missing",
+      "full": false
+    },
+    "expected": [
+      "     0.0 TurnCompleted user second hello"
+    ]
+  },
+  {
+    "operation": "ledger-turns",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "user",
+          "text": "hello"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 2000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 3000,
+          "event": "PromptReceived",
+          "turn_id": "second",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 4000,
+          "event": "TurnCompleted",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "internal",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "full": false
+    },
+    "expected": []
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": null,
+      "full": false
+    },
+    "expected": [
+      "     0.0 REPLY - defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     1.0 TurnStopped proactive defghi hello",
+      "     2.0 REPLY - second x / y",
+      "     3.0 TurnCompleted user second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ..."
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": "one",
+      "full": false
+    },
+    "expected": [
+      "     0.0 REPLY - defghi xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...",
+      "     1.0 TurnStopped proactive defghi hello",
+      "     2.0 REPLY - second x / y"
+    ]
+  },
+  {
+    "operation": "ledger-timeline",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "thread": "missing",
+      "full": false
+    },
+    "expected": [
+      "     0.0 REPLY - second x / y"
+    ]
+  },
+  {
+    "operation": "ledger-turns",
+    "input": {
+      "rows": [
+        {
+          "at": 0,
+          "event": "AssistantDelta",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "at": 1000,
+          "event": "TurnStopped",
+          "turn_id": "abcdefghi",
+          "thread_id": "one",
+          "source": "proactive",
+          "text": "hello"
+        },
+        {
+          "at": 2000,
+          "event": "AssistantDelta",
+          "turn_id": "second",
+          "thread_id": null,
+          "source": "proactive",
+          "text": "x\ny"
+        },
+        {
+          "at": 3000,
+          "event": "TurnCompleted",
+          "turn_id": "second",
+          "thread_id": "two",
+          "source": "user",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "full": false
+    },
+    "expected": []
+  }
+]

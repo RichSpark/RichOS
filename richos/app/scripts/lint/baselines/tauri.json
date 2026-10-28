@@ -974,6 +974,7 @@
     "richos/app/crates/richdoctor/Cargo.toml:package:rust::unused_must_use": "\"warn\"",
     "richos/app/crates/richos-command/Cargo.toml:inherits-workspace": "true",
     "richos/app/crates/richos-core/Cargo.toml:inherits-workspace": "true",
+    "richos/app/crates/richos-devtools/Cargo.toml:inherits-workspace": "false",
     "richos/app/crates/richos-user-update/Cargo.toml:inherits-workspace": "false",
     "richos/app/crates/richos-user-update/Cargo.toml:package:clippy::await_holding_lock": "\"warn\"",
     "richos/app/crates/richos-user-update/Cargo.toml:package:clippy::let_underscore_future": "\"warn\"",
