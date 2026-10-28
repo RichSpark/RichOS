@@ -52,8 +52,11 @@ class Env(object):
                                                      "RICHOS_SESSION_PID", "RICHOS_SESSIONS_DIR",
                                                      "RICHOS_SESSION_ID", "GIT_CONFIG_GLOBAL",
                                                      "RICHOS_BULK_ROOT", "RICHOS_CARGO_CACHE_ROOT",
-                                                     "RICHOS_MACHINE_SETTINGS_RESOLVED")}
+                                                     "RICHOS_MACHINE_SETTINGS_RESOLVED", "RICHOS_APP_STATE")}
         os.environ["HOME"] = self.home
+        # The app's state is found from here too (other_registries); a test run
+        # inside the app must never read the operator's real app registries.
+        os.environ.pop("RICHOS_APP_STATE", None)
         # A land removes the workspace's build caches (build_caches.py). Here they live in the
         # sandbox, so no test ever reads or moves the operator's real cache folders.
         self.caches = os.path.join(self.root, "caches")
@@ -4182,6 +4185,103 @@ class HuntV2_04_ADamagedRecordIsNotAMissingOne(Base):
         self.assertEqual(ws.damaged_records(), [])
         ws.pending(self.sid, self.entity, scan=True, auto=False)
         self.assertTrue([r for r in ws.all_agents() if r.get("orphan")])
+
+
+class AnyRegistryOnThisMachineCounts(Base):
+    """2026-10-28: a terminal session's Stop gate swept with only its own
+    registry (~/.claude/state/workspaces), called the app's live worker
+    worktrees unregistered — the app keeps them in its own per-conversation
+    registry, <app data>/engine-state/workspaces/<hash> — and its automatic
+    land stopped a worker's processes and deleted three worktrees. Here
+    registry B is the terminal's (this sandbox's CLAUDE_CONFIG_DIR) and
+    registry A is an app conversation's, under this sandbox's HOME exactly
+    where the app keeps it."""
+
+    APP_PARTITION = "f" * 64
+
+    def app_registry(self):
+        # Where the app keeps it (Tauri's app_data_dir for com.richos.app), under this sandbox's HOME.
+        return os.path.join(self.env.home, "Library", "Application Support", "com.richos.app",
+                            "engine-state", "workspaces", self.APP_PARTITION)
+
+    def app_worker(self, name):
+        """A cc/ worktree registered ONLY in registry A, aged past SPAWN_WINDOW,
+        with a live child process in it."""
+        path = os.path.join(self.env.root, "app-target-worktrees", name)
+        branch = "cc/" + name
+        app_sid = "app-sess-bbbbbbbb-2222"
+        os.environ["RICHOS_WORKSPACES_DIR"] = self.app_registry()
+        try:
+            ws.record_integration(self.entity, "main", "the app conversation's body of work", app_sid)
+            ws.register_cc(app_sid, name, self.entity, path, branch)
+            run("git", "-C", self.entity, "worktree", "add", "-q", path, "-b", branch)
+            ws.confirm_cc(app_sid, name, path, True)
+            self.assertTrue([r for r in ws.all_agents() if r.get("name") == name], "not registered in A")
+        finally:
+            os.environ.pop("RICHOS_WORKSPACES_DIR", None)
+        self.assertNotIn(path, [w["path"] for r in ws.all_agents(include_done=True)
+                                for w in r.get("workspaces") or []], "registered in B too")
+        # Aged past the real spawn window, read from git's own record of it.
+        admin = ws._admin_dir_for(self.entity, path)
+        old = time.time() - 3600
+        os.utime(os.path.join(admin, "commondir"), (old, old))
+        sleeper = subprocess.Popen(["sleep", "300"], cwd=path)
+        self.env.procs.append(sleeper)
+        return path, branch, sleeper
+
+    def assert_survives(self, path, branch, sleeper):
+        time.sleep(0.3)
+        self.assertIsNone(sleeper.poll(), "the gate stopped a process in another registry's worktree")
+        self.assertTrue(os.path.isdir(path), "the gate deleted another registry's worktree")
+        self.assertIn(path, worktrees(self.entity))
+        self.assertIn(branch, branches(self.entity), "the gate deleted another registry's branch")
+
+    def test_a_worktree_only_the_app_registry_holds_survives_a_terminal_gate_stop(self):
+        path, branch, sleeper = self.app_worker("ray-sonnet-app0001")
+        with patch.object(ws, "SPAWN_WINDOW", 120.0):
+            ok, _person, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        self.assert_survives(path, branch, sleeper)
+        self.assertEqual([r["key"] for r in ws.all_agents(include_done=True) if r.get("orphan")], [],
+                         "an orphan record was made for a worktree registry A holds")
+
+    def test_an_open_orphan_record_another_registry_holds_is_settled_with_nothing_deleted(self):
+        path, branch, sleeper = self.app_worker("newt-opus-app0002")
+        # The armed record exactly as the base sweep wrote it, claimed by this session.
+        key = "orphan--armedarmedarmed1"
+        rec = ws.new_record(key, name="orphan-newt-opus-app0002", orphan=True)
+        ws._add_workspace(rec, "cc", self.entity, path, branch, "unregistered")
+        rec["claimed_by"] = self.sid
+        ws.save_agent(rec)
+        # A question first: the dry status lists it nowhere and writes nothing.
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with patch.object(ws, "SPAWN_WINDOW", 120.0), redirect_stdout(buf):
+            ws._print_status(self.sid, self.entity)
+        self.assertNotIn("orphan-", buf.getvalue())
+        self.assertIsNotNone(ws.read_json(ws.agent_path(key)), "the dry status wrote")
+        # Then the gate settles it.
+        with patch.object(ws, "SPAWN_WINDOW", 120.0):
+            ok, _person, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        self.assert_survives(path, branch, sleeper)
+        self.assertIsNone(ws.load_agent(key), "the armed orphan record is still open (or was landed)")
+        self.assertEqual([r["key"] for r in ws.all_agents(include_done=True) if r.get("orphan")], [])
+        with open(ws._p("events.jsonl"), encoding="utf-8") as f:
+            evs = [json.loads(line) for line in f if line.strip()]
+        self.assertTrue([e for e in evs if e.get("event") == "unregistered-withdrawn" and e.get("key") == key],
+                        "the withdrawal was not recorded")
+        self.assertFalse([e for e in evs if e.get("event") == "landed" and e.get("key") == key])
+
+    def test_a_truly_unregistered_worktree_is_still_found(self):
+        """The twin: a worktree no registry holds is still the sweep's, so the
+        rule is not "never sweep when an app registry exists"."""
+        self.app_worker("echo-sonnet-app0003")       # A exists and holds something else
+        stray = os.path.join(self.env.root, "stray-wt")
+        run("git", "-C", self.entity, "worktree", "add", "-q", stray, "-b", "cc/stray")
+        ws.pending(self.sid, self.entity, scan=True, auto=False)
+        self.assertEqual([r["name"] for r in ws.all_agents() if r.get("orphan")], ["orphan-stray-wt"])
 
 
 class HuntV2_05_StatusReadsTheRecordedStop(Base):
