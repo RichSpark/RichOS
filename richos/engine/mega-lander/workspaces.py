@@ -1890,8 +1890,18 @@ def register_spawn(payload, entity, dry=False):
     return rec
 
 
-def withdraw_cc(session_id, name, why=""):
+def withdraw_cc(session_id, name, why="", refused_dispatch=""):
     """THE INVERSE OF `register_cc`, for a workspace whose spawn never happened.
+
+    `refused_dispatch` IS THE CALLER'S PROOF THAT A REGISTERED SPAWN WAS
+    REFUSED (2026-10-28, work-709b35ac). The spawn guard registers an Agent
+    call (`tool_use_id`, `spawned_at`) before the controls after it answer, so
+    a call one of them refused leaves those two fields on a spawn that never
+    happened. The desktop app's own dispatch receipt proves the refusal without
+    any transcript: it admits a call only as its last control, under its lock,
+    and an unadmitted call is refused (the hook exits 2). Given that proof,
+    those two fields alone no longer refuse; any sign that a run STARTED still
+    does, and so do scheduled recovery jobs.
 
     Point 3 is "if registration fails, the spawn does not happen", and its other
     half has never had a command: a workspace registered and created for a spawn
@@ -1923,8 +1933,10 @@ def withdraw_cc(session_id, name, why=""):
     for field, what in (("agent_id", "it ran"),
                         ("tool_use_id", "its spawn was registered"),
                         ("spawned_at", "its spawn was registered"),
-                        ("disposition", "its work was already decided")):
-        if rec.get(field):
+                        ("disposition", "its work was already decided"),
+                        ("started_at", "it started"), ("end", "it ended"), ("provisional", "it started"),
+                        ("recovery_jobs", "recovery jobs were scheduled for it")):
+        if rec.get(field) and not (refused_dispatch and field in ("tool_use_id", "spawned_at")):
             raise SpecError("%s is not an un-happened spawn (%s). Use `workspaces.sh land %s` or "
                             "`workspaces.sh discard %s` - this command withdraws only a registration "
                             "whose spawn never happened." % (name, what, name, name))
@@ -1940,7 +1952,7 @@ def withdraw_cc(session_id, name, why=""):
             os.remove(agent_path(key))
         except OSError:
             pass
-    event("withdrawn-cc", key=key, why=why, paths=paths)
+    event("withdrawn-cc", key=key, why=why, paths=paths, refused_dispatch=refused_dispatch or None)
     return {"withdrawn": paths}
 
 
