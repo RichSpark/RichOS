@@ -706,6 +706,39 @@ fn a_repository_connected_to_two_companies_is_a_read_root_in_each_companys_conve
     }
 }
 
+/// **Rich and Stu can answer Codex** (gap X): each Codex channel folder the user's setting names
+/// (`CODEX_CHANNELS` in their `orchestration.config`) that exists is one of the session's
+/// folders, so `to-codex.md` there can be written; one that does not exist is left out, and the
+/// read-only inspectors' roots are unchanged.
+#[test]
+fn the_users_codex_channel_folders_are_folders_of_the_session() {
+    use richos_core::{EntityId, EntityRegistry, Ledger, Spine};
+    let f=Scratch::new();
+    let alpha=EntityId::parse("alpha").unwrap();
+    let mut spine=Spine::new(Ledger::open(f.0.join("ledger.jsonl")).unwrap());
+    spine.set_entity_registry(EntityRegistry::from_existing_ids(std::slice::from_ref(&alpha)));
+    let thread=spine.create_thread("Alpha",&alpha).unwrap();
+    let (central,channel,missing)=(f.0.join("central"),f.0.join("codex channel"),f.0.join("not there"));
+    std::fs::create_dir_all(&central).unwrap();std::fs::create_dir_all(&channel).unwrap();
+    std::fs::write(central.join("orchestration.config"),format!("CODEX_CHANNELS=\"{}:{}\"\n",channel.display(),missing.display())).unwrap();
+    let mut profile=prepare_for_user(&f,&central);
+    profile.scope_to(&spine.ledger().thread_binding(&thread).unwrap()).unwrap();
+    let mut command=std::process::Command::new("/fictional/provider");profile.configure(&mut command,Path::new("/fictional/provider"),"session",&f.0.join("scope"));
+    let args:Vec<_>=command.get_args().map(|a|a.to_string_lossy().to_string()).collect();
+    assert_eq!(args.iter().filter(|arg|*arg=="--add-dir").count(),1,"one --add-dir keeps every folder");
+    let start=args.iter().position(|arg|arg=="--add-dir").unwrap()+1;
+    let directories:Vec<_>=args[start..].iter().take_while(|arg|!arg.starts_with("--")).map(String::as_str).collect();
+    assert_eq!(directories.last().copied(),Some(channel.to_str().unwrap()),"{directories:?}");
+    assert!(!directories.contains(&missing.to_str().unwrap()),"a folder that does not exist: {directories:?}");
+    let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+    let inspector_roots: Vec<String> = serde_json::from_str(environment["RICHOS_APP_READ_ROOTS"].as_deref().unwrap()).unwrap();
+    assert!(!inspector_roots.contains(&channel.to_str().unwrap().to_string()),"{inspector_roots:?}");
+    // Set empty, no channel folder.
+    std::fs::write(central.join("orchestration.config"),"CODEX_CHANNELS=\"\"\n").unwrap();
+    let mut command=std::process::Command::new("/fictional/provider");profile.configure(&mut command,Path::new("/fictional/provider"),"session",&f.0.join("scope"));
+    assert!(!command.get_args().any(|arg|arg==channel.as_os_str()),"set empty, the channel stays a session folder");
+}
+
 // =======================================================================================
 // THE USER'S OWN SETTINGS FILES — CEO ruling §138; build plan 2026-10-21, item 0
 // =======================================================================================
