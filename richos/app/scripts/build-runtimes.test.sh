@@ -80,5 +80,61 @@ else
   echo "  FAIL  B4 the zipped-executable install: $out"; fail=1
 fi
 
+# 5. The delivered git in an ordinary Mac repository: core.precomposeunicode=true (what `git
+#    init` writes on macOS) and a non-ASCII file name. A git linked against stock GNU libiconv
+#    dies there ("iconv_open(UTF-8,UTF-8-MAC) failed"). The same check_git_precompose the
+#    builder runs on every fresh runtime, run here against RICHOS_RUNTIME_DIR's git.
+# 6. Positive probes, always run: the check refuses a git that dies with that error and a git
+#    that exits 0 but reports the name decomposed, so a pass in 5 is not a check that cannot fail.
+if [ -n "${RICHOS_RUNTIME_DIR:-}" ] && [ -x "$RICHOS_RUNTIME_DIR/bin/git" ]; then
+  if out=$(python3 - "$HERE/build-runtimes.py" "$RICHOS_RUNTIME_DIR/bin/git" 2>&1 <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("build_runtimes", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+env = {**os.environ, "PATH": os.path.dirname(sys.argv[2]) + ":/usr/bin:/bin:/usr/sbin:/sbin"}
+try:
+    print(module.check_git_precompose(sys.argv[2], env))
+except RuntimeError as error:
+    raise SystemExit(str(error))
+PY
+); then
+    echo "  PASS  B5 $RICHOS_RUNTIME_DIR/bin/git status exits 0 in a core.precomposeunicode=true repository ($out)"
+  else
+    echo "  FAIL  B5 $RICHOS_RUNTIME_DIR/bin/git in a core.precomposeunicode=true repository: $out"; fail=1
+  fi
+else
+  echo "  NOT RUN  B5 the delivered git's precomposed-unicode check: RICHOS_RUNTIME_DIR names no runtime with bin/git"
+fi
+if out=$(python3 - "$HERE/build-runtimes.py" 2>&1 <<'PY'
+import importlib.util, sys, tempfile, unicodedata
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("build_runtimes", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+decomposed = unicodedata.normalize("NFD", module.PRECOMPOSE_NAME)
+stubs = {
+    "dies": "echo 'fatal: iconv_open(UTF-8,UTF-8-MAC) failed, but needed:' >&2; exit 128",
+    "decomposed": "printf '?? %s\\0' '" + decomposed + "'",
+}
+with tempfile.TemporaryDirectory(prefix="richos fictional git ") as temporary:
+    for label, status in stubs.items():
+        stub = Path(temporary) / label
+        stub.write_text('#!/bin/sh\ncase "$1" in\n  init) mkdir -p "$3" ;;\n  -C) case "$3" in status) '
+                        + status + ' ;; esac ;;\nesac\n')
+        stub.chmod(0o755)
+        try:
+            module.check_git_precompose(stub)
+        except RuntimeError:
+            continue
+        raise SystemExit(f"a git that {label} passed the check")
+print("ok")
+PY
+); then
+  echo "  PASS  B6 the precomposed-unicode check refuses a git that dies on UTF-8-MAC and one that reports the name decomposed"
+else
+  echo "  FAIL  B6 the precomposed-unicode check's positive probes: $out"; fail=1
+fi
+
 python3 -B "$HERE/runtime-launchers.test.py" || fail=1
 exit "$fail"

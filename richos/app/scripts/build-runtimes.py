@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import unicodedata
 import urllib.request
 import zipfile
 
@@ -23,6 +24,50 @@ import zipfile
 # lease's tool commands, and a runtime without them would silently stop reaping (reap gap C8).
 CLOSURE_CHECK = ("import sqlite3, fcntl, ssl, ctypes; ctypes.CDLL('/usr/lib/libproc.dylib'); "
                  "print('Python dependency closure OK')")
+
+
+# THE DELIVERED GIT MUST WORK IN AN ORDINARY MAC REPOSITORY. `git init` on macOS writes
+# core.precomposeunicode=true, and with it Git converts every non-ASCII name it reads from a
+# directory through iconv_open("UTF-8", "UTF-8-MAC") (compat/precompose_utf8.c). Only Apple's
+# system libiconv knows "UTF-8-MAC"; a Git linked against stock GNU libiconv dies with
+# "iconv_open(UTF-8,UTF-8-MAC) failed, but needed: precomposed unicode is not supported" the
+# first time `git status` meets such a name (measured 2026-10-28: richos-hq, and the runtime
+# the nightly built from runtime-sources.json eb026316eb08). An ASCII-only repository never
+# reaches that code, which is why the version check alone never saw it. build() runs this
+# against every fresh runtime and build-runtimes.test.sh runs it against RICHOS_RUNTIME_DIR.
+PRECOMPOSE_NAME = "café.txt"
+
+
+def check_git_precompose(git, env=None):
+    """`git status` in a fresh repository with core.precomposeunicode=true and a file whose
+    name is stored decomposed (NFD) must exit 0 and report the name precomposed (NFC).
+    Returns the porcelain record; raises RuntimeError quoting Git's own output otherwise.
+    Isolated from the caller's Git configuration and home."""
+    with tempfile.TemporaryDirectory(prefix="richos-git-precompose-") as temporary:
+        root = Path(temporary)
+        (root / "home").mkdir()
+        isolated = {**(env if env is not None else os.environ), "HOME": str(root / "home"),
+                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+                    "LC_ALL": "C", "LANG": "C"}
+        repo = root / "repo"
+
+        def git_run(*arguments):
+            return subprocess.run([str(git), *arguments], env=isolated, capture_output=True)
+
+        for arguments in (("init", "-q", str(repo)), ("-C", str(repo), "config", "core.precomposeunicode", "true")):
+            result = git_run(*arguments)
+            if result.returncode != 0:
+                raise RuntimeError(f"git {arguments[0]} failed ({result.returncode}): "
+                                   + result.stderr.decode(errors="replace").strip())
+        (repo / unicodedata.normalize("NFD", PRECOMPOSE_NAME)).write_text("fictional\n")
+        result = git_run("-C", str(repo), "status", "--porcelain", "-z")
+        if result.returncode != 0:
+            raise RuntimeError(f"git status in a core.precomposeunicode=true repository exited "
+                               f"{result.returncode}: " + result.stderr.decode(errors="replace").strip())
+        wanted = ("?? " + unicodedata.normalize("NFC", PRECOMPOSE_NAME) + "\0").encode()
+        if result.stdout != wanted:
+            raise RuntimeError(f"git status did not report the precomposed name: {result.stdout!r}, wanted {wanted!r}")
+        return result.stdout.decode().rstrip("\0")
 
 
 # Every download names itself. ffmpeg.martin-riedl.de answers Python's default User-Agent
