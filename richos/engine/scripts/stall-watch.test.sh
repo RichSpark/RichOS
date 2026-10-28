@@ -570,10 +570,13 @@ bash "$SB/t5-loop.sh" >/dev/null 2>&1 &
 LOOPPID=$!; PIDS+=("$LOOPPID")
 wait_for 10 test -f "$STEM.pid"
 tick 0
+# The command names this engine's agent_hold.py, shell-quoted as printed: the
+# engine under test may live under a folder with a space ("Application Support").
+AH_PRINTED="$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$SCRIPT_DIR/lib/agent_hold.py")"
 check "T05  a silent agent whose end waits on its own loop: said so, with the one command that ends its commands" \
     "$( has "$OUT" "[SILENT] papa-opus-l1: its turn ended; its end waits on its own still-running command(s)" \
         && has "$OUT" "its end waits on its own command(s) still running" && has "$OUT" "running: \`until grep -q Finished" \
-        && has "$OUT" "agent_hold.py end --session $SID --agent a0000000000fixl --name papa-opus-l1" \
+        && has "$OUT" "python3 $AH_PRINTED end --session $SID --agent a0000000000fixl --name papa-opus-l1" \
         && ! has "$OUT" "SendMessage to papa-opus-l1"; echo $?)" "out=$OUT"
 kill "$LOOPPID" 2>/dev/null
 
