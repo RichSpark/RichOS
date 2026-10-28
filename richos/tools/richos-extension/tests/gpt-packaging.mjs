@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { Worker as Thread } from 'node:worker_threads';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
 const zipPath = new URL('../modules/gpt-exporter/lib/jszip.min.js', import.meta.url);
 const zipCode = await readFile(zipPath, 'utf8');
 const zipContext = vm.createContext({ setTimeout, clearTimeout, setImmediate, clearImmediate, Uint8Array, Uint16Array, Uint32Array, ArrayBuffer, Blob });
@@ -15,8 +16,8 @@ globalThis.Worker = class {
       const context = vm.createContext({ setImmediate, clearImmediate, Blob, Uint8Array, Uint16Array, Uint32Array, ArrayBuffer, atob, setTimeout, clearTimeout });
       context.self = context;
       context.postMessage = data => parentPort.postMessage(data);
-      context.importScripts = () => vm.runInContext(fs.readFileSync(${JSON.stringify(zipPath.pathname)}, 'utf8'), context);
-      vm.runInContext(fs.readFileSync(${JSON.stringify(url.pathname)}, 'utf8'), context);
+      context.importScripts = () => vm.runInContext(fs.readFileSync(${JSON.stringify(fileURLToPath(zipPath))}, 'utf8'), context);
+      vm.runInContext(fs.readFileSync(${JSON.stringify(fileURLToPath(url))}, 'utf8'), context);
       parentPort.on('message', data => context.onmessage({ data }));`, { eval: true });
     this.thread.on('message', data => this.onmessage?.({ data }));
     this.thread.on('error', error => this.onerror?.(error));
