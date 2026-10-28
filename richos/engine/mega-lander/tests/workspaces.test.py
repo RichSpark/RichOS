@@ -4187,17 +4187,13 @@ class HuntV2_04_ADamagedRecordIsNotAMissingOne(Base):
         self.assertTrue([r for r in ws.all_agents() if r.get("orphan")])
 
 
-class AnyRegistryOnThisMachineCounts(Base):
-    """2026-10-28: a terminal session's Stop gate swept with only its own
-    registry (~/.claude/state/workspaces), called the app's live worker
-    worktrees unregistered — the app keeps them in its own per-conversation
-    registry, <app data>/engine-state/workspaces/<hash> — and its automatic
-    land stopped a worker's processes and deleted three worktrees. Here
-    registry B is the terminal's (this sandbox's CLAUDE_CONFIG_DIR) and
+class _AppRegistryFixture(Base):
+    """Registry B is the terminal's (this sandbox's CLAUDE_CONFIG_DIR) and
     registry A is an app conversation's, under this sandbox's HOME exactly
-    where the app keeps it."""
+    where the app keeps it. No tests of its own."""
 
     APP_PARTITION = "f" * 64
+    APP_SID = "app-sess-bbbbbbbb-2222"
 
     def app_registry(self):
         # Where the app keeps it (Tauri's app_data_dir for com.richos.app), under this sandbox's HOME.
@@ -4209,7 +4205,7 @@ class AnyRegistryOnThisMachineCounts(Base):
         with a live child process in it."""
         path = os.path.join(self.env.root, "app-target-worktrees", name)
         branch = "cc/" + name
-        app_sid = "app-sess-bbbbbbbb-2222"
+        app_sid = self.APP_SID
         os.environ["RICHOS_WORKSPACES_DIR"] = self.app_registry()
         try:
             ws.record_integration(self.entity, "main", "the app conversation's body of work", app_sid)
@@ -4235,6 +4231,14 @@ class AnyRegistryOnThisMachineCounts(Base):
         self.assertTrue(os.path.isdir(path), "the gate deleted another registry's worktree")
         self.assertIn(path, worktrees(self.entity))
         self.assertIn(branch, branches(self.entity), "the gate deleted another registry's branch")
+
+
+class AnyRegistryOnThisMachineCounts(_AppRegistryFixture):
+    """2026-10-28: a terminal session's Stop gate swept with only its own
+    registry (~/.claude/state/workspaces), called the app's live worker
+    worktrees unregistered — the app keeps them in its own per-conversation
+    registry, <app data>/engine-state/workspaces/<hash> — and its automatic
+    land stopped a worker's processes and deleted three worktrees."""
 
     def test_a_worktree_only_the_app_registry_holds_survives_a_terminal_gate_stop(self):
         path, branch, sleeper = self.app_worker("ray-sonnet-app0001")
@@ -4274,6 +4278,25 @@ class AnyRegistryOnThisMachineCounts(Base):
                         "the withdrawal was not recorded")
         self.assertFalse([e for e in evs if e.get("event") == "landed" and e.get("key") == key])
 
+    def test_a_workspace_two_registries_hold_is_deleted_by_neither(self):
+        """A registration HERE does not license deleting what another registry
+        also holds: _delete holds, records why and retries (point 13), so a
+        double registration reaches the CEO's notice instead of one owner
+        deleting the other's live worktree."""
+        path, branch, sleeper = self.app_worker("zach-opus-app0004")
+        ws.register_cc(self.sid, "zach-opus-app0004", self.entity, path, branch)
+        ws.confirm_cc(self.sid, "zach-opus-app0004", path, True)
+        rec = ws.load_agent(ws.named_key(self.sid, "zach-opus-app0004"))
+        self.assertEqual(ws.registry_guard(rec)[0], "hold")
+        ok = ws._delete(rec, [w for w in ws.live_workspaces(rec) if w.get("path")], branches=True, why="test")
+        self.assertFalse(ok)
+        self.assert_survives(path, branch, sleeper)
+        fresh = ws.load_agent(rec["key"])
+        self.assertIn("another workspace registry on this machine holds", fresh["deletion"]["last_error"])
+        with self.assertRaises(ws.SpecError):
+            ws.land(rec["key"], self.sid)
+        self.assert_survives(path, branch, sleeper)
+
     def test_a_truly_unregistered_worktree_is_still_found(self):
         """The twin: a worktree no registry holds is still the sweep's, so the
         rule is not "never sweep when an app registry exists"."""
@@ -4282,6 +4305,165 @@ class AnyRegistryOnThisMachineCounts(Base):
         run("git", "-C", self.entity, "worktree", "add", "-q", stray, "-b", "cc/stray")
         ws.pending(self.sid, self.entity, scan=True, auto=False)
         self.assertEqual([r["name"] for r in ws.all_agents() if r.get("orphan")], ["orphan-stray-wt"])
+
+
+ANY_REGISTRY_ENTRANCES = ("gate_stop", "session_start", "post_merge_pending", "retry_due", "land", "discard",
+                          "merge_and_land", "dry_status")
+ANY_REGISTRY_KINDS = ("worktree", "branch", "unreadable")
+
+
+def _any_registry_disabled(memo=None):
+    """The mutation: every other registry reads as empty and undamaged."""
+    return set(), set(), []
+
+
+class AnyRegistryEveryEntranceEveryKind(_AppRegistryFixture):
+    """Sage's must-have 8 (2026-10-28): NOTHING IN A WORKSPACE ANOTHER REGISTRY
+    HOLDS IS STOPPED OR DELETED, BY ANY ENTRANCE. The sweep's fix alone left
+    retry_due (which runs before pending() at the gate and at SessionStart),
+    discard and merge_and_land able to stop and delete it.
+
+    One row per entrance x kind. Every row starts from the record a base-code
+    sweep left in registry B for registry A's worker: an open orphan record
+    claimed by this session (for retry_due, one a base-code land already
+    marked landed, whose deletion failed and is due). Kinds:
+      worktree    A holds the worktree; a live process runs in it.
+      branch      A holds only the branch (its worktree is gone).
+      unreadable  A's record of the worktree cannot be read, so nothing proves
+                  the worktree unregistered (V2-04).
+    Entrances: gate_stop; lifecycle SessionStart; the post-`git merge`
+    pending(scan=False) (the hook's retry_due() before it is its own row);
+    retry_due; land; discard; merge_and_land; the dry status.
+
+    Each row is checked twice: as is (nothing stopped, deleted, merged or
+    landed) and with the any-registry check disabled (registrations_elsewhere
+    reads every other registry as empty), where the same row must go red. A
+    row that stays green with the check disabled proves nothing."""
+
+    ROW_KEY = "orphan--rowrowrowrow0001"
+
+    def _arrange(self, kind, entrance):
+        path, branch, sleeper = self.app_worker("ray-sonnet-row0001")
+        app_key = ws.named_key(self.APP_SID, "ray-sonnet-row0001")
+        os.environ["RICHOS_WORKSPACES_DIR"] = self.app_registry()
+        try:
+            if kind == "branch":
+                sleeper.kill()
+                sleeper.wait()
+                sleeper = None
+                run("git", "-C", self.entity, "worktree", "remove", "--force", path)
+                rec = ws.load_agent(app_key)
+                for w in rec["workspaces"]:
+                    if w.get("path") == path:
+                        w["deleted_at"] = ws.iso()
+                ws.save_agent(rec)
+                path = ""
+            elif kind == "unreadable":
+                with open(ws.agent_path(app_key), "w") as f:
+                    f.write('{"key": "%s", "workspaces": [' % app_key)
+        finally:
+            os.environ.pop("RICHOS_WORKSPACES_DIR", None)
+        rec = ws.new_record(self.ROW_KEY, name="orphan-ray-sonnet-row0001", orphan=True)
+        ws._add_workspace(rec, ws.classify(path, branch), self.entity, path, branch, "unregistered")
+        rec["claimed_by"] = self.sid
+        if entrance == "retry_due":
+            rec["disposition"] = {"kind": "landed", "at": ws.now(), "auto": True, "by_session": self.sid,
+                                  "as_part_of": self.ROW_KEY}
+            rec["deletion"] = {"attempts": 1, "first_failed_at": ws.now(), "next_at": 0, "branches": True,
+                               "last_error": "processes still running in its workspaces"}
+        ws.save_agent(rec)
+        return path, branch, sleeper
+
+    def _enter(self, entrance):
+        import io
+        from contextlib import redirect_stdout
+        out = {"refused": "", "printed": ""}
+        with patch.object(ws, "SPAWN_WINDOW", 120.0):
+            if entrance == "gate_stop":
+                ws.gate_stop({"session_id": self.sid}, self.entity)
+            elif entrance == "session_start":
+                ws.lifecycle({"hook_event_name": "SessionStart", "source": "startup", "session_id": self.sid,
+                              "cwd": self.entity}, self.entity)
+            elif entrance == "post_merge_pending":
+                ws.pending(self.sid, self.entity, scan=False)
+            elif entrance == "retry_due":
+                ws.retry_due(budget=60.0)
+            elif entrance == "dry_status":
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    ws._print_status(self.sid, self.entity)
+                out["printed"] = buf.getvalue()
+            else:
+                try:
+                    if entrance == "land":
+                        ws.land(self.ROW_KEY, self.sid, auto=True)
+                    elif entrance == "discard":
+                        ws.discard(self.ROW_KEY, "a row of the any-registry table",
+                                   not_ceo_ordered="a test fixture; nobody ordered it", me=self.sid)
+                    else:
+                        ws.merge_and_land(self.ROW_KEY, self.sid)
+                except ws.SpecError as e:
+                    out["refused"] = str(e)
+        return out
+
+    def _row(self, entrance, kind):
+        path, branch, sleeper = self._arrange(kind, entrance)
+        main_before = run("git", "-C", self.entity, "rev-parse", "main").stdout.strip()
+        with open(ws.agent_path(self.ROW_KEY), "rb") as f:
+            rec_before = f.read()
+        out = self._enter(entrance)
+        # What the order is about first: nothing stopped, deleted or merged.
+        time.sleep(0.3)
+        if sleeper is not None:
+            self.assertIsNone(sleeper.poll(), "%s stopped a process in another registry's worktree" % entrance)
+        if path:
+            self.assertTrue(os.path.isdir(path), "%s deleted another registry's worktree" % entrance)
+            self.assertIn(path, worktrees(self.entity))
+        self.assertIn(branch, branches(self.entity), "%s deleted another registry's branch" % entrance)
+        self.assertEqual(run("git", "-C", self.entity, "rev-parse", "main").stdout.strip(), main_before,
+                         "%s merged another registry's work into main" % entrance)
+        try:
+            with open(ws._p("events.jsonl"), encoding="utf-8") as f:
+                evs = [json.loads(line) for line in f if line.strip()]
+        except FileNotFoundError:
+            evs = []
+        acted = [e["event"] for e in evs if e.get("key") == self.ROW_KEY
+                 and e.get("event") in ("landed", "discarded", "deleted", "merged")]
+        self.assertEqual(acted, [], "%s acted on the orphan record" % entrance)
+        # Then what each entrance answers.
+        if entrance == "dry_status":
+            self.assertNotIn("orphan-", out["printed"], "the dry status listed it as work")
+            with open(ws.agent_path(self.ROW_KEY), "rb") as f:
+                self.assertEqual(f.read(), rec_before, "the dry status wrote")
+        if entrance in ("land", "discard", "merge_and_land"):
+            self.assertTrue(out["refused"], "%s was not refused" % entrance)
+        live = ws.load_agent(self.ROW_KEY)
+        if kind == "unreadable":
+            # Not proved unregistered, not proved held: it stays, untouched.
+            self.assertIsNotNone(live, "%s settled a record nothing could settle" % entrance)
+            if entrance != "retry_due":
+                self.assertFalse(live.get("disposition"), "%s gave it a disposition" % entrance)
+        elif entrance != "dry_status":
+            self.assertIsNone(live, "%s left open an orphan record another registry holds" % entrance)
+
+
+def _any_registry_rows():
+    for entrance in ANY_REGISTRY_ENTRANCES:
+        for kind in ANY_REGISTRY_KINDS:
+            def row(self, entrance=entrance, kind=kind):
+                self._row(entrance, kind)
+
+            def mutant(self, entrance=entrance, kind=kind):
+                with patch.object(ws, "registrations_elsewhere", _any_registry_disabled):
+                    with self.assertRaises(AssertionError, msg="the row stayed green with the any-registry "
+                                                               "check disabled: it proves nothing"):
+                        self._row(entrance, kind)
+
+            setattr(AnyRegistryEveryEntranceEveryKind, "test_row_%s__%s" % (entrance, kind), row)
+            setattr(AnyRegistryEveryEntranceEveryKind, "test_mutant_red_%s__%s" % (entrance, kind), mutant)
+
+
+_any_registry_rows()
 
 
 class HuntV2_05_StatusReadsTheRecordedStop(Base):
