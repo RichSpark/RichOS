@@ -623,12 +623,24 @@ def witness_land(scope, worker, targets, plan):
         print("RichOS output: the landed files were not recorded: %s" % str(error)[-500:], file=sys.stderr)
 
 
+def admitted(record):
+    """True once the app admitted this receipt's Agent call. `dispatch_intent` writes the
+    call's tool_use_id onto the receipt, under the conversation lock, as the LAST control
+    before the hook hands Agent its input; a call it did not admit was refused (the hook
+    exits 2), so the platform never started it."""
+    return bool(record.get("tool_use_id") or record.get("agent_id"))
+
+
 def ever_dispatched(record, canonical=None):
-    """Any sign that this receipt's worker was handed to the provider: the
-    receipt's own tool call or agent id, or the spawn evidence the canonical
-    record writes at PreToolUse[Agent], SubagentStart and PostToolUse[Agent]."""
-    return bool(record.get("tool_use_id") or record.get("agent_id")
-                or (canonical and any(canonical.get(field) for field in SPAWN_EVIDENCE)))
+    """Any sign that this receipt's worker was handed to the provider: the receipt's own
+    admission, or a run the canonical record saw START (SubagentStart, PostToolUse[Agent]).
+
+    THE CANONICAL SPAWN REGISTRATION ALONE IS NOT ONE (2026-10-28, work-709b35ac). The spawn
+    guard writes `tool_use_id` and `spawned_at` at PreToolUse[Agent], before the app's own
+    admission answers, so a call the admission or a later control refused left a "spawn" on
+    a receipt that never ran: refresh then turned it `interrupted` when the session ended,
+    and nothing could ever settle it."""
+    return bool(admitted(record) or (canonical and any(canonical.get(field) for field in RUN_EVIDENCE)))
 
 
 def retired_execution(record):
@@ -821,61 +833,137 @@ def repository_instructions(repos_all, record, args):
 
 
 SPAWN_EVIDENCE = ("agent_id", "tool_use_id", "spawned_at", "started_at", "end", "disposition")
+# What only a run that STARTED leaves on its canonical record. `tool_use_id` and `spawned_at`
+# are not here: the spawn guard writes them for a call that may still be refused (`admitted`).
+RUN_EVIDENCE = ("agent_id", "started_at", "end", "provisional", "disposition")
+# The receipt statuses a call that was never admitted can be in.
+NOT_ADMITTED = ("preparing", "prepared", "unknown", "blocked")
+NEVER_DISPATCHED = ("never dispatched: no worker was registered or started for this receipt, so a "
+                    "replacement cannot repeat its work")
 
 
-def settle_undispatched(scope, path, record):
-    """Settle a preparation that provably never dispatched, including Pierce refusals.
+def canonical_of(record):
+    return W.load_agent(W.named_key(record["binding"]["session_id"], record["name"]))
 
-    WHY AN UNCERTAIN RECEIPT IS KEPT AT ALL, and that reason still holds: a
-    preparation that failed after `spawn.py` began may have created workspaces,
-    and repeating a start whose outcome is unknown could repeat its side
-    effects. So the receipt is never replayed and never silently dropped.
 
-    WHY IT CAN NEVER HAVE STARTED A WORKER. Its payload reaches `Agent` only
-    through `dispatch_intent`, which refuses every receipt whose status is not
-    `prepared` and moves it to `dispatching` first. A receipt still `preparing`
-    or `unknown`, or `prepared` after inspection returned findings, therefore
-    never passed that gate, and the canonical record says
-    the same thing independently: `register_spawn` writes `tool_use_id` and
-    `spawned_at` at the PreToolUse[Agent] hook, `bind_agent` and `record_start`
-    write `agent_id` and `started_at`. With none of them present nothing ran.
+def never_started(record, canonical=False):
+    """True only on proof that no worker ever ran for this receipt: the app never admitted
+    its Agent call, nothing is preparing it right now, and its canonical record shows no
+    run. A receipt like this did no work, so nothing has to wait for it: not completion,
+    not a replacement, not the cleanup after a land (2026-10-28, work-709b35ac).
+    `canonical` False means "read it here"; None means "there is none"."""
+    if admitted(record) or record.get("status") not in NOT_ADMITTED or preparing_elsewhere(record):
+        return False
+    if canonical is False:
+        canonical = canonical_of(record)
+    return not (canonical and any(canonical.get(field) for field in RUN_EVIDENCE))
 
-    WHAT WAS MISSING (part 4, finding 1). Nothing turned that proof into a
-    settled receipt, so an assignment whose preparation failed this way refused
-    every replacement worker forever, and `refresh` could never settle it
-    because there was no start and no ending to observe.
 
-    THE SETTLEMENT IS THE CANONICAL ONE. Whatever the failed preparation did
-    create is withdrawn by `W.withdraw_cc`, the same call `spawn.py` makes to
-    roll back a spawn that never happened: it refuses anything that ever ran and
-    deletes through `_delete`, the only code that deletes a workspace. Dirty
-    files are refused first, never discarded. If any of that cannot be proved
-    or done, the receipt stays unresolved and the refusal names why.
+def held_work(workspace):
+    """None when this worktree and its branch hold nothing: no uncommitted or untracked
+    file and no commit that is not also on another branch, tag or remote. Otherwise the
+    sentence that says what it holds. Anything Git cannot answer counts as held: an unknown
+    is never deleted."""
+    path, repo, branch = workspace.get("path") or "", workspace.get("repo") or "", workspace.get("branch") or ""
+    tips = []
+    try:
+        if branch:
+            found = _git_answer(repo, "rev-parse", "--verify", "--quiet", "refs/heads/%s^{commit}" % branch)
+            if found.returncode == 0:
+                tips.append(found.stdout.strip())
+            elif found.returncode != 1:
+                return "Git could not read its branch %s" % branch
+        if path and os.path.isdir(path):
+            status = _git_answer(path, "status", "--porcelain", "--untracked-files=all")
+            if status.returncode:
+                return "Git could not read its worktree"
+            if status.stdout.strip():
+                files = [line[3:] for line in status.stdout.splitlines() if line.strip()]
+                return "%d uncommitted file%s (%s)" % (len(files), "" if len(files) == 1 else "s", ", ".join(files[:5]))
+            head = _git_answer(path, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+            if head.returncode:
+                return "its worktree has no readable commit"
+            tips.append(head.stdout.strip())
+        if not tips:
+            return None
+        own = ["--exclude=" + branch] if branch else []
+        unique = _git_answer(repo, "rev-list", "--count", *tips, "--not", *own, "--branches", "--tags", "--remotes")
+        if unique.returncode:
+            return "Git could not tell whether its commits are kept anywhere else"
+        count = int(unique.stdout.strip() or "0")
+        if count:
+            return "%d commit%s on no other branch" % (count, "" if count == 1 else "s")
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return "it could not be read: %s" % str(error)[-300:]
+    return None
+
+
+def settle_undispatched(scope, path, record, reason=NEVER_DISPATCHED):
+    """Settle a receipt that never started a run, with its reason, and remove what its
+    preparation created only when it holds nothing (2026-10-28, work-709b35ac).
+
+    A worktree or branch that holds a commit or an uncommitted file is NEVER touched: the
+    receipt is settled all the same (it did no work, so nothing waits on it), and what was
+    kept is reported on the receipt as `settled.retained`, each with what it holds. Returns
+    the settlement, or None when it is not proved that nothing ran.
+
+    WHY AN UNCERTAIN RECEIPT IS KEPT AT ALL, and that reason still holds: a preparation that
+    failed after `spawn.py` began may have created workspaces, and repeating a start whose
+    outcome is unknown could repeat its side effects. So a receipt is never replayed and never
+    silently dropped: it is settled, with its reason, on proof that nothing ran.
+
+    THE SETTLEMENT IS THE CANONICAL ONE. What the preparation created is withdrawn by
+    `W.withdraw_cc`, the same call `spawn.py` makes to roll back a spawn that never happened;
+    it deletes through `_delete`, the only code that deletes a workspace. What
+    changed is (1) a spawn the guard registered and the app then refused is proved
+    never-run by the receipt, not refused for its registration, (2) held work is kept and
+    reported rather than refusing every later step, and (3) every caller says why.
     """
-    if record.get("tool_use_id") or record.get("agent_id"):
-        return
-    if preparing_elsewhere(record):
-        return                           # its preparation is still running: nothing has failed yet
-    session, name = record["binding"]["session_id"], record["name"]
-    canonical = W.load_agent(W.named_key(session, name))
-    if canonical and any(canonical.get(field) for field in SPAWN_EVIDENCE):
-        return
-    withdrawn = []
+    if record.get("settled"):
+        return record["settled"]
+    canonical = canonical_of(record)
+    if not never_started(record, canonical):
+        return None
+    withdrawn, retained = [], []
     if canonical:
-        try:
-            W._require_clean(canonical, "withdraw its never-dispatched workspace; inspect and "
-                                        "reconcile retained uncommitted files first")
-            withdrawn = W.withdraw_cc(session, name, "its app preparation failed before any "
-                                                     "dispatch")["withdrawn"]
-        except W.SpecError as error:
-            raise ValueError("this obligation already has unresolved work: an earlier preparation never "
-                             "dispatched, but its workspace could not be withdrawn: %s" % error)
-    record.update(status="blocked", settled={
-        "at": W.iso(), "withdrawn": withdrawn,
-        "reason": "never dispatched: no worker was registered or started for this receipt, so a "
-                  "replacement cannot repeat its work"})
+        session, name = record["binding"]["session_id"], record["name"]
+        spaces = [w for w in W.live_workspaces(canonical) if w.get("path")]
+        for workspace in spaces:
+            holds = held_work(workspace)
+            if holds:
+                retained.append({"path": workspace["path"], "branch": workspace.get("branch") or "", "holds": holds})
+        if not retained:
+            try:
+                W._require_clean(canonical, "withdraw a workspace whose worker never ran")
+                refused = ("its Agent call was registered and then refused before the app admitted it"
+                           if any(canonical.get(f) for f in ("tool_use_id", "spawned_at")) else "")
+                withdrawn = W.withdraw_cc(session, name, reason, refused_dispatch=refused)["withdrawn"]
+            except W.SpecError as error:
+                retained = [{"path": w["path"], "branch": w.get("branch") or "", "holds": str(error)[-2000:]}
+                            for w in spaces]
+    record.update(status="blocked", settled={"at": W.iso(), "reason": reason, "withdrawn": withdrawn,
+                                             "retained": retained})
     save(path, record)
     project(scope, path, record)
+    return record["settled"]
+
+
+COMPLETED_UNRUN = "the assignment was completed and this receipt never ran"
+
+
+def settle_never_run(scope, root, obligation, reason):
+    """Settle every receipt of `obligation` that never started a run. Returns what was
+    settled now, each with what it withdrew and what it kept."""
+    out = []
+    for path, record in receipts(root):
+        if record["request"]["obligation_id"] != obligation or record.get("settled"):
+            continue
+        refresh(record)
+        settled = settle_undispatched(scope, path, record, reason)
+        if settled:
+            out.append({"id": record["id"], "name": record["name"], "request_id": record.get("request_id"),
+                        **{key: settled[key] for key in ("reason", "withdrawn", "retained")}})
+    return out
 
 
 def preparing_elsewhere(record):
@@ -1235,14 +1323,37 @@ def prepare(scope_path, scope, args):
             old = bounded(path)
             if old["request"] != normalized: raise ValueError("request_id was already used for different work")
             if preparing_elsewhere(old): return view(old)   # still being prepared: nothing to settle or project yet
-            refresh(old); save(path, old); project(scope,path,old)
+            refresh(old)
+            if old["status"] == "prepared" and old["binding"] != scope["binding"] and never_started(old):
+                # A PREPARE FROM AN EARLIER TURN DISPATCHES OR CLEANS UP, never just refuses
+                # (2026-10-28, f0a399b8). Its Agent call can no longer be admitted under the
+                # turn it was prepared in. Asked again in a later turn of the SAME provider
+                # session, after this call has checked the assignment again, it is bound to
+                # this turn and its payload handed back, so it can be dispatched. In another
+                # session its workspace is registered under the session that ended, where no
+                # spawn can reach it, so it is settled and what it created is withdrawn.
+                if all(old["binding"].get(key) == scope["binding"].get(key) for key in ("entity_id", "thread_id", "session_id")):
+                    old["rebound"] = {"at": W.iso(), "from_turn": old["binding"].get("turn_id")}
+                    old["binding"] = scope["binding"]
+                else:
+                    settle_undispatched(scope, path, old, "prepared in an earlier provider session, which no dispatch "
+                                                          "can reach; prepare it again under a new request_id")
+            save(path, old); project(scope,path,old)
             # Payload delivery is not retried once provider dispatch became uncertain.
             return view(old, include_payload=old["status"] == "prepared" and old["binding"] == scope["binding"])
         for old_path, old in receipts(root):
             if old["request"]["obligation_id"] == obligation and old["request"]["role"] == role:
                 refresh(old)
-                if old["status"] in ("preparing","unknown") or (old["status"] == "prepared" and old.get("pierce_refused")):
-                    settle_undispatched(scope, old_path, old)
+                # SUPERSEDED, AND PROVABLY NEVER RUN (2026-10-28, work-709b35ac): a preparation
+                # that failed or is uncertain, one whose dispatch was refused, and one from an
+                # earlier turn, which can no longer be admitted as it stands. A preparation of
+                # THIS turn that nothing refused is left alone: an assignment may have several
+                # independent workers, prepared one after the other and then dispatched.
+                # Whatever is left is settled when the assignment completes, or by `settle`.
+                if not old.get("settled") and never_started(old) and (
+                        old["status"] in ("preparing", "unknown") or old.get("pierce_refused")
+                        or (old["status"] == "prepared" and old["binding"] != scope["binding"])):
+                    settle_undispatched(scope, old_path, old, "superseded by request %s: %s" % (request_id, NEVER_DISPATCHED))
                 # An assignment may have several independent workers, reviewers or consults.
                 # Reject an exact duplicate under another id, not every request sharing a duty.
                 if old["request"] == normalized and old["status"] in ("preparing","prepared","dispatching","running","unknown"):
@@ -1466,6 +1577,10 @@ def view(record, include_payload=False):
     result["assignment_completed"] = False
     if record["request"]["role"] == "consult":
         return result                    # no workspace: its answer is `consult_answer`, on the record
+    if record.get("settled") and not record["settled"].get("retained"):
+        # Settled and nothing kept: there is no workspace to look at, and "registration is
+        # missing" read as an open problem on a receipt that is finished (2026-10-28).
+        return result
     if not record.get("integration", {}).get("verified"):
         try:
             target = target_workspace(record)
@@ -1493,6 +1608,9 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
         if len(matches) != 1: raise ValueError("Agent input is absent from or differs from its prepared scoped receipt; prepare this assignment with the app work tool before calling Agent")
         path,record = matches[0]
         require_not_stopped(scope, record["request"]["obligation_id"])
+        if record["status"] == "prepared" and record["binding"] != scope["binding"] and not admitted(record):
+            raise ValueError("this was prepared in an earlier turn: call prepare again with the same request_id "
+                             "to dispatch it in this turn, or prepare a replacement under a new request_id")
         if record["binding"] != scope["binding"] or record["status"] != "prepared":
             raise ValueError("this dispatch is stale or already attempted; reconcile before retrying")
         ti = {"name": record["name"], **ti}
@@ -2292,6 +2410,14 @@ def integrate(scope_path,scope,args):
                 ancestors.add(previous)
             reviews=[refresh(record) for _,record in receipts(root)
                 if record["request"]["role"]=="reviewer" and record.get("review_target",{}).get("worker_id") in ancestors]
+            # A REVIEW THAT NEVER RAN IS NOT LANDED, IT IS SETTLED (2026-10-28, work-709b35ac).
+            # Landing one asked canonical cleanup to land work that never started ("is not
+            # finished") or was already withdrawn ("no registered agent"), and those failures
+            # became cleanup_pending, which `complete` refuses on forever.
+            for record in [record for record in reviews if never_started(record)]:
+                settle_undispatched(scope,root/(record["id"]+".json"),record,
+                                    "the work it was to review was integrated after another review; this review never ran")
+            reviews=[record for record in reviews if not never_started(record)]
             failures=[]
             for record in [worker,*reviews]:
                 try:
@@ -2475,23 +2601,40 @@ def completion_path(scope, identity):
     return folder(scope) / ("completion-" + identity + ".receipt")
 
 
+UNRESOLVED = ("preparing", "prepared", "dispatching", "running", "unknown")
+
+
+def unresolved(rows):
+    """The receipts that still have, or may have, a run in flight. A receipt that provably
+    never started one is not among them: it did no work, so nothing waits on it
+    (2026-10-28, work-709b35ac: a review prepared and never admitted held a reviewed,
+    integrated job open)."""
+    return [record for record in rows if record["status"] in UNRESOLVED and not never_started(record)]
+
+
 def completion_evidence(scope, obligation, worker_ids):
+    """A pure read: the ECS store calls it again, from its own process, to verify a
+    completion (`verify_completion`). Settling happens in `complete`, never here."""
     rows = [refresh(record) for _, record in receipts(folder(scope))
             if record["request"]["obligation_id"] == obligation]
-    if any(record["status"] in ("preparing", "prepared", "dispatching", "running", "unknown") for record in rows):
+    if unresolved(rows):
         raise ValueError("this assignment still has unresolved execution; reconcile it before completion")
-    # A worker receipt refused or settled before dispatch did no work, so it is
-    # not a final worker: counting it would make the assignment uncompletable
+    # A worker receipt refused, settled or otherwise never started did no work, so it
+    # is not a final worker: counting it would make the assignment uncompletable
     # the moment its replacement landed (part 4, finding 1).
-    workers = [record for record in rows if record["request"]["role"] == "worker" and not never_dispatched(record) and not retired_execution(record)]
+    workers = [record for record in rows if record["request"]["role"] == "worker" and not never_dispatched(record)
+               and not never_started(record) and not retired_execution(record)]
     continued = {record["continuation"]["worker_id"] for record in workers if record.get("continuation")}
     final = [record for record in workers if record["id"] not in continued]
     if not final or sorted(record["id"] for record in final) != worker_ids:
         raise ValueError("completion must include every final worker for this assignment, without unrelated receipts")
     evidence = []
     for record in final:
-        if record.get("integration", {}).get("cleanup_pending") != []:
-            raise ValueError("finish the assignment's pending workspace cleanup before completion")
+        pending = record.get("integration", {}).get("cleanup_pending")
+        if pending != []:
+            raise ValueError("finish the assignment's pending workspace cleanup before completion%s"
+                             % ("" if not pending else ": integrate %s again to retry it (%s)"
+                                % (record["id"], str(pending[0])[:300])))
         evidence.append(verification_evidence(scope, record["id"]))
     return sorted(evidence)
 
@@ -2521,17 +2664,19 @@ def complete(scope_path, scope, args):
             require_not_stopped(scope, obligation)
             rows = [refresh(record) for _, record in receipts(folder(scope))
                     if record["request"]["obligation_id"] == obligation]
-            if any(record["status"] in ("preparing", "prepared", "dispatching", "running", "unknown") for record in rows):
+            if unresolved(rows):
                 raise ValueError("this assignment still has unresolved execution")
-            if any(record["request"]["role"] != "consult" and not never_dispatched(record) for record in rows):
+            if any(record["request"]["role"] != "consult" and not never_dispatched(record) and not never_started(record)
+                   for record in rows):
                 raise ValueError("implementation work requires verified worker completion")
             instruction = assignment_instruction(scope, obligation)
             if not isinstance(instruction, dict) or not instruction.get("ledger_ref"):
                 raise ValueError("answer completion requires the original user request")
+            settled = settle_never_run(scope, folder(scope), obligation, COMPLETED_UNRUN)
             result = ecs(scope, {"protocol":1, "command":"answer-complete", "binding":scope["binding"],
                 "obligation_id":obligation, "answer_text":answer, "source_ref":instruction["ledger_ref"]})
             report_assignment(scope, obligation, "settled", "Answer recorded.")
-            return {**result, "published":False}
+            return {**result, "published":False, "settled_receipts":settled}
     if set(args) - {"obligation_id", "worker_ids"} or "worker_ids" not in args:
         raise ValueError("completion requires an obligation and its complete final worker set")
     obligation = carried_obligation(scope) or text(args, "obligation_id")
@@ -2545,6 +2690,9 @@ def complete(scope_path, scope, args):
     identity = hashlib.sha256(json.dumps([obligation, ids], separators=(",", ":")).encode()).hexdigest()
     with locked(scope):
         evidence = completion_evidence(scope, obligation, ids)
+        # Only now that the completion stands are the receipts that never ran settled, and
+        # their empty worktrees removed; a refused completion leaves them as they were.
+        settled = settle_never_run(scope, folder(scope), obligation, COMPLETED_UNRUN)
         path = completion_path(scope, identity)
         if path.exists():
             receipt = verify_completion(scope, identity)
@@ -2562,7 +2710,94 @@ def complete(scope_path, scope, args):
         receipt["verified"] = True
         save(path, receipt)
         report_assignment(scope, obligation, "settled", "Verified local integration and cleanup.")
-        return {**result, "evidence":evidence, "published":False}
+        return {**result, "evidence":evidence, "published":False, "settled_receipts":settled}
+
+
+def quarantine_foreign_record(name, reason):
+    """REMOVE A RECORD NO WORKSPACE LIFECYCLE WROTE FROM THIS CONVERSATION'S REGISTRY
+    (2026-10-28: `agents/wait-regression.json`, a test fixture a proof run from an app shell
+    wrote into the live registry, with "The app has no tool that repairs or removes it").
+
+    A DAMAGED RECORD IS NOT HARMLESS NOISE: while any record cannot be read, nothing is
+    found unregistered (`W.scan_unregistered`, V2-04), so one stray file switches the orphan
+    sweep off for the whole thread. And a damaged record is normally KEPT, because it may be
+    the one that owns a live workspace, and removing it would make that workspace an orphan
+    for the automatic land to delete. So only a record that provably owns nothing goes:
+    the registry's own reader names it damaged (`W.damaged_records`), it is in THIS
+    conversation's registry, its key has no `<session>--` part (every record the lifecycle
+    writes has one: `named_key`, `new_record`), and it names no run and no workspace.
+    Anything else, an unparseable file included, is refused and kept.
+
+    It is moved, never deleted: into `quarantine/` beside `agents/`, which no reader of the
+    registry lists, with an event saying where. Moving it back undoes it."""
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", name):
+        raise ValueError("name the record by its file name in the registry's agents folder")
+    name = name if name.endswith(".json") else name + ".json"
+    agents = os.path.realpath(os.path.join(W.state_dir(), "agents"))
+    path = os.path.join(agents, name)
+    damaged = {os.path.realpath(p): why for p, why in W.damaged_records(include_done=False)}
+    if os.path.realpath(path) not in damaged:
+        raise ValueError("this conversation's workspace registry reports no unreadable record by that name")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError):
+        value = None
+    key = value.get("key") if isinstance(value, dict) else None
+    if (not isinstance(key, str) or not key or "--" in key
+            or any(value.get(field) for field in ("workspaces", "agent_id", "tool_use_id", "spawned_at", "started_at"))):
+        raise ValueError("this record may own a workspace, so it is kept: only a record no workspace lifecycle "
+                         "wrote (a key with no session part, naming no run and no workspace) is removed here")
+    kept = os.path.join(os.path.dirname(agents), "quarantine")
+    os.makedirs(kept, mode=0o700, exist_ok=True)
+    destination = os.path.join(kept, "%s.%s" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), name))
+    with W.Lock():
+        os.replace(path, destination)
+    W.event("quarantined-unreadable-record", path=path, kept_at=destination, why=damaged[os.path.realpath(path)],
+            reason=reason)
+    return {"registry_record": name, "removed_from": path, "kept_at": destination,
+            "was_unreadable_because": damaged[os.path.realpath(path)]}
+
+
+def settle(scope, args):
+    """SETTLE ONE RECEIPT THAT NEVER RAN, WITH A REASON (2026-10-28, work-709b35ac).
+
+    Every settlement that can be decided by itself is: a superseded preparation that can no
+    longer be dispatched (`prepare`), a review that never ran once its work is integrated
+    (`integrate`), and every receipt that never ran when its assignment completes
+    (`complete`). What the code cannot tell apart is a preparation of the SAME turn that
+    was replaced from one prepared alongside it to run in parallel; this is the supported
+    way to say which, and to clear a dead one before its assignment completes. It settles
+    only on the same proof, never a receipt whose run started, and removes a worktree only
+    when it holds nothing."""
+    if set(args) - {"request_id", "registry_record", "reason"} or ("request_id" in args) == ("registry_record" in args):
+        raise ValueError("settle takes a reason and exactly one of request_id or registry_record")
+    reason = sent_text(args, "reason", 2000).strip()
+    if len(reason) < 10:
+        raise ValueError("say why this is settled, in at least ten characters")
+    if "registry_record" in args:
+        with locked(scope):
+            return quarantine_foreign_record(args["registry_record"], reason)
+    request_id = text(args, "request_id", 128)
+    identity = hashlib.sha256(json.dumps([scope["binding"]["entity_id"], scope["binding"]["thread_id"], request_id],
+                                         separators=(",", ":")).encode()).hexdigest()
+    with locked(scope) as root:
+        path = root / (identity + ".json")
+        if not path.exists():
+            raise ValueError("no receipt in this conversation has that request_id")
+        record = refresh(bounded(path))
+        carried = carried_obligation(scope)
+        if carried is not None and record["request"]["obligation_id"] != carried:
+            raise ValueError("this receipt belongs to another assignment")
+        if not record.get("settled"):
+            if preparing_elsewhere(record):
+                raise ValueError("this receipt is still being prepared; inspect it once its preparation returns")
+            if not never_started(record):
+                raise ValueError("this receipt's run started, so it is not settled here: a run is reconciled "
+                                 "with inspect, and its work with integrate")
+            settle_undispatched(scope, path, record, "settled on request: " + reason)
+        return {"id": record["id"], "name": record["name"], "request_id": record.get("request_id"),
+                "status": record["status"], "settled": record["settled"]}
 
 
 def call(scope_path, name, args):
@@ -2596,6 +2831,7 @@ def call(scope_path, name, args):
             return report_assignment(scope, obligation, status, sent_text(args,"detail",4096))
     if name == "team": return team(args)
     if name == "inspect": return inspect_receipts(scope, args)
+    if name == "settle": return settle(scope, args)
     raise ValueError("unknown app work tool")
 
 
@@ -2638,10 +2874,11 @@ TOOLS = [
     {"name":"complete","description":"Close a code assignment in ECS only after every requirement is satisfied and every final worker has a passing independent review, verified local integration and completed cleanup. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Supply all final worker receipts, across every repository. Unresolved execution or omitted work is refused. Do not use this to claim unrelated or unverified business outcomes. For an assignment without implementation work, supply answer with your verified outcome instead of worker_ids. Unresolved execution and code work refuse this answer-only path. Completion updates the operational record but never sends Rich a message. Local completion never means publication.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"answer":{"type":"string","minLength":1,"maxLength":262144},"worker_ids":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":50}},"required":[],"additionalProperties":False}},
     {"name":"report","description":"Keep the selected operational assignment current: running when you begin handling it, or failed when you cannot complete it. Supply the real obligation_id from the record. This never dispatches work or sends Rich a message. Completion uses complete and its evidence checks.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"state":{"type":"string","enum":["running","failed"]},"detail":{"type":"string","maxLength":4096}},"required":["obligation_id","state","detail"],"additionalProperties":False}},
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
-    {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns agent_payload only while no dispatch has been attempted. Submit that exact JSON to Agent once. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A failed preparation that never dispatched is settled when a new request_id prepares a replacement: anything it created is withdrawn, and dirty files are refused rather than discarded. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
+    {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns agent_payload only while no dispatch has been attempted. Submit that exact JSON to Agent once. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A preparation that never ran is settled when a new request_id prepares a replacement for the same duty, if it failed, its dispatch was refused, or it was prepared in an earlier turn; what it created is withdrawn only when it holds no commit and no uncommitted file, and anything else is kept and reported. A preparation from an earlier turn is dispatched by preparing it again with the same request_id. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
     {"name":"integrate","description":"After an authorized implementation and an actual passing independent review, merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id","reviewer_id"],"additionalProperties":False}},
     {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. New teammates become available to Agent after this turn through the native plugin reload, without replacing Stu or stopping running workers; RichOS then sends a team_reloaded message: carry on there with the work that waited for them. Changes to an existing definition take effect in a new Stu session.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart.","inputSchema":{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":False}},
+    {"name":"settle","description":"Settle one receipt whose worker never ran, with your reason: a preparation you replaced in this same turn, or one you will not dispatch. Receipts that never ran are already settled by themselves when a later turn prepares a replacement for the same duty, when the work a review was for is integrated, and when the assignment completes; use this only for the rest. A receipt whose run started is refused. Its worktree and branch are removed only when they hold no commit and no uncommitted file; anything else is kept and reported in settled.retained, never discarded. With registry_record instead of request_id, it removes one record the workspace registry reports as unreadable, only when no workspace lifecycle wrote it (a stray test fixture); it is moved aside, never deleted, and a record that could own a workspace is refused.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string"},"registry_record":{"type":"string"},"reason":{"type":"string","minLength":10,"maxLength":2000}},"required":["reason"],"additionalProperties":False}},
 ]
 def available_tools(read_only=False):
     if not read_only: return TOOLS

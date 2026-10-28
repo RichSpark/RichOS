@@ -198,6 +198,12 @@ rec = workspaces.new_record("%s--%s" % (sid, name), name=name, session_id=sid, a
                             started_at=workspaces.iso(now - float(started)),
                             workspaces=[{"kind": "cc", "repo": repo, "path": os.path.realpath(repo),
                                          "branch": "cc/" + name, "deleted_at": None}])
+if extra in ("prepared", "refused"):
+    rec["agent_id"] = ""
+    rec["registered_at"] = rec.pop("started_at")
+    if extra == "refused":
+        rec["spawned_at"] = rec["registered_at"]
+        rec["tool_use_id"] = "toolu_refused_before_start"
 if extra == "pause":
     rec["pause"] = {"at": now - 60, "until": "the fixture's resume", "control": True}
 if extra == "deferred":
@@ -277,7 +283,7 @@ echo "=== stall-watch tests ==="
 
 # I01: controlled CPU/activity readings and installed capability checks.
 python3 - "$SCRIPT_DIR/lib" "$SB" <<'PY_IDLE'
-import os,sys,types,unittest
+import json,os,sys,types,unittest
 from unittest.mock import patch
 sys.path.insert(0,sys.argv.pop(1))
 import stall_watch
@@ -366,6 +372,67 @@ class InstalledSources(unittest.TestCase):
         source=stall_watch.Sources(engine)
         self.assertIsNone(source.proof_slots)
         self.assertEqual(stall_watch._slot_lines(source,1000),(None,'the proof-run slot library could not be loaded'))
+
+class HostCleanupOwner(unittest.TestCase):
+    def setUp(self):
+        self.leads=os.path.join(scratch,'cleanup-owner','stall-watch-lead')
+        os.makedirs(self.leads,exist_ok=True)
+        for sid,started in [('older',100),('newer',200)]:
+            with open(os.path.join(self.leads,sid+'.json'),'w') as f:
+                json.dump({'session':sid,'started':started},f)
+            sessions=os.path.join(os.path.dirname(self.leads),'workspaces',sid,'sessions')
+            os.makedirs(sessions,exist_ok=True)
+            with open(os.path.join(sessions,sid+'.json'),'w') as f:
+                json.dump({'pid':started,'pid_start':'fixture'},f)
+        self.live={'older':'running','newer':'running'}
+        self.src=types.SimpleNamespace(ws=types.SimpleNamespace(session_state=lambda sid,identity=None,*_:
+            ('running' if self.live[sid]=='unknown' and identity and identity.get('pid_start')=='fixture'
+             else self.live[sid],'')))
+        self.reg=types.SimpleNamespace(recs=[])
+        self.issue={'id':'esc-20261028T120000Z-12345678','teammate':'scratch-reaper',
+                    'worktree':'/fixture','raised':'2026-10-28T12:00:00Z','state':'proceeding',
+                    'for':'lead','title':'Cleanup failed','question':'Inspect the scheduled result',
+                    'bucket':'1h','age_min':60}
+
+    def look(self,sid,prev=None):
+        with patch.dict(os.environ,{stall_watch.host_child.LEAD_ENV:os.path.join(self.leads,sid+'.json')}), \
+                patch.object(stall_watch,'Registry',return_value=self.reg), \
+                patch.object(stall_watch,'lead_transcript',return_value='/fixture/transcript'), \
+                patch.object(stall_watch.escalations,'read_rows',return_value=([],0)), \
+                patch.object(stall_watch.escalations,'outstanding',return_value=[self.issue]), \
+                patch.object(stall_watch.escalations,'reached_scan',return_value=(
+                    {'session_start':set(),'stop':set(),'monitor':set()},0,True)):
+            lines,state,problems=stall_watch.escalation_watch(self.src,1793192400,sid,
+                prev or {'session_start':1},stall_watch.thresholds())
+            self.assertEqual(problems,[])
+            return lines,state
+
+    def test_one_host_issue_wakes_only_one_conversation_and_fails_over(self):
+        self.assertTrue(self.look('older')[0])
+        self.assertEqual(self.look('newer')[0],[])
+        self.live['older']='ended'
+        self.assertTrue(self.look('newer')[0])
+
+    def test_already_duplicated_notices_do_not_repeat_in_the_other_conversation(self):
+        key=stall_watch.escalations.delivery_key(self.issue)
+        old={'session_start':1,'woken':{key:{'first':1,'last':1,'count':1,'bucket':'new'}}}
+        self.assertEqual(self.look('newer',old)[0],[])
+
+    def test_the_current_host_lead_need_not_be_in_the_default_cli_account(self):
+        self.live['newer']='unknown'
+        self.assertTrue(self.look('older')[0])
+        self.assertEqual(self.look('newer')[0],[])
+
+    def test_a_peer_end_record_wins_even_while_its_process_is_still_alive(self):
+        self.live['older']='unknown'
+        path=os.path.join(os.path.dirname(self.leads),'workspaces','older','sessions','older.json')
+        with open(path,'w') as f:
+            json.dump({'pid':100,'pid_start':'fixture','ended_at':'2026-10-28T12:01:00Z'},f)
+        self.assertTrue(self.look('newer')[0])
+
+    def test_unreadable_ownership_does_not_hide_the_issue(self):
+        self.src.ws.session_state=lambda *_: (_ for _ in ()).throw(OSError('unreadable'))
+        self.assertTrue(self.look('newer')[0])
 
 unittest.main()
 PY_IDLE
@@ -533,6 +600,8 @@ add_agent lima-opus-q1 a0000000000fixq "$SID" 3600 3000 1500
 add_agent mike-opus-r1 a0000000000fixr "$SID" 3600 3500 300
 add_agent november-opus-p1 a0000000000fixp "$SID" 3600 3500 3000 pause
 add_agent oscar-opus-e1 a0000000000fixe "$SID" 3600 3500 3000 end
+add_agent pending-opus-p1 a0000000000prep "$SID" 3600 3500 3000 prepared
+add_agent refused-opus-p1 a0000000000refused "$SID" 3600 3500 3000 refused
 tick 0
 check "T01  no commit and no transcript write for 25 min: SILENT, with last commit, transcript, action" \
     "$( [ "$(count "$OUT" "[SILENT]")" -eq 1 ] && has "$OUT" "[SILENT] lima-opus-q1: no commit and no transcript activity, for 25 min" \
@@ -549,6 +618,8 @@ check "T04  a long honest run, a paused teammate and a finished one are not SILE
     "$( has "$T01OUT" "[SILENT] lima-opus-q1" && ! has "$T01OUT" "mike-opus-r1" && ! has "$T01OUT" "november-opus-p1" \
         && ! has "$T01OUT" "oscar-opus-e1"; echo $?)" \
     "out=$T01OUT"
+check "T04b a preparation and a refused pre-start call never become silent workers" \
+    "$( ! has "$T01OUT" "pending-opus-p1" && ! has "$T01OUT" "refused-opus-p1"; echo $?)" "out=$T01OUT"
 
 # --- T05: an end deferred by its own endless loop (2026-10-11, echo-opus-walk49fix1) ----
 new_registry t5; new_state t5

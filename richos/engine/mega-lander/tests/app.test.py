@@ -701,12 +701,13 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(settled["settled"]["withdrawn"], [])
         self.assertIn("never dispatched", settled["settled"]["reason"])
 
-    def test_a_created_but_never_dispatched_preparation_is_withdrawn_and_a_registered_spawn_is_not(self):
+    def test_a_created_but_never_dispatched_preparation_is_withdrawn_and_a_started_run_is_not(self):
         """Part 4, finding 1, the harder half: the failed preparation DID create
-        its workspace. Its registration shows no spawn, so the canonical
-        withdrawal removes it and a replacement proceeds. The control is the
-        reason the receipt is kept at all: once the canonical record shows a
-        registered spawn, nothing is withdrawn and the refusal stands."""
+        its workspace. Nothing ran, so the canonical withdrawal removes it and a
+        replacement proceeds. The control is the reason the receipt is kept at
+        all: once the canonical record shows a run that STARTED, nothing is
+        withdrawn and the refusal stands. A spawn the guard merely registered is
+        not one (2026-10-28): this receipt was never admitted, so no call ran."""
         real = self.app.run
         def created_then_uncertain(command, **kw):
             real(command, **kw)
@@ -718,23 +719,19 @@ class DesktopWork(unittest.TestCase):
         key = self.app.W.named_key(self.session, stuck["name"])
         workspace = [w for w in self.app.W.load_agent(key)["workspaces"] if w.get("kind") == "cc"][0]
         self.assertTrue(Path(workspace["path"]).is_dir())
-        # CONTROL: a registered spawn may have run, so it is never withdrawn here.
+        # CONTROL: a run that started is never withdrawn here.
         with self.app.W.Lock():
-            canonical = self.app.W.load_agent(key); canonical["tool_use_id"] = "observed-spawn"
+            canonical = self.app.W.load_agent(key); canonical["started_at"] = "2026-10-28T15:37:13Z"
             self.app.W.save_agent(canonical)
         with self.assertRaisesRegex(ValueError, "unresolved"):
             self.call("prepare", {**self.args, "request_id":"refused-replacement"})
         self.assertTrue(Path(workspace["path"]).is_dir())
-        # CONTROL: dirty files are refused, never discarded.
+        # A spawn the guard registered and the app never admitted did not run: with
+        # nothing in it, it is withdrawn canonically, and replaced.
         with self.app.W.Lock():
-            canonical = self.app.W.load_agent(key); canonical.pop("tool_use_id")
+            canonical = self.app.W.load_agent(key); canonical.pop("started_at")
+            canonical.update(tool_use_id="refused-call", spawned_at="2026-10-28T15:37:13Z")
             self.app.W.save_agent(canonical)
-        (Path(workspace["path"]) / "keep.txt").write_text("KEEP")
-        with self.assertRaisesRegex(ValueError, "could not be withdrawn"):
-            self.call("prepare", {**self.args, "request_id":"dirty-replacement"})
-        self.assertEqual((Path(workspace["path"]) / "keep.txt").read_text(), "KEEP")
-        (Path(workspace["path"]) / "keep.txt").unlink()
-        # Nothing ran and nothing is dirty: withdrawn canonically, and replaced.
         replacement = self.call("prepare", {**self.args, "request_id":"replacement"})
         self.assertEqual(replacement["status"], "prepared")
         self.assertFalse(Path(workspace["path"]).exists())
@@ -743,6 +740,30 @@ class DesktopWork(unittest.TestCase):
         settled = [r for r in self.call("inspect")["records"] if r["id"] == stuck["id"]][0]
         self.assertEqual(settled["status"], "blocked")
         self.assertEqual(settled["settled"]["withdrawn"], [workspace["path"]])
+        self.assertNotIn("workspace_problem", settled, "a settled receipt read as an open problem")
+
+    def test_a_never_run_preparation_with_dirty_files_is_settled_and_its_files_are_kept(self):
+        """Dirty files are never discarded, and they no longer hold the assignment
+        hostage either: the receipt is settled and what was kept is reported."""
+        real = self.app.run
+        def created_then_uncertain(command, **kw):
+            real(command, **kw)
+            raise TimeoutError("synthetic uncertainty after the workspace was created")
+        with patch.object(self.app, "run", side_effect=created_then_uncertain):
+            with self.assertRaises(TimeoutError): self.call("prepare", self.args)
+        stuck = self.call("inspect")["records"][0]
+        key = self.app.W.named_key(self.session, stuck["name"])
+        workspace = [w for w in self.app.W.load_agent(key)["workspaces"] if w.get("kind") == "cc"][0]
+        (Path(workspace["path"]) / "keep.txt").write_text("KEEP")
+        replacement = self.call("prepare", {**self.args, "request_id":"dirty-replacement"})
+        self.assertEqual(replacement["status"], "prepared")
+        self.assertEqual((Path(workspace["path"]) / "keep.txt").read_text(), "KEEP")
+        self.assertIsNotNone(self.app.W.load_agent(key))
+        settled = [r for r in self.call("inspect")["records"] if r["id"] == stuck["id"]][0]
+        self.assertEqual(settled["status"], "blocked")
+        self.assertEqual(settled["settled"]["withdrawn"], [])
+        self.assertEqual([r["path"] for r in settled["settled"]["retained"]], [workspace["path"]])
+        self.assertIn("uncommitted", settled["settled"]["retained"][0]["holds"])
 
     def test_a_settled_preparation_does_not_block_the_assignment_from_completing(self):
         """Part 4, finding 1, one step later: a settled receipt did no work, so
@@ -754,6 +775,182 @@ class DesktopWork(unittest.TestCase):
         self.assertTrue(self.call("integrate", args)["work_integrated"])
         done = self.call("complete", {"obligation_id":"fixture-task", "worker_ids":[args["worker_id"]]})
         self.assertTrue(done["obligation_closed"])
+
+    # ------------------------------------------------------------------ receipts that never ran
+    # 2026-10-28, work-709b35ac: Echo's work was reviewed by Tom and integrated, and `complete`
+    # refused it with "this assignment still has unresolved execution; reconcile it before
+    # completion". What it counted were review preparations that never ran: one prepared in an
+    # earlier turn and never admitted (its Agent call passed the spawn registration and was then
+    # refused, so the canonical record showed a spawn), and one Pierce refused. Preparing a third
+    # under a new request_id settled neither, integrate's cleanup then tried to land both
+    # ("no registered agent", "is not finished"), and their worktrees stayed behind.
+
+    def next_turn(self, number):
+        """His next message: a new turn in the same provider session."""
+        self.scope["binding"]=self.bind_seat(None,"turn-%d"%number,audience="ceo",session=self.session,revision=number-1)
+        self.scope_path.write_text(json.dumps(self.scope))
+
+    def target_of(self, ready):
+        return self.root/"engine-state/target-worktrees"/self.app.folder(self.scope).name/ready["name"]
+
+    def receipt_of(self, ready):
+        return next(r for r in self.call("inspect",{"limit":50})["records"] if r["id"]==ready["id"])
+
+    def branch_exists(self, branch):
+        return subprocess.run(["git","-C",str(self.repo),"rev-parse","--verify","--quiet","refs/heads/"+branch],
+                              capture_output=True).returncode==0
+
+    def registered_branch(self, ready):
+        """The receipt's worktree and branch exist the moment it is prepared."""
+        canonical=self.app.W.load_agent(self.app.W.named_key(self.session,ready["name"]))
+        branch=[w for w in canonical["workspaces"] if w.get("kind")=="cc"][0]["branch"]
+        self.assertTrue(self.target_of(ready).is_dir(),ready["name"])
+        self.assertTrue(self.branch_exists(branch),ready["name"])
+        return branch
+
+    def test_todays_never_run_receipts_settle_and_only_their_empty_worktrees_are_removed(self):
+        placeholder=self.call("prepare",{**self.args,"request_id":"placeholder-1",
+                                         "brief":"Placeholder brief, replaced before it was dispatched."})
+        branches={placeholder["id"]:self.registered_branch(placeholder)}
+        worker=self.call("prepare",self.args)
+        target=self.start_fixture_worker(worker,"todays-worker")
+        (target/"result.txt").write_text("FICTIONAL")
+        self.app.git(target,"add","result.txt");self.app.git(target,"commit","-qm","Fictional result")
+        commit=self.app.git(target,"rev-parse","HEAD")
+        self.finish_fixture_worker("todays-worker")
+        review={**self.args,"role":"reviewer","review_of":worker["id"],"title":"Review the result"}
+        # Turn 1 (iconv-tom-review-1): the spawn guard registered its Agent call and a later
+        # control refused it, so the app never admitted it and no worker ran.
+        refused=self.call("prepare",{**review,"request_id":"review-1","brief":"Review result.txt; change nothing."})
+        branches[refused["id"]]=self.registered_branch(refused)
+        call={"session_id":self.session,"tool_use_id":"call-review-1","tool_input":refused["agent_payload"]}
+        self.app.dispatch_intent(self.scope,call,inspect_only=True)
+        self.app.W.register_spawn(call,str(self.coord))
+        # A never-run reviewer whose worktree somebody committed in: never touched.
+        committed=self.call("prepare",{**review,"request_id":"review-committed","brief":"Review it again; change nothing."})
+        branches[committed["id"]]=self.registered_branch(committed)
+        (self.target_of(committed)/"kept.txt").write_text("COMMITTED BY HAND")
+        self.app.git(self.target_of(committed),"add","kept.txt")
+        self.app.git(self.target_of(committed),"commit","-qm","Committed by hand")
+        kept_commit=self.app.git(self.target_of(committed),"rev-parse","HEAD")
+        # Turn 2 (iconv-tom-review-2): Pierce refused its dispatch.
+        self.next_turn(2)
+        pierced=self.call("prepare",{**review,"request_id":"review-2","brief":"Review once more; change nothing."})
+        branches[pierced["id"]]=self.registered_branch(pierced)
+        self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"call-review-2",
+                                             "tool_input":pierced["agent_payload"]},review_refused=True)
+        # A never-run reviewer with an uncommitted file in its worktree: never touched.
+        dirty=self.call("prepare",{**review,"request_id":"review-dirty","brief":"Review one more way; change nothing."})
+        branches[dirty["id"]]=self.registered_branch(dirty)
+        (self.target_of(dirty)/"notes.txt").write_text("UNCOMMITTED")
+        never_run=(placeholder,refused,committed,pierced,dirty)
+        # Turn 3 (iconv-tom-review-3): the replacement runs, passes and is integrated.
+        self.next_turn(3)
+        final=self.call("prepare",{**review,"request_id":"review-3","brief":"Review result.txt; change nothing. Final."})
+        self.start_fixture_worker(final,"todays-reviewer")
+        self.finish_fixture_worker("todays-reviewer","RICHOS_REVIEW "+json.dumps(
+            {"commit":commit,"verdict":"passed","checks":["synthetic reviewer observation"]}))
+        landed=self.call("integrate",{"worker_id":worker["id"],"reviewer_id":final["id"]})
+        self.assertTrue(landed["work_integrated"])
+        # Today this refused: "this assignment still has unresolved execution; reconcile it before completion".
+        done=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[worker["id"]]})
+        self.assertTrue(done["obligation_closed"])
+        self.assertEqual(landed["cleanup_pending"],[],"integrate tried to land reviews that never ran")
+        for ready in never_run:
+            record=self.receipt_of(ready)
+            self.assertEqual(record["status"],"blocked",ready["name"])
+            self.assertTrue(record["settled"]["reason"],ready["name"])
+            self.assertFalse(record.get("tool_use_id") or record.get("agent_id"),ready["name"])
+        # Empty: the worktree, the branch and the registration are gone.
+        for ready in (placeholder,refused,pierced):
+            self.assertFalse(self.target_of(ready).exists(),ready["name"])
+            self.assertFalse(self.branch_exists(branches[ready["id"]]),ready["name"])
+            self.assertIsNone(self.app.W.load_agent(self.app.W.named_key(self.session,ready["name"])),ready["name"])
+            self.assertEqual(self.receipt_of(ready)["settled"]["retained"],[],ready["name"])
+        # Holding work: the receipt settles, the worktree and branch are kept and reported.
+        for ready in (committed,dirty):
+            retained=self.receipt_of(ready)["settled"]["retained"]
+            self.assertEqual([r["path"] for r in retained],[str(self.target_of(ready))],ready["name"])
+            self.assertTrue(self.branch_exists(branches[ready["id"]]),ready["name"])
+        self.assertEqual(self.app.git(self.target_of(committed),"rev-parse","HEAD"),kept_commit)
+        self.assertEqual((self.target_of(committed)/"kept.txt").read_text(),"COMMITTED BY HAND")
+        self.assertEqual((self.target_of(dirty)/"notes.txt").read_text(),"UNCOMMITTED")
+
+    def test_a_prepare_from_an_earlier_turn_dispatches_when_it_is_prepared_again(self):
+        """f0a399b8: a prepare from an earlier turn is not refused merely for being stale."""
+        ready=self.call("prepare",self.args)
+        self.next_turn(2)
+        call={"session_id":self.session,"tool_use_id":"call-stale","tool_input":ready["agent_payload"]}
+        with self.assertRaisesRegex(ValueError,"prepare again with the same request_id"):
+            self.app.dispatch_intent(self.scope,call,inspect_only=True)
+        again=self.call("prepare",self.args)
+        self.assertEqual(again["id"],ready["id"])
+        self.assertEqual(again["binding"],self.scope["binding"])
+        self.assertEqual(again["agent_payload"],ready["agent_payload"])
+        self.start_fixture_worker(again,"rebound-worker")
+        self.assertEqual(self.receipt_of(ready)["status"],"running")
+
+    def test_a_prepare_from_an_ended_session_cleans_up_when_it_is_asked_again(self):
+        ready=self.call("prepare",self.args)
+        branch=self.registered_branch(ready)
+        self.scope["binding"]=self.bind_seat(None,"turn-2",audience="ceo",session="the-next-session",revision=1)
+        self.scope_path.write_text(json.dumps(self.scope))
+        again=self.call("prepare",self.args)
+        self.assertNotIn("agent_payload",again)
+        self.assertEqual(again["status"],"blocked")
+        self.assertIn("earlier provider session",again["settled"]["reason"])
+        self.assertFalse(self.target_of(ready).exists())
+        self.assertFalse(self.branch_exists(branch))
+
+    def test_the_settle_verb_settles_a_same_turn_replacement_and_never_a_run_that_started(self):
+        placeholder=self.call("prepare",{**self.args,"request_id":"placeholder","brief":"A placeholder brief."})
+        branch=self.registered_branch(placeholder)
+        worker=self.call("prepare",self.args)
+        self.assertEqual(self.receipt_of(placeholder)["status"],"prepared",
+                         "a same-turn preparation was taken for a replaced one")
+        with self.assertRaisesRegex(ValueError,"say why"):
+            self.call("settle",{"request_id":"placeholder","reason":"no"})
+        with self.assertRaisesRegex(ValueError,"no receipt"):
+            self.call("settle",{"request_id":"nothing-by-this-name","reason":"Replaced by the real brief."})
+        result=self.call("settle",{"request_id":"placeholder","reason":"Replaced by the real brief."})
+        self.assertEqual(result["status"],"blocked")
+        self.assertIn("Replaced by the real brief.",result["settled"]["reason"])
+        self.assertEqual(result["settled"]["withdrawn"],[str(self.target_of(placeholder))])
+        self.assertFalse(self.target_of(placeholder).exists())
+        self.assertFalse(self.branch_exists(branch))
+        self.assertNotIn("workspace_problem",self.receipt_of(placeholder))
+        self.assertEqual(self.call("settle",{"request_id":"placeholder","reason":"Asked a second time."})["settled"],
+                         result["settled"])
+        with self.assertRaisesRegex(ValueError,"exactly one"):
+            self.call("settle",{"reason":"Neither one is named here."})
+        self.start_fixture_worker(worker,"settle-control")
+        with self.assertRaisesRegex(ValueError,"run started"):
+            self.call("settle",{"request_id":"prepare-one","reason":"It must not be settled here."})
+        self.assertEqual(self.receipt_of(worker)["status"],"running")
+
+    def test_a_stray_fixture_record_is_moved_out_of_the_registry_and_a_record_that_may_own_work_is_not(self):
+        """2026-10-28: record-canary.test.sh wrote agents/wait-regression.json into the live
+        registry; it switched the orphan sweep off and nothing in the app could remove it."""
+        agents=Path(self.app.W.state_dir())/"agents";agents.mkdir(parents=True,exist_ok=True)
+        stray=agents/"wait-regression.json"
+        stray.write_text(json.dumps({"key":"wait-regression","name":"lead-fixture","session_id":"fixture",
+            "waiting":{"kind":"started","on":"its merge check is running","end":"at:2099-01-01T00:00:00Z"}}))
+        lost=agents/(self.app.W.named_key(self.session,"mark-sonnet-lostlist")+".json")
+        lost.write_text(json.dumps({"key":self.app.W.named_key(self.session,"mark-sonnet-lostlist"),"name":"mark-sonnet-lostlist"}))
+        garbled=agents/"garbled.json";garbled.write_text("{not json")
+        self.assertEqual(len(self.app.W.damaged_records(include_done=False)),3)
+        with self.assertRaisesRegex(ValueError,"may own a workspace"):
+            self.call("settle",{"registry_record":lost.name,"reason":"It is not a fixture."})
+        with self.assertRaisesRegex(ValueError,"may own a workspace"):
+            self.call("settle",{"registry_record":"garbled","reason":"It cannot be read at all."})
+        with self.assertRaisesRegex(ValueError,"reports no unreadable record"):
+            self.call("settle",{"registry_record":"nothing-here","reason":"There is no such record."})
+        result=self.call("settle",{"registry_record":"wait-regression.json","reason":"A test fixture written into the live registry."})
+        self.assertFalse(stray.exists())
+        self.assertEqual(json.loads(Path(result["kept_at"]).read_text())["name"],"lead-fixture")
+        self.assertTrue(lost.exists());self.assertTrue(garbled.exists())
+        self.assertEqual(sorted(Path(p).name for p,_ in self.app.W.damaged_records(include_done=False)),
+                         sorted([lost.name,"garbled.json"]))
 
     def test_v2_01_a_session_ending_never_turns_an_unused_preparation_into_a_final_worker(self):
         """Hunt part 4 v2, V2-01: `refresh` marked an unknown, never-dispatched
@@ -844,12 +1041,13 @@ class DesktopWork(unittest.TestCase):
         self.assertFalse(Path(self.app.W.done_path(key)).exists())
 
     def test_v2_01_a_dispatched_worker_is_still_interrupted_by_its_session_ending(self):
-        """The twin: a receipt with dispatch evidence keeps the interruption."""
+        """The twin: a receipt with dispatch evidence keeps the interruption. The evidence is
+        the app's own admission of the Agent call, then the guard's registration; a
+        registration alone is what a REFUSED call leaves (2026-10-28), so it is not used here."""
         prepared = self.call("prepare", self.args)
-        key = self.app.W.named_key(self.session, prepared["name"])
-        with self.app.W.Lock():
-            canonical = self.app.W.load_agent(key); canonical["tool_use_id"] = "observed-spawn"
-            self.app.W.save_agent(canonical)
+        call = {"session_id": self.session, "tool_use_id": "observed-spawn", "tool_input": prepared["agent_payload"]}
+        self.app.dispatch_intent(self.scope, call)
+        self.app.W.register_spawn(call, str(self.coord))
         self.app.W.record_session_end(self.session, "fixture provider session ended")
         rec = [r for r in self.call("inspect")["records"] if r["id"] == prepared["id"]][0]
         self.assertEqual(rec["status"], "interrupted")
@@ -1747,7 +1945,10 @@ class DesktopWork(unittest.TestCase):
     def test_completion_refuses_prepared_and_unreviewed_work(self):
         worker=self.call("prepare",self.args)
         args={"obligation_id":"fixture-task","worker_ids":[worker["id"]]}
-        with self.assertRaisesRegex(ValueError,"unresolved execution"):self.call("complete",args)
+        # A preparation that never ran did no work, so it is no final worker (2026-10-28);
+        # the refused completion settles nothing, and it can still be dispatched.
+        with self.assertRaisesRegex(ValueError,"every final worker"):self.call("complete",args)
+        self.assertEqual(self.call("inspect")["records"][0]["status"],"prepared")
         self.start_fixture_worker(worker,"unfinished")
         self.finish_fixture_worker("unfinished")
         with self.assertRaisesRegex(ValueError,"cleanup"):self.call("complete",args)
@@ -1961,18 +2162,18 @@ class DesktopWork(unittest.TestCase):
         named the wrong obligation here leaves the obligation open, and the app's
         settle reading reports a failure over work that actually landed.
 
-        The refusal asserted below is the completion gate doing its own job
-        ("unresolved execution"), reached only because the obligation resolved --
-        an invented id would have been refused earlier and for a different reason,
-        which is what the second arm pins.
+        The refusal asserted below is the completion gate doing its own job (a
+        preparation that never ran is no final worker), reached only because the
+        obligation resolved -- an invented id would have been refused earlier and
+        for a different reason, which is what the second arm pins.
         """
         worker = self.call("prepare", self.args)
         work, _ = self.work_lease()
-        with self.assertRaisesRegex(ValueError, "unresolved execution"):
+        with self.assertRaisesRegex(ValueError, "every final worker"):
             self.app.call(work, "complete", {"worker_ids": [worker["id"]]})
         # The same call naming a guess reaches the same gate: the scope wins and
         # the guess is never read.
-        with self.assertRaisesRegex(ValueError, "unresolved execution"):
+        with self.assertRaisesRegex(ValueError, "every final worker"):
             self.app.call(work, "complete", {"obligation_id": "obl-add-notes-line",
                                              "worker_ids": [worker["id"]]})
         # CONTROL: on the conversation's scope the argument is still required.

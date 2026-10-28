@@ -452,8 +452,8 @@ def cleanup_health(reaper_state, state_path, max_age_h, now, launch_agents_dir,
     if not isinstance(epoch, (int, float)) or epoch <= 0:
         problems.append("the scheduled job has never completed a run")
     elif now - epoch > max_age_h * 3600:
-        problems.append("the last completed scheduled run was %s ago, past the %d h window"
-                        % (_short_age(now - epoch), int(max_age_h)))
+        problems.append("the last completed scheduled run at %s is past the %d h window"
+                        % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch)), int(max_age_h)))
     if reaper_state.get("outcome") == "unresolved":
         rows = [u for u in (reaper_state.get("unresolved") or []) if isinstance(u, dict)]
         for u in rows:
@@ -500,8 +500,8 @@ def _escalation_status(esc_id, now):
 def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, state_path):
     """The scheduled tick's owner action: ONE open escalation per unresolved result.
 
-    Unresolved and nothing associated, or the associated one acknowledged
-    permanently: raise one (state proceeding, for the lead). Associated and open,
+    Unresolved and nothing associated, or a materially changed acknowledged
+    failure: raise one (state proceeding, for the lead). Associated and open,
     or held by a timed acknowledgement: nothing; the ledger and the stall watcher
     already repeat it, and an expiring hold reopens the same id. Healthy again
     (kept leftovers are not a failure): acknowledge the associated id permanently,
@@ -510,6 +510,7 @@ def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, 
     checkout = os.path.realpath(os.path.join(engine_scripts, "..", "..", ".."))
     assoc = prev.get("cleanup_escalation") if isinstance(prev.get("cleanup_escalation"), dict) else None
     status = _escalation_status(assoc["id"], now) if assoc and assoc.get("id") else None
+    problem_key = hashlib.sha256(json.dumps(sorted(problems)).encode("utf-8")).hexdigest()
     if not problems:
         if not assoc:
             return None
@@ -528,7 +529,12 @@ def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, 
             return None if rc == 0 else assoc
         return None if status in ("closed", "missing") else assoc
     if assoc and status in ("open", "held", "unknown"):
-        return assoc
+        return {**assoc, "problem_key": assoc.get("problem_key") or problem_key}
+    if assoc and status == "closed" and (assoc.get("problem_key") or problem_key) == problem_key:
+        # An acknowledgement is a decision about this failure, not recovery. Keep
+        # the unhealthy result visible without making the lead decide it every tick.
+        # Older associations adopt their first fingerprint without a new wake.
+        return {**assoc, "problem_key": problem_key}
     title = "Scheduled cleanup has not recovered: %s" % problems[0][:140]
     question = ("Diagnose and repair the scheduled cleanup (%d unresolved: %s). Detail: %s "
                 "--verbose and %s. Manual deletion does not clear this; only the next "
@@ -548,7 +554,7 @@ def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, 
             % (stamp, rc, out.strip()[:200]))
         return assoc
     log(log_path, "%s cleanup escalation %s raised: %s" % (stamp, found[0], problems[0][:160]))
-    return {"id": found[0], "raised": stamp,
+    return {"id": found[0], "raised": stamp, "problem_key": problem_key,
             "replaces": assoc.get("id") if assoc else None}
 
 
