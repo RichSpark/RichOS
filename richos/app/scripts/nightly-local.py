@@ -182,7 +182,7 @@ def owned_run(args, **kwargs):
 
 
 ROOT = Path(__file__).resolve().parents[3]
-REPO = "WebDevBooster/richos"
+REPO = "RichSpark/RichOS"
 SCRIPTS = Path("richos/app/scripts")
 GUI_BOOT_SUITE = SCRIPTS / "gui-boot.test.sh"
 
@@ -788,7 +788,7 @@ GATE_PASSTHROUGH = (
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
-    # `origin` is git@github.com:WebDevBooster/richos.git, so `fetch` authenticates over ssh
+    # `origin` is git@github.com:RichSpark/RichOS.git, so `fetch` authenticates over ssh
     # through the agent. Without the socket the fetch phase prompts, and GIT_TERMINAL_PROMPT=0
     # (set below) turns that prompt into a failure whose message names none of this.
     "SSH_AUTH_SOCK",

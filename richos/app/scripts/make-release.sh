@@ -63,7 +63,7 @@ product_root="$(cd "$app_dir/.." && pwd)"
 repo_root="$(cd "$product_root/.." && pwd)"
 src_tauri="$app_dir/src-tauri"
 
-REPO="WebDevBooster/richos"
+REPO="RichSpark/RichOS"
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -198,7 +198,7 @@ sha256_of() { /usr/bin/shasum -a 256 "$1" | awk '{print $1}'; }
 # The endpoints compiled into the app have to include the one this release publishes to. If
 # those ever drift, every claim below is about a file nobody fetches. The app carries RichOS's
 # new GitHub address first and its old one second (the GitHub move, CEO 2026-10-27), and this
-# release publishes to whichever of the two `REPO` names.
+# release publishes to the one `REPO` names, the new address since the move on 2026-10-28.
 CONFIGURED_ENDPOINTS="$(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1]))["plugins"]["updater"]["endpoints"]))' "$src_tauri/tauri.conf.json")"
 printf '%s\n' "$CONFIGURED_ENDPOINTS" | grep -Fxq -- "$ENDPOINT" || die "tauri.conf.json's updater endpoints are
     $CONFIGURED_ENDPOINTS
