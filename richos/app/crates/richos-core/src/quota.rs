@@ -2102,28 +2102,32 @@ pub(crate) mod tests {
     /// Haiku 3,953 tokens a point, so the remainder was 21.1 points in the live minute; at the
     /// fast interval the point was 99 - (ceil(21.1 x (1 + 5)) - 1) = 99 - 126, clamped to 0, and
     /// Work at 3% was `leaving` (the gate's handoff order, gate.rs `handoff`) and held (the
-    /// gate's `admission`) until the minute passed. Home at 99% is leaving all along.
+    /// gate's `admission`) until the minute passed. Home at 99% is leaving all along. Again with
+    /// 1,500 Haiku tokens in the second episode (the second review of d73436c94: a fix that
+    /// still let Haiku be fitted alone read 59.5 points a minute there).
     #[test]
     fn a_leases_haiku_remainder_does_not_hand_off_an_account_with_room() {
         let root = Scratch::new();
-        let episodes = json!([
-            {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
-            {"points": 1.0, "tokens": {"claude-haiku-5-5": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
-        let app = root.path().join("app");
-        let (service, work) = home_spent_work_in_use(&app, episodes, 3.);
-        let now = crate::util::now_millis();
-        let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
-            "claude-opus-5-5": {"inputTokens": 2, "outputTokens": 400, "cacheReadInputTokens": 180_000, "cacheCreationInputTokens": 0},
-            "claude-haiku-5-5": {"inputTokens": 76_707, "outputTokens": 6_739, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
-        lease_frames(&service, &work, &[(opus_frame("msg_lead", 180_000), now - 20_000), (result, now - 1_000)]);
-        service.before_turn(&work, None);
-        let state = app.join("engine-state");
-        let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
-        assert_eq!(published.leaving, vec!["1".to_string()], "only Home, at 99%, is being left; Work at 3% is not \
-            (its point read {}, its weekly speed {} points a minute)", published.act_at["seven_day"],
-            published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
-        assert_eq!(published.act_at["seven_day"], 99.);
-        assert!(gate::admission(&state, crate::util::now_millis()).allows_work(), "{:?}", published.admission);
+        for haiku in [3_151, 1_500] {
+            let episodes = json!([
+                {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+                {"points": 1.0, "tokens": {"claude-haiku-5-5": haiku, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
+            let app = root.path().join(format!("app-{haiku}"));
+            let (service, work) = home_spent_work_in_use(&app, episodes, 3.);
+            let now = crate::util::now_millis();
+            let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
+                "claude-opus-5-5": {"inputTokens": 2, "outputTokens": 400, "cacheReadInputTokens": 180_000, "cacheCreationInputTokens": 0},
+                "claude-haiku-5-5": {"inputTokens": 76_707, "outputTokens": 6_739, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
+            lease_frames(&service, &work, &[(opus_frame("msg_lead", 180_000), now - 20_000), (result, now - 1_000)]);
+            service.before_turn(&work, None);
+            let state = app.join("engine-state");
+            let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
+            assert_eq!(published.leaving, vec!["1".to_string()], "only Home, at 99%, is being left; Work at 3% is not \
+                (its point read {}, its weekly speed {} points a minute)", published.act_at["seven_day"],
+                published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+            assert_eq!(published.act_at["seven_day"], 99.);
+            assert!(gate::admission(&state, crate::util::now_millis()).allows_work(), "{:?}", published.admission);
+        }
     }
 
     /// **A real sustained speed still hands off at the point it did before** (the CEO's
