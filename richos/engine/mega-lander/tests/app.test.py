@@ -921,10 +921,36 @@ class DesktopWork(unittest.TestCase):
         self.assertNotIn("workspace_problem",self.receipt_of(placeholder))
         self.assertEqual(self.call("settle",{"request_id":"placeholder","reason":"Asked a second time."})["settled"],
                          result["settled"])
+        with self.assertRaisesRegex(ValueError,"exactly one"):
+            self.call("settle",{"reason":"Neither one is named here."})
         self.start_fixture_worker(worker,"settle-control")
         with self.assertRaisesRegex(ValueError,"run started"):
             self.call("settle",{"request_id":"prepare-one","reason":"It must not be settled here."})
         self.assertEqual(self.receipt_of(worker)["status"],"running")
+
+    def test_a_stray_fixture_record_is_moved_out_of_the_registry_and_a_record_that_may_own_work_is_not(self):
+        """2026-10-28: record-canary.test.sh wrote agents/wait-regression.json into the live
+        registry; it switched the orphan sweep off and nothing in the app could remove it."""
+        agents=Path(self.app.W.state_dir())/"agents";agents.mkdir(parents=True,exist_ok=True)
+        stray=agents/"wait-regression.json"
+        stray.write_text(json.dumps({"key":"wait-regression","name":"lead-fixture","session_id":"fixture",
+            "waiting":{"kind":"started","on":"its merge check is running","end":"at:2099-01-01T00:00:00Z"}}))
+        lost=agents/(self.app.W.named_key(self.session,"mark-sonnet-lostlist")+".json")
+        lost.write_text(json.dumps({"key":self.app.W.named_key(self.session,"mark-sonnet-lostlist"),"name":"mark-sonnet-lostlist"}))
+        garbled=agents/"garbled.json";garbled.write_text("{not json")
+        self.assertEqual(len(self.app.W.damaged_records(include_done=False)),3)
+        with self.assertRaisesRegex(ValueError,"may own a workspace"):
+            self.call("settle",{"registry_record":lost.name,"reason":"It is not a fixture."})
+        with self.assertRaisesRegex(ValueError,"may own a workspace"):
+            self.call("settle",{"registry_record":"garbled","reason":"It cannot be read at all."})
+        with self.assertRaisesRegex(ValueError,"reports no unreadable record"):
+            self.call("settle",{"registry_record":"nothing-here","reason":"There is no such record."})
+        result=self.call("settle",{"registry_record":"wait-regression.json","reason":"A test fixture written into the live registry."})
+        self.assertFalse(stray.exists())
+        self.assertEqual(json.loads(Path(result["kept_at"]).read_text())["name"],"lead-fixture")
+        self.assertTrue(lost.exists());self.assertTrue(garbled.exists())
+        self.assertEqual(sorted(Path(p).name for p,_ in self.app.W.damaged_records(include_done=False)),
+                         sorted([lost.name,"garbled.json"]))
 
     def test_v2_01_a_session_ending_never_turns_an_unused_preparation_into_a_final_worker(self):
         """Hunt part 4 v2, V2-01: `refresh` marked an unknown, never-dispatched

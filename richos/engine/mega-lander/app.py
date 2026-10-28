@@ -2713,6 +2713,52 @@ def complete(scope_path, scope, args):
         return {**result, "evidence":evidence, "published":False, "settled_receipts":settled}
 
 
+def quarantine_foreign_record(name, reason):
+    """REMOVE A RECORD NO WORKSPACE LIFECYCLE WROTE FROM THIS CONVERSATION'S REGISTRY
+    (2026-10-28: `agents/wait-regression.json`, a test fixture a proof run from an app shell
+    wrote into the live registry, with "The app has no tool that repairs or removes it").
+
+    A DAMAGED RECORD IS NOT HARMLESS NOISE: while any record cannot be read, nothing is
+    found unregistered (`W.scan_unregistered`, V2-04), so one stray file switches the orphan
+    sweep off for the whole thread. And a damaged record is normally KEPT, because it may be
+    the one that owns a live workspace, and removing it would make that workspace an orphan
+    for the automatic land to delete. So only a record that provably owns nothing goes:
+    the registry's own reader names it damaged (`W.damaged_records`), it is in THIS
+    conversation's registry, its key has no `<session>--` part (every record the lifecycle
+    writes has one: `named_key`, `new_record`), and it names no run and no workspace.
+    Anything else, an unparseable file included, is refused and kept.
+
+    It is moved, never deleted: into `quarantine/` beside `agents/`, which no reader of the
+    registry lists, with an event saying where. Moving it back undoes it."""
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", name):
+        raise ValueError("name the record by its file name in the registry's agents folder")
+    name = name if name.endswith(".json") else name + ".json"
+    agents = os.path.realpath(os.path.join(W.state_dir(), "agents"))
+    path = os.path.join(agents, name)
+    damaged = {os.path.realpath(p): why for p, why in W.damaged_records(include_done=False)}
+    if os.path.realpath(path) not in damaged:
+        raise ValueError("this conversation's workspace registry reports no unreadable record by that name")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError):
+        value = None
+    key = value.get("key") if isinstance(value, dict) else None
+    if (not isinstance(key, str) or not key or "--" in key
+            or any(value.get(field) for field in ("workspaces", "agent_id", "tool_use_id", "spawned_at", "started_at"))):
+        raise ValueError("this record may own a workspace, so it is kept: only a record no workspace lifecycle "
+                         "wrote (a key with no session part, naming no run and no workspace) is removed here")
+    kept = os.path.join(os.path.dirname(agents), "quarantine")
+    os.makedirs(kept, mode=0o700, exist_ok=True)
+    destination = os.path.join(kept, "%s.%s" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), name))
+    with W.Lock():
+        os.replace(path, destination)
+    W.event("quarantined-unreadable-record", path=path, kept_at=destination, why=damaged[os.path.realpath(path)],
+            reason=reason)
+    return {"registry_record": name, "removed_from": path, "kept_at": destination,
+            "was_unreadable_because": damaged[os.path.realpath(path)]}
+
+
 def settle(scope, args):
     """SETTLE ONE RECEIPT THAT NEVER RAN, WITH A REASON (2026-10-28, work-709b35ac).
 
@@ -2724,11 +2770,15 @@ def settle(scope, args):
     way to say which, and to clear a dead one before its assignment completes. It settles
     only on the same proof, never a receipt whose run started, and removes a worktree only
     when it holds nothing."""
-    if set(args) - {"request_id", "reason"}:
-        raise ValueError("settle takes request_id and reason")
-    request_id, reason = text(args, "request_id", 128), sent_text(args, "reason", 2000).strip()
+    if set(args) - {"request_id", "registry_record", "reason"} or ("request_id" in args) == ("registry_record" in args):
+        raise ValueError("settle takes a reason and exactly one of request_id or registry_record")
+    reason = sent_text(args, "reason", 2000).strip()
     if len(reason) < 10:
-        raise ValueError("say why this receipt is settled, in at least ten characters")
+        raise ValueError("say why this is settled, in at least ten characters")
+    if "registry_record" in args:
+        with locked(scope):
+            return quarantine_foreign_record(args["registry_record"], reason)
+    request_id = text(args, "request_id", 128)
     identity = hashlib.sha256(json.dumps([scope["binding"]["entity_id"], scope["binding"]["thread_id"], request_id],
                                          separators=(",", ":")).encode()).hexdigest()
     with locked(scope) as root:
@@ -2828,7 +2878,7 @@ TOOLS = [
     {"name":"integrate","description":"After an authorized implementation and an actual passing independent review, merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id","reviewer_id"],"additionalProperties":False}},
     {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. New teammates become available to Agent after this turn through the native plugin reload, without replacing Stu or stopping running workers; RichOS then sends a team_reloaded message: carry on there with the work that waited for them. Changes to an existing definition take effect in a new Stu session.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart.","inputSchema":{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":False}},
-    {"name":"settle","description":"Settle one receipt whose worker never ran, with your reason: a preparation you replaced in this same turn, or one you will not dispatch. Receipts that never ran are already settled by themselves when a later turn prepares a replacement for the same duty, when the work a review was for is integrated, and when the assignment completes; use this only for the rest. A receipt whose run started is refused. Its worktree and branch are removed only when they hold no commit and no uncommitted file; anything else is kept and reported in settled.retained, never discarded.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string"},"reason":{"type":"string","minLength":10,"maxLength":2000}},"required":["request_id","reason"],"additionalProperties":False}},
+    {"name":"settle","description":"Settle one receipt whose worker never ran, with your reason: a preparation you replaced in this same turn, or one you will not dispatch. Receipts that never ran are already settled by themselves when a later turn prepares a replacement for the same duty, when the work a review was for is integrated, and when the assignment completes; use this only for the rest. A receipt whose run started is refused. Its worktree and branch are removed only when they hold no commit and no uncommitted file; anything else is kept and reported in settled.retained, never discarded. With registry_record instead of request_id, it removes one record the workspace registry reports as unreadable, only when no workspace lifecycle wrote it (a stray test fixture); it is moved aside, never deleted, and a record that could own a workspace is refused.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string"},"registry_record":{"type":"string"},"reason":{"type":"string","minLength":10,"maxLength":2000}},"required":["reason"],"additionalProperties":False}},
 ]
 def available_tools(read_only=False):
     if not read_only: return TOOLS

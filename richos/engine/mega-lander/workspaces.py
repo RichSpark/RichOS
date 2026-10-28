@@ -3606,7 +3606,7 @@ def unreadable_line():
     more = " and %d more" % (len(bad) - 1) if len(bad) > 1 else ""
     return ("UNREADABLE RECORD: %d workspace registry record(s) cannot be read (%s%s); the due work "
             "told is from the readable records only.%s" % (len(bad), bad[0][0], more,
-            " The app has no tool that repairs or removes it." if this_conversation()
+            " If no workspace lifecycle wrote it, the app's settle tool removes it (registry_record)." if this_conversation()
             else " workspaces.sh status names it; repair or remove it when convenient."))
 
 
