@@ -329,6 +329,65 @@ fn ensure_app_review_watch(engine: &Path, data_dir: &Path, claude: &Path, at_lau
     }
 }
 
+/// Where the Codex watcher's entries go: set once at launch, before the watcher first starts.
+static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sync::OnceLock::new();
+
+/// **EACH NEW ENTRY CODEX WRITES TO RICH REACHES HIM, IN THE CONVERSATION ON SCREEN** (gap X):
+/// saved in Rich's inbox of the active conversation, where `peer_messages` hands it to him as it
+/// hands him Stu's messages. With no conversation open yet (or the state not yet managed) it
+/// waits, looking again every five seconds, and the entries after it wait behind it.
+fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
+    Arc::new(move |text: String| {
+        let mut said = false;
+        loop {
+            let saved = app.try_state::<AppState>().and_then(|state| {
+                let binding = state.reader.snapshot().active_binding().cloned()?;
+                Some(richos_core::codex_watch::deliver(&state.data_dir.join("engine-state"), &binding, &text))
+            });
+            match saved {
+                Some(Ok(())) => return,
+                Some(Err(e)) if !said => eprintln!("[richos] Codex watch: an entry waits for Rich ({e})"),
+                None if !said => eprintln!("[richos] Codex watch: an entry waits for a conversation to be open"),
+                _ => {}
+            }
+            said = true;
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        }
+    })
+}
+
+/// **CODEX'S ENTRIES REACH RICH BY THEMSELVES** (gap X): the engine's codex-watch, the app's own
+/// child (`richos_core::codex_watch`), on the user's Codex channels. Started at launch when the
+/// engine verifies, and again (a no-op while it runs on the same channels) whenever a session
+/// opens, which covers an engine set up after launch and a changed `CODEX_CHANNELS` setting.
+/// Ended by the quit path.
+fn ensure_app_codex_watch(engine: &Path, data_dir: &Path, at_launch: bool) {
+    let Some(sink) = CODEX_SINK.get() else { return };
+    let runtime = match richos_core::runtime::verify_engine(engine) {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            if at_launch {
+                eprintln!("[richos] Codex watch: not watching yet, the engine is not verified ({e})");
+            }
+            return;
+        }
+    };
+    let launch = richos_core::codex_watch::Launch {
+        python: runtime.python.clone(),
+        engine: engine.to_path_buf(),
+        state: data_dir.join("engine-state"),
+        environment: richos_core::review_watch::environment(&runtime.path()),
+        channels: richos_core::codex_watch::installed_channel_folders(),
+        sink: Arc::clone(sink),
+    };
+    match richos_core::codex_watch::ensure(&launch) {
+        Ok(Some(pid)) if at_launch => eprintln!("[richos] Codex watch: watching {} channel(s) (process {pid})", launch.channels.len()),
+        Ok(None) if at_launch => eprintln!("[richos] Codex watch: no Codex channel is set"),
+        Ok(_) => {}
+        Err(e) => eprintln!("[richos] Codex watch: the watcher could not start ({e})"),
+    }
+}
+
 struct WorkNotice {
     app: AppHandle,
 }
@@ -559,6 +618,8 @@ impl LeaseFactory for EngineLeaseFactory {
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         // The second review's watcher, if launch could not start it (an engine set up since).
         ensure_app_review_watch(&dir, &self.data_dir, &bin, false);
+        // And the Codex watcher, on the channels the user's setting names now.
+        ensure_app_codex_watch(&dir, &self.data_dir, false);
         let mut profile = richos_core::engine_profile::EngineProfile::prepare(&dir, &self.data_dir, runtime.clone())
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?;
@@ -628,6 +689,9 @@ impl EngineLeaseFactory {
         }
         let runtime = richos_core::runtime::verify_engine(&dir)
             .map_err(|e| CognitionError::Io(e.to_string()))?;
+        // The Codex watcher, if launch could not start it (an engine set up since), on the
+        // channels the user's setting names now.
+        ensure_app_codex_watch(&dir, &self.data_dir, false);
         let mut profile = richos_core::engine_profile::EngineProfile::prepare(&dir, &self.data_dir, runtime.clone())
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         if let Some(binding) = binding { profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?; }
@@ -3098,6 +3162,13 @@ fn main() {
             if let Some(dir) = boot_engine.as_deref() {
                 ensure_app_review_watch(dir, &data_dir, &claude_bin, true);
             }
+            // Codex's entries to Rich, the app's own child from launch to quit (gap X).
+            if CODEX_SINK.set(codex_sink(app.handle().clone())).is_err() {
+                eprintln!("[richos] Codex watch: its sink was already set");
+            }
+            if let Some(dir) = boot_engine.as_deref() {
+                ensure_app_codex_watch(dir, &data_dir, true);
+            }
             // **THE APP CLEANS UP ITS OWN GARBAGE, NO MATTER WHAT** (CEO §54 addendum 2): what an
             // earlier run left (a crash or a force-quit included) goes now, on its own thread;
             // again whenever Stu's jobs have settled, and at quit (the Exit arm). The engine's
@@ -3964,6 +4035,10 @@ fn main() {
                     let watchers = richos_core::review_watch::stop_all();
                     if !watchers.is_empty() {
                         eprintln!("[richos] quit: the second review's watcher(s) {watchers:?} ended.");
+                    }
+                    // The Codex watcher too (gap X), reaped and its record removed.
+                    if let Some(pid) = richos_core::codex_watch::stop_all() {
+                        eprintln!("[richos] quit: the Codex watcher {pid} ended.");
                     }
                     // **WHAT THIS RUN LEFT BEHIND GOES WITH IT** (CEO §54 addendum 2), after every
                     // lease above has ended, so their sessions are provably ended. Waited for, at

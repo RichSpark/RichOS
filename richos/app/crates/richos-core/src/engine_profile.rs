@@ -723,7 +723,13 @@ impl EngineProfile {
         if self.work_scope.is_some() {
             read_roots.push(self.target_state());
             read_roots.extend(attachments.iter().cloned());
-            command.arg("--add-dir").args(&read_roots);
+            // The user's Codex channel folders that exist (`codex_watch.rs`, gap X): Rich and Stu
+            // read Codex's `to-rich.md` and answer in its `to-codex.md`. Folders of the session,
+            // not of the read-only inspectors below.
+            let home = std::env::var_os("HOME").map(PathBuf::from).filter(|home| !home.as_os_str().is_empty());
+            let channels: Vec<PathBuf> = crate::codex_watch::channel_folders(self.user.folder.as_deref(), home.as_deref())
+                .into_iter().filter(|folder| folder.is_dir() && !read_roots.contains(folder)).collect();
+            command.arg("--add-dir").args(&read_roots).args(&channels);
         }
         // Read-only inspectors inherit exactly this company's/conversation's
         // host-selected folders. A path in a model's brief is not a grant.

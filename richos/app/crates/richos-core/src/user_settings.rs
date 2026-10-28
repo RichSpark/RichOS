@@ -170,6 +170,20 @@ fn assigned_key(line: &str) -> Option<&str> {
         && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')).then_some(key)
 }
 
+/// **The value the user's `orchestration.config` gives `key`**: its last assignment (as a shell
+/// that sources the file would see it), with a trailing ` # comment` and one pair of
+/// surrounding quotes removed; `None` when the file or the key is absent. Read as text, never
+/// executed.
+pub fn config_value(folder: &Path, key: &str) -> Result<Option<String>, RuntimeError> {
+    let Some(text) = read_optional(&folder.join(ORCHESTRATION_CONFIG))? else { return Ok(None) };
+    Ok(text.lines().rfind(|line| assigned_key(line) == Some(key)).map(|line| {
+        let value = line.split_once('=').map(|(_, value)| value).unwrap_or_default();
+        let value = value.split_once(" #").map(|(value, _)| value).unwrap_or(value).trim();
+        let quoted = value.len() >= 2 && (value.starts_with('"') && value.ends_with('"') || value.starts_with('\'') && value.ends_with('\''));
+        (if quoted { &value[1..value.len() - 1] } else { value }).to_string()
+    }))
+}
+
 /// **The coordination folder's `orchestration.config`**: the engine's line for each
 /// [`ENGINE_DEFAULTS`] key the user's file does not set (`engine` is the shipped engine's
 /// `orchestration.config`), the user's file as written (minus any [`APP_KEYS`] line), then the
@@ -292,5 +306,20 @@ mod tests {
         assert_eq!(assigned_key("# ALLOWED_MODELS=\"x\""), None);
         assert_eq!(assigned_key("1BAD=x"), None);
         assert_eq!(assigned_key("plain text"), None);
+    }
+
+    #[test]
+    fn a_config_value_is_the_last_assignment_unquoted_and_without_its_comment() {
+        let folder = std::env::temp_dir().join(format!("richos-config-value-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&folder).unwrap();
+        assert_eq!(config_value(&folder, "CODEX_CHANNELS").unwrap(), None, "no file");
+        std::fs::write(folder.join(ORCHESTRATION_CONFIG),
+            "# CODEX_CHANNELS=\"commented\"\nCODEX_CHANNELS=/first\nexport CODEX_CHANNELS=\"/a b:~/c\" # mine\nOTHER='x'\n").unwrap();
+        assert_eq!(config_value(&folder, "CODEX_CHANNELS").unwrap().as_deref(), Some("/a b:~/c"));
+        assert_eq!(config_value(&folder, "OTHER").unwrap().as_deref(), Some("x"));
+        assert_eq!(config_value(&folder, "MISSING").unwrap(), None);
+        std::fs::write(folder.join(ORCHESTRATION_CONFIG), "CODEX_CHANNELS=\"\"\n").unwrap();
+        assert_eq!(config_value(&folder, "CODEX_CHANNELS").unwrap().as_deref(), Some(""), "set empty is not unset");
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 }

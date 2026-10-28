@@ -22,10 +22,14 @@
 #        is told
 #   C07  monitors.json starts `codex-watch.sh --monitor` always
 #   C08  a repository that never adopted the engine: silent, exit 0
-#   C09  --monitor --host-json, the RichOS app host's own child (host_child.py):
+#   C09  --monitor --host-json, the RichOS app's own child (richos-core
+#        codex_watch.rs runs scripts/lib/codex_watch.py so, with no --config):
 #        an appended entry is ONE JSON line carrying every line of it, and the
 #        watcher ends once its host (the parent whose pid RICHOS_WATCH_HOST
 #        names) is gone
+#   C10  the user's setting: CODEX_CHANNELS in orchestration.config names the
+#        channel folders; an entry in a configured folder is told, one in a
+#        folder the setting leaves out is not; an empty value watches none
 #
 # Exit 0 = every case passed; exit 1 = at least one failed.
 
@@ -165,7 +169,8 @@ import os, subprocess, sys, time
 cw, sb = sys.argv[1:3]
 env = dict(os.environ, RICHOS_WATCH_HOST=str(os.getpid()), CODEX_WATCH_POLL_SECONDS="0.3",
            CODEX_WATCH_STATE_DIR=os.path.join(sb, "state-host"))
-child = subprocess.Popen(["bash", cw, "--monitor", "--host-json"], env=env,
+lib = os.path.join(os.path.dirname(cw), "lib", "codex_watch.py")
+child = subprocess.Popen([sys.executable, lib, "--monitor", "--host-json"], env=env,
                          stdout=open(os.path.join(sb, "host.out"), "w"), stderr=open(os.path.join(sb, "host.err"), "w"))
 with open(os.path.join(sb, "host.child.tmp"), "w") as fh:
     fh.write(str(child.pid))
@@ -191,6 +196,26 @@ PY
 check "C09  --host-json: ONE JSON line with every line of the entry; the watcher ends once its host is gone" \
     "$( [ "$RC" -eq 0 ] && [ "$ENDED" -eq 0 ]; echo $?)" \
     "out=$(cat "$SB/host.out") err=$(cat "$SB/host.err") ended=$ENDED"
+
+# --- C10: the user's setting ---------------------------------------------------
+# The setting names folders. CODEX_WATCH_CHANNELS, which the cases above and the app set, is unset.
+CFG="$SB/configured"
+mkdir -p "$CFG/team-codex" "$CFG/left-out"
+printf '## 2026-10-05 06:00Z — CONFIGURED BACKLOG\nconfigured-backlog\n\n' >"$CFG/team-codex/to-rich.md"
+printf '## 2026-10-05 06:00Z — LEFT OUT BACKLOG\nleft-out-backlog\n\n' >"$CFG/left-out/to-rich.md"
+printf 'PROTECTED_PATHS=""\nexport CODEX_CHANNELS="%s" # the user setting\n' "$CFG/team-codex" \
+    >"$RICHOS_ENTITY_ROOT/orchestration.config"
+cfg_tick() { OUT="$(env -u CODEX_WATCH_CHANNELS CODEX_WATCH_STATE_DIR="$SB/state-config" bash "$CW" --tick 2>&1)"; }
+cfg_tick; cfg_tick
+printf '## 2026-10-05 13:00Z — FROM THE CONFIGURED CHANNEL\nconfigured-line\n' >>"$CFG/team-codex/to-rich.md"
+printf '## 2026-10-05 13:00Z — FROM A FOLDER NOT CONFIGURED\nleft-out-line\n' >>"$CFG/left-out/to-rich.md"
+cfg_tick; cfg_tick; X="$OUT"
+printf 'PROTECTED_PATHS=""\nCODEX_CHANNELS=""\n' >"$RICHOS_ENTITY_ROOT/orchestration.config"
+printf '## 2026-10-05 14:00Z — WHILE NONE IS WATCHED\nnone-watched-line\n' >>"$CFG/team-codex/to-rich.md"
+cfg_tick; cfg_tick; Y="$OUT"
+check "C10  CODEX_CHANNELS names the watched folders: the configured one is told, one it leaves out is not; empty watches none" \
+    "$( [ "$(headers "$X")" -eq 1 ] && has "$X" "team-codex/to-rich.md" && has "$X" "configured-line" \
+        && ! has "$X" "left-out-line" && ! has "$X" "configured-backlog" && [ -z "$Y" ]; echo $?)" "x=$X y=$Y"
 
 if [ "$FAIL" -gt 0 ]; then
     echo "=== codex-watch tests: $FAIL FAILED, $PASS passed ==="
