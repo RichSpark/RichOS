@@ -198,6 +198,12 @@ rec = workspaces.new_record("%s--%s" % (sid, name), name=name, session_id=sid, a
                             started_at=workspaces.iso(now - float(started)),
                             workspaces=[{"kind": "cc", "repo": repo, "path": os.path.realpath(repo),
                                          "branch": "cc/" + name, "deleted_at": None}])
+if extra in ("prepared", "refused"):
+    rec["agent_id"] = ""
+    rec["registered_at"] = rec.pop("started_at")
+    if extra == "refused":
+        rec["spawned_at"] = rec["registered_at"]
+        rec["tool_use_id"] = "toolu_refused_before_start"
 if extra == "pause":
     rec["pause"] = {"at": now - 60, "until": "the fixture's resume", "control": True}
 if extra == "deferred":
@@ -533,6 +539,8 @@ add_agent lima-opus-q1 a0000000000fixq "$SID" 3600 3000 1500
 add_agent mike-opus-r1 a0000000000fixr "$SID" 3600 3500 300
 add_agent november-opus-p1 a0000000000fixp "$SID" 3600 3500 3000 pause
 add_agent oscar-opus-e1 a0000000000fixe "$SID" 3600 3500 3000 end
+add_agent pending-opus-p1 a0000000000prep "$SID" 3600 3500 3000 prepared
+add_agent refused-opus-p1 a0000000000refused "$SID" 3600 3500 3000 refused
 tick 0
 check "T01  no commit and no transcript write for 25 min: SILENT, with last commit, transcript, action" \
     "$( [ "$(count "$OUT" "[SILENT]")" -eq 1 ] && has "$OUT" "[SILENT] lima-opus-q1: no commit and no transcript activity, for 25 min" \
@@ -549,6 +557,8 @@ check "T04  a long honest run, a paused teammate and a finished one are not SILE
     "$( has "$T01OUT" "[SILENT] lima-opus-q1" && ! has "$T01OUT" "mike-opus-r1" && ! has "$T01OUT" "november-opus-p1" \
         && ! has "$T01OUT" "oscar-opus-e1"; echo $?)" \
     "out=$T01OUT"
+check "T04b a preparation and a refused pre-start call never become silent workers" \
+    "$( ! has "$T01OUT" "pending-opus-p1" && ! has "$T01OUT" "refused-opus-p1"; echo $?)" "out=$T01OUT"
 
 # --- T05: an end deferred by its own endless loop (2026-10-11, echo-opus-walk49fix1) ----
 new_registry t5; new_state t5

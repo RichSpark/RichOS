@@ -806,6 +806,8 @@ def _silent(src, reg, now, session_id, th, waits):
     for rec in reg.recs:
         if rec.get("session_id") != session_id or rec.get("disposition"):
             continue
+        if not (rec.get("agent_id") or rec.get("started_at")):
+            continue                       # preparation or a refused call is not a silent worker
         try:
             fin, paused, _why = src.ws.finished_state(rec, cache)
         except Exception:  # noqa: BLE001
