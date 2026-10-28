@@ -345,7 +345,9 @@ class P5_33_QuotaTickUsesCompiledHelper(Scratch):
             with open(path, "w") as fh:
                 fh.write("#!/bin/sh\necho %s \"$@\"\n" % word)
             os.chmod(path, 0o755)
+        # The machine-wide app slot points into the fixture, never the user's /Applications.
         env = dict(os.environ, HOME=os.path.join(self.tmp, "home"),
+                   RICHOS_SYSTEM_APPLICATIONS=os.path.join(self.tmp, "system-Applications"),
                    PATH=os.pathsep.join([stubs, "/usr/bin", "/bin"]))
         out = subprocess.run(["bash", os.path.join(scripts, "quota-reset.sh")] + list(args),
                              env=env, capture_output=True, text=True, timeout=60)
@@ -358,8 +360,6 @@ class P5_33_QuotaTickUsesCompiledHelper(Scratch):
         self.assertEqual(self.run_helper("status"), "CARGO")
 
     def test_tick_without_a_compiled_helper_still_uses_cargo(self):
-        if os.path.exists("/Applications/RichOS.app/Contents/MacOS/richos-tauri"):
-            self.skipTest("an installed RichOS app would serve the tick on this host")
         self.assertEqual(self.run_helper("tick", with_binary=False), "CARGO")
 
 

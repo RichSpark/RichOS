@@ -6,7 +6,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PRODUCT="$(cd "$HERE/../.." && pwd)"
 
 compiled_helper() {
-  for binary in "$HERE/../bin/richos-quota" "$HOME/Applications/RichOS.app/Contents/MacOS/richos-tauri" /Applications/RichOS.app/Contents/MacOS/richos-tauri; do
+  # The machine-wide folder is /Applications. Tests point RICHOS_SYSTEM_APPLICATIONS at their
+  # own fixture so they never run the app a user installed there.
+  for binary in "$HERE/../bin/richos-quota" "$HOME/Applications/RichOS.app/Contents/MacOS/richos-tauri" "${RICHOS_SYSTEM_APPLICATIONS:-/Applications}/RichOS.app/Contents/MacOS/richos-tauri"; do
     if [ -x "$binary" ]; then
       case "$binary" in
         */richos-tauri)
