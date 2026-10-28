@@ -19,7 +19,8 @@
 //!   the non-negative weighted least-squares fit of `points = sum(tokens_m / per_point_m)` over
 //!   the kept episodes, each weighted by 1 / its tokens. With one model that is exactly
 //!   `token-track.py`'s total tokens / total points. A model the episodes cannot tell apart from
-//!   another has no figure yet.
+//!   another has no figure yet: which models are fitted is chosen by how well the fit predicts
+//!   each episode left out of it, so a model only the episodes' noise speaks for has none.
 //! - **The speed** (`Track::speed`): over the last minute, each measured model's tokens divided
 //!   by its tokens per point, summed. The quota service takes the larger of it and the
 //!   percentage speed (`Snapshot::reading_with`), so a model with no figure yet, or use this Mac
@@ -471,26 +472,46 @@ pub fn figures(episodes: &[Episode]) -> BTreeMap<String, f64> {
             models.iter().map(|(m, _)| e.tokens.get(*m).copied().unwrap_or(0) as f64 / 1e6).collect(),
             e.points, 1e6 / all as f64))
     }).collect();
-    // Non-negative least squares by trying every subset of models: the best fit whose every
-    // coefficient is positive.
-    let mut best: Option<(f64, Vec<usize>, Vec<f64>)> = None;
-    for mask in 1u32..(1 << models.len()) {
-        let pick: Vec<usize> = (0..models.len()).filter(|i| mask >> i & 1 == 1).collect();
+    // The weighted normal equations of the models `pick` over every row but `skip`.
+    let system = |pick: &[usize], skip: Option<usize>| {
         let k = pick.len();
         let mut system = vec![vec![0.; k + 1]; k];
-        for (x, points, weight) in &rows {
-            for (row, i) in system.iter_mut().zip(&pick) {
-                for (cell, j) in row.iter_mut().zip(&pick) { *cell += weight * x[*i] * x[*j]; }
+        for (_, (x, points, weight)) in rows.iter().enumerate().filter(|(r, _)| Some(*r) != skip) {
+            for (row, i) in system.iter_mut().zip(pick) {
+                for (cell, j) in row.iter_mut().zip(pick) { *cell += weight * x[*i] * x[*j]; }
                 row[k] += weight * x[*i] * points;
             }
         }
-        let Some(per_million) = solve(system) else { continue };
+        system
+    };
+    // One row's weighted squared error under the coefficients `per_million` of `pick`.
+    let error = |pick: &[usize], r: usize, per_million: &[f64]| {
+        let (x, points, weight) = &rows[r];
+        let fit: f64 = pick.iter().zip(per_million).map(|(i, c)| x[*i] * c).sum();
+        weight * (points - fit).powi(2)
+    };
+    // Non-negative least squares by trying every subset of models, each fit whose every
+    // coefficient is positive. **Chosen by how well it predicts the episode it was not fitted
+    // on** (leave-one-out), not by how well it fits them all (Work, 2026-10-28 13:05Z): with as
+    // many models as episodes some subset fits them exactly whatever the models are, and a
+    // model with a few thousand tokens in them (Claude Code's own Haiku calls) was given 3,953
+    // tokens a point by fitting nothing but the episodes' noise. Its next 83,446 tokens were then
+    // 21 points in one minute, and the week's handoff point fell to 0 at 3% used. A subset that
+    // some episode cannot be left out of (a model in one episode only, or a split only one
+    // episode's mix shows) is not chosen; with one episode there is nothing to leave out, and the
+    // best fit is chosen as before.
+    let mut best: Option<(f64, Vec<usize>, Vec<f64>)> = None;
+    for mask in 1u32..(1 << models.len()) {
+        let pick: Vec<usize> = (0..models.len()).filter(|i| mask >> i & 1 == 1).collect();
+        let Some(per_million) = solve(system(&pick, None)) else { continue };
         if per_million.iter().any(|c| c.is_nan() || *c <= 0.) { continue; }
-        let residual: f64 = rows.iter().map(|(x, points, weight)| {
-            let fit: f64 = pick.iter().zip(&per_million).map(|(i, c)| x[*i] * c).sum();
-            weight * (points - fit).powi(2)
-        }).sum();
-        if best.as_ref().is_none_or(|(r, ..)| residual < *r) { best = Some((residual, pick, per_million)); }
+        let score = if rows.len() < 2 {
+            Some((0..rows.len()).map(|r| error(&pick, r, &per_million)).sum())
+        } else {
+            (0..rows.len()).map(|r| solve(system(&pick, Some(r))).map(|left_out| error(&pick, r, &left_out))).sum::<Option<f64>>()
+        };
+        let Some(score) = score.filter(|s| !s.is_nan()) else { continue };
+        if best.as_ref().is_none_or(|(s, ..)| score < *s) { best = Some((score, pick, per_million)); }
     }
     let Some((_, pick, per_million)) = best else { return BTreeMap::new() };
     pick.into_iter().zip(per_million).map(|(i, c)| (models[i].0.to_string(), 1e6 / c)).collect()
@@ -530,11 +551,15 @@ mod tests {
     }
     #[test]
     fn mixed_episodes_separate_the_models() {
-        // Opus 2M tokens a point, Sonnet 10M a point, in changing mixes.
+        // Opus 2M tokens a point, Sonnet 10M a point, in changing mixes. The last two of the
+        // first three are one mix (3:5), so without the first those three cannot tell the models
+        // apart, and a split no single episode can be left out of is not chosen (Work,
+        // 2026-10-28): a third mix (3:10, 1.5 + 1 = 2.5 points) lets every one be left out.
         let eps = [
             episode(1., &[("opus", 1_000_000), ("sonnet", 5_000_000)]),
             episode(1., &[("opus", 1_500_000), ("sonnet", 2_500_000)]),
             episode(2., &[("opus", 3_000_000), ("sonnet", 5_000_000)]),
+            episode(2.5, &[("opus", 3_000_000), ("sonnet", 10_000_000)]),
         ];
         let f = figures(&eps);
         assert!((f["opus"] - 2e6).abs() < 1e3, "{f:?}");
@@ -546,6 +571,32 @@ mod tests {
         let f = figures(&[episode(1., &[("opus", 1_000_000), ("sonnet", 1_000_000)]),
             episode(2., &[("opus", 2_000_000), ("sonnet", 2_000_000)])]);
         assert_eq!(f.len(), 1, "{f:?}");
+    }
+    /// **A model the episodes barely saw is not given a figure by fitting their noise** (Work,
+    /// 2026-10-28 13:05Z: Ray and Zach ordered to hand off at 3% of the week). Work's first two
+    /// episodes, exactly as `claude-token-points.json` kept them: one point each, Opus and Sonnet
+    /// carrying 99.99% of the tokens and Haiku 1,029 and 3,151. Two episodes and three models: a
+    /// pair fits two episodes exactly whatever the pair, so the smallest residual chose Sonnet at
+    /// 24.5M and Haiku at 3,953 tokens a point (Opus, 99% of the use, no figure at all), and the
+    /// 83,446 Haiku tokens a lease's result reported in the 13:00 slot (Claude Code's own Haiku
+    /// calls, in no assistant frame) became 21 weekly points in one minute. Chosen by how well
+    /// each fit predicts the episode it was not fitted on, the episodes keep Opus alone, at
+    /// 1 / the weighted least-squares fit of both: 28.3M tokens a point.
+    #[test]
+    fn a_model_the_episodes_barely_saw_gets_no_figure_from_their_noise() {
+        let work = [
+            episode(1., &[("claude-haiku-5-5", 1_029), ("claude-opus-5-5", 40_634_401), ("claude-sonnet-5-5", 18_154_910)]),
+            episode(1., &[("claude-haiku-5-5", 3_151), ("claude-opus-5-5", 17_401_885), ("claude-sonnet-5-5", 4_980_038)]),
+        ];
+        let f = figures(&work);
+        assert!(!f.contains_key("claude-haiku-5-5"), "Haiku, 0.005% of the tokens, was given a figure: {f:?}");
+        assert_eq!(f.keys().collect::<Vec<_>>(), ["claude-opus-5-5"], "{f:?}");
+        assert!((f["claude-opus-5-5"] - 28_336_202.).abs() < 1., "{f:?}");
+        // The same two episodes with Opus and Haiku alone (Haiku is in every lease's result).
+        let alone: Vec<Episode> = work.iter().map(|e| Episode { points: e.points,
+            tokens: e.tokens.iter().filter(|(m, _)| !m.contains("sonnet")).map(|(m, t)| (m.clone(), *t)).collect() }).collect();
+        let f = figures(&alone);
+        assert!(!f.contains_key("claude-haiku-5-5"), "{f:?}");
     }
     /// **The spend of a lease, its unseen output included** (§118). The frames and `result` the
     /// app captured on 2026-10-07 (`native.rs`, `a_leases_result_totals_count_the_output_its_

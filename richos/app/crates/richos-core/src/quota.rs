@@ -2058,6 +2058,98 @@ pub(crate) mod tests {
         assert!(service.view().leaving.is_empty(), "a fresh 53% is current and is not moved");
     }
 
+    /// Home (Account 1) at 99% of its week and Work (Account 2) in use at `weekly`% and 28% of
+    /// its five hours, read just now; Work's learned episodes are `episodes`, kept in
+    /// `TOKEN_POINTS_FILE` as the app keeps them across launches.
+    fn home_spent_work_in_use(dir: &Path, episodes: Value, weekly: f64) -> (Service, String) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(TOKEN_POINTS_FILE), json!({ "2": episodes }).to_string()).unwrap();
+        let service = Service::open(dir).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        assert_eq!(work.id, "2");
+        *service.snapshot.lock().unwrap() = live(99.);
+        let mut reading = live(weekly);
+        reading.windows[0].used_percent = 28.;
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        service.extra.lock().unwrap().insert(work.id.clone(), (
+            std::sync::Arc::new(Mutex::new(Box::new(FakeSource { calls, result: Err(ReadError::Failed) }) as Box<dyn Source>)),
+            reading));
+        service.accounts.use_first(&work.id).unwrap();
+        (service, work.id)
+    }
+
+    /// Frames of one lease on `account`, through its own `tokens::Tally` into the service's
+    /// sink, exactly as `native.rs` passes a lease's stream on.
+    fn lease_frames(service: &Service, account: &str, frames: &[(Value, u64)]) {
+        let mut tally = tokens::Tally::default();
+        for (frame, at) in frames {
+            for found in tally.frame(frame, *at) { service.token_sink().push(account, found); }
+        }
+    }
+
+    fn opus_frame(id: &str, read: u64) -> Value {
+        json!({"type": "assistant", "parent_tool_use_id": null, "message": {"id": id, "model": "claude-opus-5-5",
+            "usage": {"input_tokens": 2, "output_tokens": 1, "cache_read_input_tokens": read, "cache_creation_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}}}})
+    }
+
+    /// **One lease's result does not hand off an account with room** (2026-10-28 13:05-13:06Z:
+    /// Work at 3% of its week and 28% of its five hours, Ray and Zach ordered to hand off, and
+    /// an agent dispatch held 16 s). Work's two learned episodes exactly as the app kept them
+    /// (`claude-token-points.json`); a lease's Opus turn whose `result` also reports 83,446 Haiku
+    /// tokens no assistant frame showed (the 13:00 slot of the spend ledger: Haiku, 0 requests,
+    /// 76,707 input and 6,739 output, all of it result remainder). Before the fix the fit gave
+    /// Haiku 3,953 tokens a point, so the remainder was 21.1 points in the live minute; at the
+    /// fast interval the point was 99 - (ceil(21.1 x (1 + 5)) - 1) = 99 - 126, clamped to 0, and
+    /// Work at 3% was `leaving` (the gate's handoff order, gate.rs `handoff`) and held (the
+    /// gate's `admission`) until the minute passed. Home at 99% is leaving all along.
+    #[test]
+    fn a_leases_haiku_remainder_does_not_hand_off_an_account_with_room() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 3.);
+        let now = crate::util::now_millis();
+        let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
+            "claude-opus-5-5": {"inputTokens": 2, "outputTokens": 400, "cacheReadInputTokens": 180_000, "cacheCreationInputTokens": 0},
+            "claude-haiku-5-5": {"inputTokens": 76_707, "outputTokens": 6_739, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
+        lease_frames(&service, &work, &[(opus_frame("msg_lead", 180_000), now - 20_000), (result, now - 1_000)]);
+        service.before_turn(&work, None);
+        let state = app.join("engine-state");
+        let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
+        assert_eq!(published.leaving, vec!["1".to_string()], "only Home, at 99%, is being left; Work at 3% is not \
+            (its point read {}, its weekly speed {} points a minute)", published.act_at["seven_day"],
+            published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert_eq!(published.act_at["seven_day"], 99.);
+        assert!(gate::admission(&state, crate::util::now_millis()).allows_work(), "{:?}", published.admission);
+    }
+
+    /// **A real sustained speed still hands off at the point it did before** (the CEO's
+    /// weekly-switch rule, unchanged). Work learned Opus at 30M tokens a point from two Opus
+    /// episodes, which the fit gives the same figure before and after the fix. Then 52 Opus
+    /// requests of 1M tokens each, one a second through the last minute: 52 / 30 = 1.733 points
+    /// a minute, fast (1.733 x 5 >= 5), so I is 1 minute and H the default 5:
+    /// 99 - (ceil(1.733 x 6 = 10.4) - 1) = 89. At 89% Work is leaving; at 88% it is not.
+    #[test]
+    fn a_real_sustained_speed_still_hands_off_at_the_same_point() {
+        let root = Scratch::new();
+        let episodes = json!([{"points": 1.0, "tokens": {"claude-opus-5-5": 30_000_000}},
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 30_000_000}}]);
+        for (weekly, leaving) in [(89., true), (88., false)] {
+            let app = root.path().join(format!("app-{weekly}"));
+            let (service, work) = home_spent_work_in_use(&app, episodes.clone(), weekly);
+            let now = crate::util::now_millis();
+            let frames: Vec<(Value, u64)> = (0..52u64).map(|i| (opus_frame(&format!("msg_{i}"), 1_000_000 - 3), now - 51_000 + i * 1_000)).collect();
+            lease_frames(&service, &work, &frames);
+            service.before_turn(&work, None);
+            let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+            assert_eq!(published.act_at["seven_day"], 89., "{:?}", published.speeds);
+            assert_eq!(published.leaving.contains(&work), leaving, "Work at {weekly}%: {:?}", published.leaving);
+        }
+    }
+
     /// **An account the app has never read is asked again soon** (handoff round 2, runs 2-4
     /// and 6: null answers starved Work's first reading for the whole run, and an account with
     /// no reading is never switched to). While there is no reading yet, a null answer is asked
