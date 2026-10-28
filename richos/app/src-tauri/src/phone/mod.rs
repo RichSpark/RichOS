@@ -123,8 +123,9 @@ pub const TAILNET_MIN_VALIDITY: &str = "720h";
 pub const KEEPALIVE_MS: u64 = 15_000;
 
 /// The VAPID `sub` claim — plan §3.5 and the brief. A URL rather than a mailto, because a
-/// free and open-source app has a repository and does not have a support inbox.
-pub const VAPID_SUBJECT: &str = "https://github.com/WebDevBooster/richos";
+/// free and open-source app has a repository and does not have a support inbox. The repository's
+/// address since the GitHub move (2026-10-28).
+pub const VAPID_SUBJECT: &str = "https://github.com/RichSpark/RichOS";
 
 /// The only host family the Mac ever dials for this feature (plan §2.6: *"exactly one
 /// destination, `*.push.apple.com`"*). Enforced in [`push::send`] before a connection is

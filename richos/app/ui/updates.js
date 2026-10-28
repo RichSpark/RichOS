@@ -336,7 +336,7 @@ window.RichUpdates = (function () {
   /// as `main.js` does for the pricing link); the `href` is the same page, so the link is
   /// announced and disclosed as what it is. `tabindex="0"` because WebKit on a Mac leaves a
   /// plain link out of the Tab order. Enter on a focused link fires this same `click`.
-  var CHANGELOG_KEY = "github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md";
+  var CHANGELOG_KEY = "github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md";
 
   /// What a screen reader hears is the `aria-label`: the visible words first (WCAG 2.5.3 "Label
   /// in Name", as the update cue does), then where it goes. Not a clipped `.sr-only` span: that

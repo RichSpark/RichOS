@@ -1482,12 +1482,14 @@ async function main() {
   //
   // His words: the user can "click something somewhere in the appropriate place in the app that
   // will open their default web browser and get them to this page:
-  // https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md". Asserted on what the
+  // https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md", which is
+  // https://github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md since the GitHub move
+  // (2026-10-28). Asserted on what the
   // opener was HANDED (`mock.js` records `open_external`), never on a real browser: the key, and
   // the page that key is (`opener.rs` proves the key opens exactly that page). Both themes, both
   // ways in (Tab then Enter, and a click), and the page never leaves the app.
   await run.check("23. See what's new: on Check for updates' line, reached by Tab, opens the changelog outside the app", async () => {
-    const CHANGELOG = "https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md";
+    const CHANGELOG = "https://github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md";
     const out = [];
     for (const theme of ["dark", "light"]) {
       const page = await openApp(browser, theme);
