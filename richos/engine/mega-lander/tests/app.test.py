@@ -755,6 +755,106 @@ class DesktopWork(unittest.TestCase):
         done = self.call("complete", {"obligation_id":"fixture-task", "worker_ids":[args["worker_id"]]})
         self.assertTrue(done["obligation_closed"])
 
+    # ------------------------------------------------------------------ receipts that never ran
+    # 2026-10-28, work-709b35ac: Echo's work was reviewed by Tom and integrated, and `complete`
+    # refused it with "this assignment still has unresolved execution; reconcile it before
+    # completion". What it counted were review preparations that never ran: one prepared in an
+    # earlier turn and never admitted (its Agent call passed the spawn registration and was then
+    # refused, so the canonical record showed a spawn), and one Pierce refused. Preparing a third
+    # under a new request_id settled neither, integrate's cleanup then tried to land both
+    # ("no registered agent", "is not finished"), and their worktrees stayed behind.
+
+    def next_turn(self, number):
+        """His next message: a new turn in the same provider session."""
+        self.scope["binding"]=self.bind_seat(None,"turn-%d"%number,audience="ceo",session=self.session,revision=number-1)
+        self.scope_path.write_text(json.dumps(self.scope))
+
+    def target_of(self, ready):
+        return self.root/"engine-state/target-worktrees"/self.app.folder(self.scope).name/ready["name"]
+
+    def receipt_of(self, ready):
+        return next(r for r in self.call("inspect",{"limit":50})["records"] if r["id"]==ready["id"])
+
+    def branch_exists(self, branch):
+        return subprocess.run(["git","-C",str(self.repo),"rev-parse","--verify","--quiet","refs/heads/"+branch],
+                              capture_output=True).returncode==0
+
+    def registered_branch(self, ready):
+        """The receipt's worktree and branch exist the moment it is prepared."""
+        canonical=self.app.W.load_agent(self.app.W.named_key(self.session,ready["name"]))
+        branch=[w for w in canonical["workspaces"] if w.get("kind")=="cc"][0]["branch"]
+        self.assertTrue(self.target_of(ready).is_dir(),ready["name"])
+        self.assertTrue(self.branch_exists(branch),ready["name"])
+        return branch
+
+    def test_todays_never_run_receipts_settle_and_only_their_empty_worktrees_are_removed(self):
+        placeholder=self.call("prepare",{**self.args,"request_id":"placeholder-1",
+                                         "brief":"Placeholder brief, replaced before it was dispatched."})
+        branches={placeholder["id"]:self.registered_branch(placeholder)}
+        worker=self.call("prepare",self.args)
+        target=self.start_fixture_worker(worker,"todays-worker")
+        (target/"result.txt").write_text("FICTIONAL")
+        self.app.git(target,"add","result.txt");self.app.git(target,"commit","-qm","Fictional result")
+        commit=self.app.git(target,"rev-parse","HEAD")
+        self.finish_fixture_worker("todays-worker")
+        review={**self.args,"role":"reviewer","review_of":worker["id"],"title":"Review the result"}
+        # Turn 1 (iconv-tom-review-1): the spawn guard registered its Agent call and a later
+        # control refused it, so the app never admitted it and no worker ran.
+        refused=self.call("prepare",{**review,"request_id":"review-1","brief":"Review result.txt; change nothing."})
+        branches[refused["id"]]=self.registered_branch(refused)
+        call={"session_id":self.session,"tool_use_id":"call-review-1","tool_input":refused["agent_payload"]}
+        self.app.dispatch_intent(self.scope,call,inspect_only=True)
+        self.app.W.register_spawn(call,str(self.coord))
+        # A never-run reviewer whose worktree somebody committed in: never touched.
+        committed=self.call("prepare",{**review,"request_id":"review-committed","brief":"Review it again; change nothing."})
+        branches[committed["id"]]=self.registered_branch(committed)
+        (self.target_of(committed)/"kept.txt").write_text("COMMITTED BY HAND")
+        self.app.git(self.target_of(committed),"add","kept.txt")
+        self.app.git(self.target_of(committed),"commit","-qm","Committed by hand")
+        kept_commit=self.app.git(self.target_of(committed),"rev-parse","HEAD")
+        # Turn 2 (iconv-tom-review-2): Pierce refused its dispatch.
+        self.next_turn(2)
+        pierced=self.call("prepare",{**review,"request_id":"review-2","brief":"Review once more; change nothing."})
+        branches[pierced["id"]]=self.registered_branch(pierced)
+        self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"call-review-2",
+                                             "tool_input":pierced["agent_payload"]},review_refused=True)
+        # A never-run reviewer with an uncommitted file in its worktree: never touched.
+        dirty=self.call("prepare",{**review,"request_id":"review-dirty","brief":"Review one more way; change nothing."})
+        branches[dirty["id"]]=self.registered_branch(dirty)
+        (self.target_of(dirty)/"notes.txt").write_text("UNCOMMITTED")
+        never_run=(placeholder,refused,committed,pierced,dirty)
+        # Turn 3 (iconv-tom-review-3): the replacement runs, passes and is integrated.
+        self.next_turn(3)
+        final=self.call("prepare",{**review,"request_id":"review-3","brief":"Review result.txt; change nothing. Final."})
+        self.start_fixture_worker(final,"todays-reviewer")
+        self.finish_fixture_worker("todays-reviewer","RICHOS_REVIEW "+json.dumps(
+            {"commit":commit,"verdict":"passed","checks":["synthetic reviewer observation"]}))
+        landed=self.call("integrate",{"worker_id":worker["id"],"reviewer_id":final["id"]})
+        self.assertTrue(landed["work_integrated"])
+        # Today this refused: "this assignment still has unresolved execution; reconcile it before completion".
+        done=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[worker["id"]]})
+        self.assertTrue(done["obligation_closed"])
+        self.assertEqual(landed["cleanup_pending"],[],"integrate tried to land reviews that never ran")
+        for ready in never_run:
+            record=self.receipt_of(ready)
+            self.assertEqual(record["status"],"blocked",ready["name"])
+            self.assertTrue(record["settled"]["reason"],ready["name"])
+            self.assertFalse(record.get("tool_use_id") or record.get("agent_id"),ready["name"])
+        # Empty: the worktree, the branch and the registration are gone.
+        for ready in (placeholder,refused,pierced):
+            self.assertFalse(self.target_of(ready).exists(),ready["name"])
+            self.assertFalse(self.branch_exists(branches[ready["id"]]),ready["name"])
+            self.assertIsNone(self.app.W.load_agent(self.app.W.named_key(self.session,ready["name"])),ready["name"])
+            self.assertEqual(self.receipt_of(ready)["settled"]["retained"],[],ready["name"])
+        # Holding work: the receipt settles, the worktree and branch are kept and reported.
+        for ready in (committed,dirty):
+            retained=self.receipt_of(ready)["settled"]["retained"]
+            self.assertEqual([r["path"] for r in retained],[str(self.target_of(ready))],ready["name"])
+            self.assertTrue(self.branch_exists(branches[ready["id"]]),ready["name"])
+        self.assertEqual(self.app.git(self.target_of(committed),"rev-parse","HEAD"),kept_commit)
+        self.assertEqual((self.target_of(committed)/"kept.txt").read_text(),"COMMITTED BY HAND")
+        self.assertEqual((self.target_of(dirty)/"notes.txt").read_text(),"UNCOMMITTED")
+
     def test_v2_01_a_session_ending_never_turns_an_unused_preparation_into_a_final_worker(self):
         """Hunt part 4 v2, V2-01: `refresh` marked an unknown, never-dispatched
         preparation `interrupted` when its provider session ended; that status
