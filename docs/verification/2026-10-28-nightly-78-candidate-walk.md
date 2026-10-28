@@ -7,12 +7,12 @@ check is B2, a missing boot-line rule; Echo retakes that proof separately.
 
 | Item | Result |
 |---|---|
-| Verdict | **IN PROGRESS** (this first commit holds identity and item 1 only) |
+| Verdict | **READY** (item 2 not walked live, a non-blocking gap: see item 2 and the verdict section) |
 | Identity | **PASS** (below) |
 | 1. Codex watcher (`ef7a26057`) | **PASS**, carried from my earlier run (deleted before it could commit) |
-| 2. Write checks in every app session (`20ce71c36`) | pending |
-| 3. Updater, changelog link, 1.2.5 bump (`8a2689030`, `9e64a48fc`) | pending |
-| Contrast | pending |
+| 2. Write checks in every app session (`20ce71c36`) | **NOT WALKED LIVE**: two full walks, both stopped at `checks`, the guest's account at 99% of its weekly limit |
+| 3. Updater, changelog link, 1.2.5 bump (`8a2689030`, `9e64a48fc`) | **PASS** light and dark |
+| Contrast | **PASS** light and dark, every row at or above 5.80:1 (table below) |
 
 ## Identity, checked before any claim: PASS
 
@@ -67,7 +67,7 @@ Found by my earlier run, via `codex-watch-walk.py` in guest `walk-6f77dcb76a39` 
 **Gaps, non-blocking:** no light and dark frames (the walk reads the ledger, not the screen); the
 `CODEX_CHANNELS` setting's entrance was not walked.
 
-## 3. Updater, changelog link and the 1.2.5 bump (`8a2689030`, `9e64a48fc`): light half PASS, dark half not yet walked
+## 3. Updater, changelog link and the 1.2.5 bump (`8a2689030`, `9e64a48fc`): PASS, light and dark
 
 Run `walk-78187db50c0a` (guest, steps-walk.py with `walkE.json`, exit at step 37 on a plan error of
 mine, see below). Frames and step records: `/Volumes/E1TB/tmp/claude/ray/e2-out/` (`steps.json`,
@@ -87,38 +87,83 @@ mine, see below). Frames and step records: `/Volumes/E1TB/tmp/claude/ray/e2-out/
   `CHANGELOG_KEY`, `opener.rs` allowlist); the old address stays allowlisted (source).
 - **My plan error, not the app's:** after Safari the Settings menu was still open and my next step
   pressed the Settings button again, so the dark-theme toggle was not on screen
-  (`ax: notfound`, step 38). A corrected plan, `walkF.json` (click Dark theme directly), was queued
-  but had not started when this handoff was forced.
-- **Not walked yet:** Settings version line and Check for updates in the dark theme.
+  (`ax: notfound`, step 38). A corrected plan, `walkF.json` (click Dark theme directly), ran next in
+  its own guest `walk-66a7733b8f6a` (`f-run.log`, `f-out/steps.json`, exit clean, guest deleted).
+- **Dark half: PASS.** `walkF` pressed Dark theme (the app turned dark, frame `f-03-home-dark.png`)
+  and reopened Settings (`f-04-settings-dark-again.png`, read live on screen). The Updates row reads
+  "RichOS 1.2.5-nightly.20261028.78 is up to date.", "Checked 1 minute ago.", the "Check for updates"
+  button and the "See what's new" link, all legible in dark. The link's target is theme-independent
+  and was walked in light.
 
-## Contrast so far (`qa/contrast.py`, `e-02-after-check.png`, light, 100% text size)
+## Contrast (`qa/contrast.py`, toolkit commit `5b4a0e013`; light `e-02-after-check.png`, dark `f-04-settings-dark-again.png`, 100% text size)
 
 | What | Size (source, `style.css`) | Light | Dark |
 |---|---|---|---|
-| "Updates" heading | 16px (not read from CSS, the row's title) | 18.07:1 | not yet walked |
-| "RichOS 1.2.5-nightly… is up to date." | 1rem = 16px (`.update-line`) | 18.07:1 | not yet walked |
-| "Checked just now." | 1rem = 16px (`.update-sub`) | 6.35:1 (#595E67 on #FDFCF8) | not yet walked |
-| "Check for updates" button label | 1rem = 16px (`.update-btn`) | 15.58:1 | not yet walked |
-| "See what's new" link | 1rem = 16px (`.update-notes`) | 6.65:1 (#715715 on #FDFCF8) | not yet walked |
+| "Updates" heading | 16px (not read from CSS, the row's title) | 18.07:1 | 12.06:1 (#DFE4EE on #182440) |
+| "RichOS 1.2.5-nightly… is up to date." | 1rem = 16px (`.update-line`) | 18.07:1 | 12.06:1 (#DFE4EE on #182440) |
+| "Checked just now." | 1rem = 16px (`.update-sub`) | 6.35:1 (#595E67 on #FDFCF8) | 5.80:1 (#989FAF on #182440) |
+| "Check for updates" button label | 1rem = 16px (`.update-btn`) | 15.58:1 | 14.78:1 (#DFE4EE on #0A1120) |
+| "See what's new" link | 1rem = 16px (`.update-notes`) | 6.65:1 (#715715 on #FDFCF8) | 6.36:1 (#C2A35C on #182440) |
 
-All light values clear 4.5:1 and the 16px floor.
+All values, light and dark, clear 4.5:1 at 16px. Dark values were measured on the guest's own live
+frame (`walk-66a7733b8f6a`, 1680x1050, regions read from the live accessibility positions); the
+"Checked" line reads "Checked 1 minute ago." in the dark frame and "Checked just now." in the light one.
 
-## Item 2: write checks in every app session (`20ce71c36`): result not read
+## Item 2: write checks in every app session (`20ce71c36`): not walked live, blocked by the account's quota
 
-Run `walk-27568a1d4c61` (`write-checks-walk.py`, `--seed-home` on an empty home first) reached
-`identity: PASS`, `first-run: PASS`, `connect: PASS`, `config: PASS` in the log
-(`/Volumes/E1TB/tmp/claude/ray/wc2-run.log`) before this handoff was forced. Its `checks` step (the
-secret-key write and the British-spelling write) and the final report in
-`/Volumes/E1TB/tmp/claude/ray/wc2-out/report.json` were not read by me. Not claimed PASS.
+Two complete walks of `write-checks-walk.py` (the whole walk each time, never `checks` alone, each in
+a fresh guest with `--seed-home` on an empty home, the candidate zip and engine tarball,
+`--expect-sha f1de705bab2ea4d366c0dff996f635bba9599280`):
 
-## Handoff (forced by the Claude-quota gate)
+| Run | Guest | Output | identity | first-run | connect | config | checks |
+|---|---|---|---|---|---|---|---|
+| 1 | `walk-27568a1d4c61` | `wc2-out/report.json` | PASS | PASS | PASS | PASS | FAIL after 616 s |
+| 2 | `walk-50b6fc33522a` | `wc3-out/report.json` | PASS | PASS | PASS | PASS | FAIL after the 600 s limit |
 
-**Verdict: NOT YET DECIDED.** Nothing found so far is a hole a user could hit. Remaining:
+(A third start, `walk-633b8ca099ac`, was stopped by my own 600 s background timeout during `checks`;
+I removed its clone with `stop.sh` and it is not counted.)
 
-1. Read `wc2-out/report.json` and the end of `wc2-run.log` for item 2's `checks` step.
-2. Read `f-run.log` and `f-out/` (`walkF.json` dark walk), compute dark contrast with
-   `qa/contrast.py` on `f-01-settings-dark.png` and `f-02-after-check-dark.png`, fill the table.
-3. Confirm both guests are gone: `slots.py status`, no `walk-` guest left (run-walk.py quits and
-   deletes on its own; I stopped nothing by hand).
-4. Fill the first-table verdict line, delete `/Volumes/E1TB/tmp/claude/ray`, run the end-of-task
-   `git merge main` and `proof-run.py`.
+- **What the app did.** In both runs the company, the connected folder and `DIALECT_TARGET="en-US"`
+  were created and the job was typed. Rich's turn started (`TurnStarted`, conversation ledger) and
+  the app then posted its own notice: "Your Claude account has used **99%** of this week's limit. It
+  is fresh again tomorrow at 5:00 AM. If it runs out before then, the team pauses until it is." That
+  notice arrived in each run about 14 s to 64 s after the prompt. After it, no reply from Rich, no
+  `PreToolUse` or `PostToolUse` record and no teammate call reached the end of the 10-minute window
+  (`observed-checks.json`: `teammate_calls` 0, `secret_write_asked` 0, `dialect` "neither").
+- **Why it is not a finding against the candidate.** The guest runs on a copy of this Mac's Claude
+  login and that account reads 99% used. Item 1 got Rich's model reply at 12:30Z the same day, so
+  the model path worked when the account had room. The silence after the quota notice is what the
+  product says it does at that limit. This is consistent with a quota stop; I could not prove the
+  cause beyond that, because the guest's model call leaves no record of its own.
+- **What this does not show.** Nothing in either run shows a write wrongly allowed or wrongly refused,
+  and nothing shows a teammate with an explicit `tools:` list failing to start. They are unobserved,
+  not clear. The secret-key refusal, the British-to-American spelling guard and the `tools:` start
+  are NOT verified on the live app.
+- **Re-walk when the limit resets** (the notice says tomorrow 5:00 AM): the same two commands, `--seed-home` then
+  `run-walk.py ... -- write-checks-walk.py --out DIR --expect-sha f1de705...`, with a `--wait` of 900 and a
+  caller timeout above 1,400 s (the walk holds a guest for about 11 to 13 minutes).
+
+## Verdict: READY, with one named gap
+
+Nothing I found is a hole a user could hit in normal use from these changes: identity matches the
+build commit in every guest; the Codex watcher delivers each entry once with no replay after a
+relaunch; the Settings version line, Check for updates and the changelog link work in light and
+dark; every checked text row clears 4.5:1 in both themes (lowest 5.80:1).
+
+**The gap, stated so the publisher can weigh it:** item 2 (`20ce71c36`, the write checks) was not
+seen working on the live app. I rate it non-blocking under the brief's rule (only a found hole blocks)
+because the stop came from the account's quota, not from anything the candidate did, but it is an
+unverified change to what a teammate may write. If the CEO wants it seen before publishing, the
+answer is a re-walk after the limit resets, not a different build.
+
+Other non-blocking notes: item 1 has no light/dark frames and its `CODEX_CHANNELS` entrance was not
+walked; the boot proof's one failing gui-boot check (B2, a missing boot-line rule) is Echo's to retake
+and was not rerun here.
+
+## Cleanup, checked
+
+Guests: `run-walk.py` quit the app by its recorded pid, stopped the VM and deleted the clone in every
+run (`clean: app quit, VM stopped, clone deleted, state removed`); the one I interrupted I cleaned
+with `stop.sh` on its own name. `slots.py status` shows `guest.lock: free` and `guest-2.lock: free`,
+no `run-walk.py` or `write-checks-walk.py` of mine is running and only `richos-base` remains in the
+VM store. Scratch `/Volumes/E1TB/tmp/claude/ray` deleted after this record was written.
