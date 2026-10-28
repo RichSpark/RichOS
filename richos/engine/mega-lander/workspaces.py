@@ -172,14 +172,25 @@ def other_registries(errors=None):
     Found the way the engine already finds app state, never from a fixed path:
     $RICHOS_APP_STATE when set (an app-launched engine), and the app's data
     folder under the CURRENT home (scratch-reaper's app_registry_relpath), so
-    a terminal beside the app sees the app's registries too."""
+    a terminal beside the app sees the app's registries too.
+
+    ONLY UNDER THE CURRENT HOME (2026-10-28). $RICHOS_APP_STATE is inherited:
+    a check run from an app shell that gives its engine a sandbox HOME still
+    carried the operator's real app state, so the sandbox's sweep read the
+    real registries, and one stray record there (agents/wait-regression.json)
+    blocked every sandboxed sweep (workspace-spec-fourteen C3). A HOME is the
+    machine user whose registries these are; app state outside it is not."""
     own = realpath(state_dir())
     home = os.path.expanduser("~")
     cands = [os.path.join(home, ".claude", "state", "workspaces")]
     cfg = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
     if cfg:
         cands.append(os.path.join(cfg, "state", "workspaces"))
-    roots = [(os.environ.get("RICHOS_APP_STATE") or "").strip(),
+    app_state = realpath(os.environ.get("RICHOS_APP_STATE") or "")
+    home_real = realpath(home)
+    if app_state and not (home_real and app_state.startswith(home_real.rstrip(os.sep) + os.sep)):
+        app_state = ""
+    roots = [app_state,
              os.path.join(home, "Library", "Application Support", APP_IDENTIFIER, "engine-state")]
     for root in roots:
         if not root:
@@ -7197,8 +7208,8 @@ def _delete_chain(chain, why, processes=None, deadline=None, memo=None):
     # A member another registry holds (registry_guard) has nothing of its
     # stopped here; its own _delete below withdraws or holds it.
     memo = {} if memo is None else memo
-    allw = [(r, w) for r in chain if not registry_guard(r, memo)[0]
-            for w in live_workspaces(r) if w.get("path")]
+    allw = [(r, w) for r in chain for w in live_workspaces(r) if w.get("path")]
+    allw = [(r, w) for r, w in allw if not registry_guard(r, memo)[0]]
     # Past the deadline nothing is stopped here (V2-03): each _delete below is
     # handed no shutdown result, sees the deadline and records a deferral.
     stopped = processes if processes is not None else (

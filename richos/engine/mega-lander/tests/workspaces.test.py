@@ -4278,6 +4278,26 @@ class AnyRegistryOnThisMachineCounts(_AppRegistryFixture):
                         "the withdrawal was not recorded")
         self.assertFalse([e for e in evs if e.get("event") == "landed" and e.get("key") == key])
 
+    def test_app_state_outside_this_home_is_not_this_machine_users(self):
+        """An inherited $RICHOS_APP_STATE outside HOME (a sandbox run from an
+        app shell) is not read: its damaged record would otherwise block every
+        sandboxed sweep. One under HOME is read."""
+        outside = os.path.join(self.env.root, "operator-app-state")
+        inside = os.path.join(self.env.home, "dev-app-state")
+        for root in (outside, inside):
+            os.makedirs(os.path.join(root, "workspaces", "p1", "agents"))
+            with open(os.path.join(root, "workspaces", "p1", "agents", "stray.json"), "w") as f:
+                f.write('{"key": "stray"}')
+        with patch.dict(os.environ, {"RICHOS_APP_STATE": outside}):
+            self.assertEqual(ws.registrations_elsewhere()[2], [])
+            stray = os.path.join(self.env.root, "stray-wt2")
+            run("git", "-C", self.entity, "worktree", "add", "-q", stray, "-b", "cc/stray2")
+            ws.pending(self.sid, self.entity, scan=True, auto=False)
+            self.assertEqual([r["name"] for r in ws.all_agents() if r.get("orphan")], ["orphan-stray-wt2"])
+        with patch.dict(os.environ, {"RICHOS_APP_STATE": inside}):
+            self.assertIn(os.path.realpath(os.path.join(inside, "workspaces", "p1")), ws.other_registries())
+            self.assertTrue(ws.registrations_elsewhere()[2], "a damaged record under HOME is read")
+
     def test_a_workspace_two_registries_hold_is_deleted_by_neither(self):
         """A registration HERE does not license deleting what another registry
         also holds: _delete holds, records why and retries (point 13), so a
