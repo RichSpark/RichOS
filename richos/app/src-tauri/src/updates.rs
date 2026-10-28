@@ -468,7 +468,12 @@ where
             Err(e) => last = Some(e),
         }
     }
-    Err(last.unwrap_or_else(|| tauri_plugin_updater::Error::Network(format!("no address to download {announced} from"))))
+    // `download_addresses` always names at least the announced address; were it ever empty, the
+    // archive is fetched as announced rather than refused.
+    match last {
+        Some(e) => Err(e),
+        None => fetch(announced.clone()).await,
+    }
 }
 
 /// The progress callbacks for ONE download attempt, so an attempt that follows a failed one counts
