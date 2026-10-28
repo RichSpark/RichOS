@@ -453,6 +453,22 @@ declare_rules() {
   # started at launch. Its "could not start" form stays UNACCOUNTED on purpose.
   routine '^\[richos\] second review: monitoring started \(process [1-9][0-9]*\)$' \
     'the review watcher is running, and its pid; the could-not-start form stays unaccounted'
+  # THE CODEX WATCHER (main.rs `ensure_app_codex_watch`, 5de81da8c / ef7a26057, gap X): printed
+  # only when it started at launch, once per boot. It is configured, not discovered: N is the
+  # number of channel folders the user's CODEX_CHANNELS setting names, or the two conventional
+  # ones when it sets none (`codex_watch.rs` `channel_folders`), counted whether or not the folder
+  # exists. So the healthy synthetic machine, which sets nothing, prints `watching 2` -- that is a
+  # statement about configuration and a running pid, and carries no claim a folder was found. `ensure`
+  # returns Some(pid) only for a non-empty list, so N is never 0. Nightly 78's proof failed B2
+  # on exactly this line (run 20261028T111233Z-41017cf2) because the watcher landed with no rule here.
+  #
+  # ONLY THE RUNNING FORM. Its three siblings stay UNACCOUNTED on purpose: "the watcher could not
+  # start" and "not watching yet, the engine is not verified" are a watcher that is not running,
+  # and "no Codex channel is set" is printed both for a user who set the setting empty AND for a
+  # launch with no `$HOME` (`channel_folders` returns nothing without a user folder), so it cannot
+  # tell a choice from the failure the declared no-`$HOME` case below is about.
+  routine '^\[richos\] Codex watch: watching [1-9][0-9]* channel\(s\) \(process [1-9][0-9]*\)$' \
+    'the Codex watcher is running on the configured channels, and its pid; the could-not-start, engine-not-verified and no-channel forms stay unaccounted'
 
   # -- the declared gaps ------------------------------------------------------------------
   gap 'RICHOS_SERVICE_BIN' \
