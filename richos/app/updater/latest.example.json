@@ -1,12 +1,12 @@
 {
-  "//": "AN EXAMPLE, NOT A LIVE MANIFEST. See app/RELEASING.md and app/UPDATES.md. This is the exact shape tauri-plugin-updater 2.11.0 parses (src/updater.rs, `RemoteRelease`'s Deserialize) and the exact shape app/scripts/package-app.sh --updater writes as latest.json. It is committed so the format has a home in the repository rather than only in a build directory; nothing fetches it, and the signature below is truncated. The url is the real shape a release publishes to: the asset lives under the TAG, while the endpoint every installed copy fetches is the unchanging https://github.com/WebDevBooster/richos/releases/latest/download/latest.json. An Intel build adds a darwin-x86_64 entry beside this one; one document carries every platform.",
+  "//": "AN EXAMPLE, NOT A LIVE MANIFEST. See app/RELEASING.md and app/UPDATES.md. This is the exact shape tauri-plugin-updater 2.11.0 parses (src/updater.rs, `RemoteRelease`'s Deserialize) and the exact shape app/scripts/package-app.sh --updater writes as latest.json. It is committed so the format has a home in the repository rather than only in a build directory; nothing fetches it, and the signature below is truncated. The url is the real shape a release publishes to: the asset lives under the TAG, while the endpoint every installed copy fetches is the unchanging https://github.com/RichSpark/RichOS/releases/latest/download/latest.json. An Intel build adds a darwin-x86_64 entry beside this one; one document carries every platform.",
   "version": "0.1.1",
   "notes": "Faster launch, and the settings menu now says what version you are running.",
   "pub_date": "2026-08-31T21:04:11Z",
   "platforms": {
     "darwin-aarch64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSQzdhMmgrYkM4cGsxIDwtLSBUUlVOQ0FURUQgSU4gVEhJUyBFWEFNUExFOiB0aGUgcmVhbCBmaWVsZCBpcyB0aGUgV0hPTEUgY29udGVudHMgb2YgUmljaE9TLmFwcC50YXIuZ3ouc2lnLCBiYXNlNjQsIG9uIG9uZSBsaW5lLgo=",
-      "url": "https://github.com/WebDevBooster/richos/releases/download/v0.1.1/RichOS.app.tar.gz"
+      "url": "https://github.com/RichSpark/RichOS/releases/download/v0.1.1/RichOS.app.tar.gz"
     }
   }
 }
