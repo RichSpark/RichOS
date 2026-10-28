@@ -99,7 +99,7 @@ check() { if [ "$2" -eq 0 ]; then ok "$1"; else bad "$1 -- $3"; fi; }
 has()   { printf '%s' "$1" | grep -qF -- "$2"; }
 
 # --- isolation -------------------------------------------------------------
-unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT RICHOS_ENGINE_ROOT CODEX_HOME
+unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT RICHOS_ENGINE_ROOT CODEX_HOME RICHOS_APP_STATE
 mkdir -p "$SB/bin" "$SB/state" "$SB/calls" "$SB/tmp" "$SB/claude" "$SB/codex-sessions" \
          "$SB/workspaces/agents" "$SB/workspaces/done"
 export SECOND_REVIEW_STATE_DIR="$SB/state"

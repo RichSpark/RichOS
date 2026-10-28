@@ -834,12 +834,22 @@ def admit(wait_seconds, say):
         time.sleep(min(ADMISSION_SAMPLE_SECONDS, max(0.0, deadline - time.monotonic())))
 
 
-def quota_hold(engine_root):
-    """(held, reading). His 93% rule, read through quota-watch's own --once."""
+def quota_hold(engine_root, accounts=""):
+    """(held, reading). His 93% rule, read through quota-watch's own --once.
+
+    `accounts` is the app's account list (--accounts, App mode): its folder is the app's data
+    folder, whose engine-state/claude-quota.json is the app's reading of the account in use.
+    review-watch's environment names neither CLAUDE_CONFIG_DIR nor RICHOS_APP_STATE, so without
+    this the child read Account 1's figures whichever account was in use and deferred reviews on
+    them (richos-hq follow-ups.md, 7fed0bef)."""
     cmd = (os.environ.get("SECOND_REVIEW_QUOTA_CMD") or "").strip()
     argv = [cmd] if cmd else ["bash", os.path.join(engine_root, "scripts", "quota-watch.sh"), "--once"]
+    env = None
+    if accounts:
+        env = dict(os.environ)
+        env["RICHOS_APP_STATE"] = os.path.join(os.path.dirname(os.path.abspath(accounts)), "engine-state")
     try:
-        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, "quota reading unavailable (%s)" % exc.__class__.__name__
     text = p.stdout.decode("utf-8", "replace").strip().splitlines()
@@ -1494,7 +1504,7 @@ def _review_owned(a, w):
         return finish(None, raw)
 
     # Claude: the reviewer of Codex's work, and the fallback.
-    held, reading = quota_hold(a.engine_root)
+    held, reading = quota_hold(a.engine_root, a.accounts)
     row["quota"] = reading
     if held:
         row["why"] = ("the quota hold is in force (his 93%% rule; %s), so no Claude review started; it waits "

@@ -3,6 +3,9 @@
 # Shared weekly policy integration. Fake redemption only; never real credentials.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# The app's state is never read from a test unless a case sets it (a test must not read the
+# LIVE claude-quota.json; richos-hq follow-ups.md 7fed0bef, R3).
+unset RICHOS_APP_STATE
 PYTHONPATH="$HERE/lib${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
 import contextlib, io, json, types, unittest
 from unittest.mock import patch
@@ -158,6 +161,50 @@ class Weekly(unittest.TestCase):
         for status in ({'error':'unavailable'},{'actionError':'uncertain'},{'resets':{'approval':None}}):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(weekly.handle(args,reading(),NOW,workers(['worker']),status,lambda:'below'),(True,True))
+
+class AppReading(unittest.TestCase):
+    """richos-hq follow-ups.md 7fed0bef: for the app, the reading is the app's own of the account in
+    use, never a probe and never the status-line file, which hold another account's figures."""
+    def setUp(self):
+        import tempfile
+        self.dir=tempfile.TemporaryDirectory(); self.state=self.dir.name
+    def tearDown(self): self.dir.cleanup()
+    def publish(self, checked, five=28, week=3, in_use={'id':'2','label':'Work'}):
+        view={'windows':[{'id':'five_hour','label':'Five-hour','usedPercent':five,'resetsAt':(NOW+3600)*1000,'durationMs':18000000},
+                         {'id':'seven_day','label':'Weekly','usedPercent':week,'resetsAt':(NOW+86400)*1000,'durationMs':604800000}],
+              'checkedAt':checked*1000,'state':'fresh','resets':{'weeklyUsed':None},
+              'accounts':[{'id':'1','label':'Home','inUse':False,'windows':[{'id':'seven_day','usedPercent':99}]}]}
+        if in_use: view['inUse']=in_use
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+    def read(self):
+        a=types.SimpleNamespace(payload='/nonexistent/statusline-payload.json',engine_root='fixture')
+        with patch.dict(watcher.os.environ,{'RICHOS_APP_STATE':self.state}), \
+             patch.object(watcher,'read_get_usage',side_effect=AssertionError('probed in the app')), \
+             patch.object(watcher,'read_reading',side_effect=AssertionError('read the status line in the app')):
+            return watcher.read_source(a,NOW)
+    def test_the_in_use_account_is_read_and_named(self):
+        self.publish(NOW-30)
+        r=self.read()
+        self.assertEqual((r['state'],r['used'],r['source']),('ok',28,'the app (account Work)'))
+        self.assertEqual(weekly.weekly(r)['used'],3); self.assertEqual(r['age'],30)
+        self.assertFalse(weekly.held(r,NOW))
+        self.assertEqual(watcher.classify(r,93,300)[0],'below')
+    def test_an_old_app_file_names_its_accounts_row(self):
+        self.publish(NOW-30,in_use=None)
+        self.assertEqual(self.read()['source'],'the app (account in use)')
+    def test_stale_missing_or_unreadable_is_unknown_never_a_probe(self):
+        self.publish(NOW-3600)
+        self.assertEqual(watcher.classify(self.read(),93,300)[0],'unknown')
+        import os; os.remove(self.state+'/claude-quota.json')
+        self.assertEqual(self.read()['state'],'missing')
+        with open(self.state+'/claude-quota.json','w') as f: f.write('{not json')
+        self.assertEqual(self.read()['state'],'malformed')
+        self.publish(0)
+        self.assertEqual(self.read()['state'],'missing')
+    def test_the_app_never_ticks_the_shared_reset_record(self):
+        with patch.dict(weekly.os.environ,{'RICHOS_APP_STATE':self.state}), \
+             patch.object(weekly.subprocess,'run',side_effect=AssertionError('ticked from the app')):
+            self.assertEqual(weekly.reset_tick('/engine'),{'status':weekly.APP_RUNS_RESET})
 
 unittest.main()
 PY

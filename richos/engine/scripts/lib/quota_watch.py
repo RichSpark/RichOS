@@ -647,8 +647,77 @@ def report_login_failure(engine_root, text):
     return r.returncode == 0
 
 
+def app_state():
+    """The RichOS app's state folder when this runs for the app (RICHOS_APP_STATE), else ""."""
+    return (os.environ.get("RICHOS_APP_STATE") or "").strip()
+
+
+def read_app(state, now):
+    """THE ACCOUNT IN USE, FROM THE APP ITSELF (richos-hq follow-ups.md, 7fed0bef). Never raises.
+
+    Inside the app, a `claude` probe or ~/.claude/statusline-payload.json reads whichever account
+    this process's environment happens to name, not the one the app's work runs on: on 2026-10-28
+    the app ran on Work (10% of its week) while a lead deferred work on Home's 99. The app publishes
+    the account in use at the top level of <state>/claude-quota.json (quota.rs `view_at`), so in
+    app context that file is the only source. Missing, unreadable or old, it is reported missing,
+    malformed or stale through the same age rules as the status-line file, never replaced by a
+    probe. The same shape as read_reading()."""
+    path = os.path.join(state, "claude-quota.json")
+    r = {"path": path, "state": "", "why": "", "used": None, "resets_at": None,
+         "age": None, "ended": False, "source": "the app"}
+    try:
+        with open(path, "rb") as fh:
+            data = json.loads(fh.read(262145).decode("utf-8"))
+    except FileNotFoundError:
+        r["state"], r["why"] = "missing", "the app has published no usage reading at %s" % path
+        return r
+    except OSError as e:
+        r["state"], r["why"] = "unreadable", "cannot read %s: %s" % (path, e)
+        return r
+    except (ValueError, UnicodeDecodeError) as e:
+        r["state"], r["why"] = "malformed", "%s is not valid JSON (%s)" % (path, e.__class__.__name__)
+        return r
+    if not isinstance(data, dict):
+        r["state"], r["why"] = "malformed", "%s is not the app's usage reading" % path
+        return r
+    who = data.get("inUse") if isinstance(data.get("inUse"), dict) else None
+    if who is None:  # an app older than the field: its accounts row, or its one account's name
+        who = next((x for x in data.get("accounts") or [] if isinstance(x, dict) and x.get("inUse")), None)
+    label = (who or {}).get("label") or data.get("firstLabel") or "in use"
+    label = "".join(c for c in str(label)[:80] if c.isprintable())
+    r["account"] = {"id": str((who or {}).get("id") or "1"), "label": label}
+    r["source"] = "the app (account %s)" % label
+    windows = []
+    for w in data.get("windows") or []:
+        if not isinstance(w, dict) or not isinstance(w.get("id"), str):
+            continue
+        used, reset = w.get("usedPercent"), w.get("resetsAt")
+        if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used) or not 0 <= used <= 100:
+            continue
+        reset = int(reset // 1000) if isinstance(reset, (int, float)) and not isinstance(reset, bool) and reset > 0 else None
+        windows.append({"id": w["id"], "label": "".join(c for c in str(w.get("label") or w["id"])[:80] if c.isprintable()),
+                        "used": used, "resets_at": reset})
+    r["windows"] = windows
+    checked = data.get("checkedAt")
+    if isinstance(checked, bool) or not isinstance(checked, (int, float)) or checked <= 0:
+        r["state"], r["why"] = "missing", "the app has no reading of account %s yet" % label
+        return r
+    r["age"] = max(0.0, now - checked / 1000.0)
+    five = next((w for w in windows if w["id"] == "five_hour"), None)
+    if five is None or five["resets_at"] is None:
+        r["state"], r["why"] = "malformed", "the app's reading of account %s carries no five-hour window" % label
+        return r
+    r["state"], r["used"], r["resets_at"] = "ok", five["used"], five["resets_at"]
+    r["ended"] = five["resets_at"] <= now
+    return r
+
+
 def read_source(a, now):
-    """get_usage first; the status-line file when it fails, saying why."""
+    """get_usage first; the status-line file when it fails, saying why. For the app
+    (RICHOS_APP_STATE set): the app's own reading of the account in use, and nothing else."""
+    state = app_state()
+    if state:
+        return read_app(state, now)
     g = read_get_usage(now)
     if g["state"] == "ok":
         return g
@@ -857,7 +926,9 @@ def mode_status(a, now):
         print("  threshold : UNKNOWN: %s is %s in %s" % (CONFIG_KEY, a.threshold_problem, a.config or "(no config)"))
     else:
         print("  threshold : %s%%  (%s=%s in %s)" % (fmt_pct(a.threshold), CONFIG_KEY, a.threshold_raw, a.config))
-    if r.get("fallback_why"):
+    if app_state():
+        print("  source    : %s, published at %s (the account in use; no probe in the app)" % (r["source"], r["path"]))
+    elif r.get("fallback_why"):
         print("  source    : the status-line file %s, because %s" % (a.payload, r["fallback_why"]))
     else:
         print("  source    : Claude Code's get_usage (%s), fresh at this read" % claude_binary())
@@ -866,7 +937,8 @@ def mode_status(a, now):
     else:
         print("  reading   : %s%% of the five-hour window" % fmt_pct(r["used"]))
         print("  age       : %s%s" % (span(r["age"] or 0), " (the payload refreshes only when a status line renders)"
-                                       if r.get("fallback_why") else " (read at this poll)"))
+                                       if r.get("fallback_why") else " (the app's last check)" if app_state()
+                                       else " (read at this poll)"))
         if r["ended"]:
             print("  window    : ENDED at %s; this reading describes a window that no longer exists"
                   % hhmm(r["resets_at"]))
@@ -1985,7 +2057,8 @@ def mode_notice(a, now):
         lines.append("  THE WATCHER CANNOT RUN HERE: %s is %s in %s. Declare it there, e.g. %s=93."
                      % (CONFIG_KEY, a.threshold_problem, a.config or "(no orchestration.config)", CONFIG_KEY))
     else:
-        r = read_reading(a.payload, now)
+        # The app's own reading in app context (read_app, a file read, no process), else the file.
+        r = read_app(app_state(), now) if app_state() else read_reading(a.payload, now)
         verdict, why = rule_verdict(r, a.threshold, a.stale, now)
         lines.append("  Threshold: %s=%s (%s)" % (CONFIG_KEY, a.threshold_raw, a.config))
         now_line = describe(r, a.threshold, now)
