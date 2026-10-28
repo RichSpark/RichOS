@@ -73,7 +73,7 @@ const TRUST_DIR = path.join(__dirname, 'trust');
 // The placeholder it replaced (`mailto:probe@richos.invalid`) was worse than useless: Google's FCM
 // accepts a fabricated subject, Apple returns BadJwtToken for one, so check 4 would have failed on his
 // iPhone for a reason that has nothing to do with the phone.
-const VAPID_SUBJECT_DEFAULT = 'https://github.com/WebDevBooster/richos';
+const VAPID_SUBJECT_DEFAULT = 'https://github.com/RichSpark/RichOS';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || VAPID_SUBJECT_DEFAULT;
 
 // An unguessable code, if one is set. The plan's own doctrine (§2, "one device set, everything
@@ -583,7 +583,7 @@ const announce = () => {
 	log(`VAPID subject:    ${VAPID_SUBJECT}`);
 	if (!process.env.VAPID_SUBJECT) {
 		log('  VAPID_SUBJECT is not set, so the public project page is being used —');
-		log('  https://github.com/WebDevBooster/richos. RFC 8292 §2.1 allows a mailto: or an https:');
+		log('  https://github.com/RichSpark/RichOS. RFC 8292 §2.1 allows a mailto: or an https:');
 		log('  URL and Apple accepts either; a personal address is never baked into a build, a config');
 		log('  default or a record, so the project URL is the default on purpose. Nothing to fix.');
 		log('');

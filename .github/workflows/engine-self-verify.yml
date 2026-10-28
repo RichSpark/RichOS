@@ -439,7 +439,7 @@ jobs:
     # say the longest shard was bounded by reconcile-terminal-worktrees.test.sh
     # at 940 s, "so ~16 minutes is the expected wall clock and 60 is 3.7x it".
     # That was true when written and had been overtaken: measured on run #216
-    # with `gh api repos/WebDevBooster/richos/actions/runs/34945072758/jobs`,
+    # with `gh api repos/RichSpark/RichOS/actions/runs/34945072758/jobs`,
     # the longest shard took 3146 s — 52.4 minutes, 87% of the ceiling this
     # number was set to be 3.7x of.
     #

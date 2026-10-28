@@ -262,7 +262,7 @@ function run(file, args, input) {
 	// naive search of the whole log for "mailto:" fails on the sentence saying why one is not used.
 	const subjectLine = (/VAPID subject:\s*(\S+)/.exec(serverLog.join('')) || [])[1] || '';
 	check('the VAPID subject is the public project page, never a personal address',
-		subjectLine === 'https://github.com/WebDevBooster/richos', `subject is ${JSON.stringify(subjectLine)}`);
+		subjectLine === 'https://github.com/RichSpark/RichOS', `subject is ${JSON.stringify(subjectLine)}`);
 	check('nothing in the boot output looks like an email address',
 		!/[\w.+-]+@[\w-]+\.[\w.]+/.test(serverLog.join('')),
 		(/[\w.+-]+@[\w-]+\.[\w.]+/.exec(serverLog.join('')) || ['none'])[0]);

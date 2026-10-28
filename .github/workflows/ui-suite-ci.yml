@@ -30,7 +30,7 @@ name: ui-suite-ci
 # job. So `ci-status.sh` reported "OVER BUDGET: run #76 took 40m33s against a
 # declared ceiling of 25m" — true, and about a workflow that no longer exists.
 # Measured with
-# `gh api 'repos/WebDevBooster/richos/actions/workflows/ui-suite-ci.yml/runs?branch=main&per_page=30'`:
+# `gh api 'repos/RichSpark/RichOS/actions/workflows/ui-suite-ci.yml/runs?branch=main&per_page=30'`:
 #
 #   sharded   #87 488s  #86 748s  #85 597s  #84 706s  #83 872s  #82 613s
 #   serial    #78 1880s #76 2433s #72 1673s #70 1978s #69 2035s #68 2054s

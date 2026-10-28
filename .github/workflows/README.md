@@ -222,7 +222,7 @@ GitHub can refuse to run any workflow whose actions are not pinned, rather than
 trusting everyone to remember. On **2026-09-04** the repository reports:
 
 ```
-$ gh api repos/WebDevBooster/richos/actions/permissions
+$ gh api repos/RichSpark/RichOS/actions/permissions
 {"enabled":true,"allowed_actions":"all","sha_pinning_required":false}
 ```
 

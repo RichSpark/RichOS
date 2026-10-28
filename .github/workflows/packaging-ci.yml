@@ -43,7 +43,7 @@ name: packaging-ci
 #      five switched off on 2026-09-01 over a billing block. Going public made Actions free
 #      and the other four were switched back on; this one was not. Measured 2026-09-10:
 #
-#        gh api repos/WebDevBooster/richos/actions/workflows \
+#        gh api repos/RichSpark/RichOS/actions/workflows \
 #          --jq '.workflows[] | "\(.state)\t\(.name)"'
 #        -> disabled_manually  packaging-ci      (every other workflow: active)
 #
@@ -123,7 +123,7 @@ name: packaging-ci
 # slow and hollow axes. Both numbers below are measured, not chosen.
 #
 # WALL CLOCK on main, over the 15 completed runs the API returns
-# (`gh api 'repos/WebDevBooster/richos/actions/workflows/packaging-ci.yml/runs?branch=main&per_page=30'`):
+# (`gh api 'repos/RichSpark/RichOS/actions/workflows/packaging-ci.yml/runs?branch=main&per_page=30'`):
 # the seven GREEN runs span 252 s to 690 s, median 448 s. The failing runs are
 # faster, not slower — they fail early — so the ceiling is set off the green
 # side, which is the only side that describes a healthy run. 15m is the 690 s
