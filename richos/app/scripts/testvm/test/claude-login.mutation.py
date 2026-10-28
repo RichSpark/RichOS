@@ -47,6 +47,18 @@ MUTANTS = [
      '    if [ ! -d "$STATE" ]; then',
      '    if false; then',
      "keep hands the guest each token"),
+    ("primary-ignores-in-use", "claude-login.sh",
+     '      HOST_SERVICE="$CLAUDE_KC_PREFIX-$(sha8 "$IN_USE_FOLDER")"\n',
+     '',
+     "the guest's primary login is the account the app has IN USE"),
+    ("renew-inherits-callers-folder", "claude-login.sh",
+     '  elif [ -z "$ACCOUNT_ITEM" ]; then\n    unset CLAUDE_CONFIG_DIR\n',
+     '  elif false; then\n    :\n',
+     "renewed under its OWN folder"),
+    ("unreadable-list-guesses", "claude-login.sh",
+     '  if ! IN_USE="$(in_use_account)"; then',
+     '  if ! IN_USE="$(in_use_account)" && false; then',
+     "never a guess at the account"),
 ]
 
 

@@ -894,8 +894,14 @@ FAKE_CRED='{"claudeAiOauth":{"accessToken":"not-a-real-token-0123456789","refres
 cat > "$TMP/host-security.sh" <<PLACEHOLDER
 #!/usr/bin/env bash
 # find-generic-password [-s svc] [-a acct] [-w]
-WANT_W=0
-for a in "\$@"; do [ "\$a" = "-w" ] && WANT_W=1; done
+WANT_W=0; SVC=""; PREV=""
+for a in "\$@"; do
+  [ "\$a" = "-w" ] && WANT_W=1
+  [ "\$PREV" = "-s" ] && SVC="\$a"
+  PREV="\$a"
+done
+# WHICH host item was asked for, by name: one line per call, never a value.
+[ -n "\${HOST_SECURITY_SERVICES_LOG:-}" ] && printf '%s\n' "\$SVC" >> "\$HOST_SECURITY_SERVICES_LOG"
 [ -n "\${HOST_SECURITY_LOGGED_OUT:-}" ] && exit 44
 if [ "\$WANT_W" -eq 1 ]; then
   if [ -n "\${HOST_SECURITY_CREDENTIAL_FILE:-}" ]; then
@@ -915,7 +921,8 @@ chmod 755 "$TMP/host-security.sh"
 # Mac renewing its login (the credential file and the item's write time change).
 cat > "$TMP/host-renew.sh" <<'RENEW'
 #!/usr/bin/env bash
-printf 'renew\n' >> "${HOST_RENEW_LOG:-/dev/null}"
+# The folder it was asked under, so a case can tell which account renewed.
+printf 'renew %s\n' "${CLAUDE_CONFIG_DIR:-}" >> "${HOST_RENEW_LOG:-/dev/null}"
 if [ -n "${HOST_RENEW_TO:-}" ] && [ -n "${HOST_SECURITY_CREDENTIAL_FILE:-}" ]; then
   cp "$HOST_RENEW_TO" "$HOST_SECURITY_CREDENTIAL_FILE"
   [ -n "${HOST_SECURITY_MDAT_FILE:-}" ] && date -u +%Y%m%d%H%M%S > "$HOST_SECURITY_MDAT_FILE"
@@ -924,6 +931,10 @@ exit 0
 RENEW
 chmod 755 "$TMP/host-renew.sh"
 export TESTVM_HOST_CLAUDE_RENEW="$TMP/host-renew.sh"
+# THE APP'S ACCOUNT LIST, isolated for the WHOLE suite: claude-login.sh follows
+# the account the app has in use, and no case may read this Mac's real record.
+# A path that does not exist is "no list", which is Home, as it always was.
+export TESTVM_CLAUDE_ACCOUNTS="$TMP/no-claude-accounts.json"
 login_env() {
   printf '%s\n' "TESTVM_HOST_SECURITY=$TMP/host-security.sh"
   printf '%s\n' "TESTVM_HOST_CLAUDE_RENEW=$TMP/host-renew.sh"
@@ -1093,6 +1104,112 @@ cred_at() {  # <file> <token> <seconds-from-now>
 KEEP_HOME="/Users/admin/testvm/richos-test-a/home" # machine-path-exempt: isolated test VM account/path; never a customer default
 # The same words login_env prints, as an array: nothing to word-split.
 LOGIN_ENV=("TESTVM_HOST_SECURITY=$TMP/host-security.sh" "TESTVM_HOST_CLAUDE_RENEW=$TMP/host-renew.sh")
+
+# --- the guest's primary login is the account the app has IN USE (2026-10-28) --
+# Nightly 78: the app had moved the team to Work (Home at 99% of its week) and
+# every guest was still signed in as Home, so its walks stalled on "Your Claude
+# account has used 99% of this week's limit". The fixture lists below are the
+# app's own shape (richos-core claude_accounts.rs): Account 1 has no folder and
+# is the bare item; a foldered account's item is named for its folder.
+ACCT_FOLDER="/nonexistent/fixture-data/claude-accounts/2"
+ACCT_ITEM="Claude Code-credentials-$(printf '%s' "$ACCT_FOLDER" | shasum -a 256 | cut -c1-8)"
+ACCT_HOME_SCOPED="Claude Code-credentials-$(printf '%s' "$KEEP_HOME/.claude" | shasum -a 256 | cut -c1-8)"
+accounts_list() {  # <file> <inUse>
+  printf '{"accounts":[{"id":"1","label":"Home"},{"id":"2","label":"Work","folder":"%s"}],"inUse":"%s","atThreshold":"pause"}\n' \
+    "$ACCT_FOLDER" "$2" > "$1"
+}
+
+t "claude login: the guest's primary login is the account the app has IN USE, read from that account's own item"
+  accounts_list "$TMP/accounts-work.json" 2
+  : > "$TMP/acct.services"; : > "$TMP/acct.log"
+  # shellcheck disable=SC2046  # login_env prints NAME=value words; splitting them is intended
+  out="$(env $(login_env) TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-work.json" HOST_SECURITY_SERVICES_LOG="$TMP/acct.services" \
+         STUB_LOG="$TMP/acct.log" STUB_SECURITY_STDIN="$TMP/acct.stdin" STUB_CLAUDE_LOGIN=present \
+         "$TESTVM_DIR/claude-login.sh" push richos-test-a "$KEEP_HOME" 2>"$TMP/acct.err")"
+  ok $? "pushing the in-use account must report logged in"
+  eq "$out" "claude login: guest logged in"
+  # Every host read named Work's item, and not one named Home's bare item.
+  eq "$(sort -u "$TMP/acct.services")" "$ACCT_ITEM" "every host read must name the in-use account's item"
+  # The GUEST's names are the ones it has always looked up: bare + its own scoped.
+  acct_payload="$(cat "$TMP/acct.stdin")"
+  has "$acct_payload" '-s "Claude Code-credentials" '
+  has "$acct_payload" "-s \"$ACCT_HOME_SCOPED\""
+  hasnt "$acct_payload" "$ACCT_ITEM"
+  eq "$(printf '%s\n' "$acct_payload" | grep -c '^add-generic-password')" "2" "the same two guest rows as a Home push"
+  has "$(cat "$TMP/acct.log")" "$KEEP_HOME/.claude/.credentials.json"
+  hasnt "$(cat "$TMP/acct.stdin" "$TMP/acct.log" "$TMP/acct.err" "$TMP/acct.services")" "also-not-real"
+  # host-check asks about the same item, by name only.
+  : > "$TMP/acct.services"
+  # shellcheck disable=SC2046
+  hc="$(env $(login_env) TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-work.json" HOST_SECURITY_SERVICES_LOG="$TMP/acct.services" \
+        "$TESTVM_DIR/claude-login.sh" host-check 2>&1)"; ok $? "$hc"
+  has "$hc" "'$ACCT_ITEM'"
+  has "$hc" "Work"
+  eq "$(sort -u "$TMP/acct.services")" "$ACCT_ITEM" "host-check must ask about the in-use account's item"
+t_done
+
+t "claude login: the in-use account is renewed under its OWN folder, never Home's"
+  accounts_list "$TMP/accounts-work.json" 2
+  cred_at "$TMP/cred-acct-short.json" "short-lived-token-0123456789" 120
+  cred_at "$TMP/cred-acct-renewed.json" "renewed-access-token-0123456789" 28800
+  : > "$TMP/acct-renew.log"
+  out="$(env "${LOGIN_ENV[@]}" TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-work.json" \
+         HOST_SECURITY_CREDENTIAL_FILE="$TMP/cred-acct-short.json" HOST_RENEW_TO="$TMP/cred-acct-renewed.json" \
+         HOST_RENEW_LOG="$TMP/acct-renew.log" STUB_LOG=/dev/null STUB_SECURITY_STDIN=/dev/null STUB_CLAUDE_LOGIN=absent \
+         "$TESTVM_DIR/claude-login.sh" push richos-test-a "$KEEP_HOME" 2>/dev/null)"
+  ok $? "a renewed token is a login"
+  eq "$(cat "$TMP/acct-renew.log")" "renew $ACCT_FOLDER" "renewal must run under the in-use account's folder"
+  # Home in use, asked by a caller that itself runs on another account's folder
+  # (an agent on Work): Home's bare item is renewed under NO folder.
+  accounts_list "$TMP/accounts-home.json" 1
+  cred_at "$TMP/cred-acct-short.json" "short-lived-token-0123456789" 120
+  : > "$TMP/acct-renew.log"
+  out="$(env "${LOGIN_ENV[@]}" CLAUDE_CONFIG_DIR="/nonexistent/callers-own-account" TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-home.json" \
+         HOST_SECURITY_CREDENTIAL_FILE="$TMP/cred-acct-short.json" HOST_RENEW_TO="$TMP/cred-acct-renewed.json" \
+         HOST_RENEW_LOG="$TMP/acct-renew.log" STUB_LOG=/dev/null STUB_SECURITY_STDIN=/dev/null STUB_CLAUDE_LOGIN=absent \
+         "$TESTVM_DIR/claude-login.sh" push richos-test-a "$KEEP_HOME" 2>/dev/null)"
+  ok $? "a renewed Home token is a login"
+  eq "$(cat "$TMP/acct-renew.log")" "renew " "Home's renewal must not inherit the caller's folder"
+t_done
+
+t "claude login: with Home in use, or no account list at all, the primary is Home's bare item as before"
+  accounts_list "$TMP/accounts-home.json" 1
+  for list in "$TMP/accounts-home.json" "$TMP/no-such-accounts.json"; do
+    : > "$TMP/acct.services"
+    # shellcheck disable=SC2046
+    out="$(env $(login_env) TESTVM_CLAUDE_ACCOUNTS="$list" HOST_SECURITY_SERVICES_LOG="$TMP/acct.services" \
+           STUB_LOG=/dev/null STUB_SECURITY_STDIN="$TMP/acct-home.stdin" STUB_CLAUDE_LOGIN=present \
+           "$TESTVM_DIR/claude-login.sh" push richos-test-a "$KEEP_HOME" 2>/dev/null)"
+    ok $? "a Home push must report logged in ($list)"
+    eq "$(sort -u "$TMP/acct.services")" "Claude Code-credentials" "Home's bare item ($list)"
+    eq "$(grep -c '^add-generic-password' "$TMP/acct-home.stdin")" "2" "the same two guest rows ($list)"
+  done
+t_done
+
+t "claude login: a second sign-in (--account) reads ITS item whatever account is in use"
+  accounts_list "$TMP/accounts-work.json" 2
+  : > "$TMP/acct.services"
+  # shellcheck disable=SC2046
+  out="$(env $(login_env) TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-work.json" HOST_SECURITY_SERVICES_LOG="$TMP/acct.services" \
+         STUB_LOG=/dev/null STUB_SECURITY_STDIN="$TMP/acct-second.stdin" STUB_CLAUDE_LOGIN=present \
+         "$TESTVM_DIR/claude-login.sh" push --account "Claude Code-credentials-0badc0de" --host-folder "/nonexistent/other" \
+         --guest-home "$KEEP_HOME" richos-test-a "$KEEP_HOME/claude-accounts/2" 2>/dev/null)"
+  ok $? "a second sign-in must report logged in"
+  eq "$(sort -u "$TMP/acct.services")" "Claude Code-credentials-0badc0de" "--account names the host item, the list does not"
+  eq "$(grep -c '^add-generic-password' "$TMP/acct-second.stdin")" "1" "exactly one guest item"
+t_done
+
+t "claude login: an account list it cannot read is a refusal, never a guess at the account"
+  printf '{"accounts": not json' > "$TMP/accounts-bad.json"
+  : > "$TMP/acct-bad.log"
+  # shellcheck disable=SC2046
+  out="$(env $(login_env) TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-bad.json" STUB_LOG="$TMP/acct-bad.log" \
+         "$TESTVM_DIR/claude-login.sh" push richos-test-a "$KEEP_HOME" 2>"$TMP/acct-bad.err")"
+  no $? "an unreadable account list must refuse"
+  eq "$out" "claude login: guest NOT logged in"
+  eq "$(wc -c < "$TMP/acct-bad.log" | tr -d ' ')" "0" "nothing reached the guest"
+  has "$(cat "$TMP/acct-bad.err")" "$TMP/accounts-bad.json"
+t_done
 
 # The mutation pass below is run by hand, so a change to claude-login.sh or to these cases
 # reaches the merge only through this runner: its text check (each mutant's text found once,
