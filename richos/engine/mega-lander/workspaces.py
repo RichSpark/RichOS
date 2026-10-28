@@ -148,6 +148,71 @@ def state_dir():
     return os.path.join(base, "state", "workspaces")
 
 
+# The app's data folder name under ~/Library/Application Support (Tauri's
+# app_data_dir for the bundle identifier; richdoctor-core RICHOS_IDENTIFIER).
+APP_IDENTIFIER = "com.richos.app"
+
+
+def other_registries(errors=None):
+    """Every OTHER workspace registry on this machine: realpaths of existing
+    directories, never state_dir() itself. `errors`, a list, receives
+    (path, why) for a folder of registries that exists and cannot be listed:
+    a registry that cannot be read may be the one that holds a workspace.
+
+    THERE IS MORE THAN ONE REGISTRY (2026-10-28). A terminal session keeps its
+    registry at $CLAUDE_CONFIG_DIR/state/workspaces (else ~/.claude/...); the
+    app gives every conversation its own, $RICHOS_WORKSPACES_DIR =
+    <RICHOS_APP_STATE>/workspaces/<sha256(entity, thread)> (engine_profile.rs
+    workspace_state), and runs its sessions with CLAUDE_CONFIG_DIR pointing at
+    an account folder, not at ~/.claude. The point-3 sweep read only its own,
+    so a terminal turn end called the app's live worker worktrees unregistered
+    and its automatic land stopped their processes and deleted them. A
+    workspace any of these holds is registered.
+
+    Found the way the engine already finds app state, never from a fixed path:
+    $RICHOS_APP_STATE when set (an app-launched engine), and the app's data
+    folder under the CURRENT home (scratch-reaper's app_registry_relpath), so
+    a terminal beside the app sees the app's registries too.
+
+    ONLY UNDER THE CURRENT HOME (2026-10-28). $RICHOS_APP_STATE is inherited:
+    a check run from an app shell that gives its engine a sandbox HOME still
+    carried the operator's real app state, so the sandbox's sweep read the
+    real registries, and one stray record there (agents/wait-regression.json)
+    blocked every sandboxed sweep (workspace-spec-fourteen C3). A HOME is the
+    machine user whose registries these are; app state outside it is not."""
+    own = realpath(state_dir())
+    home = os.path.expanduser("~")
+    cands = [os.path.join(home, ".claude", "state", "workspaces")]
+    cfg = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
+    if cfg:
+        cands.append(os.path.join(cfg, "state", "workspaces"))
+    app_state = realpath(os.environ.get("RICHOS_APP_STATE") or "")
+    home_real = realpath(home)
+    if app_state and not (home_real and app_state.startswith(home_real.rstrip(os.sep) + os.sep)):
+        app_state = ""
+    roots = [app_state,
+             os.path.join(home, "Library", "Application Support", APP_IDENTIFIER, "engine-state")]
+    for root in roots:
+        if not root:
+            continue
+        try:
+            names = sorted(os.listdir(os.path.join(root, "workspaces")))
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            if errors is not None:
+                errors.append((os.path.join(root, "workspaces"), "the directory cannot be listed: %s" % e))
+            continue
+        cands += [os.path.join(root, "workspaces", n) for n in names]
+    out, seen = [], {own}
+    for c in cands:
+        r = realpath(c)
+        if r and r not in seen and os.path.isdir(r):
+            seen.add(r)
+            out.append(r)
+    return out
+
+
 def _p(*parts):
     return os.path.join(state_dir(), *parts)
 
@@ -1016,23 +1081,25 @@ def key_for_id(agent_id):
         return ""
 
 
-def all_agents(include_done=False):
+def all_agents(include_done=False, root=None):
+    """`root` reads another registry (other_registries()); default this one."""
     out = []
+    base = root or state_dir()
     dirs = ["agents"] + (["done"] if include_done else [])
     for sub in dirs:
         try:
-            names = sorted(os.listdir(_p(sub)))
+            names = sorted(os.listdir(os.path.join(base, sub)))
         except OSError:
             continue
         for n in names:
             if n.endswith(".json"):
-                r = read_json(_p(sub, n))
+                r = read_json(os.path.join(base, sub, n))
                 if r and r.get("key"):
                     out.append(r)
     return out
 
 
-def damaged_records(include_done=True):
+def damaged_records(include_done=True, root=None):
     """[(path, why)] for every registry record that EXISTS and cannot be read.
 
     A DAMAGED RECORD IS NOT A MISSING ONE (hunt part 4 v2, V2-04). read_json
@@ -1042,20 +1109,22 @@ def damaged_records(include_done=True):
     work of an ended session", whose processes the automatic land stopped and
     whose workspace it deleted. A record that cannot be read says nothing
     about whether its worker ended. A registry directory that cannot be
-    listed is damaged too; one that does not exist yet is simply empty."""
+    listed is damaged too; one that does not exist yet is simply empty.
+    `root` reads another registry (other_registries()); default this one."""
     out = []
+    base = root or state_dir()
     for sub in ["agents"] + (["done"] if include_done else []):
         try:
-            names = sorted(os.listdir(_p(sub)))
+            names = sorted(os.listdir(os.path.join(base, sub)))
         except FileNotFoundError:
             continue
         except OSError as e:
-            out.append((_p(sub), "the directory cannot be listed: %s" % e))
+            out.append((os.path.join(base, sub), "the directory cannot be listed: %s" % e))
             continue
         for n in names:
             if not n.endswith(".json"):
                 continue
-            path = _p(sub, n)
+            path = os.path.join(base, sub, n)
             try:
                 with open(path, encoding="utf-8") as f:
                     v = json.load(f)
@@ -1485,6 +1554,133 @@ def _drop_orphans_for(path):
                 w.get("path") == path for w in live_workspaces(r)):
             os.unlink(agent_path(r["key"]))
             event("unregistered-withdrawn", key=r["key"], path=path)
+
+
+def _note_registration(r, paths, branches):
+    """Add what record `r` registers to `paths` and `branches` (point 3)."""
+    for w in r.get("workspaces") or []:
+        if not isinstance(w, dict):
+            continue
+        if w.get("path") and not w.get("deleted_at"):
+            paths.add(w["path"])
+        if w.get("branch") and not w.get("branch_deleted_at"):
+            branches.add((w.get("repo"), w["branch"]))
+    # A ref already attributed to an agent (point 3) is that agent's work,
+    # not unregistered work of an ended session: it is landed or discarded
+    # with the agent that made it.
+    for pair in r.get("created_branches") or []:
+        if len(pair) >= 2:
+            branches.add((pair[0], pair[1]))
+
+
+def registrations_elsewhere(memo=None):
+    """(paths, branches, damaged) that OTHER registries hold (other_registries).
+
+    An orphan record there is a sweep's finding, not a registration, so it
+    holds nothing: two registries that each found the same unregistered
+    workspace must not each withdraw theirs because of the other's. Paths and
+    repositories are compared as written AND as realpaths. A damaged record
+    there is damaged here too (V2-04): it may be the one that holds a
+    workspace. `memo`, a dict, keeps one read per call of pending()."""
+    if memo is not None and "elsewhere" in memo:
+        return memo["elsewhere"]
+    paths, branches, damaged = set(), set(), []
+    for d in other_registries(errors=damaged):
+        damaged += damaged_records(root=d)
+        for r in all_agents(include_done=True, root=d):
+            if not r.get("orphan"):
+                _note_registration(r, paths, branches)
+    paths |= set(realpath(p) for p in paths)
+    branches |= set((realpath(repo or ""), b) for repo, b in branches)
+    out = (paths, branches, damaged)
+    if memo is not None:
+        memo["elsewhere"] = out
+    return out
+
+
+def registry_guard(rec, memo=None):
+    """(verdict, why): may anything in `rec`'s workspaces be stopped or deleted
+    from THIS registry, given every other registry on this machine?
+
+    NOTHING IN A WORKSPACE ANOTHER REGISTRY HOLDS IS STOPPED OR DELETED
+    (2026-10-28). The sweep's fix alone left every other deleter able to do
+    it: a record a base-code gate had already landed sat with a failed
+    deletion, and retry_due, which runs before pending() at the gate and at
+    SessionStart, called _delete on it with no other check, and _delete stops
+    processes first. So every route that stops or deletes asks this first:
+    land, discard, merge_and_land, _delete_chain and _delete (which serves
+    retry_due, withdraw_cc and the continuation).
+
+      "withdraw"  an orphan record whose workspace or branch another registry
+                  holds: it is not unregistered work, so it is withdrawn (the
+                  way _drop_orphans_for withdraws one), whatever its
+                  disposition, with nothing stopped or deleted.
+      "hold"      nothing is stopped or deleted, and the record stays: a
+                  record registered HERE whose workspace another registry
+                  also holds (two owners; neither may delete it from under the
+                  other), or an orphan record while another registry cannot
+                  be read (V2-04: an unreadable record may be the one that
+                  holds it, so "unregistered" is not proved).
+      ""          nothing elsewhere holds it.
+
+    A registration here is not suspended by a damaged record elsewhere: it is
+    this registry's own proof of ownership, and only an orphan record rests on
+    "no registry holds it"."""
+    paths, branches, damaged = registrations_elsewhere(memo)
+    held = []
+    for w in live_workspaces(rec):
+        p = w.get("path")
+        if p and (p in paths or realpath(p) in paths):
+            held.append(p)
+    for repo, b in _branch_targets([rec]):
+        if (repo, b) in branches or (realpath(repo or ""), b) in branches:
+            held.append("branch %s of %s" % (b, repo))
+    if held:
+        why = "another workspace registry on this machine holds %s" % ", ".join(held)
+        return ("withdraw" if rec.get("orphan") else "hold"), why
+    if rec.get("orphan") and damaged:
+        return "hold", ("a workspace registry on this machine cannot be read (%s: %s), and it may be the one "
+                        "that holds this workspace" % damaged[0])
+    return "", ""
+
+
+def held_elsewhere(rec, memo=None):
+    """True for an orphan record registry_guard() does not let this registry
+    treat as unregistered work: another registry holds its workspace, or one
+    cannot be read. It is not work to land or list. Any other record: False."""
+    return bool(rec.get("orphan")) and bool(registry_guard(rec, memo)[0])
+
+
+def _refuse_held_elsewhere(rec, verb, memo=None):
+    """Raises SpecError, having stopped and deleted nothing, when registry_guard
+    says no for `rec` or anything in its chain; an orphan record another
+    registry holds is withdrawn first. land, discard and merge_and_land call it
+    before they stop, merge or mark anything."""
+    verdict, why = registry_guard(rec, memo)
+    if verdict == "withdraw":
+        withdraw_held_orphan(rec)
+        raise SpecError("%s is not unregistered work: %s, so its orphan record was withdrawn and nothing was "
+                        "stopped or deleted" % (rec["name"], why))
+    for r in [rec] + [c for c in _chain(rec) if c["key"] != rec["key"]]:
+        if r is not rec:
+            verdict, why = registry_guard(r, memo)
+        if verdict:
+            raise SpecError("cannot %s %s: %s; nothing was stopped, merged or deleted"
+                            % (verb, r.get("name") or r["key"], why))
+
+
+def withdraw_held_orphan(rec):
+    """Withdraw an orphan record registry_guard() said "withdraw" for (takes
+    the lock). Its disposition does not matter: an orphan record a base-code
+    land marked landed, whose deletion failed, is withdrawn the same way."""
+    with Lock():
+        fresh = read_json(agent_path(rec["key"]))
+        if not fresh or not fresh.get("orphan"):
+            return
+        os.unlink(agent_path(rec["key"]))
+    for w in live_workspaces(rec):
+        event("unregistered-withdrawn", key=rec["key"], path=w.get("path") or "",
+              branch=w.get("branch") or "", held_by="another registry")
 
 
 def live_workspaces(rec):
@@ -3610,7 +3806,7 @@ def unreadable_line():
             else " workspaces.sh status names it; repair or remove it when convenient."))
 
 
-def scan_unregistered(repos, record=True):
+def scan_unregistered(repos, record=True, memo=None):
     """Point 3, hole 6: a cc/ or native workspace with no registration, and any
     such branch, is finished work of an ended session. codex/ and every other
     name is not the system's concern (points 1, 2) and is never listed.
@@ -3618,12 +3814,18 @@ def scan_unregistered(repos, record=True):
     `record=False` only looks (finding 29): nothing is bound and no record is
     made, and what was found is returned as (repo, path, branch, kind).
 
+    A REGISTRATION IN ANY REGISTRY ON THIS MACHINE COUNTS (2026-10-28): the
+    app's per-conversation registries and the terminal's (other_registries).
+    Reading only this one deleted three live app worktrees from a terminal
+    turn end and stopped a worker's processes mid-run.
+
     WHILE ANY RECORD IS DAMAGED, NOTHING IS UNREGISTERED (V2-04). "No
     registration" is proved by reading every registration; a record that
     cannot be read may be the one that holds this workspace, so the sweep
     finds nothing and records nothing until it is repaired. pending() names
     the damaged files instead."""
-    damaged = damaged_records()
+    other_paths, other_branches, other_damaged = registrations_elsewhere(memo)
+    damaged = damaged_records() + other_damaged
     if damaged:
         if record:
             event("registry-damaged", files=[p for p, _w in damaged])
@@ -3657,17 +3859,9 @@ def scan_unregistered(repos, record=True):
                 save_agent(fresh)
                 event("bound-at-sweep", key=fresh["key"], work=fresh.get("integration_work"))
     for r in all_agents(include_done=True):
-        for w in r.get("workspaces") or []:
-            if w.get("path") and not w.get("deleted_at"):
-                paths.add(w["path"])
-            if w.get("branch") and not w.get("branch_deleted_at"):
-                branches.add((w.get("repo"), w["branch"]))
-        # A ref already attributed to an agent (point 3) is that agent's work,
-        # not unregistered work of an ended session: it is landed or discarded
-        # with the agent that made it.
-        for pair in r.get("created_branches") or []:
-            if len(pair) >= 2:
-                branches.add((pair[0], pair[1]))
+        _note_registration(r, paths, branches)
+    paths |= other_paths
+    branches |= other_branches
     found = []
     for repo in repos:
         repo = main_checkout(repo)
@@ -3685,11 +3879,15 @@ def scan_unregistered(repos, record=True):
                 continue
             if e["path"] in paths or (repo, e["branch"]) in branches:
                 continue
+            if realpath(e["path"]) in other_paths or (realpath(repo), e["branch"]) in other_branches:
+                continue
             if _younger_than_its_spawn(repo, e["path"]):
                 continue
             found.append((repo, e["path"], e["branch"], kind))
         for b in local_branches(repo, ["cc/", NATIVE_BRANCH_PREFIX + "*"]) or []:
             if b in attached or (repo, b) in branches or b.startswith(CODEX_PREFIX):
+                continue
+            if (realpath(repo), b) in other_branches:
                 continue
             found.append((repo, "", b, classify("", b)))
     if not record:
@@ -3771,13 +3969,14 @@ def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dr
     `unregistered`. The operations that are asked to act (the Stop gate, a
     live spawn, `land`) still act."""
     cache = {}
+    elsewhere = {}
     items = []
     landed_here = False
     if scan:
         repos = set(known_repos())
         if entity:
             repos.add(main_checkout(entity) or realpath(entity))
-        found = scan_unregistered(sorted(r for r in repos if r), record=not dry)
+        found = scan_unregistered(sorted(r for r in repos if r), record=not dry, memo=elsewhere)
         # A DAMAGED RECORD IS NAMED, NEVER SWEPT (V2-04). The scan above found
         # nothing while one exists; this says why, at every gate and status,
         # without holding the turn: the repair is a person's, outside the run.
@@ -3798,6 +3997,15 @@ def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dr
                               "workspaces": [(path or "(branch only)", branch)]})
     for rec in all_agents():
         if rec.get("disposition"):
+            continue
+        # AN ORPHAN RECORD WHOSE WORKSPACE ANOTHER REGISTRY HOLDS IS NOT
+        # FINISHED WORK (2026-10-28): it is withdrawn here, landing nothing and
+        # stopping nothing, and a dry question never lists it as work to land.
+        # One that rests on a registry that cannot be read is not work yet
+        # either (V2-04); it stays, untouched, until that registry reads.
+        if held_elsewhere(rec, elsewhere):
+            if not dry and registry_guard(rec, elsewhere)[0] == "withdraw":
+                withdraw_held_orphan(rec)
             continue
         if dry:
             # The platform's recorded binding and ending are READ here, never
@@ -5902,7 +6110,7 @@ def integration_for(repo):
     return integration_target([], repo)
 
 
-def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None):
+def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None, memo=None):
     """Point 4: landed means every workspace and branch is deleted. Landed is
     proved from git: every branch tip (and every workspace HEAD) is already in
     the branch this work INTEGRATES ON, which is the branch recorded when the
@@ -5920,9 +6128,13 @@ def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None
     integration branch, those entries are MOVED to <state>/kept/ and the land
     goes on: point 8 still holds (nothing is lost), and nobody has to
     remember. Uncommitted work and unreadable directories still refuse.
-    `keep_ignored` defaults to `auto`; `merge_and_land` passes it too."""
+    `keep_ignored` defaults to `auto`; `merge_and_land` passes it too.
+    `memo` is registrations_elsewhere's: one read of the other registries
+    serves this land's refusal check and its deletion."""
     keep = auto if keep_ignored is None else keep_ignored
+    memo = {} if memo is None else memo
     rec = _resolve(ref, me)
+    _refuse_held_elsewhere(rec, "land", memo)
     fin, _pz, why = finished_state(rec)
     if not fin:
         raise SpecError("%s is not finished (%s); only finished work is landed" % (rec["name"], why))
@@ -5936,7 +6148,7 @@ def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None
             # With the caller's deadline (V3-02): this retry used to drop it
             # and spend whatever its stages took.
             chain = _chain(rec)
-            clean = _delete_chain(chain, "landed", deadline=deadline)
+            clean = _delete_chain(chain, "landed", deadline=deadline, memo=memo)
             fresh = load_agent(rec["key"]) or {}
             # A RETRY THAT REOPENED THE LANDING IS NOT A LAND (hunt part 4 v3,
             # V3-04). The reproof found new work, withdrew the disposition and
@@ -5997,7 +6209,7 @@ def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None
             save_agent(fresh)
         event("landed", key=r["key"], auto=bool(auto), as_part_of=rec["key"])
     _release_carried_waits(chain, deadline)
-    clean = _delete_chain(chain, "landed", processes=stopped, deadline=deadline)
+    clean = _delete_chain(chain, "landed", processes=stopped, deadline=deadline, memo=memo)
     if not clean:
         if not (load_agent(rec["key"]) or {}).get("disposition"):
             raise SpecError("landing eligibility changed during cleanup; the work was preserved")
@@ -6063,6 +6275,9 @@ def merge_and_land(ref, me="", message=""):
     on exactly each branch tip says passed (_review_check, CEO §113), and the
     merge message names that review. Returns (merged, land result)."""
     rec = _resolve(ref, me)
+    # Before anything is merged: another registry's live worker is never
+    # merged into main from here (land repeats the check before it stops).
+    _refuse_held_elsewhere(rec, "merge")
     fin, _pz, why = finished_state(rec)
     if not fin:
         raise SpecError("%s is not finished (%s); merge it when its run has ended" % (rec["name"], why))
@@ -6875,6 +7090,8 @@ def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
     if len((reason or "").strip()) < 10:
         raise SpecError("a discard records its reason (point 7): give one")
     rec = _resolve(ref, me)
+    # Before any disposition is written or anything stopped (2026-10-28).
+    _refuse_held_elsewhere(rec, "discard")
     fin, _pz, why = finished_state(rec)
     if not fin and not never_ran(rec):
         raise SpecError("%s is not finished (%s). Stop it first; a running agent is not discarded."
@@ -6999,8 +7216,12 @@ def dispatch_refusal(rec):
     return ""
 
 
-def _delete_chain(chain, why, processes=None, deadline=None):
+def _delete_chain(chain, why, processes=None, deadline=None, memo=None):
+    # A member another registry holds (registry_guard) has nothing of its
+    # stopped here; its own _delete below withdraws or holds it.
+    memo = {} if memo is None else memo
     allw = [(r, w) for r in chain for w in live_workspaces(r) if w.get("path")]
+    allw = [(r, w) for r, w in allw if not registry_guard(r, memo)[0]]
     # Past the deadline nothing is stopped here (V2-03): each _delete below is
     # handed no shutdown result, sees the deadline and records a deferral.
     stopped = processes if processes is not None else (
@@ -7008,16 +7229,25 @@ def _delete_chain(chain, why, processes=None, deadline=None):
     complete = True
     for r in chain:
         if not _delete(r, [w for w in live_workspaces(r) if w.get("path")], branches=True, why=why,
-                       processes=stopped, deadline=deadline):
+                       processes=stopped, deadline=deadline, memo=memo):
             complete = False
             if why == "landed" and not (load_agent(r["key"]) or {}).get("disposition"):
                 return False
     return complete
 
 
-def _delete(rec, workspaces, branches, why, processes=None, deadline=None):
+def _delete(rec, workspaces, branches, why, processes=None, deadline=None, memo=None):
     """Points 9, 10, 13: stop every process, then delete every workspace (and
     branch) as one; whatever fails is retried automatically.
+
+    ANOTHER REGISTRY'S WORKSPACE IS NEVER STOPPED OR DELETED HERE (2026-10-28),
+    whoever calls: retry_due (before pending() at every gate and SessionStart),
+    withdraw_cc, the continuation, land and discard. registry_guard() first: an
+    orphan record another registry holds is withdrawn, nothing stopped or
+    deleted (answers False: nothing was deleted); a hold is a failure like a
+    surviving process, recorded and retried (point 13), so a workspace two
+    registries both hold reaches the CEO's notice instead of being deleted
+    from under one of them. `memo` is registrations_elsewhere's.
 
     `deadline` is the caller's budget (hunt part 4, finding 15). The second
     landing proof below used to run without it, so a gate or a retry with a
@@ -7045,7 +7275,14 @@ def _delete(rec, workspaces, branches, why, processes=None, deadline=None):
             held = True
         return held
 
-    if processes is None and not out_of_time("its workspaces' processes were stopped"):
+    verdict, elsewhere = registry_guard(rec, memo)
+    if verdict == "withdraw":
+        withdraw_held_orphan(rec)
+        return False
+    if verdict:
+        failures.append("nothing was stopped or deleted: %s" % elsewhere)
+        held = True
+    elif processes is None and not out_of_time("its workspaces' processes were stopped"):
         processes = stop_processes(paths, deadline=deadline)
     processes = processes or {}
     if held:
@@ -7223,6 +7460,7 @@ def retry_due(budget=5.0, deadline=None):
     t0 = now()
     stop_at = t0 + budget if deadline is None else min(t0 + budget, deadline)
     out = []
+    memo = {}                   # _delete asks registry_guard first: one read of the other registries
     for rec in all_agents():
         d = rec.get("deletion")
         if not d or d.get("next_at", 0) > now():
@@ -7231,7 +7469,7 @@ def retry_due(budget=5.0, deadline=None):
             break
         targets = [w for w in live_workspaces(rec) if w.get("path")]
         ok = _delete(rec, targets, branches=d.get("branches", True), why="retry %d" % (d.get("attempts", 0) + 1),
-                     deadline=stop_at)
+                     deadline=stop_at, memo=memo)
         out.append((rec["key"], ok))
     return out
 
@@ -8383,7 +8621,10 @@ def _print_status(me, entity):
                                     "  [independent spawns allowed]", note))
         for p, b in i["workspaces"]:
             print("           %s  %s" % (p, b or ""))
+    elsewhere = {}
     for r in all_agents():
+        if held_elsewhere(r, elsewhere):
+            continue                    # withdrawn at the next live gate; not work at all
         if r.get("disposition") or any(i["key"] == r["key"] for i in items):
             if r.get("deletion"):
                 d = r["deletion"]
