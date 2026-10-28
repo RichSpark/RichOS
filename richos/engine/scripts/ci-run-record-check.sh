@@ -59,7 +59,7 @@
 #   0fb68b7c  run #101  event=push  conclusion=success   2026-09-10T06:38:25Z
 #   de6ca1f8  run #107  event=push  conclusion=FAILURE   2026-09-10T07:07:13Z
 #
-#   (gh api repos/WebDevBooster/richos/actions/runs/34446109882 ; .../34448386082)
+#   (gh api repos/RichSpark/RichOS/actions/runs/34446109882 ; .../34448386082)
 #
 # Both sat on page 2, which nothing ever asked for. The check was not detecting
 # dropped runs; it was reporting the edge of its own pagination.

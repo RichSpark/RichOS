@@ -129,9 +129,9 @@ def ffmpeg_source_directions(source):
         "",
         "Where to get it: RichOS publishes a byte-identical copy of every archive below as an asset "
         "of each RichOS release whose engine carries these programs, under the name shown as "
-        "\"RichOS copy\", at https://github.com/WebDevBooster/richos/releases/download/<release>/<name>. "
+        "\"RichOS copy\", at https://github.com/RichSpark/RichOS/releases/download/<release>/<name>. "
         "<release> is \"v\" followed by the RichOS version that installed this engine, for example "
-        "v1.2.0-nightly.20261007.45; https://github.com/WebDevBooster/richos/releases/tag/<release> "
+        "v1.2.0-nightly.20261007.45; https://github.com/RichSpark/RichOS/releases/tag/<release> "
         "lists them. The upstream URL is where each archive was first published.",
         "",
     ]
