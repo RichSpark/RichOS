@@ -19,11 +19,6 @@
       "license_url": "https://raw.githubusercontent.com/jqlang/jq/jq-1.8.2/COPYING",
       "license_sha256": "ad2b4a266b2268939c1446979759706077421cf906a203aa188c6f396e8cfd74"
     },
-    "iconv": {
-      "version": "1.18",
-      "url": "https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.18.tar.gz",
-      "sha256": "3b08f5f4f9b4eb82f151a7040bfd6fe6c6fb922efe4b1659c66ea933276965e8"
-    },
     "git": {
       "version": "2.55.0",
       "url": "https://www.kernel.org/pub/software/scm/git/git-2.55.0.tar.xz",
