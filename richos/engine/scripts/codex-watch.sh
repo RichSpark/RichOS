@@ -8,9 +8,11 @@
 # session: the engine's plugin monitor (monitors/monitors.json), as
 # quota-watch and stall-watch are.
 #
-#   codex-watch.sh --monitor   THE WATCHER. Looks at both channels
-#                              (~/.richos-coordination/rich-codex/to-rich.md and
-#                              rich-codex-questions/to-rich.md) every 15 s and
+#   codex-watch.sh --monitor   THE WATCHER. Looks at to-rich.md in each channel
+#                              folder (the CODEX_CHANNELS setting in
+#                              orchestration.config; unset, the conventional
+#                              ~/.richos-coordination/rich-codex and
+#                              rich-codex-questions) every 15 s and
 #                              prints each new entry ONCE, as one block with
 #                              every one of its lines; each block reaches the
 #                              lead as a notification. Ends with its session.

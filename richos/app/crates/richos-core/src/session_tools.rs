@@ -145,6 +145,12 @@ pub(crate) fn observe_stall(scope:&StatusToolScope,text:&str)->Result<(),String>
     append(scope,"stu",&Message {handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None})
 }
 
+/// Codex wrote a new entry to Rich in one of the user's Codex channels (`codex_watch.rs`): the
+/// engine watcher's block, as written, for Rich. A host observation, like the stall watch's.
+pub(crate) fn observe_codex(scope:&StatusToolScope,text:&str)->Result<(),String> {
+    append(scope,"rich",&Message {handoff:false,from:"codex-watch".into(),text:text.into(),instruction:None,work:None})
+}
+
 pub(crate) fn observe_work_status(scope:&StatusToolScope,facts:Value)->Result<(),String> {
     append(scope,"rich",&Message {handoff:false,from:"work-status".into(),text:facts.to_string(),instruction:None,work:None})
 }

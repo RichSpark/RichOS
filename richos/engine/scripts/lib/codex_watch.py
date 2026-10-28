@@ -5,10 +5,14 @@
 WHAT THIS EXISTS FOR
 ===========================================================================
 Codex writes to the lead through append-only files (each entry starts
-`## <UTC time> — <subject>`):
+`## <UTC time> — <subject>`): `to-rich.md` in each channel folder, beside the
+`to-codex.md` the lead answers in. Which folders are channels is the user's
+setting, CODEX_CHANNELS in orchestration.config (colon-separated folders, `~`
+for the home folder; an empty value watches none). Without it, the
+conventional folders:
 
-    ~/.richos-coordination/rich-codex/to-rich.md
-    ~/.richos-coordination/rich-codex-questions/to-rich.md
+    ~/.richos-coordination/rich-codex
+    ~/.richos-coordination/rich-codex-questions
 
 The lead was supposed to start a background watcher on them at every session
 start. On 2026-10-05 it did not, and Codex's 08:11Z "READY TO LAND" entry for
@@ -44,13 +48,15 @@ COMMANDS (codex-watch.sh passes --engine-root and --config)
              session, and ends with its session
   --tick     one look against the session's state, printing what the monitor
              would print (codex-watch.test.sh drives it)
-  --host-json  with --monitor: the RichOS app host's own child (richos-core
-             team_watch.rs), from the app's launch to its quit: each block as
-             one JSON line, which the host sends to his team's lead
-             (host_child.py)
+  --host-json  with --monitor: the RichOS app's own child (richos-core
+             codex_watch.rs), from the app's launch to its quit: each block as
+             one JSON line, which the app gives to Rich in the conversation on
+             screen (host_child.py). It needs no --config: the app names the
+             channels the user's setting gives in CODEX_WATCH_CHANNELS and its
+             own state folder in CODEX_WATCH_STATE_DIR
 
-Settings (tests only): CODEX_WATCH_CHANNELS (colon-separated files),
-CODEX_WATCH_STATE_DIR, CODEX_WATCH_POLL_SECONDS.
+Settings: CODEX_WATCH_CHANNELS (colon-separated to-rich.md files; the app, and
+tests), CODEX_WATCH_STATE_DIR, CODEX_WATCH_POLL_SECONDS (tests only).
 """
 
 import argparse
@@ -68,13 +74,46 @@ import stall_watch  # noqa: E402  (sibling in scripts/lib: session, lock and JSO
 
 POLL_SECONDS = 15
 STATE_KEEP_SECONDS = 2 * 86400
-DEFAULT_CHANNELS = ("~/.richos-coordination/rich-codex/to-rich.md",
-                    "~/.richos-coordination/rich-codex-questions/to-rich.md")
+CONFIG_KEY = "CODEX_CHANNELS"
+# The conventional channel folders, used when the user's orchestration.config sets no
+# CODEX_CHANNELS. The app's default is the same value (richos-core codex_watch.rs, whose
+# test holds the two equal).
+DEFAULT_CHANNELS = "~/.richos-coordination/rich-codex:~/.richos-coordination/rich-codex-questions"
 
 
-def channels():
+def configured_folders(config):
+    """The value of the last CODEX_CHANNELS line in `config`, as written (quotes removed), or
+    None when the file sets none or cannot be read. Read as text, never executed."""
+    value = None
+    try:
+        with open(config, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except (OSError, ValueError):
+        return None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, sep, rest = line.partition("=")
+        if sep and key == CONFIG_KEY:
+            rest = rest.split(" #", 1)[0].strip()
+            if len(rest) >= 2 and rest[0] == rest[-1] and rest[0] in "\"'":
+                rest = rest[1:-1]
+            value = rest
+    return value
+
+
+def channels(config=""):
+    """The to-rich.md files watched: CODEX_WATCH_CHANNELS when set (files), else `to-rich.md`
+    in each folder of the user's CODEX_CHANNELS, else in each conventional folder."""
     raw = (os.environ.get("CODEX_WATCH_CHANNELS") or "").strip()
-    paths = [p for p in raw.split(":") if p] if raw else list(DEFAULT_CHANNELS)
+    if raw:
+        paths = [p for p in raw.split(":") if p]
+    else:
+        folders = configured_folders(config) if config else None
+        if folders is None:
+            folders = DEFAULT_CHANNELS
+        paths = [os.path.join(f.strip(), "to-rich.md") for f in folders.split(":") if f.strip()]
     return [os.path.abspath(os.path.expanduser(p)) for p in paths]
 
 
@@ -172,7 +211,7 @@ def session_dir(sid):
     return d
 
 
-def tick(sd, now=None, out=None, json_lines=False):
+def tick(sd, now=None, out=None, json_lines=False, config=""):
     """One look: prints each due entry as its own block (as one JSON line with
     json_lines). Returns blocks printed."""
     out = out or sys.stdout
@@ -182,7 +221,7 @@ def tick(sd, now=None, out=None, json_lines=False):
     state = stall_watch._read_json(path)
     told = stall_watch._read_json(told_path)
     printed = 0
-    for ch in channels():
+    for ch in channels(config):
         blocks, new, told_to = look_one(ch, state.get(ch), told, now)
         for b in blocks:
             out.write((host_child.line("\n".join(b)) if json_lines else "\n".join(b)) + "\n")
@@ -231,7 +270,7 @@ def session(engine_root):
     return sid, pid
 
 
-def run_loop(engine_root):
+def run_loop(engine_root, config):
     sid, spid = session(engine_root)
     sd = session_dir(sid)
     fd = stall_watch._try_lock(os.path.join(sd, "monitor.lock"))
@@ -242,7 +281,7 @@ def run_loop(engine_root):
     poll = stall_watch._env_float("CODEX_WATCH_POLL_SECONDS", POLL_SECONDS)
     try:
         while alive is None or alive():
-            tick(sd)
+            tick(sd, config=config)
             stall_watch._nap(poll, alive)
     finally:
         os.close(fd)
@@ -250,13 +289,13 @@ def run_loop(engine_root):
 
 
 def run_host_loop():
-    """--monitor --host-json: the app host's child. Codex's channels are the same whichever lead
-    is told, so its state is the host's own, beside the sessions' (one shared last-told.json, so
-    nothing the terminal's watcher told is told again here, and the reverse)."""
+    """--monitor --host-json: the app's own child (richos-core codex_watch.rs). Its state is the
+    app's own folder (CODEX_WATCH_STATE_DIR), so the app's first start replays no backlog, and a
+    later start tells what was written while the app was closed."""
     alive = host_child.start()
     if not alive():
         return 0                           # its host is gone already
-    sd = session_dir("operator-host")
+    sd = session_dir("app-host")
     fd = stall_watch._try_lock(os.path.join(sd, "monitor.lock"))
     if fd is None:
         return 0                           # another copy of the app already watches
@@ -281,16 +320,16 @@ def main(argv):
     ap.add_argument("--host-json", action="store_true",
                     help="with --monitor: the app host's child; each block as one JSON line")
     a = ap.parse_args(argv)
+    if a.host_json and a.monitor:
+        return run_host_loop()             # the app names its channels itself
     if not a.config:
         return 0  # a repository that never adopted the engine: nothing to watch, and nothing said
     engine_root = a.engine_root or os.path.dirname(os.path.dirname(HERE))
-    if a.host_json and a.monitor:
-        return run_host_loop()
     if a.tick:
         sid, _pid = session(engine_root)
-        tick(session_dir(sid))
+        tick(session_dir(sid), config=a.config)
         return 0
-    return run_loop(engine_root)
+    return run_loop(engine_root, a.config)
 
 
 if __name__ == "__main__":
