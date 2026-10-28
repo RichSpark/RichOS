@@ -227,6 +227,11 @@ pub struct AccountView {
     /// [`crate::quota::View::signed_in`] for this account.
     #[serde(default)]
     pub signed_in: Option<bool>,
+    /// The weekly point this account is left at (`Reading::weekly_point` of its own weekly
+    /// window), so a handoff order on it can record the point it acted on (`gate.rs`, follow-ups
+    /// 7fed0bef item 3). `None` until the account has a weekly reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekly_point: Option<f64>,
 }
 
 /// Why an account is being left, for the one-line notice, with the figure it was read at.

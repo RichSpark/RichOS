@@ -385,6 +385,18 @@ pub struct View {
     /// running on one of these accounts to commit, hand off and end (`gate.rs`).
     #[serde(default)]
     pub leaving: Vec<String>,
+    /// **The account every figure above describes** (richos-hq follow-ups.md, 7fed0bef): the
+    /// account in use, named, with one account too, so a reader of this file never has to guess
+    /// whose numbers it holds. `None` only in a file an older app wrote.
+    #[serde(default)]
+    pub in_use: Option<InUse>,
+}
+
+/// [`View::in_use`]: the account in use, by its id and the user's own label.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InUse {
+    pub id: String,
+    pub label: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -875,6 +887,7 @@ impl Snapshot {
             notes: Vec::new(),
             first_label: None,
             leaving: Vec::new(),
+            in_use: None,
         }
     }
 }
@@ -1088,6 +1101,15 @@ impl Service {
                 .map(|account| account.id).collect()
         };
         view.resets = self.resets.view();
+        // **The reset record's weekly figure is not the account in use's** (richos-hq
+        // follow-ups.md, 7fed0bef). The record is shared by every app and terminal on this Mac
+        // and refreshed under Account 1's sign-in (`resets.rs` `update`), so on 2026-10-28 this
+        // file said `resets.weeklyUsed: 99` (Home) beside a top level of 10 (Work, in use), and a
+        // lead deferred work on the 99. The weekly figures are the top-level windows' alone; the
+        // record keeps its own copy for the prepared reset action (`prepared_action_due`).
+        view.resets.weekly_used = None;
+        view.resets.weekly_resets_at = None;
+        view.in_use = Some(InUse { id: in_use.id.clone(), label: in_use.label.clone() });
         view.at_threshold = self.accounts.at_threshold();
         if self.accounts.count() > 1 {
             view.accounts = self.accounts.list().into_iter().map(|account| {
@@ -1097,9 +1119,12 @@ impl Service {
                     self.extra.lock().unwrap().get(&account.id).map(|(_, s)| s.view(policy.clone(), now))
                         .unwrap_or_else(|| Snapshot::default().view(policy.clone(), now))
                 };
+                let reading = readings.get(&account.id);
                 let exhausted = crate::claude_accounts::gone(
-                    readings.get(&account.id).unwrap_or(&Reading::default()), view.at_threshold,
+                    reading.unwrap_or(&Reading::default()), view.at_threshold,
                     policy.line(), self.accounts.limited_until(&account.id), now);
+                let weekly_point = reading.and_then(|r| r.windows.iter().find(|w| w.id == "seven_day")
+                    .map(|w| r.weekly_point(w)));
                 crate::claude_accounts::AccountView {
                     in_use: account.id == in_use.id,
                     working: self.accounts.working_on(&account.id),
@@ -1110,6 +1135,7 @@ impl Service {
                     exhausted_until: exhausted.map(|(_, until)| until),
                     message: account_view.message,
                     signed_in: account_view.signed_in,
+                    weekly_point,
                 }
             }).collect();
             view.held_until = self.accounts.held_until(&readings, policy.line(), now);
@@ -2906,6 +2932,202 @@ for line in sys.stdin:
             Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: weekly, resets_at: reset(&json!(weekly_reset)), duration_ms: 168 * 3_600_000 },
         ];
         service.before_turn(account, Some((windows, crate::util::now_millis() + hours * 3_600_000)));
+    }
+
+    /// Every path in `value` holding the number `target`, outside what names Home (account 1) itself:
+    /// its own `accounts[]` row, and a switch away from it (`from: "1"`, Recent changes and the
+    /// last switch, which say "Home" with its figure). A path ending in an `allowed` suffix is a
+    /// threshold (a weekly point, the reset trigger), not a usage figure.
+    fn outside_home(value: &Value, target: f64, path: &str, allowed: &[&str], found: &mut Vec<String>) {
+        match value {
+            Value::Number(n) if n.as_f64() == Some(target) && !allowed.iter().any(|a| path.ends_with(a)) => found.push(path.to_string()),
+            Value::Array(items) => for (i, item) in items.iter().enumerate() {
+                if item.get("id").and_then(Value::as_str) == Some("1") && path.ends_with("accounts") { continue; }
+                outside_home(item, target, &format!("{path}[{i}]"), allowed, found);
+            },
+            Value::Object(fields) => {
+                if fields.get("from").and_then(Value::as_str) == Some(crate::claude_accounts::ACCOUNT_ONE) { return; }
+                for (key, field) in fields {
+                    let at = if path.is_empty() { key.clone() } else { format!("{path}.{key}") };
+                    outside_home(field, target, &at, allowed, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// **EVERY USAGE CONSUMER FOLLOWS THE ACCOUNT IN USE** (richos-hq follow-ups.md, 7fed0bef; the
+    /// CEO, 2026-10-28: "This idiotic shit shouldn't need any manual checking. That should all be
+    /// automated."). That day the app ran on Work while `mcp__richos_quota__status` answered
+    /// `weeklyUsed 99` with no account named, Home's figure from the shared reset record, and a
+    /// lead deferred work until Thursday on it.
+    ///
+    /// Home is at 99% of its week (and of its five hours), resetting in 16 h; Work is at 3% of its
+    /// week and 28% of its five hours. The reset record is seeded with Home's 99, and every ambient
+    /// source a consumer could fall back on says 99 too: HOME's status-line payload, no
+    /// CLAUDE_CONFIG_DIR, a `claude` that only fails, so a consumer that bypasses the app's own
+    /// reading reads 99 (the terminal path is run once to show the trap is armed). The app switches
+    /// the way it does, with no agent step: Home's 99 arrives before a turn and `before_turn` moves
+    /// the account in use to Work. Then every consumer must report Work: the published file, the
+    /// gate (admission, and no order to a helper on Work while a helper on Home is ordered off it),
+    /// the quota tool, `quota-watch.sh --once` and second review's quota hold. Then Home's week is
+    /// fresh again with its five hours still at 99, Rich picks Home first (`use_account_first`), and
+    /// every one of them flips to Home and holds.
+    #[test]
+    #[cfg(unix)]
+    fn every_usage_consumer_follows_the_account_in_use() {
+        use std::process::Command;
+        let root = Scratch::new();
+        let app = root.path().join("app");
+        let state = app.join("engine-state");
+        let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine").canonicalize().unwrap();
+        let service = Service::open(&app).unwrap();
+        service.accounts.rename("1", "Home").unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        assert_eq!(work.id, "2");
+        {
+            // The added account's record, as `refresh_accounts` creates it (no probe here).
+            let folder = work.folder.clone().unwrap();
+            service.extra.lock().unwrap().entry(work.id.clone()).or_insert_with(|| service.reader(folder));
+        }
+        let (hour, now) = (3_600_000, crate::util::now_millis() / 1000 * 1000);
+        let home_week_reset = now + 16 * hour;
+        let window = |id: &str, used: f64, resets: u64, duration: u64| Window {
+            id: id.into(), label: if id == "five_hour" { "Five-hour".into() } else { "Weekly".into() },
+            used_percent: used, resets_at: Some(resets), duration_ms: duration };
+        let (five, week) = (5 * hour, 168 * hour);
+
+        // The shared reset record carries Home's 99, read under Home's sign-in.
+        struct HomeRecord(String);
+        impl resets::Transport for HomeRecord {
+            fn account(&mut self) -> Result<resets::Account, String> { Ok(resets::Account { key: "home-fixture".into() }) }
+            fn usage(&mut self) -> Result<Value, String> {
+                Ok(json!({"seven_day":{"utilization":99,"resets_at":self.0},
+                    "cedar_ember":{"eligible":false,"ineligible_reason":"no_grant","next_grant_id":null,"cooldown_until":null,"grants":[]}}))
+            }
+            fn redeem(&mut self, _: &str, _: &str) -> Result<Value, String> { Err("never redeemed here".into()) }
+        }
+        let at = time::OffsetDateTime::from_unix_timestamp((home_week_reset / 1000) as i64).unwrap();
+        let iso = format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", at.year(), u8::from(at.month()), at.day(),
+            at.hour(), at.minute(), at.second());
+        let seeded = service.resets.refresh_transport(&mut HomeRecord(iso)).unwrap();
+        assert_eq!(seeded.weekly_used, Some(99.), "the record itself keeps Home's figure (R1: it is not changed)");
+
+        // Traps: everything a consumer could read instead of the app says 99.
+        let home = root.path().join("home");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let secs = |ms: u64| ms / 1000;
+        fs::write(home.join(".claude/statusline-payload.json"), json!({"rate_limits":{
+            "five_hour":{"used_percentage":99,"resets_at":secs(now + hour)},
+            "seven_day":{"used_percentage":99,"resets_at":secs(home_week_reset)}}}).to_string()).unwrap();
+        let entity = root.path().join("entity");
+        fs::create_dir_all(&entity).unwrap();
+        fs::write(entity.join("orchestration.config"), "PROTECTED_PATHS=\"\"\nQUOTA_PAUSE_PERCENT=93\n").unwrap();
+        let scope = root.path().join("scope.json");
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":true,"background_work_allowed":true})).unwrap();
+        let accounts_list = app.join(crate::claude_accounts::LIST_FILE);
+        assert!(accounts_list.exists(), "the account list the app's review-watch is given");
+        // One environment for every engine child, from nothing: no CLAUDE_CONFIG_DIR, no app state.
+        let engine_child = |program: &str, app_state: Option<&Path>| {
+            let mut command = Command::new(program);
+            command.env_clear().current_dir(root.path())
+                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                .env("HOME", &home).env("TMPDIR", root.path())
+                .env("QUOTA_CLAUDE_BIN", "/usr/bin/false")
+                .env("QUOTA_WATCH_STATE_DIR", root.path().join("quota-watch-state"))
+                .env("RICHOS_ENTITY_ROOT", &entity)
+                .env("RICHOS_WORKSPACES_DIR", root.path().join("workspaces"))
+                .env("PYTHONDONTWRITEBYTECODE", "1");
+            if let Some(app_state) = app_state { command.env("RICHOS_APP_STATE", app_state); }
+            command
+        };
+        let once = |app_state: Option<&Path>| {
+            let out = engine_child("bash", app_state).arg(engine.join("scripts/quota-watch.sh")).arg("--once").output().unwrap();
+            (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr))
+        };
+        let review_hold = || {
+            let program = "import json, sys\nsys.path.insert(0, sys.argv[1])\nimport second_review\n\
+                print(json.dumps(second_review.quota_hold(sys.argv[2], sys.argv[3])))";
+            let out = engine_child("python3", None).arg("-I").arg("-c").arg(program)
+                .arg(engine.join("scripts/lib")).arg(&engine).arg(&accounts_list).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            serde_json::from_slice::<(bool, String)>(&out.stdout).unwrap()
+        };
+        let tool = || reset_tools::status(&app, &resets::Service::new(&app), crate::util::now_millis(), Some(state.as_os_str())).unwrap();
+        let published = || serde_json::from_slice::<Value>(&fs::read(state.join("claude-quota.json")).unwrap()).unwrap();
+        let top = |view: &Value, id: &str| view["windows"].as_array().unwrap().iter()
+            .find(|w| w["id"] == id).map(|w| w["usedPercent"].as_f64().unwrap());
+        let (trap_code, trap_text) = once(None);
+        assert_eq!(trap_code, Some(1), "the trap is armed: outside the app the status line's 99 holds: {trap_text}");
+
+        // The readings arrive before turns, Work's first; Home's 99 then moves the app to Work.
+        assert_eq!(service.before_turn(&work.id, Some((vec![window("five_hour", 28., now + 2 * hour, five),
+            window("seven_day", 3., now + 100 * hour, week)], now))), "1");
+        assert_eq!(service.before_turn("1", Some((vec![window("five_hour", 99., now + hour, five),
+            window("seven_day", 99., home_week_reset, week)], now))), "2", "Home at 99% of its week: the app moves to Work");
+
+        // 1. The published file: Work's figures, Work named, no weekly figure of the record's.
+        let view = published();
+        assert_eq!((top(&view, "seven_day"), top(&view, "five_hour")), (Some(3.), Some(28.)), "{view}");
+        assert_eq!((view["inUse"]["id"].as_str(), view["inUse"]["label"].as_str()), (Some("2"), Some("Work")), "{view}");
+        assert!(view["resets"].get("weeklyUsed").is_none_or(Value::is_null), "{}", view["resets"]);
+        assert!(view["resets"].get("weeklyResetsAt").is_none_or(Value::is_null), "{}", view["resets"]);
+        let mut found = Vec::new();
+        outside_home(&view, 99., "", &["actAt.seven_day", ".weeklyPoint", "resets.weeklyThreshold"], &mut found);
+        assert!(found.is_empty(), "99 outside Home's own row: {found:?} in {view}");
+        outside_home(&view, home_week_reset as f64, "", &[], &mut found);
+        assert!(found.is_empty(), "Home's weekly reset outside Home's own row: {found:?} in {view}");
+
+        // 2. The gate: Work admits work; a helper on Work gets no order, one still on Home does (R5),
+        // and its marker states the account and the figure it acted on (C7).
+        assert_eq!(gate::admission(&state, crate::util::now_millis()), Admission::Ready);
+        let helper = |agent: &str| json!({"agent_id":agent,"session_id":"s","tool_name":"Bash"});
+        assert!(gate::handoff(&helper("helper-work"), &state, &scope, "2").is_none(), "a helper on Work is ordered off Work");
+        assert!(matches!(gate::handoff(&helper("helper-home"), &state, &scope, "1"), Some(Err(_))), "a helper still on Home is not ordered off it");
+        let marker: gate::Handoff = gate::read_json(&state.join(gate::HANDOFFS_DIR).join("helper-home.json")).unwrap();
+        assert_eq!((marker.account.as_str(), marker.label.as_deref(), marker.weekly_used), ("1", Some("Home"), Some(99.)), "{marker:?}");
+        assert!(marker.weekly_point.is_some_and(|p| p <= 99.), "{marker:?}");
+
+        // 3. The quota tool: Work, named, with Work's figures and the gate's own admission, nothing of Home's.
+        let reply = tool();
+        assert_eq!((reply["account"]["id"].as_str(), reply["account"]["label"].as_str()), (Some("2"), Some("Work")), "{reply}");
+        assert_eq!(top(&reply, "seven_day"), Some(3.), "{reply}");
+        assert_eq!(reply["admission"]["state"], "ready", "{reply}");
+        let mut found = Vec::new();
+        outside_home(&reply, 99., "", &[], &mut found);
+        outside_home(&reply, home_week_reset as f64, "", &[], &mut found);
+        assert!(found.is_empty(), "Home's figures in the tool's reply: {found:?} in {reply}");
+        let text = reply.to_string();
+        assert!(!text.contains("99%") && !text.contains(&home_week_reset.to_string()) && !text.contains("Home"), "{text}");
+        assert!(reply["resets"].get("weeklyUsed").is_none() && reply["resets"].get("weeklyThreshold").is_none(), "{reply}");
+
+        // 4. quota-watch.sh --once for the app: Work, below the line.
+        let (code, said) = once(Some(&state));
+        assert_eq!(code, Some(0), "{said}");
+        assert!(said.contains("account Work") && !said.contains("status-line"), "{said}");
+
+        // 5. Second review's quota hold, in App mode (review-watch's environment: no app state of its own).
+        let (held, reading) = review_hold();
+        assert!(!held && reading.contains("account Work"), "{reading}");
+
+        // Back on Home, the app's own way: its week is fresh, its five hours still at 99, and Rich
+        // picks Home first. Every consumer flips to Home and holds.
+        service.before_turn("1", Some((vec![window("five_hour", 99., now + hour, five),
+            window("seven_day", 2., now + 160 * hour, week)], crate::util::now_millis().max(now + 1))));
+        assert_eq!(service.accounts.in_use().id, "2", "Work still in use until Home is picked");
+        service.use_account_first("1").unwrap();
+        let view = published();
+        assert_eq!((view["inUse"]["id"].as_str(), top(&view, "five_hour")), (Some("1"), Some(99.)), "{view}");
+        assert!(view["resets"].get("weeklyUsed").is_none_or(Value::is_null), "{}", view["resets"]);
+        assert!(matches!(gate::admission(&state, crate::util::now_millis()), Admission::Held { .. }));
+        let reply = tool();
+        assert_eq!((reply["account"]["id"].as_str(), reply["account"]["label"].as_str(), reply["admission"]["state"].as_str()),
+            (Some("1"), Some("Home"), Some("held")), "{reply}");
+        let (code, said) = once(Some(&state));
+        assert_eq!(code, Some(1), "{said}");
+        assert!(said.contains("account Home"), "{said}");
+        let (held, reading) = review_hold();
+        assert!(held && reading.contains("account Home"), "{reading}");
     }
 
     /// **Round 18: Rich suggests a second account, once** (the CEO 2026-10-06, feedback item 9:
