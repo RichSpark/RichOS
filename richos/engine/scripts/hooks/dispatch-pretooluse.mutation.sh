@@ -155,6 +155,19 @@ mutant no-manifest-passes "D17" "$D" \
     exit 0' \
     "a broken install that lost the manifest would leave every PreToolUse rule off and every tool call reported clean."
 
+# --- 9b. A CALLER'S SELECTION IS WHAT RUNS ----------------------------------
+# The desktop app names its rules; ignoring the names would run the terminal
+# operator's whole chain, his claim hooks included, in every user's app.
+mutant selection-ignored "D17a" "$D" \
+    '    _DSP_MODULES="${_dsp_kept# }"' \
+    '    :' \
+    "the app's lease would run every rule of the chain, the terminal operator's own included."
+
+mutant unknown-rule-silent "D17c" "$D" \
+    '        | tee -a "$_DSP_WORK/failures" >&2' \
+    '        >/dev/null' \
+    "a rule the app names and the manifest no longer lists would stop checking with nobody told."
+
 # --- 10. THE MEMO IS INERT UNLESS ASKED FOR --------------------------------
 # The only mutant here that reaches outside this change: resolve-roots.sh is
 # sourced by 59 hooks, and the memo's entire safety argument is that none of

@@ -134,7 +134,7 @@
 # ===========================================================================
 # USAGE
 # ===========================================================================
-#   dispatch-pretooluse.sh <chain-key>
+#   dispatch-pretooluse.sh <chain-key> [<rule> ...]
 #
 # <chain-key> is `Bash` or `Write` and is passed by hooks.json, never derived
 # from the payload. Deriving it would mean an unparseable payload selects NO
@@ -142,12 +142,21 @@
 # library exists to remove. The matcher already decided which chain this is;
 # the argument records that decision where it cannot be lost.
 #
+# <rule> ... names the rules to run, out of that chain's manifest lines, in
+# manifest order. With none named, the whole chain runs (the terminal). The
+# desktop app's lease names the ones that make sense for every user and leaves
+# out the terminal operator's (richos-core `engine_profile.rs`, `APP_BASH_RULES`
+# and `APP_WRITE_RULES`). A named rule the chain does not list is announced and
+# not run, the way an absent module is: it never blocks and never passes quietly.
+#
 # Exit codes: 0 allow, 2 block. Anything else is a bug in this file.
 
 set -uo pipefail
 
 _DSP_TAG="(hook: scripts/hooks/dispatch-pretooluse.sh)"
 _DSP_CHAIN_KEY="${1:-}"
+[ "$#" -gt 0 ] && shift
+_DSP_ONLY="$*"
 
 if [ -z "$_DSP_CHAIN_KEY" ]; then
     printf '%s\n' "ERROR: dispatch-pretooluse.sh: no chain key argument. hooks.json must pass 'Bash' or 'Write'. NO RULE IN THIS CHAIN EVALUATED THIS CALL. $_DSP_TAG" >&2
@@ -258,6 +267,21 @@ if [ -z "$_DSP_MODULES" ]; then
     exit 2
 fi
 
+# --- the caller's own selection (the desktop app) ---------------------------
+# Rules named after the chain key run, in manifest order; the rest of the chain
+# does not. A name the chain does not list is kept apart and announced below.
+_DSP_UNKNOWN=""
+if [ -n "$_DSP_ONLY" ]; then
+    _dsp_kept=""
+    for _dsp_m in $_DSP_MODULES; do
+        case " $_DSP_ONLY " in *" $_dsp_m "*) _dsp_kept="$_dsp_kept $_dsp_m" ;; esac
+    done
+    for _dsp_m in $_DSP_ONLY; do
+        case " $_dsp_kept " in *" $_dsp_m "*) ;; *) _DSP_UNKNOWN="$_DSP_UNKNOWN $_dsp_m" ;; esac
+    done
+    _DSP_MODULES="${_dsp_kept# }"
+fi
+
 # --- rules this call cannot concern (2026-10-21) ---------------------------
 # Measured 2026-10-21: the Bash chain cost 1.33 CPU-s for a plain `ls`, ~6% of
 # the Mac at the team's call rate, and most of it was rules about commands the
@@ -354,6 +378,10 @@ _DSP_STDOUT_EMITTERS=0
 _DSP_STDOUT=""
 : > "$_DSP_WORK/failures"
 : > "$_DSP_WORK/emitters"
+for _dsp_m in $_DSP_UNKNOWN; do
+    printf '%s\n' "ERROR: dispatch-pretooluse.sh: rule '$_dsp_m' was named for the ${_DSP_CHAIN_KEY} chain, but the manifest does not list it there. THAT RULE DID NOT EVALUATE THIS CALL; every other named rule ran. $_DSP_TAG" \
+        | tee -a "$_DSP_WORK/failures" >&2
+done
 _DSP_N=0
 for _dsp_m in $_DSP_MODULES; do
     _DSP_N=$((_DSP_N + 1))
