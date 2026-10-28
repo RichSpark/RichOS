@@ -6,14 +6,14 @@
 routes instead.
 
 1. **GitHub private vulnerability reporting — preferred.** Go to the
-   [Security tab](https://github.com/WebDevBooster/richos/security) of this
+   [Security tab](https://github.com/RichSpark/RichOS/security) of this
    repository and choose **Report a vulnerability**. The report is visible only
-   to you and the maintainer, and GitHub gives you a private thread to discuss a
+   to you and the maintainer and GitHub gives you a private thread to discuss a
    fix in.
 
    If you do not see that button, the feature has not been switched on. It is a
    per-repository setting that has to be enabled by hand after a repository
-   becomes public. Use email in that case, and say so in your message so it gets
+   becomes public. Use email in that case and say so in your message so it gets
    enabled.
 
 2. **Email: `webdevbooster@gmail.com`.** This address is already on every commit
@@ -31,8 +31,8 @@ be the first dishonest sentence in the file.
 Whatever you have. A short description of the problem beats a long one that
 waits for polish. If you can, include:
 
-- what an attacker gets, and what they need in order to get it;
-- the version you looked at — a release tag such as `v1.0.2`, or the commit
+- what an attacker gets and what they need in order to get it;
+- the version you looked at — a release tag such as `v1.0.2` or the commit
   SHA if you built from source;
 - the steps or the proof-of-concept, if you have one;
 - your operating system and how you built or installed RichOS.
@@ -45,8 +45,8 @@ which is why they are not shorter:
 | Stage | Target |
 |---|---|
 | Acknowledgment that your report arrived | 5 business days |
-| A first assessment — is it a vulnerability, and how serious | 10 business days |
-| A fix, or a written explanation of why there will not be one | depends entirely on the finding, and you will be told which |
+| A first assessment — is it a vulnerability and how serious | 10 business days |
+| A fix or a written explanation of why there will not be one | depends entirely on the finding and you will be told which |
 
 If 10 business days pass in silence, send a follow-up. Silence here means a
 message went astray, not that the report was judged and dismissed.
@@ -77,7 +77,7 @@ there is more than one line of development to support.
 Anything in this repository that a RichOS user relies on:
 
 - **The application** (`richos/app/`) — the Tauri shell, the `richos-core` runtime
-  spine, and the voice pipeline. The update path in `richos/app/src-tauri/src/updates.rs`
+  spine and the voice pipeline. The update path in `richos/app/src-tauri/src/updates.rs`
   is the highest-value target in the tree: it is what stands between a manifest
   URL and code running on somebody's Mac.
 - **The engine** (`richos/engine/`) — hooks, guards, the installer and the skills it
@@ -132,7 +132,7 @@ RichOS is a desktop application that drives a locally installed Claude Code CLI
 over stdio. Conversations, ledgers and session state are files on the user's own
 machine. What leaves the machine is what the user's own AI provider receives
 through that CLI, under that provider's terms. There is no RichOS server, no
-telemetry endpoint and no account system, and the feedback module in
+telemetry endpoint and no account system and the feedback module in
 `richos-core` carries test cases whose whole purpose is to prove that nothing
 goes outbound from it.
 
@@ -146,16 +146,16 @@ found, because both fetch code that then runs:
   runtime.
 - **The engine asset is fetched from a compile-time pin.** `RICHOS_ENGINE_URL`,
   `RICHOS_ENGINE_SHA256` and the version are baked in at build time, the
-  download is refused unless its sha256 matches the pin exactly, and a build
+  download is refused unless its sha256 matches the pin exactly and a build
   with no pin does not fetch anything at all.
 
 ## Related documents
 
 - `LICENSE` — GNU AGPL v3, the license for RichOS-authored software.
-- `docs/legal/LICENSING.md` — what that license covers, and the two carve-outs.
+- `docs/legal/LICENSING.md` — what that license covers and the two carve-outs.
 - `docs/legal/BRAND-ASSETS.md` — the brand and trademark exclusion.
 - `docs/legal/THIRD-PARTY-NOTICES.md` — bundled third-party work and its terms.
 - `docs/legal/THIRD-PARTY-RUST-DEPENDENCIES.md` — the compiled dependency
   inventory, keyed to the tracked lockfile digests.
-- `.github/CONTRIBUTING.md` — how to contribute, and what the AGPL means for a
+- `.github/CONTRIBUTING.md` — how to contribute and what the AGPL means for a
   contributor.

@@ -60,11 +60,11 @@ matches the current pin.
 fetches
 
 ```
-https://github.com/WebDevBooster/richos/releases/latest/download/latest.json
+https://github.com/RichSpark/RichOS/releases/latest/download/latest.json
 ```
 
-(or the same path at `RichSpark/RichOS`, which a copy carrying the GitHub move work asks first;
-`UPDATES.md`) and GitHub resolves `latest` to whatever the newest release is. From the moment this release
+(or the same path at `WebDevBooster/richos`, the address before the GitHub move of 2026-10-28,
+which a copy older than the move work knows alone and GitHub redirects; `UPDATES.md`) and GitHub resolves `latest` to whatever the newest release is. From the moment this release
 becomes the newest, that manifest is what everybody gets — so it must not exist before the
 archive it names does. A manifest naming a file that is not there yet is an update that fails
 for every customer, at the one moment nobody is watching.
@@ -114,10 +114,10 @@ richos/app/scripts/make-release.sh plan
 richos/app/scripts/make-release.sh engine
 
 # 2-3. publish the engine asset first
-gh release create v0.1.0 --repo WebDevBooster/richos \
+gh release create v0.1.0 --repo RichSpark/RichOS \
     --title 'RichOS 0.1.0' --notes 'What changed, in the language the reader speaks.'
 gh release upload v0.1.0 richos/app/target/release-staging/v0.1.0/richos-engine-1.0.0.tar.gz \
-    --repo WebDevBooster/richos
+    --repo RichSpark/RichOS
 
 # 4. the digest, off the wire
 richos/app/scripts/make-release.sh verify-engine
@@ -129,12 +129,12 @@ export RICHOS_NOTARY_KEY=...        # see richos/app/scripts/package-app.sh --he
 richos/app/scripts/make-release.sh app --notes 'What changed, in the language the reader speaks.'
 
 # 6-7. the app assets, then the manifest LAST
-gh release upload v0.1.0 --repo WebDevBooster/richos \
+gh release upload v0.1.0 --repo RichSpark/RichOS \
     richos/app/target/release-staging/v0.1.0/RichOS.app.tar.gz \
     richos/app/target/release-staging/v0.1.0/RichOS.app.tar.gz.sig \
     richos/app/target/release-staging/v0.1.0/RichOS-0.1.0-macos-aarch64.zip \
     richos/app/target/release-staging/v0.1.0/SHA256SUMS
-gh release upload v0.1.0 --repo WebDevBooster/richos \
+gh release upload v0.1.0 --repo RichSpark/RichOS \
     richos/app/target/release-staging/v0.1.0/latest.json
 
 # 8. the loop closes: download everything published and require it to match

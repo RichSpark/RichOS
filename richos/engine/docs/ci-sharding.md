@@ -2,7 +2,7 @@
 
 **2026-09-10.** `engine-self-verify` was a single job that took **123 minutes** and had not
 fired on a push since 2026-09-01. This document is why it now fires on every push, what had
-to exist first, and what each measurement here was measured with — every number below carries
+to exist first and what each measurement here was measured with — every number below carries
 the command or the run id that produced it.
 
 > A read of the source tells you what a script says. Only a run tells you what it does.
@@ -35,20 +35,20 @@ while they still have the context to fix it.
 The mapping is four rules, in order: the path IS a suite; a sibling `<stem>.test.sh` exists; a
 suite NAMES its basename (`grep -lF`); the sectioned suite's individual SECTIONS name it.
 
-**The third rule carries the mapping, and its premise was verified before being relied on:**
+**The third rule carries the mapping and its premise was verified before being relied on:**
 all 96 files under `scripts/hooks/` are named by at least one suite. That is not left as a
 remembered fact — `ci-affected-units.test.sh` case **A5** re-derives it on every run and fails
 the moment it stops being true.
 
-**An unmapped executable is a failure, and that is the point.** The dangerous case is not a
+**An unmapped executable is a failure and that is the point.** The dangerous case is not a
 diff that maps to too much; it is one that maps to NOTHING, because the gate then certifies
 the push against an empty set. A changed `.sh`/`.py` that no suite names is named and, under
 `--strict`, fails. The remedy is never "add it to an exclusion list here" — the list would
-BE the untested surface. Give it a suite, or make a suite name it.
+BE the untested surface. Give it a suite or make a suite name it.
 
-**The worst case was stated, and then the first real push produced it.** A change to the shared
+**The worst case was stated and then the first real push produced it.** A change to the shared
 fixture at the top of `contract-integrity.test.sh` maps to all 24 of its sections; the commits
-in this very branch touch `contract-integrity-probe.sh`, which that suite's preamble names, and
+in this very branch touch `contract-integrity-probe.sh`, which that suite's preamble names and
 they pull in `reconcile-terminal-worktrees.test.sh` at 940 s besides. Run `34422722682`, pushed
 2026-09-10, selected **54 units costing ~100 minutes serial** — and the `affected` job was one
 job with a 60-minute timeout. It would have been killed.
@@ -72,18 +72,18 @@ restriction that silently dropped one would plan over less than it was asked for
 `affected-coverage` then proves the affected shards covered exactly the set the diff selected —
 checked against the RESTRICTED plan, never the whole inventory, which would report 94 false
 absences and teach everyone to ignore the job. `ci-shard.test.sh` case S17 checks both
-directions: the restricted plan certifies, and the same receipts against the whole inventory
+directions: the restricted plan certifies and the same receipts against the whole inventory
 correctly fail.
 
 **`affected-coverage` is the job to mark required**, not `affected`. It is the one that both
-waits for every affected shard and proves the union, and it is the only one of the two that
+waits for every affected shard and proves the union and it is the only one of the two that
 still reports on a docs-only diff, where `affected` is correctly skipped and the absence of a
 required check would otherwise leave the commit ungated.
 
-**A NEW CHECK NEEDS NO EDIT HERE, and that was tested rather than claimed.** On 2026-09-10 the
+**A NEW CHECK NEEDS NO EDIT HERE and that was tested rather than claimed.** On 2026-09-10 the
 lead asked whether the changed-paths job wanted the cleanup-routing contract script,
 which had just landed as a standalone script with its own suite (both were removed with the
-old workspace machinery on 2026-09-11; the measurement below is kept as it was taken). The answer is no, and the
+old workspace machinery on 2026-09-11; the measurement below is kept as it was taken). The answer is no and the
 answer is the design:
 
 ```
@@ -103,7 +103,7 @@ refuses to keep — and it would have to be re-added for every future standalone
 
 `scripts/ci-units.sh` derives the inventory; `scripts/ci-shard.sh` runs a shard of it.
 
-**A unit is not a suite.** Sharding buys nothing past the largest indivisible unit, and one
+**A unit is not a suite.** Sharding buys nothing past the largest indivisible unit and one
 suite dominated everything:
 
 | unit | Linux, run `34396549904` |
@@ -114,11 +114,11 @@ suite dominated everything:
 
 `contract-integrity.test.sh` already takes `--only <section>` and carries 24 sections, so it
 contributes **24 units** instead of one. That moves the floor from a 39-minute suite to the
-largest unit that cannot be divided further — a quarter of an hour rather than two hours, and a
+largest unit that cannot be divided further — a quarter of an hour rather than two hours and a
 verdict somebody will wait for. Twelve shards sit below that floor already, so **more shards
 cannot improve the wall clock**; only making a big unit divisible can.
 
-**A scoped section is green at exit 3, and its exit 0 is a FAILURE.** That suite exits 3 when
+**A scoped section is green at exit 3 and its exit 0 is a FAILURE.** That suite exits 3 when
 scoped-and-green precisely so nothing can read a partial run as a full one. The shard runner
 therefore expects 3 — and treats 0 as `SCOPE-LOST`, because 0 from a scoped invocation means
 the `--only` selector did not apply and the unit ran something other than what its id says.
@@ -127,7 +127,7 @@ the `--only` selector did not apply and the unit ran something other than what i
 than it was given still exits 0.** A selector that stopped matching, a matrix entry that never
 started, a job stopped by a concurrency rule — each is a green tick over an unverified commit,
 and twelve green jobs is not the same claim as "121/121". So every unit writes a **receipt**
-(unit id, exit code, verdict, wall clock, shard, **and the commit**), and the `coverage` job
+(unit id, exit code, verdict, wall clock, shard, **and the commit**) and the `coverage` job
 refuses unless:
 
 - the union of units run **equals** the planned inventory exactly — a missing one is named, an
@@ -153,20 +153,20 @@ shipped reaper from inside `session-start-stdin.test.sh`). A unit that changes t
 
 **Since 2026-09-27 each unit gets a record of its own.** The canary compared the live record
 before and after a unit, so any spawn, land or message elsewhere on the machine during the
-unit failed it as `RECORD-TOUCHED`, and engine proofs could pass only on an idle session. The
+unit failed it as `RECORD-TOUCHED` and engine proofs could pass only on an idle session. The
 runner now runs every unit with `HOME` in a throwaway home (CI's shape: no record, a git
 identity), removes every variable that points into the operator's record (`CLAUDE_CONFIG_DIR`
 and `RICHOS_WORKSPACES_DIR` included, so their defaults follow `HOME`; they are never set, so a
-unit that builds a world of its own keeps it, S15h), and watches the record in that home
+unit that builds a world of its own keeps it, S15h) and watches the record in that home
 (`rc_sandbox` in `lib/record-canary.sh`). A unit that would have written the operator's record writes that one
 and is still red (S15b-S15d); a concurrent writer to the live record no longer fails a clean
 unit (S15e). What it cannot see is named in the library's header: a path to the operator's
-record fixed before the unit started, or read from the password database.
+record fixed before the unit started or read from the password database.
 
 **`run-all-tests.sh` was not modified.** The sharded reading is a second, independent
-implementation of the same discovery rule, and `ci-units.test.sh` case **U1** asserts by
+implementation of the same discovery rule and `ci-units.test.sh` case **U1** asserts by
 execution that its suite set is byte-identical to `run-all-tests.sh --list`. A shared helper
-would have made them agree by construction, and then nothing would have noticed when one
+would have made them agree by construction and then nothing would have noticed when one
 started missing a directory.
 
 ### 3. A check for runs that never happened — `engine-run-record.yml`
@@ -174,7 +174,7 @@ started missing a directory.
 Every other check asks "did it pass?". This one asks "did it RUN?"
 
 GitHub Free allows **20 concurrent jobs account-wide**, shared here with six other active
-workflows, and per GitHub's documentation an exceeded limit **DROPS** runs rather than queueing
+workflows and per GitHub's documentation an exceeded limit **DROPS** runs rather than queueing
 them. A dropped run leaves no cross, no yellow dot, no `gh run list` entry — so every tool that
 answers "is main green?" from the latest run answers with the **previous** commit's verdict,
 indefinitely. That failure is invisible by construction.
@@ -182,7 +182,7 @@ indefinitely. That failure is invisible by construction.
 It compares **pushes**, not commits: `on: push` fires once per push, so five commits pushed
 together correctly produce one run and a commit-based check would cry wolf on every batch.
 
-It lives in a **separate workflow on a schedule**, and that is not tidiness: if
+It lives in a **separate workflow on a schedule** and that is not tidiness: if
 `engine-self-verify`'s run was the one dropped, a job inside it did not run either. A check for
 absence cannot be hosted by the thing that might be absent.
 
@@ -209,9 +209,9 @@ re-packed against its own receipts the plan now says 410 s, which is the number 
 demonstrate. `timeout-minutes: 60` is still 5.7x that and should be re-promised against a run,
 not against this sentence.
 
-## "Required" is a repository setting, and it is NOT set — deliberately left for a decision
+## "Required" is a repository setting and it is NOT set — deliberately left for a decision
 
-The `affected-coverage` job is **the one to mark required**, and nothing here has marked it,
+The `affected-coverage` job is **the one to mark required** and nothing here has marked it,
 because doing so changes how this repository accepts work and that is not an engineer's call to
 make on the way past.
 
@@ -227,7 +227,7 @@ $ gh api repos/WebDevBooster/richos/branches/main/protection
 ```
 
 Branch protection exists on `main` and carries **no `required_status_checks` key at all**. So
-today every check in this directory is advisory: it runs, it reports, and nothing consults it
+today every check in this directory is advisory: it runs, it reports and nothing consults it
 before a commit lands.
 
 **What turning it on would actually do, stated rather than glossed**, because the consequence is
@@ -235,27 +235,27 @@ not "CI matters more":
 
 - **It blocks the lander.** The lander pushes directly to `main`. A required status check applies
   to direct pushes as well as pull requests, so a red or missing check stops a land until it is
-  green or the protection is bypassed. That is the point of it, and it is also a real change to
+  green or the protection is bypassed. That is the point of it and it is also a real change to
   how this team works on a bad day.
 - **A DROPPED run leaves the check permanently pending, not green.** That is strictly better than
   today's behavior, where absence reads as the previous commit's success — but "pending forever"
-  and "blocked forever" are the same thing to somebody trying to land, and the remedy is a manual
+  and "blocked forever" are the same thing to somebody trying to land and the remedy is a manual
   re-dispatch. `engine-run-record.yml` is what turns that from a mystery into a named finding.
-- **The check name must be the JOB name, and matrix jobs do not have stable names.**
+- **The check name must be the JOB name and matrix jobs do not have stable names.**
   `affected-coverage` and `coverage` are the two jobs whose names are fixed; the shards are
-  `shards (1, 12)` and so on, and requiring those individually would break the moment the shard
-  count changes. This is the second reason the coverage jobs, and not the shard jobs, are the
+  `shards (1, 12)` and so on and requiring those individually would break the moment the shard
+  count changes. This is the second reason the coverage jobs and not the shard jobs, are the
   ones to require.
 
 **The one command, for whoever decides:**
 
 ```
-gh api -X PUT repos/WebDevBooster/richos/branches/main/protection/required_status_checks \
+gh api -X PUT repos/RichSpark/RichOS/branches/main/protection/required_status_checks \
   -f strict=false -f 'contexts[]=affected-coverage'
 ```
 
 Add `-f 'contexts[]=coverage'` as well to require the full pass on `main` — which is the
-stronger and slower promise, and a separate decision from the fast one.
+stronger and slower promise and a separate decision from the fast one.
 
 ## The executions, because a YAML that looks right is not a gate that works
 
@@ -263,11 +263,11 @@ Every claim above is from a run somebody can open.
 
 | run | event | SHA | outcome |
 |---|---|---|---|
-| `34422722682` | push | `328ff8c9` | **the affected gate as ONE job, and it was wrong.** 54 units, ~100 min serial, 60-minute timeout. Stopped by hand once the arithmetic was read off the plan rather than waited for. This is the run that produced the sharded affected gate. |
+| `34422722682` | push | `328ff8c9` | **the affected gate as ONE job and it was wrong.** 54 units, ~100 min serial, 60-minute timeout. Stopped by hand once the arithmetic was read off the plan rather than waited for. This is the run that produced the sharded affected gate. |
 | `34423889101` | push | `e62ab1ae` | **green.** 21 minutes wall clock, 12 affected shards, coverage 32/32. |
 | `34425552226` | push | `a84784d3` | **green in 1 m 11 s.** A three-unit diff produced a THREE-shard matrix, not twelve — the matrix carries only shards that have work. This is the required check at the speed it promises. |
-| `34425677957` | dispatch | `a84784d3` | **the FULL pass, and it is the most useful run of the four.** See below. |
-| `34432651037` | dispatch | `05124e66` | red — `worktree-ledger` again, on a different shard. Two failures is not a flake, and this is the run that turned it into a diagnosis. |
+| `34425677957` | dispatch | `a84784d3` | **the FULL pass and it is the most useful run of the four.** See below. |
+| `34432651037` | dispatch | `05124e66` | red — `worktree-ledger` again, on a different shard. Two failures is not a flake and this is the run that turned it into a diagnosis. |
 | `34434314424` | dispatch | `cfa8e513` | **the full pass, GREEN. 150/150 units, all at one commit, longest shard 10m49s.** |
 
 Run `34423889101`, job by job:
@@ -294,7 +294,7 @@ Run `34423889101`, job by job:
 - coverage                      skipped with it
 ```
 
-### The full sharded pass, `34425677957` — red, and red in exactly the right way
+### The full sharded pass, `34425677957` — red and red in exactly the right way
 
 **148 units, all 148 accounted for, one of them red.** The coverage job's verdict:
 
@@ -307,34 +307,34 @@ Run `34423889101`, job by job:
 
 **No missing units. No unplanned units. No duplicates. No mixed commits.** The union proof
 passed and the run was refused for the only reason left — which is the whole design working:
-twelve shards' exit codes became one claim about a named set, and the one thing wrong with that
+twelve shards' exit codes became one claim about a named set and the one thing wrong with that
 set was named.
 
 Shard wall clocks ran 5 m 26 s to 17 m 28 s against 140 minutes serial.
 
-**Two findings came out of that run, and neither is the suite that went red.**
+**Two findings came out of that run and neither is the suite that went red.**
 
 **1. It asked for 26 jobs at once and GitHub put it in `queued`.** Twelve affected shards, twelve
-full shards, plan and non-suite-steps. The account-wide ceiling is 20 across every workflow, and
+full shards, plan and non-suite-steps. The account-wide ceiling is 20 across every workflow and
 an exceeded limit DROPS runs. Declaring `max-parallel: 6` and then asking for two matrices at
 once was arguing with myself. The affected set is a SUBSET of the full inventory by
-construction, so `affected` is now skipped whenever `shards` runs, and `affected-coverage` says
+construction, so `affected` is now skipped whenever `shards` runs and `affected-coverage` says
 so out loud rather than going quiet. 26 jobs becomes 14.
 
 **2. `scripts/lib/worktree-ledger.test.sh` is red on git >= 2.55 — which is what every GitHub
 runner ships.** This was written up first as an unreproducible one-off. It then failed a SECOND
-time, on a different shard and a different commit, and one variable isolated it:
+time, on a different shard and a different commit and one variable isolated it:
 
 | host | git | the `bound-members-fallback` mutant |
 |---|---|---|
 | `ubuntu:24.04` container | 2.43.0 | **passes** — removing the fallback turns L28 red, as the harness expects |
-| the same image + git-core PPA | 2.55.0 | **fails** — L29 goes red returning `[]`, and L28 does not |
+| the same image + git-core PPA | 2.55.0 | **fails** — L29 goes red returning `[]` and L28 does not |
 | the development Mac | 2.52.0 | passes |
 | `ubuntu-latest` | **2.55.0** | fails, twice: run `34425677957` shard 11, run `34432651037` shard 4 |
 
 **The BASE suite passes 37/37 on every host.** Only the mutation harness catches it, which is
 that harness earning its cost — and what it reports is precise: the mutant forces the
-registration fallback unconditionally, and under 2.55 that returns `[]` for the L29 fixture
+registration fallback unconditionally and under 2.55 that returns `[]` for the L29 fixture
 where under 2.43 it returns registrations. So `read_all()` yields no registration for that
 fixture under the newer git.
 
@@ -342,7 +342,7 @@ fixture under the newer git.
 than to test: not a flake (twice, different shards, different commits); not an ordering
 interaction introduced by sharding (the whole of shard 11, in the same order, is green on
 Linux — the hypothesis worth killing first, because it would have been a defect in this work);
-not TMPDIR shape (plain, real, symlinked, and the runner's own `/home/runner/work/_temp`, all
+not TMPDIR shape (plain, real, symlinked and the runner's own `/home/runner/work/_temp`, all
 pass); and not the seal (a hand-built fixture seals a correctly bound native member under 2.55).
 
 It is DECLARED rather than fixed, because it is worktree-lifecycle internals and the lead ruled
@@ -357,7 +357,7 @@ column: a shell predicate saying WHERE it applies.
   (case S18e).
 - Where the predicate is false the unit is judged **normally, rule 2 included** — a host without
   the defect gets a real verdict rather than a tolerated one (S18b, S18c).
-- A predicate that cannot be evaluated is treated as **applying**, and says so. Failing open
+- A predicate that cannot be evaluated is treated as **applying** and says so. Failing open
   would rebuild the skip list one broken shell expression at a time (S18d).
 
 A mechanism that can only say "red everywhere" describes a defect shape that is not the common
@@ -378,13 +378,13 @@ than the 54 of the earlier run because the diff base moved with the push — the
 push would be this workflow starving the other six of the account's 20 concurrent jobs, which is
 the same limit `engine-run-record.yml` exists to catch the consequences of.
 
-## The four red units, and what was done with each
+## The four red units and what was done with each
 
 Each was reproduced on Linux locally first, in an `ubuntu:24.04` container built to the
 2026-09-04 record's specification (bash 5.2.21, git 2.43.0, python3 3.12.3, unprivileged uid
 1001, `rsync`/`procps`/`lsof` present, the clone alone in its directory so `../richos-hq` does
-not resolve), and each was also run on macOS. **That second run is what separated two
-completely different problems**, and the brief's framing — inflow, not portability — turned out
+not resolve) and each was also run on macOS. **That second run is what separated two
+completely different problems** and the brief's framing — inflow, not portability — turned out
 to be even more right than it claimed.
 
 ### FIXED — `contract-integrity.test.sh` case 33 (Linux only)
@@ -393,9 +393,9 @@ Case 33 asserts that Layer N **warns** rather than hard-fails when `settings.loc
 untracked but not ignored, so it expects the probe to exit 0. On Linux it got 2.
 
 The cause was not Layer N. The case points `GIT_CONFIG_GLOBAL` at a throwaway config to make
-the gitignore answer deterministic, and points `GIT_CONFIG_SYSTEM` at `/dev/null` — which
+the gitignore answer deterministic and points `GIT_CONFIG_SYSTEM` at `/dev/null` — which
 between them leave **no `user.name` and no `user.email` anywhere**. The probe's own Layer Q
-fixture then cannot `git commit`, Q reports `FUNCTIONAL CANARY DID NOT RUN`, and the probe
+fixture then cannot `git commit`, Q reports `FUNCTIONAL CANARY DID NOT RUN` and the probe
 exits 2 for a reason with nothing to do with the case.
 
 It survived on macOS **by accident of the host**: git falls back to
@@ -433,7 +433,7 @@ refusals.
 `legacy-workspace-expiry`, `legacy-workspace-retirement`, `terminal-branch-shadow`,
 `terminal-recovery-shadow` and `legacy-workspace-operator-integration` each write
 `shadow.TRUSTED_GIT if sys.platform == 'darwin' else '/usr/bin/git'` at their call sites. The
-answer was decided; it just was not written where the DEFAULT is taken from, and the one
+answer was decided; it just was not written where the DEFAULT is taken from and the one
 acceptance suite that did not copy the incantation is the one that went red.
 
 `/usr/bin/git` is the right non-darwin value and this is not a loosening: `_authority` already
@@ -449,8 +449,8 @@ Verified: 7/7 on Linux, 7/7 on macOS.
 
 ### DECLARED, then FIXED BY THEIR OWNER the same day — `shell-worktree-sparse.test.sh` and `terminalize-agent-worktrees.test.sh`
 
-**Both are red identically on macOS and on Linux, so neither is a portability finding, and
-neither was ever a CI problem.** Both are contract regressions, and the attribution was proven
+**Both are red identically on macOS and on Linux, so neither is a portability finding and
+neither was ever a CI problem.** Both are contract regressions and the attribution was proven
 by execution rather than argued:
 
 | unit | at the suspect's parent | at `4f01e5c7` | broken by |
@@ -460,20 +460,20 @@ by execution rather than argued:
 
 `6472bb60` made every native member carry `cleanup_owner=claude-code` and taught
 `shell-worktree-sparse.eligible()` to refuse such a member, so no shell is sparsified any more.
-`2afb9703` introduced `cleanup_policy=integrated-daily`, and `terminalize()` now takes the
+`2afb9703` introduced `cleanup_policy=integrated-daily` and `terminalize()` now takes the
 save_ref+quarantine route only for a member carrying neither marker. **Neither commit updated
-the suite it invalidated**, and both suites still assert the old contract.
+the suite it invalidated** and both suites still assert the old contract.
 
 Re-specifying them means deciding what the new contract IS, which belongs to the engineer who
 changed it and not to whoever is turning CI on. **The lead ruled on that on 2026-09-10: a
-dedicated engineer owns both fixes, and neither suite — nor `shell-worktree-sparse.py`,
+dedicated engineer owns both fixes and neither suite — nor `shell-worktree-sparse.py`,
 `terminalize-agent-worktrees.sh` or `worktree-transactions.py` — is to be edited from the CI
 side.** Both commits DID update some suites (`worktree-transactions`, `reap-stale-worktrees`,
 `reconcile-terminal-worktrees`) and left these two behind, which is why the bisect is
 unambiguous. Leaving them red would put a cross on every
 commit for a reason unrelated to that commit; deleting their assertions would hide two real
 defects. So they are declared in `scripts/lib/ci-known-red.tsv` with the commit, the failing
-cases, a sentence saying what would un-skip them, and an **expiry**.
+cases, a sentence saying what would un-skip them and an **expiry**.
 
 ### Both rows were deleted the same day, by the rule that exists to delete them
 
@@ -484,7 +484,7 @@ than taken on trust: **21/21** and **42/42** at that tip, against 6 and 11 failu
 `4f01e5c7`.
 
 **Nobody remembered the rows.** `ci-shard.sh` ran the two units after the merge, found them
-green, and failed the run:
+green and failed the run:
 
 ```
 FAIL — declared red, but it PASSED
@@ -495,15 +495,15 @@ becomes permanent.
 
 **Twelve days of tolerance were granted and fourteen hours were used.** The rows are gone and
 the table is empty. That is the only evidence that will ever exist for whether this file is a
-skip list or not, and the rule which produced it — a declared unit that PASSES fails the build —
+skip list or not and the rule which produced it — a declared unit that PASSES fails the build —
 is the one that would have been easiest to leave out.
 
-**This is not a skip list, and the difference is enforced rather than asserted:**
+**This is not a skip list and the difference is enforced rather than asserted:**
 
-1. a declared unit that fails is reported `KNOWN-RED`, printed every run with its expiry, and
+1. a declared unit that fails is reported `KNOWN-RED`, printed every run with its expiry and
    does not fail the job;
 2. **a declared unit that PASSES fails the job** — the defect is fixed and the row is now a
-   lie. This is the negative control, and without it the table would silently outlive
+   lie. This is the negative control and without it the table would silently outlive
    everything in it, which is how every skip list everywhere becomes permanent;
 3. **an entry past its expiry fails the job** — the tolerance was time-boxed when it was
    granted, so a decision is forced rather than deferred indefinitely.
@@ -518,7 +518,7 @@ $ richos/engine/scripts/ci-units.sh plan 12
 the serial pass is 12.0x the longest shard
 ```
 
-**82 minutes of serial verification in 6.8 minutes of wall clock, and it began the day as 123
+**82 minutes of serial verification in 6.8 minutes of wall clock and it began the day as 123
 minutes in one job.** Every weight is from run `34434314424` — a single full sharded pass on
 `ubuntu-latest`, so the numbers are comparable with each other, which numbers stitched from
 several sources are not.
@@ -537,7 +537,7 @@ one day and every version was honestly wrong:
 | run `34423889101` receipts | 870.7 s | the runner, before mutant concurrency |
 | run `34434314424` receipts | **381.6 s** | `mutation-pool.sh` landed and made the harnesses concurrent |
 
-Four numbers for one harness, none of them wrong when taken, and only the last is the cost CI
+Four numbers for one harness, none of them wrong when taken and only the last is the cost CI
 pays today. **A weight is a measurement with a date, never a fact** — which is why every row
 carries the run it came from and why `--verify-receipts` prints the serial cost and the longest
 shard on every run.
@@ -545,7 +545,7 @@ shard on every run.
 ## Re-packing the shards against measured cost
 
 `scripts/lib/ci-unit-weights.tsv` is one measurement per line, each carrying the run it came
-from. A unit with no recorded weight is packed at `DEFAULT_WEIGHT` — never at zero, or a batch
+from. A unit with no recorded weight is packed at `DEFAULT_WEIGHT` — never at zero or a batch
 of new suites all lands in one shard and that shard becomes the wall clock.
 
 To re-measure: read the per-unit durations out of a real run's receipts and update that file.
