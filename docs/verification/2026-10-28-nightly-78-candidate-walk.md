@@ -67,6 +67,58 @@ Found by my earlier run, via `codex-watch-walk.py` in guest `walk-6f77dcb76a39` 
 **Gaps, non-blocking:** no light and dark frames (the walk reads the ledger, not the screen); the
 `CODEX_CHANNELS` setting's entrance was not walked.
 
-## Items 2 and 3, contrast, findings, method
+## 3. Updater, changelog link and the 1.2.5 bump (`8a2689030`, `9e64a48fc`): light half PASS, dark half not yet walked
 
-Added in the commits that follow.
+Run `walk-78187db50c0a` (guest, steps-walk.py with `walkE.json`, exit at step 37 on a plan error of
+mine, see below). Frames and step records: `/Volumes/E1TB/tmp/claude/ray/e2-out/` (`steps.json`,
+`e-00-home.png`, `e-01-settings-light.png`, `e-02-after-check.png`, `e-03-browser.png`).
+
+- **Identity in the running app:** `app.log` reads `this app: built from
+  f1de705bab2ea4d366c0dff996f635bba9599280` (step 3).
+- **Settings version line (1.2.5 bump): PASS, light.** The Updates row reads "RichOS
+  1.2.5-nightly.20261028.78 is up to date." (accessibility tree, step 17; `e-02-after-check.png`).
+- **Check for updates: PASS, light.** Pressed in the guest (step 21); after 20 s the row reads
+  "Checked just now." and the same up-to-date line, no error.
+- **See what's new: PASS.** The link ("See what's new (opens in your web browser)") was pressed
+  (step 25). Safari, the guest's default browser, then opened
+  `https://github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md` (step 28, read back with
+  osascript) and the page loaded: "Changelog", 1.2.4 section (`e-03-browser.png`). It opened in the
+  browser, not inside the app window. The new address is the one in the code (`updates.js`
+  `CHANGELOG_KEY`, `opener.rs` allowlist); the old address stays allowlisted (source).
+- **My plan error, not the app's:** after Safari the Settings menu was still open and my next step
+  pressed the Settings button again, so the dark-theme toggle was not on screen
+  (`ax: notfound`, step 38). A corrected plan, `walkF.json` (click Dark theme directly), was queued
+  but had not started when this handoff was forced.
+- **Not walked yet:** Settings version line and Check for updates in the dark theme.
+
+## Contrast so far (`qa/contrast.py`, `e-02-after-check.png`, light, 100% text size)
+
+| What | Size (source, `style.css`) | Light | Dark |
+|---|---|---|---|
+| "Updates" heading | 16px (not read from CSS, the row's title) | 18.07:1 | not yet walked |
+| "RichOS 1.2.5-nightly… is up to date." | 1rem = 16px (`.update-line`) | 18.07:1 | not yet walked |
+| "Checked just now." | 1rem = 16px (`.update-sub`) | 6.35:1 (#595E67 on #FDFCF8) | not yet walked |
+| "Check for updates" button label | 1rem = 16px (`.update-btn`) | 15.58:1 | not yet walked |
+| "See what's new" link | 1rem = 16px (`.update-notes`) | 6.65:1 (#715715 on #FDFCF8) | not yet walked |
+
+All light values clear 4.5:1 and the 16px floor.
+
+## Item 2: write checks in every app session (`20ce71c36`): result not read
+
+Run `walk-27568a1d4c61` (`write-checks-walk.py`, `--seed-home` on an empty home first) reached
+`identity: PASS`, `first-run: PASS`, `connect: PASS`, `config: PASS` in the log
+(`/Volumes/E1TB/tmp/claude/ray/wc2-run.log`) before this handoff was forced. Its `checks` step (the
+secret-key write and the British-spelling write) and the final report in
+`/Volumes/E1TB/tmp/claude/ray/wc2-out/report.json` were not read by me. Not claimed PASS.
+
+## Handoff (forced by the Claude-quota gate)
+
+**Verdict: NOT YET DECIDED.** Nothing found so far is a hole a user could hit. Remaining:
+
+1. Read `wc2-out/report.json` and the end of `wc2-run.log` for item 2's `checks` step.
+2. Read `f-run.log` and `f-out/` (`walkF.json` dark walk), compute dark contrast with
+   `qa/contrast.py` on `f-01-settings-dark.png` and `f-02-after-check-dark.png`, fill the table.
+3. Confirm both guests are gone: `slots.py status`, no `walk-` guest left (run-walk.py quits and
+   deletes on its own; I stopped nothing by hand).
+4. Fill the first-table verdict line, delete `/Volumes/E1TB/tmp/claude/ray`, run the end-of-task
+   `git merge main` and `proof-run.py`.
