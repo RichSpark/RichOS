@@ -95,6 +95,13 @@ def seed_home(home):
     return 0
 
 
+def paths_of(find_output):
+    """`find`'s output as paths, one per line. The teammate's worktree is under the app's
+    "Application Support" folder, so splitting on whitespace cuts every path in two (the walk of
+    2026-10-28: "cat: …/home/Library/Application: No such file or directory")."""
+    return [line for line in find_output.splitlines() if line]
+
+
 def judge(calls, transcripts, found):
     """The verdict from the evidence alone: (failures, summary). `found` maps each file name to the
     contents of every copy of it in the fixture home."""
@@ -136,8 +143,8 @@ class WriteChecksWalk(skills_walk.SkillsWalk):
     def found(self):
         out = {}
         for name in (SECRET_FILE, DIALECT_FILE):
-            paths = guest(self.vm, 'find ' + shlex.quote(self.home) + ' -name ' + shlex.quote(name)
-                          + ' -type f 2>/dev/null || true', 60).split()
+            paths = paths_of(guest(self.vm, 'find ' + shlex.quote(self.home) + ' -name ' + shlex.quote(name)
+                                   + ' -type f 2>/dev/null || true', 60))
             out[name] = [guest(self.vm, 'cat ' + shlex.quote(p)) for p in paths]
         return out
 

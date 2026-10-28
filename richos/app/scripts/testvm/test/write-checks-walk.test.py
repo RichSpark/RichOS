@@ -59,6 +59,14 @@ class Verdict(unittest.TestCase):
         failures, _ = walk.judge(CALLS, TRANSCRIPTS, dict(FOUND, **{walk.DIALECT_FILE: [NOTE]}))
         self.assertTrue(any('neither fixed nor refused' in f for f in failures), failures)
 
+    def test_a_path_with_a_space_stays_one_path(self):
+        out = ('/h/Library/Application Support/com.richos.app/engine-state/target-worktrees/x/w/'
+               + walk.DIALECT_FILE + '\n/h/Acme/' + walk.DIALECT_FILE + '\n')
+        self.assertEqual(walk.paths_of(out), [
+            '/h/Library/Application Support/com.richos.app/engine-state/target-worktrees/x/w/' + walk.DIALECT_FILE,
+            '/h/Acme/' + walk.DIALECT_FILE])
+        self.assertEqual(walk.paths_of(''), [])
+
     def test_this_file_is_not_itself_a_key_or_a_british_word(self):
         source = (HERE / 'write-checks-walk.py').read_text()
         self.assertNotIn(walk.KEY, source)
