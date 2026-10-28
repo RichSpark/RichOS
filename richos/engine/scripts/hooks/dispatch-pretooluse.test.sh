@@ -373,6 +373,33 @@ fi
 mv "$SBD/manifest.parked" "$SBD/dispatch-pretooluse.manifest"
 
 echo
+echo "--- F2. a caller's own selection (the desktop app's lease) ---"
+
+mkmanifest 'Bash|t-block.sh' 'Bash|t-pass.sh' 'Bash|t-block2.sh'
+OUT="$(bash "$SBD/dispatch-pretooluse.sh" Bash t-pass.sh < "$PAYLOAD" 2>"$SANDBOX/err")"; RC=$?
+ERR="$(cat "$SANDBOX/err")"
+if [ "$RC" = 0 ] && [ -z "$ERR" ]; then
+    ok "D17a named rules run and the chain's other rules do not"
+else
+    bad "D17a named rules run and the chain's other rules do not (rc=$RC err=$ERR)"
+fi
+OUT="$(bash "$SBD/dispatch-pretooluse.sh" Bash t-block2.sh t-pass.sh < "$PAYLOAD" 2>"$SANDBOX/err")"; RC=$?
+ERR="$(cat "$SANDBOX/err")"
+if [ "$RC" = 2 ] && printf '%s' "$ERR" | grep -q 'BLOCK-BETA' && ! printf '%s' "$ERR" | grep -q 'BLOCK-ALPHA'; then
+    ok "D17b a named rule's refusal stands; an unnamed one never runs"
+else
+    bad "D17b a named rule's refusal stands; an unnamed one never runs (rc=$RC err=$ERR)"
+fi
+OUT="$(bash "$SBD/dispatch-pretooluse.sh" Bash t-pass.sh t-not-listed.sh < "$PAYLOAD" 2>"$SANDBOX/err")"; RC=$?
+ERR="$(cat "$SANDBOX/err")"
+if [ "$RC" = 0 ] && printf '%s' "$ERR" | grep -q "rule 't-not-listed.sh' was named" \
+   && printf '%s' "$OUT" | grep -q 't-not-listed.sh'; then
+    ok "D17c a named rule the chain does not list is announced to the person and never blocks"
+else
+    bad "D17c a named rule the chain does not list is announced to the person and never blocks (rc=$RC out=$OUT err=$ERR)"
+fi
+
+echo
 echo "--- G. the SHIPPED manifest and the SHIPPED registration agree ---"
 
 SHIPPED_MODULES="$(grep -E '^(Bash|Write)\|' "$MANIFEST" | cut -d'|' -f2)"

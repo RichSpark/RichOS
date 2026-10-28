@@ -20,6 +20,34 @@ pub const PLUGIN_NAME: &str = "richos-app-engine";
 /// The engine file that says whose work each spawn guard's reason protects.
 pub const GUARD_AUDIENCE_DECLARATION: &str = "spawn-guard-audience.declaration";
 
+/// **The engine's Bash-chain rules every lease runs** (gap E), out of
+/// `scripts/hooks/dispatch-pretooluse.manifest`, through the engine's own dispatcher so a call
+/// that names none of a rule's words does not start it. Each reads its contract from the
+/// repository being written to (`.publication-boundary`) or from the user's own files, so it
+/// does nothing for a user who has declared nothing. The rest of the manifest polices the
+/// terminal operator's own sessions (his claim, his worktrees and lands, his record) and is
+/// left out; the claim hooks above all, which must never run in a user's app.
+const APP_BASH_RULES: [&str; 4] = [
+    "guard-publication-commits.sh",   // private material in a commit to a public repository
+    "guard-named-persons-commands.sh", // a listed person's name in a commit message, branch or PR
+    "guard-public-record-repo.sh",    // a plan or research record added to a public repository
+    "guard-unguarded-rm.sh",          // Claude Code's own rm prompt, which bypass mode still asks
+];
+
+/// **The engine's Write-chain rules every lease runs** (gap E), the same way. `dialect-guard.sh`
+/// is beside them, registered on its own as in the terminal, and is on only where the user's
+/// `orchestration.config` or the repository's own sets `DIALECT_TARGET`.
+const APP_WRITE_RULES: [&str; 3] = [
+    "scan-secrets.sh",                // a credential in a written file
+    "guard-publication-writes.sh",    // private material written into a public repository
+    "guard-named-persons-writes.sh",  // a listed person's name in a written file or its path
+];
+
+/// The engine's dispatcher command for one chain, running only `rules` of it.
+fn app_rules(engine: &Path, chain: &str, rules: &[&str]) -> String {
+    format!("/bin/bash {} {chain} {}", quote(&engine.join("scripts/hooks/dispatch-pretooluse.sh")), rules.join(" "))
+}
+
 /// **The guards that judge a dispatch the APP makes, read from the engine's own
 /// declaration rather than typed here.**
 ///
@@ -510,7 +538,16 @@ impl EngineProfile {
                 {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/guard-interactive-prompt.sh"))), "timeout":25},
                 {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/guard-no-shell-c.sh"))), "timeout":25},
                 {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/shell-evidence.sh"))), "timeout":86400},
-                {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/guard-foreign-app-data.sh"))), "timeout":25}
+                {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/guard-foreign-app-data.sh"))), "timeout":25},
+                {"type":"command", "command":app_rules(&engine, "Bash", &APP_BASH_RULES), "timeout":60}
+            ]}));
+        // The engine's checks at the write (gap E), as the terminal registers them: the
+        // dispatcher's Write chain, then `dialect-guard.sh`, which fixes a word in the write
+        // itself and so is registered on its own (the manifest's header says why).
+        hooks.get_mut("PreToolUse").unwrap().as_array_mut().unwrap().push(json!({
+            "matcher":"Write|Edit|MultiEdit|NotebookEdit", "hooks": [
+                {"type":"command", "command":app_rules(&engine, "Write", &APP_WRITE_RULES), "timeout":40},
+                {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/dialect-guard.sh"))), "timeout":20}
             ]}));
         write(&plugin.join("hooks/hooks.json"), &json!({"hooks":hooks}).to_string())?;
         // Spawn preflight runs the canonical guards directly. The real provider

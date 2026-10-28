@@ -1,0 +1,12 @@
+{
+  "built_from": "5b7af7a325f32ba44c676a7734d9c522158e4fe6",
+  "thread": "thr_0d48194d62d04c34b679e043cc5b69c8",
+  "thread_title": "Onboarding",
+  "connected": [
+    "/Users/admin/testvm/walk-6c1c07f72276/home/Acme"
+  ],
+  "checks_sent_ms": [
+    1793182554845.715,
+    1793182560398.7578
+  ]
+}

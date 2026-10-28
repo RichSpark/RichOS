@@ -31,17 +31,18 @@ fn app_profile_keeps_app_scope_on_every_tool_and_reuses_terminal_bash_hooks() {
     let hooks = manifest["hooks"].as_object().unwrap();
     assert_eq!(hooks.len(), 9);
     for (event, groups) in hooks {
-        assert_eq!(groups.as_array().unwrap().len(), if event == "PreToolUse" { 2 } else { 1 });
+        assert_eq!(groups.as_array().unwrap().len(), if event == "PreToolUse" { 3 } else { 1 });
         assert_eq!(groups[0]["hooks"].as_array().unwrap().len(), 1);
     }
     let bash = &hooks["PreToolUse"][1];
     assert_eq!(bash["matcher"], "Bash");
     let registered = bash["hooks"].as_array().unwrap();
     for (hook, name) in registered.iter().zip([
-        "guard-interactive-prompt.sh", "guard-no-shell-c.sh", "shell-evidence.sh", "guard-foreign-app-data.sh"]) {
+        "guard-interactive-prompt.sh", "guard-no-shell-c.sh", "shell-evidence.sh", "guard-foreign-app-data.sh",
+        "dispatch-pretooluse.sh"]) {
         assert!(hook["command"].as_str().unwrap().contains(engine().join("scripts/hooks").join(name).to_str().unwrap()));
     }
-    assert_eq!(registered.len(), 4);
+    assert_eq!(registered.len(), 5);
     // **NO `matcher`, SO `PreToolUse` COVERS EVERY TOOL.** Asserted rather than left to be
     // inferred: two escalations and one brief on 2026-09-18 were built on the belief that
     // this registration gated only the two continuity tools, and deferring the app's action
@@ -79,8 +80,9 @@ fn desktop_quota_wrapper_preserves_the_canonical_hook_and_its_full_tool_reach() 
     assert!(hook["command"].as_str().unwrap().contains("--claude-quota-gate"));
     assert!(hook["command"].as_str().unwrap().contains("app-engine-hook.py"));
     assert_eq!(hook["timeout"], 21600);
-    assert_eq!(manifest["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
+    assert_eq!(manifest["hooks"]["PreToolUse"].as_array().unwrap().len(), 3);
     assert_eq!(manifest["hooks"]["PreToolUse"][1], before["hooks"]["PreToolUse"][1]);
+    assert_eq!(manifest["hooks"]["PreToolUse"][2], before["hooks"]["PreToolUse"][2]);
     assert_eq!(manifest["hooks"].as_object().unwrap().len(), 9);
 }
 
@@ -1216,4 +1218,80 @@ fn with_apples_git_the_lease_includes_the_file_its_osxkeychain_default_comes_fro
     }
     let layer = richos_core::user_git::system_layer(&found, None);
     assert!(origins.iter().all(|o| layer.contains(&format!("path = \"{}\"", o.display()))), "{layer}");
+}
+
+/// **Gap E: the engine's checks at the write run in every lease, and the terminal's claim never
+/// does.** Rich, Stu and every worker and reviewer they start run this one hooks file, so a
+/// credential, private material in a public repository, a listed person's name and a
+/// non-American word are stopped at the write as the terminal stops them. The registered
+/// commands are run here, not only read, on the payload shape Claude Code sends.
+#[test]
+fn every_lease_runs_the_engines_checks_at_the_write_and_never_the_terminal_claim() {
+    // The checks at the write the terminal runs and every user needs, named here on their own
+    // so this states what the lease must carry rather than echoing what it does carry.
+    const APP_BASH_RULES: [&str; 4] = ["guard-publication-commits.sh", "guard-named-persons-commands.sh",
+        "guard-public-record-repo.sh", "guard-unguarded-rm.sh"];
+    const APP_WRITE_RULES: [&str; 3] = ["scan-secrets.sh", "guard-publication-writes.sh", "guard-named-persons-writes.sh"];
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("orchestration.config"), "DIALECT_TARGET=\"en-US\"\n").unwrap();
+    let profile = prepare_for_user(&f, &folder);
+    let text = std::fs::read_to_string(profile.plugin.join("hooks/hooks.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let pre = manifest["hooks"]["PreToolUse"].as_array().unwrap();
+
+    // Nothing that claims or checks the terminal operator's seat is registered, anywhere.
+    for claim in ["operator-claim.sh", "guard-operator-claim.sh"] {
+        assert!(!text.contains(claim), "{claim} is registered in a user's lease: {text}");
+    }
+    // Every rule the app names is one the engine's manifest lists on that chain, so a renamed
+    // or retired rule fails here rather than going quiet in the app.
+    let shipped = std::fs::read_to_string(engine().join("scripts/hooks/dispatch-pretooluse.manifest")).unwrap();
+    for (chain, rules) in [("Bash", &APP_BASH_RULES[..]), ("Write", &APP_WRITE_RULES[..])] {
+        for rule in rules {
+            assert!(shipped.lines().any(|line| line == format!("{chain}|{rule}")), "{chain}|{rule} is not in the manifest");
+            assert!(!rule.contains("operator"), "{rule}");
+        }
+    }
+    let bash = pre.iter().find(|g| g["matcher"] == "Bash").unwrap()["hooks"].as_array().unwrap();
+    assert!(bash.iter().any(|h| h["command"].as_str().unwrap()
+        .ends_with(&format!("dispatch-pretooluse.sh' Bash {}", APP_BASH_RULES.join(" ")))), "{bash:?}");
+    let write = pre.iter().find(|g| g["matcher"] == "Write|Edit|MultiEdit|NotebookEdit")
+        .expect("no Write|Edit|MultiEdit|NotebookEdit chain in the lease")["hooks"].as_array().unwrap();
+    let commands: Vec<&str> = write.iter().map(|h| h["command"].as_str().unwrap()).collect();
+    assert!(commands[0].ends_with(&format!("dispatch-pretooluse.sh' Write {}", APP_WRITE_RULES.join(" "))), "{commands:?}");
+    assert!(commands[1].ends_with("dialect-guard.sh'"), "{commands:?}");
+
+    // Run them as the lease's hooks run: the lease's own environment, and a repository the
+    // worker writes in that has adopted nothing.
+    let repo = f.0.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    assert!(std::process::Command::new("/usr/bin/git").args(["init", "-q", "-b", "main"]).current_dir(&repo).status().unwrap().success());
+    let run = |command: &str, content: &str| {
+        use std::io::Write;
+        let payload = serde_json::json!({"session_id": "e", "cwd": repo, "hook_event_name": "PreToolUse",
+            "tool_name": "Write", "tool_input": {"file_path": repo.join("notes.md"), "content": content}});
+        let mut child = std::process::Command::new("/bin/sh").arg("-c").arg(command)
+            .env("RICHOS_ENGINE_ROOT", &profile.engine).env("RICHOS_ENTITY_ROOT", &profile.coordination)
+            .env("CLAUDE_PROJECT_DIR", &profile.coordination).env("TMPDIR", &f.0)
+            .env("RICHOS_NAMED_PERSONS_FILE", f.0.join("no-list"))
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+            .spawn().unwrap();
+        child.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    // A key-shaped secret, assembled here so this file is not itself one.
+    let key = format!("AKIA{}", "QWERTYUIOPASDFGH");
+    let (code, _, err) = run(commands[0], &format!("aws_access_key_id = {key}\n"));
+    assert_eq!(code, Some(2), "a credential was written: {err}");
+    assert!(err.contains("scan-secrets.sh"), "{err}");
+    let (code, out, err) = run(commands[0], "Plain notes.\n");
+    assert_eq!(code, Some(0), "a plain note was refused: {out} {err}");
+    // The user's DIALECT_TARGET reaches the write: the word is fixed in the write itself.
+    let (code, out, err) = run(commands[1], &format!("The col{}r of the sky.\n", "ou"));
+    assert_eq!(code, Some(0), "{err}");
+    let fixed: serde_json::Value = serde_json::from_str(out.trim()).unwrap_or_else(|_| panic!("no fix: {out} {err}"));
+    assert_eq!(fixed["hookSpecificOutput"]["updatedInput"]["content"], format!("The col{}r of the sky.\n", "o"));
 }

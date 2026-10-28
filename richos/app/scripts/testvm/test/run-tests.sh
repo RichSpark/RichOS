@@ -1834,6 +1834,10 @@ t "skills-walk: a settled job whose worker's Skill call and page open completed 
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/skills-walk.test.py" >"$TMP/skills-walk.log" 2>&1; ok $? "$(cat "$TMP/skills-walk.log")"
 t_done
 
+t "write-checks-walk: a refused key write and a fixed British word pass; a teammate that never wrote, a key on disk or a word left unfixed fails"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/write-checks-walk.test.py" >"$TMP/write-checks-walk.log" 2>&1; ok $? "$(cat "$TMP/write-checks-walk.log")"
+t_done
+
 t "first-send-walk: a first send after a relaunch that the ledger received passes; an emptied composer with no PromptReceived row is named swallowed"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/first-send-walk.test.py" >"$TMP/first-send-walk.log" 2>&1; ok $? "$(cat "$TMP/first-send-walk.log")"
 t_done

@@ -1,0 +1,67 @@
+{
+  "vm": "walk-6c1c07f72276",
+  "expect_sha": "5b7af7a325f32ba44c676a7734d9c522158e4fe6",
+  "steps": [
+    {
+      "step": "identity",
+      "evidence": {
+        "built_from": "5b7af7a325f32ba44c676a7734d9c522158e4fe6"
+      },
+      "outcome": "PASS",
+      "seconds": 0.5
+    },
+    {
+      "step": "first-run",
+      "evidence": {
+        "thread": "thr_0d48194d62d04c34b679e043cc5b69c8",
+        "title": "Onboarding"
+      },
+      "outcome": "PASS",
+      "seconds": 37.7
+    },
+    {
+      "step": "connect",
+      "evidence": {
+        "connected": [
+          "/Users/admin/testvm/walk-6c1c07f72276/home/Acme"
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 27.0
+    },
+    {
+      "step": "config",
+      "evidence": {
+        "written": [
+          "# The fixture user's own values.",
+          "DIALECT_TARGET=\"en-US\""
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 0.3
+    },
+    {
+      "step": "checks",
+      "evidence": {
+        "teammate_calls": 10,
+        "teammate_tools_used": [
+          "Bash",
+          "Write"
+        ],
+        "secret_write_asked": 1,
+        "dialect": "fixed",
+        "dialect_copies": [
+          "The color of the walk."
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 344.0
+    }
+  ],
+  "logs_kept": {
+    "app.log": 12512,
+    "callbacks.txt": 95029,
+    "refusals.txt": 1147,
+    "conversation-ledger.jsonl": 16583
+  }
+}
