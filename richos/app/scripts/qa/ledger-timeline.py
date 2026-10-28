@@ -20,83 +20,26 @@ is the wait he sat through, measured off the app's own clock.
 
 Exit 0 with the timeline. Exit 2 with a sentence when the file is missing, empty or holds a line
 that is not a JSON object with an `at` time: a ledger that cannot be read is never printed as an
-empty one.
-"""
+empty one."""
 import argparse
 import json
 import sys
 from pathlib import Path
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from devtools_bridge import request
 
 def read(path):
-    """The ledger's rows, or a sentence why it cannot be read."""
-    p = Path(path)
-    if not p.is_file():
-        return None, f'no ledger at {path}'
-    rows = []
-    for n, line in enumerate(p.read_text(errors='replace').splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except ValueError:
-            return None, f'line {n} of {path} is not JSON'
-        if not isinstance(row, dict) or not isinstance(row.get('at'), (int, float)):
-            return None, f'line {n} of {path} has no `at` time'
-        rows.append(row)
-    if not rows:
-        return None, f'{path} holds no rows'
-    return rows, None
-
+    return tuple(request("ledger-read", str(path)))
 
 def cut(text, full):
-    text = str(text or '').replace('\n', ' / ')
-    return text if full or len(text) <= 300 else text[:300] + ' ...'
-
+    text = str(text or "").replace("\n", " / ")
+    return text if full or len(text) <= 300 else text[:300] + " ..."
 
 def timeline(rows, thread=None, full=False):
-    if thread:
-        rows = [r for r in rows if r.get('thread_id') in (None, thread)]
-        if not rows:
-            return []
-    t0 = rows[0]['at']
-    replies = {}
-    for r in rows:
-        if r.get('event') == 'AssistantDelta':
-            at, text = replies.get(r.get('turn_id'), (r['at'], ''))
-            replies[r.get('turn_id')] = (at, text + str(r.get('text', '')))
-    out, said = [], set()
-    for r in rows:
-        event, turn = r.get('event'), str(r.get('turn_id') or '')
-        if event == 'AssistantDelta':
-            if turn in said:
-                continue
-            said.add(turn)
-            at, text = replies[r.get('turn_id')]
-            out.append(f"{(at - t0) / 1000:8.1f} REPLY - {turn[-6:]} {cut(text, full)}")
-            continue
-        what = r.get('text') or r.get('stop_reason') or r.get('kind') or ''
-        out.append(f"{(r['at'] - t0) / 1000:8.1f} {event} {r.get('source') or '-'} {turn[-6:]} {cut(what, full)}")
-    return out
-
+    return request("ledger-timeline", {"rows": rows, "thread": thread, "full": full})
 
 def turns(rows, full=False):
-    sent, first, done = {}, {}, {}
-    for r in rows:
-        event, turn = r.get('event'), r.get('turn_id')
-        if event == 'PromptReceived' and r.get('source') not in ('internal', 'proactive'):
-            sent[turn] = r
-        elif event == 'AssistantDelta' and turn in sent and turn not in first:
-            first[turn] = r['at']
-        elif event in ('TurnCompleted', 'TurnInterrupted', 'TurnStopped', 'TurnFailed') and turn in sent:
-            done[turn] = (r['at'], event)
-    out = []
-    for turn, r in sent.items():
-        f = f"{(first[turn] - r['at']) / 1000:.1f}s" if turn in first else 'none'
-        d = f"{(done[turn][0] - r['at']) / 1000:.1f}s {done[turn][1]}" if turn in done else 'not completed'
-        out.append(f"sent {r['at']} first reply {f} end {d} | {cut(r.get('text'), full)}")
-    return out
-
+    return request("ledger-turns", {"rows": rows, "full": full})
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help'):

@@ -9,4 +9,10 @@
 # A change to any of them without a regenerated table fails here.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BRIDGE="$HERE/../../../../app/scripts/lib/devtools_bridge.py"
+if [ -f "$BRIDGE" ]; then
+  unset RICHOS_DEVTOOLS_BIN
+  RICHOS_DEVTOOLS_BIN="$(python3 -B "$BRIDGE" --binary)"
+  export RICHOS_DEVTOOLS_BIN
+fi
 exec python3 -B "$HERE/dialect-table.test.py" "$@"

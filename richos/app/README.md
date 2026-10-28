@@ -2099,6 +2099,13 @@ by `tests/runtime_delivery.rs`, `tests/owned_process.rs`, `tests/provider_auth.r
 and `tests/repository_connection.rs`. `tests/land_checks_user_tools.rs` runs an app
 land's merge check in a lease's environment and proves it finds the user's own tools.
 
+`crates/richos-devtools/tests/contracts.rs` compares offline developer reports
+with saved outputs from the original tools. This standalone crate also generates
+the pinned dictionary and checks UI test timeout arguments. The existing Python
+and Node entry points build it with Cargo in the development environment. It is
+independent of the app runtime and installed Claude Code hooks. See its
+[developer tool notes](crates/richos-devtools/README.md).
+
 ## Shared voice infrastructure
 
 The live pipeline stays in `crates/richos-voice`. Its shared model metadata and

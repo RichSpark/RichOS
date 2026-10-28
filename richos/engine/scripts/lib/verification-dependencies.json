@@ -12670,10 +12670,96 @@
     },
     "scripts/lib/dialect/dialect-table.py#generate-check": {
       "source": "scripts/lib/dialect/dialect-table.py",
-      "sha256": "6ed814780a9a8e2bacf269388e1e4cd6a74b99bf70948a88b669385ef27f439e",
-      "evidence": "Suite reaches module initialization, dictionary/cluster readers, assemble/render/generate and main --check only. Reads fixed dictionaries/fixtures as text. Optional deny_lists subprocess path is not invoked.",
+      "sha256": "7c88801399521c361e0640024c77a522e47812e279abf4abe981935c654bbf13",
+      "evidence": "Generate/check routes through the fixed Rust dictionary RPC. The test wrapper builds current source and supplies its binary. Input dictionaries remain text. Optional deny_lists subprocess path is not invoked.",
       "keys": [],
-      "edges": []
+      "edges": [],
+      "external": [
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/Cargo.lock",
+          "sha256": "6c65c04d1dd1fd3a1241bd481140e306e211ad1f05676536d292854f63b5a3ab",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/Cargo.toml",
+          "sha256": "71016ad44e5149b0d4acb79c48d79e888dee7ed12725974b291f1894dafcf25b",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/caption.rs",
+          "sha256": "2c0ad590d650764f6d24bc910828608784682e9a7767550bbc446a18583b131f",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/dialect.rs",
+          "sha256": "8b877787b812a24a948e87039d73917768bbda1a3153d101fa8be70a4f7c0e20",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/lib.rs",
+          "sha256": "ef972a71336343fa2da1d2d754f0fba4285a981bb5792462a6fc70e3798d57d9",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/main.rs",
+          "sha256": "508b493dd33e2b101dd46e39cd54fb037b484c1c74741f6d3abd51f8485cae7b",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/reports.rs",
+          "sha256": "f197e02bc7db4743a82eb68ac642c8adb2262053e81966cac90f8fc7ed4df654",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/varcon_notice.txt",
+          "sha256": "2bff2de1ba0a824395d12f2fb7095a28eee0119b5b5d646e8e7144bb9ce3f45f",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/wait_shape.rs",
+          "sha256": "d5f5ba86e10f7b47d022828b260251a776f4d8f229d7291db8fb8394ce35d1f4",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/tests/contracts.rs",
+          "sha256": "9ef56a9c50838c7aa34cafb03a19398c7bf2ae30bc20ae34511d60d006cb3d12",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/cargo_identity.py",
+          "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/devtools_bridge.py",
+          "sha256": "40802296190dbd90aaafa1c5004c2316b60539283ced8a2e0d9c64bf601766cf",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/machine_storage.py",
+          "sha256": "f87442f68e065d272663f7c18cde6691f03c7b0d82aee34d63d20975b307f3b5",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/machine_settings.py",
+          "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        }
+      ]
     },
     "scripts/lib/dialect/dialect-table.test.py": {
       "source": "scripts/lib/dialect/dialect-table.test.py",
@@ -12688,12 +12774,98 @@
     },
     "scripts/lib/dialect/dialect-table.test.sh": {
       "source": "scripts/lib/dialect/dialect-table.test.sh",
-      "sha256": "d6713f9efab157401b4b71912685011df47b809438706ce0f360b4f77855d647",
+      "sha256": "dd5aa9fb0052ec2643bc1d8635c0f84e588cb119b6fc4679ff0c24da1321e234",
       "evidence": "Fixed Python table-suite wrapper.",
       "keys": [],
       "edges": [
         {
           "to": "scripts/lib/dialect/dialect-table.test.py"
+        }
+      ],
+      "external": [
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/Cargo.lock",
+          "sha256": "6c65c04d1dd1fd3a1241bd481140e306e211ad1f05676536d292854f63b5a3ab",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/Cargo.toml",
+          "sha256": "71016ad44e5149b0d4acb79c48d79e888dee7ed12725974b291f1894dafcf25b",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/caption.rs",
+          "sha256": "2c0ad590d650764f6d24bc910828608784682e9a7767550bbc446a18583b131f",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/dialect.rs",
+          "sha256": "8b877787b812a24a948e87039d73917768bbda1a3153d101fa8be70a4f7c0e20",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/lib.rs",
+          "sha256": "ef972a71336343fa2da1d2d754f0fba4285a981bb5792462a6fc70e3798d57d9",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/main.rs",
+          "sha256": "508b493dd33e2b101dd46e39cd54fb037b484c1c74741f6d3abd51f8485cae7b",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/reports.rs",
+          "sha256": "f197e02bc7db4743a82eb68ac642c8adb2262053e81966cac90f8fc7ed4df654",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/varcon_notice.txt",
+          "sha256": "2bff2de1ba0a824395d12f2fb7095a28eee0119b5b5d646e8e7144bb9ce3f45f",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/src/wait_shape.rs",
+          "sha256": "d5f5ba86e10f7b47d022828b260251a776f4d8f229d7291db8fb8394ce35d1f4",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/crates/richos-devtools/tests/contracts.rs",
+          "sha256": "9ef56a9c50838c7aa34cafb03a19398c7bf2ae30bc20ae34511d60d006cb3d12",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/cargo_identity.py",
+          "sha256": "ddefb6aec548cce7c079175885b7bed0927d02017ed62f52c08986192f2e7df4",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/devtools_bridge.py",
+          "sha256": "40802296190dbd90aaafa1c5004c2316b60539283ced8a2e0d9c64bf601766cf",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/machine_storage.py",
+          "sha256": "f87442f68e065d272663f7c18cde6691f03c7b0d82aee34d63d20975b307f3b5",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/machine_settings.py",
+          "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
     },
