@@ -17,6 +17,17 @@
 #       read through /usr/bin/security; the guest item is named for the GUEST folder.
 #       Home's bare item and files are never touched in this mode.
 #
+#   WHICH ACCOUNT the primary login (push, keep and host-check without --account;
+#   check reads the guest only) comes from: the account the app has IN USE, read from
+#   the app's own list, $HOME/Library/Application Support/com.richos.app/
+#   claude-accounts.json (TESTVM_CLAUDE_ACCOUNTS overrides the path). `inUse`
+#   among `accounts`, else the first, as richos-core claude_accounts.rs
+#   Accounts::in_use decides. An account with a `folder` is read from ITS host
+#   item (`Claude Code-credentials-<sha8 of the folder>`) and renewed under that
+#   folder; Account 1 has none and is the bare item, as before. No list at all is
+#   Account 1. A list that cannot be read is a refusal, never a guess. The names
+#   the GUEST looks its login up by do not change with the account.
+#
 # Prints ONE line on stdout:
 #
 #   claude login: guest logged in
@@ -91,8 +102,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib.sh"
 set +e
 
-# The service and account on THIS Mac, where the CEO signed in once.
-TESTVM_CLAUDE_KC_SERVICE="${TESTVM_CLAUDE_KC_SERVICE:-Claude Code-credentials}"
+# Claude Code's own name for its keychain item: this, then "-<sha8 of
+# CLAUDE_CONFIG_DIR>" when that is set (header). The GUEST's names are built from
+# it whichever item this Mac reads, so choosing the host item never renames them.
+CLAUDE_KC_PREFIX="Claude Code-credentials"
+# The service and account on THIS Mac, where the CEO signed in once: Home's
+# (Account 1's) bare item. Overriding it changes the host read only.
+TESTVM_CLAUDE_KC_SERVICE="${TESTVM_CLAUDE_KC_SERVICE:-$CLAUDE_KC_PREFIX}"
 TESTVM_HOST_CLAUDE_ACCOUNT="${TESTVM_HOST_CLAUDE_ACCOUNT:-${USER:-alex}}"
 # Same default, same override name as keychain.sh — a throwaway phrase for a
 # throwaway keychain in a guest that is deleted at the end of the run.
@@ -121,6 +137,69 @@ HOST_SERVICE="${ACCOUNT_ITEM:-$TESTVM_CLAUDE_KC_SERVICE}"
 # Per-account run-state names, so Home's keeper state is never overwritten.
 STATE_SUFFIX=""; [ -n "$ACCOUNT_ITEM" ] && STATE_SUFFIX=".account"
 
+sha8() { printf '%s' "$1" | shasum -a 256 2>/dev/null | awk '{print substr($1,1,8)}'; }
+
+# ===========================================================================
+# THE PRIMARY LOGIN IS THE ACCOUNT THE APP HAS IN USE (2026-10-28)
+# ===========================================================================
+# The app moves the team to its next Claude account when one is nearly used up.
+# Nightly 78: it had moved to Work, Home was at 99% of its week, and every guest
+# was still signed in as Home, so the guest app stopped on "Your Claude account
+# has used 99% of this week's limit". So the primary login follows the app's own
+# record, the list the app keeps in its data folder (Tauri's app_data_dir, which
+# run.sh and richos-core entity.rs::app_config_dir both spell as below).
+TESTVM_CLAUDE_ACCOUNTS="${TESTVM_CLAUDE_ACCOUNTS:-${HOME:+$HOME/Library/Application Support/com.richos.app/claude-accounts.json}}"
+IN_USE_LABEL=""
+
+# The account in use, as three lines: id, label, folder (empty for Account 1).
+# Prints nothing when there is no list (Account 1, as before the list existed).
+# Returns 1 for a list the app itself would refuse to open.
+in_use_account() {
+  [ -n "$TESTVM_CLAUDE_ACCOUNTS" ] && [ -e "$TESTVM_CLAUDE_ACCOUNTS" ] || return 0
+  python3 -I - "$TESTVM_CLAUDE_ACCOUNTS" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        stored = json.load(f)
+    listed = [a for a in stored["accounts"] if isinstance(a, dict) and isinstance(a.get("id"), str)]
+    if not any(a["id"] == "1" for a in listed):
+        raise ValueError("the account list lost Account 1")  # Accounts::open refuses it too
+    # `inUse` among `accounts`, else the first: Accounts::in_use.
+    a = next((a for a in listed if a["id"] == stored.get("inUse")), listed[0])
+    folder = a.get("folder") or ""
+    label = a.get("label") if isinstance(a.get("label"), str) else a["id"]
+    # Claude Code names the item for the folder string exactly as the app passes it
+    # (CLAUDE_CONFIG_DIR = folder, engine_profile.rs); the app refuses non-ASCII
+    # (reset_transport.rs) rather than name a different item for the same spelling.
+    if not isinstance(folder, str) or (folder and (not folder.startswith("/") or not folder.isascii()
+                                                   or "\n" in folder)):
+        raise ValueError("unusable folder")
+    print(a["id"].replace("\n", " ")); print(label.replace("\n", " ")); print(folder)
+except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+    sys.exit(1)
+PY
+}
+
+if [ -z "$ACCOUNT_ITEM" ] && [ "$CMD" != "check" ]; then
+  if ! IN_USE="$(in_use_account)"; then
+    [ "$CMD" = "push" ] && printf 'claude login: guest NOT logged in\n'
+    printf '[testvm] REFUSED: the app'"'"'s account list %s cannot be read, so which Claude account is in use is unknown; nothing was read or pushed rather than guess.\n' \
+      "$TESTVM_CLAUDE_ACCOUNTS" >&2
+    exit 5
+  fi
+  if [ -n "$IN_USE" ]; then
+    { IFS= read -r _; IFS= read -r IN_USE_LABEL; IFS= read -r IN_USE_FOLDER; } <<EOF
+$IN_USE
+EOF
+    if [ -n "$IN_USE_FOLDER" ]; then
+      HOST_SERVICE="$CLAUDE_KC_PREFIX-$(sha8 "$IN_USE_FOLDER")"
+      HOST_FOLDER="$IN_USE_FOLDER"
+    else
+      HOST_FOLDER=""
+    fi
+  fi
+fi
+
 cg() {  # one command in the guest, the harness's single indirection
   if [ -n "${TESTVM_GUEST_EXEC:-}" ]; then
     "$TESTVM_GUEST_EXEC" "$VM" "$@"
@@ -135,10 +214,10 @@ cg() {  # one command in the guest, the harness's single indirection
 cg_stdin() { cg "$@"; }
 
 guest_service_scoped() {  # the name the app resolves, given its config dir
-  local dir="$1" h
-  h="$(printf '%s' "$dir" | shasum -a 256 2>/dev/null | awk '{print substr($1,1,8)}')"
+  local h
+  h="$(sha8 "$1")"
   [ -n "$h" ] || return 1
-  printf '%s-%s\n' "$TESTVM_CLAUDE_KC_SERVICE" "$h"
+  printf '%s-%s\n' "$CLAUDE_KC_PREFIX" "$h"
 }
 
 # The host's `security`, behind ONE override — the same seam `host_ts_cli` has,
@@ -200,12 +279,20 @@ host_written_at() {
 # window. The process is this call's own group and is ended on every path. It
 # costs no model turn. Returns 0 when it answered.
 host_renew() {
+  # Under the folder of the account whose item is read, and under NO folder for
+  # Account 1's bare item: a caller that itself runs on another account (an
+  # agent on Work has CLAUDE_CONFIG_DIR set) must not renew that one instead.
+  unset CLAUDE_SECURESTORAGE_CONFIG_DIR
+  if [ -n "$HOST_FOLDER" ]; then
+    export CLAUDE_CONFIG_DIR="$HOST_FOLDER"
+  elif [ -z "$ACCOUNT_ITEM" ]; then
+    unset CLAUDE_CONFIG_DIR
+  fi
   if [ -n "$TESTVM_HOST_CLAUDE_RENEW" ]; then
     "$TESTVM_HOST_CLAUDE_RENEW"
     return $?
   fi
   local bin
-  [ -n "$HOST_FOLDER" ] && export CLAUDE_CONFIG_DIR="$HOST_FOLDER"
   bin="$(host_claude_path)"
   [ -n "$bin" ] && [ -x "$bin" ] || return 1
   python3 - "$bin" <<'PY'
@@ -315,7 +402,7 @@ guest_logged_in() {  # <service>
 case "$CMD" in
   host-check)
     if host_logged_in; then
-      log "host claude is logged in (keychain item '$TESTVM_CLAUDE_KC_SERVICE', account $TESTVM_HOST_CLAUDE_ACCOUNT)"
+      log "host claude is logged in (keychain item '$HOST_SERVICE', account $TESTVM_HOST_CLAUDE_ACCOUNT${IN_USE_LABEL:+; the account the app has in use: $IN_USE_LABEL})"
       exit 0
     fi
     printf '[testvm] host claude is not logged in — /login on the host first\n' >&2
@@ -364,7 +451,7 @@ if [ "$CMD" = "check" ]; then
   if [ "${FB:-0}" -gt 1 ] 2>/dev/null; then
     report "logged in"; exit 0
   fi
-  if guest_logged_in "$SVC_SCOPED" || { [ -z "$ACCOUNT_ITEM" ] && guest_logged_in "$TESTVM_CLAUDE_KC_SERVICE"; }; then
+  if guest_logged_in "$SVC_SCOPED" || { [ -z "$ACCOUNT_ITEM" ] && guest_logged_in "$CLAUDE_KC_PREFIX"; }; then
     report "logged in"; exit 0
   fi
   report "NOT logged in"; exit 1
@@ -413,6 +500,7 @@ if [ "$CMD" = "keep" ]; then
 fi
 
 # --- push ---------------------------------------------------------------------
+[ -n "$IN_USE_LABEL" ] && log "the guest's login is the app's account in use, $IN_USE_LABEL (this Mac's keychain item '$HOST_SERVICE')"
 if ! host_logged_in; then
   report "NOT logged in"
   printf '[testvm] host claude is not logged in — /login on the host first\n' >&2
@@ -478,7 +566,7 @@ PAYLOAD="$(printf 'add-generic-password -U -a "%s" -s "%s" -X "%s" "%s"\n' \
 if [ -z "$ACCOUNT_ITEM" ]; then
   PAYLOAD="$PAYLOAD
 $(printf 'add-generic-password -U -a "%s" -s "%s" -X "%s" "%s"\n' \
-  "$TESTVM_GUEST_USER" "$TESTVM_CLAUDE_KC_SERVICE" "$HEX" "$KC_HOME/Library/Keychains/login.keychain-db")"
+  "$TESTVM_GUEST_USER" "$CLAUDE_KC_PREFIX" "$HEX" "$KC_HOME/Library/Keychains/login.keychain-db")"
 fi
 
 # Each line is one `security -i` command; the limit is per line, as the code

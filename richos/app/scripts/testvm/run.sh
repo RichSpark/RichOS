@@ -344,6 +344,10 @@ fi
 # NOT fatal, for the same reason the keychain step is not: everything that needs
 # no model turn still renders, still screenshots and still proves what it was
 # asked to. It says so here rather than at the first model turn.
+#
+# WHOSE login: the account the app has in use on this Mac (claude-accounts.json
+# inUse; claude-login.sh "WHICH ACCOUNT"), so a guest is never signed in as an
+# account the app has already left for being nearly used up.
 if [ "$NEWUSER" -eq 1 ]; then
   # A new user is signed out until they sign in; the walk signs in when it means to.
   CLAUDE_LOGIN_LINE="claude login: guest NOT logged in (--new-user: nothing pushed)"

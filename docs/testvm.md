@@ -713,6 +713,17 @@ sends `refreshToken`, its expiry or other credential-store entries. Both guest
 file stores and both keychain entries receive this same restricted snapshot.
 Malformed or expired source credentials are refused before any guest write.
 
+**Which host credential:** the account the app has in use on this Mac. `claude-login.sh`
+reads `inUse` from the app's own list,
+`$HOME/Library/Application Support/com.richos.app/claude-accounts.json`
+(`TESTVM_CLAUDE_ACCOUNTS` overrides the path). If there is no list or if Account 1
+(Home) is in use, the snapshot comes from the bare `Claude Code-credentials` item, as
+before. If an account with its own folder (Work) is in use, it comes from that
+account's item, `Claude Code-credentials-<first 8 hex of sha256(folder)>` and renewal
+runs under that folder. A list that cannot be read is refused with exit 5 and nothing
+is guessed. `host-check` names the item it asked about. The guest's own item names
+do not change with the account.
+
 A single snapshot **can expire during a run**, so two things keep it current and
 in both only this Mac ever renews this Mac's login (its own lock, its own store):
 
