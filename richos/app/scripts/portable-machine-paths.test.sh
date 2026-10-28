@@ -11,7 +11,9 @@ from pathlib import Path
 import os, shutil, subprocess, sys, tempfile
 source=Path(sys.argv[1])
 with tempfile.TemporaryDirectory(prefix='portable checkout ') as directory:
-    base=Path(directory); primary=base/'primary'; primary.mkdir()
+    # Resolved: Git reports a worktree by its real path, and macOS's default TMPDIR is under
+    # /var, a symlink to /private/var, so the unresolved name never matched the pointer.
+    base=Path(directory).resolve(); primary=base/'primary'; primary.mkdir()
     script=primary/'richos/tools/myrichos/build-myrichos.sh'
     script.parent.mkdir(parents=True);shutil.copy2(source/'richos/tools/myrichos/build-myrichos.sh',script)
     shutil.copytree(source/'richos/tools/myrichos/seed',script.parent/'seed')
