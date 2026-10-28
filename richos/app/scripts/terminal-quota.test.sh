@@ -3,6 +3,8 @@
 # run-tests: inputs richos/app/scripts/terminal-quota.test.sh richos/app/Cargo.toml richos/app/Cargo.lock richos/app/crates/richos-core richos/engine/scripts/quota-reset.sh
 # run-tests: covers richos/app/crates/richos-core/src/bin/richos-quota.rs richos/app/crates/richos-core/examples/terminal_quota_proof.rs richos/app/crates/richos-core/src/quota/terminal.rs
 # run-tests: no-host-screen: richos-quota and terminal_quota_proof are command-line binaries, and the "RichOS.app" it runs is a two-line shell stand-in in a temporary HOME that prints its arguments and exits; nothing is drawn
+# The wrapper's machine-wide slot (/Applications) is pointed at the temporary HOME too, so an
+# app the user installed in /Applications is never run by this suite.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 - <<'PY'
@@ -17,7 +19,9 @@ exe={r['target']['name']:r['executable'] for line in build.stdout.splitlines()
      if (r:=json.loads(line)).get('reason')=='compiler-artifact' and r.get('executable')}
 with tempfile.TemporaryDirectory(prefix='terminal-quota-cli-') as d:
     root=pathlib.Path(d)
-    env={**os.environ,'HOME':d,'ANTHROPIC_API_KEY':'fixture-auth-override'}
+    system_apps=root/'system-Applications'
+    env={**os.environ,'HOME':d,'ANTHROPIC_API_KEY':'fixture-auth-override',
+         'RICHOS_SYSTEM_APPLICATIONS':str(system_apps)}
     def call(*args):
         return subprocess.run([exe['richos-quota'],*args],env=env,stdin=subprocess.DEVNULL,
             capture_output=True,text=True)
@@ -45,8 +49,15 @@ with tempfile.TemporaryDirectory(prefix='terminal-quota-cli-') as d:
     app.write_text('#!/bin/sh\necho GUI-WAS-LAUNCHED\n');app.chmod(0o700)
     r=subprocess.run([str(installed/'quota-reset.sh'),'tick'],env=env,capture_output=True,text=True)
     assert 'GUI-WAS-LAUNCHED' not in r.stdout,'old app was launched'
+    assert r.returncode==2 and 'helper is unavailable' in r.stderr,r
     app.write_text('#!/bin/sh\n# --richos-quota-v1\nprintf "%s\\n" "$@"\n')
     r=subprocess.run([str(installed/'quota-reset.sh'),'tick'],env=env,capture_output=True,text=True)
     assert r.returncode==0 and r.stdout.splitlines()==['--richos-quota-v1','tick'],r
-print('  PASS  noninteractive approval refusal, no yes flag, no credential read on refusal, live-proof opt-in and headless wrapper')
+    # The machine-wide slot resolves to the fixture, never the real /Applications.
+    app.write_text('#!/bin/sh\necho GUI-WAS-LAUNCHED\n')
+    system_app=system_apps/'RichOS.app/Contents/MacOS/richos-tauri';system_app.parent.mkdir(parents=True)
+    system_app.write_text('#!/bin/sh\n# --richos-quota-v1\necho SYSTEM-FIXTURE\nprintf "%s\\n" "$@"\n');system_app.chmod(0o700)
+    r=subprocess.run([str(installed/'quota-reset.sh'),'tick'],env=env,capture_output=True,text=True)
+    assert r.returncode==0 and r.stdout.splitlines()==['SYSTEM-FIXTURE','--richos-quota-v1','tick'],r
+print('  PASS  noninteractive approval refusal, no yes flag, no credential read on refusal, live-proof opt-in and headless wrapper that runs no app outside its temporary HOME')
 PY
