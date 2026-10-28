@@ -7831,7 +7831,7 @@ class AppDueNotice(Base):
         self.assertIn("The app has no tool that discards it", commands["zach-opus-af"])
         self.assertIn("The app has no tool that discards it, so saving them does not close it",
                       commands["zach-opus-as"])
-        self.assertIn("The app has no tool that repairs or removes it.", notices[2])
+        self.assertIn("If no workspace lifecycle wrote it, the app's settle tool removes it (registry_record).", notices[2])
 
     def test_terminal_due_notice_is_unchanged(self):
         commands = self._every_kind_due()
