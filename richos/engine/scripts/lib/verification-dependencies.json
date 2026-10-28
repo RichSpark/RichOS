@@ -11985,32 +11985,39 @@
     },
     "scripts/lib/agent_hold.py": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+      "sha256": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
       "keys": [],
       "edges": [
         {
           "to": "mega-lander/workspaces.py#recipient"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
         }
       ],
-      "evidence": "Full program reviewed (hold, release, watchdog, wait and CLI). Inputs: the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), this user's ps table, recorded shell PID files, other processes' environments read through the kernel only to match the agent's own inherited tag (never printed), test-VM slot records under TESTVM_ROOT or HOME and lock-file paths through libproc. It signals only processes under the agent's recorded shells. hold() starts a detached watchdog, which runs the workspace recipient CLI as its one engine execution. No orchestration.config read. Renewal 2026-09-28 (b92c21f8..1b7aa978): a subagent's foreground Bash call now runs as a native background task with its record, job, output and status files in its shell directory; wait reads that host-owned result through the agent's own transcript (the payload's transcript_path, bound by session, agent and tool-use id, read as data) and the task output file named there; BASH_MAX_TIMEOUT_MS and RICHOS_AGENT_HOLD_WAIT_SECONDS bound the wait; wait notices live in the state directory; a held call's job is detached with SIGUSR1 and stopped. Still no orchestration.config read, and the watchdog's recipient CLI is still the one engine execution. Renewal 2026-10-11 (end_owned): before each signal it re-reads that process's start time through libproc (proc_pidinfo PROC_PIDTBSDINFO; a one-process ps elsewhere) and signals only the process recorded. No new input, no config read, no engine execution. Renewal 2026-10-16: generated wait command names this installed helper through realpath(__file__), with shell quoting. No new state or process read."
+      "evidence": "Full program reviewed (hold, release, watchdog, wait and CLI). Inputs: the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), this user's ps table, recorded shell PID files, other processes' environments read through the kernel only to match the agent's own inherited tag (never printed), test-VM slot records under TESTVM_ROOT or HOME and lock-file paths through libproc. It signals only processes under the agent's recorded shells. hold() starts a detached watchdog, which runs the workspace recipient CLI as its one engine execution. No orchestration.config read. Renewal 2026-09-28 (b92c21f8..1b7aa978): a subagent's foreground Bash call now runs as a native background task with its record, job, output and status files in its shell directory; wait reads that host-owned result through the agent's own transcript (the payload's transcript_path, bound by session, agent and tool-use id, read as data) and the task output file named there; BASH_MAX_TIMEOUT_MS and RICHOS_AGENT_HOLD_WAIT_SECONDS bound the wait; wait notices live in the state directory; a held call's job is detached with SIGUSR1 and stopped. Still no orchestration.config read, and the watchdog's recipient CLI is still the one engine execution. Renewal 2026-10-11 (end_owned): before each signal it re-reads that process's start time through libproc (proc_pidinfo PROC_PIDTBSDINFO; a one-process ps elsewhere) and signals only the process recorded. No new input, no config read, no engine execution. Renewal 2026-10-16: generated wait command names this installed helper through realpath(__file__), with shell quoting. No new state or process read. Renewal 2026-10-28 (zero-CPU waits): every wait (wait_resume, _collect, collect_native, watch) blocks on kernel events through quiet_wait.py, loaded by fixed path beside this file (a lone copy sleeps instead), and native_result indexes the host transcript once per process (only complete lines naming a tool_result are parsed; the same [offset, offset + 4 MiB) window). Same files read; no new configuration key, state or execution edge."
     },
     "scripts/lib/agent_hold.py#release": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+      "sha256": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
       "keys": [],
       "edges": [],
       "evidence": "release, records, release_session, release_orphans and describe_* only: read hold records in the agent-hold state directory, this user's ps table and recorded shell PID files, and continue recorded processes. No watchdog, engine execution or orchestration.config read. Renewed 2026-10-11 (zach-opus-heldwait1): release also appends one line per released hold to hold-history.jsonl in the same state directory (pruned to 14 days once over 256 KiB), and history() reads it back; nothing new is read or executed."
     },
     "scripts/lib/agent_hold.py#gate": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+      "sha256": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
       "keys": [],
-      "edges": [],
-      "evidence": "gate only (2026-10-04), run by shell-evidence.py before its rewrite: for a subagent's own wait call it reads that agent's hold record and wait-notice file in the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), sleeps one second between reads while the hold stands and returns when it is gone, when the notice is not this hold's or when its parent process is gone. It starts no process, signals nothing and never reaches the watchdog or the workspace recipient CLI (watch and _registry_finished are not called). No engine execution and no orchestration.config read."
+      "edges": [
+        {
+          "to": "scripts/lib/quiet_wait.py"
+        }
+      ],
+      "evidence": "gate only (2026-10-04), run by shell-evidence.py before its rewrite: for a subagent's own wait call it reads that agent's hold record and wait-notice file in the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), sleeps one second between reads while the hold stands and returns when it is gone, when the notice is not this hold's or when its parent process is gone. It starts no process, signals nothing and never reaches the watchdog or the workspace recipient CLI (watch and _registry_finished are not called). No engine execution and no orchestration.config read. Renewal 2026-10-28 (zero-CPU waits): gate also loads quiet_wait.py by fixed path and blocks on the hold and wait-notice directories and its parent's exit instead of a one-second sleep; still no process started, nothing signaled, no config read."
     },
     "scripts/lib/agent_hold.py#capture": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+      "sha256": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
       "keys": [],
       "edges": [],
       "evidence": "capture and rewrite (renewed 2026-09-28): for a Bash payload with valid session, agent and tool-use ids it creates call records in the agent-hold state directory, notes the size of the agent's transcript named by the payload, prunes records of ended calls (a signal-0 probe of recorded PIDs) and returns shell text or a deny as data. Pruning a dead call that carried a process identity takes this user's ps table and reads tagged processes' environments through the kernel, to keep ownership of live descendants. No engine execution and no orchestration.config read."
@@ -15759,7 +15766,7 @@
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
           "path": "scripts/lib/agent_hold.py",
-          "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+          "sha256": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         },
         {
@@ -16723,6 +16730,60 @@
       "evidence": "Sources the fixed sibling launchd-install.sh for its state-file names. Reads launchctl print for the label it is given, writes and removes its own pid and give-up files, and runs the install command its starter passed. No configuration lookup.",
       "keys": [],
       "edges": []
+    },
+    "scripts/lib/quiet_wait.py": {
+      "source": "scripts/lib/quiet_wait.py",
+      "sha256": "ba6e9889d05fcb1ae7634209393f5ee0a26e95eac4d536a591cc3e0d9afb268d",
+      "evidence": "Standard library only (select.kqueue, os, errno, time): registers process-exit, process-fork, signal and file/directory-change events the caller names and blocks on them with a timeout. Reads no configuration key, environment variable or file contents and executes nothing.",
+      "keys": [],
+      "edges": []
+    },
+    "scripts/lib/wait-cpu.test.py": {
+      "source": "scripts/lib/wait-cpu.test.py",
+      "sha256": "5e4a9bf57b26c73682225ebfeca84eed4adb41f69db917197519fc6f914f3728",
+      "evidence": "Fixed Python fixture: each case runs one bound waiter (agent_hold.py wait, gate, watch; and, from the sweep, stop-at-line.py, proc_tree.py run, provider-supervisor.py, worker_tokens.py run and lease, quota_watch.mode_watch) for 60 s in a private temporary state directory, HOME, config and CPU-guard state in explicit fixture mode, and reads its CPU time from RUSAGE_CHILDREN of a literal measuring parent. The watchdog's registry is a literal stand-in script. setUpModule refuses to run with the app's live state variables set. No configuration key is read.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/agent_hold.py"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
+        }
+      ]
+    },
+    "scripts/lib/wait-cpu.test.sh": {
+      "source": "scripts/lib/wait-cpu.test.sh",
+      "sha256": "a1df56df8dddfc9ea45647734050ddaf325078d3005ad2fba161c950c2a4f2df",
+      "evidence": "Executes exactly the adjacent fixed Python fixture, with no mutation driver.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/wait-cpu.test.py"
+        }
+      ]
+    },
+    "scripts/lib/quiet_wait.test.py": {
+      "source": "scripts/lib/quiet_wait.test.py",
+      "sha256": "bfdf66dba97b01ee94fa0125a718d39e0e5f1730c0d1f4b2807e1ce3d3cb0593",
+      "evidence": "Fixed Python fixture imports only the bound helper and the standard library; its events (a file written, a process that exits or forks, a signal to itself) are literal and confined to its own temporary directory and its own child processes. No configuration key is read.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/quiet_wait.py"
+        }
+      ]
+    },
+    "scripts/lib/quiet_wait.test.sh": {
+      "source": "scripts/lib/quiet_wait.test.sh",
+      "sha256": "90df146bfc7620ebbb7ea9fca6c256471f363a570c6360465bb707dbb7db65a1",
+      "evidence": "Executes exactly the adjacent fixed Python fixture, with no mutation driver.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/quiet_wait.test.py"
+        }
+      ]
     }
   },
   "units": {
@@ -16909,7 +16970,9 @@
     "scripts/operator-fences-second-git.test.sh": "scripts/operator-fences-second-git.test.sh",
     "scripts/lib/merge-verification-pins.test.sh": "scripts/lib/merge-verification-pins.test.sh",
     "scripts/verification-pins.test.sh": "scripts/verification-pins.test.sh",
-    "scripts/lib/inflight-gaps.test.sh": "scripts/lib/inflight-gaps.test.sh"
+    "scripts/lib/inflight-gaps.test.sh": "scripts/lib/inflight-gaps.test.sh",
+    "scripts/lib/wait-cpu.test.sh": "scripts/lib/wait-cpu.test.sh",
+    "scripts/lib/quiet_wait.test.sh": "scripts/lib/quiet_wait.test.sh"
   },
   "hook_readers": {
     "scripts/hooks/ceo-asks.test.sh": {
@@ -17097,7 +17160,7 @@
         "scripts/lib/pause_protocol.py": "d302f0866df40d27cdb224b8c55974a9c22cf7a1a540c37cf440df881c4cb27e",
         "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/lib/host_child.py": "59fdb01f44f03ef847210ea9e55aa6b2adc226827c10f11805a2bc2335210b4a"
       }
     },
@@ -17172,7 +17235,7 @@
         "scripts/lib/pause_protocol.py": "d302f0866df40d27cdb224b8c55974a9c22cf7a1a540c37cf440df881c4cb27e",
         "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/lib/host_child.py": "59fdb01f44f03ef847210ea9e55aa6b2adc226827c10f11805a2bc2335210b4a"
       }
     },
@@ -17414,7 +17477,7 @@
         "scripts/hooks/worker-started-handoff.sh": "f18675f4938cae746d536661b44e49e7a3425c15acff5c7cd3ad2e1bf7ee9919",
         "scripts/hooks/worker-updated-handoff.sh": "6cbcdd13306d482c8bfd9da1f6ccc68141a3091f9f9405bb52232cb14430ebf8",
         "scripts/hooks/contract-integrity-case7.mutation.sh": "71a90a5ab0d82a3e109d7f06924e6766135b106bd3581b291067efb4fa663866",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
         "ass-kicker/brief-done.py": "db1fd5e6658db77631bbde3d54b0ca47bbad319c14cde21bb7a44e4135efb4f3",
@@ -17650,7 +17713,7 @@
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "mega-lander/workspaces.py": "ae047dec5765187e3aa42cbec11e3f9006d786ebe64df89201197237a6c8fb93",
         "scripts/hooks/scan-secrets.sh": "fd488d5b07748fd41c773c80ec133eed526869534f4f1324c847a33701ae1ab1",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
         "scripts/hooks/guard-shared-scratchpad.sh": "4c3cf896da287334a38a6f3be20fc7a25bba901756ea1de665b5e4c77421f2c4",
@@ -17700,7 +17763,7 @@
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
         "scripts/hooks/release-land-leases.sh": "e8830da188b023fee309d4e712a7b099a339b63b56a720080d349ea9d709a19e",
         "scripts/hooks/turn-manifest.sh": "f5e92311f9896874e5294533673dd08160f3e4cfba4a262e161ae96e377331ae",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/hooks/ass-kicker.sh": "67958c5559f0271a699ee95462636009f5547ad1212124139137827b0a6006c1"
       }
     },
@@ -18093,7 +18156,7 @@
         "scripts/hooks/guard-vendoring-commits.sh": "2f7d9f2973134d1d25bf9c8f8b83e803389d02c64e28bfe15acc6b2ce2c19f32",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
         "ass-kicker/brief-done.py": "db1fd5e6658db77631bbde3d54b0ca47bbad319c14cde21bb7a44e4135efb4f3",
@@ -18160,7 +18223,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa",
         "scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -18182,7 +18245,7 @@
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/workspaces.py": "ae047dec5765187e3aa42cbec11e3f9006d786ebe64df89201197237a6c8fb93",
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -18219,7 +18282,7 @@
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/hooks/observe-created-refs.sh": "6c1bcc7fc86608dace9465fdaef957468872b82906e4134382a98b5ab8085202",
         "scripts/hooks/workspace-lifecycle.sh": "e8a6bd193fe910eb22f76da44c81b04feaa04e2a7429b055823ea8efc8df72e8",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
@@ -18265,7 +18328,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/hooks/observe-created-refs.sh": "6c1bcc7fc86608dace9465fdaef957468872b82906e4134382a98b5ab8085202",
         "scripts/hooks/workspace-lifecycle.sh": "e8a6bd193fe910eb22f76da44c81b04feaa04e2a7429b055823ea8efc8df72e8",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -18368,7 +18431,7 @@
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
         "scripts/hooks/guard-resume-isolation.test.sh": "2fc190fc539a183b423ac8ba7a22a23c56d6f8cd289aa341a67a7d6fd8f39a1d",
         "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/pause_protocol.py": "d302f0866df40d27cdb224b8c55974a9c22cf7a1a540c37cf440df881c4cb27e",
@@ -18443,7 +18506,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa",
         "scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -18501,7 +18564,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa",
         "scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -18559,7 +18622,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "51dc7e5a7ceebb36bc8269df9e13441efe6ffc3e879be97b6f41950d363d6eb3",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa",
         "scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
