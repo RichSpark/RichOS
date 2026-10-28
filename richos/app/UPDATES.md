@@ -293,7 +293,7 @@ archive.
   "platforms": {
     "darwin-aarch64": {
       "signature": "<the whole contents of RichOS.app.tar.gz.sig>",
-      "url": "https://github.com/WebDevBooster/richos/releases/download/v0.1.1/RichOS.app.tar.gz"
+      "url": "https://github.com/RichSpark/RichOS/releases/download/v0.1.1/RichOS.app.tar.gz"
     }
   }
 }
@@ -328,11 +328,13 @@ https://github.com/RichSpark/RichOS/releases/latest/download/latest.json
 https://github.com/WebDevBooster/richos/releases/latest/download/latest.json
 ```
 
-**Two addresses, for the GitHub move (CEO, 2026-10-27).** The repository moves to
-`RichSpark/RichOS`. `updates.rs` (`first_answer`) asks the new address first and the old one
+**Two addresses, for the GitHub move (CEO, 2026-10-27).** The repository moved to
+`RichSpark/RichOS` on 2026-10-28 and releases publish there. `updates.rs` (`first_answer`) asks the new address first and the old one
 second and the first that answers with a manifest wins. Before the move the new address does
 not exist, so the old one answers. After the move the new one answers and the old one is not
-asked. A download that a manifest still names on the old address is fetched from the new one.
+asked. A download on either address is fetched from the new one first and the old one second,
+decided when it is installed, so an update found before the move and installed after it does
+not depend on GitHub's redirect.
 The steps of the move are in the private record:
 `richos-hq/docs/operations/2026-10-27-github-richcore-move.md`.
 

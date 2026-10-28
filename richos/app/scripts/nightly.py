@@ -31,7 +31,7 @@ CONFIG = APP / "src-tauri/tauri.conf.json"
 LOCK = APP / "src-tauri/Cargo.lock"
 PROVENANCE = APP / "nightly-build.json"
 CANDIDATE_MANIFEST = "candidate.json"
-REPO = "WebDevBooster/richos"
+REPO = "RichSpark/RichOS"
 # The channel is a ROLLING RELEASE TAG, never a branch. CEO ruling 2026-09-13
 # (ceo-decisions 38): the public repository shows `main` and release tags and nothing
 # else. `nightly` is a release tag carrying a permanent prerelease whose `latest.json`
@@ -51,8 +51,8 @@ ENDPOINT = f"https://github.com/{REPO}/releases/download/{CHANNEL_TAG}/latest.js
 STABLE_ENDPOINT = f"https://github.com/{REPO}/releases/latest/download/latest.json"
 CHANNEL_ENDPOINTS = {"nightly": ENDPOINT, "stable": STABLE_ENDPOINT}
 # THE GITHUB MOVE (CEO, 2026-10-27; richos-hq docs/operations/2026-10-27-github-richcore-move.md):
-# the repository moves from `WebDevBooster/richos` to `RichSpark/RichOS`. `REPO` above is where a
-# release is PUBLISHED, and it changes to the new address after the move. What a build COMPILES
+# the repository moved from `WebDevBooster/richos` to `RichSpark/RichOS` on 2026-10-28. `REPO`
+# above is where a release is PUBLISHED, the new address since the move. What a build COMPILES
 # IN is both addresses of its channel, the new one first: `src-tauri/src/updates.rs` asks them
 # in that order, so an installed copy finds its updates before, during and after the move.
 HOME_REPO = "RichSpark/RichOS"
@@ -1295,10 +1295,17 @@ def changelog_request(info):
 
 
 @release_step
-def changelog_section(record):
+def changelog_section(record, repo=REPO):
     return (f"## {record['version']}\n\n"
-            f"[GitHub release](https://github.com/{REPO}/releases/tag/{record['tag']})\n\n"
+            f"[GitHub release](https://github.com/{repo}/releases/tag/{record['tag']})\n\n"
             f"{record['entry']}\n")
+
+
+def is_changelog_section(text, record):
+    """`text` is `record`'s section, with its release link on either address. A section written
+    before the GitHub move (2026-10-28) keeps the link it was published with: published notes are
+    never rewritten, and both addresses name the same release."""
+    return text.strip() in {changelog_section(record, repo).strip() for repo in (REPO, FORMER_REPO)}
 
 
 @release_step
@@ -1346,8 +1353,8 @@ def write_changelog_draft(request, entry):
     existing = re.search(r"^" + re.escape(heading) + r"\n.*?(?=^## |\Z)", text, re.M | re.S)
     section = changelog_section(record)
     if existing:
-        if existing[0].strip() != section.strip():
-            if not prior or existing[0].strip() != changelog_section(prior).strip():
+        if not is_changelog_section(existing[0], record):
+            if not prior or not is_changelog_section(existing[0], prior):
                 raise ValueError("the changelog already has an unrecognized entry for this version")
             document.write_text(text[:existing.start()] + section + "\n" + text[existing.end():])
     else:
@@ -1380,7 +1387,7 @@ def read_changelog_record(info):
     validate_changelog_entry(record.get("entry"))
     section = re.search(r"^## " + re.escape(info["version"]) + r"\n.*?(?=^## |\Z)",
                         document, re.M | re.S)
-    if not section or section[0].strip() != changelog_section(record).strip():
+    if not section or not is_changelog_section(section[0], record):
         raise ValueError("approved notes and the public changelog disagree")
     return record, main
 

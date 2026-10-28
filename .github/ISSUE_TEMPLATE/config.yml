@@ -6,12 +6,12 @@ blank_issues_enabled: true
 
 contact_links:
   - name: Security vulnerability — do not open an issue
-    url: https://github.com/WebDevBooster/richos/security/policy
+    url: https://github.com/RichSpark/RichOS/security/policy
     about: >-
       A vulnerability goes through a private route, never a public issue. The
       security policy has both routes and says what to expect back.
   - name: Before you write code — pull requests need approval first
-    url: https://github.com/WebDevBooster/richos/blob/main/.github/CONTRIBUTING.md
+    url: https://github.com/RichSpark/RichOS/blob/main/.github/CONTRIBUTING.md
     about: >-
       Issues are open to everyone; pull requests are not. An unapproved pull
       request is closed automatically within about a minute, and an issue is the

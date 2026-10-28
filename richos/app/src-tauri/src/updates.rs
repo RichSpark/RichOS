@@ -368,8 +368,8 @@ impl Failure {
 /// its old one second (`richos_core::github_home`), and [`first_answer`] asks them in that order.
 /// Before the move the new address does not exist and the old one answers; after it the new one
 /// answers. The plugin is handed one address at a time so this file knows WHICH one answered:
-/// that is the endpoint the view reports, the one a rollback derives its tag manifest from, and
-/// the one that decides where the download is fetched ([`richos_core::github_home::download_at`]).
+/// that is the endpoint the view reports and the one a rollback derives its tag manifest from.
+/// Where the download is fetched is decided when it is installed ([`download_new_first`]).
 ///
 /// Read once per call rather than cached, so `updater-e2e.sh` can start two processes from
 /// the same bundle with different endpoints.
@@ -444,14 +444,94 @@ where
     Err(last)
 }
 
-/// Where the plugin fetches `update`'s archive: on RichOS's new address when the manifest came
-/// from there and still names the old one. The bytes are signature-checked either way.
-fn download_from_home(update: &mut tauri_plugin_updater::Update, answered: &str) {
-    if let Some(home) = richos_core::github_home::download_at(answered, update.download_url.as_str()) {
-        if let Ok(url) = tauri::Url::parse(&home) {
-            update.download_url = url;
+/// **WHERE AN ARCHIVE IS DOWNLOADED FROM IS DECIDED WHEN IT IS INSTALLED**, not when the update
+/// was found (the GitHub move, 2026-10-28; follow-up `rv-20261027T120956Z-02520365-1a35#1`). An
+/// update found before the move is announced on RichOS's old address and may be installed after
+/// it. So an archive on either address is fetched from the new one first and, when that does not
+/// deliver (before the move the new address has nothing), from the old one; anything else only as
+/// announced ([`richos_core::github_home::download_addresses`]). `fetch` is one download with its
+/// signature check, so the address cannot change what is installed. When none delivers, the last
+/// failure is the one reported, as in [`first_answer`].
+async fn download_new_first<T, F, Fut>(announced: &tauri::Url, mut fetch: F) -> Result<T, tauri_plugin_updater::Error>
+where
+    F: FnMut(tauri::Url) -> Fut,
+    Fut: std::future::Future<Output = Result<T, tauri_plugin_updater::Error>>,
+{
+    let mut last = None;
+    for address in richos_core::github_home::download_addresses(announced.as_str()) {
+        let result = match tauri::Url::parse(&address) {
+            Ok(url) => fetch(url).await,
+            Err(e) => Err(e.into()),
+        };
+        match result {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) => last = Some(e),
         }
     }
+    // `download_addresses` always names at least the announced address; were it ever empty, the
+    // archive is fetched as announced rather than refused.
+    match last {
+        Some(e) => Err(e),
+        None => fetch(announced.clone()).await,
+    }
+}
+
+/// The progress callbacks for ONE download attempt, so an attempt that follows a failed one counts
+/// its own bytes from zero.
+///
+/// Progress is emitted on a THROTTLE, not per chunk. reqwest hands back chunks in the low tens of
+/// kilobytes, so the event count scales with the payload and the payload is about to change by an
+/// order of magnitude (CEO decision 16 deletes `app/acp-adapter/`). A time-based throttle is the
+/// only kind that is correct at both sizes: no byte count, no chunk count, no threshold tuned to
+/// today's bundle.
+///
+/// The gap between the last byte and the first extracted file is where the signature is checked,
+/// and it is long enough to look like a stall. So it gets its own state and its own sentence in the
+/// UI rather than a bar frozen at 100%. Deliberately not tied to any duration: minisign over the
+/// whole payload takes as long as the payload is long.
+fn download_progress(app: &AppHandle) -> (impl FnMut(usize, Option<u64>), impl FnOnce()) {
+    let app_for_chunks = app.clone();
+    let mut received: u64 = 0;
+    let mut last_emit = Instant::now() - Duration::from_millis(200);
+    let on_chunk = move |chunk: usize, total: Option<u64>| {
+        received += chunk as u64;
+        let done = total.map(|t| received >= t).unwrap_or(false);
+        if last_emit.elapsed() >= Duration::from_millis(100) || done {
+            last_emit = Instant::now();
+            let percent = total.and_then(|t| {
+                if t == 0 {
+                    None
+                } else {
+                    Some(((received.min(t) * 100) / t) as u8)
+                }
+            });
+            transition(&app_for_chunks, |v| {
+                v.state = "downloading";
+                v.downloaded_bytes = received;
+                v.total_bytes = total;
+                v.percent = percent;
+            });
+        }
+    };
+    let app_for_finish = app.clone();
+    let on_finish = move || {
+        transition(&app_for_finish, |v| {
+            v.state = "installing";
+            v.percent = Some(100);
+        });
+    };
+    (on_chunk, on_finish)
+}
+
+/// Download and verify `update`'s archive, from the address [`download_new_first`] decides.
+async fn download_verified(app: &AppHandle, update: &tauri_plugin_updater::Update) -> Result<Vec<u8>, tauri_plugin_updater::Error> {
+    download_new_first(&update.download_url, |url| {
+        let mut attempt = update.clone();
+        attempt.download_url = url;
+        let (on_chunk, on_finish) = download_progress(app);
+        async move { attempt.download(on_chunk, on_finish).await }
+    })
+    .await
 }
 
 /// Install the update state. Pure — no I/O, no network, nothing that can fail — so it is
@@ -550,10 +630,7 @@ pub async fn check(app: &AppHandle) -> UpdateView {
         Ok((i, answer)) => {
             let endpoint = endpoints[i].clone();
             transition(app, |v| v.endpoint = endpoint.clone());
-            Ok(answer.map(|mut update| {
-                download_from_home(&mut update, &endpoint);
-                update
-            }))
+            Ok(answer)
         }
         Err(failure) => Err(failure),
     };
@@ -655,50 +732,9 @@ pub async fn install(app: &AppHandle) -> UpdateView {
         v.failure = None;
     });
 
-    // Progress is emitted on a THROTTLE, not per chunk. reqwest hands back chunks in the
-    // low tens of kilobytes, so the event count scales with the payload and the payload is
-    // about to change by an order of magnitude (CEO decision 16 deletes `app/acp-adapter/`).
-    // A time-based throttle is the only kind that is correct at both sizes: no byte count,
-    // no chunk count, no threshold tuned to today's bundle.
-    let app_for_chunks = app.clone();
-    let mut received: u64 = 0;
-    let mut last_emit = Instant::now() - Duration::from_millis(200);
-    let on_chunk = move |chunk: usize, total: Option<u64>| {
-        received += chunk as u64;
-        let done = total.map(|t| received >= t).unwrap_or(false);
-        if last_emit.elapsed() >= Duration::from_millis(100) || done {
-            last_emit = Instant::now();
-            let percent = total.and_then(|t| {
-                if t == 0 {
-                    None
-                } else {
-                    Some(((received.min(t) * 100) / t) as u8)
-                }
-            });
-            transition(&app_for_chunks, |v| {
-                v.state = "downloading";
-                v.downloaded_bytes = received;
-                v.total_bytes = total;
-                v.percent = percent;
-            });
-        }
-    };
-
-    // The gap between the last byte and the first extracted file is where the signature is
-    // checked, and it is long enough to look like a stall. So it gets its own state and its
-    // own sentence in the UI rather than a bar frozen at 100%. Deliberately not tied to any
-    // duration: minisign over the whole payload takes as long as the payload is long.
-    let app_for_finish = app.clone();
-    let on_finish = move || {
-        transition(&app_for_finish, |v| {
-            v.state = "installing";
-            v.percent = Some(100);
-        });
-    };
-
     // Download returns only after the plugin verifies the signed payload. Its macOS
     // install method has an administrator fallback, so it is never called here.
-    let bytes = match update.download(on_chunk, on_finish).await {
+    let bytes = match download_verified(app, &update).await {
         Ok(bytes) => bytes,
         Err(e) => {
             return transition(app, |v| {
@@ -899,9 +935,8 @@ pub async fn rollback(app: &AppHandle) -> UpdateView {
     .await;
 
     let update = match answered {
-        Ok((i, Some(mut update))) => {
+        Ok((i, Some(update))) => {
             let channel = channels[i].clone();
-            download_from_home(&mut update, &channel);
             transition(app, |v| v.endpoint = channel.clone());
             update
         }
@@ -937,40 +972,9 @@ pub async fn rollback(app: &AppHandle) -> UpdateView {
         v.ready_is_rollback = true;
     });
 
-    let app_for_chunks = app.clone();
-    let mut received: u64 = 0;
-    let mut last_emit = Instant::now() - Duration::from_millis(200);
-    let on_chunk = move |chunk: usize, total: Option<u64>| {
-        received += chunk as u64;
-        let done = total.map(|t| received >= t).unwrap_or(false);
-        if last_emit.elapsed() >= Duration::from_millis(100) || done {
-            last_emit = Instant::now();
-            let percent = total.and_then(|t| {
-                if t == 0 {
-                    None
-                } else {
-                    Some(((received.min(t) * 100) / t) as u8)
-                }
-            });
-            transition(&app_for_chunks, |v| {
-                v.state = "downloading";
-                v.downloaded_bytes = received;
-                v.total_bytes = total;
-                v.percent = percent;
-            });
-        }
-    };
-    let app_for_finish = app.clone();
-    let on_finish = move || {
-        transition(&app_for_finish, |v| {
-            v.state = "installing";
-            v.percent = Some(100);
-        });
-    };
-
     // Returns only after the plugin has verified the signed payload. Identical to the
     // update path, and the reason a rollback is not a hole in the signature story.
-    let bytes = match update.download(on_chunk, on_finish).await {
+    let bytes = match download_verified(app, &update).await {
         Ok(bytes) => bytes,
         Err(e) => {
             return transition(app, |v| {
@@ -1728,5 +1732,60 @@ mod tests {
         // An address that is not a URL is skipped as a configuration fault, not a stop.
         let got = tauri::async_runtime::block_on(first_answer(&["not a url".to_string(), OLD.to_string()], |_url| async { Ok::<_, tauri_plugin_updater::Error>(7) }));
         assert_eq!(got.map_err(|f| f.kind), Ok((1, 7)));
+    }
+
+    const OLD_ARCHIVE: &str = "https://github.com/WebDevBooster/richos/releases/download/v1.3.0/RichOS.app.tar.gz";
+    const NEW_ARCHIVE: &str = "https://github.com/RichSpark/RichOS/releases/download/v1.3.0/RichOS.app.tar.gz";
+
+    /// Installs an update announced at `announced` through [`download_new_first`]; `delivers` is
+    /// whether each address asked delivers the archive, in the order asked (`false` is the 404 the
+    /// plugin reports for an address with nothing there). Returns the address that delivered, or
+    /// the failure reported, and the addresses asked.
+    fn install_from(announced: &str, delivers: &[bool]) -> (Result<String, String>, Vec<String>) {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let announced = tauri::Url::parse(announced).unwrap();
+        let got = tauri::async_runtime::block_on(download_new_first(&announced, |url| {
+            asked.borrow_mut().push(url.to_string());
+            let delivered = delivers[asked.borrow().len() - 1];
+            async move {
+                if delivered {
+                    Ok(url.to_string())
+                } else {
+                    Err(tauri_plugin_updater::Error::Network("Download request failed with status: 404 Not Found".into()))
+                }
+            }
+        }));
+        (got.map_err(|e| e.to_string()), asked.into_inner())
+    }
+
+    /// THE FOLLOW-UP `rv-20261027T120956Z-02520365-1a35#1`: an update found before the move is
+    /// announced on the old address; installed after the move, it downloads from the new address,
+    /// and the old one (now only GitHub's redirect) is not asked.
+    #[test]
+    fn an_update_found_before_the_move_and_installed_after_it_downloads_from_the_new_address() {
+        let (got, asked) = install_from(OLD_ARCHIVE, &[true, true]);
+        assert_eq!(got.as_deref(), Ok(NEW_ARCHIVE));
+        assert_eq!(asked, [NEW_ARCHIVE], "the old address is not asked once the new one delivers");
+    }
+
+    /// Before the move the new address has nothing, so the archive comes from the old one.
+    #[test]
+    fn before_the_move_the_archive_comes_from_the_old_address() {
+        let (got, asked) = install_from(OLD_ARCHIVE, &[false, true]);
+        assert_eq!(got.as_deref(), Ok(OLD_ARCHIVE));
+        assert_eq!(asked, [NEW_ARCHIVE, OLD_ARCHIVE], "the new address first, then the old one");
+    }
+
+    /// Neither delivers: the last failure is the one reported. An archive anywhere else (the test
+    /// server of `updater-e2e.sh`) is asked once, exactly as announced.
+    #[test]
+    fn when_neither_address_delivers_the_last_failure_is_reported_and_any_other_address_is_asked_once() {
+        let (got, asked) = install_from(NEW_ARCHIVE, &[false, false]);
+        assert!(got.as_ref().unwrap_err().contains("404"), "{got:?}");
+        assert_eq!(asked, [NEW_ARCHIVE, OLD_ARCHIVE]);
+        let local = "http://127.0.0.1:8973/RichOS.app.tar.gz";
+        let (got, asked) = install_from(local, &[true]);
+        assert_eq!(got.as_deref(), Ok(local));
+        assert_eq!(asked, [local]);
     }
 }

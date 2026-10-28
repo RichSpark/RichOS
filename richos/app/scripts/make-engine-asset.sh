@@ -202,7 +202,7 @@ SOURCE_SHA="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo 
 
 [ -n "$TAG" ] || TAG="engine-v$VERSION"
 ASSET="richos-engine-$VERSION.tar.gz"
-URL="https://github.com/WebDevBooster/richos/releases/download/$TAG/$ASSET"
+URL="https://github.com/RichSpark/RichOS/releases/download/$TAG/$ASSET"
 
 # ---------------------------------------------------------------------------------------
 # Build one archive, deterministically, into $1
@@ -478,8 +478,8 @@ echo "=== the pin ==="
 cat "$PIN_FILE"
 echo
 echo "=== what a human does next, and nothing here did it ==="
-echo "  gh release create $TAG --repo WebDevBooster/richos --title 'RichOS engine $VERSION' --notes '...'"
-echo "  gh release upload $TAG '$TARBALL' --repo WebDevBooster/richos"
+echo "  gh release create $TAG --repo RichSpark/RichOS --title 'RichOS engine $VERSION' --notes '...'"
+echo "  gh release upload $TAG '$TARBALL' --repo RichSpark/RichOS"
 echo "  source '$PIN_FILE' && richos/app/scripts/package-app.sh"
 echo
 echo "  The upload has to happen BEFORE a build carrying this pin ships, or every customer's"

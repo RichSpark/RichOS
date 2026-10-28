@@ -31,7 +31,7 @@
 #   |                              |   "conflicting-dependencies": [] }        |
 #
 # One open alert, GHSA-wrw7-89jp-8q8g, medium, against
-# `richos/app/src-tauri/Cargo.lock`. Measured with `gh api repos/WebDevBooster/richos/
+# `richos/app/src-tauri/Cargo.lock`. Measured with `gh api repos/RichSpark/RichOS/
 # dependabot/alerts`.
 #
 # WE DO NOT CONTROL THAT VERSION. glib 0.18.5 is not a direct dependency and is
@@ -88,7 +88,7 @@
 # so as of 2026-09-15 ci-surface.py reads its declarations from here.
 #
 # WALL CLOCK: both runs on record are ~50 s (33900052388 and 33901300900,
-# 2026-09-04, `gh api repos/WebDevBooster/richos/actions/workflows/350381100/
+# 2026-09-04, `gh api repos/RichSpark/RichOS/actions/workflows/350381100/
 # runs`). Almost all of that is pulling the updater container image, which is
 # GitHub's to make faster and not ours. 10m is loose on purpose: the cost here
 # is dominated by image pull and registry latency, neither of which this

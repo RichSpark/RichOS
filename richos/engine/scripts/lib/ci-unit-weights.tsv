@@ -10,7 +10,7 @@
 # run #216), a full sharded pass on `ubuntu-latest` at `d2664cdb`, 2026-09-15.
 # Harvested with:
 #
-#     gh api repos/WebDevBooster/richos/actions/jobs/<id>/logs   (all 12 shards)
+#     gh api repos/RichSpark/RichOS/actions/jobs/<id>/logs   (all 12 shards)
 #
 # COVERAGE, AND ITS DATE. That run measured 137 units against an inventory of
 # 137 — no gaps, nothing falling back to DEFAULT_WEIGHT. Then main moved the

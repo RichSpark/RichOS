@@ -54,7 +54,7 @@ Run the focused offline checks with:
 ```bash
 bash richos/engine/scripts/lib/ci_pause.test.sh
 bash richos/engine/scripts/ci-status.sh --repo /path/to/richos --sentence
-gh workflow list --repo WebDevBooster/richos --all
+gh workflow list --repo RichSpark/RichOS --all
 ```
 
 The status command must say `CI PAUSED`; that is not a passing build result.

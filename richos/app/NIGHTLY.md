@@ -530,8 +530,11 @@ archives, not candidate numbers. See [GitHub's release limits](https://docs.gith
 Installing a versioned nightly ZIP is the opt-in. Nightlies use:
 
 ```text
-https://github.com/WebDevBooster/richos/releases/download/nightly/latest.json
+https://github.com/RichSpark/RichOS/releases/download/nightly/latest.json
 ```
+
+and, second, the same path at `WebDevBooster/richos`, the repository's address before the
+GitHub move (2026-10-28), which GitHub redirects to the new one.
 
 That is an asset on `nightly`, a permanent prerelease whose tag moves on every
 publish. It is pinned to that tag, so unlike the stable endpoint it does not

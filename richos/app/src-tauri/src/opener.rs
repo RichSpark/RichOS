@@ -10,7 +10,8 @@
 //! A general "open this URL" command is a hole with a button on it: anything that can reach the
 //! webview can then ask the Mac to open `file:///`, a `mailto:` that sends, a custom scheme
 //! registered by some other application, or a link that looks like ours with a different host.
-//! The screens need **eight** destinations, all of them fixed at build time, so the command takes
+//! The screens need **eight** destinations (the changelog under two keys, its address before and
+//! after the GitHub move), all of them fixed at build time, so the command takes
 //! the address as a **key into a table** rather than as data to act on. Anything not in the table
 //! is refused by name.
 //!
@@ -59,6 +60,14 @@ const ALLOWED: &[(&str, Target)] = &[
     ),
     ("console.tailscale.com/admin/dns", Target::Page("https://console.tailscale.com/admin/dns")),
     // The Updates row's "See what's new" link (CEO, 2026-10-19; round 34): the RichOS changelog.
+    (
+        "github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md",
+        Target::Page("https://github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md"),
+    ),
+    // The same page under RichOS's address before the GitHub move (2026-10-28; richos-hq
+    // `docs/operations/2026-10-27-github-richcore-move.md`): a link already in a user's hands keeps
+    // opening. It opens exactly the address asked for, as every entry does, and GitHub sends it on
+    // to the new address.
     (
         "github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md",
         Target::Page("https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md"),
@@ -226,16 +235,22 @@ mod tests {
         assert_eq!(resolve("claude.com/pricing"), Some(Target::Page("https://claude.com/pricing")));
         // The eighth belongs to the Updates row's "See what's new" link (CEO, 2026-10-19).
         let updates_js = include_str!("../../ui/updates.js");
-        let changelog = "github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md";
+        let changelog = "github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md";
         assert!(
             updates_js.contains(&format!("\"{changelog}\"")),
             "the Updates row must ask for the changelog by this key"
         );
         assert_eq!(
             resolve(changelog),
+            Some(Target::Page("https://github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md"))
+        );
+        // The key it had before the GitHub move still opens it (GitHub redirects that address).
+        assert_eq!(
+            resolve("github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md"),
             Some(Target::Page("https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md"))
         );
-        assert_eq!(ALLOWED.len(), 8, "the allowlist grew or shrank without this test being told");
+        // Eight destinations, the changelog under both of its addresses.
+        assert_eq!(ALLOWED.len(), 9, "the allowlist grew or shrank without this test being told");
     }
 
     /// **AN ADDRESS OUTSIDE THE LIST IS REFUSED** — the check the brief asks for, over the near
@@ -264,6 +279,11 @@ mod tests {
             "github.com/WebDevBooster/richos/blob/evil/docs/CHANGELOG.md",
             "github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md?x=1",
             "github.com/WebDevBooster/richos",
+            "https://github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md",
+            "github.com/RichSpark/RichOS/blob/evil/docs/CHANGELOG.md",
+            "github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md?x=1",
+            "github.com/RichSpark/richos/blob/main/docs/CHANGELOG.md",
+            "github.com/RichSpark/RichOS",
             "file:///etc/passwd",
             "mailto:someone@example.com",
             // Whitespace and case: no normalizing, on purpose.

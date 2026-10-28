@@ -8,8 +8,9 @@
 //!
 //!   - **Updates** try [`HOME`] first and [`FORMER`] second (`src-tauri/src/updates.rs`). Before
 //!     the move the new address does not exist yet and the old one answers; after it the new one
-//!     answers, and a download the manifest still names on the old address is fetched from the new
-//!     one ([`download_at`]), so nothing depends on GitHub's redirect from the old address.
+//!     answers. A download on either address is fetched from the new one first and the old one
+//!     second, decided when it is installed ([`download_addresses`]): an update found before the
+//!     move and installed after it does not depend on GitHub's redirect from the old address.
 //!   - **Reports and ideas** come back from the relay as a link on whichever repository the relay
 //!     filed them on. A link on either address is the same repository ([`accepted`]); a link on any
 //!     other repository is still refused.
@@ -56,15 +57,17 @@ pub fn at_home(url: &str) -> Option<String> {
     url.strip_prefix(&format!("https://github.com/{FORMER}/")).map(|rest| format!("https://github.com/{HOME}/{rest}"))
 }
 
-/// Where to download an update from, when the manifest that announced `download` was fetched from
-/// `endpoint`: on [`HOME`] when the manifest came from the new address and still names the old one
-/// (it was published before the move), so nothing after the move depends on GitHub's redirect;
-/// `None` (download it as announced) otherwise.
-pub fn download_at(endpoint: &str, download: &str) -> Option<String> {
-    if endpoint.starts_with(&format!("https://github.com/{HOME}/")) {
-        at_home(download)
-    } else {
-        None
+/// Where to download an update announced at `download`, in the order to try, decided when it is
+/// installed: a page or download of RichOS on github.com, on either address, at [`HOME`] first and
+/// [`FORMER`] second (before the move the new address has nothing; after it the new one answers);
+/// anything else only as announced. The bytes are signature-checked whichever address delivers.
+pub fn download_addresses(download: &str) -> Vec<String> {
+    let rest = [HOME, FORMER]
+        .iter()
+        .find_map(|repository| download.strip_prefix(&format!("https://github.com/{repository}/")));
+    match rest {
+        Some(rest) => [HOME, FORMER].iter().map(|repository| format!("https://github.com/{repository}/{rest}")).collect(),
+        None => vec![download.to_string()],
     }
 }
 
@@ -131,17 +134,22 @@ mod tests {
         }
     }
 
-    /// A manifest from the new address that still names a download on the old one is fetched
-    /// from the new one; one from the old address (before the move) is fetched as announced.
+    /// An update announced on either address, whenever it was found, is downloaded from the new
+    /// address first and the old one second (follow-up `rv-20261027T120956Z-02520365-1a35#1`: one
+    /// found before the move and installed after it). Anything else only as announced.
     #[test]
-    fn a_download_moves_home_only_when_the_manifest_came_from_home() {
+    fn a_download_on_either_address_is_tried_at_the_new_one_first_and_the_old_one_second() {
         let old = "https://github.com/WebDevBooster/richos/releases/download/v1.2.3/RichOS.app.tar.gz";
         let new = "https://github.com/RichSpark/RichOS/releases/download/v1.2.3/RichOS.app.tar.gz";
-        let home = "https://github.com/RichSpark/RichOS/releases/latest/download/latest.json";
-        let former = "https://github.com/WebDevBooster/richos/releases/latest/download/latest.json";
-        assert_eq!(download_at(home, old).as_deref(), Some(new));
-        assert_eq!(download_at(home, new), None, "already home");
-        assert_eq!(download_at(former, old), None, "before the move the old address is the right one");
-        assert_eq!(download_at("http://127.0.0.1:8973/latest.json", old), None, "a test server is left alone");
+        assert_eq!(download_addresses(old), [new, old], "announced on the old address before the move");
+        assert_eq!(download_addresses(new), [new, old], "announced on the new address");
+        for unchanged in [
+            "http://127.0.0.1:8973/RichOS.app.tar.gz",
+            "https://github.com/WebDevBooster/richos-hq/releases/download/v1/x",
+            "https://github.com/RichSpark/RichOS-HQ/releases/download/v1/x",
+            "https://objects.githubusercontent.com/WebDevBooster/richos/x",
+        ] {
+            assert_eq!(download_addresses(unchanged), [unchanged], "{unchanged}");
+        }
     }
 }

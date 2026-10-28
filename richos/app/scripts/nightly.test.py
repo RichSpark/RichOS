@@ -1147,7 +1147,7 @@ class CommittedChangelogTests(unittest.TestCase):
     def test_entry_has_its_own_release_link_without_a_permanent_prepared_label(self):
         section = n.changelog_section({"version": "9.9.9", "tag": "v9.9.9", "entry": "- Fixed a lost message"})
         self.assertNotIn("Prepared", section)
-        self.assertIn("https://github.com/WebDevBooster/richos/releases/tag/v9.9.9)", section)
+        self.assertIn("https://github.com/RichSpark/RichOS/releases/tag/v9.9.9)", section)
 
     def test_technical_tag_marks_a_line_only_a_technical_person_would_care_about(self):
         entry = "- Added a file card\n- [technical] Fixed a teammate's command being refused"
@@ -1163,7 +1163,9 @@ class CommittedChangelogTests(unittest.TestCase):
                 n.changelog_identity(record)
                 n.validate_changelog_entry(record["entry"])
                 document = (n.ROOT / n.CHANGELOG_FILES[record["channel"]]).read_text()
-                self.assertIn(n.changelog_section(record).strip(), document)
+                # Published before the GitHub move, a section keeps its link on the old address.
+                self.assertTrue(any(n.changelog_section(record, repo).strip() in document
+                                    for repo in (n.REPO, n.FORMER_REPO)), n.changelog_section(record))
                 if record["previous_tag"] is not None:
                     self.assertRegex(record["previous_source"], r"^[0-9a-f]{40}$")
                     pattern = ("v" + n.BASE_RE + r"-nightly\.[0-9]{8}\.[1-9][0-9]*"
@@ -1912,7 +1914,7 @@ printf 'fixture engine bytes' > "$dest/richos-engine-1.2.0.tar.gz"
 digest=$(shasum -a 256 "$dest/richos-engine-1.2.0.tar.gz" | awk '{print $1}')
 cat > "$dest/engine-pin.env" <<EOF
 export RICHOS_ENGINE_VERSION=1.2.0
-export RICHOS_ENGINE_URL=https://github.com/WebDevBooster/richos/releases/download/$tag/richos-engine-1.2.0.tar.gz
+export RICHOS_ENGINE_URL=https://github.com/RichSpark/RichOS/releases/download/$tag/richos-engine-1.2.0.tar.gz
 export RICHOS_ENGINE_SHA256=$digest
 EOF
 ''')

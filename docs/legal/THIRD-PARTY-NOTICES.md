@@ -548,7 +548,7 @@ RichOS release whose engine carries ffmpeg also carries, beside the engine
 asset, a byte-identical copy of each of the 34 archives, named
 `ffmpeg-source-<name>-<version>.tar.<gz|xz|bz2>` (for example
 `ffmpeg-source-x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee.tar.gz`), at
-`https://github.com/WebDevBooster/richos/releases/download/<release>/<name>`.
+`https://github.com/RichSpark/RichOS/releases/download/<release>/<name>`.
 `FFMPEG-SOURCE.txt` gives each archive's release name next to its upstream URL
 and SHA-256. The nightly publish step attaches them (`nightly.py`
 `attach_gpl_sources`, run by `finish` before the release is verified and before

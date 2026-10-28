@@ -12503,14 +12503,14 @@
     },
     "scripts/lib/ci-run-records.py": {
       "source": "scripts/lib/ci-run-records.py",
-      "sha256": "478c8689e5daf1179a10f12887f851b207f572ef43e270836e1689ca7acc71a5",
+      "sha256": "135e0bc261218fb4979c786fb2ba0739fba2f50fb13ebf110f6bc36ae9aadeba",
       "evidence": "Stdlib JSON/date/argument parser reads event and run JSON, merges pages and reports coverage. No engine imports or config evaluation.",
       "keys": [],
       "edges": []
     },
     "scripts/ci-run-record-check.sh#fixture-api": {
       "source": "scripts/ci-run-record-check.sh",
-      "sha256": "4b5b671e3e1f1ef7b3735b0b7407daede0d76abac06fc882cb7c33295dbbacc5",
+      "sha256": "1ebcdd956a3df6b18214a0a92cd7d75397da07baf63e9ba0b42408e220188503",
       "evidence": "Tests pass private events/runs JSON or a literal gh stub for paging. Wrapper invokes ci-run-records and inline stdlib JSON only; no orchestration config or dynamic engine helper.",
       "keys": [],
       "edges": [
@@ -14880,7 +14880,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "ec03d66621121b06cd07e13b83b179c9f57a24ee8f19dfaa592af5ec606b5b6b",
+          "sha256": "b435fa6c2e68f6cac2b37b3c7eebdbe85d23f660d83d9fb4ea0d74af64817ae2",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {

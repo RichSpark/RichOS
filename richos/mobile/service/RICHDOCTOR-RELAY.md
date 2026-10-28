@@ -107,7 +107,7 @@ D1 holds, per report: the ID, the receipt's hash, the content hash, the state, t
 
 ## Operating it
 
-The profile is private, identifiers only: `stage` (`production` or `test`), `accountId`, `databaseId`, `hostname`, `worker`, `repository`, `bucket`, `appId`, `installationId`, `botLogin`, `label` and for staff reads `accessTeamDomain` (`https://<team>.cloudflareaccess.com`) and `accessAud`. A production profile must name exactly `richos-report`, `report.richos.ceo`, the repository `WebDevBooster/richos` (or, once the repository has moved into the RichSpark organization, `RichSpark/RichOS`) and the bucket `richos-report`; a test profile may use none of them.
+The profile is private, identifiers only: `stage` (`production` or `test`), `accountId`, `databaseId`, `hostname`, `worker`, `repository`, `bucket`, `appId`, `installationId`, `botLogin`, `label` and for staff reads `accessTeamDomain` (`https://<team>.cloudflareaccess.com`) and `accessAud`. A production profile must name exactly `richos-report`, `report.richos.ceo`, the repository `RichSpark/RichOS` (or `WebDevBooster/richos`, its address before the move into the RichSpark organization on 2026-10-28) and the bucket `richos-report`; a test profile may use none of them.
 
 ```sh
 node richos/mobile/cli/mobile.mjs report artifact <profile.json>     # exact upload: modules, hashes, bindings, schedule, schema
