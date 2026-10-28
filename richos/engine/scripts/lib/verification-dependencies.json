@@ -1561,7 +1561,7 @@
     },
     "scripts/hooks/guard-sealed-worktree.test.sh": {
       "source": "scripts/hooks/guard-sealed-worktree.test.sh",
-      "sha256": "39eb12173a6f0e1dc8544edf4fd519ee2ce2ab45cb25a8578df1d9e517189995",
+      "sha256": "b164e741450f276665aa2d636d389c8eb1388efd0ed44ac69139f21f3a5e009c",
       "evidence": "Creates private HOME/config, sessions and Git worktrees. Copies the real config, replacing only SEAL_WAIT_SECONDS with zero; all other guard settings remain inputs. Actual lifecycle and gate-stop commands can reach app cleanup reading the original engine config. The missing-library fixture copies only the guard and root resolver. Nested mutation suites retain the same closure.",
       "keys": [],
       "edges": [
@@ -2175,7 +2175,7 @@
     },
     "scripts/lib/record-canary.sh": {
       "source": "scripts/lib/record-canary.sh",
-      "sha256": "2cf0fc8ace8e444b2af29265e4fbb0fb08047e1b13978c7d41a79e594ede5c72",
+      "sha256": "3f96edb4e8fb4441a53ea05047eeb0ed4ac63aeeb09fb0407ca8278811cf1ca4",
       "evidence": "Reads only fixed ledger, team and workspace paths beneath the supplied config directory. Inline Python reads JSON/text and file metadata; it never executes record content or sources orchestration settings. Per-unit HOME construction seeds fixed Git identity and scratch bookkeeping, then strips environment paths into the caller record; no orchestration reader is added.",
       "keys": [],
       "edges": []
@@ -8605,7 +8605,7 @@
     },
     "mega-lander/tests/workspaces.test.py": {
       "source": "mega-lander/tests/workspaces.test.py",
-      "sha256": "58b210293363ee87a17e737500a7ddc2dea001305f12199b69abbcfb7775d89b",
+      "sha256": "51cde7e6c402bd390ca8afa21c996358ffaa414ea5571086a5369b972495eb99",
       "evidence": "AST census of every ws call, subprocess and run call: fixed Git fixtures, captured sleep processes, a literal shutdown writer and seven Stop guards. Private HOME/config directories and Git config do not replace real app cleanup or QA settings. Six guards receive only a forbidden lead; workspace gate receives a private unadopted repository. The sole land CLI call explicitly patches out the scratch sweep. The added resource-waits Stop guard also returns at the forbidden-lead recovery before reading settings or wait state. Renewed 2026-09-30 (hunt part 4): the finding-20 case runs app.test.py as a subprocess for the one case test_pause_message_is_fixed selects (edge to that case) and reads the five sibling *.mutation.sh files as text; the finding 11-15 and 29 cases add literal sleeper processes, ps reads, a patched container reaper and a private RICHOS_WORKSPACES_GATE_BUDGET. No configuration read is added. Renewed 2026-10-07 (merge-gate abort): MergeGateRefusal installs and switches on the operator fence in its private repository through scripts/operator-fences.sh with a literal private entity config, writes a private session record for its own pid, takes the lease with scripts/land-lease.sh (CLAUDE_PID removed from the child environment), adds a literal refusing pre-merge-commit hook and runs workspaces.py merge as a subprocess. No configuration read is added. Env (2026-10-08) also exports SCRATCH_BUILD_CACHE_ROOT and SCRATCH_CARGO_TARGET_ROOTS pointing into its own temporary root and restores them on close, so the lander's build-cache step never reads the operator's configured cache folders. RecoveryChain fixtures exercise private review state and patch mode/reconcile/provider launch; observation tests execute no model and preserve baseline helper tools. Direct recovery imports are included in the fixture dependency closure. Renewed 2026-10-20 (verification reliability PRD T20): VerifierBuildOutputDoesNotBlockAContinuation reads the repository's committed richos/mobile/conformance/verifier/.gitignore beside the ignore files RichosBuildOutputDoesNotBlockAContinuation already reads, and writes only its private fixture. No configuration read is added. Renewed 2026-10-24 (app due-work notice, CEO 138): AppDueNotice loads mega-lander/app.py by fixed path for its TOOLS list only (module load: the closure app.py#land-lock-fixtures binds; no call entrypoint, no MCP server) and sets literal RICHOS_APP_ENTITY/RICHOS_APP_THREAD values with patch.dict, restored after the case. No configuration read is added.",
       "keys": [],
       "edges": [
@@ -11490,7 +11490,7 @@
     },
     "scripts/spawn.test.sh": {
       "source": "scripts/spawn.test.sh",
-      "sha256": "bdcbadba325947b1c85f81d4c76c88c4c3b2c768107fa2c9086aba9a690249b4",
+      "sha256": "f6d236f89403fe9618966cd3bd01ab99293b9ea9debec24885f2ed6b45a52b84",
       "evidence": "Full suite reviewed: private repositories copy actual engine config, execute spawn with pinned guard fixtures and retain real model, toolkit and cleanup readers. Real surfaces collect registration as data; only the separately content-bound external scope guard executes. Direct LOCAL_APP_CONTEXT_RE config read remains. Literal QA directory override applies to just one case; other cases keep its actual key.",
       "keys": [
         "LOCAL_APP_CONTEXT_RE"
@@ -11680,7 +11680,7 @@
     },
     "scripts/lib/record-canary.test.sh": {
       "source": "scripts/lib/record-canary.test.sh",
-      "sha256": "a1f164bbea63e1e9cfd1167d31632c3ac93040b05b138f66c02fbba4f7d9b80f",
+      "sha256": "0f12b31a9ba90727df07d6e386c194c0162331d7b3a8d0d43708561a4aaee004",
       "evidence": "All record paths are beneath a private CLAUDE_CONFIG_DIR. Calls record-canary functions and literal Python/bash writers for deliberate fixture contamination. Detached restoration executes only its literal inline program. No orchestration settings are sourced or read. The lead-wait regression imports workspaces.py and calls save_agent/wait on the private operator and unit records; no land, scratch sweep or orchestration configuration reader runs.",
       "keys": [],
       "edges": [
@@ -14416,7 +14416,7 @@
     },
     "mega-lander/tests/workspace-pause-hold.test.sh": {
       "source": "mega-lander/tests/workspace-pause-hold.test.sh",
-      "sha256": "505403e87770be3d281226a08f6eabc42c88c723678c2d667f11e7c7a60b67a0",
+      "sha256": "d5634ff18552a8f14923862bce27e6a476991f39fa520345be09feb21f270c0e",
       "evidence": "Fixed private Git/process fixture with copied real config. Retain actual isolation/model and lifecycle cleanup keys. Generated shell-evidence prefix invokes bound agent_hold; all body/worker/supervisor/WAIT programs are source-bound. No hook inventory execution. Renewed 2026-10-11 (H11, review rv-20261011T055437Z-206908c9-000f): a fixed helper loads mega-lander/app.py by the suite's own engine path and calls its pause_message and resume_message tools with read_scope stubbed (no app scope, ECS store or orchestration.config is read); the tools reach pause_protocol.issue and the same workspaces.py pause/resume/agent_hold closure as H10, against this fixture's private registry.",
       "keys": [],
       "edges": [
@@ -14449,7 +14449,7 @@
     },
     "scripts/pause-acceptance.test.sh": {
       "source": "scripts/pause-acceptance.test.sh",
-      "sha256": "be65bdc4f6a3bf124b215701841d391337c44734a15a1454f1f792a7976d91cf",
+      "sha256": "f83fb0bf8343464d02c684ae71c348e14bdecfcc1f8ab40b3ee374038bc88e23",
       "evidence": "Fixed private fake-agent programs plus real acceptance reader/worker. Copied config keeps actual isolation and cleanup keys. Generated shell prefixes and all subsequent commands are bound here; no real model or hook inventory executes.",
       "keys": [],
       "edges": [
@@ -17085,7 +17085,7 @@
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
         "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-        "scripts/lib/record-canary.sh": "2cf0fc8ace8e444b2af29265e4fbb0fb08047e1b13978c7d41a79e594ede5c72",
+        "scripts/lib/record-canary.sh": "3f96edb4e8fb4441a53ea05047eeb0ed4ac63aeeb09fb0407ca8278811cf1ca4",
         "scripts/hooks/session-start-ceo-ask.sh": "5880b3f3a494bd25f9320b6786efe37cb357edde9406974e6b064ee274744b26",
         "scripts/lib/ceo-asks.sh": "ab105fa8aa606262613b1f8113f3d137e26d8e4802d5e008f017d59b123807f6",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
@@ -17108,7 +17108,7 @@
       "evidence": "Nested SessionStart stdin suite explicitly snapshots real manifest registration rows across all events. Engine-status also reads the copied registration inventory. No manifest command is executed dynamically. All nested test and library sources are bound, including the finite mutation driver.",
       "sources": {
         "scripts/hooks/root-contract.test.sh": "3f529198ae5b26fa3f0243d7b9d42b83aa0322236ca262387aec1b3fd7d8f43b",
-        "scripts/lib/record-canary.sh": "2cf0fc8ace8e444b2af29265e4fbb0fb08047e1b13978c7d41a79e594ede5c72",
+        "scripts/lib/record-canary.sh": "3f96edb4e8fb4441a53ea05047eeb0ed4ac63aeeb09fb0407ca8278811cf1ca4",
         "scripts/hooks/guard-main-checkout-writes.sh": "6e82fa3b4ada059d40200b56549e249d1048eb88b68a97d2961065a0504ededa",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -17185,7 +17185,7 @@
         "ass-kicker/tests/stated-actions.mutation.sh": "fb2b1f726c2945c158083ab2fc63a6987bf8427a35d1be7aa786ffb0da70e0f1",
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/tests/workspaces-e2e.test.sh": "c8790b5c0761f1c5c7f25faa5b6192f8c236554c6a975c86aa2fe2df0f961a30",
-        "mega-lander/tests/workspaces.test.py": "58b210293363ee87a17e737500a7ddc2dea001305f12199b69abbcfb7775d89b",
+        "mega-lander/tests/workspaces.test.py": "51cde7e6c402bd390ca8afa21c996358ffaa414ea5571086a5369b972495eb99",
         "mega-lander/workspaces.py": "a8fcfff23595d0ec3616c70351642086acbab704c5c10db0956d40974a004380",
         "mega-lander/workspaces.sh": "f3d8f6fd22b225d83efa1debf5336de5076c6531a48690802000e5f573f80744",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
@@ -18175,7 +18175,7 @@
         "scripts/hooks/guard-sealed-worktree.sh"
       ],
       "sources": {
-        "scripts/spawn.test.sh": "bdcbadba325947b1c85f81d4c76c88c4c3b2c768107fa2c9086aba9a690249b4",
+        "scripts/spawn.test.sh": "f6d236f89403fe9618966cd3bd01ab99293b9ea9debec24885f2ed6b45a52b84",
         "scripts/lib/spawn.py": "3f5b489bc1684909bd8b3d63a8c083921ef845cfb3ea43b9e6bc53cd7c353c56",
         "ass-kicker/brief-provenance.py": "dc8b2c55174fd815580afef91583582ffc66d4ce153aa3d3356f361e3257f005",
         "ass-kicker/brief-scope.py": "d6910b6891d7461b98d51b234343a004834e6fd4a3c52e5dc530b6539cf376a9",

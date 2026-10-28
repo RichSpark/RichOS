@@ -152,11 +152,14 @@ fi
 exit 0
 G
 chmod +x "$GUARDS"/*.sh
+# The engine under test may live under a folder with a space ("Application
+# Support"), so its guard's path is quoted in the command, as a registration
+# naming an absolute path must be; unquoted it is two words and never runs.
 cat >"$GUARDS/engine-hooks.json" <<J
 {"hooks": {"PreToolUse": [
   {"hooks": [{"type": "command", "command": "bash $GUARDS/always-ok.sh"}]},
   {"matcher": "Agent", "hooks": [
-    {"type": "command", "command": "bash $SCRIPT_DIR/hooks/guard-worktree-isolation.sh"},
+    {"type": "command", "command": "bash '$SCRIPT_DIR/hooks/guard-worktree-isolation.sh'"},
     {"type": "command", "command": "bash $GUARDS/refuse-a.sh"},
     {"type": "command", "command": "bash $GUARDS/refuse-after-create.sh"},
     {"type": "command", "command": "bash $GUARDS/stall-after-create.sh"}]},

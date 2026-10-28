@@ -102,8 +102,9 @@ generated() { # <json-from-the-harness> -> the message field
 
 # The fake agent: the counter in the background, then steps, each a rewritten Bash call.
 cat > "$T/fake-agent.py" <<'PY'
-import json, os, shutil, subprocess, sys, time
+import json, os, shlex, shutil, subprocess, sys, time
 sid, aid, hooks, worker, work, transcript, groups, stop = sys.argv[1:9]
+q = shlex.quote  # the engine under test may live under "Application Support"
 shell = shutil.which("zsh") or "/bin/sh"
 def call(n, command, wait=True):
     hook = subprocess.run(["bash", os.path.join(hooks, "shell-evidence.sh")], capture_output=True, text=True,
@@ -112,7 +113,7 @@ def call(n, command, wait=True):
                                             "tool_input": {"command": command}}))
     response = json.loads(hook.stdout)["hookSpecificOutput"]
     if response.get("permissionDecision") == "deny":
-        call("wait_" + n, "python3 %s wait" % os.path.join(hooks, "../lib/agent_hold.py"))
+        call("wait_" + n, "python3 %s wait" % q(os.path.join(hooks, "../lib/agent_hold.py")))
         return
     rewritten = response["updatedInput"]["command"]
     p = subprocess.Popen([shell, "-c", rewritten], process_group=0, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -124,11 +125,11 @@ def call(n, command, wait=True):
         t.write(json.dumps({"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
                             "type": "tool_result", "call": n}) + "\n")
 os.makedirs(work, exist_ok=True)
-call("count", "python3 %s count --dir %s" % (worker, work), wait=False)
+call("count", "python3 %s count --dir %s" % (q(worker), q(work)), wait=False)
 i = 0
 while not os.path.exists(stop):
     i += 1
-    call("step%d" % i, "python3 %s step --dir %s --seconds 1.5" % (worker, work))
+    call("step%d" % i, "python3 %s step --dir %s --seconds 1.5" % (q(worker), q(work)))
 PY
 start_fake() { # <name> <agent-id> <work-dir>: its records are <work-dir>.groups and .stop
     python3 "$T/fake-agent.py" "$SID" "$2" "$HOOKS" "$WORKER" "$3" \

@@ -969,18 +969,19 @@ class Point03_TheLeadIsNeverLockedOutByASubagent(Base):
         engine = os.path.dirname(os.path.dirname(os.path.abspath(ws.__file__)))
         stop_sh = os.path.join(engine, "scripts", "stop.sh")
         ack_sh = os.path.join(engine, "scripts", "stop-work-ack.sh")
+        # Quoted as a lead types them: the engine may live under "Application Support".
         self.assertEqual(self.lead("TaskStop", sid=sid2, task_id="a275ae996204b25b3")[0], "RECOVERY")
-        for cmd in ("%s isaac-opus-n1 andy-opus-n1 --ceo-word 'Stop them now'" % stop_sh,
-                    "bash %s isaac-opus-n1 --ceo-word \"Stop them\"" % stop_sh,
-                    "%s --task isaac-opus-n1 --destroying 'nothing uncommitted' --why 'his word'" % ack_sh):
+        for cmd in ("%s isaac-opus-n1 andy-opus-n1 --ceo-word 'Stop them now'" % shlex.quote(stop_sh),
+                    "bash %s isaac-opus-n1 --ceo-word \"Stop them\"" % shlex.quote(stop_sh),
+                    "%s --task isaac-opus-n1 --destroying 'nothing uncommitted' --why 'his word'" % shlex.quote(ack_sh)):
             self.assertEqual(self.lead("Bash", sid=sid2, command=cmd)[0], "RECOVERY", cmd)
         # Nothing else rides along with a stop.
         other = os.path.join(self.env.root, "scripts", "stop.sh")
-        for cmd in ("%s x --ceo-word 'w'; rm -rf %s" % (stop_sh, self.entity),
-                    "%s x --ceo-word \"$(touch %s/p)\"" % (stop_sh, self.env.root),
-                    "%s x --ceo-word `id`" % stop_sh,
-                    "%s x > %s/out" % (stop_sh, self.env.root),
-                    "%s x --ceo-word 'w'" % other,
+        for cmd in ("%s x --ceo-word 'w'; rm -rf %s" % (shlex.quote(stop_sh), self.entity),
+                    "%s x --ceo-word \"$(touch %s/p)\"" % (shlex.quote(stop_sh), self.env.root),
+                    "%s x --ceo-word `id`" % shlex.quote(stop_sh),
+                    "%s x > %s/out" % (shlex.quote(stop_sh), self.env.root),
+                    "%s x --ceo-word 'w'" % shlex.quote(other),
                     "git -C %s merge cc/x" % self.entity,
                     "ls"):
             self.assertEqual(self.lead("Bash", sid=sid2, command=cmd)[0], "FORBIDDEN", cmd)
@@ -3230,7 +3231,7 @@ class UnknownIsNeverClean(Base):
         stem, _held = ah._record(payload, "bg", "sleep 30")
         self.pre(aid, call)
         shell = subprocess.Popen(["bash", "-c", "%s %s mark --state %s %s && exec sleep 30"
-                                  % (sys.executable, ah.__file__, ah.state_dir(), stem)])
+                                  % tuple(map(shlex.quote, (sys.executable, ah.__file__, ah.state_dir(), stem)))])
         self.env.procs.append(shell)
         for _ in range(100):
             if os.path.exists(stem + ".pid"):
@@ -3269,7 +3270,7 @@ class UnknownIsNeverClean(Base):
                    "tool_input": {"command": "sleep 30", "run_in_background": True}}
         stem, _held = ah._record(payload, "native", "sleep 30")
         shell = subprocess.Popen(["bash", "-c", "%s %s mark --state %s %s && exec sleep 30"
-                                  % (sys.executable, ah.__file__, ah.state_dir(), stem)])
+                                  % tuple(map(shlex.quote, (sys.executable, ah.__file__, ah.state_dir(), stem)))])
         self.env.procs.append(shell)
         for _ in range(100):
             if os.path.exists(stem + ".pid"):
@@ -3300,7 +3301,7 @@ class UnknownIsNeverClean(Base):
                    "tool_input": {"command": loop}}
         stem, _held = ah._record(payload, "native", loop)
         shell = subprocess.Popen(["bash", "-c", "%s %s mark --state %s %s\nexport %s=%s %s=%s\n%s"
-                                  % (sys.executable, ah.__file__, ah.state_dir(), stem,
+                                  % (*map(shlex.quote, (sys.executable, ah.__file__, ah.state_dir(), stem)),
                                      ah.TAG, aid, ah.SESSION_TAG, self.sid, loop)],
                                  start_new_session=True)
         self.env.procs.append(shell)
@@ -3397,7 +3398,7 @@ class UnknownIsNeverClean(Base):
                             "content": "Command running in background with ID: bkrace. Output is being "
                                        "written to: /tmp/x/tasks/bkrace.output.", "is_error": False}]}})
         shell = subprocess.Popen(["bash", "-c", "%s %s mark --state %s %s && exit 101"
-                                  % (sys.executable, ah.__file__, ah.state_dir(), stem)])
+                                  % tuple(map(shlex.quote, (sys.executable, ah.__file__, ah.state_dir(), stem)))])
         self.env.procs.append(shell)
         shell.wait()                                        # the command ends (reaped: no shell is left)
         self.assertTrue(os.path.exists(stem + ".pid"), "agent_hold's mark never recorded the shell")
