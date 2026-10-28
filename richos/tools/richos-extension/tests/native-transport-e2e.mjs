@@ -560,8 +560,25 @@ async function investigateTabArming(workDir) {
   return mint;
 }
 
+// --------------------------------------------------------------------------------------- scratch
+/**
+ * Everything the Chrome-launched native host reads (launcher, drop zone, fixtures) lives under ONE
+ * scratch root on the internal disk: the per-user macOS temp dir, whatever TMPDIR the caller
+ * exported. The nightly's gate TMPDIR is on the external SSD (/Volumes/...), and a host reading
+ * there is its own privacy subject that asks for Removable Volumes access (native-host-privacy.mjs).
+ * TMPDIR is pinned to it so Chrome and the host it starts inherit the same internal path; the
+ * removable-volume refusal below still runs on what is actually used, unchanged.
+ */
+function pinInternalTmpdir() {
+  if (process.platform !== 'darwin') return;
+  let dir = '';
+  try { dir = execFileSync('/usr/bin/getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).trim(); } catch { /* keep TMPDIR */ }
+  if (dir && path.isAbsolute(dir) && fs.existsSync(dir)) process.env.TMPDIR = dir;
+}
+
 // --------------------------------------------------------------------------------------- main
 async function main() {
+  pinInternalTmpdir();
   if (!CHROME) throw new Error('no Chrome for Testing found; set CHROME_PATH');
   if (!fs.existsSync(HOST_JS)) throw new Error(`native host not found at ${HOST_JS}`);
   // The host Chrome launches answers to macOS as itself; on a removable volume it would ask.
