@@ -52,11 +52,15 @@ LICENSE_CLASS = {
     "Apache-2.0 / MIT": "permissive",
     "Apache-2.0 AND ISC": "permissive",
     "Apache-2.0 AND MIT": "permissive",
+    "Apache-2.0 OR BSL-1.0": "permissive",
     "Apache-2.0 OR ISC OR MIT": "permissive",
     "Apache-2.0 OR MIT": "permissive",
+    "Apache-2.0 OR MIT OR Zlib": "permissive",
     "Apache-2.0 WITH LLVM-exception": "permissive",
     "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT": "permissive",
     "Apache-2.0/MIT": "permissive",
+    "BSD-2-Clause": "permissive",
+    "BSD-2-Clause OR Apache-2.0 OR MIT": "permissive",
     "BSD-2-Clause OR MIT OR Apache-2.0": "permissive",
     "BSD-3-Clause": "permissive",
     "BSD-3-Clause AND MIT": "permissive",
@@ -84,7 +88,7 @@ CLASS_NOTE = {
     "permissive": "Attribution only. Combines with AGPL-3.0-only without further obligation.",
     "file-copyleft": (
         "Per-file reciprocal. MPL-2.0 section 3.3 permits distributing the Larger Work "
-        "under the GNU AGPL v3, and the source of the covered files must stay available."
+        "under the GNU AGPL v3 and the source of the covered files must stay available."
     ),
     "data": "A permissive license over data rather than code. No reciprocal obligation.",
 }
@@ -257,7 +261,7 @@ def main(argv):
         "This is the per-package inventory that `docs/legal/THIRD-PARTY-NOTICES.md` "
         "makes a gate on distributing a RichOS binary. Every row comes from "
         "`cargo metadata --locked`, which refuses to run if a lockfile would have to "
-        "change — so this document describes the graph the committed lockfiles pin, or "
+        "change — so this document describes the graph the committed lockfiles pin or "
         "it does not exist."
     )
     w("")
@@ -278,13 +282,13 @@ def main(argv):
     w(
         "**%d distinct third-party packages resolve across the %d workspaces. Every one of "
         "them may be distributed as part of an AGPL-3.0-only combined work.** No package in "
-        "this tree is proprietary, and none carries terms that conflict with the AGPL."
+        "this tree is proprietary and none carries terms that conflict with the AGPL."
         % (len(rows), len(workspaces))
     )
     w("")
     w(
         "%d of them reach a macOS binary. The rest are build-time tooling, test-only "
-        "dependencies, or code compiled exclusively for targets RichOS does not ship."
+        "dependencies or code compiled exclusively for targets RichOS does not ship."
         % ships_count
     )
     w("")
@@ -294,7 +298,7 @@ def main(argv):
     w(
         "**MPL-2.0 (%d packages: %s).** MPL-2.0 is reciprocal per FILE, not per program. "
         "Section 3.3 expressly permits distributing the Larger Work under a Secondary "
-        "License, and the GNU AGPL v3 is named as one — provided no covered file carries "
+        "License and the GNU AGPL v3 is named as one — provided no covered file carries "
         "the Exhibit B \"Incompatible With Secondary Licenses\" notice. No source file in "
         "any of these packages carries it; the phrase appears only inside the license text "
         "each of them ships, where it is part of the boilerplate. The obligation RichOS "
@@ -312,12 +316,12 @@ def main(argv):
         w(
             "**`r-efi` (%s).** Offered as \"MIT OR Apache-2.0 OR LGPL-2.1-or-later\". The "
             "pre-publication audit flagged it twice: once because an LGPL alternative in the "
-            "list must not be silently rolled into an AGPL claim, and once because the two "
+            "list must not be silently rolled into an AGPL claim and once because the two "
             "untracked lockfiles carried different versions of it."
             % ", ".join("%s" % e["version"] for e in refi)
         )
         w("")
-        w("Both are settled here, and neither needed a dependency change.")
+        w("Both are settled here and neither needed a dependency change.")
         w("")
         w(
             "*The license.* RichOS takes the MIT branch, which the offer permits outright. "
