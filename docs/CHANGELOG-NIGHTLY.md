@@ -2,6 +2,14 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.2.5-nightly.20261028.78
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261028.78)
+
+- [technical] Added Codex's notes reaching Rich by themselves: each new entry Codex writes to him in one of your Codex channel folders comes to him in the conversation you have open and Rich and Stu can write back in that folder
+- [technical] Added the engine's safety checks to your team's work in the app: a file holding a password or access key is refused before it is written, private material and names on your list stay out of a repository marked public and British spellings become American where your settings ask for American spelling
+- [technical] Improved Download update and Go back in Settings, Updates: they now download from RichOS's new GitHub address first and the old one second, so an update found before the move no longer relies on GitHub forwarding the old address
+
 ## 1.2.4-nightly.20261027.77
 
 [GitHub release](https://github.com/WebDevBooster/richos/releases/tag/v1.2.4-nightly.20261027.77)

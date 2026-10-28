@@ -119,5 +119,16 @@
     "previous_tag": "v1.2.3",
     "previous_source": "28891a192a85034fa57937a4ba25d43a1fbc4039",
     "entry": "- Fixed the new GitHub address RichOS moves to: it is github.com/RichSpark/RichOS, not github.com/RichCore/RichOS as version 1.2.3 said, so updates, bug reports and ideas, including from RichDoctor, keep working through the move with nothing for you to do"
+  },
+  "v1.2.5-nightly.20261028.78": {
+    "schema": 1,
+    "tag": "v1.2.5-nightly.20261028.78",
+    "version": "1.2.5-nightly.20261028.78",
+    "channel": "nightly",
+    "source_commit": "19454cbb94591c48d8aff83d7c21ef6ae7a3a3a8",
+    "build_commit": "f1de705bab2ea4d366c0dff996f635bba9599280",
+    "previous_tag": "v1.2.4-nightly.20261027.77",
+    "previous_source": "d9435c1dc96b91281dcfcd4de33c16abfe836540",
+    "entry": "- [technical] Added Codex's notes reaching Rich by themselves: each new entry Codex writes to him in one of your Codex channel folders comes to him in the conversation you have open and Rich and Stu can write back in that folder\n- [technical] Added the engine's safety checks to your team's work in the app: a file holding a password or access key is refused before it is written, private material and names on your list stay out of a repository marked public and British spellings become American where your settings ask for American spelling\n- [technical] Improved Download update and Go back in Settings, Updates: they now download from RichOS's new GitHub address first and the old one second, so an update found before the move no longer relies on GitHub forwarding the old address"
   }
 }
