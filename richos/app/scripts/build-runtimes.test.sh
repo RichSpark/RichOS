@@ -104,7 +104,7 @@ PY
     echo "  FAIL  B5 $RICHOS_RUNTIME_DIR/bin/git in a core.precomposeunicode=true repository: $out"; fail=1
   fi
 else
-  echo "  NOT RUN  B5 the delivered git's precomposed-unicode check: RICHOS_RUNTIME_DIR names no runtime with bin/git"
+  echo "  NOT RUN  B5 the delivered git's precomposed-unicode check: RICHOS_RUNTIME_DIR names no runtime with bin/git; build-runtimes.py ran it on every runtime it built"  # not-a-subcheck: with no runtime named this suite checks the builder only, as B1 falls back to the host Python; no runtime can exist untested, because build() runs check_git_precompose before it writes delivery.json, and verify-runtime.py refuses a runtime from any other recipe
 fi
 if out=$(python3 - "$HERE/build-runtimes.py" 2>&1 <<'PY'
 import importlib.util, sys, tempfile, unicodedata
