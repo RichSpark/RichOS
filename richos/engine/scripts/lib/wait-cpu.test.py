@@ -19,6 +19,10 @@ Mac), which includes the interpreter's own start (about 0.05 s). Each case also 
 that the waiter really waited the whole time on the path it is meant to (its wall time
 and its own output), so a waiter that crashed or returned early cannot pass as quiet.
 
+The sweep's waiters follow (the same day, the same class): stop-at-line.py, proc_tree.py's
+supervisor, the reaping provider supervisor, a worker permit wait, a pool worker's lease,
+quota-watch --watch and a mutation-pool worker waiting for its lease.
+
 All cases run at once, each in its own temporary state directory, so the suite takes
 about CASE_SECONDS plus setup. Run with the app's variables unset; setUpModule refuses
 to run with them set, because they would point waiters at live state.
@@ -27,6 +31,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -278,6 +283,120 @@ class WaitCpu(unittest.TestCase):
         return [sys.executable, "-B", str(AGENT_HOLD), "watch", "--session", env["RICHOS_AGENT_SESSION"],
                 "--agent", env["RICHOS_AGENT_OWNER"]], env
 
+    # --------------------------------------------------- the sweep's waiters (scripts/lib, scripts)
+
+    @classmethod
+    def fixture_env(cls, name):
+        """A private HOME, config and CPU-guard state in explicit fixture mode, as the proc_tree
+        and worker-budget suites run them: nothing here reads or writes the Mac's own."""
+        root = os.path.join(cls.tmp, name)
+        home = os.path.join(root, "home")
+        os.makedirs(os.path.join(home, ".claude"))
+        env = dict(os.environ, HOME=home, CLAUDE_CONFIG_DIR=os.path.join(home, ".claude"),
+                   RICHOS_CPU_GUARD_STATE=os.path.join(root, "cpu-guard"), RICHOS_VERIFICATION_MODE="fixture",
+                   RICHOS_VERIFICATION_FIXTURE_ROOT=root, RICHOS_MACHINE_SETTINGS_RESOLVED="",
+                   PYTHONDONTWRITEBYTECODE="1")
+        for k in ("RICHOS_MACHINE_WORKERS", "RICHOS_WORKER_TOKENS", "RICHOS_WORKER_BORROW_LOCK",
+                  "RICHOS_VERIFICATION_OWNER", "RICHOS_WORKER_SLOT_HELD"):
+            env.pop(k, None)
+        return root, env
+
+    @classmethod
+    def case_stop_at_line(cls):
+        """The mutation harness's stop-at-line, its command running and printing nothing."""
+        root, env = cls.fixture_env("stop-at-line")
+        return [sys.executable, "-B", str(HERE / "stop-at-line.py"), "--out", os.path.join(root, "out"),
+                "--line", "FAIL  never-printed", "--marker", os.path.join(root, "marker"), "--",
+                "sleep", "%d" % CASE_SECONDS], env
+
+    @classmethod
+    def case_proc_tree_supervise(cls):
+        """proc_tree.py run: the supervisor of every managed check, its command only waiting."""
+        _root, env = cls.fixture_env("proc-tree")
+        return [sys.executable, "-B", str(HERE / "proc_tree.py"), "run", str(os.getpid()), "--",
+                "sleep", "%d" % CASE_SECONDS], env
+
+    @classmethod
+    def case_provider_supervisor(cls):
+        """The reaping provider supervisor (every product lease), its provider only waiting."""
+        root, env = cls.fixture_env("provider-supervisor")
+        return {"argv": [sys.executable, "-B", str(HERE.parent / "provider-supervisor.py"), "--reap-descendants",
+                         "--reap-state=" + os.path.join(root, "reap.json"), "--reap-log=" + os.path.join(root, "reap.log"),
+                         "--reap-grace=1", "sleep", "%d" % CASE_SECONDS],
+                "env": env, "session": True}
+
+    @classmethod
+    def worker_budget(cls, root, env):
+        budget = os.path.join(root, "workers")
+        subprocess.run([sys.executable, "-B", str(HERE / "worker_tokens.py"), "init", budget, "1"],
+                       env=env, check=True, capture_output=True)
+        return budget
+
+    @classmethod
+    def case_worker_tokens_permit_wait(cls):
+        """A permit wait (Budget.acquire): its one permit held by another run for the whole case."""
+        root, env = cls.fixture_env("permit-wait")
+        budget = cls.worker_budget(root, env)
+        holder = subprocess.Popen([sys.executable, "-B", str(HERE / "worker_tokens.py"), "run", budget, "--",
+                                   "sleep", "%d" % CASE_SECONDS], env=env, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL)
+        cls.own.append(holder)
+        token = os.path.join(budget, sorted(n for n in os.listdir(budget) if n.startswith("token-"))[0])
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not os.path.getsize(token):
+            time.sleep(0.1)   # setup only: the holder publishes its row once it holds the permit
+        return [sys.executable, "-B", str(HERE / "worker_tokens.py"), "run", budget, "--", "true"], env
+
+    @classmethod
+    def case_worker_tokens_lease(cls):
+        """A pool worker's lease (lease_worker): held while its worker runs, until the release file."""
+        root, env = cls.fixture_env("lease")
+        budget = cls.worker_budget(root, env)
+        release = os.path.join(root, "release")
+        cls.after.append((CASE_SECONDS, lambda: Path(release).touch()))
+        # The lease's owner is the pool worker that starts it: its parent shell, alive while it runs.
+        script = 'python3 -B "$0" lease "$1" $$ "$2" "$3" -; status=$?; exit $status'
+        return ["/bin/sh", "-c", script, str(HERE / "worker_tokens.py"), budget,
+                os.path.join(root, "ready"), release], env
+
+    @classmethod
+    def case_mutation_pool_ready_wait(cls):
+        """A mutation-pool worker waiting for its lease's permit (mutation-pool.sh): past its first
+        half second it blocks in quiet_wait.py until the ready file appears or the lease exits."""
+        root, _env = cls.fixture_env("pool-ready")
+        env = dict(_env)
+        lease = cls.spawn_sleeper()
+        ready = os.path.join(root, "0001.ready")
+        cls.after.append((CASE_SECONDS, lambda: Path(ready).write_text("scope")))
+        return [sys.executable, "-B", str(HERE / "quiet_wait.py"), "--until-exists", ready,
+                "--pid", str(lease.pid), "--seconds", "%d" % (CASE_SECONDS * 2)], env
+
+    @classmethod
+    def case_quota_watch(cls):
+        """quota-watch --watch, the doorbell an agent leaves running: its poller alive, no wake-up."""
+        root, env = cls.fixture_env("quota-watch")
+        sd = os.path.join(root, "session")
+        os.makedirs(sd)
+        poller, session = cls.spawn_sleeper(), cls.spawn_sleeper()
+        lock = open(os.path.join(sd, "poller.lock"), "w")      # the poller holds its lock
+        import fcntl
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        cls.own_files = getattr(cls, "own_files", []) + [lock]
+        event = json.dumps({"kind": "threshold", "at": int(time.time()), "text": "QUOTA-THRESHOLD fixture\n"})
+
+        def wake():   # the poller journals a wake-up
+            with open(os.path.join(sd, "events.jsonl"), "a") as out:
+                out.write(event + "\n")
+        cls.after.append((CASE_SECONDS, wake))
+        code = ("import argparse, sys; sys.path.insert(0, %r); import quota_watch as q\n"
+                "sd, poller, spid = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])\n"
+                "q._doorbell_setup = lambda a: (sd, spid)\n"
+                "q.ensure_poller = lambda a, d, s: (poller, False)\n"
+                "a = argparse.Namespace(threshold=90.0, until_reset=False, command='quota-watch.sh', poll=300,\n"
+                "                       config='fixture', engine_root=%r)\n"
+                "sys.exit(q.mode_watch(a))\n" % (str(HERE), str(HERE.parent.parent)))
+        return [sys.executable, "-B", "-c", code, sd, str(poller.pid), str(session.pid)], env
+
     # ------------------------------------------------------------------ the checks
 
     def measured(self, name, wall_at_least=CASE_SECONDS - 1):
@@ -316,6 +435,38 @@ class WaitCpu(unittest.TestCase):
         r = self.measured("agent_hold_watchdog")
         self.assertEqual(r["code"], 0)
         self.assertLess(r["wall"], CASE_SECONDS + 10, "it ended soon after the release")
+
+    def test_stop_at_line(self):
+        r = self.measured("stop_at_line")
+        self.assertEqual(r["code"], 0, "the command's own status: no named line was printed")
+
+    def test_proc_tree_supervise(self):
+        r = self.measured("proc_tree_supervise")
+        self.assertEqual(r["code"], 0, r["out"])
+
+    def test_provider_supervisor(self):
+        r = self.measured("provider_supervisor")
+        self.assertEqual(r["code"], -signal.SIGKILL, "it ends by killing its own group, as designed: %s" % r["out"])
+
+    def test_worker_tokens_permit_wait(self):
+        # Kept at 0.2 s on purpose (worker_tokens.POLL_SECONDS): this measures that it costs about 0%.
+        r = self.measured("worker_tokens_permit_wait", wall_at_least=CASE_SECONDS - 10)
+        self.assertEqual(r["code"], 0, r["out"])
+
+    def test_worker_tokens_lease(self):
+        r = self.measured("worker_tokens_lease")
+        self.assertEqual(r["code"], 0, r["out"])
+
+    def test_mutation_pool_ready_wait(self):
+        r = self.measured("mutation_pool_ready_wait")
+        self.assertEqual(r["code"], 0, r["out"])
+        self.assertLess(r["wall"], CASE_SECONDS + 10, "it returned when the ready file appeared")
+
+    def test_quota_watch(self):
+        r = self.measured("quota_watch")
+        self.assertEqual(r["code"], 0, r["out"])
+        self.assertIn("QUOTA-THRESHOLD fixture", r["out"], "it woke on the wake-up, not on a clock")
+        self.assertLess(r["wall"], CASE_SECONDS + 10)
 
 
 if __name__ == "__main__":

@@ -64,7 +64,7 @@ mkdir -p "$FAKE_ENG/mega-lander/tests"
 printf 'PROTECTED_PATHS="app"\n' > "$FAKE_ENG/orchestration.config"
 printf '0.0.0-fixture\n' > "$FAKE_ENG/VERSION"
 cp "$ENGINE_ROOT"/scripts/lib/*.sh "$FAKE_ENG/scripts/lib/"
-cp "$ENGINE_ROOT/scripts/lib/stop-at-line.py" "$ENGINE_ROOT/scripts/lib/operator_fences.py" "$ENGINE_ROOT/scripts/lib/proc_tree.py" "$FAKE_ENG/scripts/lib/"
+cp "$ENGINE_ROOT/scripts/lib/stop-at-line.py" "$ENGINE_ROOT/scripts/lib/operator_fences.py" "$ENGINE_ROOT/scripts/lib/proc_tree.py" "$ENGINE_ROOT/scripts/lib/quiet_wait.py" "$FAKE_ENG/scripts/lib/"
 printf 'RULE_A=1\nRULE_B=1\nUNUSED=1\n' > "$FAKE_ENG/mega-lander/feature.sh"
 
 PROBE="$SANDBOX/probe"; mkdir -p "$PROBE"

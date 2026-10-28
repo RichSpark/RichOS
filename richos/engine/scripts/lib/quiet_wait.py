@@ -147,3 +147,33 @@ def until(seconds, paths=(), pids=()):
     """One blocking wait: True when a watched path changed or process exited, False at `seconds`."""
     with Watch(paths, pids) as w:
         return w.wait(seconds)
+
+
+def main(argv=None):
+    """`quiet_wait.py --until-exists PATH [--pid PID] [--seconds N]`: for a shell that would
+    otherwise loop on `[ -e PATH ] || sleep 0.02`. Returns 0 once PATH exists, PID has exited
+    or N seconds (default 60) have passed; the caller looks again and decides."""
+    import argparse
+    p = argparse.ArgumentParser(description=main.__doc__)
+    p.add_argument("--until-exists", required=True, metavar="PATH")
+    p.add_argument("--pid", type=int, default=None)
+    p.add_argument("--seconds", type=float, default=60.0)
+    a = p.parse_args(argv)
+    deadline = time.monotonic() + a.seconds
+    while True:
+        with Watch(paths=[a.until_exists], pids=[a.pid] if a.pid else ()) as w:
+            if os.path.exists(a.until_exists) or time.monotonic() >= deadline:
+                return 0
+            if a.pid:
+                try:
+                    os.kill(a.pid, 0)
+                except ProcessLookupError:
+                    return 0
+                except PermissionError:
+                    pass
+            if w.wait(deadline - time.monotonic()) and a.pid and a.pid in _GONE_SEEN:
+                return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
