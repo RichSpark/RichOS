@@ -2,13 +2,20 @@
 //! tie order; exact gap alignment prefers near spellings at equal edit counts.
 use regex::Regex;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::OnceLock;
 
 fn re(pattern: &str) -> Regex {
     Regex::new(pattern).unwrap()
 }
+fn word_noise() -> &'static Regex {
+    // Normalization runs for every token. Compile the Unicode classes once,
+    // rather than rebuilding the regex twice per word in a transcript.
+    static CLEAN: OnceLock<Regex> = OnceLock::new();
+    CLEAN.get_or_init(|| re(r"[^\p{L}\p{N}_']"))
+}
 pub fn norm(word: &str) -> String {
-    re(r"[^\p{L}\p{N}_']")
+    word_noise()
         .replace_all(
             &word.replace(['\u{2018}', '\u{2019}'], "'").to_lowercase(),
             "",
@@ -273,9 +280,18 @@ fn top(counts: &[((String, String), usize)], n: usize) -> Value {
         .collect::<Vec<_>>())
 }
 fn repeats(words: &[Word]) -> Value {
+    // Keep first-seen order for Counter.most_common tie compatibility, with
+    // indexed updates rather than scanning every distinct phrase per word.
     let mut counts = Vec::new();
+    let mut positions = HashMap::new();
     for pair in words.windows(2) {
-        add(&mut counts, &pair[0].normal, &pair[1].normal);
+        let key = (pair[0].normal.as_str(), pair[1].normal.as_str());
+        let index = *positions.entry(key).or_insert_with(|| {
+            let index = counts.len();
+            counts.push((key, 0usize));
+            index
+        });
+        counts[index].1 += 1;
     }
     counts.sort_by_key(|item| std::cmp::Reverse(item.1));
     counts
@@ -318,7 +334,7 @@ pub fn compare(input: &Value) -> Result<Value, String> {
         None::<Value>,
         None::<f64>,
     );
-    let clean = re(r"[^\p{L}\p{N}_']");
+    let clean = word_noise();
     for (op, r, h) in ops {
         let r = r.map(|i| &reference[i]);
         let h = h.map(|i| &hypothesis[i]);
@@ -421,6 +437,14 @@ mod tests {
         assert_eq!(
             compare(&json!({"vtt":"","txt":""})).unwrap()["wer"],
             Value::Null
+        );
+    }
+    #[test]
+    fn repeated_phrase_ties_keep_first_occurrence() {
+        let out = compare(&json!({"vtt":"a b c a b c", "txt":"a b c a b c"})).unwrap();
+        assert_eq!(
+            out["repeats"]["captions"],
+            json!({"phrase":"a b", "count":2})
         );
     }
 }

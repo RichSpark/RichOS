@@ -6,7 +6,7 @@ It has no dependency on the app, audio workspace or installed engine hooks.
 Transcript episode accounting and shell guards remain unchanged.
 
 The existing Python commands and Node import stay available as small adapters.
-On first use they build this crate with Cargo, using the existing machine storage
+On first use they build this crate in release mode with Cargo, using the existing machine storage
 settings and a target directory private to this workspace. Later invocations let
 Cargo check freshness before running the cached executable. A Rust toolchain is
 required only when using these developer tools. Normal Claude Code terminal

@@ -42,7 +42,7 @@ def binary():
         raise RuntimeError('Rust developer tools need Cargo in the development environment')
     environment = cargo_identity.enable_environment(toolchain_environment(os.environ, cargo))
     _, target = cargo_identity.target_dir(manifest.parent, environment)
-    result = subprocess.run([cargo, 'build', '--locked', '--manifest-path', str(manifest),
+    result = subprocess.run([cargo, 'build', '--release', '--locked', '--manifest-path', str(manifest),
                              '--target-dir', str(target), '--message-format=json'],
                             env=environment, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, text=True, check=True)

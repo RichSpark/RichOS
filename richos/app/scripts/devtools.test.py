@@ -34,6 +34,7 @@ class EntryPoints(unittest.TestCase):
                                PYTHONDONTWRITEBYTECODE='1')
 
     def test_cargo_summary_import_and_cli_status(self):
+        self.assertEqual(Path(self.binary).parent.name, 'release')
         log = ('Running fixture\ntest result: FAILED. 2 passed; 1 failed; 0 ignored;\n'
                'Doc-tests fixture\ntest result: ok. 4 passed; 0 failed; 0 ignored;\n')
         with patch.dict(os.environ, self.environment):
