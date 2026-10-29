@@ -1813,6 +1813,33 @@ else
     bad "W24b recovery of all failed roots did not close $ID4 (rc=$RC assoc=$(wd_assoc))"
 fi
 
+# W25 — ONE FINDING, ONE ID, HOWEVER ITS COUNT MOVES (2026-10-28/29)
+# ===========================================================================
+# "/private/tmp/claude-501: N undecided claude-session entries (S), e.g. <path>: <why>"
+# reached the lead under 26 escalation ids, each acknowledged as the same finding again.
+# Its count, size and example move with every second review's 96-byte folder; its root
+# and its kind of failure do not. Acknowledged once, it stays acknowledged while only
+# those move: a repeat keeps its id. (W23h2: another kind of failure is still new.)
+SD="$REAL/scope-d"; mkdir -p "$SD"
+claude_rows() {            # <count> <size> <example> <entry|entries>: the reaper's own shape
+    healthy_reaper_state "$RS" '"outcome": "unresolved", "roots": ["'"$SD"'"], "unresolved": [{"scope": "'"$SD"'", "class": "claude-session", "count": '"$1"', "bytes": 0, "identity": "i'"$1"'", "cause": "'"$1"' undecided claude-session '"$4"' ('"$2"'), e.g. '"$SD/$3"': a running claude process is named by no session file and started before this scratch was last written, so it could own it"}]'
+}
+N0="$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')"
+claude_rows 2 "320 B" a entries
+run_wd_scheduled >/dev/null 2>&1
+ID5="$(wd_assoc)"
+esc ack "$ID5" --disposition "known: empty second-review session folders, filed as a follow-up"
+claude_rows 15 "37.8 MB" b entries
+run_wd_scheduled >/dev/null 2>&1
+claude_rows 1 "96 B" c entry
+run_wd_scheduled >/dev/null 2>&1
+N5="$(( $(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])') - N0 ))"
+if [ -n "$ID5" ] && [ "$(wd_assoc)" = "$ID5" ] && [ "$N5" = "1" ]; then
+    ok "W25  an acknowledged finding whose count, size and example change keeps its one id (no new escalation)"
+else
+    bad "W25  the same finding was raised again under a new id (first=$ID5 now=$(wd_assoc) raised=$N5)"
+fi
+
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

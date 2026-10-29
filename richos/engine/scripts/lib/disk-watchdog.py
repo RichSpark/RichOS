@@ -17,6 +17,7 @@ import calendar
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import machine_settings as M
 import subprocess
@@ -497,6 +498,32 @@ def _escalation_status(esc_id, now):
     return "closed" if acks else "unknown"
 
 
+FINDING_KEY_VERSION = 2   # 1 (unwritten): sha256 of the exact problem texts
+_EXAMPLE_TAIL = re.compile(r", e\.g\. .*$", re.S)
+_MEASURE = re.compile(r"\d+(?:\.\d+)?(?:\s?[KMGTP]?i?B\b)?")
+_ENTRY_WORD = re.compile(r"\bentr(?:y|ies)\b")
+
+
+def finding_key(problems):
+    """WHAT FAILED, NEVER HOW MUCH OF IT: the identity of an unresolved cleanup result.
+
+    2026-10-28/29: one finding ("/private/tmp/claude-501: N undecided claude-session
+    entries (S), e.g. <path>: <why>") reached the lead under 26 escalation ids, each acked
+    as "the same finding under a new id". a2025c7cb stopped the re-raise of an acked
+    result whose text is unchanged, but the text carries the count, the size and an
+    example, and those change whenever a second review leaves one more 96-byte folder or
+    one ages out. The root and the kind of failure do not change, and they are what an
+    acknowledgement decides. So the key drops the example and every measured number: a
+    changed count is the same finding under the same id; another root or another kind
+    of failure is a new one (W23h2)."""
+    norm = set()
+    for p in problems:
+        text = _EXAMPLE_TAIL.sub("", str(p))
+        text = _ENTRY_WORD.sub("entries", _MEASURE.sub("#", text))
+        norm.add(" ".join(text.split()))
+    return hashlib.sha256(json.dumps(sorted(norm)).encode("utf-8")).hexdigest()
+
+
 def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, state_path):
     """The scheduled tick's owner action: ONE open escalation per unresolved result.
 
@@ -510,7 +537,11 @@ def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, 
     checkout = os.path.realpath(os.path.join(engine_scripts, "..", "..", ".."))
     assoc = prev.get("cleanup_escalation") if isinstance(prev.get("cleanup_escalation"), dict) else None
     status = _escalation_status(assoc["id"], now) if assoc and assoc.get("id") else None
-    problem_key = hashlib.sha256(json.dumps(sorted(problems)).encode("utf-8")).hexdigest()
+    problem_key = finding_key(problems)
+    if assoc and assoc.get("key_version") != FINDING_KEY_VERSION:
+        # An association stored under the old, text-exact key adopts the finding key
+        # once, without a wake, exactly as one with no key did (a2025c7cb).
+        assoc = {k: v for k, v in assoc.items() if k != "problem_key"}
     if not problems:
         if not assoc:
             return None
@@ -529,12 +560,13 @@ def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, 
             return None if rc == 0 else assoc
         return None if status in ("closed", "missing") else assoc
     if assoc and status in ("open", "held", "unknown"):
-        return {**assoc, "problem_key": assoc.get("problem_key") or problem_key}
+        return {**assoc, "problem_key": assoc.get("problem_key") or problem_key,
+                "key_version": FINDING_KEY_VERSION}
     if assoc and status == "closed" and (assoc.get("problem_key") or problem_key) == problem_key:
         # An acknowledgement is a decision about this failure, not recovery. Keep
         # the unhealthy result visible without making the lead decide it every tick.
         # Older associations adopt their first fingerprint without a new wake.
-        return {**assoc, "problem_key": problem_key}
+        return {**assoc, "problem_key": problem_key, "key_version": FINDING_KEY_VERSION}
     title = "Scheduled cleanup has not recovered: %s" % problems[0][:140]
     question = ("Diagnose and repair the scheduled cleanup (%d unresolved: %s). Detail: %s "
                 "--verbose and %s. Manual deletion does not clear this; only the next "
@@ -555,7 +587,7 @@ def bridge_cleanup_escalation(problems, prev, now, stamp, log_path, reaper_cmd, 
         return assoc
     log(log_path, "%s cleanup escalation %s raised: %s" % (stamp, found[0], problems[0][:160]))
     return {"id": found[0], "raised": stamp, "problem_key": problem_key,
-            "replaces": assoc.get("id") if assoc else None}
+            "key_version": FINDING_KEY_VERSION, "replaces": assoc.get("id") if assoc else None}
 
 
 # ---------------------------------------------------------------------------
