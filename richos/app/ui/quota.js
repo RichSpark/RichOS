@@ -498,8 +498,10 @@
         body = `${whose} window is at <b>${pct(five.usedPercent)} used</b>, past your ${fiveLine()}% line. ${many ? "" : agents === 1 ? "It has kept its place. " : "Each has kept its place. "}`
           // Inside the last 20 minutes they go one at a time, and only while the speed before the
           // pause keeps the account under 100% at the reset (quota/stagger.rs, Rich 2026-10-29).
-          + (agents === 1 ? `It resumes at <b>${esc(clock(activity.resumesAt))}</b>, 20 minutes before the reset, if the speed before the pause keeps the account under 100%; otherwise at the reset`
-            : `They resume one at a time from <b>${esc(clock(activity.resumesAt))}</b>, 20 minutes before the reset, while the speed before the pause keeps the account under 100%; the rest at the reset`)
+          // As many lines as the sentence before it, so the three-agent holding sheet still fits
+          // 1440 x 900 (tests/quota.js; measured 120 px, the old sentence's height).
+          + (agents === 1 ? `It resumes at <b>${esc(clock(activity.resumesAt))}</b> if the account stays under 100%; otherwise at the reset`
+            : `They resume one at a time from <b>${esc(clock(activity.resumesAt))}</b>, never past 100%; the rest at the reset`)
           + (many ? "." : " or sooner if a fresh reading is back under the line.");
       } else {
         head = admitted ? "Releasing the pause…" : agents ? `${agents} ${agents === 1 ? "agent is" : "agents are"} paused` : assignments ? `${assignments} ${assignments === 1 ? "assignment is" : "assignments are"} paused` : "Waiting to start an agent";
