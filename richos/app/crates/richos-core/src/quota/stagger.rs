@@ -24,9 +24,19 @@
 //!
 //! **Several gate processes decide together**: each held tool call is its own process, so the
 //! released sets live in one small file under `engine-state`, one per account, read and
-//! written under an exclusive lock. A helper already released stays released for the rest of
-//! that window: its next tool call is the same worker carrying on, not a new one. An Agent call
-//! starts a new agent and needs a release of its own (`gate::release_key`).
+//! written under an exclusive lock. A helper already released keeps its permit for the rest of
+//! that window: its next tool call is the same worker carrying on, not a new one, and it never
+//! queues for a fresh release slot. An Agent call starts a new agent and needs a release of its
+//! own (`gate::release_key`).
+//!
+//! **A permit is not a pass for the rest of the window** (third review of 2026-10-29, P1):
+//! every call on a permit is judged again on the reading it meets ([`Release::keeps`]). With
+//! the first `k` released carrying on, the rate is the larger of their share of the pace before
+//! the hold, `pre_hold x k / team`, and their share of what the readings measure now, `speed x k
+//! / n` (`n` released). The `k`th permit carries on only while that projection stays under 100;
+//! the latest permits pause first, and pick up again on a later reading that fits, on the same
+//! permit. Before, a permit returned at once: a helper released at 95% kept going on a fresh
+//! 99% reading with ten minutes left at 1 point a minute (110.4% projected), and at 100% too.
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
 
@@ -82,7 +92,23 @@ impl Release {
     /// not seen, as after a restart in the middle of a hold), a rate of 0 is no measurement, and
     /// everyone waits for the reset (second review of 2026-10-29, finding 2).
     pub fn allows(&self, n: usize, team: usize) -> bool {
-        (self.pre_hold > 0. || self.speed > 0.) && self.projected(n, team) < 100.
+        self.measured() && self.projected(n, team) < 100.
+    }
+    /// May the `k`th of `n` calls already released carry on, on this reading? The readings
+    /// since the releases measure the `n` running, so the first `k` are judged at `k / n` of
+    /// what they measure, and never below their share of the pace before the hold: the
+    /// projection is `used + max(pre_hold x k / team, speed x k / n) x (resets_at - checked_at)`,
+    /// under 100 and on a measurement, as for a new release (third review of 2026-10-29, P1).
+    pub fn keeps(&self, k: usize, n: usize, team: usize) -> bool {
+        let share = self.pre_hold * k as f64 / team.max(1) as f64;
+        let measured = self.speed * k as f64 / n.max(k).max(1) as f64;
+        let left = self.resets_at.saturating_sub(self.checked_at) as f64;
+        self.measured() && self.used + share.max(measured) * left < 100.
+    }
+    /// A speed before the hold or one measured since: a rate of 0 while everyone is held is no
+    /// measurement (second review of 2026-10-29, finding 2).
+    fn measured(&self) -> bool {
+        self.pre_hold > 0. || self.speed > 0.
     }
 }
 
@@ -120,10 +146,12 @@ fn lock(state: &Path) -> io::Result<Locked> {
     Ok(Locked(file))
 }
 
-/// **May the held call `key` on `account` go on now?** `true` when it was released earlier in
-/// this window, or when it is released now: at least [`STAGGER_MS`] after the previous release
-/// and only while [`Release::allows`] the one more. `team` gives, for the released set, the
-/// helpers whose pace the speed before the hold measured (released or still waiting).
+/// **May the held call `key` on `account` go on now?** When it was released earlier in this
+/// window, while [`Release::keeps`] its place among the released on this reading (the permit
+/// stays either way); otherwise when it is released now: at least [`STAGGER_MS`] after the
+/// previous release and only while [`Release::allows`] the one more. `team` gives, for the
+/// released set, the helpers whose pace the speed before the hold measured (released or still
+/// waiting).
 pub fn admit(
     state: &Path,
     account: &str,
@@ -141,8 +169,9 @@ pub fn admit(
     if !super::same_reset(ledger.resets_at, release.resets_at) {
         *ledger = Ledger { resets_at: release.resets_at, ..Default::default() };
     }
-    if ledger.released.iter().any(|k| k == key) {
-        return Ok(true);
+    if let Some(place) = ledger.released.iter().position(|k| k == key) {
+        let n = ledger.released.len();
+        return Ok(release.keeps(place + 1, n, team(&ledger.released)));
     }
     if ledger.last_at.is_some_and(|t| now < t.saturating_add(STAGGER_MS)) {
         return Ok(false);
@@ -288,5 +317,54 @@ mod tests {
             .iter().filter(|&&(account, key)| go(account, key)).count();
         assert_eq!(went, 2, "one on each account, not two on each");
         assert!(go("1", "home-0") && go("2", "work-0"), "each released worker carries on");
+    }
+
+    /// **Third review of 2026-10-29, P1: a permit is judged again on every reading.** One of
+    /// ten released at 95% (95 + 0.14 x 19 = 97.66). Nine minutes on, a fresh reading of 99%
+    /// with ten minutes left, measured at 1 point a minute with that one running: carrying on
+    /// projects 99 + max(0.14, 1) x 10 = 109, so the released helper waits (before: it went
+    /// on, "released helper admitted=true"), and so does a second (99 + 2 x 10 = 119). At 100%
+    /// both wait. The permit stays: nine minutes later, a reading of 99.5% with one minute left
+    /// and nobody running (the speed before the hold, 0.14 a minute for one) projects
+    /// 99.5 + 0.14 x 1 = 99.64, and the same helper carries on, on its first permit, with no
+    /// new release written.
+    #[test]
+    fn a_released_helper_waits_when_a_fresh_reading_would_pass_100_and_keeps_its_permit() {
+        let root = Scratch::new();
+        let state = root.path().join("engine-state");
+        let now = 1_000_000_000;
+        let reset = now + 19 * MINUTE;
+        let start = Release { used: 95., checked_at: now, resets_at: reset, speed: 0., pre_hold: per_minute(1.4) };
+        let team = |_: &[String]| 10;
+        let go = |key: &str, reading: &Release, at: u64| admit(&state, "2", key, reading, &team, at).unwrap();
+        assert!(go("worker-0", &start, now), "the first is released at 97.66% projected");
+
+        let at = now + 9 * MINUTE;
+        let fast = Release { used: 99., checked_at: at, resets_at: reset, speed: per_minute(1.), pre_hold: per_minute(1.4) };
+        assert!((fast.used + per_minute(1.) * (reset - at) as f64 - 109.).abs() < 1e-9);
+        assert!(!go("worker-0", &fast, at), "109% projected: the released helper waits");
+        assert!(!go("worker-1", &fast, at), "119% projected: nobody new goes");
+        let full = Release { used: 100., ..fast };
+        assert!(!go("worker-0", &full, at + 1), "at 100% the released helper waits");
+
+        let late = now + 18 * MINUTE;
+        let calm = Release { used: 99.5, checked_at: late, resets_at: reset, speed: 0., pre_hold: per_minute(1.4) };
+        assert!(go("worker-0", &calm, late), "99.64% projected: it carries on, on the same permit");
+        let ledger: Ledgers = crate::quota::gate::read_json(&state.join(LEDGER_FILE)).unwrap();
+        assert_eq!(ledger.accounts["2"].released, vec!["worker-0".to_string()], "no new release was written");
+        assert_eq!(ledger.accounts["2"].last_at, Some(now), "the gap still counts from the one release");
+    }
+
+    /// **The latest permits pause first.** Three of ten released, measured together at 0.42 a
+    /// minute (0.14 each), 98% read with five minutes left: the first carries on at
+    /// 98 + 0.14 x 5 = 98.7, the second at 98 + 0.28 x 5 = 99.4, the third would make it
+    /// 98 + 0.42 x 5 = 100.1 and waits.
+    #[test]
+    fn the_latest_permits_wait_first_when_a_reading_fits_fewer() {
+        let now = 1_000_000_000;
+        let reading = Release { used: 98., checked_at: now, resets_at: now + 5 * MINUTE, speed: per_minute(0.42), pre_hold: per_minute(1.4) };
+        let carry: Vec<bool> = (1..=3).map(|k| reading.keeps(k, 3, 10)).collect();
+        assert_eq!(carry, vec![true, true, false]);
+        assert!(!Release { pre_hold: 0., speed: 0., ..reading }.keeps(1, 3, 10), "no measurement keeps nobody going");
     }
 }

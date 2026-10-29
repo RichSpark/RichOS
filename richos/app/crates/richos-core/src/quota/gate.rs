@@ -889,6 +889,18 @@ mod tests {
         assert_eq!(released.len(), 1, "not all at once, and none past the projected 100%: {released:?}");
         assert!(call(released[0]), "the released worker carries on with its next call");
         assert_eq!(workers.iter().filter(|id| call(id)).count(), 1, "the other nine still wait");
+        // **Third review of 2026-10-29, P1: the permit is judged again on a fresh reading.**
+        // 97% -> 99% in a minute, still 19 minutes from the reset: at whole points with the
+        // first unseen that is 1 point a minute, and the released worker carrying on projects
+        // 99 + max(0.14, 1) x 19 = 118. It waits; before, its permit let it straight through.
+        let mut fresh = Snapshot::default();
+        fresh.accept(five(97.), now - minute);
+        fresh.accept(five(99.), now);
+        *service.snapshot.lock().unwrap() = fresh;
+        service.publish().unwrap();
+        assert!(decide(&state, Some("1"), crate::util::now_millis()).1.is_some(), "still inside the window: the stagger decides");
+        assert!(!call(released[0]), "a fresh reading past 100% pauses the released worker too");
+        assert_eq!(workers.iter().filter(|id| call(id)).count(), 0, "and nobody goes");
         assert!(admission(&state, reset + 1).allows_work(), "the rest wait for the reset itself");
     }
 
