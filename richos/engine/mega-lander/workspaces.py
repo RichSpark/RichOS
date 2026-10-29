@@ -14,8 +14,9 @@ THE TWO EVENTS (point 3)
                                                   (land, discard; retry)
 
 STATE — outside every repository and session, one JSON file per agent:
-    $RICHOS_WORKSPACES_DIR, else $CLAUDE_CONFIG_DIR/state/workspaces,
-    else ~/.claude/state/workspaces
+    $RICHOS_WORKSPACES_DIR, else <claude_home()>/state/workspaces, where
+    claude_home() is $CLAUDE_CONFIG_DIR, else ~/.claude, except that a lease on
+    an added Claude account reads $RICHOS_CLAUDE_HOME (machine_settings.py)
       sessions/<session_id>.json   every session records itself (point 12)
       agents/<key>.json            one agent: its workspaces and its facts
       refs/<key>/<call>.json       the refs its repositories held at the START
@@ -139,13 +140,29 @@ def realpath(p):
     return os.path.realpath(os.path.expanduser(p))
 
 
+def claude_home():
+    """The one Claude home of this machine: machine_settings.claude_home() (CLAUDE_CONFIG_DIR,
+    else ~/.claude; RICHOS_CLAUDE_HOME where CLAUDE_CONFIG_DIR is the added account's folder the
+    app gave this lease). Never for Claude Code's own records (sessions/,
+    projects/), which follow the account's CLAUDE_CONFIG_DIR. Loaded by its path rather than by
+    moving sys.path, because this module runs in a hook on every tool call."""
+    mod = sys.modules.get("machine_settings")
+    if mod is None or not hasattr(mod, "claude_home"):
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "scripts", "lib", "machine_settings.py")
+        spec = importlib.util.spec_from_file_location("machine_settings", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sys.modules.setdefault("machine_settings", mod)
+    return mod.claude_home()
+
+
 def state_dir():
     d = (os.environ.get("RICHOS_WORKSPACES_DIR") or "").strip()
     if d:
         return d
-    base = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() \
-        or os.path.join(os.path.expanduser("~"), ".claude")
-    return os.path.join(base, "state", "workspaces")
+    return os.path.join(claude_home(), "state", "workspaces")
 
 
 # The app's data folder name under ~/Library/Application Support (Tauri's
@@ -182,7 +199,8 @@ def other_registries(errors=None):
     machine user whose registries these are; app state outside it is not."""
     own = realpath(state_dir())
     home = os.path.expanduser("~")
-    cands = [os.path.join(home, ".claude", "state", "workspaces")]
+    cands = [os.path.join(home, ".claude", "state", "workspaces"),
+             os.path.join(claude_home(), "state", "workspaces")]   # a terminal's, seen from a lease
     cfg = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
     if cfg:
         cands.append(os.path.join(cfg, "state", "workspaces"))
@@ -512,14 +530,16 @@ def land_locks_dir():
 
     Deliberately NOT `state_dir()` and NOT app.py's `state()`: those are the two
     partitions this lock exists to sit outside of. It is derived instead from
-    `CLAUDE_CONFIG_DIR` (else `~/.claude`) — the same machine-wide home the
-    workspace registry falls back to and the worktree ledger lives in — because
-    the app neither sets nor removes that variable for the engine it launches:
-    `EngineProfile::configure` strips every inherited `RICHOS_`/`LORO_`/`ECS_`/
-    `GIT_` name and re-adds its own list, and `CLAUDE_CONFIG_DIR` is in neither
-    (engine_profile.rs:156-210; the app reads it only to FIND the engine,
-    setup.rs:146 and engine.rs:95). One value for every thread of one app, and
-    for a terminal beside it.
+    `claude_home()` — the same machine-wide home the workspace registry falls
+    back to: `CLAUDE_CONFIG_DIR`, else `~/.claude`, and `RICHOS_CLAUDE_HOME`
+    (Account 1's folder) where `CLAUDE_CONFIG_DIR` is the added account's
+    folder the app gave this lease (`RICHOS_CLAUDE_ACCOUNT_DIR`;
+    `EngineProfile::configure`). On an added account the app points
+    `CLAUDE_CONFIG_DIR` at that account's folder, and a lock derived from that
+    split by account: a Work lease saw another lock than the installed fence's
+    (2026-10-28; this docstring had said the app never set the variable). One
+    value for every thread of one app, whichever account it spends, and for a
+    terminal beside it.
 
     `RICHOS_LAND_LOCKS_DIR` overrides it for tests. That override cannot reach
     an app-launched engine at all, because the strip above removes it — and so
@@ -531,9 +551,7 @@ def land_locks_dir():
     if override:
         base = realpath(override)
     else:
-        home = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() \
-            or os.path.join(os.path.expanduser("~"), ".claude")
-        base = os.path.join(realpath(home), "state", "land-locks")
+        base = os.path.join(realpath(claude_home()), "state", "land-locks")
     if not os.path.isabs(base):
         raise ValueError("the land lock home must be an absolute path")
     for name in ("RICHOS_APP_STATE", "RICHOS_WORKSPACES_DIR"):
@@ -794,6 +812,7 @@ def _ps_parent_and_comm(pid, timeout=10):
 
 
 def _platform_sessions_dir():
+    # Claude Code's own records, under the account's CLAUDE_CONFIG_DIR: never claude_home().
     return (os.environ.get("RICHOS_SESSIONS_DIR") or "").strip() or os.path.join(
         (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
         "sessions")
@@ -2519,6 +2538,7 @@ def record_end(session_id, agent_id, signal_name, detail=""):
 
 
 def _platform_projects_dir():
+    # Claude Code's own records, under the account's CLAUDE_CONFIG_DIR: never claude_home().
     return (os.environ.get("RICHOS_PROJECTS_DIR") or "").strip() or os.path.join(
         (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
         "projects")
@@ -3384,9 +3404,7 @@ def _hold_time(value):
 
 def _review_ended(review_id):
     """None while review <id> runs; else why it counts as ended."""
-    base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(
-        (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
-        "state")
+    base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(claude_home(), "state")
     try:
         with open(os.path.join(base, "reviews.jsonl"), encoding="utf-8") as f:
             for line in f:
@@ -3633,9 +3651,7 @@ def parse_iso_epoch(text):
 
 def _reviews_by_tip():
     """{tip: the newest second-review verdict row for it} from second-review's ledger."""
-    base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(
-        (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
-        "state")
+    base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(claude_home(), "state")
     out = {}
     try:
         with open(os.path.join(base, "reviews.jsonl"), encoding="utf-8") as f:

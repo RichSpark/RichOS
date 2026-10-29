@@ -157,6 +157,14 @@ pub struct EngineProfile {
     pub user: crate::user_settings::UserSetup,
 }
 
+/// **Account 1's Claude folder, the machine-wide home** a lease is given as `RICHOS_CLAUDE_HOME`:
+/// the app's own `CLAUDE_CONFIG_DIR`, else `~/.claude`, exactly as a terminal resolves it.
+fn machine_claude_home() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from).or_else(|| {
+        std::env::var_os("HOME").filter(|home| !home.is_empty()).map(|home| PathBuf::from(home).join(".claude"))
+    })
+}
+
 /// **Which speech model the video skill transcribes with**, the value of
 /// [`EngineProfile::speech_model`]. `transcription` is the pinned transcription model's own check
 /// (`richos_voice::stt::model_verified(TRANSCRIPTION_MODEL_ID)` in the shell); `voice` is the
@@ -730,8 +738,20 @@ impl EngineProfile {
         for key in crate::machine_settings::KEYS { command.env_remove(key); }
         command.envs(self.machine_settings.environment());
         command.env_remove("RICHOS_APP_ENTITY").env_remove("RICHOS_APP_THREAD");
+        // **One Claude home for the whole machine** (richos-hq follow-ups, "the usage hold reads
+        // the wrong Claude account", 2026-10-28; Rich's decision 23:58Z): the engine's own stores
+        // (the land lease, the fence settings, second-review records, the workspace registry's
+        // fallback) live in Account 1's folder whichever account this lease spends. An added
+        // account's `CLAUDE_CONFIG_DIR` moves only what Claude Code itself keeps there. The
+        // engine reads `RICHOS_CLAUDE_HOME` only while `CLAUDE_CONFIG_DIR` is still the folder
+        // named by `RICHOS_CLAUDE_ACCOUNT_DIR` (`machine_settings.claude_home`), so a test sandbox
+        // that sets its own `CLAUDE_CONFIG_DIR` inside this lease keeps its own stores. Inherited
+        // values of both were removed with every other `RICHOS_` name above.
+        if let Some(home) = machine_claude_home() {
+            command.env("RICHOS_CLAUDE_HOME", home);
+        }
         if let Some(folder) = self.claude_account.as_ref().and_then(|a| a.folder.as_ref()) {
-            command.env("CLAUDE_CONFIG_DIR", folder);
+            command.env("CLAUDE_CONFIG_DIR", folder).env("RICHOS_CLAUDE_ACCOUNT_DIR", folder);
         }
         // **Which Claude account this provider and every helper inside it spend** (weekly-switch
         // plan §1): hooks run in the provider's environment, so the quota gate reads it on every

@@ -174,6 +174,7 @@ if HERE not in sys.path:
 
 import cpu_policy  # noqa: E402  (sibling in scripts/lib: the engine's CPU admission rule)
 import instruction_files  # noqa: E402  (sibling: the repository's own CLAUDE.md or AGENTS.md, by Claude Code's rule)
+import machine_settings  # noqa: E402  (sibling: claude_home, the machine's one Claude home)
 
 CODEX_MODEL = "gpt-6.1-sol"
 CODEX_EFFORT = "high"
@@ -249,11 +250,13 @@ def git(repo, *args, check=True):
 
 
 def state_root():
+    """The ledger's folder: SECOND_REVIEW_STATE_DIR, else <the machine's one Claude home>/state,
+    whichever Claude account this review spends (machine_settings.claude_home). Every reader of
+    the ledger resolves it the same way, so a review written under a Work lease is found."""
     d = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip()
     if d:
         return d
-    base = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude")
-    return os.path.join(base, "state")
+    return os.path.join(machine_settings.claude_home(), "state")
 
 
 def ledger_path():
@@ -1067,14 +1070,17 @@ def claude_env(account=None):
     an added account's folder becomes CLAUDE_CONFIG_DIR and its id RICHOS_CLAUDE_ACCOUNT, exactly
     as a work lease is given them (richos-core engine_profile.rs configure); Account 1 has no
     folder and keeps the inherited one. Only the reviewer gets them: this command's own state and
-    scratch stay where they were."""
+    scratch stay where they were. Like a lease, an added account's reviewer is also given the
+    machine's one Claude home (RICHOS_CLAUDE_HOME, paired with RICHOS_CLAUDE_ACCOUNT_DIR), so the
+    engine's hooks inside it read this command's ledger, not the account's folder."""
     env = dict(os.environ)
     for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"):
         env.pop(k, None)
     if account:
         env["RICHOS_CLAUDE_ACCOUNT"] = account["id"]
         if account.get("folder"):
-            env["CLAUDE_CONFIG_DIR"] = account["folder"]
+            env["RICHOS_CLAUDE_HOME"] = machine_settings.claude_home()
+            env["CLAUDE_CONFIG_DIR"] = env["RICHOS_CLAUDE_ACCOUNT_DIR"] = account["folder"]
     return env
 
 

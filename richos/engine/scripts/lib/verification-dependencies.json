@@ -455,7 +455,7 @@
     },
     "scripts/lib/operator_fences.py#proc": {
       "source": "scripts/lib/operator_fences.py",
-      "sha256": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+      "sha256": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
       "evidence": "Kernel process-generation routines read libproc or /proc only. Fence/lease commands below this region are not invoked by the process supervisor.",
       "keys": [],
       "edges": [],
@@ -1428,8 +1428,8 @@
     },
     "mega-lander/workspaces.py#barrier": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "The barrier CLI reaches reference snapshots, native process identities and private workspace/session records. Its reviewed local call closure now has the explicitly declared recovery helper import and does not read orchestration.config. WAIT branch: an ending the platform recorded (observe_platform_end) also imports agent_hold.py to release that agent's hold; release reads no config and executes no engine program. Recovery integration (2026-10-11): now reaches the explicit recovery adapter/runner closure. Its normal private fixture entities have no declaration and remain off; focused recovery fixtures bind all state and fake provider inputs. No unchanged narrow-import claim covers this new closure.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "The barrier CLI reaches reference snapshots, native process identities and private workspace/session records. Its reviewed local call closure now has the explicitly declared recovery helper import and does not read orchestration.config. WAIT branch: an ending the platform recorded (observe_platform_end) also imports agent_hold.py to release that agent's hold; release reads no config and executes no engine program. Recovery integration (2026-10-11): now reaches the explicit recovery adapter/runner closure. Its normal private fixture entities have no declaration and remain off; focused recovery fixtures bind all state and fake provider inputs. No unchanged narrow-import claim covers this new closure. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -1437,6 +1437,9 @@
         },
         {
           "to": "scripts/lib/recovery_controls.py"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -1487,8 +1490,8 @@
     },
     "mega-lander/workspaces.py#lifecycle-fixtures": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Reviewed CLI paths: hook/lifecycle, register-spawn, barrier, integration/record_integration, pause and gate-stop. Their local call closure reaches workspace cleanup and these three dynamic modules; it does not reach the land CLI-only QA throwaway or scratch-sweep calls. No direct orchestration.config reader. WAIT branch: pause, resume, stop, TaskStop, SessionStart and SessionEnd also import agent_hold.py to hold or release the agent's processes, and the SendMessage path imports pause_protocol.py to recognize the generated pause and RESUME. Neither reads config. Workspace cleanup (2026-10-08) also loads scripts/lib/build_caches.py by fixed path: before a workspace is removed it lists the cache folders keyed to that workspace, and after the removal moves them aside and starts one detached rm. The module reads SCRATCH_BUILD_CACHE_ROOT and SCRATCH_CARGO_TARGET_ROOTS from the environment, else from SCRATCH_REAPER_CONFIG or the engine's orchestration.config. SubagentStop (2026-10-08) also reads that agent's call records in the agent-hold state directory and the platform's own transcript of the agent under RICHOS_PROJECTS_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/projects (the same root platform_agent_record reads), to see whether a background call that has ended is still to be delivered; read only, no execution and no config value. Recovery integration (2026-10-11): now reaches the explicit recovery adapter/runner closure. Its normal private fixture entities have no declaration and remain off; focused recovery fixtures bind all state and fake provider inputs. No unchanged narrow-import claim covers this new closure. Proof report (2026-10-20): after TaskCompleted and a SubagentStop that ends the agent, attach_proof_reports reads each live workspace's HEAD (git rev-parse) and, under the proof-run directory machine_settings.state names (RICHOS_PROOF_RUN_DIR, else the machine settings), at most five saved runs' plan.json and summary.json, read only, no execution, no orchestration.config value; a fixture with no saved run gets an unavailable report. No silent holds (2026-10-22): the SendMessage path also imports scripts/lib/hold_words.py (via the agent_hold path insert) and records a wait or a correction; gate-stop adds hold_lines, which reads <state>/holds/*.json, the bound registry's agents, Git tips of their workspaces and second-review's reviews.jsonl under SECOND_REVIEW_STATE_DIR or CLAUDE_CONFIG_DIR/state (data, sandboxed by every fixture); RICHOS_HOLD_REPORT_SECONDS only sets the 30-minute line. Startup dedup (2026-10-24): SessionStart with due work also imports scripts/lib/stall_watch.py (via the agent_hold path insert) and records the due items it told in that session's announced.json, under a short flock on announced.lock beside it, under STALL_WATCH_STATE_DIR, else HOME .claude/state/stall-watch (data, sandboxed by every fixture); STALL_WATCH_NOW only sets the recorded time. No orchestration.config value.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Reviewed CLI paths: hook/lifecycle, register-spawn, barrier, integration/record_integration, pause and gate-stop. Their local call closure reaches workspace cleanup and these three dynamic modules; it does not reach the land CLI-only QA throwaway or scratch-sweep calls. No direct orchestration.config reader. WAIT branch: pause, resume, stop, TaskStop, SessionStart and SessionEnd also import agent_hold.py to hold or release the agent's processes, and the SendMessage path imports pause_protocol.py to recognize the generated pause and RESUME. Neither reads config. Workspace cleanup (2026-10-08) also loads scripts/lib/build_caches.py by fixed path: before a workspace is removed it lists the cache folders keyed to that workspace, and after the removal moves them aside and starts one detached rm. The module reads SCRATCH_BUILD_CACHE_ROOT and SCRATCH_CARGO_TARGET_ROOTS from the environment, else from SCRATCH_REAPER_CONFIG or the engine's orchestration.config. SubagentStop (2026-10-08) also reads that agent's call records in the agent-hold state directory and the platform's own transcript of the agent under RICHOS_PROJECTS_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/projects (the same root platform_agent_record reads), to see whether a background call that has ended is still to be delivered; read only, no execution and no config value. Recovery integration (2026-10-11): now reaches the explicit recovery adapter/runner closure. Its normal private fixture entities have no declaration and remain off; focused recovery fixtures bind all state and fake provider inputs. No unchanged narrow-import claim covers this new closure. Proof report (2026-10-20): after TaskCompleted and a SubagentStop that ends the agent, attach_proof_reports reads each live workspace's HEAD (git rev-parse) and, under the proof-run directory machine_settings.state names (RICHOS_PROOF_RUN_DIR, else the machine settings), at most five saved runs' plan.json and summary.json, read only, no execution, no orchestration.config value; a fixture with no saved run gets an unavailable report. No silent holds (2026-10-22): the SendMessage path also imports scripts/lib/hold_words.py (via the agent_hold path insert) and records a wait or a correction; gate-stop adds hold_lines, which reads <state>/holds/*.json, the bound registry's agents, Git tips of their workspaces and second-review's reviews.jsonl under SECOND_REVIEW_STATE_DIR or CLAUDE_CONFIG_DIR/state (data, sandboxed by every fixture); RICHOS_HOLD_REPORT_SECONDS only sets the 30-minute line. Startup dedup (2026-10-24): SessionStart with due work also imports scripts/lib/stall_watch.py (via the agent_hold path insert) and records the due items it told in that session's announced.json, under a short flock on announced.lock beside it, under STALL_WATCH_STATE_DIR, else HOME .claude/state/stall-watch (data, sandboxed by every fixture); STALL_WATCH_NOW only sets the recorded time. No orchestration.config value. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -2280,10 +2283,14 @@
     },
     "mega-lander/workspaces.py#liveness-readers": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "agent-liveness imports only key_for_id, load_agent, done_path, read_json and finished_state. Their reviewed local closure is state_dir/_p/_key_segment, agent_path/session_path/load_session, session_state/process_start/_ps_env and iso. These read registry JSON and native process status, never orchestration settings, and have no dynamic engine import.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "agent-liveness imports only key_for_id, load_agent, done_path, read_json and finished_state. Their reviewed local closure is state_dir/_p/_key_segment, agent_path/session_path/load_session, session_state/process_start/_ps_env and iso. These read registry JSON and native process status, never orchestration settings, and have no dynamic engine import. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "scripts/lib/agent-liveness.py": {
       "source": "scripts/lib/agent-liveness.py",
@@ -2474,10 +2481,14 @@
     },
     "mega-lander/workspaces.py#session-recovery": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "The stop recovery predicate calls load_session and forbidden_now. Their finite local closure reads private registry/platform session JSON, native ancestry and git rev-parse, and may heal that same session under Lock/write_json/event. Helpers include session_pid, _ps_parent_and_comm, _platform_sessions_dir, worktree_session_reason, realpath, git/_git_env and registry path/time helpers. None reads orchestration.config or imports a dynamic engine module.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "The stop recovery predicate calls load_session and forbidden_now. Their finite local closure reads private registry/platform session JSON, native ancestry and git rev-parse, and may heal that same session under Lock/write_json/event. Helpers include session_pid, _ps_parent_and_comm, _platform_sessions_dir, worktree_session_reason, realpath, git/_git_env and registry path/time helpers. None reads orchestration.config or imports a dynamic engine module. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "scripts/lib/stop-session-recovery.py": {
       "source": "scripts/lib/stop-session-recovery.py",
@@ -2492,10 +2503,14 @@
     },
     "mega-lander/workspaces.py#claims-fixture": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "The claims test calls load_agent, new_record, now and save_agent. Their finite local closure creates the literal record, resolves private agent/done paths and writes the private record/id index via write_json/_write_id. No config read or dynamic engine import.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "The claims test calls load_agent, new_record, now and save_agent. Their finite local closure creates the literal record, resolves private agent/done paths and writes the private record/id index via write_json/_write_id. No config read or dynamic engine import. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "scripts/hooks/guard-agent-state-claims.py": {
       "source": "scripts/hooks/guard-agent-state-claims.py",
@@ -2968,10 +2983,14 @@
     },
     "mega-lander/workspaces.py#integration": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "integration_for/integration_target and record_integration use a finite local closure: integration record/file/path/work lookup, branch_tip/main_checkout/git, _write_integration/Lock/write_json/event and path/time helpers. Only registry JSON and git metadata are consumed; no config read or engine import. all_bodies_of_work uses the same _integration_file reader and returns its works mapping without executing lifecycle actions.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "integration_for/integration_target and record_integration use a finite local closure: integration record/file/path/work lookup, branch_tip/main_checkout/git, _write_integration/Lock/write_json/event and path/time helpers. Only registry JSON and git metadata are consumed; no config read or engine import. all_bodies_of_work uses the same _integration_file reader and returns its works mapping without executing lifecycle actions. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "mega-lander/workspaces.sh#integration": {
       "source": "mega-lander/workspaces.sh",
@@ -3668,10 +3687,14 @@
     },
     "mega-lander/workspaces.py#empty-recipient-fixture": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "The pause fixture explicitly supplies a newly created private RICHOS_WORKSPACES_DIR with no agent/done records. The recipient CLI reads load_agent(named_key(session,name)) and returns unregistered before observe_platform_end or any lifecycle operation. The recipient CLI takes entity from its argument or environment and does not perform the hook-only cwd Git lookup. Reached helpers are state_dir/_p/_key_segment, agent_path/done_path/read_json and named_key; none consumes config. The caller test hash binds this empty-registry precondition.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "The pause fixture explicitly supplies a newly created private RICHOS_WORKSPACES_DIR with no agent/done records. The recipient CLI reads load_agent(named_key(session,name)) and returns unregistered before observe_platform_end or any lifecycle operation. The recipient CLI takes entity from its argument or environment and does not perform the hook-only cwd Git lookup. Reached helpers are state_dir/_p/_key_segment, agent_path/done_path/read_json and named_key; none consumes config. The caller test hash binds this empty-registry precondition. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "scripts/hooks/guard-resume-isolation.sh#pause-terminal-fixture": {
       "source": "scripts/hooks/guard-resume-isolation.sh",
@@ -3857,8 +3880,8 @@
     },
     "mega-lander/workspaces.py#discard": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Reviewed discard CLI plus fixture registration new_record/named_key/_add_workspace/main_checkout/save_agent and record_end. Every local helper other than discard is shared with the already reviewed lifecycle closure. Discard validates record state/reason, records tips and invokes the same _delete_chain cleanup. CLI receives explicit --session; it never enters land-only QA or scratch-sweep paths. Retains actual engine configuration reads from app-instance cleanup. Renewed 2026-10-24 (a discard keeps a predecessor's unlanded work): before recording tips, discard asks _unlanded of each predecessor's branches, which reads branch_tip_read, the declared integration_target and git merge-base --is-ancestor (registry JSON and git metadata only), and saves a reopened predecessor's record with Lock/save_agent. No new config key, reader or execution edge.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Reviewed discard CLI plus fixture registration new_record/named_key/_add_workspace/main_checkout/save_agent and record_end. Every local helper other than discard is shared with the already reviewed lifecycle closure. Discard validates record state/reason, records tips and invokes the same _delete_chain cleanup. CLI receives explicit --session; it never enters land-only QA or scratch-sweep paths. Retains actual engine configuration reads from app-instance cleanup. Renewed 2026-10-24 (a discard keeps a predecessor's unlanded work): before recording tips, discard asks _unlanded of each predecessor's branches, which reads branch_tip_read, the declared integration_target and git merge-base --is-ancestor (registry JSON and git metadata only), and saves a reopened predecessor's record with Lock/save_agent. No new config key, reader or execution edge. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -3866,6 +3889,9 @@
         },
         {
           "to": "mega-lander/workspaces.py#integration"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -4091,12 +4117,15 @@
     },
     "mega-lander/workspaces.py#isolation-registration": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Reviewed CLI register-readonly/register-cc/confirm-cc and check-spawn. Only register_readonly, register_cc and confirm_cc add local functions beyond the reviewed lifecycle/discard closure; they use the same registry, native identity and Git helpers, with no new dynamic import or config read. check-spawn calls register_spawn with dry=True. Also retains hook, integration and discard used directly by the isolation suite. Explicit --session bypasses ambient current_session for the non-payload fixture calls.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Reviewed CLI register-readonly/register-cc/confirm-cc and check-spawn. Only register_readonly, register_cc and confirm_cc add local functions beyond the reviewed lifecycle/discard closure; they use the same registry, native identity and Git helpers, with no new dynamic import or config read. check-spawn calls register_spawn with dry=True. Also retains hook, integration and discard used directly by the isolation suite. Explicit --session bypasses ambient current_session for the non-payload fixture calls. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
           "to": "mega-lander/workspaces.py#discard"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -4149,12 +4178,15 @@
     },
     "mega-lander/workspaces.py#recipient": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "The recipient CLI calls recipient_state, which loads its named record then observe_platform_end and finished_state. Only recipient_state is new beyond the reviewed lifecycle closure; all its callees are already covered there. Its cleanup remains bound to actual engine app-instance settings. Explicit --session avoids ambient current_session.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "The recipient CLI calls recipient_state, which loads its named record then observe_platform_end and finished_state. Only recipient_state is new beyond the reviewed lifecycle closure; all its callees are already covered there. Its cleanup remains bound to actual engine app-instance settings. Explicit --session avoids ambient current_session. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
           "to": "mega-lander/workspaces.py#lifecycle-fixtures"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -4315,7 +4347,7 @@
     },
     "scripts/lib/operator_fences.py#claim-readers": {
       "source": "scripts/lib/operator_fences.py",
-      "sha256": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+      "sha256": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
       "evidence": "Reviewed sessions_dir, launcher_for/fenced, claude_session, alive, iso and JSON read/write helpers reached by claim-start. Local closure adds ancestors/lstart_epoch, repo_paths/git and read_launcher. Git calls read metadata; launcher content is parsed as data, never sourced. Native process identity is shared with the existing proc closure. No orchestration configuration.",
       "keys": [],
       "literal_keys": {
@@ -5013,14 +5045,18 @@
     },
     "mega-lander/workspaces.py#land-lock-paths": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "The admin status path calls land_locks_dir and land_lock_path. Their finite closure is realpath, canonical_repository, git and _git_env. It creates the private lock directory and reads Git repository identity, never orchestration.config or another engine helper.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "The admin status path calls land_locks_dir and land_lock_path. Their finite closure is realpath, canonical_repository, git and _git_env. It creates the private lock directory and reads Git repository identity, never orchestration.config or another engine helper. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR. land_locks_dir now also loads machine_settings.py (by its path, no sys.path change) for claude_home; that is its one engine-helper read.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "scripts/lib/operator_fences.py#admin-status": {
       "source": "scripts/lib/operator_fences.py",
-      "sha256": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+      "sha256": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
       "evidence": "The fixed admin status dispatch imports operator_fences_admin. Its library callbacks are read_json, git, file_digest, read_launcher, repo_paths, _default_home and keyed_paths, and for the declared land-lease holders declared_holders, app_bundle and bundle_candidates (os.walk of a missing holder's app bundle; /usr/bin/codesign -d displays signatures, nothing in the bundle executes). Their only dynamic engine import is workspaces for land lock paths. The lease status/fence/install dispatches are not reached.",
       "keys": [
         "SECOND_REVIEW_REPOS"
@@ -5036,7 +5072,7 @@
     },
     "scripts/lib/operator_fences_admin.py#status": {
       "source": "scripts/lib/operator_fences_admin.py",
-      "sha256": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
+      "sha256": "0ef83bd105b4f47a851050f15cf8ef158ba33e46e2aca9e9cc2ffbefd7b98187",
       "evidence": "Status and declaration-check parse OPERATOR_FENCES and, to compare it with each launcher's holders, LAND_LEASE_HOLDERS from the explicit entity config. Remaining local calls read registry JSON, launcher text, file hashes, chain directory entries and Git hooksPath, and test each declared holder path for existence; no launcher, chain member or holder executes. The other config assignments parsed into the declaration dictionary are unused by status. Renewed 2026-10-09 (second review, slice 3): status also parses SECOND_REVIEW_REPOS from the same explicit entity config, to compare each launcher's baked review ledger with it. Renewed 2026-10-09 (review rv-20261009T052655Z-daf09e19-0bc6): SECOND_REVIEW_REPOS is no longer parsed as text. operator_fences.review_repos, its one reader, sources the entity's orchestration.config in a clean bash (env cleared to HOME, PATH, LC_ALL and TMPDIR from the caller's environment; cwd the config's directory; stdin /dev/null; its own process group, killed after REVIEW_READ_SECONDS) and prints only that key's value; the config is a file the engine's hooks already source. Only SECOND_REVIEW_REPOS is taken from it. No new configuration key and no new dynamic import. Off validates the native operator using the existing holder policy, requires a recorded reason and appends private setting audit before mutation. Installed recovery reader identity is compared at status. Neither path imports an executable from evidence.",
       "keys": [
         "OPERATOR_FENCES",
@@ -5063,7 +5099,7 @@
     },
     "scripts/lib/operator_fences.py#admin-holders-notice": {
       "source": "scripts/lib/operator_fences.py",
-      "sha256": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+      "sha256": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
       "evidence": "The fixed admin holders-notice dispatch imports operator_fences_admin and reaches cmd_holders_notice only. Its library callbacks are read_launcher, repo_paths, git, fenced, declared_holders, app_bundle and bundle_candidates (os.walk of a missing holder's app bundle; /usr/bin/codesign -d displays signatures, nothing in the bundle executes). With --repo the registry and the lease home are not read, so workspaces is not imported.",
       "keys": [],
       "literal_keys": {
@@ -5077,7 +5113,7 @@
     },
     "scripts/lib/operator_fences_admin.py#holders-notice": {
       "source": "scripts/lib/operator_fences_admin.py",
-      "sha256": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
+      "sha256": "0ef83bd105b4f47a851050f15cf8ef158ba33e46e2aca9e9cc2ffbefd7b98187",
       "evidence": "cmd_holders_notice and holder_problems read only the named repositories' reference-transaction launchers as text and test each declared holder path for existence; no orchestration.config is read (the declaration comparison is status's). It prints sentences and exits 0; no launcher, chain member or holder executes. Off validates the native operator using the existing holder policy, requires a recorded reason and appends private setting audit before mutation. Installed recovery reader identity is compared at status. Neither path imports an executable from evidence.",
       "keys": [],
       "edges": [
@@ -5097,6 +5133,38 @@
         },
         {
           "to": "scripts/lib/operator_fences_admin.py#holders-notice"
+        }
+      ]
+    },
+    "scripts/lib/claude-home.test.py": {
+      "source": "scripts/lib/claude-home.test.py",
+      "sha256": "86427daafe7e459d00d93a9789e2ce5f05119e2ad1eae32471be38ca1826d1cc",
+      "evidence": "Reviewed 2026-10-29 (zach-opus-e389e1518dc1, claude_home): unittest run once by operator-fences.test.sh F36. Makes a private sandbox HOME (mkdtemp) with a fixture .claude, a fixture app data folder and claude-accounts/<n> folders, and git init of one private repository (GIT_CONFIG_GLOBAL=/dev/null, no system config). Each case runs a fixed probe with sys.executable in a fresh process whose environment drops every store-moving variable and sets HOME to the sandbox: it imports operator_fences, operator_fences_admin, second_review and workspaces and calls keyed_paths, land_lock_path, settings_log_path, registry_path, ledger_path, review_ledger_default, append_land_record, land_records, append_jsonl, append_row and _reviews_by_tip, and takes or tries an fcntl lock on the sandbox land lock file. Its own probe processes are the only processes it starts and it waits for each. No orchestration.config is read and nothing outside the sandbox is written.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/operator_fences.py#runtime"
+        },
+        {
+          "to": "scripts/lib/operator_fences.py#admin-status"
+        },
+        {
+          "to": "scripts/lib/operator_fences_admin.py#holders-notice"
+        },
+        {
+          "to": "scripts/lib/second_review.py"
+        },
+        {
+          "to": "mega-lander/workspaces.py#land-lock-paths"
+        },
+        {
+          "to": "mega-lander/workspaces.py#land-record-readers"
+        },
+        {
+          "to": "mega-lander/workspaces.py#holds"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -7683,10 +7751,14 @@
     },
     "mega-lander/workspaces.py#ledger-lookup": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Ledger assignment resolution calls key_for_id then load_agent. Reviewed key/id/path/read_json helpers only read the workspace registry; no config or dynamic helper call.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Ledger assignment resolution calls key_for_id then load_agent. Reviewed key/id/path/read_json helpers only read the workspace registry; no config or dynamic helper call. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "scripts/lib/worktree-ledger.py#append": {
       "source": "scripts/lib/worktree-ledger.py",
@@ -7743,10 +7815,14 @@
     },
     "mega-lander/workspaces.py#event-store": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Reviewed state_dir, event, _p, iso and now only: resolves the workspace store and appends a timestamped JSON row, without config or dynamic helper calls.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Reviewed state_dir, event, _p, iso and now only: resolves the workspace store and appends a timestamped JSON row, without config or dynamic helper calls. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "scripts/lib/protected-ref-moves.py": {
       "source": "scripts/lib/protected-ref-moves.py",
@@ -7906,8 +7982,8 @@
     },
     "mega-lander/workspaces.py#left-off-registry": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Left-off reads all_agents(include_done=True); its suite writes new_record/named_key/save_agent and record_integration. Reviewed record enumeration only adds private path/read_json to the existing claims and integration closures.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Left-off reads all_agents(include_done=True); its suite writes new_record/named_key/save_agent and record_integration. Reviewed record enumeration only adds private path/read_json to the existing claims and integration closures. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -7915,6 +7991,9 @@
         },
         {
           "to": "mega-lander/workspaces.py#integration"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -8036,8 +8115,8 @@
     },
     "mega-lander/workspaces.py#quota-fixture": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Quota workers calls current_session, all_agents and finished_state; fixtures also use integration/register-spawn/hook/recipient. Reviewed current_session reads the explicit session ID or the private registry/platform records using the captured sleeper PID. These share lifecycle helpers and retain real engine cleanup settings.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Quota workers calls current_session, all_agents and finished_state; fixtures also use integration/register-spawn/hook/recipient. Reviewed current_session reads the explicit session ID or the private registry/platform records using the captured sleeper PID. These share lifecycle helpers and retain real engine cleanup settings. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -8045,6 +8124,9 @@
         },
         {
           "to": "mega-lander/workspaces.py#recipient"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -8366,8 +8448,8 @@
     },
     "mega-lander/workspaces.py#land-cli-fixtures": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Reviewed CLI integration/discard/withdraw-cc/land and current_session. Land shares existing lifecycle eligibility/deletion helpers but its CLI also calls qa_throwaway_lines and sweep_scratch_after_land. Those fixed helper imports and the real scratch sweep are included. Unsourced QA transcript classifier defaults are separately scoped. Renewed 2026-10-01 (a land sweeps only the landed agent's scratch): before land() the CLI reads land_sweep_scopes (the record, its chain, all_agents and finished_state for a live namesake) and passes the scopes to sweep_scratch_after_land, which runs the same scratch-sweep.sh with --agent arguments and formats its JSON. No scope, no sweep. Renewed 2026-10-04: the merge CLI (merge_and_land) runs git merge --no-ff of the record's own branches in that repository's main checkout and then the same land; the automatic land (_keep_ignored) moves ignored entries into the private registry's kept/ directory. No config read and no new dynamic import. Renewed 2026-10-09 (second review, slice 3): merge_and_land's _review_check reads the repository's fence launcher as text for OPERATOR_FENCES_REVIEWS and, only when it is set, loads the fixed scripts/lib/operator_fences.py for its review functions, which read the review ledger and verdict records as JSON and run read-only Git queries. No configuration key is read. Renewed 2026-10-09 (review rv-20261009T031207Z-ba444a8a-607a, finding 1): whether a repository is reviewed is decided from the declaration, so _review_check now always loads the same fixed operator_fences.py when there is work to merge and parses SECOND_REVIEW_REPOS as text (last assignment, never executed) from the orchestration.config of each governing entity: every chain record's own `entity` and RICHOS_ENTITY_ROOT_RESOLVED from the environment. An entity with no readable config contributes nothing. The ledger a listed repository is checked in is F.review_ledger_default() (SECOND_REVIEW_STATE_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state), plus the launcher's OPERATOR_FENCES_REVIEWS when that differs. Renewed 2026-10-09 (review rv-20261009T033652Z-f3bfe22f-9372, findings 1 and 2): the governing entities also include those the fence registry records (operator-fences.json in land_locks_dir(), CLAUDE_CONFIG_DIR or HOME .claude/state/land-locks, read as JSON data: its top-level entity and each repository's entity), and the same SECOND_REVIEW_REPOS text parse is applied to their orchestration.config. A config or registry that exists but cannot be read or parsed refuses the merge instead of listing nothing. No new configuration key, no execution and no new dynamic import. Renewed 2026-10-09 (review rv-20261009T044823Z-fc8c7569-5919): the same registry read also takes each repository's boolean `reviewed`, which operator-fences.sh install now writes from the declaration, and a repository it records as reviewed is reviewed whatever its declarations say now; a registry or launcher that is a link to nothing (os.path.lexists) refuses; any non-comment line naming SECOND_REVIEW_REPOS that is not the plain assignment refuses. Same files, no new configuration key, no execution and no new dynamic import. Renewed 2026-10-09 (review rv-20261009T052655Z-daf09e19-0bc6): SECOND_REVIEW_REPOS is no longer parsed as text. operator_fences.review_repos, its one reader, sources the entity's orchestration.config in a clean bash (env cleared to HOME, PATH, LC_ALL and TMPDIR from the caller's environment; cwd the config's directory; stdin /dev/null; its own process group, killed after REVIEW_READ_SECONDS) and prints only that key's value; the config is a file the engine's hooks already source. Only SECOND_REVIEW_REPOS is taken from it. No new configuration key and no new dynamic import. Renewed 2026-10-11 (the land lease held through the land): before each git merge, merge_and_land calls the same fixed operator_fences.py's register_land, which adds the caller's land command to the lease file it already holds (the launcher's baked home, under the lease's flock); _abort_own_merge, when the fence is on and this process does not hold the lease, runs the fixed scripts/land-lease.sh acquire --repo <main> --wait 30 as a child before git merge --abort, and runs no abort when that fails. No configuration key and no new dynamic import. Renewed 2026-10-19 (a stale installed fence never judges a land): after _review_check and before any git merge, merge_and_land imports the fixed scripts/lib/operator_fences_admin.py (scripts/lib on sys.path, as _agent_hold and _recovery_adapter do) and calls its bring_current for each main checkout, which compares the installed fence files beside the launcher with the engine's by SHA-256 and copies the engine's in when they differ. No configuration key, no execution and no new dynamic import. Renewed 2026-10-24 (a release land's checks run outside ~/.claude): a merge into a branch the main checkout is not on makes its temporary checkout under machine_settings.state('merge-checkouts'), through the fixed scripts/lib/machine_settings.py (its own declared settings reader), instead of the workspaces state directory. No other new reader, key or execution edge.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Reviewed CLI integration/discard/withdraw-cc/land and current_session. Land shares existing lifecycle eligibility/deletion helpers but its CLI also calls qa_throwaway_lines and sweep_scratch_after_land. Those fixed helper imports and the real scratch sweep are included. Unsourced QA transcript classifier defaults are separately scoped. Renewed 2026-10-01 (a land sweeps only the landed agent's scratch): before land() the CLI reads land_sweep_scopes (the record, its chain, all_agents and finished_state for a live namesake) and passes the scopes to sweep_scratch_after_land, which runs the same scratch-sweep.sh with --agent arguments and formats its JSON. No scope, no sweep. Renewed 2026-10-04: the merge CLI (merge_and_land) runs git merge --no-ff of the record's own branches in that repository's main checkout and then the same land; the automatic land (_keep_ignored) moves ignored entries into the private registry's kept/ directory. No config read and no new dynamic import. Renewed 2026-10-09 (second review, slice 3): merge_and_land's _review_check reads the repository's fence launcher as text for OPERATOR_FENCES_REVIEWS and, only when it is set, loads the fixed scripts/lib/operator_fences.py for its review functions, which read the review ledger and verdict records as JSON and run read-only Git queries. No configuration key is read. Renewed 2026-10-09 (review rv-20261009T031207Z-ba444a8a-607a, finding 1): whether a repository is reviewed is decided from the declaration, so _review_check now always loads the same fixed operator_fences.py when there is work to merge and parses SECOND_REVIEW_REPOS as text (last assignment, never executed) from the orchestration.config of each governing entity: every chain record's own `entity` and RICHOS_ENTITY_ROOT_RESOLVED from the environment. An entity with no readable config contributes nothing. The ledger a listed repository is checked in is F.review_ledger_default() (SECOND_REVIEW_STATE_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state), plus the launcher's OPERATOR_FENCES_REVIEWS when that differs. Renewed 2026-10-09 (review rv-20261009T033652Z-f3bfe22f-9372, findings 1 and 2): the governing entities also include those the fence registry records (operator-fences.json in land_locks_dir(), CLAUDE_CONFIG_DIR or HOME .claude/state/land-locks, read as JSON data: its top-level entity and each repository's entity), and the same SECOND_REVIEW_REPOS text parse is applied to their orchestration.config. A config or registry that exists but cannot be read or parsed refuses the merge instead of listing nothing. No new configuration key, no execution and no new dynamic import. Renewed 2026-10-09 (review rv-20261009T044823Z-fc8c7569-5919): the same registry read also takes each repository's boolean `reviewed`, which operator-fences.sh install now writes from the declaration, and a repository it records as reviewed is reviewed whatever its declarations say now; a registry or launcher that is a link to nothing (os.path.lexists) refuses; any non-comment line naming SECOND_REVIEW_REPOS that is not the plain assignment refuses. Same files, no new configuration key, no execution and no new dynamic import. Renewed 2026-10-09 (review rv-20261009T052655Z-daf09e19-0bc6): SECOND_REVIEW_REPOS is no longer parsed as text. operator_fences.review_repos, its one reader, sources the entity's orchestration.config in a clean bash (env cleared to HOME, PATH, LC_ALL and TMPDIR from the caller's environment; cwd the config's directory; stdin /dev/null; its own process group, killed after REVIEW_READ_SECONDS) and prints only that key's value; the config is a file the engine's hooks already source. Only SECOND_REVIEW_REPOS is taken from it. No new configuration key and no new dynamic import. Renewed 2026-10-11 (the land lease held through the land): before each git merge, merge_and_land calls the same fixed operator_fences.py's register_land, which adds the caller's land command to the lease file it already holds (the launcher's baked home, under the lease's flock); _abort_own_merge, when the fence is on and this process does not hold the lease, runs the fixed scripts/land-lease.sh acquire --repo <main> --wait 30 as a child before git merge --abort, and runs no abort when that fails. No configuration key and no new dynamic import. Renewed 2026-10-19 (a stale installed fence never judges a land): after _review_check and before any git merge, merge_and_land imports the fixed scripts/lib/operator_fences_admin.py (scripts/lib on sys.path, as _agent_hold and _recovery_adapter do) and calls its bring_current for each main checkout, which compares the installed fence files beside the launcher with the engine's by SHA-256 and copies the engine's in when they differ. No configuration key, no execution and no new dynamic import. Renewed 2026-10-24 (a release land's checks run outside ~/.claude): a merge into a branch the main checkout is not on makes its temporary checkout under machine_settings.state('merge-checkouts'), through the fixed scripts/lib/machine_settings.py (its own declared settings reader), instead of the workspaces state directory. No other new reader, key or execution edge. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [
         "SECOND_REVIEW_REPOS"
       ],
@@ -8413,8 +8495,8 @@
     },
     "mega-lander/workspaces.py#observe-refs": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Reviewed observe CLI parses payload, resolves its recorded agent and observes only unfinished work. observe_created_refs and its snapshot/protected-ref helpers are shared with the lifecycle/barrier closures; payload commands are never executed.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Reviewed observe CLI parses payload, resolves its recorded agent and observes only unfinished work. observe_created_refs and its snapshot/protected-ref helpers are shared with the lifecycle/barrier closures; payload commands are never executed. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -8422,6 +8504,9 @@
         },
         {
           "to": "mega-lander/workspaces.py#barrier"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -8581,8 +8666,8 @@
     },
     "mega-lander/workspaces.py#unit-fixtures": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Reviewed all external import/execution sites and unit-call census. Library calls use lifecycle, registration and observation helpers. QA uses the fixed toolkit/classifier imports. The only main(land) call patches sweep_scratch_after_land to a no-op, so its production reaper is not invoked. Stop and wait only update records and observe refs. WAIT branch: stop and pause also release or hold processes through agent_hold.py, reached by the lifecycle edge.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Reviewed all external import/execution sites and unit-call census. Library calls use lifecycle, registration and observation helpers. QA uses the fixed toolkit/classifier imports. The only main(land) call patches sweep_scratch_after_land to a no-op, so its production reaper is not invoked. Stop and wait only update records and observe refs. WAIT branch: stop and pause also release or hold processes through agent_hold.py, reached by the lifecycle edge. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -8600,12 +8685,15 @@
         {
           "to": "scripts/lib/qa-throwaways.py#scan-classify",
           "fixture": true
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
     "mega-lander/tests/workspaces.test.py": {
       "source": "mega-lander/tests/workspaces.test.py",
-      "sha256": "b0bbefb5a3a8b5df1c8795291309c0defda0ea3549e1c1149ddd7a6ada618c36",
+      "sha256": "c3ab53171de82e672c2508a5d7ad8d356abacdc87fc835a3f8ce483f59d93be0",
       "evidence": "AST census of every ws call, subprocess and run call: fixed Git fixtures, captured sleep processes, a literal shutdown writer and seven Stop guards. Private HOME/config directories and Git config do not replace real app cleanup or QA settings. Six guards receive only a forbidden lead; workspace gate receives a private unadopted repository. The sole land CLI call explicitly patches out the scratch sweep. The added resource-waits Stop guard also returns at the forbidden-lead recovery before reading settings or wait state. Renewed 2026-09-30 (hunt part 4): the finding-20 case runs app.test.py as a subprocess for the one case test_pause_message_is_fixed selects (edge to that case) and reads the five sibling *.mutation.sh files as text; the finding 11-15 and 29 cases add literal sleeper processes, ps reads, a patched container reaper and a private RICHOS_WORKSPACES_GATE_BUDGET. No configuration read is added. Renewed 2026-10-07 (merge-gate abort): MergeGateRefusal installs and switches on the operator fence in its private repository through scripts/operator-fences.sh with a literal private entity config, writes a private session record for its own pid, takes the lease with scripts/land-lease.sh (CLAUDE_PID removed from the child environment), adds a literal refusing pre-merge-commit hook and runs workspaces.py merge as a subprocess. No configuration read is added. Env (2026-10-08) also exports SCRATCH_BUILD_CACHE_ROOT and SCRATCH_CARGO_TARGET_ROOTS pointing into its own temporary root and restores them on close, so the lander's build-cache step never reads the operator's configured cache folders. RecoveryChain fixtures exercise private review state and patch mode/reconcile/provider launch; observation tests execute no model and preserve baseline helper tools. Direct recovery imports are included in the fixture dependency closure. Renewed 2026-10-20 (verification reliability PRD T20): VerifierBuildOutputDoesNotBlockAContinuation reads the repository's committed richos/mobile/conformance/verifier/.gitignore beside the ignore files RichosBuildOutputDoesNotBlockAContinuation already reads, and writes only its private fixture. No configuration read is added. Renewed 2026-10-24 (app due-work notice, CEO 138): AppDueNotice loads mega-lander/app.py by fixed path for its TOOLS list only (module load: the closure app.py#land-lock-fixtures binds; no call entrypoint, no MCP server) and sets literal RICHOS_APP_ENTITY/RICHOS_APP_THREAD values with patch.dict, restored after the case. No configuration read is added.",
       "keys": [],
       "edges": [
@@ -8698,8 +8786,8 @@
     },
     "mega-lander/workspaces.py#fourteen-cli": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Reviewed suite CLI calls: register-cc, integration, status, retry, pause, stop, wait, discard and land, plus _turn_started_by_person import. All use the previously reviewed local library call closure. Land includes its real QA and scratch sweep. Printed command/payload text is never executed by this module.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Reviewed suite CLI calls: register-cc, integration, status, retry, pause, stop, wait, discard and land, plus _turn_started_by_person import. All use the previously reviewed local library call closure. Land includes its real QA and scratch sweep. Printed command/payload text is never executed by this module. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -8707,6 +8795,9 @@
         },
         {
           "to": "mega-lander/workspaces.py#land-cli-fixtures"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -8949,8 +9040,8 @@
     },
     "mega-lander/workspaces.py#live-names": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Reviewed all_agents(False), finished_state and fixture record creation. Private enumeration adds only JSON reads to liveness/claims paths; no cleanup or dynamic engine import.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Reviewed all_agents(False), finished_state and fixture record creation. Private enumeration adds only JSON reads to liveness/claims paths; no cleanup or dynamic engine import. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -8958,6 +9049,9 @@
         },
         {
           "to": "mega-lander/workspaces.py#claims-fixture"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -8974,8 +9068,8 @@
     },
     "scripts/lib/operator_fences.py#runtime": {
       "source": "scripts/lib/operator_fences.py",
-      "sha256": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-      "evidence": "AST call/import inventory and all external execution boundaries reviewed for fence, lease, merge-owner, turn-end and early-check. Only engine imports are workspace lock paths and the claim predicate. Launcher assignments are data. Git uses the caller repository and its separately bound hooks. Admin is a separate dispatch. declared_holder's moved-holder test (2026-10-01) asks the kernel through ctypes (libSystem csops: the running ancestor's CS_VALID status and team) and runs only /usr/bin/codesign -d to display the bundle's signing team; nothing it finds executes. Renewed 2026-10-09 (second review, slice 3): the fence also reads the review ledger the launcher bakes (OPERATOR_FENCES_REVIEWS) and verdict records as JSON, and runs read-only Git queries (merge-base, rev-list, rev-parse) on the transaction's commits. When lease fencing is off, installed reviewed repositories still execute effective review/recovery acceptance and current-operation checks. Refused exact findings append a bounded applicability routing request; no review outcome changes.",
+      "sha256": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
+      "evidence": "AST call/import inventory and all external execution boundaries reviewed for fence, lease, merge-owner, turn-end and early-check. Only engine imports are workspace lock paths and the claim predicate. Launcher assignments are data. Git uses the caller repository and its separately bound hooks. Admin is a separate dispatch. declared_holder's moved-holder test (2026-10-01) asks the kernel through ctypes (libSystem csops: the running ancestor's CS_VALID status and team) and runs only /usr/bin/codesign -d to display the bundle's signing team; nothing it finds executes. Renewed 2026-10-09 (second review, slice 3): the fence also reads the review ledger the launcher bakes (OPERATOR_FENCES_REVIEWS) and verdict records as JSON, and runs read-only Git queries (merge-base, rev-list, rev-parse) on the transaction's commits. When lease fencing is off, installed reviewed repositories still execute effective review/recovery acceptance and current-operation checks. Refused exact findings append a bounded applicability routing request; no review outcome changes. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "literal_keys": {
         "SECOND_REVIEW_REPOS": "Appears only in operator_fences.review_repos. The fence, lease, merge-owner, turn-end and early-check dispatches reviewed here do not call it; the land check's own read lives in workspaces.py, bound by its own row."
@@ -8989,6 +9083,9 @@
         },
         {
           "to": "scripts/lib/recovery.py"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -9005,7 +9102,7 @@
     },
     "scripts/lib/operator_fences_admin.py#fixture-admin": {
       "source": "scripts/lib/operator_fences_admin.py",
-      "sha256": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
+      "sha256": "0ef83bd105b4f47a851050f15cf8ef158ba33e46e2aca9e9cc2ffbefd7b98187",
       "evidence": "All admin bodies reviewed. Reads three named keys from explicit entity configuration, copies the fixed program and renders the fixed launcher. Registry and hook files are data in admin; copied hooks do not execute here. Renewed 2026-10-09 (second review, slice 3): install also reads SECOND_REVIEW_REPOS and bakes the review ledger path (or an empty value) into the launcher; nothing is executed from it. Renewed 2026-10-09 (review rv-20261009T033652Z-f3bfe22f-9372, finding 2): install also records the entity in each repository's registry entry, as data the land command reads. Renewed 2026-10-09 (review rv-20261009T052655Z-daf09e19-0bc6): SECOND_REVIEW_REPOS is no longer parsed as text. operator_fences.review_repos, its one reader, sources the entity's orchestration.config in a clean bash (env cleared to HOME, PATH, LC_ALL and TMPDIR from the caller's environment; cwd the config's directory; stdin /dev/null; its own process group, killed after REVIEW_READ_SECONDS) and prints only that key's value; the config is a file the engine's hooks already source. Only SECOND_REVIEW_REPOS is taken from it. No new configuration key and no new dynamic import. Off validates the native operator using the existing holder policy, requires a recorded reason and appends private setting audit before mutation. Installed recovery reader identity is compared at status. Neither path imports an executable from evidence. Renewed 2026-10-19: install's copy is copy_program, which writes each of the three fixed files by rename; bring_current reads the repository's launcher as text, hashes the installed and engine files, and when they differ calls the same copy_program and rewrites the launcher's OPERATOR_FENCES_PROGRAM_DIGEST line. No configuration key is read and nothing is executed.",
       "keys": [
         "OPERATOR_FENCES",
@@ -9047,7 +9144,7 @@
     },
     "scripts/lib/operator-fences-fixture.sh": {
       "source": "scripts/lib/operator-fences-fixture.sh",
-      "sha256": "cb872b1fb06d8d090feb2b06dc9895147e88efff741d6d3187b2a44e7a6c60af",
+      "sha256": "07a6030882a7731a09f7a213c473b3a29ae785c6ff6311e4eb97ba3326d48d48",
       "evidence": "Full fixture reviewed: literal entity config, private Git/session/lease trees and captured shell servers. Optional installed dispatcher runs only as reference-transaction, skipping identity policy and chaining to the private repository hook. Its executable bytes are independently bound.",
       "keys": [],
       "edges": [
@@ -9710,18 +9807,21 @@
     },
     "mega-lander/workspaces.py#land-record-readers": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Reviewed read_land_lock, land_record_path and land_records: bounded JSON history reads beside canonical repository lock paths, with no config read or execution.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Reviewed read_land_lock, land_record_path and land_records: bounded JSON history reads beside canonical repository lock paths, with no config read or execution. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
           "to": "mega-lander/workspaces.py#land-lock-paths"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
     "mega-lander/app.py#land-lock-fixtures": {
       "source": "mega-lander/app.py",
-      "sha256": "98763574473dc2d89a964e12c5cb038cfdd9cf095da822b03522e0b03f272ca2",
+      "sha256": "6f4ac2426ea524b51ebb714eb87f2fcb3c6f10460096aa08f900559a49dee8af",
       "evidence": "Fixture calls only land_lock and _live_fence_lease. Full local closure reviewed: lock metadata, flock, process liveness and repository lease/history reads. Workspaces and ECS imports are bound; ECS runtime operations are not invoked. Renewed 2026-10-15 (echo-opus-hire57): the team tool's description text only; nothing read changed. Renewed 2026-10-18: retired-execution reconciliation and two desktop dispatch cases changed elsewhere in these files; this selected fixture closure and setUp are unchanged. Renewed 2026-10-21 (zach-opus-folderfiles1): module load now also loads instruction_files.py by fixed path (edge added); prepare changed, outside this fixture closure. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): land_lock also calls _take_fence_lease and _release_fence_lease, which load scripts/lib/operator_fences.py by fixed path and, where the fixture repository's launcher has the fence on, write and remove the lease file in the launcher's home under the same flock. No configuration read is added. Renewed 2026-10-21 (zach-opus-landgate1, review rv-20261021T072931Z-a4453faa-ffff finding 1): where the fixture repository's launcher names a lease home other than this land's lock home (another Claude account's CLAUDE_CONFIG_DIR, RICHOS_LAND_LOCKS_DIR in the fixture), _take_fence_lease also takes the launcher's own lock file and reads its lease there, within RICHOS_LAND_LOCK_TIMEOUT; both homes are private to the fixture. No configuration key is added. Renewed 2026-10-21 (zach-opus-landgate1, review f79aeabf finding 1): land_merge's Git environment changed; this closure does not reach it. Renewed 2026-10-24 (echo-opus-teamreload1): the team tool's description text only; nothing read changed.",
       "keys": [],
       "edges": [
@@ -9747,8 +9847,8 @@
     },
     "mega-lander/workspaces.py#fence-restore": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Full _recreate_deleted_ref and _fence_restore_intent reviewed: private Git ref/intent operations, launcher text reads and native process identity. No config execution; installed callbacks are separately bound by the fixture.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Full _recreate_deleted_ref and _fence_restore_intent reviewed: private Git ref/intent operations, launcher text reads and native process identity. No config execution; installed callbacks are separately bound by the fixture. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -9756,6 +9856,9 @@
         },
         {
           "to": "mega-lander/workspaces.py#liveness-readers"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -9797,7 +9900,7 @@
     },
     "scripts/operator-fences.test.sh": {
       "source": "scripts/operator-fences.test.sh",
-      "sha256": "b18f0d2687e4b8faa414751af61c049e00b3159c88187dad4ee747728640243f",
+      "sha256": "6eb3d2eda4539acaef1047b73c764f033bad4ec69d3e275524fdebab7e42530c",
       "evidence": "Full standalone suite and fixed shell-server commands reviewed: private literal entity settings, Git repositories, fence/lease state and ingress payloads. Exercises reference transaction callbacks, restore intents and land locks without launching model agents. F34 runs the fixed scripts/lib/operator-fences-holders.test.py once, outside the per-git loop. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): F15's label and header comment text only; nothing read changed.",
       "keys": [],
       "edges": [
@@ -9835,6 +9938,9 @@
         },
         {
           "to": "scripts/lib/operator-fences-holders.test.py"
+        },
+        {
+          "to": "scripts/lib/claude-home.test.py"
         }
       ]
     },
@@ -11424,8 +11530,8 @@
     },
     "mega-lander/workspaces.py#spawn-fixtures": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Spawn reaches integration, registration, native session, Git and registry readers plus withdraw_cc. known_repos/all_integration_records read private JSON. withdraw_cc delegates to the reviewed lifecycle deletion path and retains engine cleanup configuration; no land CLI sweep is invoked. Recovery integration (2026-10-11): now reaches the explicit recovery adapter/runner closure. Its normal private fixture entities have no declaration and remain off; focused recovery fixtures bind all state and fake provider inputs. No unchanged narrow-import claim covers this new closure.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Spawn reaches integration, registration, native session, Git and registry readers plus withdraw_cc. known_repos/all_integration_records read private JSON. withdraw_cc delegates to the reviewed lifecycle deletion path and retains engine cleanup configuration; no land CLI sweep is invoked. Recovery integration (2026-10-11): now reaches the explicit recovery adapter/runner closure. Its normal private fixture entities have no declaration and remain off; focused recovery fixtures bind all state and fake provider inputs. No unchanged narrow-import claim covers this new closure. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -11439,6 +11545,9 @@
         },
         {
           "to": "scripts/lib/recovery_controls.py"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -12756,7 +12865,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
-          "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
+          "sha256": "3fff9f4ef049fe67bd496593786e5faf4b3a7c55b32bad1c9b1e761e5a2a2947",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
@@ -12864,7 +12973,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
-          "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
+          "sha256": "3fff9f4ef049fe67bd496593786e5faf4b3a7c55b32bad1c9b1e761e5a2a2947",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
@@ -13141,12 +13250,15 @@
     },
     "mega-lander/workspaces.py#fixture-records": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Fixture and completion functions only: named_key/new_record/_add_workspace/save_agent/load_agent/live_workspaces plus path/JSON/id/iso helpers. Writes private registry records, reads no config and runs no lifecycle command. _add_workspace also calls _remember_repo and _bind_body_of_work, which read/write private JSON and call the bound integration_record closure.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Fixture and completion functions only: named_key/new_record/_add_workspace/save_agent/load_agent/live_workspaces plus path/JSON/id/iso helpers. Writes private registry records, reads no config and runs no lifecycle command. _add_workspace also calls _remember_repo and _bind_body_of_work, which read/write private JSON and call the bound integration_record closure. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
           "to": "mega-lander/workspaces.py#integration"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -13430,8 +13542,8 @@
     },
     "mega-lander/workspaces.py#stop-records": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Stop CLI and fixture call all_agents(True), named_key/load_agent, finished_state, live_workspaces, _chain, main_checkout, integration_target, record_integration, new_record/save_agent and _bind_body_of_work. Reviewed _chain adds only load_agent traversal. All other callees are in the bound registry/integration closures. No lifecycle operation, cleanup or config-value reader executes.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Stop CLI and fixture call all_agents(True), named_key/load_agent, finished_state, live_workspaces, _chain, main_checkout, integration_target, record_integration, new_record/save_agent and _bind_body_of_work. Reviewed _chain adds only load_agent traversal. All other callees are in the bound registry/integration closures. No lifecycle operation, cleanup or config-value reader executes. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -13442,6 +13554,9 @@
         },
         {
           "to": "mega-lander/workspaces.py#fixture-records"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -13970,8 +14085,8 @@
     },
     "mega-lander/workspaces.py#desktop-work-fixtures": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "Desktop app and fixture use the reviewed lifecycle/unit/spawn/land closure. Additional append_land_record/_trim_land_records write bounded JSON only, while land_by_another_conversation reads history and thread identity. _require_clean uses the reviewed land residue/uncommitted helpers. Retain real cleanup and CLI helper configuration conservatively.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "Desktop app and fixture use the reviewed lifecycle/unit/spawn/land closure. Additional append_land_record/_trim_land_records write bounded JSON only, while land_by_another_conversation reads history and thread identity. _require_clean uses the reviewed land residue/uncommitted helpers. Retain real cleanup and CLI helper configuration conservatively. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -13985,6 +14100,9 @@
         },
         {
           "to": "mega-lander/workspaces.py#land-record-readers"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -14010,7 +14128,7 @@
     },
     "mega-lander/app.py#desktop-work-fixtures": {
       "source": "mega-lander/app.py",
-      "sha256": "98763574473dc2d89a964e12c5cb038cfdd9cf095da822b03522e0b03f272ca2",
+      "sha256": "6f4ac2426ea524b51ebb714eb87f2fcb3c6f10460096aa08f900559a49dee8af",
       "evidence": "All call entrypoints plus observe, dispatch_intent, lock and receipt helpers run against source-bound private fixtures. Subprocesses are Git or fixed spawn.py; the test failure override is literal Python. Spawn hook sources are explicitly fixed to actual isolation guard. The module is imported, never launched as its MCP server. Retain every actual workspace/spawn configuration dependency. Renewed 2026-09-30 (hunt part 4, findings 18, 22, 23): run() exports RICHOS_OPERATION_DEADLINE to the command and, on timeout, reads ps to stop the process tree it started; prepare() releases the conversation lock while the spawn command runs and stamps its receipt with its own pid and start time; observe() saves only the receipts that changed. No configuration read is added. Renewed 2026-10-05 (Output side panel slice S2b): integrate's land witness loads scripts/lib/app-evidence.py by fixed path, runs git diff --name-only in the landed repository and appends land rows through append_land_rows under the fixture's private engine-state/evidence; a failure there is reported on stderr and never fails the land. No configuration read is added. Renewed 2026-10-06 (proto-teammate shelf slice 2): prepare reads the named teammate's definition off the fixture's private roster <entity root>/.claude/agents/, ALLOWED_MODELS from the fixture's private orchestration.config, and the duty text mega-lander/duties/<role>.md by fixed engine path, which it writes at the top of the brief; build_spawn_command passes richos-app-engine:<teammate> and that definition's model to the same fixed spawn.py. Renewed 2026-10-06 (proto-teammate shelf slice 3): role consult reads mega-lander/duties/consult.md by the same fixed path, names no repository, and passes the fixture's RICHOS_ENTITY_ROOT as the one --repo with no --dir to the same fixed spawn.py; worker_context refuses a consult's file edits; observe keeps a consult's handback or SubagentStop message on its receipt; project writes no ECS work unit for a consult. No configuration read is added. Renewed 2026-10-06 (proto-teammate shelf slice 4): the team tool lists and reads team/shelf/*.md by fixed engine path, reads the fixture's private orchestration.config ALLOWED_MODELS (the same key prepare reads) to check a definition before saving it, and writes <app data>/team/<name>.md, the parent of the fixture's RICHOS_APP_STATE, through a temporary file and a rename. No new configuration key is read. Renewed 2026-10-07 (weekly-switch handoff slice 4): prepare with continue_of checks for the app quota gate's marker <RICHOS_APP_STATE>/handoffs/<agent_id>.json under the fixture's private engine-state, reads the saved commit's message with git log, and for a marked worker runs git status, git add -A and git commit in its target workspaces, authored by that repository's own Git configuration as merge_commit already is. No configuration read is added. Renewed 2026-10-09 (zach-sonnet-shellc1): validate_shell_target loads scripts/lib/shell_c.py by fixed engine path and refuses a Bash command that wraps an inline script in bash -c, sh -c or zsh -c; the module reads only the command text, no configuration. Renewed 2026-10-09 (second review slice 4): prepare checks the scope's user_instruction.text against its sha256, starts a reviewer's brief with it and writes it beside the receipt (<id>.words, private); worker_spaces reads receipts and the canonical record read only. No new module, key or environment variable. Renewed 2026-10-15 (echo-opus-hire57): the team tool's description states the save-name rule in words; no code path, key or environment variable changed. Renewed 2026-10-18 (retired execution after app update): retirement reads the canonical workspaces agents/done records through existing workspaces.py helpers under the fixture private RICHOS_WORKSPACES_DIR; active cleanup intent cannot retire a worker. The new fixture calls the same canonical land and session lifecycle APIs used by existing integration/restart cases, then verifies actual ECS completion. No configuration key, environment variable, subprocess type or outside fixture file is added. Renewed 2026-10-21 (zach-opus-folderfiles1): prepare() adds the repository's own instruction file to the brief, read through instruction_files.py (edge added) at the starting commit resolved from the receipt, base, integration, the recorded integration branch or HEAD; no new key or environment variable. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): integrate lands with `git merge --no-ff` in the fixture repository, with that repository's own hooks (none in setUp; the two land-check cases add a literal pre-merge-commit hook and the fence installed by operator-fences.sh) and workspaces.py's _land_env, _author_runs and _chain; a refused merge is aborted with `git merge --abort`. land_lock loads scripts/lib/operator_fences.py by fixed path (workspaces.py _fence_program) and, where the fixture repository's launcher has the fence on, writes and removes the lease in the launcher's home, which the fixture keeps private. No configuration key is added. Renewed 2026-10-21 (zach-opus-landgate1, review rv-20261021T072931Z-a4453faa-ffff finding 1): where the fixture repository's launcher names a lease home other than this land's lock home (another Claude account's CLAUDE_CONFIG_DIR, RICHOS_LAND_LOCKS_DIR in the fixture), _take_fence_lease also takes the launcher's own lock file and reads its lease there, within RICHOS_LAND_LOCK_TIMEOUT; both homes are private to the fixture. No configuration key is added. Renewed 2026-10-21 (zach-opus-landgate1, review rv-20261021T082940Z-f79aeabf-fd06): the land's `git merge` and its abort run under users_git_settings, which drops GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM and passes the dropped file as GIT_CONFIG_SYSTEM, so Git reads the user's $HOME/.gitconfig and $XDG_CONFIG_HOME/git/config as from a terminal; the fixture points HOME and XDG_CONFIG_HOME at a private empty home. No configuration key is added. Renewed 2026-10-24 (echo-opus-teamreload1): the team tool's description text only; nothing read changed.",
       "keys": [
         "ALLOWED_MODELS"
@@ -14104,8 +14222,8 @@
     },
     "scripts/lib/review_watch.py": {
       "source": "scripts/lib/review_watch.py",
-      "sha256": "e71c80114ef06137177b5d5a464f37769a63d4a41b96870b1007650df609e055",
-      "evidence": "Added 2026-10-09 (second review slice 4; app.test.py's edge to it came with 8a433f70e and had no row). Module load: standard-library imports, the sibling imports stall_watch and app_review (app_paths), constants and HOST_JSON; nothing else runs. Configuration: only World (the operator monitor, review-watch.sh --config) reads SECOND_REVIEW_REPOS, as text from the file it is given, never executed; it is declared here though app.test.py's AppWorld passes no config and reads none. What app.test.py reaches: app_mode with tick sets REVIEW_WATCH_STATE_DIR, SECOND_REVIEW_STATE_DIR and RICHOS_PROJECTS_DIR under the fixture's private engine-state (app_paths); AppWorld loads mega-lander/workspaces.py by fixed path through stall_watch._load and, per private registry partition (RICHOS_WORKSPACES_DIR), calls all_agents, finished_state, _chain, integration_target and integration_for, reads the private work-receipts JSON and <id>.words beside them, runs git rev-parse/merge-base/log in the fixture's repositories and reads JSON/JSONL state, locks and the ledger under that private state. A due review runs bash on REVIEW_WATCH_SECOND_REVIEW, which the fixture sets to a literal fake script; scripts/second-review.sh is never run by the fixture. Watcher.stop_own reads its own locks, freezes its own child's process group (SIGSTOP; second-review keeps its reviewer in that group), reads the process table (ps -A -o pid=,ppid=,pgid=,stat=) for the process groups of every descendant of that group's processes, signals that group and those groups only, waits for them to be gone (killpg signal 0) and appends an attempts row. Environment read: REVIEW_WATCH_NOW, REVIEW_WATCH_STATE_DIR, REVIEW_WATCH_SECOND_REVIEW, SECOND_REVIEW_STATE_DIR, CLAUDE_CONFIG_DIR, RICHOS_PROJECTS_DIR, RICHOS_WORKSPACES_DIR (set per partition and restored), and in World only REVIEW_WATCH_TO_RICH/REVIEW_WATCH_TO_CODEX (Codex channel files, not reached by AppWorld). Renewed 2026-10-09 (echo-opus-review4c, second review of f14155545, finding 1): stop_all also stops and waits for the process groups of every descendant of a recorded review (second-review's reviewer leads its own session) and returns the reviews not seen gone, which stop_own never records as stopped; no new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4c, finding 2): spawn holds a SIGTERM or SIGHUP that arrives inside Popen until the child is in Watcher.children, and stop_own also stops every child of its own whose pid has not reached its lock, settling the lock start() was filling in; nothing new is read. Renewed 2026-10-09 (echo-opus-review4c, finding 3): owner_session and the lost-twice notice take the review's recorded session first and fall back to the registry only for an item of the same work; _who names an item at the reviewed tip only when it is the same work; nothing new is read. Renewed 2026-10-09 (echo-opus-review4d, second review of 783a8dba1, finding 1): stop_all reads the process table once more (the same ps -A -o pid=,ppid=,pgid=) before its SIGKILL, for the reviews still running after the SIGTERM grace, and signals the groups found below them too; nothing new is read. Renewed 2026-10-09 (echo-opus-review4d, finding 2): tell's repeated handover notice takes only verdicts of the item's own work and sends them through owner_session, on a told-state clock per work; in the plain monitor (run_loop sets MONITOR to the current session id) a block owned by another lead session is left to that session's monitor when its told.json under REVIEW_WATCH_STATE_DIR records a look and it holds its monitor.lock (a non-blocking flock probe, released at once). app.test.py's tick never sets MONITOR. No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4e, second review of b5ff41f02, finding 1): the process-table reads are gone (groups_below and both of its ps -A calls); stop_all signals each recorded review's process group, which now holds second-review's reviewer, waits until that whole group is gone, and sends SIGKILL again on each pass of its wait. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4e, second review of b5ff41f02, finding 2): tell reads and writes last-told.json under REVIEW_WATCH_STATE_DIR once per look, keeping in it, beside the shared `rows` cursor, a `delivered` map of review id to time (entries older than seven days dropped), written only for a verdict this monitor's own session owns or the operator host (--host-json) sends to its owner; a monitor's first look also tells its own session's undelivered verdicts of the last seven days. for_this_monitor no longer reads another session's told.json, only its monitor.lock (the same non-blocking flock probe). No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4e, the real second review of 4d99d0b7e): a verdict whose owner this watcher delivers to (its own monitor's session, or any owner for --host-json) is told whenever it is not in last-told.json's `delivered`, on any look; a monitor's verdicts stop at the BLOCK_CHARS cap, unmarked, and its cursor and the shared `rows` stop there too; the first look under this rule seeds `delivered` from the rows the shared cursor had passed. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4e, esc-20261009T054753Z-400c68b3): stop_all freezes each review's group with SIGSTOP until ps shows its processes stopped (FREEZE_SECONDS), reads the process table once, SIGKILLs the groups below it (Codex's own command groups), sends the review's group SIGTERM and SIGCONT, and freezes, reads and SIGKILLs once more whatever is left; QUIT_TERM_SECONDS is 1.0. Nothing else new is read. Renewed 2026-10-09 (echo-opus-review4e, the real second review of 6e8cc3f6d): `delivered` is no longer seeded from the old shared cursor and keeps every review id still in reviews.jsonl; an undelivered verdict no longer expires; the owner lookup for earlier rows runs only for rows whose repository and tip an attempt row or lock names with a session this watcher delivers to, or whose work a registry item of such a session has. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4f, the real second review of 0d83e456d, findings 1 and 2): the process-table walk is gone (process_table, groups_below). spawn puts RICHOS_REVIEW_OWNER, 16 random bytes in hex, in the review's environment and keeps it in the lock as `mark`; a stop reads the process table once per pass (ps -A -o pid=,uid=,pgid=,stat=), calls os.getsid on this user's processes, and reads each one's environment as it was started (sysctl KERN_PROCARGS2 through ctypes on macOS, /proc/<pid>/environ on Linux) for that exact NAME=value; members of the session the review leads count while its leader is verified alive or one of them carries the mark. It signals only those processes and, while the leader is verified, the leader's group. reconcile ends what an exited launcher left carrying the mark before settling its lock. No new configuration key; the new environment variable is one this module writes for its children, never reads from its own environment. Renewed 2026-10-09 (echo-opus-review4f, the real second review of 0d83e456d, finding 3): tell no longer writes `delivered`; it leaves the review ids of the owned verdicts it printed in PRINTED, and tick records them in last-told.json (under the look lock) only once its output was written and flushed, or, when HOST_JSON is on and the environment variable RICHOS_REVIEW_WATCH_ACKS is \"1\" (set by richos-core review_watch.rs for the operator child), only once the host acknowledges them on this process's stdin as JSON lines {\"ack\": [ids]}, read without blocking at the start of each tick. --host-json lines carry a `keys` list of those ids. New environment read: RICHOS_REVIEW_WATCH_ACKS; new input: stdin acknowledgments in the operator host child only. No new configuration key. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 1): start records `own_session` in the lock (the leader verified alive right after spawn). stop_all owns the leader's session while the leader is verified alive, or, once it has exited, while the lock records own_session or the pid is this watcher's own child, unless os.getsid shows that pid leading a session again; it stops owning it once a read finds no member left. owned_processes' values carry each process's session id (pgid, stat, sid); its unreachable leftover after the return is removed. The same ps read, os.getsid and environment reads as before; nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4h, the real second review of 16c154f5a, finding 1): owned_processes returns None when the process table cannot be read (a ps timeout or error), and stop_all keeps such a review as left with its session still owned, so stop_own never records it stopped and its lock stays for the next look; nothing new is read. Renewed 2026-10-09 (echo-opus-review4h, finding 2): run_host_loop reads and removes RICHOS_REVIEW_WATCH_HOST (the host's own pid, set by richos-core review_watch.rs) from its own environment and returns before the first look when its parent is not that pid; without it, the parent at that point. New environment read: RICHOS_REVIEW_WATCH_HOST, in the host loop only (app.test.py's tick never reaches it). No new configuration key. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 2): the NO VERDICT TWICE notice for an owner this watcher delivers to carries the key lost:<repo>:<tip> (in PRINTED and the --host-json keys) and is recorded in last-told.json's `delivered` only once its output is accepted, like a verdict; `delivered` keeps such a key while attempts.jsonl still holds that commit's two losses. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 1): app mode takes --accounts (the app's Claude account list, a path) and AppWorld hands it to each app item's second-review arguments as --accounts; the watcher itself never opens it. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4m, the real second review of 0be50ade1, finding 1): tell builds PRINTED (the delivery keys) only from the blocks its output really carries, after the monitor's BLOCK_CHARS cap; the told-state marks of the notices without a delivery key (a NOT STARTED problem, a handover reminder, a block for another lead, a failed look) are written to the session's told.json under REVIEW_WATCH_STATE_DIR only after the output was written and flushed, under the look lock; an owned NOT CONVERGING notice carries the delivery key nc:<work>:<finding> and last-told.json's `delivered` keeps such a key seven days. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4m, merging main 2ec9241b1, the review land gate): the module also imports its sibling operator_fences (as F) at load; World reads SECOND_REVIEW_REPOS only through F.review_repos, which sources the given config in a clean bash (so the config is now executed by that reader, not parsed as text here), and matches repositories with F.review_listed; an unreadable value is told once per session (told_unreadable_repos in the session's told.json). app.test.py's AppWorld passes no config and reaches none of this. No new environment variable. Renewed 2026-10-09 (echo-opus-review4m, after that merge): AppWorld sets repos_error to \"\" beside its repos, which main's Watcher.look reads first; nothing new is read. Renewed 2026-10-09 (echo-opus-codexswitch1, the Codex review switch, round 20.2): app mode takes --codex-reviews, the app's codex-reviews.json, and Item.args reads it as JSON when an app review starts (app_reviewer: {\"on\": true} is --reviewer auto, anything else or no file is --reviewer claude); app.test.py passes none, so it reaches nothing new. No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-codexswitch1, merging main bb0e97920): main's change (the `blocks` field: not_converging compares rechecks repository by repository through _same_repo, by repo_id or real path, and counts only still-open findings that block) and the Codex switch above are both in the file; nothing new is read. Recovery integration (2026-10-11): now reaches the explicit recovery adapter/runner closure. Its normal private fixture entities have no declaration and remain off; focused recovery fixtures bind all state and fake provider inputs. No unchanged narrow-import claim covers this new closure. Renewed 2026-10-24 (zach-opus-oldlost1, narrowed by zach-opus-oldlost2): the NO VERDICT TWICE notice is not told for a commit already on its repository's main (git merge-base --is-ancestor <tip> refs/heads/main in the attempt's recorded repository, the same git as before); one shown for another session's lead is still marked only in the session's told.json, as before. Nothing new is read: no configuration key or environment variable.",
+      "sha256": "68d646fb682fe42ddfb95c4a911099caa6de5dee5fd6f67d2e9354ff56ddfaab",
+      "evidence": "Added 2026-10-09 (second review slice 4; app.test.py's edge to it came with 8a433f70e and had no row). Module load: standard-library imports, the sibling imports stall_watch and app_review (app_paths), constants and HOST_JSON; nothing else runs. Configuration: only World (the operator monitor, review-watch.sh --config) reads SECOND_REVIEW_REPOS, as text from the file it is given, never executed; it is declared here though app.test.py's AppWorld passes no config and reads none. What app.test.py reaches: app_mode with tick sets REVIEW_WATCH_STATE_DIR, SECOND_REVIEW_STATE_DIR and RICHOS_PROJECTS_DIR under the fixture's private engine-state (app_paths); AppWorld loads mega-lander/workspaces.py by fixed path through stall_watch._load and, per private registry partition (RICHOS_WORKSPACES_DIR), calls all_agents, finished_state, _chain, integration_target and integration_for, reads the private work-receipts JSON and <id>.words beside them, runs git rev-parse/merge-base/log in the fixture's repositories and reads JSON/JSONL state, locks and the ledger under that private state. A due review runs bash on REVIEW_WATCH_SECOND_REVIEW, which the fixture sets to a literal fake script; scripts/second-review.sh is never run by the fixture. Watcher.stop_own reads its own locks, freezes its own child's process group (SIGSTOP; second-review keeps its reviewer in that group), reads the process table (ps -A -o pid=,ppid=,pgid=,stat=) for the process groups of every descendant of that group's processes, signals that group and those groups only, waits for them to be gone (killpg signal 0) and appends an attempts row. Environment read: REVIEW_WATCH_NOW, REVIEW_WATCH_STATE_DIR, REVIEW_WATCH_SECOND_REVIEW, SECOND_REVIEW_STATE_DIR, CLAUDE_CONFIG_DIR, RICHOS_PROJECTS_DIR, RICHOS_WORKSPACES_DIR (set per partition and restored), and in World only REVIEW_WATCH_TO_RICH/REVIEW_WATCH_TO_CODEX (Codex channel files, not reached by AppWorld). Renewed 2026-10-09 (echo-opus-review4c, second review of f14155545, finding 1): stop_all also stops and waits for the process groups of every descendant of a recorded review (second-review's reviewer leads its own session) and returns the reviews not seen gone, which stop_own never records as stopped; no new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4c, finding 2): spawn holds a SIGTERM or SIGHUP that arrives inside Popen until the child is in Watcher.children, and stop_own also stops every child of its own whose pid has not reached its lock, settling the lock start() was filling in; nothing new is read. Renewed 2026-10-09 (echo-opus-review4c, finding 3): owner_session and the lost-twice notice take the review's recorded session first and fall back to the registry only for an item of the same work; _who names an item at the reviewed tip only when it is the same work; nothing new is read. Renewed 2026-10-09 (echo-opus-review4d, second review of 783a8dba1, finding 1): stop_all reads the process table once more (the same ps -A -o pid=,ppid=,pgid=) before its SIGKILL, for the reviews still running after the SIGTERM grace, and signals the groups found below them too; nothing new is read. Renewed 2026-10-09 (echo-opus-review4d, finding 2): tell's repeated handover notice takes only verdicts of the item's own work and sends them through owner_session, on a told-state clock per work; in the plain monitor (run_loop sets MONITOR to the current session id) a block owned by another lead session is left to that session's monitor when its told.json under REVIEW_WATCH_STATE_DIR records a look and it holds its monitor.lock (a non-blocking flock probe, released at once). app.test.py's tick never sets MONITOR. No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4e, second review of b5ff41f02, finding 1): the process-table reads are gone (groups_below and both of its ps -A calls); stop_all signals each recorded review's process group, which now holds second-review's reviewer, waits until that whole group is gone, and sends SIGKILL again on each pass of its wait. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4e, second review of b5ff41f02, finding 2): tell reads and writes last-told.json under REVIEW_WATCH_STATE_DIR once per look, keeping in it, beside the shared `rows` cursor, a `delivered` map of review id to time (entries older than seven days dropped), written only for a verdict this monitor's own session owns or the operator host (--host-json) sends to its owner; a monitor's first look also tells its own session's undelivered verdicts of the last seven days. for_this_monitor no longer reads another session's told.json, only its monitor.lock (the same non-blocking flock probe). No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4e, the real second review of 4d99d0b7e): a verdict whose owner this watcher delivers to (its own monitor's session, or any owner for --host-json) is told whenever it is not in last-told.json's `delivered`, on any look; a monitor's verdicts stop at the BLOCK_CHARS cap, unmarked, and its cursor and the shared `rows` stop there too; the first look under this rule seeds `delivered` from the rows the shared cursor had passed. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4e, esc-20261009T054753Z-400c68b3): stop_all freezes each review's group with SIGSTOP until ps shows its processes stopped (FREEZE_SECONDS), reads the process table once, SIGKILLs the groups below it (Codex's own command groups), sends the review's group SIGTERM and SIGCONT, and freezes, reads and SIGKILLs once more whatever is left; QUIT_TERM_SECONDS is 1.0. Nothing else new is read. Renewed 2026-10-09 (echo-opus-review4e, the real second review of 6e8cc3f6d): `delivered` is no longer seeded from the old shared cursor and keeps every review id still in reviews.jsonl; an undelivered verdict no longer expires; the owner lookup for earlier rows runs only for rows whose repository and tip an attempt row or lock names with a session this watcher delivers to, or whose work a registry item of such a session has. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4f, the real second review of 0d83e456d, findings 1 and 2): the process-table walk is gone (process_table, groups_below). spawn puts RICHOS_REVIEW_OWNER, 16 random bytes in hex, in the review's environment and keeps it in the lock as `mark`; a stop reads the process table once per pass (ps -A -o pid=,uid=,pgid=,stat=), calls os.getsid on this user's processes, and reads each one's environment as it was started (sysctl KERN_PROCARGS2 through ctypes on macOS, /proc/<pid>/environ on Linux) for that exact NAME=value; members of the session the review leads count while its leader is verified alive or one of them carries the mark. It signals only those processes and, while the leader is verified, the leader's group. reconcile ends what an exited launcher left carrying the mark before settling its lock. No new configuration key; the new environment variable is one this module writes for its children, never reads from its own environment. Renewed 2026-10-09 (echo-opus-review4f, the real second review of 0d83e456d, finding 3): tell no longer writes `delivered`; it leaves the review ids of the owned verdicts it printed in PRINTED, and tick records them in last-told.json (under the look lock) only once its output was written and flushed, or, when HOST_JSON is on and the environment variable RICHOS_REVIEW_WATCH_ACKS is \"1\" (set by richos-core review_watch.rs for the operator child), only once the host acknowledges them on this process's stdin as JSON lines {\"ack\": [ids]}, read without blocking at the start of each tick. --host-json lines carry a `keys` list of those ids. New environment read: RICHOS_REVIEW_WATCH_ACKS; new input: stdin acknowledgments in the operator host child only. No new configuration key. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 1): start records `own_session` in the lock (the leader verified alive right after spawn). stop_all owns the leader's session while the leader is verified alive, or, once it has exited, while the lock records own_session or the pid is this watcher's own child, unless os.getsid shows that pid leading a session again; it stops owning it once a read finds no member left. owned_processes' values carry each process's session id (pgid, stat, sid); its unreachable leftover after the return is removed. The same ps read, os.getsid and environment reads as before; nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4h, the real second review of 16c154f5a, finding 1): owned_processes returns None when the process table cannot be read (a ps timeout or error), and stop_all keeps such a review as left with its session still owned, so stop_own never records it stopped and its lock stays for the next look; nothing new is read. Renewed 2026-10-09 (echo-opus-review4h, finding 2): run_host_loop reads and removes RICHOS_REVIEW_WATCH_HOST (the host's own pid, set by richos-core review_watch.rs) from its own environment and returns before the first look when its parent is not that pid; without it, the parent at that point. New environment read: RICHOS_REVIEW_WATCH_HOST, in the host loop only (app.test.py's tick never reaches it). No new configuration key. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 2): the NO VERDICT TWICE notice for an owner this watcher delivers to carries the key lost:<repo>:<tip> (in PRINTED and the --host-json keys) and is recorded in last-told.json's `delivered` only once its output is accepted, like a verdict; `delivered` keeps such a key while attempts.jsonl still holds that commit's two losses. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 1): app mode takes --accounts (the app's Claude account list, a path) and AppWorld hands it to each app item's second-review arguments as --accounts; the watcher itself never opens it. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4m, the real second review of 0be50ade1, finding 1): tell builds PRINTED (the delivery keys) only from the blocks its output really carries, after the monitor's BLOCK_CHARS cap; the told-state marks of the notices without a delivery key (a NOT STARTED problem, a handover reminder, a block for another lead, a failed look) are written to the session's told.json under REVIEW_WATCH_STATE_DIR only after the output was written and flushed, under the look lock; an owned NOT CONVERGING notice carries the delivery key nc:<work>:<finding> and last-told.json's `delivered` keeps such a key seven days. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4m, merging main 2ec9241b1, the review land gate): the module also imports its sibling operator_fences (as F) at load; World reads SECOND_REVIEW_REPOS only through F.review_repos, which sources the given config in a clean bash (so the config is now executed by that reader, not parsed as text here), and matches repositories with F.review_listed; an unreadable value is told once per session (told_unreadable_repos in the session's told.json). app.test.py's AppWorld passes no config and reaches none of this. No new environment variable. Renewed 2026-10-09 (echo-opus-review4m, after that merge): AppWorld sets repos_error to \"\" beside its repos, which main's Watcher.look reads first; nothing new is read. Renewed 2026-10-09 (echo-opus-codexswitch1, the Codex review switch, round 20.2): app mode takes --codex-reviews, the app's codex-reviews.json, and Item.args reads it as JSON when an app review starts (app_reviewer: {\"on\": true} is --reviewer auto, anything else or no file is --reviewer claude); app.test.py passes none, so it reaches nothing new. No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-codexswitch1, merging main bb0e97920): main's change (the `blocks` field: not_converging compares rechecks repository by repository through _same_repo, by repo_id or real path, and counts only still-open findings that block) and the Codex switch above are both in the file; nothing new is read. Recovery integration (2026-10-11): now reaches the explicit recovery adapter/runner closure. Its normal private fixture entities have no declaration and remain off; focused recovery fixtures bind all state and fake provider inputs. No unchanged narrow-import claim covers this new closure. Renewed 2026-10-24 (zach-opus-oldlost1, narrowed by zach-opus-oldlost2): the NO VERDICT TWICE notice is not told for a commit already on its repository's main (git merge-base --is-ancestor <tip> refs/heads/main in the attempt's recorded repository, the same git as before); one shown for another session's lead is still marked only in the session's told.json, as before. Nothing new is read: no configuration key or environment variable. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR. review_ledger now returns operator_fences.review_ledger_default().",
       "keys": [
         "SECOND_REVIEW_REPOS"
       ],
@@ -14124,6 +14242,9 @@
         },
         {
           "to": "scripts/lib/recovery_events.py"
+        },
+        {
+          "to": "scripts/lib/operator_fences.py#recovery-readers"
         }
       ]
     },
@@ -15045,12 +15166,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/engine/scripts/lib/operator_fences.py",
-          "sha256": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
           "sha256": "b435fa6c2e68f6cac2b37b3c7eebdbe85d23f660d83d9fb4ea0d74af64817ae2",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
@@ -15059,6 +15174,12 @@
           "root": "repository",
           "path": "richos/mobile/native-android/bin/randroid",
           "sha256": "b49476409dd1c2aab9f574789e63ee541bdca2946e426c543bbe9a412f7fd064",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/operator_fences.py",
+          "sha256": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         }
       ]
@@ -15711,7 +15832,7 @@
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
           "path": "mega-lander/workspaces.py",
-          "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+          "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         },
         {
@@ -15783,7 +15904,7 @@
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
           "path": "mega-lander/workspaces.py",
-          "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+          "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         }
       ]
@@ -15903,10 +16024,14 @@
     },
     "mega-lander/workspaces.py#wait-fixture": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "record-canary.test.sh imports the fixed module and calls save_agent then wait(started) on its own literal record. The reachable Lock, _resolve_record, platform binding/end lookup, path, JSON and event helpers use sandboxed registry/project records. No QA, lifecycle command, integration target or orchestration configuration is reached.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "record-canary.test.sh imports the fixed module and calls save_agent then wait(started) on its own literal record. The reachable Lock, _resolve_record, platform binding/end lookup, path, JSON and event helpers use sandboxed registry/project records. No QA, lifecycle command, integration target or orchestration configuration is reached. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "mega-lander/tests/app.test.py#pause-message-case": {
       "source": "mega-lander/tests/app.test.py",
@@ -15924,7 +16049,7 @@
     },
     "mega-lander/app.py#pause-message-case": {
       "source": "mega-lander/app.py",
-      "sha256": "98763574473dc2d89a964e12c5cb038cfdd9cf095da822b03522e0b03f272ca2",
+      "sha256": "6f4ac2426ea524b51ebb714eb87f2fcb3c6f10460096aa08f900559a49dee8af",
       "evidence": "Reviewed 2026-09-30, the path app.test.py's pause-message case reaches: module load (ecs_core, the ECS adapter and workspaces.py loaded by fixed path); ECS bind, checkpoint, inspect and seats against the private store; workspaces.record_session_start (session registry and platform session JSON, git rev-parse, events); read_scope; pause_message, which renders pause_protocol; and inspect over no receipts, whose reconcile_seats retains this conversation's own seat. prepare, integrate, complete, spawn and land are not reached, so none of their model, scratch, app-instance or QA settings is read, and no orchestration.config is read. Renewed 2026-10-11 (review rv-20261011T055437Z-206908c9-000f): pause_message and the new resume_message call pause_protocol.issue, which renders the message and then imports mega-lander/workspaces.py by fixed path and calls current_session and pause(control=True) or resume; for an unregistered name (the app.test.py case) they stop at the registry lookup in the fixture's private RICHOS_WORKSPACES_DIR, and for a registered one (workspace-pause-hold.test.sh H11) they reach the workspaces.py#lifecycle-fixtures closure that suite already declares. No configuration read is added. Renewed 2026-10-15 (echo-opus-hire57): the team tool's description text only; nothing read changed. Renewed 2026-10-18: retired-execution reconciliation and two desktop dispatch cases changed elsewhere in these files; this selected fixture closure and setUp are unchanged. Renewed 2026-10-21 (zach-opus-folderfiles1): module load now also loads instruction_files.py by fixed path (edge added); prepare changed, which this case does not reach. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): integrate and land_lock changed; this case reaches neither. Nothing read changed. Renewed 2026-10-21 (zach-opus-landgate1, review finding 1): _take_fence_lease changed; this case does not reach it. Renewed 2026-10-21 (zach-opus-landgate1, review f79aeabf finding 1): land_merge's Git environment changed; this closure does not reach it. Renewed 2026-10-24 (echo-opus-teamreload1): the team tool's description text only; nothing read changed.",
       "keys": [],
       "edges": [
@@ -16170,6 +16295,9 @@
         },
         {
           "to": "scripts/lib/operator-fences-holders.test.py"
+        },
+        {
+          "to": "scripts/lib/claude-home.test.py"
         }
       ]
     },
@@ -16261,8 +16389,8 @@
     },
     "scripts/hooks/deliver-review-verdict.sh": {
       "source": "scripts/hooks/deliver-review-verdict.sh",
-      "sha256": "a4a67d345e9ba04a100a8000f441053ad85a548d5ef95c7ab94a75d00f1efa75",
-      "evidence": "Full wrapper reviewed (2026-10-09): a substring test of the payload for agent_id, a presence test of the review ledger from SECOND_REVIEW_STATE_DIR/CLAUDE_CONFIG_DIR, then the fixed Python helper; exit 0 on every path. No configuration key is read.",
+      "sha256": "02c9e480f815ee7616268031914cd4fc3e92dc562f0372e18836a706e81237cc",
+      "evidence": "Full wrapper reviewed (2026-10-09): a substring test of the payload for agent_id, a presence test of the review ledger from SECOND_REVIEW_STATE_DIR/CLAUDE_CONFIG_DIR, then the fixed Python helper; exit 0 on every path. No configuration key is read. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR. The ledger presence test now reads RICHOS_CLAUDE_HOME before CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -16272,12 +16400,15 @@
     },
     "scripts/lib/review_delivery.py": {
       "source": "scripts/lib/review_delivery.py",
-      "sha256": "ca416390f374e360843ea0d1ad5c1f9917e2dddfca8dc8e55142d052c27c5116",
-      "evidence": "Full program reviewed (2026-10-09): parses the payload's agent_id, reads second-review's ledger and verdict records as JSON data, loads the fixed workspaces.py for key_for_id, load_agent and _chain (registry reads only), creates one marker file per teammate and review under the review-watch state directory, and prints additionalContext. Nothing is executed, no configuration key is read, every outcome is exit 0. Renewed 2026-10-09 (review rv-20261009T031207Z-ba444a8a-607a, finding 2): each verdict is compared with the registered_at of the chain record whose work it is on, read from the same registry records; no new read, import or key.",
+      "sha256": "af27352a96deabd4927cfe2e938f5d12b9e99d18161a4ac90640fe5ed33c8628",
+      "evidence": "Full program reviewed (2026-10-09): parses the payload's agent_id, reads second-review's ledger and verdict records as JSON data, loads the fixed workspaces.py for key_for_id, load_agent and _chain (registry reads only), creates one marker file per teammate and review under the review-watch state directory, and prints additionalContext. Nothing is executed, no configuration key is read, every outcome is exit 0. Renewed 2026-10-09 (review rv-20261009T031207Z-ba444a8a-607a, finding 2): each verdict is compared with the registered_at of the chain record whose work it is on, read from the same registry records; no new read, import or key. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
           "to": "mega-lander/workspaces.py#ledger-lookup"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -16338,8 +16469,8 @@
     },
     "scripts/lib/second_review.py": {
       "source": "scripts/lib/second_review.py",
-      "sha256": "623433f61e4ea7d7e5e1b140e4f2a8dc5106c4a14d7248a3a605b12d945af623",
-      "evidence": "Reviewed writer and outcome adapter: source execution claims, private JSONL/full verdict records and recovery claims. Test reviewers are literal fake executables with fixed quota/CPU controls. No production provider is invoked by the fixtures. Original authority is retained as data, not an executable configuration. Recovery-model fixtures reach its module constants, bounded subprocess runner, private quota-command override and literal provider decoder; they do not enter the review CLI or workspace lifecycle. The lead's follow-up ruling (--follow-up, --reopen) appends to the private review-deferrals.jsonl and review-follow-ups.jsonl beside the ledger, and reads RICHOS_AGENT_OWNER and the caller's Claude session record through operator_fences.claude_session; no orchestration setting. Renewed 2026-10-21 (zach-opus-folderfiles1): the input's repository instructions come from instruction_files.py (edge added), read at the reviewed tip in the reviewed repository through the same call as prepare; AGENTS.md left RULE_FILES. Renewed 2026-10-23 (zach-opus-reviewfix1): --follow-up keeps only later reviews of the finding's tip or a commit built on it, through operator_fences._own_history (git merge-base in the ledger row's own repository); no new key, setting or file.",
+      "sha256": "3b05f2c7adf81345a2f4b2ed8b66924856c2d810e7761eb30225cdbe1a7c6d98",
+      "evidence": "Reviewed writer and outcome adapter: source execution claims, private JSONL/full verdict records and recovery claims. Test reviewers are literal fake executables with fixed quota/CPU controls. No production provider is invoked by the fixtures. Original authority is retained as data, not an executable configuration. Recovery-model fixtures reach its module constants, bounded subprocess runner, private quota-command override and literal provider decoder; they do not enter the review CLI or workspace lifecycle. The lead's follow-up ruling (--follow-up, --reopen) appends to the private review-deferrals.jsonl and review-follow-ups.jsonl beside the ledger, and reads RICHOS_AGENT_OWNER and the caller's Claude session record through operator_fences.claude_session; no orchestration setting. Renewed 2026-10-21 (zach-opus-folderfiles1): the input's repository instructions come from instruction_files.py (edge added), read at the reviewed tip in the reviewed repository through the same call as prepare; AGENTS.md left RULE_FILES. Renewed 2026-10-23 (zach-opus-reviewfix1): --follow-up keeps only later reviews of the finding's tip or a commit built on it, through operator_fences._own_history (git merge-base in the ledger row's own repository); no new key, setting or file. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [
         {
@@ -16350,6 +16481,9 @@
         },
         {
           "to": "scripts/lib/instruction_files.py"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -16369,10 +16503,14 @@
     },
     "scripts/lib/operator_fences.py#recovery-readers": {
       "source": "scripts/lib/operator_fences.py",
-      "sha256": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-      "evidence": "Recovery reaches repository Git identity, review JSON/JSONL readers, atomic file persistence and process-generation observation. These standard-library/Git helpers do not invoke fence CLI dispatch, workspace land, lease acquisition or model consultation. No orchestration setting is read in this closure.",
+      "sha256": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
+      "evidence": "Recovery reaches repository Git identity, review JSON/JSONL readers, atomic file persistence and process-generation observation. These standard-library/Git helpers do not invoke fence CLI dispatch, workspace land, lease acquisition or model consultation. No orchestration setting is read in this closure. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": [],
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ],
       "region": [
         "def review_repo_resolved(repo):",
         "def route_refused_review("
@@ -16380,10 +16518,14 @@
     },
     "mega-lander/workspaces.py#recovery-model-records": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "The advisor snapshot reads all_agents, recovery_chain, recovery_work_key, load_agent, platform_agent_transcript, finished_state and git directly. These metadata readers do not run integration_target, registration, workspace cleanup or a land. Explicit fixture state roots supply all native identities. No orchestration configuration key is read by this closure. Full source identity is bound even though unrelated commands are not reached.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "The advisor snapshot reads all_agents, recovery_chain, recovery_work_key, load_agent, platform_agent_transcript, finished_state and git directly. These metadata readers do not run integration_target, registration, workspace cleanup or a land. Explicit fixture state roots supply all native identities. No orchestration configuration key is read by this closure. Full source identity is bound even though unrelated commands are not reached. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": [],
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ],
       "literal_keys": {
         "ALLOWED_MODELS": "Unreached spawn/creation validation; this snapshot does not register an assignment."
       }
@@ -16397,8 +16539,8 @@
     },
     "scripts/lib/machine_settings.py": {
       "source": "scripts/lib/machine_settings.py",
-      "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
-      "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority. Renewed 2026-10-13: restore the existing RICHOS_NATIVE_ANDROID_CACHE key and derive RANDROID_CACHE when absent, preserving explicit current-name precedence and resolved snapshots. Fixture-supplied selectors and environments remain the input boundary; no new process or file reader.",
+      "sha256": "3fff9f4ef049fe67bd496593786e5faf4b3a7c55b32bad1c9b1e761e5a2a2947",
+      "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority. Renewed 2026-10-13: restore the existing RICHOS_NATIVE_ANDROID_CACHE key and derive RANDROID_CACHE when absent, preserving explicit current-name precedence and resolved snapshots. Fixture-supplied selectors and environments remain the input boundary; no new process or file reader. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": []
     },
@@ -16483,10 +16625,14 @@
     },
     "mega-lander/workspaces.py#holds": {
       "source": "mega-lander/workspaces.py",
-      "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-      "evidence": "hold(), holds(), hold_end(), hold_end_state(), hold_lines(), release() and their helpers (_resolve_record, _ceo_items, _reviews_by_tip, _commit_time, finished_state, session_state): the bound registry's agents and holds/*.json, Git tips and commit times of recorded workspaces, second-review's reviews.jsonl under SECOND_REVIEW_STATE_DIR or CLAUDE_CONFIG_DIR/state, the TODO_VIEW page of a known repository's .ceo-todos or RICHOS_CEO_TODOS_VIEW, and RICHOS_APP_ENTITY/THREAD and RICHOS_HOLD_REPORT_SECONDS from the environment. No orchestration.config key and no execution edge.",
+      "sha256": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
+      "evidence": "hold(), holds(), hold_end(), hold_end_state(), hold_lines(), release() and their helpers (_resolve_record, _ceo_items, _reviews_by_tip, _commit_time, finished_state, session_state): the bound registry's agents and holds/*.json, Git tips and commit times of recorded workspaces, second-review's reviews.jsonl under SECOND_REVIEW_STATE_DIR or CLAUDE_CONFIG_DIR/state, the TODO_VIEW page of a known repository's .ceo-todos or RICHOS_CEO_TODOS_VIEW, and RICHOS_APP_ENTITY/THREAD and RICHOS_HOLD_REPORT_SECONDS from the environment. No orchestration.config key and no execution edge. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "scripts/lib/inflight-gaps.test.sh": {
       "source": "scripts/lib/inflight-gaps.test.sh",
@@ -16949,7 +17095,7 @@
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b"
@@ -16992,7 +17138,7 @@
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b"
@@ -17032,7 +17178,7 @@
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
@@ -17069,7 +17215,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "scripts/hooks/workspace-lifecycle.sh": "e8a6bd193fe910eb22f76da44c81b04feaa04e2a7429b055823ea8efc8df72e8",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
@@ -17092,7 +17238,7 @@
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/record-canary.sh": "3f96edb4e8fb4441a53ea05047eeb0ed4ac63aeeb09fb0407ca8278811cf1ca4",
         "scripts/hooks/session-start-ceo-ask.sh": "5880b3f3a494bd25f9320b6786efe37cb357edde9406974e6b064ee274744b26",
         "scripts/lib/ceo-asks.sh": "ab105fa8aa606262613b1f8113f3d137e26d8e4802d5e008f017d59b123807f6",
@@ -17127,7 +17273,7 @@
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
@@ -17145,7 +17291,7 @@
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
@@ -17193,8 +17339,8 @@
         "ass-kicker/tests/stated-actions.mutation.sh": "fb2b1f726c2945c158083ab2fc63a6987bf8427a35d1be7aa786ffb0da70e0f1",
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/tests/workspaces-e2e.test.sh": "c8790b5c0761f1c5c7f25faa5b6192f8c236554c6a975c86aa2fe2df0f961a30",
-        "mega-lander/tests/workspaces.test.py": "b0bbefb5a3a8b5df1c8795291309c0defda0ea3549e1c1149ddd7a6ada618c36",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/tests/workspaces.test.py": "c3ab53171de82e672c2508a5d7ad8d356abacdc87fc835a3f8ce483f59d93be0",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "mega-lander/workspaces.sh": "f3d8f6fd22b225d83efa1debf5336de5076c6531a48690802000e5f573f80744",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/claim-roles.mutation.sh": "73f0f9a1974cd17863539183827f795c5d343ff418b6acca7e98ca7242b811b2",
@@ -17271,8 +17417,8 @@
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-        "scripts/lib/operator_fences_admin.py": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
+        "scripts/lib/operator_fences_admin.py": "0ef83bd105b4f47a851050f15cf8ef158ba33e46e2aca9e9cc2ffbefd7b98187",
         "scripts/lib/pause_protocol.py": "5c3b0c82d7025af9a01a7d79fe001d0cba3c6f95bd96301dc5b8c1feb66cafbe",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
@@ -17491,7 +17637,7 @@
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
@@ -17617,7 +17763,7 @@
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
@@ -17656,7 +17802,7 @@
         "scripts/hooks/guard-vendoring-commits.sh": "2f7d9f2973134d1d25bf9c8f8b83e803389d02c64e28bfe15acc6b2ce2c19f32",
         "scripts/lib/vendored-material.sh": "0463fd1ec609cd013e07e5977e3b8bd4affcbe3d4b603bb9d2e54a2d664bffdc",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/hooks/scan-secrets.sh": "fd488d5b07748fd41c773c80ec133eed526869534f4f1324c847a33701ae1ab1",
         "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
@@ -17682,7 +17828,7 @@
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/stop-session-recovery.py": "7f73be10acfee2d62a9f05115a20d8c64bfd63764a4fffb084675ca14a4d7ed2",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/hooks/guard-ci-turn-gate.sh": "d5982f5f16da84d753d275669128b20c453782674189d9b8b2b7ac0dae39c324",
         "scripts/hooks/guard-failure-type-answer.sh": "9178339b1342a751b3de2fa743b2d65df019af3eb4af10e7447a82ad805895aa",
         "scripts/hooks/guard-idle-land.sh": "c65ff6beb940c15ff20cf5a7e54e2f8453c4f6594d2ed2a8d32cda662dc3efae",
@@ -17731,7 +17877,7 @@
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b"
@@ -17760,7 +17906,7 @@
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
@@ -17800,7 +17946,7 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
         "scripts/lib/publication-boundary-cache.test.py": "26e050d865dcc217075d8882f3b0b969c65124b038d9606bab945416b56a7d34",
-        "scripts/lib/machine_settings.py": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e"
+        "scripts/lib/machine_settings.py": "3fff9f4ef049fe67bd496593786e5faf4b3a7c55b32bad1c9b1e761e5a2a2947"
       },
       "evidence": "Only the two publication guard registrations are queried on plugin and seated surfaces. Probe and installer source are assertion data. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [
@@ -17827,12 +17973,12 @@
       ],
       "sources": {
         "scripts/hooks/operator-leads.test.sh": "9097e525483d7c88c0aade29c3f18f5266c0b590709195d8bd2abd0f3310ba35",
-        "scripts/lib/operator-fences-fixture.sh": "cb872b1fb06d8d090feb2b06dc9895147e88efff741d6d3187b2a44e7a6c60af",
+        "scripts/lib/operator-fences-fixture.sh": "07a6030882a7731a09f7a213c473b3a29ae785c6ff6311e4eb97ba3326d48d48",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/operator-fences.sh": "b14c4294844b4bc9dade5e32d9642824a92b2c7690d01c2c8b6e914e893dae0c",
-        "scripts/lib/operator_fences_admin.py": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "scripts/lib/operator_fences_admin.py": "0ef83bd105b4f47a851050f15cf8ef158ba33e46e2aca9e9cc2ffbefd7b98187",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
         "scripts/lib/operator-fence-launcher.sh": "8451a5fad996eec1caf6bf20d0d71eb702db04d8cc977db566912c752b19575a",
         "scripts/land-lease.sh": "a3a621ff827d5d60c4a127e9cb155bb03a78e9fed842d34acc727a39669e84b2",
@@ -17961,7 +18107,7 @@
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/stop-session-recovery.py": "7f73be10acfee2d62a9f05115a20d8c64bfd63764a4fffb084675ca14a4d7ed2",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/hooks/guard-agent-state-claims.py": "341d0223962f9ccfa6298b3d6982dc55b5f3ea19ec5ea4ba1deb162380811ab5",
         "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
         "scripts/hooks/guard-brief-scope.sh": "d62b66830b5f8665bb7492b2278ad7261f3279401142b41296ab1d2ada78c9e3",
@@ -17991,7 +18137,7 @@
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
@@ -18129,7 +18275,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/hooks/guard-model-ceiling.sh": "88b1802d9021e8fbcb2fc16881c70f6fbdc7c5313b0c61e1535f20a4d8e2e26f",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
@@ -18161,8 +18307,8 @@
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/operator-fences.sh": "b14c4294844b4bc9dade5e32d9642824a92b2c7690d01c2c8b6e914e893dae0c",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-        "scripts/lib/operator_fences_admin.py": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
+        "scripts/lib/operator_fences_admin.py": "0ef83bd105b4f47a851050f15cf8ef158ba33e46e2aca9e9cc2ffbefd7b98187",
         "scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "scripts/lib/entrypoints.sh": "ca4d90b9bc460ead00bc7e4cd85c523abad1b0d6077408dbc7c27393f1df8659",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
@@ -18188,7 +18334,7 @@
         "ass-kicker/brief-provenance.py": "dc8b2c55174fd815580afef91583582ffc66d4ce153aa3d3356f361e3257f005",
         "ass-kicker/brief-scope.py": "d6910b6891d7461b98d51b234343a004834e6fd4a3c52e5dc530b6539cf376a9",
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
@@ -18218,7 +18364,7 @@
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/tests/workspace-spec-fourteen.mutation.sh": "00d7a31ba4b4b9f240441b5ea5feb4365338dfea78144fbf68d5b3570eb6ed8c",
         "mega-lander/tests/workspace-spec-fourteen.test.sh": "a97d1ab97e123b9bbb1776e7d0253fc35115170d0160d9cffa6a2f4c95ad2523",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "mega-lander/workspaces.sh": "f3d8f6fd22b225d83efa1debf5336de5076c6531a48690802000e5f573f80744",
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
         "scripts/hooks/guard-unresolved-claims.py": "5b482a224e00c2aa6010fbf2e29947e60277e2d74458fab7bb56117665abb2dc",
@@ -18236,7 +18382,7 @@
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/pause_protocol.py": "5c3b0c82d7025af9a01a7d79fe001d0cba3c6f95bd96301dc5b8c1feb66cafbe",
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
@@ -18266,7 +18412,7 @@
       "sources": {
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/tests/workspaces-e2e.test.sh": "c8790b5c0761f1c5c7f25faa5b6192f8c236554c6a975c86aa2fe2df0f961a30",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "mega-lander/workspaces.sh": "f3d8f6fd22b225d83efa1debf5336de5076c6531a48690802000e5f573f80744",
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
         "scripts/hooks/guard-workspace-gate.sh": "a4771af1be31ff8cb5d6ef3fe4e9e3b898154c30c269fa161aba320a229c18c8",
@@ -18300,7 +18446,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/hooks/guard-owned-state.sh": "2d886379c7d0b4335f7ba7942513af0da48613ad2062bb0fdc63397f8a64a563",
         "scripts/hooks/owned-state.mutation.sh": "4f81a9cb4d1671fa021327648e7194f1a8778b0e87378c94903d8001025eb0b2",
         "scripts/owned-state.sh": "313a26b975baf1005c6a86beaa03cc7910481b9e1d6754d45a0e4206b5b001a0",
@@ -18347,7 +18493,7 @@
         "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "scripts/hooks/ceo-todos.test.sh": "456edf169779e0b78ae8d3ffba553ded91e72bb0ff61573fccd1ec80ed648cc6",
         "scripts/ceo-todos-render.sh": "63b00d5fde2eb129df925749ae9967521d9251936f5f19db627bded6049fddc3",
@@ -18372,7 +18518,7 @@
     "scripts/hooks/guard-resume-isolation.test.sh": {
       "commands": [],
       "sources": {
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
         "scripts/hooks/guard-resume-isolation.test.sh": "2fc190fc539a183b423ac8ba7a22a23c56d6f8cd289aa341a67a7d6fd8f39a1d",
         "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
@@ -18412,7 +18558,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/hooks/guard-model-ceiling.sh": "88b1802d9021e8fbcb2fc16881c70f6fbdc7c5313b0c61e1535f20a4d8e2e26f",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
@@ -18444,8 +18590,8 @@
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/operator-fences.sh": "b14c4294844b4bc9dade5e32d9642824a92b2c7690d01c2c8b6e914e893dae0c",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-        "scripts/lib/operator_fences_admin.py": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
+        "scripts/lib/operator_fences_admin.py": "0ef83bd105b4f47a851050f15cf8ef158ba33e46e2aca9e9cc2ffbefd7b98187",
         "scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "scripts/lib/entrypoints.sh": "ca4d90b9bc460ead00bc7e4cd85c523abad1b0d6077408dbc7c27393f1df8659",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
@@ -18470,7 +18616,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/hooks/guard-model-ceiling.sh": "88b1802d9021e8fbcb2fc16881c70f6fbdc7c5313b0c61e1535f20a4d8e2e26f",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
@@ -18502,8 +18648,8 @@
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/operator-fences.sh": "b14c4294844b4bc9dade5e32d9642824a92b2c7690d01c2c8b6e914e893dae0c",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-        "scripts/lib/operator_fences_admin.py": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
+        "scripts/lib/operator_fences_admin.py": "0ef83bd105b4f47a851050f15cf8ef158ba33e46e2aca9e9cc2ffbefd7b98187",
         "scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "scripts/lib/entrypoints.sh": "ca4d90b9bc460ead00bc7e4cd85c523abad1b0d6077408dbc7c27393f1df8659",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
@@ -18528,7 +18674,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
-        "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+        "mega-lander/workspaces.py": "5c2111bb7a35765263860b35999e1dadaa1732f907223293b4ed6110ef0abee6",
         "scripts/hooks/guard-model-ceiling.sh": "88b1802d9021e8fbcb2fc16881c70f6fbdc7c5313b0c61e1535f20a4d8e2e26f",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
@@ -18560,8 +18706,8 @@
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/operator-fences.sh": "b14c4294844b4bc9dade5e32d9642824a92b2c7690d01c2c8b6e914e893dae0c",
-        "scripts/lib/operator_fences.py": "0b4af73c49a733d4910af7059a3a962241b8a3c8233c6eba1bbe8a6557955dea",
-        "scripts/lib/operator_fences_admin.py": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
+        "scripts/lib/operator_fences.py": "4ad54793d36294b6db63f118d0ec883d635e6814e25c0230ca436d18eccaafd8",
+        "scripts/lib/operator_fences_admin.py": "0ef83bd105b4f47a851050f15cf8ef158ba33e46e2aca9e9cc2ffbefd7b98187",
         "scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "scripts/lib/entrypoints.sh": "ca4d90b9bc460ead00bc7e4cd85c523abad1b0d6077408dbc7c27393f1df8659",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
