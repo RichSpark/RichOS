@@ -231,9 +231,10 @@ impl WorkHost {
         let continued = quota.limit_reached(&account, resets_at) == crate::claude_accounts::AfterLimit::Continue;
         // `Continue` says only that another account is in use, which it already is when another
         // conversation's turn moved there first; that account may since have been refused too
-        // (review of e58c2c825, P2). It has room only when it is not marked gone itself.
+        // (review of e58c2c825, P2), or be used up by its readings with no refusal yet (second
+        // review rv-20261029T111217Z-71fb5f11-8f6b, P2). It has room only when it is neither.
         let next = continued.then(|| quota.accounts.in_use().id);
-        let room = next.as_deref().is_some_and(|id| !Self::marked_gone(&quota, id));
+        let room = next.as_deref().is_some_and(|id| Self::gone_until(&quota, id).is_none());
         if room {
             // **Never back to the refused account** (review of a6bd17fa5, P1): a command, helper
             // or automatic turn of his keeps his session there (`renew_lease`), and the retry
@@ -248,7 +249,7 @@ impl WorkHost {
             return Some(hold);
         }
         let now = crate::util::now_millis();
-        let limited = |id: &str| quota.accounts.limited_until(id).filter(|until| *until > now);
+        let limited = |id: &str| Self::gone_until(&quota, id);
         // With room he waits only for his own session to come free, at most to this account's
         // reset; without, for the soonest reset of the accounts.
         let soonest = limited(&hold.account).into_iter().chain(next.as_deref().and_then(limited)).min();
@@ -263,25 +264,34 @@ impl WorkHost {
     }
 
     /// **Stu's input can go again without meeting the same refusal**: the refused `account` is
-    /// no longer marked gone (its reset passed, or a reset was used on it), or another account
-    /// is in use, is not marked gone itself, and nothing of his still holds his session on the
-    /// refused one. Read by the hold before the retry, so it ends as soon as either is true
-    /// rather than at the time it began with.
-    ///
-    /// "Marked gone" is the usage-limit backstop's mark ([`crate::claude_accounts::Accounts::limited_until`]),
-    /// the refusals this retry answers. An account that is only near its threshold by its
-    /// readings is the switch decision's to leave (`before_turn`, run by the retry's delivery).
+    /// no longer gone (its reset passed, or a reset was used on it), or another account is in
+    /// use, is not gone itself, and nothing of his still holds his session on the refused one.
+    /// Read by the hold before the retry, so it ends as soon as either is true rather than at
+    /// the time it began with. "Gone" is [`Self::gone_until`].
     fn usage_limit_lifted(&self, backend: &Backend, quota: &crate::quota::Service, account: &str) -> bool {
-        if !Self::marked_gone(quota, account) { return true; }
+        if Self::gone_until(quota, account).is_none() { return true; }
         let in_use = quota.accounts.in_use().id;
-        if in_use == account || Self::marked_gone(quota, &in_use) { return false; }
+        if in_use == account || Self::gone_until(quota, &in_use).is_some() { return false; }
         let lease = backend.lease.lock().unwrap();
         lease.as_ref().is_none_or(|current| current.account() != Some(account) || !Self::session_in_use(backend, current.as_ref()))
     }
 
-    /// `id` is marked gone by a usage limit that has not reset yet.
-    fn marked_gone(quota: &crate::quota::Service, id: &str) -> bool {
-        quota.accounts.limited_until(id).is_some_and(|until| until > crate::util::now_millis())
+    /// **`id` has no room for Stu's input, and until when**: a usage-limit refusal that has not
+    /// reset (the backstop's mark, [`crate::claude_accounts::Accounts::limited_until`]), or used
+    /// up by its readings with no refusal yet: its row in the quota view says so
+    /// (`exhausted_until`, the same `claude_accounts::gone` rule the switch decides on), or every
+    /// account is held (`held_until`). Second review rv-20261029T111217Z-71fb5f11-8f6b, P2: an
+    /// account the readings showed used up counted as available, so the one retry was spent on
+    /// it. With one account the view has no rows and no hold, so only the refusal mark counts,
+    /// as before.
+    fn gone_until(quota: &crate::quota::Service, id: &str) -> Option<u64> {
+        let now = crate::util::now_millis();
+        if let Some(until) = quota.accounts.limited_until(id).filter(|until| *until > now) {
+            return Some(until);
+        }
+        let view = quota.view();
+        view.accounts.iter().find(|row| row.id == id).and_then(|row| row.exhausted_until)
+            .or(view.held_until).filter(|until| *until > now)
     }
 
     fn live_completion(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding,
@@ -3314,6 +3324,63 @@ mod tests {
         assert!(waits.len()==1 && waits[0]<=hour && waits[0]>hour-minute,"not one hold to the soonest reset: {waits:?}");
         let shown=stu.notices.0.lock().unwrap().clone();
         assert!(shown.len()==1 && shown[0].1.contains("no Claude account has room"),"{shown:?}");
+        assert!(stu.failures().is_empty());
+        stu.end();
+    }
+
+    /// A retry clock that records each wait and, unless the hold is already over when it starts,
+    /// does `lift` and returns as a hold cut short does. A retry after it is then one the hold's
+    /// own early end allowed; a hold already over is sent at once, as before this clock.
+    struct LiftOnWait { waits: Mutex<Vec<std::time::Duration>>, lift: Box<dyn Fn() + Send + Sync> }
+    impl crate::upstream::RetryClock for LiftOnWait {
+        fn wait(&self, wait: std::time::Duration, stop: &dyn Fn() -> bool) -> bool {
+            self.waits.lock().unwrap().push(wait);
+            if !stop() { (self.lift)(); }
+            false
+        }
+    }
+
+    /// **Not spent on an account its readings show used up** (second review
+    /// rv-20261029T111217Z-71fb5f11-8f6b, P2). While Stu's turn runs on Account 1, another
+    /// conversation is refused on Account 1 and Home is put in use; then Home's own reading
+    /// comes back at 100% of its week, with no refusal on it. When Stu's turn is cut, `Continue`
+    /// names Home, which has no refusal mark. The one retry is not sent to Home at once: it is
+    /// held, to the soonest reset (Account 1's, an hour away), with RichOS's line that no
+    /// account has room, and it goes on Home once Home's reading shows room again.
+    #[test]
+    #[cfg(unix)]
+    fn a_stu_turn_cut_by_a_usage_limit_is_held_when_the_account_in_use_is_used_up_by_its_readings() {
+        let h=harness(0);
+        let (quota,home)=account_one_and_home_with_room(&h);
+        let bin=h.root.join("quota").join("claude-fixture");
+        let home_usage=home.folder.clone().unwrap().join("usage.json");
+        let stu=stu_with_a_usage_limit(h,quota.clone(),1);
+        let elsewhere=(quota.clone(),home.id.clone(),bin.clone(),home_usage.clone());
+        *stu.before_cut.lock().unwrap()=Some(Box::new(move || {
+            let (quota,home,bin,home_usage)=elsewhere;
+            assert_eq!(quota.limit_reached("1",Some(crate::util::now_millis()+3_600_000)),crate::claude_accounts::AfterLimit::Continue);
+            crate::quota::tests::usage(&home_usage,10.,100.,"2099-01-06T00:00:00Z");
+            quota.refresh(&bin,true);
+            assert_eq!(quota.accounts.in_use().id,home,"Home stays in use: no account has room to go to");
+            assert_eq!(quota.accounts.limited_until(&home),None,"Home was never refused");
+        }));
+        let lifting=(quota.clone(),bin,home_usage);
+        let clock=Arc::new(LiftOnWait {waits:Mutex::new(Vec::new()),lift:Box::new(move || {
+            crate::quota::tests::usage(&lifting.2,10.,20.,"2099-01-06T00:00:00Z");
+            lifting.0.refresh(&lifting.1,true);
+        })});
+        stu.host.set_retry_clock(clock.clone());
+
+        stu.send("Input under test",1);
+
+        let waits=clock.waits.lock().unwrap().clone();
+        let (hour,minute)=(std::time::Duration::from_secs(3600),std::time::Duration::from_secs(60));
+        assert!(waits.len()==1 && waits[0]<=hour && waits[0]>hour-minute,
+            "the one retry was not held while Home was used up by its readings: {waits:?}");
+        let shown=stu.notices.0.lock().unwrap().clone();
+        assert!(shown.len()==1 && shown[0].1.contains("no Claude account has room"),"{shown:?}");
+        assert_eq!(stu.deliveries("Input under test"),["1".to_string(),home.id.clone()],
+            "not sent once more on Home once its reading had room: {:?}",stu.prompts.lock().unwrap());
         assert!(stu.failures().is_empty());
         stu.end();
     }
