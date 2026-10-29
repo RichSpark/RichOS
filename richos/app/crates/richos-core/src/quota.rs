@@ -189,6 +189,15 @@ pub const RESET_EXEMPTION_MS: u64 = 20 * 60_000;
 /// How many rises of one window are kept for the speed before a hold (`Snapshot::rise_log`).
 const RISES_KEPT: usize = 8;
 
+/// **One window read two ways is one window**: reset times that agree within a minute. The
+/// probe reports an ISO time and the stream whole seconds, so exact equality would make one
+/// window two (`Snapshot::measure`), and would start the staggered release's count over in
+/// the middle of a window (`stagger::admit`, review of 2026-10-29, finding 2). Two five-hour
+/// windows are five hours apart.
+fn same_reset(a: u64, b: u64) -> bool {
+    a.abs_diff(b) < 60_000
+}
+
 /// A span as Rich says it: "41 min", "1 h 41 min", "2 d 3 h" (round 16's way of writing one).
 pub fn words(ms: u64) -> String {
     let minutes = ms.div_ceil(60_000).max(1);
@@ -636,11 +645,9 @@ impl Snapshot {
     fn measure(&mut self, windows: &[Window], observed: u64) {
         for window in windows {
             let fresh = SpeedBase { used: window.used_percent, resets_at: window.resets_at, at: observed, last: observed, rose: false };
-            // The SAME window when the reset times agree within a minute: the probe reports
-            // an ISO time and the stream whole seconds, so exact equality would treat one
-            // window read two ways as two windows and never measure a speed across them.
+            // The SAME window when the reset times agree within a minute (`same_reset`).
             let same = |a: Option<u64>, b: Option<u64>| match (a, b) {
-                (Some(a), Some(b)) => a.abs_diff(b) < 60_000,
+                (Some(a), Some(b)) => same_reset(a, b),
                 (a, b) => a == b,
             };
             match self.bases.get(&window.id).copied() {

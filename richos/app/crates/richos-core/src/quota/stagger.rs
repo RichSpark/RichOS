@@ -20,9 +20,10 @@
 //! Whoever is not released waits for the reset, when the window's figures stop holding.
 //!
 //! **Several gate processes decide together**: each held tool call is its own process, so the
-//! released set lives in one small file under `engine-state`, read and written under an
-//! exclusive lock. A call already released stays released for the rest of that window: its
-//! next tool call is the same worker carrying on, not a new one.
+//! released sets live in one small file under `engine-state`, one per account, read and
+//! written under an exclusive lock. A helper already released stays released for the rest of
+//! that window: its next tool call is the same worker carrying on, not a new one. An Agent call
+//! starts a new agent and needs a release of its own (`gate::release_key`).
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
 
@@ -75,13 +76,22 @@ impl Release {
     }
 }
 
+/// One account's released set in its current five-hour window.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Ledger {
-    account: String,
     resets_at: u64,
     released: Vec<String>,
     last_at: Option<u64>,
+}
+
+/// **Each account keeps its own count** (review of 2026-10-29, finding 3): with one shared
+/// ledger, calls alternating between two accounts during a move each wiped the other's released
+/// set and gap, and each account let a second worker go at once.
+#[derive(Default, Serialize, Deserialize)]
+struct Ledgers {
+    #[serde(default)]
+    accounts: std::collections::BTreeMap<String, Ledger>,
 }
 
 /// An exclusive lock on the ledger for as long as it lives (the descriptor's close releases it).
@@ -114,9 +124,13 @@ pub fn admit(
 ) -> io::Result<bool> {
     let _locked = lock(state)?;
     let path = state.join(LEDGER_FILE);
-    let mut ledger = super::gate::read_json::<Ledger>(&path).ok()
-        .filter(|l| l.account == account && l.resets_at == release.resets_at)
-        .unwrap_or_else(|| Ledger { account: account.into(), resets_at: release.resets_at, ..Default::default() });
+    let mut all = super::gate::read_json::<Ledgers>(&path).unwrap_or_default();
+    let ledger = all.accounts.entry(account.into()).or_default();
+    // A new window starts a new count; the same window read by the probe and by the stream,
+    // a fraction of a second apart, keeps it (`super::same_reset`, finding 2).
+    if !super::same_reset(ledger.resets_at, release.resets_at) {
+        *ledger = Ledger { resets_at: release.resets_at, ..Default::default() };
+    }
     if ledger.released.iter().any(|k| k == key) {
         return Ok(true);
     }
@@ -130,7 +144,7 @@ pub fn admit(
     }
     ledger.released.push(key.into());
     ledger.last_at = Some(now);
-    super::atomic_write(&path, &ledger)?;
+    super::atomic_write(&path, &all)?;
     Ok(true)
 }
 
@@ -202,7 +216,48 @@ mod tests {
             assert!(fresh.allows(went, 10), "never past the projected 100%: {went} released at minute {minute}");
         }
         assert_eq!(released, 4, "the stagger stops before 100%; the other six wait for the reset");
-        // Another account, or the next window, starts its own count.
-        assert!(go(&ten[9], &Release { resets_at: now + 20 * MINUTE, ..reading }, now + 19 * MINUTE));
+        // The next window (five hours on, read at 1% once it began) starts its own count:
+        // 1 + 0.14 x 300 = 43, under 100.
+        let next = Release { used: 1., checked_at: now + 19 * MINUTE, resets_at: now + 319 * MINUTE, ..reading };
+        assert!(go(&ten[9], &next, now + 19 * MINUTE));
+    }
+
+    /// **Review of 2026-10-29, finding 2: the probe and the stream read one window.** The probe
+    /// reports the reset as an ISO time and the stream in whole seconds, so the same window comes
+    /// with reset times 500 ms apart. Before, the ledger matched them exactly, started the count
+    /// over and let a second worker go in the same instant, past the projected 100% (95 + 0.28
+    /// x 19 = 100.32). The same window keeps its count; a new one, five hours on, starts its own.
+    #[test]
+    fn the_same_window_read_by_the_probe_and_the_stream_keeps_its_count() {
+        let root = Scratch::new();
+        let state = root.path().join("engine-state");
+        let now = 1_000_000_000;
+        let probe = Release { used: 95., checked_at: now, resets_at: now + 19 * MINUTE, speed: 0., pre_hold: per_minute(1.4) };
+        let stream = Release { resets_at: probe.resets_at + 500, ..probe };
+        let held = |released: &[String]| 10 - released.len();
+        let go = |key: &str, reading: &Release, at: u64| admit(&state, "2", key, reading, &held, at).unwrap();
+        assert!(go("worker-0", &probe, now));
+        assert!(!go("worker-1", &stream, now), "the same instant: the gap holds");
+        assert!(!go("worker-1", &stream, now + MINUTE), "a minute on: 100.32% projected holds");
+        assert!(go("worker-0", &stream, now + MINUTE), "the released worker carries on");
+    }
+
+    /// **Review of 2026-10-29, finding 3: each account keeps its own count.** During a move,
+    /// calls alternate between Home (1) and Work (2), both held inside their windows. Before,
+    /// one shared ledger was wiped by every change of account and all four calls in the same
+    /// instant went (two on each). Now each account releases its first, and the second on each
+    /// waits for the gap.
+    #[test]
+    fn alternating_accounts_each_keep_their_own_released_set_and_gap() {
+        let root = Scratch::new();
+        let state = root.path().join("engine-state");
+        let now = 1_000_000_000;
+        let reading = Release { used: 95., checked_at: now, resets_at: now + 19 * MINUTE, speed: 0., pre_hold: per_minute(1.4) };
+        let held = |released: &[String]| 10 - released.len();
+        let go = |account: &str, key: &str| admit(&state, account, key, &reading, &held, now).unwrap();
+        let went = [("1", "home-0"), ("2", "work-0"), ("1", "home-1"), ("2", "work-1")]
+            .iter().filter(|&&(account, key)| go(account, key)).count();
+        assert_eq!(went, 2, "one on each account, not two on each");
+        assert!(go("1", "home-0") && go("2", "work-0"), "each released worker carries on");
     }
 }
