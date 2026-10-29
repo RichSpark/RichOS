@@ -495,9 +495,14 @@ fn card_price(model: &str) -> Option<f64> {
 }
 
 /// The variance, in points squared, of one episode's points when the episodes cannot measure it
-/// themselves (no more episodes than fitted models): half a point either way. A reading is a whole
-/// point, and a late `result` moves tokens into the next episode.
-const UNMEASURED_NOISE: f64 = 0.25;
+/// themselves (no more episodes than fitted models): a fifth of a point either way. An episode
+/// runs from one whole-point rise to the next, so its points are off only by the minutes before a
+/// reading sees a rise and by a late `result` landing in the next episode. Half a point let the
+/// card pull a model with an episode of its own (the second review of 0e2a10356: 40M Opus cache
+/// reads for one point and 4M Sonnet input for the next, $8 each, read Sonnet at 5.97M, not
+/// 4M); a hundredth let one tiny model's share of two noisy episodes move it to a fraction of its
+/// card (the third review's finding 1 at point 97).
+const UNMEASURED_NOISE: f64 = 0.04;
 /// The least variance taken from the episodes' own residuals: precise episodes are trusted
 /// almost entirely, but two models always spent in the same mix still read at their cards.
 const LEAST_NOISE: f64 = 1e-6;
@@ -728,7 +733,7 @@ mod tests {
             let f = figures(&eps);
             assert_eq!(f.keys().collect::<Vec<_>>(), ["claude-haiku-5-5", "claude-opus-5-5", "claude-sonnet-5-5"], "{f:?}");
             let at_card = card_dollars(&eps[0]) / 0.10 * 1e6;
-            assert!((f["claude-haiku-5-5"] / at_card - 1.).abs() < 1e-3, "Haiku, 0.005% of the tokens, is not at its card {at_card}: {f:?}");
+            assert!((f["claude-haiku-5-5"] / at_card - 1.).abs() < 0.05, "Haiku, 0.005% of the tokens, is not at its card {at_card}: {f:?}");
             assert!(83_446. / f["claude-haiku-5-5"] < 1e-4, "{f:?}");
         }
     }
@@ -754,14 +759,25 @@ mod tests {
     /// 5.5's cache reads), so a late 3M-token Fable `result` was 20.3 points a minute. At $10 a
     /// million against the dearest point's $198.85, its card is 19.89M tokens a point (its list
     /// ratio to Opus, 2.5, puts it at 16M at a true 40M Opus point), and the two episodes move it
-    /// only a little (19.30M): the 3M are 0.155 points, under the 0.2 of the true point 98.
+    /// to 16.70M: the 3M are 0.180 points, under the 0.2 of the true point 98.
     #[test]
     fn a_model_the_episodes_barely_saw_is_read_at_its_card_not_its_worst_case() {
         let eps = work_first_two_with("claude-fable-5-1", 3_151);
         let f = figures(&eps);
         let at_card = card_dollars(&eps[0]) / 10. * 1e6;
-        assert!((f["claude-fable-5-1"] / at_card - 1.).abs() < 0.05, "Fable is far from its card {at_card}: {f:?}");
+        assert!(f["claude-fable-5-1"] <= at_card * (1. + 1e-9) && f["claude-fable-5-1"] > 15e6, "card {at_card}: {f:?}");
         assert!(3e6 / f["claude-fable-5-1"] < 0.2, "{f:?}");
+    }
+    /// **A model with an episode of its own keeps what it measured, whatever its bucket mix** (the
+    /// second review of 0e2a10356, its own fixture): 40M Opus cache reads for one point and 4M
+    /// Sonnet input for the next, $8 of card each. Sonnet is 4M a point, as main measures it,
+    /// though its card at the dearest point says 80M; Opus is 40M.
+    #[test]
+    fn a_model_with_an_episode_of_its_own_keeps_what_it_measured() {
+        let f = figures(&[episode(1., &[("claude-opus-5-5", 40_000_000)]), episode(1., &[("claude-sonnet-5-5", 4_000_000)])]);
+        assert!((f["claude-sonnet-5-5"] / 4e6 - 1.).abs() < 0.1, "{f:?}");
+        assert!(8e6 / f["claude-sonnet-5-5"] > 11. / 6., "8M Sonnet in a minute must be over 1.83 a minute (point 88): {f:?}");
+        assert!((f["claude-opus-5-5"] / 40e6 - 1.).abs() < 0.1, "{f:?}");
     }
     /// **A model the episodes measure keeps its figure beside a pair they cannot separate** (the
     /// second review of d22fc43f8, its own fixture). Opus and Fable always in the same ratio (100

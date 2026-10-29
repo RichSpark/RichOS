@@ -2400,6 +2400,33 @@ pub(crate) mod tests {
         assert!(published.leaving.contains(&work), "Work at 89% during an Opus burst is not being left: {:?}", published.leaving);
     }
 
+    /// **A model with an episode of its own hands off at what it measured** (the second review of
+    /// 0e2a10356, its fixture through the service). 40M Opus cache reads for one point, then 4M
+    /// Sonnet input for the next ($8 of card each): Sonnet is 4M a point on main, 4.32M here (the
+    /// card moves it a little). Then 7.6M Sonnet tokens in the last minute: 1.9 points a minute on
+    /// main, 99 - (ceil(1.9 x 6 = 11.4) - 1) = 88; 1.76 here, fast, I = 1 minute:
+    /// 99 - (ceil(1.76 x 6 = 10.6) - 1) = 89; Work at 89% is left either way. 0e2a10356 let the
+    /// card pull Sonnet to 5.97M (1.27 a minute, point 92: Work at 89% kept running). (7.6M, not
+    /// the review's 8M: 2.0 a minute exactly would put main's point on f64's rounding.)
+    #[test]
+    fn a_model_with_an_episode_of_its_own_hands_off_at_what_it_measured() {
+        let root = Scratch::new();
+        let episodes = json!([{"points": 1.0, "tokens": {"claude-opus-5-5": 40_000_000}},
+            {"points": 1.0, "tokens": {"claude-sonnet-5-5": 4_000_000}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 89.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..19u64)
+            .map(|i| (model_frame("claude-sonnet-5-5", &format!("msg_{i}"), 2, 400_000 - 3, None), now - 57_000 + i * 3_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point <= 89., "a 7.6M-token Sonnet minute left the week's point at {point} (weekly speed {} points a minute); \
+            at Sonnet's measured 4M a point it is 88", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 89% during a Sonnet burst is not being left: {:?}", published.leaving);
+    }
+
     /// **A model the episodes measure still hands off at its own speed** (the second review of
     /// d22fc43f8, its fixture through the service). Two one-point episodes where Opus and Fable
     /// always come in the same ratio and Sonnet apart, Sonnet at 4M tokens a point; then 8M Sonnet
@@ -2433,8 +2460,8 @@ pub(crate) mod tests {
     /// against Opus 5.5's 40M) that is 0.1875 a minute, not fast, so I = 5 minutes and H 5:
     /// 99 - (ceil(0.1875 x 10 = 1.875) - 1) = 98, and Work at 3% is not left. Main fitted Fable
     /// at a few thousand tokens a point (point 0); d22fc43f8 held it at its worst-case bound,
-    /// 147,761 (20.3 a minute, point 0). Read near its card at Work's dearest point (19.89M; the
-    /// two episodes move it to 19.30M): 0.155 a minute, ceil(1.55) - 1 = 1, point 98.
+    /// 147,761 (20.3 a minute, point 0). Read from its card at Work's dearest point (19.89M; the
+    /// two episodes move it to 16.70M): 0.180 a minute, ceil(1.80) - 1 = 1, point 98.
     #[test]
     fn a_late_minority_result_does_not_hand_off_an_account_with_room() {
         let root = Scratch::new();
