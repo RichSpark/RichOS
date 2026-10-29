@@ -12756,7 +12756,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
-          "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
+          "sha256": "b15aa198db0c50c25baca0d6cdfd24e842f4607d0e9a83d7c9c35ca97bc8e9a6",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
@@ -12864,7 +12864,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
-          "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
+          "sha256": "b15aa198db0c50c25baca0d6cdfd24e842f4607d0e9a83d7c9c35ca97bc8e9a6",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
@@ -14938,7 +14938,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/testvm/reserve.py",
-          "sha256": "068796f18885ad8691711bf093a4ec40700ae40a005f5f5d655c4e5b43a61b7c",
+          "sha256": "90eeb193d7e53964c26b4c9119397591c874f04d987e17bfd1469b99a8522de0",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15052,7 +15052,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "b435fa6c2e68f6cac2b37b3c7eebdbe85d23f660d83d9fb4ea0d74af64817ae2",
+          "sha256": "1287d5047606bc0ace76ec67db369603207cb2c29bd4974acb4e4bd28cc6d354",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -15157,7 +15157,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/testvm/reserve.py",
-          "sha256": "068796f18885ad8691711bf093a4ec40700ae40a005f5f5d655c4e5b43a61b7c",
+          "sha256": "90eeb193d7e53964c26b4c9119397591c874f04d987e17bfd1469b99a8522de0",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -16397,8 +16397,8 @@
     },
     "scripts/lib/machine_settings.py": {
       "source": "scripts/lib/machine_settings.py",
-      "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
-      "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority. Renewed 2026-10-13: restore the existing RICHOS_NATIVE_ANDROID_CACHE key and derive RANDROID_CACHE when absent, preserving explicit current-name precedence and resolved snapshots. Fixture-supplied selectors and environments remain the input boundary; no new process or file reader.",
+      "sha256": "b15aa198db0c50c25baca0d6cdfd24e842f4607d0e9a83d7c9c35ca97bc8e9a6",
+      "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority. Renewed 2026-10-13: restore the existing RICHOS_NATIVE_ANDROID_CACHE key and derive RANDROID_CACHE when absent, preserving explicit current-name precedence and resolved snapshots. Fixture-supplied selectors and environments remain the input boundary; no new process or file reader. Renewed 2026-10-29: limit() reads whole-number machine limits (TESTVM_MEMORY_FLOOR_MB) from the environment, else limits.env beside .env under the same HOME (or the absolute RICHOS_LIMITS_FILE), else the caller's stated default; .env parsing and KEYS are unchanged. Fixture callers supply HOME or RICHOS_LIMITS_FILE, the same boundary as RICHOS_ENV_FILE; no process.",
       "keys": [],
       "edges": []
     },
@@ -17800,7 +17800,7 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
         "scripts/lib/publication-boundary-cache.test.py": "26e050d865dcc217075d8882f3b0b969c65124b038d9606bab945416b56a7d34",
-        "scripts/lib/machine_settings.py": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e"
+        "scripts/lib/machine_settings.py": "b15aa198db0c50c25baca0d6cdfd24e842f4607d0e9a83d7c9c35ca97bc8e9a6"
       },
       "evidence": "Only the two publication guard registrations are queried on plugin and seated surfaces. Probe and installer source are assertion data. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [

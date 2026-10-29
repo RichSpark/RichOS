@@ -17,11 +17,21 @@ during the sample). --wait N retries for at most N seconds, one sample every
 line is not applied, the memory rule and the backoff still are, and the command
 runs under nice -n 10. Every use is announced. When that build ends, the 80%
 line applies again: stop passing the flag.
+
+A NIGHTLY WAITING FOR ITS GUEST GOES FIRST (2026-10-29, nightly 80). While a
+nightly's vm-boot-proof or new-user-walk waits for a test-VM guest slot,
+slots.py writes <TESTVM_ROOT>/nightly-guest-wait.json, and every admission
+sampled here (this command, proof-run.py's checks, every other guest walk's
+slot) is refused, naming that wait, until the nightly is admitted or gives up.
+Only that one waiting process is exempt. It is narrower than release.lock,
+which §77 keeps away from proof runs, and it holds nothing: a record whose
+process is gone, or older than the longest slot wait, is ignored.
 """
 import argparse
 from contextlib import contextmanager, ExitStack
 import ctypes
 import fcntl
+import json
 import os
 from pathlib import Path
 import signal
@@ -46,6 +56,123 @@ MIN_RETRY_SECONDS = 30
 LOW_PRIORITY_NICE = 10
 MAX_WAIT_SECONDS = 3600
 PRESSURE_NAMES = {1: 'normal', 2: 'warn', 4: 'critical'}
+NIGHTLY_GUEST_WAIT = 'nightly-guest-wait.json'
+# A record older than this is a leftover, whatever its pid says: no slot wait outlasts
+# MAX_WAIT_SECONDS, and the margin covers the samples taken around it.
+NIGHTLY_GUEST_WAIT_STALE = MAX_WAIT_SECONDS + 600
+
+
+# THE KERNEL'S OWN LEAK (2026-10-29, Otto's read-only trace). With no guest running this Mac had
+# 12.57 GiB wired, about 9.3 GiB of it one kernel zone, data.kalloc.1024, growing about 46
+# elements/s under agent workloads; only a restart gives it back. A memory refusal that named
+# only apps sent people closing apps for memory no app held. `zprint ZONE` needs no sudo; without
+# it the size columns read 0K, so the zone's size is its elements in use times the element size.
+LEAK_ZONE = 'data.kalloc.1024'
+LEAK_SHARE = 0.10           # named once the zone holds this share of physical memory
+_ZONE_CACHE = {}
+
+
+def zone_in_use_mb(text, zone=LEAK_ZONE):
+    """MB in use by `zone` in `zprint`'s output, else None. Columns: name, element size, cur size,
+    max size, cur #elts, max #elts, cur inuse, alloc size, alloc count."""
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 7 and parts[0] == zone and parts[1].isdigit() and parts[6].isdigit():
+            return int(parts[1]) * int(parts[6]) / 1048576
+    return None
+
+
+def kernel_zone_text(zone=LEAK_ZONE, now=None):
+    """`zprint ZONE`'s output, read-only and at most once a minute per process; '' if unreadable."""
+    now = time.monotonic() if now is None else now
+    cached = _ZONE_CACHE.get(zone)
+    if cached and now - cached[0] < 60:
+        return cached[1]
+    try:
+        text = subprocess.run(['/usr/bin/zprint', zone], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        text = ''
+    _ZONE_CACHE[zone] = (now, text)
+    return text
+
+
+def kernel_leak_note(total_mb=None, text=None):
+    """'' unless the leaking kernel zone holds LEAK_SHARE or more of this Mac's memory, else the
+    clause that names it. `text` is zprint's output (read here when None)."""
+    held = zone_in_use_mb(kernel_zone_text() if text is None else text)
+    if held is None:
+        return ''
+    try:
+        total_mb = total_mb or _sysctl('hw.memsize', ctypes.c_uint64()).value / 1048576
+    except OSError:
+        return ''
+    if held < LEAK_SHARE * total_mb:
+        return ''
+    return f'kernel leak {LEAK_ZONE} holds {held / 1024:.1f} GB; only a restart returns it'
+
+
+def testvm_root(root=None):
+    """The test VM's state directory (slots.py's root_dir): TESTVM_ROOT, else ~/.richos-testvm."""
+    return Path(root or os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm')))
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def nightly_guest_wait(root=None, now=None):
+    """The record of a nightly phase waiting for a guest slot right now, else None. A record
+    that cannot be read, whose process has ended or that is older than any slot wait is None."""
+    path = testvm_root(root) / NIGHTLY_GUEST_WAIT
+    try:
+        record = json.loads(path.read_text())
+        pid, since = int(record['pid']), float(record['since'])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if pid <= 0 or not _alive(pid) or (now or time.time()) - since > NIGHTLY_GUEST_WAIT_STALE:
+        return None
+    return {**record, 'pid': pid, 'since': since}
+
+
+def nightly_hold(root=None, now=None, me=None):
+    """'' when no nightly waits for a guest (or the one waiting is this process), else the
+    sentence that refuses a new test or proof admission."""
+    waiting = nightly_guest_wait(root, now)
+    if not waiting or waiting['pid'] == (me or os.getpid()):
+        return ''
+    minutes = ((now or time.time()) - waiting['since']) / 60
+    return (f"a nightly's {waiting.get('phase') or 'VM phase'} has waited {minutes:.0f} min for a test-VM "
+            f"guest slot (pid {waiting['pid']}); new test and proof admissions are held until it has "
+            f"its guest or gives up ({NIGHTLY_GUEST_WAIT}, reserve.py)")
+
+
+def write_nightly_guest_wait(phase, root=None):
+    """Record that this process, a nightly's `phase`, is waiting for a guest slot. Atomic."""
+    path = testvm_root(root) / NIGHTLY_GUEST_WAIT
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if path.parent.is_symlink() or path.parent.stat().st_uid != os.getuid():
+        raise ValueError('testvm directory must be owned by the current user and not a symlink: '
+                         + str(path.parent))
+    partial = path.with_name(f'.{path.name}.{os.getpid()}')
+    partial.write_text(json.dumps({'pid': os.getpid(), 'since': time.time(), 'phase': phase}) + '\n')
+    os.replace(partial, path)
+    return path
+
+
+def clear_nightly_guest_wait(root=None):
+    """Remove the record, only if it is this process's own."""
+    path = testvm_root(root) / NIGHTLY_GUEST_WAIT
+    try:
+        if int(json.loads(path.read_text()).get('pid', 0)) == os.getpid():
+            path.unlink()
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
 
 
 class _CpuLoad(ctypes.Structure):
@@ -120,9 +247,28 @@ def host_sample(interval=1.0):
     if total <= 0:
         raise BlockingIOError('CPU measurement unavailable; the tick counters did not advance')
     pct = [100.0 * d / total for d in delta]
-    return {'cpu_user_percent': pct[0] + pct[3], 'cpu_system_percent': pct[1], 'cpu_idle_percent': pct[2],
-            'swapout_mb_per_s': (out1 - out0) * page / 1048576 / interval,
-            'memory_pressure': PRESSURE_NAMES.get(level, str(level)), 'memory_free_percent': free,
+    sample = {'cpu_user_percent': pct[0] + pct[3], 'cpu_system_percent': pct[1], 'cpu_idle_percent': pct[2],
+              'swapout_mb_per_s': (out1 - out0) * page / 1048576 / interval,
+              'memory_pressure': PRESSURE_NAMES.get(level, str(level)), 'memory_free_percent': free,
+              'swap_used_mb': swap.used / 1048576}
+    held = nightly_hold()
+    if held:
+        # Carried in the sample, so every caller that refuses on it (_refusal) also says why
+        # (describe), proof-run.py's checks included.
+        sample['held_for_nightly'] = held
+    return sample
+
+
+def memory_sample():
+    """The memory half of `host_sample`, at once: no CPU interval, no swap-out rate. For a
+    question about memory alone (slots.py `fits`). Fails closed like host_sample."""
+    try:
+        level = _sysctl('kern.memorystatus_vm_pressure_level', ctypes.c_int()).value
+        free = _sysctl('kern.memorystatus_level', ctypes.c_int()).value
+        swap = _sysctl('vm.swapusage', _SwapUsage())
+    except (OSError, AttributeError) as exc:
+        raise BlockingIOError('memory measurement unavailable: ' + str(exc)) from exc
+    return {'memory_pressure': PRESSURE_NAMES.get(level, str(level)), 'memory_free_percent': free,
             'swap_used_mb': swap.used / 1048576}
 
 
@@ -132,17 +278,23 @@ def cpu_busy_percent():
 
 
 def _refusal(s, max_cpu, max_swapout, cpu_rule=True):
+    if s.get('held_for_nightly'):
+        return s['held_for_nightly']
     if cpu_rule and not admission_open(busy_percent(s), max_cpu):
         return f"total CPU is {busy_percent(s):.1f}% (limit {max_cpu:g}%)"
     if s['memory_pressure'] == 'critical':
-        return 'kernel memory pressure is CRITICAL'
-    if s['swapout_mb_per_s'] >= max_swapout:
-        return f"swapping out {s['swapout_mb_per_s']:.1f} MB/s (limit {max_swapout:g} MB/s)"
-    return ''
+        why = 'kernel memory pressure is CRITICAL'
+    elif s['swapout_mb_per_s'] >= max_swapout:
+        why = f"swapping out {s['swapout_mb_per_s']:.1f} MB/s (limit {max_swapout:g} MB/s)"
+    else:
+        return ''
+    leak = kernel_leak_note()
+    return f'{why}; {leak}' if leak else why
 
 
 def describe(s):
-    return (f"user CPU {s['cpu_user_percent']:.1f}%, system {s['cpu_system_percent']:.1f}%, "
+    return ((f"HELD: {s['held_for_nightly']}; " if s.get('held_for_nightly') else '')
+            + f"user CPU {s['cpu_user_percent']:.1f}%, system {s['cpu_system_percent']:.1f}%, "
             f"idle {s['cpu_idle_percent']:.1f}%; memory pressure {s['memory_pressure']}, "
             f"free {s['memory_free_percent']}%, swap used {s['swap_used_mb']:.0f} MB, "
             f"swap-out {s['swapout_mb_per_s']:.1f} MB/s")

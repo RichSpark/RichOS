@@ -308,6 +308,19 @@ NEW_USER_WALK_STEPS = ("identity", "setup", "signed-out", "accounts", "update", 
 NEW_USER_WALK_WAIT = 3600
 NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 
+# GUEST MEMORY, ASKED AT ONCE (2026-10-29, nightly 80). That build passed every gate, then its
+# boot proof waited the full hour for a slot and ended "a guest needs 5120 MB: 8847 MB
+# available ... would leave 3727 MB (floor 4096 MB)": memory no slot wait could free, found
+# only at the deadline. So a build that will boot a guest asks `testvm/slots.py fits` before its
+# gates (announced; two hours of gates are time to free memory) and again on entering each VM
+# phase. A shortfall that only running guests' end can clear is left to the slot wait; one held
+# by apps or the kernel ends the phase AT ONCE, naming them, instead of waiting out the hour.
+GUEST_FIT_SCRIPT = Path(__file__).resolve().parent / "testvm" / "slots.py"
+GUEST_FIT_TIMEOUT = 120
+# Handed to each VM phase's slot wait (testvm/slots.py NIGHTLY_WAIT_ENV): while that wait lasts,
+# reserve.py refuses every new test and proof admission on this Mac, and says why.
+NIGHTLY_WAIT_ENV = "TESTVM_NIGHTLY_WAIT"
+
 # A SETTING GIVEN TO THE BUILD IS NEVER SILENTLY DROPPED (2026-09-29). Attempt 2 that day was
 # started as `RICHOS_GUI_HOST=richos-test-1 nightly-local.py build --no-host-screen`; every
 # gate runs in the allowlisted environment below (GATE_PASSTHROUGH), the variable never
@@ -2708,6 +2721,49 @@ class Runner:
         where = fields.get("where", "")
         return where.partition(":")[2] or where or "the guest named in the run log"
 
+    def guest_memory_fit(self):
+        """`testvm/slots.py fits`'s answer ({'fits', 'reason', 'waitable', 'running'}), or
+        {'error': why} when it could not be asked. Read-only: one memory reading, no slot."""
+        try:
+            done = subprocess.run([sys.executable, str(GUEST_FIT_SCRIPT), "fits"],
+                                  env={**self.env, **self.vm_settings}, stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=GUEST_FIT_TIMEOUT)
+        except (OSError, subprocess.SubprocessError) as error:
+            return {"error": str(error)}
+        try:
+            return json.loads(done.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return {"error": (done.stderr.strip() or f"exit {done.returncode}, no answer")[-300:]}
+
+    def guest_memory_check(self, when):
+        """Say at once whether a test-VM guest fits in memory `when`. The sentence that says
+        why not when apps or the kernel hold the shortfall (waiting will not clear it), else
+        None: it fits, only running guests stand in the way (the slot wait covers that), or it
+        could not be asked (the slot wait still decides)."""
+        fit = self.guest_memory_fit()
+        if "fits" not in fit:
+            self.announce(f"Guest memory {when}: not checked ({fit.get('error')}); the slot wait decides.")
+            return None
+        if fit["fits"]:
+            self.announce(f"Guest memory {when}: a test-VM guest fits now.")
+            return None
+        if fit.get("waitable"):
+            self.announce(f"Guest memory {when}: short only while {', '.join(fit.get('running') or [])} "
+                          f"run(s); the slot wait covers that: {fit['reason']}")
+            return None
+        short = f"a test-VM guest does not fit in memory {when}, and waiting will not free it: {fit['reason']}"
+        self.announce("GUEST MEMORY SHORT: " + short)
+        return short
+
+    def guest_memory_before_gates(self):
+        """Before the gates of a build that ends in a VM phase: say NOW whether its guest would
+        fit. Reported, not refused: the gates take hours, which is time to free the memory, and
+        each VM phase asks again on entry and ends at once if it is still short."""
+        short = self.guest_memory_check("before the gates")
+        if short:
+            self.announce("The VM phase after the build ends at once unless that memory is free by "
+                          "then; the gates go on.")
+
     def vm_boot_proof(self, run_id):
         """Boot the candidate's own signed bundle in a test-VM guest. None on a pass, else
         the sentence that says what did not happen and how to take it again.
@@ -2719,9 +2775,16 @@ class Runner:
         args = ["bash", self.source / SCRIPTS / "gui-proof-in-vm.sh", "--run", run_id, "--out", proof]
         if self.gui_host:
             args += ["--vm", self.gui_host]
-        # Written literally for this one step: where the run pointer lives, and the testvm
-        # settings the operator's shell gave (TESTVM_ROOT, TESTVM_SLOTS, ...).
-        extra = {"RICHOS_NIGHTLY_STATE": str(self.state), **self.vm_settings}
+        short = self.guest_memory_check("on entering the VM boot proof")
+        if short:
+            return (f"THE CANDIDATE IS BUILT, AND ITS BOOT WAS NOT PROVEN IN THE TEST VM: {short}. "
+                    "Nothing waited for a slot. Free that memory, then take the proof with "
+                    f"richos/app/scripts/gui-proof-in-vm.sh --run {run_id} (no rebuild needed).")
+        # Written literally for this one step: where the run pointer lives, the testvm settings
+        # the operator's shell gave (TESTVM_ROOT, TESTVM_SLOTS, ...), and the name its slot wait
+        # holds every other admission under.
+        extra = {"RICHOS_NIGHTLY_STATE": str(self.state), **self.vm_settings,
+                 NIGHTLY_WAIT_ENV: f"{VM_PROOF_PHASE} (run {run_id})"}
         guest = f"guest {self.gui_host}" if self.gui_host else "a fresh guest"
         self.announce(f"Booting the candidate's own bundle in {guest} on the test VM "
                       "(nothing is put on this Mac's screen)...")
@@ -2757,6 +2820,11 @@ class Runner:
         the evidence is and how to walk it again without a rebuild."""
         bundle = Path(out) / f"RichOS-{info['version']}-macos-aarch64.zip"
         walk = self.new_user_walk_dir(run_id)
+        short = self.guest_memory_check("on entering the new-user walk")
+        if short:
+            return (f"THE CANDIDATE IS BUILT, AND A NEW USER'S FIRST RUN OF IT WAS NOT WALKED: {short}. "
+                    "Nothing waited for a slot. `publish` refuses this candidate until the walk passes; "
+                    "free that memory and walk it again (no rebuild needed).")
         home = walk.parent / f"{run_id}.home"
         shutil.rmtree(walk, ignore_errors=True)
         shutil.rmtree(home, ignore_errors=True)
@@ -2770,7 +2838,9 @@ class Runner:
                       "(first install, signed out, update check, signed in)...")
         try:
             with self.phase(NEW_USER_WALK_PHASE):
-                self.command(*args, env_extra=dict(self.vm_settings), timeout=NEW_USER_WALK_BUDGET)
+                self.command(*args, env_extra={**self.vm_settings,
+                                               NIGHTLY_WAIT_ENV: f"{NEW_USER_WALK_PHASE} (run {run_id})"},
+                             timeout=NEW_USER_WALK_BUDGET)
         except RuntimeError as error:
             return (f"THE CANDIDATE IS BUILT, AND A NEW USER'S FIRST RUN OF IT FAILED: {error}. "
                     f"Each step's verdict is in {walk / 'report.json'}, with its frames and app.log "
@@ -3203,6 +3273,7 @@ class Runner:
             # named with --gates-passed-in) already passed every gate on this same source
             # commit against the dependencies installed now (both checked above), so nothing
             # already proven is redone (CEO, 2026-10-19).
+            self.guest_memory_before_gates()
             if passed:
                 for name in GATE_NAMES:
                     self.skip(name, f"passed in run {passed['run_id']} on {passed['source_commit']}")
@@ -3297,6 +3368,7 @@ class Runner:
             raise ValueError("only build, release or publish may build or publish")
         with self.phase("runtime-verify"):
             self.runtime(runtime)
+        self.guest_memory_before_gates()
         # SKIPPING IS FOR CANDIDATES, NEVER FOR THE COMMAND THAT PUBLISHES. `release` runs
         # every suite every time, whatever a proof file on this host remembers.
         if passed:

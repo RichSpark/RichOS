@@ -46,7 +46,23 @@ host was at 99% CPU, memory pressure warn, 32% free and swapping out 120 MB/s (i
 whole RAM about to be used.
 So a guest is admitted only when the kernel's available memory, less what every running guest
 may still take (its RAM less what its VM process already holds) and less this guest's whole
-RAM, leaves GUEST_MEMORY_FLOOR_MB for everything else on the Mac.
+RAM, leaves the memory floor for everything else on the Mac.
+
+THE FLOOR IS A MACHINE SETTING (2026-10-29, nightly 80: refused for an hour with 3727 MB left
+against a hard-coded 4096). TESTVM_MEMORY_FLOOR_MB, from the environment or this Mac's private
+limits file (engine machine_settings.py `limit`), else GUEST_MEMORY_FLOOR_MB below, the stated
+default for a Mac nobody has measured. Admission still reads live available memory every time;
+the floor is only the margin a guest leaves for everything else. A refusal names the setting it
+used, and the kernel's own leak (reserve.py LEAK_ZONE) when that, not an app, holds the memory.
+
+`slots.py fits` answers "would one more guest fit now?" at once, for the nightly to ask before
+its gates and again on entering its VM phase (nightly-local.py), instead of finding out at the
+end of an hour's slot wait.
+
+A NIGHTLY WAITING FOR ITS SLOT GOES FIRST. A caller with TESTVM_NIGHTLY_WAIT set (the nightly's
+vm-boot-proof and new-user-walk) records its wait in <TESTVM_ROOT>/nightly-guest-wait.json from
+its first refusal until it is admitted or refused for good; meanwhile reserve.py refuses every
+other admission, test, proof and guest walk alike (reserve.py's docstring).
 
 A GUEST NEVER OUTLIVES ITS SLOT. run.sh records the slot it booted under in its run state,
 and refuses to boot at all unless a slot is held by one of its own ancestors (`check`). When a
@@ -68,15 +84,19 @@ import time
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import reserve  # noqa: E402
+import reserve  # noqa: E402  (it also puts engine/scripts/lib on the path)
+import machine_settings  # noqa: E402
 
 SLOT_FILES = ('guest.lock', 'guest-2.lock')
 MAX_SLOTS = len(SLOT_FILES)
 SLOT_POLL_SECONDS = 2      # a flock attempt is a syscall; checking often costs nothing
 CLONE_POLL_SECONDS = 10    # a running-guest count is one `tart list`
 ENV = 'TESTVM_SLOT'
-# What must stay available for the Mac itself once every admitted guest has all its RAM. The
-# 18:56Z measurement above swapped hard with about 3 GB projected to be left, so 4 GB.
+NIGHTLY_WAIT_ENV = 'TESTVM_NIGHTLY_WAIT'
+FLOOR_SETTING = 'TESTVM_MEMORY_FLOOR_MB'
+# The DEFAULT for what must stay available for the Mac itself once every admitted guest has all
+# its RAM, used only where no machine sets FLOOR_SETTING. The 18:56Z measurement above swapped
+# hard with about 3 GB projected to be left, so 4 GB.
 GUEST_MEMORY_FLOOR_MB = 4096
 VM_PROCESS = 'com.apple.Virtualization.VirtualMachine'
 # Docker Desktop's VM runs in a VM process of its own; the app list counts it as Docker's.
@@ -193,13 +213,22 @@ def top_apps(processes, count=3):
     return sorted(totals.items(), key=lambda item: -item[1])[:count]
 
 
-def memory_refusal(sample, running, resident=None, total_mb=None, ram_mb=None, floor_mb=GUEST_MEMORY_FLOOR_MB,
-                   processes=None):
+def guest_memory_floor():
+    """(MB, where it came from): the machine's TESTVM_MEMORY_FLOOR_MB, else the stated default."""
+    return machine_settings.limit(FLOOR_SETTING, GUEST_MEMORY_FLOOR_MB)
+
+
+def memory_refusal(sample, running, resident=None, total_mb=None, ram_mb=None, floor_mb=None,
+                   processes=None, zone_text=None):
     """'' when one more guest fits, else why not. `sample` is reserve's (memory_free_percent is
     the kernel's own available level); `running` the running guests; `resident` the MB each VM
-    process already holds. A running guest with no visible process is owed its whole RAM."""
+    process already holds. A running guest with no visible process is owed its whole RAM.
+    `floor_mb` None reads the machine's setting; `zone_text` None reads `zprint` (reserve.py)."""
     ram_mb = ram_mb or guest_ram_mb()
     total_mb = total_mb or host_memory_mb()
+    floor_from = 'given'
+    if floor_mb is None:
+        floor_mb, floor_from = guest_memory_floor()
     resident = vm_resident_mb() if resident is None else resident
     available = sample['memory_free_percent'] / 100 * total_mb
     owed = sum(max(0.0, ram_mb - r) for r in resident[:len(running)])
@@ -208,16 +237,41 @@ def memory_refusal(sample, running, resident=None, total_mb=None, ram_mb=None, f
     if left >= floor_mb:
         return ''
     text = (f'a guest needs {ram_mb} MB: {available:.0f} MB available, {owed:.0f} MB still owed to '
-            f'{len(running)} running guest(s), would leave {left:.0f} MB (floor {floor_mb} MB); '
+            f'{len(running)} running guest(s), would leave {left:.0f} MB (floor {floor_mb} MB, {floor_from}); '
             f'{floor_mb - left:.0f} MB more must be free')
+    # The kernel's own leak first, when it is a large share: no app closed gives that back.
+    leak = reserve.kernel_leak_note(total_mb, zone_text)
+    if leak:
+        text += '; ' + leak
     apps = top_apps(process_memory_mb() if processes is None else processes)
     if apps:
         text += '; largest apps by memory: ' + ', '.join(f'{name} {mb:.0f} MB' for name, mb in apps)
     return text
 
 
+def guest_fit(sample=None, running=None, resident=None, total_mb=None, ram_mb=None, floor_mb=None,
+              processes=None, zone_text=None):
+    """Would one more guest fit NOW? {'fits', 'reason', 'waitable', 'running'}, from one memory
+    reading (no CPU sample, no slot touched). `waitable` is True when only running guests stand
+    in the way: once they end, their VM processes' memory is available again and the guest fits.
+    A shortfall that is not waitable is held by apps or the kernel, and waiting will not clear it."""
+    sample = sample or reserve.memory_sample()
+    running = running_guests() if running is None else running
+    resident = vm_resident_mb() if resident is None else resident
+    total_mb = total_mb or host_memory_mb()
+    reason = memory_refusal(sample, running, resident, total_mb, ram_mb, floor_mb, processes, zone_text)
+    if not reason:
+        return {'fits': True, 'reason': '', 'waitable': False, 'running': list(running)}
+    waitable = False
+    if running:
+        freed = sum(resident[:len(running)])
+        later = dict(sample, memory_free_percent=sample['memory_free_percent'] + freed / total_mb * 100)
+        waitable = not memory_refusal(later, [], [], total_mb, ram_mb, floor_mb, processes=[], zone_text='')
+    return {'fits': False, 'reason': reason, 'waitable': waitable, 'running': list(running)}
+
+
 def root_dir(root=None):
-    return Path(root or os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm')))
+    return reserve.testvm_root(root)
 
 
 def slot_count():
@@ -394,6 +448,8 @@ def guest_slot(root=None, wait_seconds=0, purpose='', max_cpu=reserve.DEFAULT_MA
     slept = 0.0
     last_reason = None
     recorded = None
+    nightly = os.environ.get(NIGHTLY_WAIT_ENV, '')
+    announced = False
     try:
         while True:
             handle = path = None
@@ -439,9 +495,20 @@ def guest_slot(root=None, wait_seconds=0, purpose='', max_cpu=reserve.DEFAULT_MA
                 _say(f'slot waiting: {reason}; up to {remaining:.0f}s more')
                 last_reason = reason
             recorded = _record_wait(recorded, reason)
+            if nightly and not announced:
+                # From the first refusal: every other admission now waits behind this one.
+                try:
+                    reserve.write_nightly_guest_wait(nightly, root)
+                    _say(f'slot waiting as the nightly\'s {nightly}: new test and proof admissions are '
+                         'held until this run has its guest (reserve.py)')
+                except (OSError, ValueError) as exc:
+                    _say(f'nightly slot wait not recorded, other admissions are not held: {exc}')
+                announced = True
             sleep(min(pause, remaining))
             slept += min(pause, remaining)
     finally:
+        if announced:
+            reserve.clear_nightly_guest_wait(root)
         if recorded is not None:
             recorded.close()
     waited = clock() - started
@@ -504,6 +571,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='verb', required=True)
     sub.add_parser('status', help='each slot: free, or who holds it and for how long')
+    sub.add_parser('fits', help='one JSON line: would one more guest fit in memory now (exit 0), or why '
+                                'not (exit 75) and whether only running guests stand in the way')
     sub.add_parser('check', help='exit 0 and print the slot only when an ancestor of the caller holds the slot '
                                  'named in $' + ENV)
     r = sub.add_parser('run', help='hold one slot for exactly one command')
@@ -517,6 +586,10 @@ def main():
         for path in slot_paths():
             print(describe(path))
         return 0
+    if a.verb == 'fits':
+        report = guest_fit()
+        print(json.dumps(report), flush=True)
+        return 0 if report['fits'] else 75
     if a.verb == 'check':
         why = check()
         if why:

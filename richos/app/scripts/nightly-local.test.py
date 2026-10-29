@@ -33,6 +33,10 @@ spec.loader.exec_module(m)
 REPORT_PUBLISHED = m.Runner.report_published
 PREPARE_CHANGELOG = m.Runner.prepare_changelog
 COMPLETED_BUILD = m.Runner.completed_build
+# No test asks this Mac's memory or tart by accident: a Runner's guest always fits unless the test
+# says otherwise. GuestMemoryTests drives the real method against a stand-in slots.py.
+GUEST_MEMORY_FIT = m.Runner.guest_memory_fit
+GUEST_FITS = {"fits": True, "reason": "", "waitable": False, "running": []}
 LEDGER = tempfile.TemporaryDirectory(prefix="nightly-local-ledger-")
 LEDGER_ENV = "RICHOS_ESCALATION_LEDGER"
 LEDGER_BEFORE = os.environ.get(LEDGER_ENV)
@@ -45,12 +49,14 @@ def setUpModule():
     def prepare(runner, info, out):
         runner.__dict__.setdefault("changelog_prepared", []).append((info["tag"], str(out)))
     m.Runner.prepare_changelog = prepare
+    m.Runner.guest_memory_fit = lambda runner: dict(GUEST_FITS)
     os.environ[LEDGER_ENV] = str(Path(LEDGER.name) / "escalations.jsonl")
 
 
 def tearDownModule():
     m.Runner.report_published = REPORT_PUBLISHED
     m.Runner.prepare_changelog = PREPARE_CHANGELOG
+    m.Runner.guest_memory_fit = GUEST_MEMORY_FIT
     if LEDGER_BEFORE is None:
         os.environ.pop(LEDGER_ENV, None)
     else:
@@ -1876,6 +1882,97 @@ while True: time.sleep(.02)
         with self.assertRaisesRegex(ValueError, "no new-user walk"):
             publisher.require_new_user_walk(info, "fixture-run-id")
         self.assertIsNone(publisher.require_new_user_walk(dict(self.CANDIDATE_INFO), "fixture-run-id"))
+
+    # ---- 2026-10-29, nightly 80: guest memory is asked at once, never found at an hour's end ----
+    # Its retake ended "guest slot refused after 3602s: a guest needs 5120 MB: 8847 MB available
+    # ... would leave 3727 MB (floor 4096 MB)". On main the VM phase starts its slot wait whatever
+    # the memory, so these are red there: the wait is the hour.
+    SHORT_BY_APPS = {"fits": False, "waitable": False, "running": [], "reason": (
+        "a guest needs 5120 MB: 8847 MB available, 0 MB still owed to 0 running guest(s), would leave "
+        "3727 MB (floor 4096 MB, default); 369 MB more must be free; kernel leak data.kalloc.1024 holds "
+        "9.3 GB; only a restart returns it; largest apps by memory: ChatGPT 2338 MB, RichOS 800 MB")}
+
+    @staticmethod
+    def slot_waits(calls):
+        return [Path(str(a[1])).name for a, _ in calls if Path(str(a[1])).name in ("gui-proof-in-vm.sh", "run-walk.py")]
+
+    def test_a_guest_that_cannot_fit_ends_the_vm_phase_at_once_naming_what_holds_the_memory(self):
+        r, calls = self.build_that_takes_its_vm_proof("pass")
+        r.guest_memory_fit = Mock(return_value=dict(self.SHORT_BY_APPS))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), \
+                self.assertRaisesRegex(RuntimeError, "ITS BOOT WAS NOT PROVEN IN THE TEST VM") as caught:
+            r.perform("build", no_host_screen=True)
+        self.assertEqual(self.slot_waits(calls), [], "a shortfall no slot wait can clear never starts one")
+        for words in ("Nothing waited for a slot", "kernel leak data.kalloc.1024 holds 9.3 GB; only a restart",
+                      "ChatGPT 2338 MB", "gui-proof-in-vm.sh --run fixture-run-id (no rebuild needed)"):
+            self.assertIn(words, str(caught.exception))
+        out = buf.getvalue()
+        # Asked before the gates as well, and said then, not refused: the build still went on.
+        before = out.index("GUEST MEMORY SHORT: a test-VM guest does not fit in memory before the gates")
+        self.assertLess(before, out.index("Building "))
+        self.assertIn("the gates go on", out)
+        self.assertIn("on entering the VM boot proof", out)
+        self.assertIn("Candidate build", out)
+
+    def test_a_shortfall_only_running_guests_hold_is_left_to_the_slot_wait(self):
+        r, calls = self.build_that_takes_its_vm_proof("pass")
+        r.guest_memory_fit = Mock(return_value={"fits": False, "waitable": True, "running": ["walk-a"],
+                                                "reason": "a guest needs 5120 MB: ... 5070 MB still owed"})
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            r.perform("build", no_host_screen=True)
+        self.assertEqual(self.slot_waits(calls), ["gui-proof-in-vm.sh"])
+        self.assertIn("short only while walk-a run(s); the slot wait covers that", buf.getvalue())
+        self.assertNotIn("GUEST MEMORY SHORT", buf.getvalue())
+
+    def test_a_guest_memory_check_that_cannot_be_asked_leaves_the_decision_to_the_slot_wait(self):
+        r, calls = self.build_that_takes_its_vm_proof("pass")
+        r.guest_memory_fit = Mock(return_value={"error": "tart could not say which guests are running"})
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            r.perform("build", no_host_screen=True)
+        self.assertEqual(self.slot_waits(calls), ["gui-proof-in-vm.sh"])
+        self.assertIn("not checked (tart could not say", buf.getvalue())
+
+    def test_the_new_user_walk_asks_again_on_entry_and_ends_at_once_when_short(self):
+        passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
+        r, calls = self.build_that_walks_as_a_new_user(passed)
+        # Fits before the gates and for the boot proof; ChatGPT grew before the walk.
+        r.guest_memory_fit = Mock(side_effect=[dict(GUEST_FITS), dict(GUEST_FITS), dict(self.SHORT_BY_APPS)])
+        with contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaisesRegex(RuntimeError, "A NEW USER'S FIRST RUN OF IT WAS NOT WALKED") as caught:
+            r.perform("build", no_host_screen=True)
+        self.assertEqual(self.slot_waits(calls), ["gui-proof-in-vm.sh"], "the walk never started its slot wait")
+        self.assertIn("ChatGPT 2338 MB", str(caught.exception))
+        self.assertEqual(r.guest_memory_fit.call_count, 3)
+
+    def test_each_vm_phase_s_slot_wait_names_itself_so_reserve_holds_other_admissions(self):
+        passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
+        r, calls = self.build_that_walks_as_a_new_user(passed)
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("build", no_host_screen=True)
+        named = {Path(str(a[1])).name: k["env_extra"].get(m.NIGHTLY_WAIT_ENV) for a, k in calls
+                 if Path(str(a[1])).name in ("gui-proof-in-vm.sh", "run-walk.py")}
+        self.assertEqual(named, {"gui-proof-in-vm.sh": "vm-boot-proof (run fixture-run-id)",
+                                 "run-walk.py": "new-user-walk (run fixture-run-id)"})
+        self.assertEqual(m.NIGHTLY_WAIT_ENV, "TESTVM_NIGHTLY_WAIT", "the name testvm/slots.py reads")
+
+    def test_the_memory_question_is_slots_py_fits_and_a_garbled_answer_is_not_a_pass(self):
+        r = self.runner()
+        r.env, r.vm_settings = {"PATH": os.environ.get("PATH", "")}, {"TESTVM_RAM_MB": "5120"}
+        stand_in = self.root / "slots.py"
+        for body, expect in (
+                ('import json, os, sys; assert sys.argv[1:] == ["fits"]; '
+                 'print(json.dumps({"fits": False, "reason": os.environ["TESTVM_RAM_MB"], "waitable": False, '
+                 '"running": []})); sys.exit(75)', {"fits": False, "reason": "5120"}),
+                ('import sys; print("tart: not installed", file=sys.stderr); sys.exit(75)',
+                 {"error": "tart: not installed"})):
+            stand_in.write_text(body)
+            with patch.object(m, "GUEST_FIT_SCRIPT", stand_in):
+                answer = GUEST_MEMORY_FIT(r)
+            for key, value in expect.items():
+                self.assertEqual(answer.get(key), value, answer)
 
     def test_a_vm_proof_that_fails_fails_the_build_and_still_shows_the_candidate(self):
         r, _ = self.build_that_takes_its_vm_proof("fail:no-window")

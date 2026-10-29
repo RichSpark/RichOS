@@ -61,9 +61,14 @@ class Slots(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / 'testvm'
-        self.env = patch.dict(os.environ, {'TESTVM_ROOT': str(self.root)})
+        # This Mac's own limits file never decides a floor a test asserts (the default is used).
+        limits = Path(self.tmp.name) / 'limits.env'
+        limits.write_text('')
+        self.env = patch.dict(os.environ, {'TESTVM_ROOT': str(self.root), 'RICHOS_LIMITS_FILE': str(limits)})
         self.env.start()
         os.environ.pop('TESTVM_SLOTS', None)
+        os.environ.pop('TESTVM_MEMORY_FLOOR_MB', None)
+        os.environ.pop('TESTVM_NIGHTLY_WAIT', None)
         os.environ.pop(slots.ENV, None)
         os.environ.pop('RICHOS_AGENT_OWNER', None)  # these tests wait on runs of one owner (this agent's)
 
