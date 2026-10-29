@@ -402,6 +402,41 @@ Nothing above blocks publishing the **source**. The AGPL obligations attach to
 what this repository contains and every bundled work in it is named here with
 its terms.
 
+### sentencepiece-model 0.1.4 — BSD-2-Clause notice
+
+`sentencepiece-model` 0.1.4 (BSD-2-Clause) is compiled into the application
+(`richos/app`, `richos/app/src-tauri`; see its row in
+`docs/legal/THIRD-PARTY-RUST-DEPENDENCIES.md`). The crate ships no LICENSE file
+in its package; its `Cargo.toml` names the author Christian Sdunek and the
+license BSD-2-Clause. BSD-2-Clause clause 2 requires this notice in binary
+distributions. The text below is the upstream `LICENSE`, verbatim, from
+<https://github.com/Systemcluster/sentencepiece-model> at tag `v0.1.4`, commit
+`73e79d3cc659cfd696f4aedd2a0fbe9a325d6c83` (file sha256
+`e914a373d19228aa8c0d55f0949c7f37f5e1218d297004cb1fad91f7a47e342d`).
+
+```text
+Copyright (c) 2023 Christian Sdunek <me@systemcluster.me>
+
+Redistribution and use in source and binary forms, with or without modification, are permitted
+provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions
+and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of
+conditions and the following disclaimer in the documentation and/or other materials provided with
+the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
 ## Designs adopted from third-party source — no code bundled
 
 Nothing in this section is redistributed. It is recorded because a design read

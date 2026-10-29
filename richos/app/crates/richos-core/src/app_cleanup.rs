@@ -66,12 +66,38 @@ pub const OWNER_FILE: &str = ".richos-owner.json";
 /// lstart=` under `LC_ALL=C TZ=UTC0`), so the two compare as text. Read once.
 pub fn own_start() -> Option<String> {
     static START: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    START.get_or_init(|| {
-        let out = Command::new("ps").args(["-o", "lstart=", "-p", &std::process::id().to_string()])
-            .env("LC_ALL", "C").env("LANG", "C").env("TZ", "UTC0").output().ok()?;
-        let text = String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>().join(" ");
-        (out.status.success() && !text.is_empty()).then_some(text)
+    START.get_or_init(|| match process_start(std::process::id()) {
+        ProcessStart::Running(start) => Some(start),
+        ProcessStart::Gone | ProcessStart::Unreadable => None,
     }).clone()
+}
+
+/// What the operating system says of one process number, read by [`process_start`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessStart {
+    /// A process with this number runs, started at this time (`ps -o lstart=` text).
+    Running(String),
+    /// No process with this number exists (`ps` answers nothing: `workspaces.py`'s "gone").
+    Gone,
+    /// It could not be asked.
+    Unreadable,
+}
+
+/// Any process's start, read the same way as [`own_start`].
+pub fn process_start(pid: u32) -> ProcessStart {
+    if pid == 0 {
+        return ProcessStart::Unreadable;
+    }
+    let Ok(out) = Command::new("ps").args(["-o", "lstart=", "-p", &pid.to_string()])
+        .env("LC_ALL", "C").env("LANG", "C").env("TZ", "UTC0").stdin(Stdio::null()).output() else {
+        return ProcessStart::Unreadable;
+    };
+    let text = String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>().join(" ");
+    match (out.status.code(), text.is_empty()) {
+        (Some(0), false) => ProcessStart::Running(text),
+        (Some(0 | 1), true) => ProcessStart::Gone,
+        _ => ProcessStart::Unreadable,
+    }
 }
 
 /// Write [`OWNER_FILE`] into `folder`: this process and its start.

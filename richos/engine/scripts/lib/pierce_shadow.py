@@ -161,7 +161,9 @@ def heads(read_roots):
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=10)
         except (OSError, subprocess.TimeoutExpired):
             continue
-        lines = p.stdout.split()
+        # One line each: a checkout under "Application Support" has a space in
+        # its top-level path, and a whitespace split dropped its commit.
+        lines = p.stdout.splitlines()
         if p.returncode == 0 and len(lines) == 2:
             out[lines[0]] = lines[1]
     return out

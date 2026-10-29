@@ -258,6 +258,24 @@ if rc_sandbox "$UH"; then
         *RC_TEST_OUTSIDE*) bad "7c  a variable pointing elsewhere is left alone" "got:$ENVARGS" ;;
         *) ok "7c  and a variable pointing anywhere else is passed through untouched" ;;
     esac
+    # 7g (2026-10-28): the app's session is removed BY NAME, whatever its value,
+    # and a machine setting that is not the session passes through.
+    APPENV="$(RICHOS_ENGINE_ROOT=/installed/engine RICHOS_APP_THREAD=thr_fixture RICHOS_APP_STATE=/app/state \
+        RICHOS_WORKSPACES_DIR=/app/state/workspaces/x RICHOS_AGENT_HOLD_DIR=/app/state/agent-hold \
+        STALL_WATCH_STATE_DIR=/app/state/stall-watch RICHOS_ENTITY_ROOT=/app/coordination \
+        RICHOS_SESSION_ID=fixture-session RICHOS_BULK_ROOT=/bulk CLAUDE_PROJECT_DIR=/app/coordination \
+        bash -c '. "$1"; rc_sandbox "$2" && printf " %s " "${RC_SANDBOX_ENV[*]}"' _ "$SCRIPT_DIR/record-canary.sh" "$SANDBOX/unit-home-app")"
+    G7=1
+    for name in RICHOS_ENGINE_ROOT RICHOS_APP_THREAD RICHOS_APP_STATE RICHOS_WORKSPACES_DIR RICHOS_AGENT_HOLD_DIR \
+            STALL_WATCH_STATE_DIR RICHOS_ENTITY_ROOT RICHOS_SESSION_ID CLAUDE_PROJECT_DIR; do
+        case "$APPENV" in *" -u $name "*) ;; *) G7=0 ;; esac
+    done
+    case "$APPENV" in *RICHOS_BULK_ROOT*|*"RICHOS_ENGINE_ROOT="*|*"RICHOS_APP_THREAD="*) G7=0 ;; esac
+    if [ "$G7" -eq 1 ]; then
+        ok "7g  the app's session (installed engine, live records, conversation) is REMOVED by name and never set; a machine setting passes"
+    else
+        bad "7g  the app's session is handed to the unit" "got:$APPENV"
+    fi
     B8="$SANDBOX/b8.txt"
     rc_baseline "$B8"
     printf '{"event": "terminated", "agent_id": "z", "ts": "t"}\n' >>"$CFG/state/worktree-ledger.jsonl"

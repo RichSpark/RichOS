@@ -123,6 +123,28 @@ fi
 if [ "$SCREEN_SUITES" = 1 ]; then
   [ -f "$CAND_DIR/RichOS.app.tar.gz" ] || die "screen suites need $CAND_DIR/RichOS.app.tar.gz"
   command -v cliclick >/dev/null 2>&1 || die "screen suites need cliclick on PATH to transfer into the guest"
+
+  # THE RUNTIME AND THE SPEECH MODELS gui-boot's healthy machine needs, named the way the nightly
+  # names them (nightly-local.py Runner.runtime; lib/runtime_cache.py). A worktree has no
+  # extracted runtime (it is gitignored), so a retake of a boot proof from a worker's worktree
+  # stopped at "provide an extracted engine with runtimes via RICHOS_GUI_ENGINE_SOURCE, or a
+  # verified RICHOS_RUNTIME_DIR" until both variables were set by hand (2026-10-28). A caller's
+  # own value still wins. Read here, before any guest or slot exists, so a missing runtime is
+  # refused in a second with the one command that builds it.
+  if [ -z "${RICHOS_RUNTIME_DIR:-}" ]; then
+    RECIPE="$HERE/runtime-sources.json"
+    RUNTIME="$(python3 "$HERE/lib/runtime_cache.py" path "$STATE_DIR" "$RECIPE")" \
+      || die "cannot name the nightly's runtime for $RECIPE"
+    BUILD_RUNTIME="python3 $(printf '%q %q' "$HERE/build-runtimes.py" "$RUNTIME")"
+    [ -d "$RUNTIME" ] \
+      || die "there is no runtime at $RUNTIME for this checkout's recipe. Build it once with: $BUILD_RUNTIME"
+    python3 "$HERE/verify-runtime.py" "$RUNTIME" "$RECIPE" >/dev/null 2>&1 \
+      || die "the runtime at $RUNTIME does not verify against $RECIPE. Rebuild it with: $BUILD_RUNTIME (run verify-runtime.py on it to see why)"
+    export RICHOS_RUNTIME_DIR="$RUNTIME"
+  fi
+  if [ -z "${RICHOS_GUI_SPEECH_MODELS:-}" ] && SPEECH_MODELS="$(python3 "$HERE/lib/runtime_cache.py" models 2>/dev/null)"; then
+    export RICHOS_GUI_SPEECH_MODELS="$SPEECH_MODELS"
+  fi
 fi
 
 # ONE GUEST SLOT, FOR THIS RUN ONLY (testvm/slots.py; the CEO, 2026-09-27). Everything

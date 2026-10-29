@@ -261,6 +261,28 @@ def clean_env(common):
     return env
 
 
+def check_tmpdir(repo):
+    """The TMPDIR the hook's checks run with: {"TMPDIR": dir}, or {} to leave theirs alone.
+
+    The hook decides it, never the caller's shell, so a commit passes or fails the same way from
+    a terminal, an app's worker and Rich's own checkout. The directory is the machine's named
+    scratch for the hook (machine_settings.scratch: the configured bulk root's tmp/claude, else a
+    folder under the caller's TMPDIR). The privacy fixture of the extension's native host is why:
+    it runs only with TMPDIR on a mounted volume other than the startup disk and says NOT RUN
+    from /var/folders, and the commit refused on that exit code for any worker whose TMPDIR was
+    the app's per-user folder. When no scratch can be made, the caller's TMPDIR stays if it names
+    a writable directory, and is dropped (children then use /tmp) if it does not."""
+    try:
+        return {"TMPDIR": str(machine_storage(repo).scratch("autocheck-hook", repo.env))}
+    except (ValueError, OSError, ImportError, AttributeError):
+        pass
+    given = repo.env.get("TMPDIR", "")
+    if given and os.path.isdir(given) and os.access(given, os.W_OK):
+        return {}
+    repo.env.pop("TMPDIR", None)
+    return {}
+
+
 def ancestors():
     pids, pid = set(), os.getppid()
     for _ in range(64):
@@ -293,6 +315,7 @@ class Repo:
         self.branch = git("symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
         self.state = self.common / "richos-autocheck"
         self.env = clean_env(str(self.common))
+        self.env.update(check_tmpdir(self))
 
     def run(self, argv, env=None, **kw):
         say("+ " + " ".join(shlex.quote(str(a)) for a in argv))

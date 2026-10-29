@@ -112,6 +112,31 @@
 # disk-watchdog.test.sh W22d does: judged against the throwaway home, the
 # declared $TMPDIR is "a folder holding the home" — a verdict about the runner.
 #
+# ===========================================================================
+# AMENDED 2026-10-28 — THE APP'S SESSION IS A ROAD BACK TOO
+# ===========================================================================
+# A worker shell the RichOS app starts carries the app's session in its
+# environment: the INSTALLED engine (RICHOS_ENGINE_ROOT, RICHOS_ENGINE_DIR), the
+# app's live records (RICHOS_WORKSPACES_DIR, RICHOS_AGENT_HOLD_DIR,
+# STALL_WATCH_STATE_DIR, RICHOS_SA_TEAMS_DIR, RICHOS_APP_STATE), its
+# conversation (RICHOS_APP_ENTITY, RICHOS_APP_THREAD, RICHOS_SESSION_ID, ...)
+# and its coordination entity (RICHOS_ENTITY_ROOT, and the launching Claude
+# session's CLAUDE_PROJECT_DIR, under which left-off.test.sh wrote its fixture
+# left-off.*.state files into the live coordination checkout). None of them lies under
+# CLAUDE_CONFIG_DIR, so the rule above handed every one to the unit, and a unit
+# then tested the installed engine instead of the one under test, spoke to the
+# app's audience instead of the terminal's, and wrote into the app's live
+# registry: on 2026-10-28 record-canary.test.sh 7d'' wrote its fixture wait
+# record into engine-state/workspaces/<thread>/agents/wait-regression.json, and
+# twelve checks of one proof run (locate-engine, pierce, spawn, stall-watch,
+# contract-integrity Q, ...) failed only in the app's shells. CI and the nightly
+# have none of these names (nightly-launch.sh starts the app under env -i), so
+# removing them is CI's shape, as the throwaway home is. They are REMOVED,
+# never set, by NAME (APP_SESSION_NAMES and every RICHOS_APP_* below): a value
+# like a thread id is no path, so the path rule above cannot find it. Machine
+# settings (RICHOS_BULK_ROOT, RICHOS_CLAUDE_BIN, ...) are not the session and
+# pass through; a unit that tests app behaviour sets the names it needs itself.
+#
 # WHAT IT CANNOT SEE NOW, named: a unit that reaches the operator's record by a
 # path fixed BEFORE it started (an absolute path baked into a script) or from
 # the password database (pwd.getpwuid) rather than $HOME. Measured 2026-09-27:
@@ -146,12 +171,19 @@ RC_HEALTHY=1
 RC_SANDBOX_ENV=()
 
 # _rc_roads_back — the name of every environment variable whose value is the
-# operator's record or a path inside it, one per line. A function of its own so
-# the heredoc is not nested inside a command substitution, which bash 3.2 (the
-# operator's /bin/bash) can misparse.
+# operator's record or a path inside it, and of every variable of the app's
+# session (the header, "AMENDED 2026-10-28"), one per line. A function of its
+# own so the heredoc is not nested inside a command substitution, which bash 3.2
+# (the operator's /bin/bash) can misparse.
 _rc_roads_back() {
     python3 - "$RC_LIVE_CFG" "${RC_LIVE_HOME:+$RC_LIVE_HOME/.claude}" <<'PY'
 import os, sys
+APP_SESSION_NAMES = {
+    "RICHOS_ENGINE_ROOT", "RICHOS_ENGINE_DIR", "RICHOS_ENTITY_ROOT", "RICHOS_SA_ENTITY_ROOT",
+    "RICHOS_SA_TEAMS_DIR", "RICHOS_WORKSPACES_DIR", "RICHOS_AGENT_HOLD_DIR", "STALL_WATCH_STATE_DIR",
+    "RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION", "RICHOS_SESSION_ID", "RICHOS_SESSION_PID",
+    "RICHOS_SPAWN_HOOK_SOURCES", "RICHOS_CLAUDE_ACCOUNT", "CLAUDE_PROJECT_DIR",
+}
 roots = []
 for r in sys.argv[1:]:
     if r:
@@ -160,7 +192,9 @@ for r in sys.argv[1:]:
 for name, value in sorted(os.environ.items()):
     if name == "HOME" or not name.replace("_", "a").isalnum():
         continue
-    if any(value == r or value.startswith(r + "/") for r in roots if r):
+    if name in APP_SESSION_NAMES or name.startswith("RICHOS_APP_"):
+        print(name)
+    elif any(value == r or value.startswith(r + "/") for r in roots if r):
         print(name)
 PY
 }
@@ -183,17 +217,19 @@ rc_sandbox() {
     printf '[user]\n\tname = richos-engine-unit\n\temail = richos-engine-unit@users.noreply.github.com\n' \
         >"$home/.gitconfig" 2>/dev/null || return 1
     # Every variable whose value is the operator's record or inside it is
-    # removed, whatever it is called: a unit is handed no road back to it.
-    # Python reads the environment because a value may hold a newline. If it
-    # cannot run, the unit is NOT started with a road left open.
+    # removed, whatever it is called, and so is every variable of the app's
+    # session: a unit is handed no road back to either. Python reads the
+    # environment because a value may hold a newline. If it cannot run, the
+    # unit is NOT started with a road left open.
     names="$(_rc_roads_back)" || return 1
     for name in $names; do
         RC_SANDBOX_ENV+=(-u "$name")
     done
-    # HOME is the one name SET. CLAUDE_CONFIG_DIR and RICHOS_WORKSPACES_DIR are
-    # removed above when they point at the operator's record, and are never
-    # set: their defaults then resolve inside this home, and a unit that builds
-    # a world of its own keeps the resolution it chose (see the header).
+    # HOME is the one name SET. CLAUDE_CONFIG_DIR is removed above when it
+    # points at the operator's record and RICHOS_WORKSPACES_DIR always (it is
+    # the app's session); neither is ever set: their defaults then resolve
+    # inside this home, and a unit that builds a world of its own keeps the
+    # resolution it chose (see the header).
     RC_SANDBOX_ENV+=("HOME=$home")
     return 0
 }

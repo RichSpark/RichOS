@@ -196,7 +196,9 @@ agent_call "$AID" "toolu_work1" "python3 $T/worker.py $T/w1 $ROUNDS; echo native
 sub "H1.0 ordinary CLI call requests six-second foreground grace" \
     "python3 -c 'import json,sys; t=json.load(open(sys.argv[1]))[\"hookSpecificOutput\"][\"updatedInput\"]; assert t[\"run_in_background\"] is False and t[\"timeout\"] == 6000' '$T/w1.hook.json'"
 wait_file "$T/w1.progress"; W1="$(cat "$T/w1.pid")"; OURS+=("$W1"); SH1="$(cat "$T/w1.shell")"
-WAITCMD="python3 $LIB/agent_hold.py wait"
+# Quoted exactly as pause_protocol.WAIT_COMMAND quotes it: the engine under test
+# may live under a folder with a space ("Application Support").
+WAITCMD="python3 $(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$LIB/agent_hold.py") wait"
 agent_call "$AID" "toolu_delivery" "$WAITCMD" delivery
 sleep 0.2
 T0="$(python3 -c 'import time; print(time.time())')"
