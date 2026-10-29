@@ -228,7 +228,12 @@ impl WorkHost {
             let lease = lease.as_ref()?;
             (lease.account()?.to_string(), lease.session_id().to_string())
         };
-        let room = quota.limit_reached(&account, resets_at) == crate::claude_accounts::AfterLimit::Continue;
+        let continued = quota.limit_reached(&account, resets_at) == crate::claude_accounts::AfterLimit::Continue;
+        // `Continue` says only that another account is in use, which it already is when another
+        // conversation's turn moved there first; that account may since have been refused too
+        // (review of e58c2c825, P2). It has room only when it is not marked gone itself.
+        let next = continued.then(|| quota.accounts.in_use().id);
+        let room = next.as_deref().is_some_and(|id| !Self::marked_gone(&quota, id));
         if room {
             // **Never back to the refused account** (review of a6bd17fa5, P1): a command, helper
             // or automatic turn of his keeps his session there (`renew_lease`), and the retry
@@ -243,8 +248,12 @@ impl WorkHost {
             return Some(hold);
         }
         let now = crate::util::now_millis();
+        let limited = |id: &str| quota.accounts.limited_until(id).filter(|until| *until > now);
+        // With room he waits only for his own session to come free, at most to this account's
+        // reset; without, for the soonest reset of the accounts.
+        let soonest = limited(&hold.account).into_iter().chain(next.as_deref().and_then(limited)).min();
         let held = (!room).then(|| quota.view().held_until).flatten();
-        let until = held.or_else(|| quota.accounts.limited_until(&hold.account)).unwrap_or(now);
+        let until = held.or(soonest).unwrap_or(now);
         let wait = std::time::Duration::from_millis(until.saturating_sub(now));
         if !room {
             // Shown as the overload wait is: RichOS's own retry sentence, never Stu's words.
@@ -255,15 +264,24 @@ impl WorkHost {
 
     /// **Stu's input can go again without meeting the same refusal**: the refused `account` is
     /// no longer marked gone (its reset passed, or a reset was used on it), or another account
-    /// is in use and nothing of his still holds his session on the refused one. Read by the hold
-    /// before the retry, so it ends as soon as either is true rather than at the time it began
-    /// with.
+    /// is in use, is not marked gone itself, and nothing of his still holds his session on the
+    /// refused one. Read by the hold before the retry, so it ends as soon as either is true
+    /// rather than at the time it began with.
+    ///
+    /// "Marked gone" is the usage-limit backstop's mark ([`crate::claude_accounts::Accounts::limited_until`]),
+    /// the refusals this retry answers. An account that is only near its threshold by its
+    /// readings is the switch decision's to leave (`before_turn`, run by the retry's delivery).
     fn usage_limit_lifted(&self, backend: &Backend, quota: &crate::quota::Service, account: &str) -> bool {
-        let now = crate::util::now_millis();
-        if quota.accounts.limited_until(account).is_none_or(|until| until <= now) { return true; }
-        if quota.accounts.in_use().id == account { return false; }
+        if !Self::marked_gone(quota, account) { return true; }
+        let in_use = quota.accounts.in_use().id;
+        if in_use == account || Self::marked_gone(quota, &in_use) { return false; }
         let lease = backend.lease.lock().unwrap();
         lease.as_ref().is_none_or(|current| current.account() != Some(account) || !Self::session_in_use(backend, current.as_ref()))
+    }
+
+    /// `id` is marked gone by a usage limit that has not reset yet.
+    fn marked_gone(quota: &crate::quota::Service, id: &str) -> bool {
+        quota.accounts.limited_until(id).is_some_and(|until| until > crate::util::now_millis())
     }
 
     fn live_completion(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding,
@@ -3081,7 +3099,10 @@ mod tests {
         cut: Arc<AtomicUsize>,
         prompts: Arc<Mutex<Vec<(String, String)>>>,
         commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
+        before_cut: BeforeCut,
     }
+    /// What happens elsewhere while Stu's turn runs, just before the limit cuts it (run once).
+    type BeforeCut = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
     impl Cognition for LimitedLease {
         fn session_id(&self)->&str {&self.session}
         fn account(&self)->Option<&str> {Some(&self.account)}
@@ -3090,6 +3111,8 @@ mod tests {
         fn prompt(&mut self,text:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
             self.prompts.lock().unwrap().push((self.account.clone(),text.to_string()));
             if self.cut.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|left|left.checked_sub(1)).is_ok() {
+                let elsewhere=self.before_cut.lock().unwrap().take();
+                if let Some(elsewhere)=elsewhere {elsewhere();}
                 return Err(CognitionError::Protocol(crate::claude_accounts::usage_limit_error(Some(self.resets_at),
                     "[\"You've hit your session limit\"]")));
             }
@@ -3098,13 +3121,14 @@ mod tests {
     }
     struct LimitedFactory { quota: Arc<crate::quota::Service>, spawns: Arc<AtomicUsize>, resets_at: u64,
         cut: Arc<AtomicUsize>, prompts: Arc<Mutex<Vec<(String, String)>>>,
-        commands: Arc<Mutex<crate::lease_commands::CommandReading>> }
+        commands: Arc<Mutex<crate::lease_commands::CommandReading>>, before_cut: BeforeCut }
     impl LeaseFactory for LimitedFactory {
         fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
         fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
             let n=self.spawns.fetch_add(1,Ordering::SeqCst);
             Ok(Box::new(LimitedLease {session:format!("stu-limited-{n}"),account:self.quota.lease_account().id,
-                resets_at:self.resets_at,cut:self.cut.clone(),prompts:self.prompts.clone(),commands:self.commands.clone()}))
+                resets_at:self.resets_at,cut:self.cut.clone(),prompts:self.prompts.clone(),commands:self.commands.clone(),
+                before_cut:self.before_cut.clone()}))
         }
     }
     struct Limited {
@@ -3117,6 +3141,7 @@ mod tests {
         prompts: Arc<Mutex<Vec<(String, String)>>>,
         /// What Stu's leases report running (`Clear` unless a test says otherwise).
         commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
+        before_cut: BeforeCut,
         resets_at: u64,
     }
     /// A quota service with Account 1 in use and Home, both read with room (the probe fixture),
@@ -3140,14 +3165,15 @@ mod tests {
         let resets_at=crate::util::now_millis()+3_600_000;
         let (cut,prompts)=(Arc::new(AtomicUsize::new(cut)),Arc::new(Mutex::new(Vec::new())));
         let commands=Arc::new(Mutex::new(crate::lease_commands::CommandReading::Clear));
+        let before_cut: BeforeCut=Arc::new(Mutex::new(None));
         let notices=Arc::new(RecordingNotifier::default());
         let host=WorkHost::new(&h.state,Box::new(LimitedFactory {quota:quota.clone(),spawns:Arc::new(AtomicUsize::new(0)),
-            resets_at,cut:cut.clone(),prompts:prompts.clone(),commands:commands.clone()}),notices.clone());
+            resets_at,cut:cut.clone(),prompts:prompts.clone(),commands:commands.clone(),before_cut:before_cut.clone()}),notices.clone());
         let clock=Arc::new(RecordedRetryClock::default());
         host.set_retry_clock(clock.clone());
         host.set_quota(quota.clone());
         crate::session_tools::bind(&h.root.join("peer-status.json"),&host.message_scope(&h.binding),"front","rich",None).unwrap();
-        Limited {h,host,quota,clock,notices,cut,prompts,commands,resets_at}
+        Limited {h,host,quota,clock,notices,cut,prompts,commands,before_cut,resets_at}
     }
     impl Limited {
         /// Rich hands Stu `text`; returns once the run loop has finished `completed` turns.
@@ -3253,6 +3279,42 @@ mod tests {
         assert!(waits.len()==1 && waits[0]<=hour && waits[0]>hour-minute,"not one hold to Account 1's reset: {waits:?}");
         assert!(stu.failures().is_empty(),"a turn that went on on Home was reported as failed");
         assert!(stu.notices.0.lock().unwrap().is_empty(),"Home has room: no line says no account has room");
+        stu.end();
+    }
+
+    /// **Not spent on an account in use that is refused too** (review of e58c2c825, P2). While
+    /// Stu's turn runs on Account 1, another conversation's turns are refused on Account 1 (Home
+    /// is put in use) and then on Home. When Stu's turn is cut, `limit_reached` says only that
+    /// another account is in use. The one retry is not sent to Home: it is held, to the soonest
+    /// reset, with RichOS's line that no account has room, and it goes on Home once Home's
+    /// refusal is lifted (a reset used on it).
+    #[test]
+    #[cfg(unix)]
+    fn a_stu_turn_cut_by_a_usage_limit_is_held_when_the_account_in_use_was_refused_too() {
+        let h=harness(0);
+        let (quota,home)=account_one_and_home_with_room(&h);
+        let stu=stu_with_a_usage_limit(h,quota.clone(),1);
+        let elsewhere=(quota.clone(),home.id.clone());
+        *stu.before_cut.lock().unwrap()=Some(Box::new(move || {
+            let (quota,home)=elsewhere;
+            let now=crate::util::now_millis();
+            assert_eq!(quota.limit_reached("1",Some(now+3_600_000)),crate::claude_accounts::AfterLimit::Continue);
+            assert_eq!(quota.limit_reached(&home,Some(now+2*3_600_000)),crate::claude_accounts::AfterLimit::NoRoom);
+        }));
+        let lifting=(quota.clone(),home.id.clone());
+        let clock=Arc::new(LiftedDuringHold::new(move || lifting.0.accounts.reset_used(&lifting.1).unwrap()));
+        stu.host.set_retry_clock(clock.clone());
+
+        stu.send("Input under test",1);
+
+        assert_eq!(stu.deliveries("Input under test"),["1".to_string(),home.id.clone()],
+            "the one retry was spent while every account was refused: {:?}",stu.prompts.lock().unwrap());
+        let waits=clock.waits();
+        let (hour,minute)=(std::time::Duration::from_secs(3600),std::time::Duration::from_secs(60));
+        assert!(waits.len()==1 && waits[0]<=hour && waits[0]>hour-minute,"not one hold to the soonest reset: {waits:?}");
+        let shown=stu.notices.0.lock().unwrap().clone();
+        assert!(shown.len()==1 && shown[0].1.contains("no Claude account has room"),"{shown:?}");
+        assert!(stu.failures().is_empty());
         stu.end();
     }
 
