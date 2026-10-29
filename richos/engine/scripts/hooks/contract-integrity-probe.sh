@@ -471,6 +471,9 @@ run_layer_R() {
     #     about. Its subject is the COMMAND's text and the payload's cwd, not a repository.
     #   guard-host-sleep — the Bash rule that refuses caffeinate and sleep-setting changes on
     #     the host. Its subject is the COMMAND's text alone; no repository decides it.
+    #   guard-headed-browser — the Bash and mcp__* rule that keeps browser automation on the
+    #     host headless. Its subject is the command, the files it runs from the payload's cwd
+    #     and the MCP server's launch configuration; no repository decides it.
     #   deliver-review-verdict - a matcherless PreToolUse delivery of a second-review
     #     verdict to the running teammate whose work it is. Its subject is the
     #     payload's agent_id, the review ledger and the workspace registry, all in
@@ -482,7 +485,7 @@ run_layer_R() {
     notice-inflight-sends session-start-ci-surface session-start-scratch session-start-quota session-start-stall shell-evidence strip-ack-lines \
     task-completed-handoff teammate-idle-handoff \
     worker-created-handoff worker-started-handoff worker-updated-handoff worker-ended-handoff \
-    guard-ci-red-lands guard-land-lease-commands guard-foreign-app-data guard-shared-scratchpad guard-unguarded-rm guard-host-sleep \
+    guard-ci-red-lands guard-land-lease-commands guard-foreign-app-data guard-shared-scratchpad guard-unguarded-rm guard-host-sleep guard-headed-browser \
     deliver-review-verdict \
     guard-no-shell-c"
 
@@ -1261,6 +1264,7 @@ guard-foreign-app-data.sh|PreToolUse
 guard-shared-scratchpad.sh|PreToolUse
 guard-unguarded-rm.sh|PreToolUse
 guard-host-sleep.sh|PreToolUse
+guard-headed-browser.sh|PreToolUse
 guard-no-shell-c.sh|PreToolUse
 guard-stop-live-work.sh|PreToolUse
 deliver-review-verdict.sh|PreToolUse

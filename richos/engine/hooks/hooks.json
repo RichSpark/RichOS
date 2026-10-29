@@ -283,6 +283,16 @@
         ]
       },
       {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/hooks/guard-headed-browser.sh",
+            "timeout": 15
+          }
+        ]
+      },
+      {
         "matcher": "Workflow",
         "hooks": [
           {

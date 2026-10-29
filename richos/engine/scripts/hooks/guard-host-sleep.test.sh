@@ -96,6 +96,7 @@ check 2 P4 'pmset relative' 'pmset relative wake 60'
 check 2 P5 'systemsetup -setcomputersleep' 'sudo systemsetup -setcomputersleep Never'
 check 2 P5 'defaults write PowerManagement' 'defaults write com.apple.PowerManagement "Sleep On Power Button" -bool NO'
 check 2 P5 'open -a Amphetamine' 'open -a Amphetamine'
+check 2 P5 'open -ga (flags clustered)' 'open -ga Amphetamine'
 check 2 P5 'open of a keep-awake app by path' 'open /Applications/KeepingYouAwake.app'
 check 2 P5 'python -c running caffeinate' "python3 -c 'import subprocess; subprocess.run([\"caffeinate\", \"-i\", \"-t\", \"60\"])'"
 check 2 P5 'osascript -e running caffeinate' "osascript -e 'do shell script \"caffeinate -i -t 60\"'"

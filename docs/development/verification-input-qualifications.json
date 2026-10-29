@@ -481,7 +481,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -498,8 +498,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -555,7 +555,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -572,8 +572,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -629,7 +629,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -646,8 +646,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -702,7 +702,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/contract-integrity.test.sh": "0f68abbe588960a3efa8d353a94cf2f90d9d29f1e20a37ae2bdedc64a07127f9",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
@@ -720,8 +720,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -777,7 +777,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -794,8 +794,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -851,7 +851,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -868,8 +868,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -925,7 +925,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -942,8 +942,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -998,7 +998,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -1016,8 +1016,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -1074,7 +1074,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -1091,8 +1091,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -1148,7 +1148,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -1165,8 +1165,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -1222,7 +1222,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -1239,8 +1239,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -1296,7 +1296,7 @@
         "richos/engine/scripts/hooks/snapshot-agent-definitions.sh": "51f92567f9daaa9bacd37082d0cd30beba284b3149714c8a45f945738d6ebaff",
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "richos/engine/scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -1313,8 +1313,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -1377,7 +1377,7 @@
         "richos/engine/scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "richos/engine/scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
         "richos/engine/scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "richos/engine/scripts/hooks/contract-integrity.test.sh": "0f68abbe588960a3efa8d353a94cf2f90d9d29f1e20a37ae2bdedc64a07127f9",
         "richos/engine/scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
@@ -1396,8 +1396,8 @@
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -1448,8 +1448,8 @@
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2"
       },
       "requires": {
         "paths": [],
@@ -1495,8 +1495,8 @@
         "richos/engine/scripts/ceo-asks-status.sh": "bd01c8ce9d195b5c77cc0011b08b8ac983865d08c3a8f0e8feb31d103fb2a650",
         "richos/engine/scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "richos/engine/scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2"
       },
       "requires": {
         "paths": [],
@@ -1534,8 +1534,8 @@
         "richos/engine/scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "richos/engine/scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "richos/engine/scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2"
       },
       "requires": {
         "paths": [],
@@ -1582,8 +1582,8 @@
         "richos/engine/scripts/hooks/notice-ceo-ruled-prose.sh": "b6aa4600524c27077232a5a83feab3cfe603436ae8dcaaaa0bcc9ed725c0c1b5",
         "richos/engine/scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "richos/engine/scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2"
       },
       "requires": {
         "paths": [],
@@ -1634,8 +1634,8 @@
         "richos/engine/scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "richos/engine/scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "richos/engine/scripts/hooks/ceo-todos.mutation.sh": "b84e9b40ba67ff10767e38c451804c32d2789c99f8881a5d063bef590d954b25",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2"
       },
       "requires": {
         "paths": [],
@@ -1672,8 +1672,8 @@
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "richos/engine/scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/machine_paths.py": "c6c84b3946aa4f1f4be46d9f6176f9149b07a75c57163ad6f649aec5d396142a"
       },
       "requires": {
@@ -1710,8 +1710,8 @@
         "richos/engine/scripts/named-persons.sh": "0e219dffeb78a8d7d9593475d2c9efdba010597c08af1dd1b9846e411bd2a2be",
         "richos/engine/scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2"
       },
       "requires": {
         "paths": [],
@@ -1760,8 +1760,8 @@
         "richos/engine/scripts/hooks/guard-row-currency-commits.mutation.sh": "624a4cab7af937bb9ea59cb48429f3ad290fca56eab3d4718a52a7e5eabbc5af",
         "richos/engine/scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "richos/engine/scripts/hooks/row-currency.test.sh": "802f6a46747b6cdfd085e81d6b2ec2e191e3e5e0c6715c253de4465b40d5434f",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2"
       },
       "requires": {
         "paths": [],
@@ -1808,8 +1808,8 @@
         "richos/engine/scripts/lib/row-currency.py": "484404c6143d1a5b94182321e6fa0f6250b298b27a7d3b59ba26d5ed648db677",
         "richos/engine/scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "richos/engine/scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2"
       },
       "requires": {
         "paths": [],
@@ -2332,8 +2332,8 @@
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
         "richos/engine/scripts/lib/sandbox-completeness.sh": "2d141da4f87eb59130459ce74fa1c3067e43c4e7b39ad03cb43f17cfb7973131",
         "richos/engine/scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2"
       },
       "requires": {
         "paths": [],
@@ -2385,8 +2385,8 @@
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
         "richos/engine/scripts/lib/sandbox-completeness.sh": "2d141da4f87eb59130459ce74fa1c3067e43c4e7b39ad03cb43f17cfb7973131",
         "richos/engine/scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/ass-kicker/tests/ass-kicker.test.sh": "1cda599bbf3f363230bc5d1c4217b95822546e0a6481b9c13574d1abd3900a2a",
         "richos/engine/scripts/hooks/ass-kicker.sh": "67958c5559f0271a699ee95462636009f5547ad1212124139137827b0a6006c1",
         "richos/engine/ass-kicker/ass-kicker.py": "1f866789c96ccffdb8d216cbe90cb3b17d405fe0b483ffa0dd7a51a8b07bbe61"
@@ -2439,7 +2439,7 @@
         "richos/engine/scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
         "richos/engine/scripts/hooks/install.sh": "4969540a16589d916ec696f4135a7815cb5975a3d5e3535df84e8d915a33678c",
         "richos/engine/scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
+        "richos/engine/scripts/hooks/contract-integrity-probe.sh": "d7cc0d198e5e6e513cd0655641571925ac5111cd8eb64801de14f5b2b57de88c",
         "richos/engine/scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "richos/engine/scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "richos/engine/scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
@@ -2476,8 +2476,8 @@
         "richos/engine/scripts/lib/hook-dependencies.sh": "a4634dd1f95fe9c518055fd324d4b56a07186aafb8828e387c890c3cbd0e4621",
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
         "richos/engine/scripts/lib/sandbox-completeness.sh": "2d141da4f87eb59130459ce74fa1c3067e43c4e7b39ad03cb43f17cfb7973131",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "richos/engine/scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "richos/engine/scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -2532,8 +2532,8 @@
         "richos/engine/scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
         "richos/engine/scripts/lib/sandbox-completeness.sh": "2d141da4f87eb59130459ce74fa1c3067e43c4e7b39ad03cb43f17cfb7973131",
         "richos/engine/scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "richos/engine/hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
+        "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2"
       },
       "requires": {
         "paths": [],

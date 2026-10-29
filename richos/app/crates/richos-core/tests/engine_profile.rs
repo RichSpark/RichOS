@@ -1229,8 +1229,8 @@ fn with_apples_git_the_lease_includes_the_file_its_osxkeychain_default_comes_fro
 fn every_lease_runs_the_engines_checks_at_the_write_and_never_the_terminal_claim() {
     // The checks at the write the terminal runs and every user needs, named here on their own
     // so this states what the lease must carry rather than echoing what it does carry.
-    const APP_BASH_RULES: [&str; 5] = ["guard-publication-commits.sh", "guard-named-persons-commands.sh",
-        "guard-public-record-repo.sh", "guard-unguarded-rm.sh", "guard-host-sleep.sh"];
+    const APP_BASH_RULES: [&str; 6] = ["guard-publication-commits.sh", "guard-named-persons-commands.sh",
+        "guard-public-record-repo.sh", "guard-unguarded-rm.sh", "guard-host-sleep.sh", "guard-headed-browser.sh"];
     const APP_WRITE_RULES: [&str; 3] = ["scan-secrets.sh", "guard-publication-writes.sh", "guard-named-persons-writes.sh"];
     let f = Scratch::new();
     let folder = f.0.join("central");

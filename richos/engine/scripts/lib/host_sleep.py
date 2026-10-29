@@ -122,7 +122,7 @@ def judge(argv):
         return "`%s`: rewrites the Mac's power-management preferences" % shown
     if name == "open":
         for k, a in enumerate(args):
-            if a in ("-a", "-b") and k + 1 < len(args) and KEEP_AWAKE_APPS.search(args[k + 1]):
+            if re.fullmatch(r"-[A-Za-z]*[ab]", a) and k + 1 < len(args) and KEEP_AWAKE_APPS.search(args[k + 1]):
                 return "`%s`: starts an app whose job is to keep the Mac awake" % shown
             if KEEP_AWAKE_APPS.search(a) and a.endswith(".app"):
                 return "`%s`: starts an app whose job is to keep the Mac awake" % shown

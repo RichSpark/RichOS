@@ -866,6 +866,11 @@ expect_fraction "1a  baseline: banner reports ${EXPECT_N}/${EXPECT_N}, matching 
 # every caffeinate, every pmset write and the other sleep-assertion changes on the host (§65; an agent
 # held caffeinate -i -w for seven minutes on 2026-10-29), and says what to do instead. Suite:
 # guard-host-sleep.test.sh.
+# guard-headed-browser.sh, ADDED 2026-10-29 — BLOCKING, a module of the Bash chain's manifest and
+# registered on mcp__* tools. It keeps browser automation on the host headless: --headed, headless:
+# false in the code a command runs, Playwright's window-only commands, a browser started without
+# --headless and a browser MCP server configured without it (§65; a visible Chrome window reached the
+# CEO's screen on 2026-10-28). Suite: guard-headed-browser.test.sh.
 # guard-no-shell-c.sh, ADDED 2026-10-09 — BLOCKING, a module of the Bash chain's manifest. It refuses
 # a command that wraps an inline script in bash -c, sh -c or zsh -c, which Claude Code cannot check and
 # so asks the user ("This shell -c script ... could not be checked"). The refusal names the rewrite:
@@ -930,6 +935,7 @@ guard-foreign-app-data.sh
 guard-shared-scratchpad.sh
 guard-unguarded-rm.sh
 guard-host-sleep.sh
+guard-headed-browser.sh
 guard-no-shell-c.sh
 operator-claim.sh
 guard-operator-claim.sh
