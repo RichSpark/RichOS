@@ -16875,6 +16875,35 @@
         }
       ],
       "evidence": "Builds a private fixture tree (scripts, playwright configs, package.json, .mcp.json, a synthetic HOME with .claude.json) and feeds PreToolUse payloads to the hook; no command under test is executed and no browser starts. D1 sends non-commit Bash payloads through the real Bash dispatcher. R1 parses hooks.json as data (json.load) for the mcp__.* registration; it executes no registered command."
+    },
+    "scripts/lib/app_management_watch.py": {
+      "source": "scripts/lib/app_management_watch.py",
+      "sha256": "97e4c7b97feec4584a25ce506b206cd6566c88cc927af524229db3c4c1e04b38",
+      "keys": [],
+      "edges": [],
+      "evidence": "The app's read-only child (2026-10-29). Runs /usr/bin/log stream with a fixed predicate (or reads a file named by --input / APP_MANAGEMENT_WATCH_INPUT) and appends records only to <state>/app-management/ledger.jsonl. Environment: RICHOS_WATCH_HOST (the host pid, watched with kqueue) and the input override; no orchestration key."
+    },
+    "scripts/lib/app_management_watch.test.py": {
+      "source": "scripts/lib/app_management_watch.test.py",
+      "sha256": "b72821ce1bda802efc32785588d2959b2a300d0e6292513d0f513748c6d6d077",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/app_management_watch.py"
+        }
+      ],
+      "evidence": "Drives the Recorder with synthetic events in a temporary state folder; starts the real watcher on a private fifo and a private /bin/sleep host it kills itself; runs log stream --timeout 2s read-only to check the predicate. Writes nothing outside its temporary folders."
+    },
+    "scripts/lib/app-management-watch.test.sh": {
+      "source": "scripts/lib/app-management-watch.test.sh",
+      "sha256": "97db3d7647f9edbae470176dc7db8cf289ba1391def6350d44ee7d9ae0234a27",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/app_management_watch.test.py"
+        }
+      ],
+      "evidence": "Runs the fixed app_management_watch.test.py with python3 -B; nothing else."
     }
   },
   "units": {
@@ -17063,7 +17092,8 @@
     "scripts/verification-pins.test.sh": "scripts/verification-pins.test.sh",
     "scripts/lib/inflight-gaps.test.sh": "scripts/lib/inflight-gaps.test.sh",
     "scripts/hooks/guard-host-sleep.test.sh": "scripts/hooks/guard-host-sleep.test.sh",
-    "scripts/hooks/guard-headed-browser.test.sh": "scripts/hooks/guard-headed-browser.test.sh"
+    "scripts/hooks/guard-headed-browser.test.sh": "scripts/hooks/guard-headed-browser.test.sh",
+    "scripts/lib/app-management-watch.test.sh": "scripts/lib/app-management-watch.test.sh"
   },
   "hook_readers": {
     "scripts/hooks/ceo-asks.test.sh": {
