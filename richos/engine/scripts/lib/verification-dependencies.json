@@ -14932,7 +14932,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/simulator_budget.py",
-          "sha256": "c63a923188aa52be893cf9ee11e4499049d42dc1bccbb0e7efe7b8925abba05c",
+          "sha256": "0fa2cb40093d138564eddbf72e8a0008c31c12bfc26978c8d91a0fed12656298",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -14986,7 +14986,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/native-work.py",
-          "sha256": "38993b2e6b69b2064974d39eb4f34762429e1fb8aaa6fc9e0e4df2dffea77f12",
+          "sha256": "f2c51021bb0597e92ad14f7cefd0a954a4587be2df2b0b90ebf78dd5dc1bd8d0",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15052,7 +15052,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "1287d5047606bc0ace76ec67db369603207cb2c29bd4974acb4e4bd28cc6d354",
+          "sha256": "a13cffe4e0193e4105a00481ba2af7b20c56118267fab64dac2fd8bdd88e62f6",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -15065,7 +15065,7 @@
     },
     "scripts/lib/native-work.py#cpu-fixtures": {
       "source": "scripts/lib/native-work.py",
-      "sha256": "38993b2e6b69b2064974d39eb4f34762429e1fb8aaa6fc9e0e4df2dffea77f12",
+      "sha256": "f2c51021bb0597e92ad14f7cefd0a954a4587be2df2b0b90ebf78dd5dc1bd8d0",
       "keys": [],
       "edges": [
         {

@@ -312,9 +312,12 @@ NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 # boot proof waited the full hour for a slot and ended "a guest needs 5120 MB: 8847 MB
 # available ... would leave 3727 MB (floor 4096 MB)": memory no slot wait could free, found
 # only at the deadline. So a build that will boot a guest asks `testvm/slots.py fits` before its
-# gates (announced; two hours of gates are time to free memory) and again on entering each VM
-# phase. A shortfall that only running guests' end can clear is left to the slot wait; one held
-# by apps or the kernel ends the phase AT ONCE, naming them, instead of waiting out the hour.
+# gates and again on entering each VM phase, and a shortfall is REPORTED AT ONCE, naming what
+# holds it (apps, the kernel's leak, running guests), instead of surfacing at the hour's end.
+# The phase still waits for its slot while what processes hold could cover the shortfall:
+# other agents' builds and checks end within minutes, and while it waits reserve.py holds every
+# new admission back, so they drain. Only a shortfall larger than everything every process holds
+# (the kernel's, which only a restart returns) ends the phase at once, since no wait can clear it.
 GUEST_FIT_SCRIPT = Path(__file__).resolve().parent / "testvm" / "slots.py"
 GUEST_FIT_TIMEOUT = 120
 # Handed to each VM phase's slot wait (testvm/slots.py NIGHTLY_WAIT_ENV): while that wait lasts,
@@ -2736,10 +2739,11 @@ class Runner:
             return {"error": (done.stderr.strip() or f"exit {done.returncode}, no answer")[-300:]}
 
     def guest_memory_check(self, when):
-        """Say at once whether a test-VM guest fits in memory `when`. The sentence that says
-        why not when apps or the kernel hold the shortfall (waiting will not clear it), else
-        None: it fits, only running guests stand in the way (the slot wait covers that), or it
-        could not be asked (the slot wait still decides)."""
+        """Say at once whether a test-VM guest fits in memory `when`, and if not what holds the
+        memory. Returns the sentence that ends the phase only when no wait can clear it (more
+        is short than every process holds: only a restart returns it); else None, and the slot
+        wait goes on: it fits, processes that end or can be closed hold the shortfall, or the
+        question could not be asked."""
         fit = self.guest_memory_fit()
         if "fits" not in fit:
             self.announce(f"Guest memory {when}: not checked ({fit.get('error')}); the slot wait decides.")
@@ -2748,21 +2752,27 @@ class Runner:
             self.announce(f"Guest memory {when}: a test-VM guest fits now.")
             return None
         if fit.get("waitable"):
-            self.announce(f"Guest memory {when}: short only while {', '.join(fit.get('running') or [])} "
-                          f"run(s); the slot wait covers that: {fit['reason']}")
+            running = fit.get("running") or []
+            self.announce(f"GUEST MEMORY SHORT {when.upper()}: {fit['reason']}. Processes hold enough to cover "
+                          f"it ({fit.get('freeable_mb', '?')} MB, {fit.get('needed_mb', '?')} MB needed)"
+                          + (f", running guests {', '.join(running)} among them" if running else "")
+                          + ": the slot wait goes on, new test and proof admissions are held while it waits, "
+                          "and closing an app named here lets the guest in sooner.")
             return None
-        short = f"a test-VM guest does not fit in memory {when}, and waiting will not free it: {fit['reason']}"
+        short = (f"a test-VM guest does not fit in memory {when}: {fit['reason']}. More is short "
+                 f"({fit.get('needed_mb', '?')} MB) than every process on this Mac holds "
+                 f"({fit.get('freeable_mb', '?')} MB), so no wait frees it; only a restart of this Mac does")
         self.announce("GUEST MEMORY SHORT: " + short)
         return short
 
     def guest_memory_before_gates(self):
         """Before the gates of a build that ends in a VM phase: say NOW whether its guest would
         fit. Reported, not refused: the gates take hours, which is time to free the memory, and
-        each VM phase asks again on entry and ends at once if it is still short."""
+        each VM phase asks again on entry."""
         short = self.guest_memory_check("before the gates")
         if short:
-            self.announce("The VM phase after the build ends at once unless that memory is free by "
-                          "then; the gates go on.")
+            self.announce("The VM phase after the build ends at once unless this Mac is restarted "
+                          "before then; the gates go on.")
 
     def vm_boot_proof(self, run_id):
         """Boot the candidate's own signed bundle in a test-VM guest. None on a pass, else
@@ -2778,7 +2788,7 @@ class Runner:
         short = self.guest_memory_check("on entering the VM boot proof")
         if short:
             return (f"THE CANDIDATE IS BUILT, AND ITS BOOT WAS NOT PROVEN IN THE TEST VM: {short}. "
-                    "Nothing waited for a slot. Free that memory, then take the proof with "
+                    "Nothing waited for a slot. After a restart, take the proof with "
                     f"richos/app/scripts/gui-proof-in-vm.sh --run {run_id} (no rebuild needed).")
         # Written literally for this one step: where the run pointer lives, the testvm settings
         # the operator's shell gave (TESTVM_ROOT, TESTVM_SLOTS, ...), and the name its slot wait
@@ -2824,7 +2834,7 @@ class Runner:
         if short:
             return (f"THE CANDIDATE IS BUILT, AND A NEW USER'S FIRST RUN OF IT WAS NOT WALKED: {short}. "
                     "Nothing waited for a slot. `publish` refuses this candidate until the walk passes; "
-                    "free that memory and walk it again (no rebuild needed).")
+                    "after a restart, walk it again (no rebuild needed).")
         home = walk.parent / f"{run_id}.home"
         shutil.rmtree(walk, ignore_errors=True)
         shutil.rmtree(home, ignore_errors=True)

@@ -88,18 +88,26 @@ class Floor(Isolated):
         self.assertIn('(floor 2048 MB, machine setting TESTVM_MEMORY_FLOOR_MB', short)
 
     def test_a_missing_setting_falls_back_to_the_stated_default_and_says_so(self):
-        for text in (None, '', '# nothing set\n'):
-            if text is None:
-                self.limits.unlink(missing_ok=True)
-                os.environ.pop('RICHOS_LIMITS_FILE')
-                with patch.dict(os.environ, {'HOME': str(self.dir)}):
-                    floor, where = slots.guest_memory_floor()
-            else:
+        # Second review, P3: the no-file case once dropped RICHOS_LIMITS_FILE for the cases after
+        # it, which then read this Mac's own limits.env (2048). Each case states its whole input.
+        empty_home = self.dir / 'home'
+        empty_home.mkdir()
+        cases = (('', {'RICHOS_LIMITS_FILE': str(self.limits)}),
+                 ('# nothing set\n', {'RICHOS_LIMITS_FILE': str(self.limits)}),
+                 (None, {'HOME': str(empty_home)}))
+        for text, env in cases:
+            if text is not None:
                 self.limits.write_text(text)
+            with patch.dict(os.environ, env):
+                if text is None:
+                    os.environ.pop('RICHOS_LIMITS_FILE', None)    # restored by patch.dict on exit
                 floor, where = slots.guest_memory_floor()
-            self.assertEqual(floor, slots.GUEST_MEMORY_FLOOR_MB)
+            self.assertEqual(floor, slots.GUEST_MEMORY_FLOOR_MB, (text, where))
             self.assertEqual(floor, 4096)
             self.assertTrue(where.startswith('default; no TESTVM_MEMORY_FLOOR_MB in '), where)
+            if text is None:
+                self.assertIn(str(empty_home / 'Library/Application Support/RichOS/limits.env'), where)
+        self.assertEqual(os.environ.get('RICHOS_LIMITS_FILE'), str(self.limits))
         short = slots.memory_refusal(NIGHTLY_80, [], resident=[], total_mb=24576, ram_mb=5120, processes=[],
                                      zone_text='')
         self.assertIn('would leave 3727 MB (floor 4096 MB, default; no TESTVM_MEMORY_FLOOR_MB', short)
@@ -157,20 +165,29 @@ class KernelLeak(Isolated):
 
 
 class Fit(Isolated):
-    def test_apps_and_the_kernel_are_not_waited_for_running_guests_are(self):
+    def test_what_processes_could_free_is_waited_for_and_only_the_kernel_s_share_is_not(self):
+        # Nightly 80: 369 MB short while ChatGPT and RichOS alone held 3138 MB. Second review, P2:
+        # memory processes hold (apps, other agents' builds) is worth the slot wait, and says so.
         with zprint_says(LEAKING):
-            held = slots.guest_fit(NIGHTLY_80, running=[], resident=[], total_mb=24576, ram_mb=5120, floor_mb=4096,
+            apps = slots.guest_fit(NIGHTLY_80, running=[], resident=[], total_mb=24576, ram_mb=5120, floor_mb=4096,
                                    processes=APPS)
-        self.assertEqual((held['fits'], held['waitable']), (False, False))
-        self.assertIn('kernel leak data.kalloc.1024 holds 9.3 GB', held['reason'])
-        # One guest running and settled at 5000 MB: once it ends, its memory comes back and a guest fits.
-        # 25% of 24 GB is 6144 MB: less 120 MB still owed and 5120 MB leaves 904 MB; without walk-a, 6024 MB.
+        self.assertEqual((apps['fits'], apps['waitable'], apps['needed_mb'], apps['freeable_mb']),
+                         (False, True, 369, 3138))
+        self.assertIn('kernel leak data.kalloc.1024 holds 9.3 GB', apps['reason'])
+        # 25% of 24 GB is 6144 MB: a 5120 MB guest leaves 1024 MB, 3072 MB short of a 4096 floor, and
+        # every process together holds 2600 MB: no wait frees it, the kernel holds the rest.
+        stuck = slots.guest_fit({'memory_free_percent': 25}, running=[], resident=[], total_mb=24576, ram_mb=5120,
+                                floor_mb=4096, processes=[('/bin/x', 2600)], zone_text='')
+        self.assertEqual((stuck['fits'], stuck['waitable'], stuck['needed_mb'], stuck['freeable_mb']),
+                         (False, False, 3072, 2600))
+        # One guest running and settled at 5000 MB: it is owed 120 MB more and gives back 5000 when it ends.
         busy = slots.guest_fit({'memory_free_percent': 25}, running=['walk-a'], resident=[5000], total_mb=24576,
                                ram_mb=5120, floor_mb=2048, processes=[], zone_text='')
-        self.assertEqual((busy['fits'], busy['waitable'], busy['running']), (False, True, ['walk-a']))
+        self.assertEqual((busy['fits'], busy['waitable'], busy['running'], busy['freeable_mb']),
+                         (False, True, ['walk-a'], 5120))
         free = slots.guest_fit({'memory_free_percent': 60}, running=[], resident=[], total_mb=24576, ram_mb=5120,
                                floor_mb=2048, processes=[], zone_text='')
-        self.assertEqual(free, {'fits': True, 'reason': '', 'waitable': False, 'running': []})
+        self.assertEqual((free['fits'], free['reason'], free['waitable']), (True, '', False))
 
 
 def idle_sample():
@@ -221,6 +238,53 @@ class NightlyGoesFirst(Isolated):
         done = REAL_RUN([sys.executable, str(HERE / 'reserve.py'), '--', '/usr/bin/true'], env=env,
                         capture_output=True, text=True, timeout=60)
         self.assertNotIn('nightly', done.stderr)
+
+    def test_native_builds_and_simulator_boots_held_by_a_nightly_say_why(self):
+        """Second review, P3: native-work and the simulator boot budget refuse on the same sample
+        and printed only 'waiting for headroom'."""
+        import contextlib
+        import importlib.util
+        import io
+        held = {'cpu_user_percent': 5.0, 'cpu_system_percent': 2.0, 'cpu_idle_percent': 93.0,
+                'swapout_mb_per_s': 0.0, 'memory_pressure': 'normal', 'memory_free_percent': 60,
+                'swap_used_mb': 0.0, 'held_for_nightly': "a nightly's vm-boot-proof (run R80) has waited 3 min"}
+        calm = {k: v for k, v in held.items() if k != 'held_for_nightly'}
+        lib = HERE.parents[2] / 'engine/scripts/lib'
+        sys.path.insert(0, str(lib))
+        spec = importlib.util.spec_from_file_location('native_work_under_test', lib / 'native-work.py')
+        native = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(native)
+        samples = iter([held, calm])
+        err = io.StringIO()
+        with patch.object(reserve, 'host_sample', lambda: next(samples)), patch.object(native.time, 'sleep'), \
+                contextlib.redirect_stderr(err):
+            native.wait_for_headroom(reserve)
+        self.assertIn("native-work: held: a nightly's vm-boot-proof (run R80) has waited 3 min", err.getvalue())
+
+        sys.path.insert(0, str(HERE.parent / 'lib'))
+        import simulator_budget
+        import cpu_guard
+
+        class Token:
+            def release(self):
+                pass
+
+        class Budget:
+            def __init__(self, *a, **k):
+                pass
+
+            def try_acquire(self):
+                return Token()
+        samples = iter([held, calm])
+        err = io.StringIO()
+        with patch.object(cpu_guard, 'require_managed_ancestor'), \
+                patch.object(simulator_budget.worker_tokens, 'init'), \
+                patch.object(simulator_budget.worker_tokens, 'Budget', Budget), \
+                patch.object(simulator_budget.worker_tokens, 'machine_directory', return_value=str(self.dir / 'm')), \
+                patch.object(simulator_budget.time, 'sleep'), contextlib.redirect_stderr(err):
+            self.assertIsInstance(simulator_budget.acquire('boot', sampler=lambda: next(samples),
+                                                           inventory=lambda: 0), Token)
+        self.assertIn("simulator-budget: boot held: a nightly's vm-boot-proof (run R80)", err.getvalue())
 
     def hold(self, **kw):
         kw.setdefault('guests', lambda: [])

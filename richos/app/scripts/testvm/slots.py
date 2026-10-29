@@ -218,12 +218,8 @@ def guest_memory_floor():
     return machine_settings.limit(FLOOR_SETTING, GUEST_MEMORY_FLOOR_MB)
 
 
-def memory_refusal(sample, running, resident=None, total_mb=None, ram_mb=None, floor_mb=None,
-                   processes=None, zone_text=None):
-    """'' when one more guest fits, else why not. `sample` is reserve's (memory_free_percent is
-    the kernel's own available level); `running` the running guests; `resident` the MB each VM
-    process already holds. A running guest with no visible process is owed its whole RAM.
-    `floor_mb` None reads the machine's setting; `zone_text` None reads `zprint` (reserve.py)."""
+def _accounting(sample, running, resident, total_mb, ram_mb, floor_mb):
+    """(ram, total, floor, where the floor came from, available, owed to running guests, left)."""
     ram_mb = ram_mb or guest_ram_mb()
     total_mb = total_mb or host_memory_mb()
     floor_from = 'given'
@@ -233,7 +229,17 @@ def memory_refusal(sample, running, resident=None, total_mb=None, ram_mb=None, f
     available = sample['memory_free_percent'] / 100 * total_mb
     owed = sum(max(0.0, ram_mb - r) for r in resident[:len(running)])
     owed += ram_mb * max(0, len(running) - len(resident))
-    left = available - owed - ram_mb
+    return ram_mb, total_mb, floor_mb, floor_from, available, owed, available - owed - ram_mb
+
+
+def memory_refusal(sample, running, resident=None, total_mb=None, ram_mb=None, floor_mb=None,
+                   processes=None, zone_text=None):
+    """'' when one more guest fits, else why not. `sample` is reserve's (memory_free_percent is
+    the kernel's own available level); `running` the running guests; `resident` the MB each VM
+    process already holds. A running guest with no visible process is owed its whole RAM.
+    `floor_mb` None reads the machine's setting; `zone_text` None reads `zprint` (reserve.py)."""
+    ram_mb, total_mb, floor_mb, floor_from, available, owed, left = _accounting(
+        sample, running, resident, total_mb, ram_mb, floor_mb)
     if left >= floor_mb:
         return ''
     text = (f'a guest needs {ram_mb} MB: {available:.0f} MB available, {owed:.0f} MB still owed to '
@@ -251,23 +257,28 @@ def memory_refusal(sample, running, resident=None, total_mb=None, ram_mb=None, f
 
 def guest_fit(sample=None, running=None, resident=None, total_mb=None, ram_mb=None, floor_mb=None,
               processes=None, zone_text=None):
-    """Would one more guest fit NOW? {'fits', 'reason', 'waitable', 'running'}, from one memory
-    reading (no CPU sample, no slot touched). `waitable` is True when only running guests stand
-    in the way: once they end, their VM processes' memory is available again and the guest fits.
-    A shortfall that is not waitable is held by apps or the kernel, and waiting will not clear it."""
+    """Would one more guest fit NOW? {'fits', 'reason', 'waitable', 'running', 'needed_mb',
+    'freeable_mb'}, from one memory reading (no CPU sample, no slot touched).
+
+    `waitable` is True when what processes hold could cover the shortfall: running guests
+    (their RAM comes back when they end), other agents' builds and checks that end within
+    minutes, or apps somebody can close. Then the slot wait is worth having, and the caller says
+    so at once. It is False only when the shortfall is more than every process on this Mac holds
+    together: the kernel holds it (reserve.py LEAK_ZONE), and only a restart returns it."""
     sample = sample or reserve.memory_sample()
     running = running_guests() if running is None else running
     resident = vm_resident_mb() if resident is None else resident
     total_mb = total_mb or host_memory_mb()
+    processes = process_memory_mb() if processes is None else processes
     reason = memory_refusal(sample, running, resident, total_mb, ram_mb, floor_mb, processes, zone_text)
     if not reason:
-        return {'fits': True, 'reason': '', 'waitable': False, 'running': list(running)}
-    waitable = False
-    if running:
-        freed = sum(resident[:len(running)])
-        later = dict(sample, memory_free_percent=sample['memory_free_percent'] + freed / total_mb * 100)
-        waitable = not memory_refusal(later, [], [], total_mb, ram_mb, floor_mb, processes=[], zone_text='')
-    return {'fits': False, 'reason': reason, 'waitable': waitable, 'running': list(running)}
+        return {'fits': True, 'reason': '', 'waitable': False, 'running': list(running),
+                'needed_mb': 0, 'freeable_mb': 0}
+    _, _, floor_mb, _, _, owed, left = _accounting(sample, running, resident, total_mb, ram_mb, floor_mb)
+    needed = floor_mb - left
+    freeable = owed + sum(resident[:len(running)]) + sum(mb for _, mb in processes)
+    return {'fits': False, 'reason': reason, 'waitable': needed <= freeable, 'running': list(running),
+            'needed_mb': round(needed), 'freeable_mb': round(freeable)}
 
 
 def root_dir(root=None):
