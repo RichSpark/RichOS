@@ -74,6 +74,11 @@
 #   C25  --follow-up reads a finding as the land fence does: a "withdrawn" from a review of
 #        an unrelated tip (one not built on the finding's tip) never closes it, so the
 #        finding the fence refuses on can be filed, and the fence then admits that tip
+#   C26  a recheck that rules a finding "fixed" at exactly the tip it reviewed clears it at
+#        the fence for that tip, even when it was not handed that finding; and the next
+#        reviewer is handed every finding still open in its own tip's history, never one a
+#        review of an unrelated tip withdrew. A "still-open" ruling, or a "fixed" ruling at
+#        another tip, still blocks
 #
 
 # Exit 0 = every case passed; exit 1 = at least one failed.
@@ -943,6 +948,83 @@ check "C25 the finding the fence refuses on is filed by --follow-up (one deferra
 GATE="$(c25_gate)"
 [ -z "$GATE" ]
 check "C25 once filed, the fence admits tip A" $? "gate=$GATE"
+
+# --- C26 ---------------------------------------------------------------------
+# 2026-10-29, richos 5611a7964: rv-20261029T140028Z-3e883526-10b9 raised blocking finding #1. A
+# review of an unrelated tip on the same work key (2f57a3fd, not built on it) withdrew it, so the
+# reviewers of 5611a7964 were not handed it, although the fence (which reads only the land tip's own
+# history) still held on it. The --recheck rv-20261029T155324Z-5611a796-3aed of 5611a7964 ruled it
+# "fixed" anyway; the fence skipped that ruling because the id was not in its earlier_findings_in,
+# and refused the land with "Blocking finding id(s): rv-20261029T140028Z-3e883526-10b9#1". Fixture
+# ledger only: base -> A -> T1 -> T, and B cut from base. Review a (A) raises #1; review b (B)
+# withdraws it; review c (T) is not handed it; review d rechecks c at T.
+REPO6="$SB/repo-unhanded-fixed"
+G6() { git -C "$REPO6" -c core.hooksPath=/dev/null -c user.name=Author -c user.email=author@example.invalid -c commit.gpgsign=false "$@"; }
+mkdir -p "$REPO6"
+G6 init -q -b main
+printf 'base\n' >"$REPO6/a.txt"; G6 add -A; G6 commit -qm "base"
+BASE6="$(G6 rev-parse HEAD)"
+G6 checkout -qb cc/work; printf 'base\na\n' >"$REPO6/a.txt"; G6 commit -qam "tip A"
+TIP6A="$(G6 rev-parse HEAD)"
+printf 'base\na\nt1\n' >"$REPO6/a.txt"; G6 commit -qam "tip T1"
+TIP6T1="$(G6 rev-parse HEAD)"
+printf 'base\na\nt1\nt\n' >"$REPO6/a.txt"; G6 commit -qam "tip T"
+TIP6T="$(G6 rev-parse HEAD)"
+G6 checkout -qb cc/other "$BASE6"; printf 'b\n' >"$REPO6/b.txt"; G6 add -A; G6 commit -qm "tip B"
+TIP6B="$(G6 rev-parse HEAD)"
+G6 checkout -q main
+c26() { # <scenario>: prints "<earlier ids handed to a review of T>|<the fence's refusal of T>"
+    python3 - "$SCRIPT_DIR/lib" "$SB/c26-$1" "$1" "$REPO6" "$BASE6" "$TIP6A" "$TIP6B" "$TIP6T1" "$TIP6T" <<'PY'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+state, scenario, repo, base, a, b, t1, t = sys.argv[2:10]
+os.makedirs(state)
+os.environ["SECOND_REVIEW_STATE_DIR"] = state
+import operator_fences as f
+import second_review as sr
+ident, work = f.review_repo_identity(repo), "work-c26"
+finding = {"priority": 2, "title": "Retry budget lost on continuation", "files": ["x.rs"], "evidence": "e",
+           "fixture": "", "blocks": True}
+note = "x.rs:505 keeps the marking through continuation creation; the probe confirms it."
+ruling = {"id": "rv-c26a#1", "status": "fixed", "blocks": False, "note": note}
+if scenario == "still-open":
+    ruling = dict(ruling, status="still-open", blocks=True)
+d_tip = t1 if scenario == "other-tip" else t
+reviews = [("rv-c26a", a, "changes-requested", "", {"findings": [finding], "earlier_findings": []}, []),
+           ("rv-c26b", b, "passed", "", {"findings": [], "earlier_findings": [
+               {"id": "rv-c26a#1", "status": "withdrawn", "blocks": False, "note": "absent from tip B"}]},
+            [dict(finding, id="rv-c26a#1")])]
+c = ("rv-c26c", t, "passed", "", {"findings": [], "earlier_findings": []}, [])
+d = ("rv-c26d", d_tip, "passed", "rv-c26c" if d_tip == t else "", {"findings": [], "earlier_findings": [ruling]}, [])
+# The ruling at another tip comes before the land tip's own review, so the fence reads it.
+reviews += [d, c] if scenario == "other-tip" else [c, d]
+with open(os.path.join(state, "reviews.jsonl"), "w") as ledger:
+    for n, (rid, tip, verdict, recheck, answer, handed) in enumerate(reviews):
+        os.makedirs(os.path.join(state, rid))
+        answer = dict(answer, reviewed_commit=tip, verdict=verdict)
+        json.dump({"answer": answer, "earlier_findings_in": handed},
+                  open(os.path.join(state, rid, "verdict.json"), "w"))
+        ledger.write(json.dumps({"id": rid, "tip": tip, "repo": repo, "repo_id": ident, "work": work,
+                                 "trigger": "manual", "verdict": verdict, "recheck_of": recheck,
+                                 "record": os.path.join(state, rid)}) + "\n")
+        if rid == "rv-c26b":
+            # What the reviewer of T is handed once a, b are on the ledger (review c's input).
+            ledger.flush()
+            handed_to_t = ",".join(fid for fid, _ in sr.earlier_findings(work, t, repo, ident))
+print("%s|%s" % (handed_to_t, " ".join(f.review_gaps(os.path.join(state, "reviews.jsonl"), [t], repo).get(t, []))))
+PY
+}
+OUT6="$(c26 fixed)"
+has "${OUT6%%|*}" "rv-c26a#1"
+check "C26 the reviewer of T is handed rv-c26a#1, still open in T's own history (only unrelated tip B withdrew it)" $? "out=$OUT6"
+[ -z "${OUT6#*|}" ]
+check "C26 a recheck at T ruling rv-c26a#1 fixed, though not handed it, clears it: the fence admits T" $? "out=$OUT6"
+OUT6="$(c26 still-open)"
+has "${OUT6#*|}" "Blocking finding id(s): rv-c26a#1"
+check "C26 guard: a still-open ruling at T, not handed it, still blocks T" $? "out=$OUT6"
+OUT6="$(c26 other-tip)"
+has "${OUT6#*|}" "Blocking finding id(s): rv-c26a#1"
+check "C26 guard: a fixed ruling at another tip (T1, built on by T), not handed it, does not clear it at T" $? "out=$OUT6"
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"

@@ -1171,10 +1171,18 @@ def review_record(row):
         return {}
 
 
-def open_review_findings(rows):
+def open_review_findings(rows, tip=None):
     """Finding identity survives duplicate reviews. Only witnessed resolutions
     remove it. A same-source withdrawal must be an explicit independent recheck
     carrying the original finding; a later PASS cannot erase another review.
+
+    One ruling counts without the review having been handed the finding: a
+    review of exactly `tip` (the commit being decided) that rules it "fixed",
+    with a note, for the commit it reviewed. It judged that very commit, so
+    nothing it was not asked about can have changed under it (2026-10-29:
+    rv-20261029T155324Z-5611a796-3aed ruled rv-20261029T140028Z-3e883526-10b9#1
+    fixed at 5611a7964 and the fence still refused that tip on it). Any other
+    ruling on a finding the review was not handed is skipped, as before.
     """
     opened, by_id, seen = {}, {r.get("id"): r for r in rows}, set()
     for row in rows:
@@ -1189,9 +1197,10 @@ def open_review_findings(rows):
                       (parent_record.get("answer") or {}).get("findings") or [], 1)} if parent else set()
         parent_ids.update(e.get("id") for e in parent_record.get("earlier_findings_in") or [])
         witnessed = {e.get("id"): e for e in record.get("earlier_findings_in") or []}
+        of_tip = bool(tip) and row.get("tip") == tip and answer.get("reviewed_commit") == tip
         for e in answer.get("earlier_findings") or []:
             fid = e.get("id")
-            if fid not in opened or fid not in witnessed:
+            if fid not in opened or (fid not in witnessed and not (of_tip and e.get("status") == "fixed")):
                 continue
             old_tip = opened[fid].get("source_tip")
             same_source = old_tip == row.get("tip")
@@ -1287,7 +1296,7 @@ def review_of(rows, tip, repo, deferred=None):
         works = {r.get("work") for r in land if r.get("work")}
         history = [r for r in mine[:end+1] if (r.get("work") in works and _own_history(repo, r.get("tip"), tip)) or
                    (r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)]
-        opened = open_review_findings(history)
+        opened = open_review_findings(history, tip)
         applied = {}
         for fid, ruling in (deferred or {}).items():
             if fid in opened and review_row_belongs(ruling, ident):
