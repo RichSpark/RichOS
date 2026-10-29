@@ -1933,6 +1933,171 @@ pub(crate) mod tests {
         assert!(after.act_at["seven_day"] < 99., "the switch point moved: {}", after.act_at["seven_day"]);
     }
 
+    /// Home (Account 1) at 99% of its week and Work (Account 2) in use at `weekly`% of its week
+    /// and 28% of its five hours, read just now; Work's learned episodes are `episodes`, kept in
+    /// `TOKEN_POINTS_FILE` as the app keeps them across launches.
+    fn home_spent_work_in_use(dir: &Path, episodes: serde_json::Value, weekly: f64) -> (Service, String) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(TOKEN_POINTS_FILE), json!({ "2": episodes }).to_string()).unwrap();
+        let service = Service::open(dir).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        assert_eq!(work.id, "2");
+        *service.snapshot.lock().unwrap() = live(99.);
+        let mut reading = live(weekly);
+        reading.windows[0].used_percent = 28.;
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        service.extra.lock().unwrap().insert(work.id.clone(), (
+            std::sync::Arc::new(Mutex::new(Box::new(FakeSource { calls, result: Err(ReadError::Failed) }) as Box<dyn Source>)),
+            reading));
+        service.accounts.use_first(&work.id).unwrap();
+        (service, work.id)
+    }
+
+    /// Frames of one lease on `account`, through its own `tokens::Tally` into the service's
+    /// sink, exactly as `native.rs` passes a lease's stream on.
+    fn lease_frames(service: &Service, account: &str, frames: &[(serde_json::Value, u64)]) {
+        let mut tally = tokens::Tally::default();
+        for (frame, at) in frames {
+            for found in tally.frame(frame, *at) { service.token_sink().push(account, found); }
+        }
+    }
+
+    /// An `assistant` frame of `model` whose usage is `input`, 1 output token and `read` cache reads.
+    fn model_frame(model: &str, id: &str, input: u64, read: u64, parent: Option<&str>) -> serde_json::Value {
+        json!({"type": "assistant", "parent_tool_use_id": parent, "message": {"id": id, "model": model,
+            "usage": {"input_tokens": input, "output_tokens": 1, "cache_read_input_tokens": read, "cache_creation_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}}}})
+    }
+
+    /// **One lease's late result frame does not hand off an account with room** (2026-10-28
+    /// 13:05Z: Work at 3% of its week, Ray and Zach ordered to hand off). Work's two learned
+    /// episodes as the app kept them then (`claude-token-points.json`), and the fit exactly as on
+    /// main: it gives Haiku 3,953 tokens a point (Sonnet and Haiku fit both episodes exactly;
+    /// Opus gets no figure). A lease's Opus turn whose `result` also reports 83,446 Haiku tokens
+    /// (76,707 input, 6,739 output), in two shapes: (a) no Haiku frame was streamed, so the
+    /// remainder is a correction stamped at the result; (b) one Haiku helper message was
+    /// streamed (1,000 input, 1 output, 20 s ago), so the remainder is that message at its final
+    /// size, and only its first 1,001 tokens were live.
+    ///
+    /// On main the late tokens are 83,446 / 3,953 = 21.1 points in the live minute: fast, so I =
+    /// 1 minute and H the default 5, and the point is 99 - (ceil(21.1 x 6 = 126.7) - 1) = -27,
+    /// clamped to 0: Work at 3% is `leaving` (the gate's handoff order) and held. With the late
+    /// tokens counted at most `tokens::LATE_POINTS_MAX` (1 point) the speed is (a) 1 point a
+    /// minute and (b) 1,001 / 3,953 + 1 = 1.25: the point is (a) 99 - (ceil(1 x 6) - 1) = 94,
+    /// or 93 when f64 puts 1/60,000 x 60,000 a hair over 1; (b) 99 - (ceil(1.25 x 6 = 7.5) - 1) = 92.
+    /// So it stays at or above 89 (the most one late lump can move it at either interval: 99 -
+    /// (ceil(1 x (5 + 5)) - 1) = 90, 89 with that same hair) and Work at 3% is not left. Home, at
+    /// 99%, is being left all along.
+    #[test]
+    fn one_leases_late_result_frame_does_not_collapse_the_handoff_point() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
+        let learned: Vec<tokens::Episode> = serde_json::from_value(episodes.clone()).unwrap();
+        let haiku = tokens::figures(&learned)["claude-haiku-5-5"];
+        assert!((haiku - 3_953.).abs() < 1., "the incident's fit gives Haiku {haiku} tokens a point");
+        let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
+            "claude-opus-5-5": {"inputTokens": 2, "outputTokens": 400, "cacheReadInputTokens": 180_000, "cacheCreationInputTokens": 0},
+            "claude-haiku-5-5": {"inputTokens": 76_707, "outputTokens": 6_739, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
+        for streamed_helper in [false, true] {
+            let app = root.path().join(format!("app-{streamed_helper}"));
+            let (service, work) = home_spent_work_in_use(&app, episodes.clone(), 3.);
+            let now = crate::util::now_millis();
+            let mut frames = vec![(model_frame("claude-opus-5-5", "msg_lead", 2, 179_999, None), now - 30_000)];
+            if streamed_helper {
+                frames.push((model_frame("claude-haiku-5-5", "msg_helper", 1_000, 0, Some("toolu_1")), now - 20_000));
+            }
+            frames.push((result.clone(), now - 1_000));
+            lease_frames(&service, &work, &frames);
+            service.before_turn(&work, None);
+            let state = app.join("engine-state");
+            let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
+            let point = published.act_at["seven_day"];
+            let per_minute = published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.;
+            assert!(point >= 89., "helper streamed: {streamed_helper}; one late result frame moved Work's point to {point} \
+                (its weekly speed {per_minute} points a minute)");
+            let capped = if streamed_helper { 1_001. / haiku + 1. } else { 1. };
+            assert!((per_minute - capped).abs() < 1e-9, "helper streamed: {streamed_helper}; {per_minute} points a minute, \
+                by hand {capped}");
+            assert_eq!(published.leaving, vec!["1".to_string()], "helper streamed: {streamed_helper}; only Home, at 99%, \
+                is being left; Work at 3% is not (its point {point}, its speed {per_minute} points a minute)");
+            assert!(gate::admission(&state, crate::util::now_millis()).allows_work(), "{:?}", published.admission);
+        }
+    }
+
+    /// **A real sustained speed still hands off at the point it did on main** (the CEO's
+    /// weekly-switch rule, unchanged). Work learned Opus at 30M tokens a point from two Opus
+    /// episodes. Then 52 Opus requests of 1M tokens each streamed, one a second through the last
+    /// minute, and the lease's `result` adding 52,000 output tokens no frame showed (a
+    /// correction: 52 messages were open), 52,000 / 30M = 0.0017 points, under the late cap, so
+    /// counted in full exactly as on main. 52,052,000 / 30M = 1.735 points a minute, fast
+    /// (1.735 x 5 >= 5), so I is 1 minute and H the default 5: 99 - (ceil(1.735 x 6 = 10.41) -
+    /// 1) = 89. At 89% Work is leaving; at 88% it is not.
+    #[test]
+    fn a_real_sustained_speed_still_hands_off_at_the_same_point() {
+        let root = Scratch::new();
+        let episodes = json!([{"points": 1.0, "tokens": {"claude-opus-5-5": 30_000_000}},
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 30_000_000}}]);
+        for (weekly, leaving) in [(89., true), (88., false)] {
+            let app = root.path().join(format!("app-{weekly}"));
+            let (service, work) = home_spent_work_in_use(&app, episodes.clone(), weekly);
+            let now = crate::util::now_millis();
+            let mut frames: Vec<(serde_json::Value, u64)> = (0..52u64)
+                .map(|i| (model_frame("claude-opus-5-5", &format!("msg_{i}"), 2, 1_000_000 - 3, None), now - 52_000 + i * 1_000))
+                .collect();
+            frames.push((json!({"type": "result", "session_id": "lead", "modelUsage": {"claude-opus-5-5": {
+                "inputTokens": 104, "outputTokens": 52 + 52_000, "cacheReadInputTokens": 52 * (1_000_000 - 3),
+                "cacheCreationInputTokens": 0}}}), now - 500));
+            lease_frames(&service, &work, &frames);
+            service.before_turn(&work, None);
+            let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+            let per_minute = published.speeds["seven_day"] * 60_000.;
+            assert!((per_minute - 52_052_000. / 30_000_000.).abs() < 1e-9, "{per_minute} points a minute");
+            assert_eq!(published.act_at["seven_day"], 89., "{per_minute} points a minute");
+            assert_eq!(published.leaving.contains(&work), leaving, "Work at {weekly}%: {:?}", published.leaving);
+        }
+    }
+
+    /// **A minority model's real burst still hands off as on main** (Fable included). Work's
+    /// six learned episodes as `claude-token-points.json` kept them on 2026-10-28: Fable is in
+    /// three, 8,760,602 tokens in all, and the fit (as on main) gives it a figure. Then a Fable
+    /// burst through a lease: 20 requests of 1M tokens in the last minute, every token streamed.
+    /// Nothing here is late, so the speed and the point are main's exactly: 20M / Fable's figure
+    /// points a minute, fast, I = 1 minute, H the default 5, point = 99 - (ceil(speed x 6) - 1),
+    /// recomputed below from `tokens::figures` and asserted equal. Work at 93% is being left.
+    #[test]
+    fn a_minority_models_burst_still_hands_off() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 2939271, "claude-haiku-5-5": 83446, "claude-opus-5-5": 27210374, "claude-sonnet-5-5": 3477888}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 1667801, "claude-opus-5-5": 13890036, "claude-sonnet-5-5": 2311295}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 4153530, "claude-opus-5-5": 36103747, "claude-sonnet-5-5": 5854694}},
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 54593932, "claude-sonnet-5-5": 291147}}]);
+        let learned: Vec<tokens::Episode> = serde_json::from_value(episodes.clone()).unwrap();
+        let fable = tokens::figures(&learned)["claude-fable-5-1"];
+        let speed = 20_000_000. / fable;
+        assert!(speed * 5. >= FAST_POINTS_PER_CHECK, "Fable at {fable} tokens a point: {speed} points a minute is not fast");
+        let expected = 99. - ((speed * 6.).ceil() - 1.);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 93.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(serde_json::Value, u64)> = (0..20u64)
+            .map(|i| (model_frame("claude-fable-5-1", &format!("msg_{i}"), 2, 1_000_000 - 3, None), now - 57_000 + i * 3_000))
+            .collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        let per_minute = published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.;
+        assert!((per_minute - speed).abs() < 1e-9, "Fable read at {per_minute} points a minute, as on main {speed}");
+        assert_eq!(point, expected, "Fable at {fable} tokens a point, {per_minute} points a minute");
+        assert!(point <= 93., "a Fable burst left the week's point at {point}");
+        assert!(published.leaving.contains(&work), "Work at 93% during a Fable burst is not being left: {:?}", published.leaving);
+    }
+
     /// **The spend counts both sources once** (§118): a request in Account 1's transcripts and a
     /// request a lease streamed (no transcript holds it), each priced at its own model's rates;
     /// the quota's own reader still gets the lease's tokens, from its own queue.
