@@ -2114,3 +2114,35 @@ App source builds require `../engine/voice/models/`: the Rust crate embeds those
 files at compile time. An engine update alone does not replace an app's embedded
 metadata. Run `bash scripts/voice-component.test.sh` for consumer and relocation
 checks, with Node and Cargo on PATH.
+
+### Shared live Mac resources
+
+`mcp__richos_status__system_resources` gives app-managed agents current host CPU,
+RAM, memory pressure, swap and up to sixty recent samples. One native sampler runs
+once per second while the desktop app is open. Tool calls immediately read its
+in-memory cache through an owner-only local socket. No model is called or sent a
+message for each sample and existing resource admission controls are unchanged.
+
+Both Rich and Stu receive the read tool. Generated restricted teammate tool lists
+include this single read; saved definitions are untouched. Isolated Claude and
+Codex review providers receive an MCP endpoint exposing only this read. Fixed-function
+tool-free classifiers and titlers retain their existing contracts.
+
+The version 1 response contains `instance_id`, `status`, `age_ms`,
+`observed_monotonic_ms`, `current`, `history` and an optional `detail`. Status is
+`warming_up`, `available`, `stale` or `unavailable`. Only `available` has a current
+reading. A sample older than three seconds is stale. A clock that includes sleep
+measures age; comparison with the awake clock discards sleep intervals. A stopped
+or crashed sampler returns unavailable. Unsupported platforms do not report fake
+zeroes. There is no per-second disk log or process enumeration.
+
+CPU percentages describe the whole Mac on a 0–100 scale. Used memory is anonymous
+pages less purgeable pages, plus wired pages and the physical compressor footprint;
+file cache is excluded. This definition does not promise exact parity with Activity
+Monitor's accounting. Pressure is `normal`, `warning`, `critical` or `unknown`.
+
+The desktop `system_resources` command reads the same cache. For a diagnostic read
+without opening a window, run the app executable with `--system-resources <absolute
+engine-state directory>`. `--resources-mcp` serves only the read tool over stdio.
+The bounded `system_resources_probe` core example exercises this same sampler and
+reports measured CPU, memory and cached-read cost.

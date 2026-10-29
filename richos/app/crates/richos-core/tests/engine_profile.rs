@@ -503,7 +503,7 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
     assert_eq!(registered(&first), expected);
     assert_eq!(on_roster(), expected);
     for stock in ["clark", "reed", "frank", "pierce"] {
-        let shipped = std::fs::read(engine().join(format!("agents/{stock}.md"))).unwrap();
+        let shipped = richos_core::engine_profile::with_resource_access(&std::fs::read_to_string(engine().join(format!("agents/{stock}.md"))).unwrap()).into_bytes();
         assert_eq!(std::fs::read(first.plugin.join(format!("agents/{stock}.md"))).unwrap(), shipped);
         assert_eq!(std::fs::read(roster.join(format!("{stock}.md"))).unwrap(), shipped);
     }
@@ -549,7 +549,7 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
     let stock = ["clark", "dean", "frank", "pierce", "reed"];
     assert_eq!(registered(&next), stock);
     assert_eq!(on_roster(), stock);
-    assert_eq!(std::fs::read(roster.join("dean.md")).unwrap(), std::fs::read(engine().join("agents/dean.md")).unwrap());
+    assert_eq!(std::fs::read_to_string(roster.join("dean.md")).unwrap(), richos_core::engine_profile::with_resource_access(&std::fs::read_to_string(engine().join("agents/dean.md")).unwrap()));
 
     // A fresh install has no team folder at all and gets the stock five.
     let fresh = Scratch::new();
@@ -557,9 +557,9 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
     assert_eq!(registered(&profile), stock);
 }
 
-/// Native definitions retain the user's chosen tools and instructions byte for byte.
+/// Saved definitions stay intact; generated tool lists also grant the shared host read.
 #[test]
-fn saved_teammate_instructions_and_tool_lists_are_registered_unchanged() {
+fn saved_teammate_instructions_stay_intact_and_generated_lists_gain_host_read() {
     let f = Scratch::new();
     let team = f.0.join("team");
     std::fs::create_dir_all(&team).unwrap();
@@ -574,8 +574,35 @@ fn saved_teammate_instructions_and_tool_lists_are_registered_unchanged() {
         let original = std::fs::read(team.join(format!("{name}.md"))).unwrap();
         for registered in [profile.plugin.join(format!("agents/{name}.md")),
                            profile.coordination.join(format!(".claude/agents/{name}.md"))] {
-            assert_eq!(std::fs::read(registered).unwrap(), original);
+            let loaded = std::fs::read_to_string(registered).unwrap();
+            let expected = if name=="scout" {
+                "---\nname: scout\ntools: [Read, Bash, mcp__richos_status__system_resources]\n---\nUser instructions.\n"
+            } else {
+                "---\nname: writer\ntools:\n  - mcp__richos_status__system_resources\n  - Read\n---\nDifferent instructions.\n"
+            };
+            assert_eq!(loaded,expected);
+            assert_eq!(std::fs::read(team.join(format!("{name}.md"))).unwrap(),original);
         }
+    }
+}
+
+#[test]
+fn resource_access_preserves_commented_and_multiline_tool_definitions() {
+    use richos_core::engine_profile::with_resource_access;
+    let tool="mcp__richos_status__system_resources";
+    for (before,after) in [
+        ("tools: Read, Bash # keep these",format!("tools: Read, Bash, {tool} # keep these")),
+        ("tools: \"Read, Bash\" # label",format!("tools: \"Read, Bash, {tool}\" # label")),
+        ("tools: [Read] # a comment with ]",format!("tools: [Read, {tool}] # a comment with ]")),
+        ("tools: [\n  Read,\n  Bash, # last tool\n]",format!("tools: [Read,\n  Bash, {tool}]")),
+        ("tools: # list\n# keep this comment\n  - Read",format!("tools: # list\n# keep this comment\n  - {tool}\n  - Read")),
+        ("tools: Read # mcp__richos_status__system_resources is not yet allowed",format!("tools: Read, {tool} # mcp__richos_status__system_resources is not yet allowed")),
+    ] {
+        let original=format!("---\nname: fixture\n{before}\nmodel: sonnet\n---\nInstructions stay exactly here.\n");
+        let expected=format!("---\nname: fixture\n{after}\nmodel: sonnet\n---\nInstructions stay exactly here.\n");
+        let rendered=with_resource_access(&original);
+        assert_eq!(rendered,expected);
+        assert_eq!(with_resource_access(&rendered),rendered,"the host read was duplicated");
     }
 }
 
