@@ -15043,13 +15043,13 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/runtime_cache.py",
-          "sha256": "a5104002f3b4d14b208032aab7e3061ef5a807091fd4e5e6044d60771b0fab73",
+          "sha256": "7e984a5a96dc194e42826fd66149226a328eaa50cf99db55d2f109ef680b0637",
           "evidence": "Imported by proof-run.py supply_runtime and nightly-local.py Runner.runtime_path: hashes the bytes of runtime-sources.json to name the nightly's recipe-keyed runtime cache directory, and (gui_speech_models) checks whether ~/Models/Whisper/ggml-small.en.bin and ggml-large-v3-turbo-q5_0.bin under HOME are files, the speech models gui-boot's fixture needs. Stdlib only; reads no configuration and no file contents."
         },
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "4e4f107eb448ea789cf5bb24e35590390828ce956f914091a301972bb1388101",
+          "sha256": "d75a429a33369de44b376d18b45aaf789e30fe4a7232a753126ea5f803735283",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         },
         {
@@ -15190,13 +15190,13 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/runtime_cache.py",
-          "sha256": "a5104002f3b4d14b208032aab7e3061ef5a807091fd4e5e6044d60771b0fab73",
+          "sha256": "7e984a5a96dc194e42826fd66149226a328eaa50cf99db55d2f109ef680b0637",
           "evidence": "Imported by proof-run.py supply_runtime and nightly-local.py Runner.runtime_path: hashes the bytes of runtime-sources.json to name the nightly's recipe-keyed runtime cache directory, and (gui_speech_models) checks whether ~/Models/Whisper/ggml-small.en.bin and ggml-large-v3-turbo-q5_0.bin under HOME are files, the speech models gui-boot's fixture needs. Stdlib only; reads no configuration and no file contents."
         },
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "4e4f107eb448ea789cf5bb24e35590390828ce956f914091a301972bb1388101",
+          "sha256": "d75a429a33369de44b376d18b45aaf789e30fe4a7232a753126ea5f803735283",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         },
         {
