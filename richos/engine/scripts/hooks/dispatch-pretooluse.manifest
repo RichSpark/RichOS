@@ -47,6 +47,7 @@ Bash|guard-foreign-app-data.sh
 Bash|guard-unguarded-rm.sh
 Bash|guard-host-sleep.sh
 Bash|guard-headed-browser.sh
+Bash|guard-toolchain.sh
 Bash|guard-operator-claim.sh
 Bash|guard-shared-scratchpad.sh
 Bash|guard-no-shell-c.sh

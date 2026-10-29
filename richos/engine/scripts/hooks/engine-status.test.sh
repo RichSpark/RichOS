@@ -871,6 +871,9 @@ expect_fraction "1a  baseline: banner reports ${EXPECT_N}/${EXPECT_N}, matching 
 # false in the code a command runs, Playwright's window-only commands, a browser started without
 # --headless and a browser MCP server configured without it (§65; a visible Chrome window reached the
 # CEO's screen on 2026-10-28). Suite: guard-headed-browser.test.sh.
+# guard-toolchain.sh, ADDED 2026-10-29 — BLOCKING, a module of the Bash chain's manifest. It stops a
+# command that would run an Apple developer-tools stub with no usable toolchain (the stub opens the
+# install dialog), and reports the missing tool once. Suite: scripts/lib/toolchain.test.sh.
 # guard-no-shell-c.sh, ADDED 2026-10-09 — BLOCKING, a module of the Bash chain's manifest. It refuses
 # a command that wraps an inline script in bash -c, sh -c or zsh -c, which Claude Code cannot check and
 # so asks the user ("This shell -c script ... could not be checked"). The refusal names the rewrite:
@@ -936,6 +939,7 @@ guard-shared-scratchpad.sh
 guard-unguarded-rm.sh
 guard-host-sleep.sh
 guard-headed-browser.sh
+guard-toolchain.sh
 guard-no-shell-c.sh
 operator-claim.sh
 guard-operator-claim.sh
