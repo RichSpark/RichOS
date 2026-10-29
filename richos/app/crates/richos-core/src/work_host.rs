@@ -1259,13 +1259,36 @@ impl WorkHost {
         self.backends.lock().unwrap().get(thread).map(Arc::clone)
     }
 
+    /// **The provider sessions this host holds open now**, one per back end: a lease that exists
+    /// and has not reached provider EOF ([`Cognition::is_closed`]). Read off the lease itself,
+    /// never off the remembered [`Inner::lease_session`], which outlives the lease: after provider
+    /// EOF or shutdown it keeps naming the session until another input opens a replacement
+    /// (second review rv-20261029T062537Z-21f7f26e-d081 of `21f7f26e5`: that remembered id kept
+    /// "1 assignment is still running in the background." after Stu's provider exited, where a
+    /// fresh host over the same disk read clear). A lease whose mutex is held is in use (a turn,
+    /// an opening, a renewal) and counts by its remembered session: never blocked on, because a
+    /// turn holds it for its whole length, and in use is open (fail toward waiting).
     pub fn lease_sessions(&self) -> Vec<String> {
-        self.backends
-            .lock()
-            .unwrap()
-            .values()
-            .filter_map(|backend| backend.inner.lock().unwrap().lease_session.clone())
+        let backends: Vec<_> = self.backends.lock().unwrap().values().cloned().collect();
+        backends
+            .iter()
+            .filter_map(|backend| match backend.lease.try_lock() {
+                Ok(lease) => Self::open_session(&lease),
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                    Self::open_session(&poisoned.into_inner())
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    backend.inner.lock().unwrap().lease_session.clone()
+                }
+            })
             .collect()
+    }
+
+    fn open_session(lease: &Option<Box<dyn Cognition>>) -> Option<String> {
+        lease
+            .as_ref()
+            .filter(|lease| !lease.is_closed())
+            .map(|lease| lease.session_id().to_string())
     }
 
     pub fn wait_for_completed(&self, count: u64, limit: std::time::Duration) -> bool {
@@ -1558,7 +1581,8 @@ impl WorkHost {
     /// terminal evidence is the engine's own (`workspaces.py` `session_state`): its journal's
     /// last session row is `SessionEnd` (`app_workers::session_ended`), its canonical record
     /// carries `ended_at`, or the process recorded running it is gone or is now another
-    /// process. Never ended while this host holds it as a live lease, while its recorded
+    /// process. Never ended while this host holds it as an open lease ([`Self::lease_sessions`]:
+    /// the lease itself, not the session id remembered after it closed), while its recorded
     /// process still runs, or when either of those cannot be read (fail toward waiting).
     fn provider_ended(&self, entity: &str, thread: &str, session: &str, hosted: &[String]) -> bool {
         if hosted.iter().any(|live| live == session) {
@@ -2027,6 +2051,9 @@ mod tests {
         /// Every lease opens the first session again, as `claude --resume` does in the app: a
         /// renewed or restarted Stu is the same provider session (`renew_lease`).
         resume_same_session: bool,
+        /// Every lease reports provider EOF ([`Cognition::is_closed`]), as Stu's does once his
+        /// provider exits on a lost connection.
+        closed: bool,
     }
     struct Lease {
         session: String,
@@ -2036,6 +2063,9 @@ mod tests {
         settings: Option<String>,
     }
     impl Cognition for Lease {
+        fn is_closed(&self) -> bool {
+            self.team.lock().unwrap().closed
+        }
         fn session_id(&self) -> &str {
             &self.session
         }
@@ -4845,16 +4875,93 @@ read -r keep_alive
             "ended_at": "2026-10-29T00:00:00Z", "end_reason": "SessionEnd"}));
         assert_eq!((h.host.background_work().running, gate(&h)), (1, busy.clone()),
             "a session whose provider process still runs was read as ended");
-        // This host has it live as Stu's lease.
+        // This host holds it open as Stu's lease: the lease itself exists and is not closed.
         canonical(end_record);
         let backend = Backend::new();
         backend.inner.lock().unwrap().lease_session = Some("work-session-one".into());
-        h.host.backends.lock().unwrap().insert("thread-one".into(), backend);
+        *backend.lease.lock().unwrap() = Some(Box::new(Lease { session: "work-session-one".into(),
+            prompts: h.work_prompts.clone(), commands: h.commands.clone(), team: h.team.clone(), settings: None }));
+        h.host.backends.lock().unwrap().insert("thread-one".into(), backend.clone());
+        assert_eq!((h.host.background_work().running, gate(&h)), (1, busy.clone()),
+            "a session this host has open was read as ended");
+        // In use (a turn holds the lease for its whole length): open, by its remembered session.
+        let in_use = backend.lease.lock().unwrap();
         assert_eq!((h.host.background_work().running, gate(&h)), (1, busy),
-            "a session this host has live was read as ended");
+            "a lease in use was read as ended");
+        drop(in_use);
         h.host.backends.lock().unwrap().clear();
         assert_eq!(gate(&h), clear);
         h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A session whose lease has closed, or been removed, has no veto** (second review
+    /// rv-20261029T062537Z-21f7f26e-d081 of `21f7f26e5`, from its fixture `closed-lease.rs`).
+    /// Stu is handed his job the normal way and his turn ends; his helper's receipt still says
+    /// `running`. While his provider is open, even `SessionEnd` and `ended_at` do not end it.
+    /// Then his provider exits (a lost connection: provider EOF), with no input waiting: on
+    /// `21f7f26e5` the remembered session id kept "1 assignment is still running in the
+    /// background." until another input opened a replacement, and still did after shutdown removed
+    /// the lease, where a fresh host over the same disk read clear. The gate is read as
+    /// `updates.rs` reads it, with every lease's own worker view.
+    #[test]
+    fn a_session_whose_lease_closed_or_was_removed_has_no_veto_and_an_open_lease_keeps_one() {
+        use sha2::Digest;
+        let h = harness(0);
+        let _ = handed_job(&h);
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)), "Stu was never given the job");
+        assert!(!h.host.peer_work_pending());
+        helper_receipt(&h, "running");
+        let evidence = h.state.join("evidence/work-session-one");
+        std::fs::create_dir_all(&evidence).unwrap();
+        std::fs::write(evidence.join(".lock"), "").unwrap();
+        let row = |event: &str, more: serde_json::Value| {
+            let mut callback = serde_json::json!({"session_id": "work-session-one", "hook_event_name": event});
+            for (key, value) in more.as_object().unwrap() { callback[key] = value.clone(); }
+            serde_json::json!({"schema": 1, "callback": callback}).to_string() + "\n"
+        };
+        let launched = row("SubagentStart", serde_json::json!({"agent_id": "agent-one"}))
+            + &row("PostToolUse", serde_json::json!({"tool_name": "Agent",
+                "tool_response": {"status": "async_launched", "agentId": "agent-one"}}));
+        let read = |host: &WorkHost| {
+            let work = host.background_work();
+            let views: Vec<_> = host.lease_sessions().iter()
+                .map(|session| crate::app_workers::status(&h.state, Some(session))).collect();
+            (work.running, crate::work_gate::background(&work, &views))
+        };
+        let busy = (1, (crate::work_gate::Liveness::Busy, Some("1 assignment is still running in the background.".to_string())));
+        let clear = (0, (crate::work_gate::Liveness::Clear, None));
+
+        // Control: his provider is open and his helper launched. Running.
+        std::fs::write(evidence.join("callbacks.jsonl"), &launched).unwrap();
+        assert_eq!(read(&h.host), busy, "a helper of Stu's open session was read as ended");
+        // Both terminal witnesses, his provider still open: the open lease keeps its veto.
+        std::fs::write(evidence.join("callbacks.jsonl"), launched + &row("SessionEnd", serde_json::json!({"reason": "other"}))).unwrap();
+        let sessions = h.state.join("workspaces")
+            .join(format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]"))).join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("work-session-one.json"), serde_json::json!({"session_id": "work-session-one",
+            "ended_at": "2026-10-29T00:00:00Z", "end_reason": "SessionEnd"}).to_string()).unwrap();
+        assert_eq!(crate::app_workers::session_ended(&h.state, "work-session-one"), Some(true));
+        assert_eq!(h.host.lease_sessions(), vec!["work-session-one".to_string()]);
+        assert_eq!(read(&h.host), busy, "a session this host holds open lost its veto");
+
+        // The reviewer's case: provider EOF, nothing waiting for Stu. The ended session decides.
+        h.team.lock().unwrap().closed = true;
+        assert!(!h.host.peer_work_pending());
+        assert_eq!(read(&h.host), clear, "a closed lease's remembered session kept the update blocked");
+        assert_eq!(h.host.lease_sessions(), Vec::<String>::new(), "a closed lease was counted as open");
+        // Shutdown removes the lease itself: still clear.
+        h.host.shutdown();
+        assert_eq!(read(&h.host), clear, "a removed lease's remembered session kept the update blocked");
+        // The same disk state in a fresh host reads the same.
+        let restarted = WorkHost::new(&h.state, Box::new(Factory {
+            spawns: h.spawns.clone(), prompts: h.work_prompts.clone(), commands: h.commands.clone(),
+            team: h.team.clone(), gate: h.start_gate.clone(),
+        }), Arc::new(SilentNotifier));
+        assert_eq!(read(&restarted), clear);
+        restarted.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 
